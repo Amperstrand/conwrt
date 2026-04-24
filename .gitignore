@@ -1,0 +1,41 @@
+# --- Personal / device-specific data (never commit) ---
+data/
+.env
+secrets/
+
+# --- Runtime artifacts ---
+# runs/ contains per-device session data — all gitignored
+# (the .gitkeep is tracked via git add -f)
+runs/
+!runs/.gitkeep
+
+# captures/ contains pcap files for boot sequence analysis — never commit
+captures/
+!captures/.gitkeep
+
+# --- Node modules ---
+node_modules/
+
+# --- macOS ---
+.DS_Store
+
+# --- Certificates and keys ---
+*.pem
+*.key
+
+# --- OpenCode / tooling workspaces ---
+.opencode/
+.playwright-mcp/
+.sisyphus/
+
+# --- Stray files ---
+device-identification-notes.md
+linksys-velop-*.png
+captures/
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Firmware image cache ---
+images/

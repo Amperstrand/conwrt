@@ -1,0 +1,69 @@
+{
+  "id": "dlink_covr-x1860-a1",
+  "vendor": "D-Link",
+  "description": "COVR-X1860 A1 mesh WiFi",
+  "openwrt": {
+    "target": "ramips/mt7621",
+    "device": "dlink,covr-x1860-a1",
+    "default_ip": "192.168.1.1",
+    "arch": "mipsel_24kc"
+  },
+  "hardware": {
+    "soc": "MT7621AT",
+    "flash": "NAND 128MB",
+    "ram": "256MB",
+    "ethernet_ports": "4x 1G (1 WAN + 3 LAN)",
+    "wifi": "2.4GHz + 5GHz (MT7612N)"
+  },
+  "mac_oui": ["BC:22:28"],
+  "flash_methods": {
+    "recovery-http": {
+      "description": "D-Link recovery mode (hold reset pin under device while powering on)",
+      "recovery_ip": "192.168.0.1",
+      "client_ip": "192.168.0.10",
+      "client_subnet": "255.255.255.0",
+      "openwrt_client_ip": "192.168.1.254",
+      "upload_endpoint": "/upload",
+      "upload_field": "firmware",
+      "trigger_flash_endpoint": "",
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Use a pin to press and hold the reset button UNDER the device.",
+      "led_pattern": "status LED blinks red"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  },
+  "signatures": {
+    "recovery": {
+      "source": "pcap analysis 2026-05-07",
+      "recovery_mac_prefix": "3e:85:be",
+      "http_title": "D-Link Router Recovery Mode",
+      "upload_response_pattern": "Upgrade successfully!",
+      "upload_duration_seconds": 4,
+      "flash_response_delay_seconds": 30
+    },
+    "reboot": {
+      "source": "pcap analysis 2026-05-07",
+      "recovery_mac_last_packet": "TCP FIN after HTTP response body",
+      "silence_until_openwrt_seconds": 115,
+      "link_down_duration_seconds": 115
+    },
+    "openwrt_booting": {
+      "source": "pcap analysis 2026-05-07",
+      "first_packet_protocol": "icmpv6_mldv2",
+      "first_packet_from_mac": "bc:22:28:XX:XX:XX",
+      "first_ipv4_protocol": "DHCP reply from 192.168.1.1:67",
+      "first_arp": "who-has 192.168.1.XXX tell 192.168.1.1",
+      "no_dhcp_client": true,
+      "no_mdns": true
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 60
+    }
+  }
+}

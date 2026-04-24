@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/TODO/conwrt/schemas/target-device-candidate.json",
+  "title": "Target Device Candidate",
+  "description": "A candidate device identification with confidence level.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manufacturer", "model", "confidence", "evidence_summary"],
+  "properties": {
+    "manufacturer": { "type": "string" },
+    "model": { "type": "string" },
+    "hardware_revision": { "type": "string" },
+    "firmware_version": { "type": "string" },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "confirmed"]
+    },
+    "evidence_summary": { "type": "string" },
+    "mac_oui": {
+      "type": "string",
+      "pattern": "^[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}$"
+    },
+    "open_ports": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+    }
+  }
+}

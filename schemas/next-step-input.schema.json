@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/TODO/conwrt/schemas/next-step-input.json",
+  "title": "Next Step Input",
+  "description": "Structured input context passed to the next workflow step.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recommended_step", "rationale"],
+  "properties": {
+    "recommended_step": { "type": "string", "description": "e.g. step-02" },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Step-specific parameters"
+    },
+    "rationale": { "type": "string" },
+    "safety_notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Safety reminders for the next step operator"
+    }
+  }
+}

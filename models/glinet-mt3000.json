@@ -1,0 +1,66 @@
+{
+  "id": "glinet_gl-mt3000",
+  "vendor": "GL.iNet",
+  "description": "Beryl AX (GL-MT3000) WiFi 6 travel router",
+  "openwrt": {
+    "target": "mediatek/filogic",
+    "device": "glinet,gl-mt3000",
+    "default_ip": "192.168.1.1",
+    "arch": "aarch64_cortex-a53"
+  },
+  "hardware": {
+    "soc": "MT7981B (Filogic 820) dual-core Cortex-A53 @ 1.3GHz",
+    "flash": "NAND 256MB",
+    "ram": "512MB DDR4",
+    "ethernet_ports": "1x WAN 2.5G + 1x LAN 1G",
+    "wifi": "2.4GHz + 5GHz WiFi 6 (MT7981B + MT7976C)",
+    "power": "USB-C 5V/3A"
+  },
+  "mac_oui": ["94:83:C4"],
+  "stock_default_ip": "192.168.8.1",
+  "flash_methods": {
+    "uboot-http": {
+      "description": "U-Boot HTTP recovery (hold reset button on side, power on)",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.254",
+      "client_subnet": "255.255.255.0",
+      "upload_endpoint": "/upload",
+      "upload_field": "firmware",
+      "trigger_flash_endpoint": "/flashing.html",
+      "flash_time_seconds": 360,
+      "silence_timeout": 30,
+      "reset_instructions": "Press and hold the reset button on the side, under the antenna.",
+      "led_pattern": "blue LED flashes 6 times then solid white"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  },
+  "signatures": {
+    "recovery": {
+      "source": "pcap analysis 2026-05-07",
+      "uboot_http_get_returns_html": true,
+      "uboot_http_head_returns_405": true,
+      "upload_response_pattern": "size md5hash",
+      "trigger_response_pattern": "Update in progress",
+      "flash_duration_seconds": 360
+    },
+    "reboot": {
+      "source": "pcap analysis 2026-05-07",
+      "uboot_arp_before_reboot": "192.168.1.2",
+      "uboot_to_openwrt_gap_seconds": 11
+    },
+    "openwrt_booting": {
+      "source": "pcap analysis 2026-05-07",
+      "first_packet_protocol": "icmpv6_multicast_listener_report",
+      "icmpv6_ra_interval_seconds": 10,
+      "no_failsafe_udp_4919": true
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 60
+    }
+  }
+}
