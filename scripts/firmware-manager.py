@@ -135,7 +135,6 @@ def _build_defaults(
 
     if wan_ssh:
         lines.extend([
-            "# Allow SSH on WAN",
             "uci add firewall rule",
             "uci set firewall.@rule[-1].name='Allow-SSH-WAN'",
             "uci set firewall.@rule[-1].src='wan'",
@@ -143,6 +142,12 @@ def _build_defaults(
             "uci set firewall.@rule[-1].proto='tcp'",
             "uci set firewall.@rule[-1].target='ACCEPT'",
             "uci commit firewall",
+        ])
+
+    if wan_ssh and ssh_key_path:
+        lines.extend([
+            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+            "uci commit dropbear",
         ])
 
     return "\n".join(lines), ssh_key_cleaned, ssh_key_source
@@ -329,7 +334,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             continue
 
         status = status_data.get("status", "")
-        if status in ("pending", "building"):
+        if status in ("pending", "building", 202):
             logger.info("build status: %s, polling in %ds...", status, POLL_INTERVAL)
             time.sleep(POLL_INTERVAL)
             continue
@@ -339,10 +344,11 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("build timed out after %ds", POLL_TIMEOUT)
         return 1
 
-    if status_data.get("status") != "done":
+    if status_data.get("status") not in ("done", 200):
         logger.error(
-            "build failed: status=%s message=%s",
+            "build failed: status=%s detail=%s message=%s",
             status_data.get("status"),
+            status_data.get("detail", ""),
             status_data.get("message", ""),
         )
         return 1
@@ -374,7 +380,17 @@ def cmd_request(args: argparse.Namespace) -> int:
 
         logger.info("downloading %s (%d bytes)...", filename, size)
         try:
-            urllib.request.urlretrieve(download_url, str(dest_path))
+            req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": "conwrt-firmware-manager/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
         except Exception as exc:
             logger.error("download failed for %s: %s", filename, exc)
             dest_path.unlink(missing_ok=True)
