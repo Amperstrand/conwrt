@@ -20,7 +20,9 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 |--------|--------|--------|
 | D-Link COVR-X1860 A1 | recovery-http | Tested on hardware |
 | GL.iNet MT3000 | uboot-http | Tested on hardware |
-| Linksys WHW03 (V1/V2) | auto-flash | Legacy, needs refactor |
+| GL.iNet AR150 | sysupgrade | Model defined, not tested |
+| GL.iNet AR300M (lite/nand/nor) | sysupgrade | Model defined, not tested |
+| Linksys WHW03 V1/V2 | sysupgrade | Model defined, signatures needed |
 
 ## Layout
 
@@ -28,14 +30,19 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 conwrt/
 ├── models/              # Device model definitions (species-level, static, in git)
 │   ├── dlink-covr-x1860-a1.json
-│   └── glinet-mt3000.json
+│   ├── glinet-gl-ar150.json
+│   ├── glinet-gl-ar300m-lite.json
+│   ├── glinet-gl-ar300m-nand.json
+│   ├── glinet-gl-ar300m-nor.json
+│   ├── glinet-mt3000.json
+│   ├── linksys-whw03-v1.json
+│   └── linksys-whw03-v2.json
 ├── scripts/             # Automated flashing and management scripts
 │   ├── conwrt.py               # Main flasher (auto-detect, sysupgrade, U-Boot recovery)
 │   ├── router-fingerprint.py  # SSH-based device fingerprinting and inventory
 │   ├── firmware-manager.py    # ASU firmware build/download/cache management
 │   ├── model_loader.py        # Shared model registry reader
 │   ├── router-probe.py        # Device boot state detection (off/uboot/openwrt)
-│   ├── auto-flash.py          # Automated flashing (Linksys WHW03, legacy)
 │   └── inventory.py           # Inventory utilities
 ├── data/                # Runtime data (gitignored)
 │   ├── inventory.jsonl         # Append-only device inventory (specimen-level)
@@ -73,8 +80,8 @@ The output of this process is a model JSON for `models/` and recipe notes for `r
 For any device already defined in `models/`, the scripts handle everything end-to-end:
 
 ```bash
-python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 \
-  --request-image --ssh-key ~/.ssh/id_ed25519.pub --no-password
+# Auto-detect device and flash with custom ASU image
+python3 scripts/conwrt.py --request-image --wan-ssh
 ```
 
 ### Flash with an existing firmware image
@@ -104,24 +111,23 @@ python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 \
   --image fw.bin --no-upload
 ```
 
-### Firmware management
-
-```bash
-# Request a custom firmware build
-python3 scripts/firmware-manager.py request \
-  --profile dlink_covr-x1860-a1 --ssh-key ~/.ssh/id_ed25519.pub --no-password
-
-# List cached firmware
-python3 scripts/firmware-manager.py list
-
-# Find latest cached firmware for a profile
-python3 scripts/firmware-manager.py find --profile dlink_covr-x1860-a1 --type recovery
-```
-
 ### List available device models
 
 ```bash
-python3 scripts/model_loader.py list
+python3 scripts/conwrt.py list
+```
+
+### Manage cached firmware
+
+```bash
+# List all cached builds
+python3 scripts/conwrt.py cache list
+
+# Remove old builds, keep latest per model
+python3 scripts/conwrt.py cache clean --keep-latest
+
+# Remove all builds for a specific model
+python3 scripts/conwrt.py cache clean --model-id dlink_covr-x1860-a1
 ```
 
 ### Fingerprint a connected router
@@ -137,17 +143,18 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1
 python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 ```
 
-## Key CLI Options (conwrt.py)
+## Key CLI Options (conwrt.py flash)
 
 | Option | Description |
 |--------|-------------|
-| `--model-id ID` | Model ID from models/ directory (required) |
+| `--model-id ID` | Model ID from models/ (auto-detected if device is running OpenWrt) |
 | `--image PATH` | Path to firmware image |
 | `--request-image` | Request custom image from ASU with baked-in settings |
-| `--ssh-key PATH` | SSH public key to embed (default: ~/.ssh/id_ed25519.pub) |
+| `--ssh-key PATH` | SSH public key to embed (auto-detected: id_ed25519.pub or id_rsa.pub) |
 | `--password PASS` | Set root password (default: random, printed once) |
 | `--no-password` | Skip password, key-only auth |
-| `--wan-ssh` | Open SSH on WAN interface (requires --no-password) |
+| `--wan-ssh` | Open SSH on WAN interface (disables password login on WAN) |
+| `--force-uboot` | Force U-Boot recovery even if OpenWrt is running |
 | `--no-voice` | Disable voice guidance |
 | `--no-upload` | Dry run, detect only |
 | `--interface IFACE` | Ethernet interface (auto-detected) |
@@ -164,11 +171,14 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 ## Features
 
 - Event-driven state machine with real-time pcap monitoring
+- Auto-detects device state (OpenWrt, U-Boot, offline) and picks sysupgrade or U-Boot recovery
+- Optional model ID — auto-detected from SSH fingerprint when device is running
 - Voice guidance via macOS `say` (user actions and milestones only)
 - Full timeline tracking: power off through SSH verification
 - SHA-256 firmware verification
 - SSH verification and inventory collection after flash
-- ASU integration for custom firmware builds with baked-in SSH keys
+- ASU integration for custom firmware builds with baked-in SSH keys, passwords, WAN SSH
+- Firmware cache management (`conwrt cache list/clean`)
 - Automatic ethernet interface detection
 - Link monitoring survives pcap writer death during reboot
 
