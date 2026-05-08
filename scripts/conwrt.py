@@ -6,19 +6,17 @@ Auto-detects device state (OpenWrt running, U-Boot recovery, or offline) and
 picks the appropriate flash method (SSH sysupgrade or U-Boot HTTP upload).
 
 Usage:
-    # Flash with auto-detection (picks sysupgrade if OpenWrt is running):
-    python3 scripts/conwrt.py --request-image
-    python3 scripts/conwrt.py --request-image --wan-ssh
-    python3 scripts/conwrt.py --request-image --password secret --ssh-key ~/.ssh/id_rsa.pub
+    # Flash (auto-detects method):
+    conwrt --request-image --wan-ssh
+    conwrt flash --model-id dlink-covr-x1860-a1 --request-image --force-uboot
 
-    # Flash a pre-built image to a specific model:
-    python3 scripts/conwrt.py --model-id glinet-mt3000 --image firmware.bin
-    python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 --image firmware.bin
+    # List supported models:
+    conwrt list
 
-    # Force U-Boot recovery even if OpenWrt is running:
-    python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 --request-image --force-uboot
-
-Use 'python3 scripts/model_loader.py list' to see all available model IDs.
+    # Manage cached firmware:
+    conwrt cache list
+    conwrt cache clean --keep-latest
+    conwrt cache clean --model-id dlink-covr-x1860-a1
 """
 
 import argparse
@@ -29,6 +27,7 @@ import os
 import queue
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -129,7 +128,7 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
             log(f"Added alias {interface}: {openwrt_client}/255.255.255.0")
 
 
-def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None) -> str:
+def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
     """Probe the device to determine its current state.
 
     Returns: "openwrt", "uboot", or "unknown"
@@ -137,16 +136,28 @@ def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
 
-    if check_ssh(openwrt_ip):
-        log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
-        return "openwrt"
+    try:
+        if check_ssh(openwrt_ip):
+            log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
+            return "openwrt"
+    except Exception as e:
+        log(f"SSH probe failed for {openwrt_ip}: {e}")
 
-    found, detail = detect_uboot_http(recovery_ip)
-    if found:
-        log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
-        return "uboot"
+    try:
+        found, detail = detect_uboot_http(recovery_ip)
+        if found:
+            log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
+            return "uboot"
+    except Exception as e:
+        log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
 
-    log("No SSH or recovery HTTP detected — device state unknown")
+    if profile and profile.openwrt_ip and profile.recovery_ip:
+        if profile.openwrt_ip != "192.168.1.1" or profile.recovery_ip != "192.168.0.1":
+            log("No SSH or recovery HTTP detected on profile IPs — device may be on a different subnet")
+        else:
+            log("No SSH or recovery HTTP detected — device state unknown")
+    else:
+        log("No SSH or recovery HTTP detected — device state unknown")
     return "unknown"
 
 
@@ -167,7 +178,12 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
     try:
         r = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=120, check=False)
         if r.returncode != 0:
-            log(f"SCP failed (exit {r.returncode}): {r.stderr[:200]}")
+            stderr_hint = r.stderr[:300] if r.stderr else "(no stderr)"
+            if "permission denied" in stderr_hint.lower():
+                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
+                log("Hint: check SSH key authentication — ensure the key is authorized on the device")
+            else:
+                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
             return False
     except subprocess.TimeoutExpired:
         log("SCP upload timed out.")
@@ -192,6 +208,14 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
         if r.returncode != 0 and not r.stdout and not r.stderr:
             log("sysupgrade initiated (connection closed by remote — expected).")
             return True
+        if "Connection refused" in r.stderr or "Connection timed out" in r.stderr:
+            log(f"SSH connection failed during sysupgrade: {r.stderr[:200]}")
+            log("Hint: device may have rejected the firmware or SSH is not available")
+            return False
+        if r.returncode != 0 and "Rebooting" not in r.stdout and "Upgrading" not in r.stdout:
+            log(f"WARNING: sysupgrade returned exit {r.returncode}")
+            log(f"  stdout: {r.stdout[:300]}")
+            log(f"  stderr: {r.stderr[:300]}")
         log(f"sysupgrade returned {r.returncode}: {r.stdout[:200]} {r.stderr[:200]}")
         return r.returncode == 0 or r.returncode == 255
     except subprocess.TimeoutExpired:
@@ -210,6 +234,8 @@ def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 180) -> bool:
         if check_ssh(device_ip):
             return True
         time.sleep(10)
+    log(f"Device did not come back at {device_ip} within {timeout}s")
+    log("Hint: the firmware may be incompatible with this device, or the device booted on a different subnet")
     return False
 
 
@@ -1421,7 +1447,7 @@ def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
     return candidates[0]
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     try:
         available_ids = [m["id"] for m in list_models()]
     except Exception:
@@ -1430,43 +1456,211 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="conwrt — flash OpenWrt firmware to routers",
     )
-    parser.add_argument("--model-id", required=False,
+    subparsers = parser.add_subparsers(dest="command")
+
+    flash_parser = subparsers.add_parser("flash",
+        help="Flash firmware to device (default if no subcommand given)")
+    flash_parser.add_argument("--model-id", required=False,
                         help=f"Model ID from models/ directory (e.g. glinet-mt3000, dlink-covr-x1860-a1). "
                              f"Auto-detected if device is running OpenWrt. "
-                             f"Use 'model_loader.py list' to see all available. "
+                             f"Use 'conwrt list' to see all available. "
                              f"Known: {', '.join(sorted(available_ids)) or 'none loaded'}")
 
-    firmware_group = parser.add_mutually_exclusive_group()
+    firmware_group = flash_parser.add_mutually_exclusive_group()
     firmware_group.add_argument("--image", default=None,
                                 help="Path to firmware image (vanilla or custom)")
     firmware_group.add_argument("--request-image", action="store_true",
                                 help="Request custom image from ASU with baked-in settings")
 
-    parser.add_argument("--ssh-key", default=None,
+    flash_parser.add_argument("--ssh-key", default=None,
                         help="SSH public key to install (default: first found of ~/.ssh/id_ed25519.pub, id_rsa.pub)")
-    parser.add_argument("--password", default=None,
+    flash_parser.add_argument("--password", default=None,
                         help="Set root password (default: random, printed once)")
-    parser.add_argument("--no-password", action="store_true",
+    flash_parser.add_argument("--no-password", action="store_true",
                         help="Skip password (key-only auth)")
-    parser.add_argument("--wan-ssh", action="store_true",
+    flash_parser.add_argument("--wan-ssh", action="store_true",
                         help="Open SSH on WAN port (disables password login on WAN)")
-    parser.add_argument("--interface", default=None,
+    flash_parser.add_argument("--interface", default=None,
                         help="Ethernet interface (auto-detected if omitted)")
-    parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
-    parser.add_argument("--no-upload", action="store_true",
+    flash_parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
+    flash_parser.add_argument("--no-upload", action="store_true",
                         help="Stop after detecting U-Boot (dry run)")
-    parser.add_argument("--force-uboot", action="store_true",
+    flash_parser.add_argument("--force-uboot", action="store_true",
                         help="Force U-Boot recovery mode even if OpenWrt is detected")
-    parser.add_argument("--capture", default=None,
+    flash_parser.add_argument("--capture", default=None,
                         help="Save pcap capture to file (requires sudo)")
-    parser.add_argument("--router-mac", default="",
+    flash_parser.add_argument("--router-mac", default="",
                         help="Router's OpenWrt MAC address (for ICMPv6 detection)")
-    parser.add_argument("--uboot-mac", default="",
+    flash_parser.add_argument("--uboot-mac", default="",
                         help="Router's U-Boot MAC address (for ARP detection)")
-    parser.add_argument("--silence-timeout", type=int, default=SILENCE_TIMEOUT_DEFAULT,
+    flash_parser.add_argument("--silence-timeout", type=int, default=SILENCE_TIMEOUT_DEFAULT,
                         help="Seconds of no packets before silence event")
-    args = parser.parse_args()
 
+    subparsers.add_parser("list", help="List available device models")
+
+    cache_parser = subparsers.add_parser("cache", help="Manage cached firmware images")
+    cache_sub = cache_parser.add_subparsers(dest="cache_command")
+    cache_sub.add_parser("list", help="List cached firmware images")
+    cache_clean = cache_sub.add_parser("clean", help="Remove cached firmware images")
+    cache_clean.add_argument("--model-id", default=None,
+                        help="Only clean images for this model")
+    cache_clean.add_argument("--keep-latest", action="store_true",
+                        help="Keep only the latest build per model")
+    cache_clean.add_argument("--yes", action="store_true",
+                        help="Skip confirmation prompt")
+
+    return parser
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    models = list_models()
+    if not models:
+        print("No models found in models/ directory.", file=sys.stderr)
+        return 1
+
+    print(f"{'Model ID':<40s}  {'Vendor':<12s}  {'Target':<22s}  {'Flash Methods':<20s}  Description")
+    print("-" * 140)
+    for model in models:
+        model_id = model.get("id", "?")
+        vendor = model.get("vendor", "?")
+        target = model.get("openwrt", {}).get("target", "?")
+        methods = ", ".join(model.get("flash_methods", {}).keys()) or "none"
+        desc = model.get("description", "")
+        print(f"{model_id:<40s}  {vendor:<12s}  {target:<22s}  [{methods}]  {desc}")
+    return 0
+
+
+def cmd_cache(args: argparse.Namespace) -> int:
+    images_dir = Path(__file__).resolve().parent.parent / "images"
+
+    if args.cache_command == "list":
+        return _cache_list(images_dir)
+    elif args.cache_command == "clean":
+        return _cache_clean(images_dir, args)
+    else:
+        print("Usage: conwrt cache <list|clean>", file=sys.stderr)
+        return 1
+
+
+def _cache_list(images_dir: Path) -> int:
+    if not images_dir.is_dir():
+        print("No images/ directory found.", file=sys.stderr)
+        return 1
+
+    entries = []
+    for model_dir in sorted(images_dir.iterdir()):
+        if not model_dir.is_dir():
+            continue
+        for hash_dir in sorted(model_dir.iterdir()):
+            if not hash_dir.is_dir():
+                continue
+            model_id = model_dir.name
+            request_hash = hash_dir.name
+            metadata_files = list(hash_dir.glob("*.metadata.json"))
+            metadata = {}
+            if metadata_files:
+                try:
+                    with open(metadata_files[0]) as f:
+                        metadata = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            bin_files = list(hash_dir.glob("*.bin"))
+            image_types = []
+            total_size = 0
+            for bf in bin_files:
+                if "sysupgrade" in bf.name:
+                    image_types.append("sysupgrade")
+                elif "recovery" in bf.name:
+                    image_types.append("recovery")
+                elif "factory" in bf.name:
+                    image_types.append("factory")
+                else:
+                    image_types.append(bf.stem)
+                total_size += bf.stat().st_size
+
+            build_info = metadata.get("version", "?")
+            if metadata.get("version_code"):
+                build_info += f" ({metadata.get('version_code', '')[:20]})"
+
+            entries.append({
+                "model": model_id,
+                "hash": request_hash[:12],
+                "version": build_info,
+                "types": ", ".join(sorted(set(image_types))) or "none",
+                "size_mb": f"{total_size / 1024 / 1024:.1f}",
+            })
+
+    if not entries:
+        print("No cached firmware images found.")
+        return 0
+
+    print(f"{'Model':<30s}  {'Hash':<14s}  {'Version':<35s}  {'Types':<30s}  {'Size':>8s}")
+    print("-" * 130)
+    for e in entries:
+        print(f"{e['model']:<30s}  {e['hash']:<14s}  {e['version']:<35s}  {e['types']:<30s}  {e['size_mb']:>7s} MB")
+    print(f"\nTotal: {len(entries)} cached build(s)")
+    return 0
+
+
+def _cache_clean(images_dir: Path, args: argparse.Namespace) -> int:
+    if not images_dir.is_dir():
+        print("No images/ directory found.", file=sys.stderr)
+        return 1
+
+    targets = []
+    for model_dir in sorted(images_dir.iterdir()):
+        if not model_dir.is_dir():
+            continue
+        if args.model_id and model_dir.name != args.model_id and model_dir.name != args.model_id.replace("-", "_"):
+            continue
+
+        hash_dirs = sorted(model_dir.iterdir(), key=lambda d: d.stat().st_mtime)
+        hash_dirs = [h for h in hash_dirs if h.is_dir()]
+
+        if args.keep_latest and len(hash_dirs) > 1:
+            targets.extend(hash_dirs[:-1])
+        elif not args.keep_latest:
+            targets.extend(hash_dirs)
+
+    if not targets:
+        if args.model_id:
+            print(f"No cached images found for model '{args.model_id}'.")
+        else:
+            print("No cached images found.")
+        return 0
+
+    total_size = sum(
+        f.stat().st_size
+        for d in targets
+        for f in d.iterdir()
+        if f.is_file()
+    )
+    print(f"Will remove {len(targets)} cached build(s) ({total_size / 1024 / 1024:.1f} MB):")
+    for d in targets:
+        print(f"  {d.parent.name}/{d.name[:12]}...")
+
+    if not args.yes:
+        try:
+            response = input("Continue? [y/N] ")
+            if response.lower() not in ("y", "yes"):
+                print("Cancelled.")
+                return 0
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+    removed = 0
+    for d in targets:
+        shutil.rmtree(d)
+        removed += 1
+
+    print(f"Removed {removed} cached build(s) ({total_size / 1024 / 1024:.1f} MB freed).")
+    return 0
+
+
+def cmd_flash(args: argparse.Namespace) -> int:
+    parser = _build_parser()
     validation_error = _validate_args(args)
     if validation_error:
         parser.error(validation_error)
@@ -1671,6 +1865,21 @@ def main() -> int:
         pcap_thread.join(timeout=5)
 
     return rc
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "-h", "--help"):
+        sys.argv.insert(1, "flash")
+
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.command == "list":
+        return cmd_list(args)
+    elif args.command == "cache":
+        return cmd_cache(args)
+    else:
+        return cmd_flash(args)
 
 
 if __name__ == "__main__":
