@@ -1,0 +1,27 @@
+{
+  "id": "linksys_whw03v2",
+  "vendor": "Linksys",
+  "description": "Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "linksys,whw03v2",
+    "default_ip": "192.168.1.1",
+    "arch": "arm_cortex-a7_neon-vfpv4"
+  },
+  "hardware": {
+    "soc": "IPQ4019 (quad-core Cortex-A7) @ 716MHz",
+    "flash": "NAND 512MB",
+    "ram": "512MB DDR3",
+    "ethernet_ports": "2x 10/100/1000",
+    "wifi": "2.4GHz + 5GHz low + 5GHz high tri-band (IPQ4019 + QCA9984)"
+  },
+  "mac_oui": ["E8:9F:80"],
+  "stock_default_ip": "192.168.1.1",
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  }
+}

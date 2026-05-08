@@ -1,0 +1,29 @@
+{
+  "id": "glinet_gl-ar150",
+  "vendor": "GL.iNet",
+  "description": "AR150 Mini Router (all variants)",
+  "openwrt": {
+    "target": "ath79/generic",
+    "device": "glinet,gl-ar150",
+    "default_ip": "192.168.8.1",
+    "arch": "mips_24kc"
+  },
+  "hardware": {
+    "soc": "AR9331 (MIPS 24Kc) @ 400MHz",
+    "flash": "NOR 16MB",
+    "ram": "64MB DDR2",
+    "ethernet_ports": "2x 10/100 (1 WAN + 1 LAN)",
+    "wifi": "2.4GHz 802.11b/g/n (AR9331 integrated)",
+    "usb": "1x USB 2.0 Type-A",
+    "power": "5V/1A micro-USB"
+  },
+  "mac_oui": ["94:83:C4"],
+  "stock_default_ip": "192.168.8.1",
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  }
+}
