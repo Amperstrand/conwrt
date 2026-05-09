@@ -26,7 +26,7 @@
       "client_subnet": "255.255.255.0",
       "upload_endpoint": "/upload",
       "upload_field": "firmware",
-      "trigger_flash_endpoint": "/flashing.html",
+      "trigger_flash_endpoint": "/result",
       "flash_time_seconds": 360,
       "silence_timeout": 30,
       "reset_instructions": "Press and hold the reset button on the side, under the antenna.",
@@ -40,11 +40,13 @@
   },
   "signatures": {
     "recovery": {
-      "source": "pcap analysis 2026-05-07",
+      "source": "pcap analysis + U-Boot source (gl-inet/mt798x-boot)",
       "uboot_http_get_returns_html": true,
       "uboot_http_head_returns_405": true,
       "upload_response_pattern": "size md5hash",
-      "trigger_response_pattern": "Update in progress",
+      "trigger_endpoint": "/result",
+      "trigger_response_pattern": "success",
+      "trigger_blocks_until_done": true,
       "flash_duration_seconds": 360
     },
     "reboot": {

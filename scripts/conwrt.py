@@ -57,44 +57,73 @@ REBOOT_TIMEOUT = 360
 SILENCE_TIMEOUT_DEFAULT = 30
 
 
-def _find_recovery_flash_method(model: dict) -> tuple[str, dict]:
-    for method_name, method_cfg in model.get("flash_methods", {}).items():
+def _find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str, dict]:
+    methods = model.get("flash_methods", {})
+    if method_hint and method_hint in methods:
+        return method_hint, methods[method_hint]
+    for method_name, method_cfg in methods.items():
         if "recovery_ip" in method_cfg:
             return method_name, method_cfg
-    available = list(model.get("flash_methods", {}).keys())
+    available = list(methods.keys())
+    serial_methods = [m for m in available if m.startswith("serial-tftp-")]
+    if serial_methods and not method_hint:
+        raise ValueError(
+            f"Model '{model.get('id', '?')}' has no HTTP recovery method. "
+            f"Use --serial-method to select a serial flash method. "
+            f"Available serial methods: {serial_methods}"
+        )
     raise ValueError(
         f"No HTTP recovery flash method found in model '{model.get('id', '?')}'. "
         f"Available methods: {available}"
     )
 
 
-def _build_profile_from_model(model_id: str) -> SimpleNamespace:
+def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleNamespace:
     """Load a model and build a runtime profile namespace for the recovery script.
 
     Returns a SimpleNamespace with the same attributes that DeviceProfile used to have,
     so the rest of the state machine code works unchanged.
     """
     model = load_model(model_id)
-    method_name, fm = _find_recovery_flash_method(model)
+    method_hint = f"serial-tftp-{serial_method}" if serial_method else ""
+    method_name, fm = _find_recovery_flash_method(model, method_hint)
 
-    client_ip = fm["client_ip"]
+    is_serial_tftp = method_name.startswith("serial-tftp")
+
+    if is_serial_tftp:
+        client_ip = fm.get("tftp_server_ip", "192.168.1.254")
+        recovery_ip = fm.get("tftp_router_ip", "192.168.1.1")
+    else:
+        client_ip = fm["client_ip"]
+        recovery_ip = fm["recovery_ip"]
+
     return SimpleNamespace(
         name=model["id"],
         vendor=model["vendor"],
         description=model["description"],
         flash_method=method_name,
-        recovery_ip=fm["recovery_ip"],
+        recovery_ip=recovery_ip,
         client_ip=client_ip,
         client_subnet=fm.get("client_subnet", "255.255.255.0"),
-        reset_instructions=fm["reset_instructions"],
-        led_pattern=fm["led_pattern"],
-        upload_endpoint=fm["upload_endpoint"],
-        upload_field=fm["upload_field"],
+        reset_instructions=fm.get("reset_instructions", ""),
+        led_pattern=fm.get("led_pattern", ""),
+        upload_endpoint=fm.get("upload_endpoint", ""),
+        upload_field=fm.get("upload_field", ""),
         trigger_flash_endpoint=fm.get("trigger_flash_endpoint", ""),
-        flash_time_seconds=fm["flash_time_seconds"],
+        flash_time_seconds=fm.get("flash_time_seconds", 120),
         silence_timeout=fm.get("silence_timeout", 30),
         openwrt_ip=model["openwrt"]["default_ip"],
         openwrt_client_ip=fm.get("openwrt_client_ip", client_ip),
+        is_serial_tftp=is_serial_tftp,
+        serial_baud=fm.get("serial_baud", 115200),
+        bootmenu_timeout=fm.get("bootmenu_timeout_seconds", 30),
+        bootmenu_interrupt=fm.get("bootmenu_interrupt", "ctrl-c"),
+        bootmenu_select_console=fm.get("bootmenu_select_console", "0"),
+        tftp_server_ip=fm.get("tftp_server_ip", ""),
+        lan_port=fm.get("lan_port", ""),
+        uboot_commands=fm.get("uboot_commands", []),
+        images=fm.get("images", {}),
+        eth_prime=fm.get("eth_prime", ""),
     )
 
 
@@ -279,6 +308,9 @@ class Event(Enum):
     NO_PACKETS_FOR_N_SECONDS = auto()
     UPLOAD_COMPLETE = auto()
     FLASH_TRIGGERED = auto()
+    SERIAL_UBOOT_READY = auto()
+    SERIAL_COMMAND_DONE = auto()
+    SERIAL_ALL_DONE = auto()
 
 
 class State(Enum):
@@ -291,6 +323,9 @@ class State(Enum):
     WAITING_FOR_UBOOT = auto()
     UBOOT_UPLOADING = auto()
     UBOOT_FLASHING = auto()
+    SERIAL_WAITING_FOR_BOOTMENU = auto()
+    SERIAL_UBOOT_INTERACTING = auto()
+    SERIAL_TFTP_FLASHING = auto()
     REBOOTING = auto()
     OPENWRT_BOOTING = auto()
     COMPLETE = auto()
@@ -331,7 +366,10 @@ def ts_str(t: float) -> str:
 
 
 def say(msg: str) -> None:
-    subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=10)
+    try:
+        subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def log(msg: str) -> None:
@@ -412,17 +450,34 @@ def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 30
 def trigger_flash(profile: SimpleNamespace) -> bool:
     if not profile.trigger_flash_endpoint:
         return True
-    log(f"Triggering flash via {profile.trigger_flash_endpoint}...")
+    endpoint = profile.trigger_flash_endpoint
+    # GL.iNet U-Boot uses /result which blocks until flash completes.
+    # Allow up to flash_time_seconds + 60s for the response.
+    flash_timeout = profile.flash_time_seconds + 60
+    log(f"Triggering flash via {endpoint} (timeout: {flash_timeout}s)...")
     try:
         r = subprocess.run(
-            ["curl", "-s", "--max-time", "5",
-             f"http://{profile.recovery_ip}{profile.trigger_flash_endpoint}"],
-            capture_output=True, text=True, timeout=10, check=False,
+            ["curl", "-s", "--max-time", str(flash_timeout),
+             f"http://{profile.recovery_ip}{endpoint}"],
+            capture_output=True, text=True, timeout=flash_timeout + 30, check=False,
         )
+        response = r.stdout.strip()
+        if response == "success":
+            log(f"Flash completed successfully ({endpoint} returned 'success').")
+            return True
         if "Update in progress" in r.stdout:
             log("Flash triggered — 'Update in progress' page returned.")
             return True
-        log(f"Unexpected flash response: {r.stdout[:100]}")
+        if response:
+            log(f"Flash response: {response[:100]}")
+            if "success" in response.lower():
+                return True
+        else:
+            log(f"Empty response from {endpoint} — flash may have been consumed already.")
+            return True
+    except subprocess.TimeoutExpired:
+        log(f"Flash trigger timed out after {flash_timeout}s — flash may still be in progress.")
+        return True
     except Exception as e:
         log(f"Flash trigger error: {e}")
     return False
@@ -732,6 +787,224 @@ class SSHMonitor:
             self._stop.wait(self._poll_interval)
 
 
+def _auto_detect_serial_port() -> str:
+    import glob as globmod
+    candidates = sorted(globmod.glob("/dev/cu.usbserial*") + globmod.glob("/dev/cu.SLAB_USBtoUART*"))
+    if candidates:
+        return candidates[0]
+    raise FileNotFoundError(
+        "No serial adapter found. Checked /dev/cu.usbserial* and /dev/cu.SLAB_USBtoUART*. "
+        "Use --serial-port to specify manually."
+    )
+
+
+class TFTPServerManager:
+    def __init__(self, tftp_root: str):
+        self.tftp_root = tftp_root
+        self._proc: Optional[subprocess.Popen] = None
+
+    def start(self) -> bool:
+        if not os.path.isdir(self.tftp_root):
+            log(f"ERROR: TFTP root directory not found: {self.tftp_root}")
+            return False
+
+        tftp_script = os.path.join(os.path.dirname(__file__), "..", "..", "jtag", "tftp-server.py")
+        if not os.path.isfile(tftp_script):
+            tftp_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tftp-server.py")
+
+        tftp_cmd = None
+        if os.path.isfile(tftp_script):
+            tftp_cmd = [sys.executable, tftp_script, self.tftp_root]
+        else:
+            import shutil
+            dnsmasq = shutil.which("dnsmasq")
+            if dnsmasq:
+                tftp_cmd = [dnsmasq, f"--tftp-root={self.tftp_root}", "--no-daemon", "--port=0"]
+
+        if not tftp_cmd:
+            log("WARNING: No TFTP server script found. U-Boot TFTP commands may fail.")
+            log("  Expected: jtag/tftp-server.py or scripts/tftp-server.py")
+            return False
+
+        log(f"Starting TFTP server: {' '.join(tftp_cmd)}")
+        try:
+            self._proc = subprocess.Popen(
+                tftp_cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            time.sleep(1)
+            if self._proc.poll() is not None:
+                err = self._proc.stderr.read().decode(errors="replace")
+                log(f"TFTP server failed to start: {err.strip()}")
+                self._proc = None
+                return False
+            log(f"TFTP server serving {self.tftp_root} on port 69 (PID {self._proc.pid})")
+            return True
+        except Exception as e:
+            log(f"TFTP server error: {e}")
+            self._proc = None
+            return False
+
+    def stop(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+            log("TFTP server stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+
+class SerialUBootDriver:
+    ERROR_STRINGS = ["ERROR:", "not found", "Bad CRC", "usage:", "Unknown command"]
+
+    def __init__(self, port: str, baud: int = 115200, timeout: float = 0.1):
+        try:
+            import serial as _serial
+        except ImportError:
+            print("ERROR: pyserial is required for serial-tftp flash method.", file=sys.stderr)
+            print("  Install with: pip install pyserial", file=sys.stderr)
+            sys.exit(1)
+        self._serial_mod = _serial
+        self.ser = _serial.Serial(port, baud, timeout=timeout)
+        self.port = port
+        self.baud = baud
+
+    def _drain(self, timeout: float = 0.5) -> bytes:
+        time.sleep(timeout)
+        data = b""
+        while True:
+            chunk = self.ser.read(4096)
+            if not chunk:
+                break
+            data += chunk
+        return data
+
+    def wait_for_bootmenu(self, timeout: float = 60, interrupt: str = "ctrl-c",
+                          console_option: str = "0", say_fn=None) -> bool:
+        buf = b""
+        start = time.time()
+        while time.time() - start < timeout:
+            chunk = self.ser.read(4096)
+            if chunk:
+                buf += chunk
+                text = chunk.decode("ascii", errors="replace")
+                for line in text.split("\n"):
+                    clean = line.strip()
+                    if clean:
+                        log(f"  [serial] {clean}")
+
+                full_text = buf.decode("ascii", errors="replace")
+
+                if "Hit any key" in full_text or "stop autoboot" in full_text.lower():
+                    log("Bootmenu countdown detected — entering U-Boot console")
+                    if say_fn:
+                        say_fn("Bootmenu detected. Entering U-Boot console.")
+                    time.sleep(0.5)
+                    self.ser.write(b"\x03")
+                    time.sleep(0.3)
+                    self.ser.write((console_option + "\r\n").encode())
+                    time.sleep(2)
+                    remaining = self._drain(2)
+                    full_text += remaining.decode("ascii", errors="replace")
+
+                if "=>" in full_text:
+                    log("Got U-Boot prompt")
+                    self._drain(0.5)
+                    return True
+
+                if "login:" in full_text or "init:" in full_text:
+                    log("ERROR: Linux already booting — too late to interrupt")
+                    return False
+
+        log("ERROR: Timed out waiting for U-Boot bootmenu")
+        return False
+
+    def send_command(self, cmd: str, wait: float = 3) -> tuple[bool, str]:
+        self._drain(0.2)
+        self.ser.write((cmd + "\r\n").encode())
+        time.sleep(wait)
+        data = self._drain(0.5)
+        text = data.decode("ascii", errors="replace")
+
+        output_lines = []
+        for line in text.strip().split("\n"):
+            clean = line.strip()
+            if clean and clean != cmd:
+                output_lines.append(clean)
+
+        has_error = any(err in text for err in self.ERROR_STRINGS)
+
+        if "tftpboot" in cmd and "Bytes transferred" not in text and "LOAD ERROR" not in text.upper():
+            if "ERROR" in text.upper() or "Retry count exceeded" in text:
+                has_error = True
+
+        return has_error, "\n".join(output_lines)
+
+    def run_commands(self, commands: list[str], event_queue: queue.Queue,
+                     say_fn=None, flash_time_seconds: int = 120) -> bool:
+        total = len(commands)
+        for i, cmd in enumerate(commands):
+            progress = f"[{i+1}/{total}]"
+            log(f"{progress} U-Boot: {cmd}")
+
+            cmd_lower = cmd.lower()
+
+            if "tftpboot" in cmd_lower:
+                wait = 15
+                if ".bin" in cmd_lower:
+                    fn_match = re.search(r'tftpboot\s+\S+\s+(\S+)', cmd)
+                    if fn_match:
+                        fn = fn_match.group(1)
+                        if "chunk" in fn:
+                            wait = 300
+                say_msg = f"Transferring file {i+1} of {total}"
+            elif "nand erase" in cmd_lower or "mtd erase" in cmd_lower:
+                wait = 30
+                say_msg = f"Erasing flash partition {i+1} of {total}"
+            elif "nand write" in cmd_lower or "mtd write" in cmd_lower:
+                wait = 30
+                say_msg = f"Writing flash partition {i+1} of {total}"
+            elif "ubi create" in cmd_lower:
+                wait = 5
+                say_msg = f"Creating UBI volume {i+1} of {total}"
+            elif "reset" in cmd_lower:
+                wait = 2
+                say_msg = "Rebooting router"
+            else:
+                wait = 3
+                say_msg = ""
+
+            if say_fn and say_msg:
+                say_fn(say_msg)
+
+            has_error, output = self.send_command(cmd, wait)
+
+            if output:
+                for line in output.split("\n")[:10]:
+                    log(f"  {line}")
+
+            if has_error and "reset" not in cmd_lower:
+                log(f"ERROR: Command failed: {cmd}")
+                log(f"  Output: {output[:300]}")
+                event_queue.put((Event.SERIAL_COMMAND_DONE, ts(), f"ERROR: {cmd}"))
+                return False
+
+            event_queue.put((Event.SERIAL_COMMAND_DONE, ts(), cmd))
+
+        event_queue.put((Event.SERIAL_ALL_DONE, ts(), ""))
+        return True
+
+    def close(self):
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+            log(f"Serial port {self.port} closed")
+
+
 @dataclass
 class RecoveryContext:
     profile: object  # SimpleNamespace loaded from model JSON via model_loader
@@ -753,6 +1026,11 @@ class RecoveryContext:
     force_uboot: bool = False
     boot_state: str = "unknown"
     ssh_key_path: str = ""
+    serial_port: str = ""
+    serial_method: str = ""
+    serial_baud: int = 115200
+    tftp_root: str = ""
+    uboot_commands: list = field(default_factory=list)
     _say_fn: object = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -917,6 +1195,10 @@ def _run_state_machine(
             _handle_uboot_uploading(ctx, event_queue)
         elif ctx.state == State.UBOOT_FLASHING:
             _handle_uboot_flashing(ctx, event_queue, pcap_monitor)
+        elif ctx.state == State.SERIAL_WAITING_FOR_BOOTMENU:
+            _handle_serial_waiting_for_bootmenu(ctx, event_queue)
+        elif ctx.state == State.SERIAL_UBOOT_INTERACTING:
+            _handle_serial_uboot_interacting(ctx, event_queue)
         elif ctx.state == State.REBOOTING:
             _handle_rebooting(ctx, event_queue)
         elif ctx.state == State.OPENWRT_BOOTING:
@@ -1126,6 +1408,128 @@ def _handle_uboot_flashing(ctx: RecoveryContext, eq: queue.Queue, pcap_monitor: 
         ctx._say_fn("Link down. Router is rebooting.")
     elif result == Event.UBOOT_ARP_192_168_1_2:
         ctx._say_fn("Firmware uploaded. Flashing in progress. Do not unplug.")
+
+
+def _handle_serial_waiting_for_bootmenu(ctx: RecoveryContext, eq: queue.Queue) -> None:
+    profile = ctx.profile
+    port = ctx.serial_port
+    baud = ctx.serial_baud
+
+    if not port:
+        try:
+            port = _auto_detect_serial_port()
+            log(f"Auto-detected serial port: {port}")
+        except FileNotFoundError as e:
+            log(f"ERROR: {e}")
+            ctx.state = State.FAILED
+            return
+
+    ctx._say_fn("Connect serial adapter and Ethernet cable to LAN2.")
+    if profile.lan_port:
+        log(f"IMPORTANT: Connect Ethernet cable to {profile.lan_port} port")
+    log(f"Serial port: {port} at {baud} baud")
+
+    ctx._say_fn("Power cycle the router now.")
+    log("Power cycle the router now. Watching for U-Boot bootmenu...")
+
+    driver = SerialUBootDriver(port, baud)
+    ctx._serial_driver = driver
+
+    got_prompt = driver.wait_for_bootmenu(
+        timeout=profile.bootmenu_timeout,
+        interrupt=profile.bootmenu_interrupt,
+        console_option=profile.bootmenu_select_console,
+        say_fn=ctx._say_fn,
+    )
+
+    if not got_prompt:
+        ctx._say_fn("Failed to get U-Boot prompt. Check serial connection and try again.")
+        driver.close()
+        ctx.state = State.FAILED
+        return
+
+    eq.put((Event.SERIAL_UBOOT_READY, ts(), ""))
+    ctx.timeline.uboot_http_first = ts()
+    ctx.state = State.SERIAL_UBOOT_INTERACTING
+
+
+def _handle_serial_uboot_interacting(ctx: RecoveryContext, eq: queue.Queue) -> None:
+    profile = ctx.profile
+    driver: SerialUBootDriver = ctx._serial_driver
+
+    tftp_root = ctx.tftp_root
+    if not tftp_root:
+        tftp_root = os.path.join(os.path.dirname(ctx.image_path), "tftpboot")
+        if not os.path.isdir(tftp_root):
+            tftp_root = os.path.dirname(ctx.image_path)
+
+    tftp_mgr = TFTPServerManager(tftp_root)
+    ctx._tftp_manager = tftp_mgr
+
+    if not tftp_mgr.start():
+        log("WARNING: TFTP server not available — commands may fail")
+
+    ctx._say_fn("Setting up network and starting flash process.")
+
+    setup_interface_for_serial(ctx)
+
+    commands = ctx.uboot_commands
+    if not commands:
+        commands = profile.uboot_commands
+
+    if not commands:
+        log("ERROR: No U-Boot commands defined in model JSON")
+        ctx.state = State.FAILED
+        tftp_mgr.stop()
+        driver.close()
+        return
+
+    ctx.timeline.upload_start = ts()
+    ctx.sha256_before = sha256_file(ctx.image_path) if ctx.image_path else ""
+
+    success = driver.run_commands(
+        commands, eq,
+        say_fn=ctx._say_fn,
+        flash_time_seconds=profile.flash_time_seconds,
+    )
+
+    tftp_mgr.stop()
+
+    if success:
+        ctx.timeline.flash_complete = ts()
+        ctx.timeline.upload_complete = ts()
+        log("All U-Boot commands executed successfully")
+        ctx.state = State.REBOOTING
+        driver.close()
+    else:
+        ctx._say_fn("Flash failed. Check serial output for details.")
+        ctx.state = State.FAILED
+        driver.close()
+
+
+def setup_interface_for_serial(ctx: RecoveryContext) -> None:
+    profile = ctx.profile
+    interface = ctx.interface
+    if not interface:
+        return
+
+    existing = subprocess.run(
+        ["ifconfig", interface], capture_output=True, text=True, check=False,
+    ).stdout
+
+    if profile.client_ip and profile.client_ip not in existing:
+        result = subprocess.run(
+            ["ifconfig", interface, profile.client_ip,
+             "netmask", profile.client_subnet, "up"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            log(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}")
+            log(f"  sudo ifconfig {interface} {profile.client_ip} netmask {profile.client_subnet} up")
+        else:
+            log(f"Configured {interface}: {profile.client_ip}/{profile.client_subnet}")
+    else:
+        log(f"Interface {interface} already has {profile.client_ip}")
 
 
 def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
@@ -1495,6 +1899,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Router's U-Boot MAC address (for ARP detection)")
     flash_parser.add_argument("--silence-timeout", type=int, default=SILENCE_TIMEOUT_DEFAULT,
                         help="Seconds of no packets before silence event")
+    flash_parser.add_argument("--serial-port", default=None,
+                        help="Serial port for serial-tftp method (e.g. /dev/cu.usbserial-A50285BI). "
+                             "Auto-detected if omitted.")
+    flash_parser.add_argument("--serial-method", default=None,
+                        help="Serial flash method variant (e.g. openwrt-flash, stock-restore). "
+                             "Selects the serial-tftp-{method} flash_method from model JSON.")
+    flash_parser.add_argument("--serial-baud", type=int, default=115200,
+                        help="Serial baud rate (default: 115200)")
+    flash_parser.add_argument("--tftp-root", default=None,
+                        help="TFTP server root directory. Defaults to image directory.")
 
     subparsers.add_parser("list", help="List available device models")
 
@@ -1693,14 +2107,33 @@ def cmd_flash(args: argparse.Namespace) -> int:
             parser.error("--model-id is required when device is not reachable via SSH.")
 
     try:
-        profile = _build_profile_from_model(args.model_id)
+        profile = _build_profile_from_model(args.model_id, serial_method=args.serial_method or "")
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
+    is_serial_tftp = getattr(profile, 'is_serial_tftp', False)
+
+    if is_serial_tftp and not args.serial_method:
+        serial_methods = [k for k in load_model(args.model_id).get("flash_methods", {}).keys()
+                          if k.startswith("serial-tftp-")]
+        if len(serial_methods) == 1:
+            method_suffix = serial_methods[0].replace("serial-tftp-", "")
+            profile = _build_profile_from_model(args.model_id, serial_method=method_suffix)
+            log(f"Auto-selected serial method: {serial_methods[0]}")
+        elif len(serial_methods) > 1:
+            print(f"ERROR: Multiple serial methods available: {serial_methods}. "
+                  f"Use --serial-method to select one.", file=sys.stderr)
+            return 1
+
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
-    boot_state = _detect_boot_state("", profile)
-    use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
+
+    if is_serial_tftp:
+        boot_state = "unknown"
+        use_sysupgrade = False
+    else:
+        boot_state = _detect_boot_state("", profile)
+        use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
 
     generated_password = ""
     password_set = False
@@ -1763,8 +2196,14 @@ def cmd_flash(args: argparse.Namespace) -> int:
     log(f"Interface:  {interface}")
     log(f"Pcap:       {pcap_path}")
     log(f"Boot state: {boot_state}")
-    log(f"Flash path: {'sysupgrade' if use_sysupgrade else 'U-Boot recovery'}")
-    if not use_sysupgrade:
+    if is_serial_tftp:
+        log(f"Flash path: serial-tftp ({profile.flash_method})")
+        log(f"Serial:     {args.serial_port or 'auto-detect'} @ {getattr(profile, 'serial_baud', 115200)} baud")
+        if getattr(profile, 'lan_port', ''):
+            log(f"LAN port:   {profile.lan_port} (for TFTP)")
+    else:
+        log(f"Flash path: {'sysupgrade' if use_sysupgrade else 'U-Boot recovery'}")
+    if not use_sysupgrade and not is_serial_tftp:
         log(f"LED signal: {profile.led_pattern}")
     if args.request_image:
         log(f"Auth type:  {auth_type}")
@@ -1800,7 +2239,12 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log("No running router detected at this IP (expected — device needs recovery)")
         print()
 
-    initial_state = State.SYSUPGRADE_UPLOADING if use_sysupgrade else State.WAITING_FOR_POWER_OFF
+    if is_serial_tftp:
+        initial_state = State.SERIAL_WAITING_FOR_BOOTMENU
+    elif use_sysupgrade:
+        initial_state = State.SYSUPGRADE_UPLOADING
+    else:
+        initial_state = State.WAITING_FOR_POWER_OFF
 
     ctx = RecoveryContext(
         profile=profile,
@@ -1818,6 +2262,11 @@ def cmd_flash(args: argparse.Namespace) -> int:
         force_uboot=args.force_uboot,
         boot_state=boot_state,
         ssh_key_path=ssh_key_path,
+        serial_port=args.serial_port or "",
+        serial_method=args.serial_method or "",
+        serial_baud=args.serial_baud or getattr(profile, 'serial_baud', 115200),
+        tftp_root=args.tftp_root or "",
+        uboot_commands=getattr(profile, 'uboot_commands', []),
         _say_fn=_say_fn,
         state=initial_state,
     )
@@ -1831,6 +2280,24 @@ def cmd_flash(args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             log("Interrupted by user.")
             rc = 1
+        return rc
+
+    if is_serial_tftp:
+        _say_fn(f"Starting {profile.description} serial recovery.")
+        if getattr(profile, 'lan_port', ''):
+            log(f"IMPORTANT: Connect Ethernet cable to {profile.lan_port} port")
+        try:
+            rc = _run_state_machine(ctx, event_queue, None, None)
+        except KeyboardInterrupt:
+            log("Interrupted by user.")
+            rc = 1
+        finally:
+            driver = getattr(ctx, '_serial_driver', None)
+            if driver:
+                driver.close()
+            tftp_mgr = getattr(ctx, '_tftp_manager', None)
+            if tftp_mgr:
+                tftp_mgr.stop()
         return rc
 
     _setup_interface_ips(interface, profile)

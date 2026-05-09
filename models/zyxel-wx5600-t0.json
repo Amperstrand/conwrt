@@ -1,0 +1,172 @@
+{
+  "id": "zyxel_wx5600-t0",
+  "vendor": "Zyxel",
+  "description": "WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B",
+  "openwrt": {
+    "target": "mediatek/filogic",
+    "device": "zyxel,wx5600-t0-ubootmod",
+    "default_ip": "192.168.1.1",
+    "arch": "aarch64_cortex-a53"
+  },
+  "hardware": {
+    "soc": "MT7986B (Filogic 830) quad-core Cortex-A53 @ 1.6GHz",
+    "flash": "SPI NAND 512MB (Micron MT29F4G01ABAFD, NMBM enabled)",
+    "ram": "512MB DDR3",
+    "ethernet_ports": "2x Maxlinear GPY211C 2.5Gbps (LAN1, LAN2)",
+    "wifi": "2.4GHz + 5GHz WiFi 6 (MT7986B integrated)",
+    "serial": "UART0, 115200 8N1, 3.3V, 4-pin header (Pin1=GND, Pin2=NC, Pin3=TX, Pin4=RX)",
+    "note": "U-Boot TFTP only works on LAN2 port. Must use static IP on host (no DHCP)."
+  },
+  "mac_oui": ["48:ED:E6", "FC:22:F4"],
+  "flash_methods": {
+    "serial-tftp-openwrt": {
+      "description": "Flash OpenWrt via serial + TFTP. Requires FTDI adapter (3.3V) and case opening.",
+      "serial_baud": 115200,
+      "serial_voltage": "3.3V",
+      "bootmenu_interrupt": "ctrl-c",
+      "bootmenu_select_console": "0",
+      "bootmenu_timeout_seconds": 30,
+      "tftp_server_ip": "192.168.1.254",
+      "tftp_router_ip": "192.168.1.1",
+      "tftp_load_address": "0x46000000",
+      "eth_prime": "ethernet@15100000",
+      "lan_port": "LAN2",
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
+      "led_pattern": "no specific LED pattern — watch serial output",
+      "images": {
+        "preloader": {
+          "filename": "*-ubootmod-preloader.bin",
+          "target_mtd": "bl2"
+        },
+        "fip": {
+          "filename": "*-ubootmod-bl31-uboot.fip",
+          "target_mtd": "fip"
+        },
+        "sysupgrade": {
+          "filename": "*-ubootmod-squashfs-sysupgrade.itb",
+          "target_ubi_vol": "fit"
+        }
+      },
+      "uboot_commands": [
+        "setenv ipaddr 192.168.1.1",
+        "setenv serverip 192.168.1.254",
+        "setenv ethprime ethernet@15100000",
+        "ubi detach",
+        "nand erase.part ubi",
+        "ubi part ubi",
+        "ubi create ubootenv 0x1E0000",
+        "ubi create fit 0xA00000",
+        "ubi create ubootenv2 0x1E0000",
+        "tftpboot 0x46000000 sysupgrade.itb",
+        "ubi write 0x46000000 fit ${filesize}",
+        "tftpboot 0x46000000 preloader.bin",
+        "mtd erase bl2",
+        "mtd write bl2 0x46000000 0x0 ${filesize}",
+        "tftpboot 0x46000000 fip.bin",
+        "mtd erase fip",
+        "mtd write fip 0x46000000 0x0 ${filesize}",
+        "reset"
+      ]
+    },
+    "serial-tftp-stock-restore": {
+      "description": "Restore stock firmware from NAND dumps via serial + TFTP. Requires backup files.",
+      "serial_baud": 115200,
+      "serial_voltage": "3.3V",
+      "bootmenu_interrupt": "ctrl-c",
+      "bootmenu_select_console": "0",
+      "bootmenu_timeout_seconds": 30,
+      "tftp_server_ip": "192.168.1.254",
+      "tftp_router_ip": "192.168.1.1",
+      "tftp_load_address": "0x46000000",
+      "eth_prime": "ethernet@15100000",
+      "lan_port": "LAN2",
+      "flash_time_seconds": 300,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
+      "led_pattern": "no specific LED pattern — watch serial output",
+      "images": {
+        "stock_bl2": {
+          "filename": "zyxel-bl2.bin",
+          "target_mtd": "bl2",
+          "expected_size": 1048576
+        },
+        "stock_fip": {
+          "filename": "zyxel-fip.bin",
+          "target_mtd": "fip",
+          "expected_size": 1835008
+        },
+        "stock_env": {
+          "filename": "zyxel-env.bin",
+          "target_mtd": "u-boot-env",
+          "expected_size": 524288
+        },
+        "ubi_chunk0": {
+          "filename": "ubi-chunk0.bin",
+          "target_nand_offset": "0x580000",
+          "target_nand_size": "0x19000000",
+          "expected_size": 419430400
+        },
+        "ubi_chunk1": {
+          "filename": "ubi-chunk1.bin",
+          "target_nand_offset": "0x19580000",
+          "target_nand_size": "0x4A80000",
+          "expected_size": 78118912
+        }
+      },
+      "uboot_commands": [
+        "setenv ipaddr 192.168.1.1",
+        "setenv serverip 192.168.1.254",
+        "setenv ethprime ethernet@15100000",
+        "tftpboot 0x46000000 ubi-chunk0.bin",
+        "nand erase.part ubi",
+        "nand write 0x46000000 0x580000 0x19000000",
+        "tftpboot 0x46000000 ubi-chunk1.bin",
+        "nand write 0x46000000 0x19580000 0x4A80000",
+        "tftpboot 0x46000000 zyxel-env.bin",
+        "mtd erase u-boot-env",
+        "mtd write u-boot-env 0x46000000 0x0 ${filesize}",
+        "tftpboot 0x46000000 zyxel-fip.bin",
+        "mtd erase fip",
+        "mtd write fip 0x46000000 0x0 ${filesize}",
+        "tftpboot 0x46000000 zyxel-bl2.bin",
+        "mtd erase bl2",
+        "mtd write bl2 0x46000000 0x0 ${filesize}",
+        "reset"
+      ]
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    }
+  },
+  "signatures": {
+    "uboot_bootmenu": {
+      "source": "serial capture 2026-04-30, 2026-05-05",
+      "countdown_prompt": "Hit any key to stop autoboot:",
+      "countdown_seconds": 3,
+      "console_option": "0",
+      "menu_title": "U-Boot Boot Menu"
+    },
+    "openwrt_booting": {
+      "source": "pcap analysis 2026-05-05",
+      "first_packet_protocol": "icmpv6_mldv2",
+      "first_dhcp": "DHCP reply from 192.168.1.1:67",
+      "no_mdns": true
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 30
+    }
+  },
+  "partition_layout": {
+    "source": "AGENTS.md, verified on hardware",
+    "mtd0": {"name": "bl2",      "offset": "0x000000", "size": "1MB"},
+    "mtd1": {"name": "u-boot-env","offset": "0x100000", "size": "512KB"},
+    "mtd2": {"name": "factory",  "offset": "0x180000", "size": "2MB", "irreplaceable": true},
+    "mtd3": {"name": "fip",      "offset": "0x380000", "size": "1.75MB"},
+    "mtd4": {"name": "zloader",  "offset": "0x540000", "size": "256KB"},
+    "mtd5": {"name": "ubi",      "offset": "0x580000", "size": "~496MB"}
+  }
+}
