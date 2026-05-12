@@ -44,6 +44,12 @@ Vanilla OpenWrt has no root password by default. SSH as root with no password wo
 
 ## U-Boot Recovery
 
+### D-Link COVR-X1860: LAN port works for recovery
+Recovery mode works on both WAN and LAN ports (validated 2026-05-12). The recovery HTTP server at 192.168.0.1 is accessible regardless of which ethernet port the cable is plugged into.
+
+### D-Link COVR-X1860: Skip power cycle if already in recovery
+If the device is already in recovery mode (recovery HTTP live), conwrt detects this and skips the power-off/reset-button sequence, going straight to firmware upload.
+
 ### GL.iNet LED patterns differ by model
 - AR-150/AR300M: red LED blinks, release on 6th blink, green LED = ready
 - MT3000: blue LED flashes 6x, then solid white = ready
@@ -55,6 +61,11 @@ The HTTP form field for firmware upload is "firmware" (validated on MT3000 and A
 Use Chrome or Edge for U-Boot web UI. Firefox has known issues that may brick the device during upload.
 
 ## Security
+
+### SSH key mismatch: ASU bake vs. SSH/SCP connection
+When config.toml has multiple SSH keys, ASU bakes the **first** key into the firmware's authorized_keys. But `_detect_ssh_key_path()` may resolve to a different private key for SCP/SSH connections. If the keys don't match, the device rejects the connection after flashing.
+
+**Fix:** Ensure the first key in `config.toml` `keys` array has a corresponding private key on the host machine. The private key is resolved from the public key path (strip `.pub`) or auto-detected from `~/.ssh/`.
 
 ### Don't accidentally modify the upstream router
 When your development machine has SSH access to both the test router AND the upstream/main router, verify the IP address before running ANY command. Commands like `passwd` run without confirmation.
