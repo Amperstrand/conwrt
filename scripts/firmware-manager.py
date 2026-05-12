@@ -34,7 +34,6 @@ IMAGES_DIR = REPO_ROOT / "images"
 
 ASU_BASE = "https://sysupgrade.openwrt.org"
 ASU_BUILD_URL = f"{ASU_BASE}/api/v1/build"
-ASU_PACKAGES_URL = f"{ASU_BASE}/api/v1/packages"
 ASU_STORE_URL = f"{ASU_BASE}/store"
 
 POLL_INTERVAL = 10
@@ -343,45 +342,6 @@ def _find_cached_firmware(profile: str, request_hash: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _query_default_packages(
-    profile: str, target: str, version: str
-) -> list[str]:
-    """Query ASU for the default package list of a device profile."""
-    url = (
-        f"{ASU_PACKAGES_URL}?distro=openwrt"
-        f"&version={version}&target={target}&profile={profile}"
-    )
-    try:
-        data = _http_get_json(url, timeout=15)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return data.get("packages", [])
-        return []
-    except Exception as exc:
-        logger.warning("could not query default packages: %s", exc)
-        return []
-
-
-def _fetch_profiles_packages(target: str, version: str, profile_name: str) -> tuple[list[str], list[str]]:
-    """Fetch default and device package lists from OpenWrt profiles.json."""
-    url = f"https://downloads.openwrt.org/releases/{version}/targets/{target}/profiles.json"
-    try:
-        data = _http_get_json(url, timeout=15)
-    except Exception as exc:
-        logger.warning("could not fetch profiles.json packages: %s", exc)
-        return [], []
-
-    default_packages = data.get("default_packages", [])
-    profiles = data.get("profiles", {})
-    device_packages = profiles.get(profile_name, {}).get("device_packages", [])
-
-    if not isinstance(default_packages, list):
-        default_packages = []
-    if not isinstance(device_packages, list):
-        device_packages = []
-    return default_packages, device_packages
-
 
 def _compute_cache_key(
     distro: str,
@@ -458,45 +418,17 @@ def cmd_request(args: argparse.Namespace) -> int:
             " (includes SSH key)" if ssh_key_cleaned else "",
         )
 
-    extra_packages: list[str] = []
-    default_packages: list[str] = []
-    device_packages: list[str] = []
-    extras: list[str] = []
+    # Collect extra packages to ADD on top of the ImageBuilder's profile defaults.
+    # With diff_packages=false (the default), ASU includes the profile's
+    # default_packages and device_packages automatically — we only need to
+    # specify what we want ON TOP of those.
     packages_to_send: Optional[list[str]] = None
+    extras = list(cfg.extra_packages)
     if packages_str:
-        extra_packages = [p.strip() for p in packages_str.split(",") if p.strip()]
-
-        # ASU replaces defaults when packages are specified
-        default_packages = _query_default_packages(profile, target, version)
-        if default_packages:
-            combined = list(dict.fromkeys(default_packages + extra_packages))
-            packages_to_send = combined
-            logger.info(
-                "packages: %d defaults + %d extra = %d total",
-                len(default_packages),
-                len(extra_packages),
-                len(combined),
-            )
-        else:
-            packages_to_send = extra_packages
-            logger.warning(
-                "could not fetch defaults, sending only extra packages: %s",
-                extra_packages,
-            )
-    else:
-        default_packages, device_packages = _fetch_profiles_packages(target, version, profile)
-        extras = list(cfg.extra_packages)
-        if default_packages or device_packages:
-            packages_to_send = list(dict.fromkeys(default_packages + device_packages + extras))
-            logger.info(
-                "packages: %d defaults + %d device + %d extras = %d total",
-                len(default_packages),
-                len(device_packages),
-                len(extras),
-                len(packages_to_send),
-            )
-        else:
-            logger.warning("profiles.json package fetch failed; falling back to ASU defaults")
+        extras += [p.strip() for p in packages_str.split(",") if p.strip()]
+    if extras:
+        packages_to_send = list(dict.fromkeys(extras))
+        logger.info("extra packages (%d): %s", len(packages_to_send), packages_to_send)
 
     cache_key = _compute_cache_key(
         "openwrt",
@@ -521,8 +453,6 @@ def cmd_request(args: argparse.Namespace) -> int:
     }
     if packages_to_send:
         build_request["packages"] = packages_to_send
-        if not packages_str:
-            build_request["diff_packages"] = True
     if defaults_script:
         build_request["defaults"] = defaults_script
 
@@ -660,16 +590,8 @@ def cmd_request(args: argparse.Namespace) -> int:
         "version_code": status_data.get("version_code", ""),
         "target": status_data.get("target", target),
         "profile": status_data.get("profile", profile),
-        "packages_requested": extra_packages,
-        "packages_default": default_packages,
-        "packages_device": device_packages if not packages_str else status_data.get("packages_device", []),
-        "packages_all": status_data.get("packages", {}),
         "packages": packages_to_send or [],
-        "packages_sources": {
-            "default": default_packages,
-            "device": device_packages,
-            "extra": extra_packages if packages_str else extras,
-        },
+        "packages_all": status_data.get("packages", {}),
         "defaults": defaults_script if defaults_script else None,
         "ssh_key_source": ssh_key_source,
         "images": downloaded_images,
