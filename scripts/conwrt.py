@@ -899,8 +899,11 @@ class PcapMonitor:
         if "udp" in lower and "4919" in lower:
             self._emit(Event.FAILSAFE_BROADCAST, line[:120])
 
-    def _run_tcpdump_fallback(self) -> None:
+    def _run_tcpdump_fallback(self) -> Optional[bool]:
         self._writer_proc = self._start_writer()
+
+        if not self._writer_proc:
+            return None
 
         # Wait for pcap file header to be written
         time.sleep(1)
@@ -958,6 +961,7 @@ class PcapMonitor:
 
     def run(self) -> None:
         log(f"Pcap monitor starting: iface={self.config.interface} pcap={self.config.pcap_path}")
+
         try:
             from scapy.all import ARP, Ether, IP, IPv6, PcapWriter, Raw, TCP, UDP, sniff
             self._scapy = SimpleNamespace(
@@ -971,9 +975,29 @@ class PcapMonitor:
                 UDP=UDP,
                 sniff=sniff,
             )
+            # Test if we can actually sniff (needs root for raw sockets)
+            test_sock = None
+            try:
+                from scapy.all import conf, L2socket
+                test_sock = L2socket(iface=self.config.interface)
+                test_sock.close()
+            except Exception:
+                raise PermissionError(
+                    f"no permission to capture on {self.config.interface} "
+                    f"(need root or CAP_NET_RAW)"
+                )
+        except PermissionError:
+            log(f"scapy: permission denied — trying sudo tcpdump fallback")
+            self._run_tcpdump_fallback()
+            log("Pcap monitor stopped")
+            return
         except Exception as e:
             log(f"scapy unavailable, falling back to tcpdump capture: {e}")
-            self._run_tcpdump_fallback()
+            tcpdump_result = self._run_tcpdump_fallback()
+            if tcpdump_result is None:
+                log("WARNING: no packet capture available (no root). "
+                    "State machine will rely on link monitoring and SSH polling only.")
+                return
             log("Pcap monitor stopped")
             return
 
@@ -2263,7 +2287,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--force-uboot", action="store_true",
                         help="Force U-Boot recovery mode even if OpenWrt is detected")
     flash_parser.add_argument("--capture", default=None,
-                        help="Save pcap capture to file (requires sudo)")
+                        help="Save pcap capture to file (auto-degrades if no root)")
     flash_parser.add_argument("--router-mac", default="",
                         help="Router's OpenWrt MAC address (for ICMPv6 detection)")
     flash_parser.add_argument("--uboot-mac", default="",
