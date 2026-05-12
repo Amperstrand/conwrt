@@ -313,7 +313,8 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
         print(f"Management WiFi already configured on {args.ip}")
         return 0
 
-    script = build_mgmt_wifi_script()
+    cfg = _load_config()
+    script = build_mgmt_wifi_script(txpower=cfg.mgmt_wifi_txpower)
     ssh_command = ssh_cmd(args.ip, "sh -s", key=ssh_key, connect_timeout=10)
 
     try:

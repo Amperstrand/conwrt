@@ -61,6 +61,7 @@ class ConwrtConfig:
     password_mode: str = "random"
     wan_ssh: bool = False
     mgmt_wifi: bool = False
+    mgmt_wifi_txpower: Optional[int] = None
     wifi_sta: Optional[WifiSTAConfig] = None
     wifi_ap: Optional[WifiAPConfig] = None
 
@@ -236,6 +237,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         password_mode=password_mode,
         wan_ssh=network_section.get("wan_ssh", False),
         mgmt_wifi=network_section.get("mgmt_wifi", False),
+        mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
         wifi_sta=wifi_sta,
         wifi_ap=wifi_ap,
     )

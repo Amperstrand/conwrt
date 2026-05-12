@@ -112,8 +112,8 @@ def _read_ssh_pubkey(path: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def build_mgmt_wifi_script() -> str:
-    return textwrap.dedent(
+def build_mgmt_wifi_script(txpower: Optional[int] = None) -> str:
+    base = textwrap.dedent(
         """\
         # --- management WiFi setup ---
         # Do NOT use 'set -eu' — radio/wifi subsystem may not be fully
@@ -163,25 +163,18 @@ def build_mgmt_wifi_script() -> str:
             printf 'conwrt-mgmt-wifi: Could not determine MAC address, skipping\\n' >&2
             exit 0
         fi
-        if [ -z "$MAC" ]; then
-            for iface in /sys/class/net/*/address; do
-                case "$iface" in
-                    */lo/address) continue ;;
-                esac
-                MAC=$(cat "$iface" 2>/dev/null || true)
-                [ -n "$MAC" ] && break
-            done
-        fi
-        if [ -z "$MAC" ]; then
-            printf 'conwrt-mgmt-wifi: Could not determine MAC address, skipping\\n' >&2
-            exit 0
-        fi
         SSID="MGMT-$(printf '%s' "$MAC" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
 
-        # --- Enable the 2.4GHz radio and set regulatory domain ---
+        # --- Enable the 2.4GHz radio ---
         uci set wireless.$RADIO_2G.disabled=0
         uci -q delete wireless.$RADIO_2G.country || true
+"""
+    )
+    if txpower is not None:
+        base += f"        uci set wireless.$RADIO_2G.txpower='{txpower}'\n"
 
+    base += textwrap.dedent(
+        """\
         # --- Idempotent cleanup: remove all existing wifi-ifaces and mgmt remnants ---
         uci -q delete network.mgmt_dev
         uci -q delete network.mgmt
@@ -246,6 +239,7 @@ def build_mgmt_wifi_script() -> str:
         printf 'MGMT_WIFI_RADIO=%s\\n' "$RADIO_2G"
         """
     )
+    return base
 
 
 def _build_defaults(
@@ -254,6 +248,7 @@ def _build_defaults(
     wan_ssh: bool,
     extra_pub_keys: Optional[list[str]] = None,
     mgmt_wifi: bool = False,
+    mgmt_wifi_txpower: Optional[int] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Build the shell defaults script for first-boot customization.
 
@@ -295,7 +290,7 @@ def _build_defaults(
         ])
 
     if mgmt_wifi:
-        lines.append(build_mgmt_wifi_script().rstrip())
+        lines.append(build_mgmt_wifi_script(txpower=mgmt_wifi_txpower).rstrip())
 
     return "\n".join(lines), ssh_key_cleaned, ssh_key_source
 
@@ -409,6 +404,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         wan_ssh,
         extra_pub_keys=extra_pub_keys,
         mgmt_wifi=cfg.mgmt_wifi,
+        mgmt_wifi_txpower=cfg.mgmt_wifi_txpower,
     )
 
     if defaults_script:
