@@ -17,9 +17,9 @@ from pathlib import Path
 
 def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
     """Get default gateway IP address."""
+    import platform
     try:
-        # Try using iproute2 (modern Linux)
-        if os.path.exists('/sbin/ip'):
+        if platform.system() == "Linux" or os.path.exists('/sbin/ip'):
             cmd = ['ip', 'route', 'show', 'default']
             if interface:
                 cmd.insert(2, 'dev', interface)
@@ -30,17 +30,17 @@ def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
                         parts = line.split()
                         if 'via' in parts:
                             return parts[parts.index('via') + 1]
-        # Fallback to route command
-        cmd = ['route', '-n', 'get', 'default']
-        if interface:
-            cmd.insert(2, 'dev', interface)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if 'gateway' in line:
-                    parts = line.split()
-                    if 'gateway' in parts:
-                        return parts[parts.index('gateway') + 1]
+        elif platform.system() == "Darwin":
+            cmd = ['route', '-n', 'get', 'default']
+            if interface:
+                cmd.extend(['-ifscope', interface])
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'gateway' in line:
+                        parts = line.split()
+                        if 'gateway' in parts:
+                            return parts[parts.index('gateway') + 1]
     except Exception:
         pass
     return None
