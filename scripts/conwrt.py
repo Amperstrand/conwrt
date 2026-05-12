@@ -41,6 +41,7 @@ from typing import Optional
 
 # model_loader is in the same directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import load_config as _load_config
 from model_loader import load_model, list_models
 import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
@@ -283,13 +284,9 @@ def _find_model_id_by_board(board_name: str) -> Optional[str]:
     return None
 
 
-def _detect_ssh_key_path() -> str:
-    """Find the private key matching the auto-detected public key."""
-    for candidate in ["~/.ssh/id_ed25519.pub", "~/.ssh/id_rsa.pub"]:
-        pub_path = os.path.expanduser(candidate)
-        if os.path.isfile(pub_path):
-            return pub_path.replace(".pub", "")
-    return ""
+ def _detect_ssh_key_path() -> str:
+    cfg = _load_config()
+    return cfg.ssh_private_key_path
 
 
 def _arp_target_for_profile(profile: SimpleNamespace) -> str:
@@ -2080,13 +2077,11 @@ def cmd_flash(args: argparse.Namespace) -> int:
         parser.error(validation_error)
 
     if args.request_image and not args.ssh_key:
-        for candidate in ["~/.ssh/id_ed25519.pub", "~/.ssh/id_rsa.pub"]:
-            candidate_path = os.path.expanduser(candidate)
-            if os.path.isfile(candidate_path):
-                args.ssh_key = candidate_path
-                break
-        if not args.ssh_key:
-            parser.error("No SSH public key found. Use --ssh-key to specify one.")
+        cfg = _load_config()
+        if cfg.ssh_public_key_path:
+            args.ssh_key = cfg.ssh_public_key_path
+        else:
+            parser.error("No SSH public key found. Set [ssh].key in config.toml or use --ssh-key.")
 
     _say_fn = (lambda m: None) if args.no_voice else say
 
@@ -2142,13 +2137,23 @@ def cmd_flash(args: argparse.Namespace) -> int:
     image_path = args.image
 
     if args.request_image:
+        cfg = _load_config()
         password = args.password
         if not args.no_password and not args.password:
-            generated_password = _generate_random_password()
-            _say_fn("Random password generated. Check the console.")
-            password = generated_password
-            password_set = True
-            auth_type = "key-and-password"
+            if cfg.password_is_key_only:
+                password = None
+                password_set = False
+                auth_type = "key-only"
+            elif cfg.password_is_random:
+                generated_password = _generate_random_password()
+                _say_fn("Random password generated. Check the console.")
+                password = generated_password
+                password_set = True
+                auth_type = "key-and-password"
+            elif cfg.password_literal:
+                password = cfg.password_literal
+                password_set = True
+                auth_type = "key-and-password"
         elif args.password:
             password_set = True
             auth_type = "key-and-password"
@@ -2156,7 +2161,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             password_set = False
             auth_type = "key-only"
 
-        wan_ssh_enabled = args.wan_ssh
+        wan_ssh_enabled = args.wan_ssh or cfg.wan_ssh
 
         image_path = _request_custom_image(
             model_id=args.model_id,

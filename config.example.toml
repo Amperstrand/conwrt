@@ -1,0 +1,43 @@
+# conwrt configuration
+# Copy this file to config.toml and fill in your values.
+# config.toml is gitignored — your keys and passwords stay local.
+
+[ssh]
+# Public key for ASU image builds and router authorized_keys.
+# Two formats accepted (auto-detected):
+#   Inline key — value starts with "ssh-" (e.g. ssh-ed25519, ssh-rsa)
+#   File path  — anything else, treated as path to .pub file
+key = "ssh-rsa AAAA...your-public-key-here... user@host"
+# key = "~/.ssh/id_ed25519.pub"
+
+[password]
+# Controls root password on the flashed router.
+#   "key-only" = no password, SSH key auth only (default, most secure)
+#   "random"   = generate a random password, print it once
+#   " literal" = use this exact string as the password
+mode = "key-only"
+
+[network]
+# Allow SSH on the WAN interface (adds firewall rule, disables password on WAN).
+wan_ssh = false
+
+# --- WiFi STA (client mode) ---
+# Router connects to an upstream AP (e.g. for WAN backhaul).
+# Uncomment to enable. The correct radio is auto-detected from the band.
+#
+# [network.sta]
+# band = "2.4ghz"           # "2.4ghz", "5ghz", "5ghz-low", "5ghz-high"
+# ssid = "UpstreamNetwork"
+# encryption = "psk2"        # psk2, psk3, sae, none
+# key = "passphrase"
+
+# --- WiFi AP (access point mode) ---
+# Router broadcasts its own network.
+# Uncomment to customize. When commented out, OpenWrt stock defaults apply.
+#
+# [network.ap]
+# band = "2.4ghz"
+# ssid = "MyOpenWrt"
+# encryption = "psk2"
+# key = "passphrase"
+# channel = "auto"           # auto, 1-13 (2.4GHz), 36-165 (5GHz)

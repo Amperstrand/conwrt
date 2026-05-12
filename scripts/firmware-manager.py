@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
+from config import load_config as _load_config
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -225,6 +226,11 @@ def cmd_request(args: argparse.Namespace) -> int:
     ssh_key_path: Optional[str] = args.ssh_key
     password: Optional[str] = args.password
     wan_ssh: bool = args.wan_ssh
+
+    if not ssh_key_path:
+        cfg = _load_config()
+        if cfg.ssh_public_key_path:
+            ssh_key_path = cfg.ssh_public_key_path
 
     if not target:
         model_id = profile.replace("-", "_")
@@ -705,7 +711,7 @@ def main() -> int:
     )
     p_request.add_argument(
         "--ssh-key", default=None,
-        help="Path to SSH public key (default: ~/.ssh/id_ed25519.pub)",
+        help="Path to SSH public key (default: [ssh].key from config.toml, then ~/.ssh/id_ed25519.pub)",
     )
     p_request.add_argument(
         "--password", default=None,

@@ -1,4 +1,5 @@
 # --- Personal / device-specific data (never commit) ---
+config.toml
 data/
 .env
 secrets/
