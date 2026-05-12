@@ -20,11 +20,14 @@ import socket
 import subprocess
 import sys
 import time
+import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ssh_utils import ssh_cmd, run_ssh
 
 logger = logging.getLogger("conwrt.probe")
 
@@ -32,8 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CAPTURES_DIR = REPO_ROOT / "captures"
 
 try:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from auto_flash import run_cmd as _auto_flash_run_cmd
+    _auto_flash_run_cmd = importlib.import_module("auto_flash").run_cmd
     run_cmd = _auto_flash_run_cmd
 except ImportError:
     def run_cmd(
@@ -287,30 +289,24 @@ def probe_ssh(device_ip: str) -> ProbeResult:
     status = "no_response"
     detail = ""
     try:
-        r = run_cmd(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "LogLevel=ERROR",
-             "-o", "BatchMode=yes",
-             f"root@{device_ip}", "cat", "/etc/openwrt_release"],
+        r = run_ssh(
+            device_ip,
+            ["cat", "/etc/openwrt_release"],
+            connect_timeout=3,
             timeout=8,
-            check=False,
+            ssh_options=["-o", "LogLevel=ERROR"],
         )
         if r.returncode == 0:
             release_info = r.stdout.strip()
             status = "openwrt_ssh"
             detail = release_info[:200]
         else:
-            r2 = run_cmd(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=3",
-                 "-o", "LogLevel=ERROR",
-                 "-o", "BatchMode=yes",
-                 f"root@{device_ip}", "true"],
+            r2 = run_ssh(
+                device_ip,
+                ["true"],
+                connect_timeout=3,
                 timeout=8,
-                check=False,
+                ssh_options=["-o", "LogLevel=ERROR"],
             )
             if r2.returncode == 0:
                 status = "ssh_ok"
@@ -333,29 +329,19 @@ def probe_ssh_failsafe(device_ip: str) -> ProbeResult:
     status = "not_failsafe"
     detail = ""
     try:
-        r = run_cmd(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "LogLevel=ERROR",
-             "-o", "BatchMode=yes",
-             f"root@{device_ip}", "ls", "/tmp/failsafe"],
-            timeout=8,
-            check=False,
-        )
+        failsafe_cmd = ssh_cmd(device_ip, ["ls", "/tmp/failsafe"], connect_timeout=3)
+        failsafe_cmd[1:1] = ["-o", "LogLevel=ERROR"]
+        r = run_cmd(failsafe_cmd, timeout=8, check=False)
         if r.returncode == 0:
             status = "failsafe"
             detail = "/tmp/failsafe exists"
         else:
-            r2 = run_cmd(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=3",
-                 "-o", "LogLevel=ERROR",
-                 "-o", "BatchMode=yes",
-                 f"root@{device_ip}", "mount"],
+            r2 = run_ssh(
+                device_ip,
+                ["mount"],
+                connect_timeout=3,
                 timeout=8,
-                check=False,
+                ssh_options=["-o", "LogLevel=ERROR"],
             )
             if r2.returncode == 0 and "jffs2" not in r2.stdout and "overlay" not in r2.stdout:
                 status = "failsafe"
@@ -388,16 +374,12 @@ def probe_ssh_details(device_ip: str) -> tuple[str, str, str, int]:
     firmware_version = ""
     ssh_key_count = 0
     try:
-        r = run_cmd(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "LogLevel=ERROR",
-             "-o", "BatchMode=yes",
-             f"root@{device_ip}",
-             "cat", "/etc/openwrt_release"],
+        r = run_ssh(
+            device_ip,
+            ["cat", "/etc/openwrt_release"],
+            connect_timeout=3,
             timeout=8,
-            check=False,
+            ssh_options=["-o", "LogLevel=ERROR"],
         )
         if r.returncode == 0:
             for line in r.stdout.splitlines():
@@ -408,30 +390,22 @@ def probe_ssh_details(device_ip: str) -> tuple[str, str, str, int]:
                 if "DISTRIB_TARGET" in line:
                     pass
 
-        r2 = run_cmd(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "LogLevel=ERROR",
-             "-o", "BatchMode=yes",
-             f"root@{device_ip}",
-             "cat", "/tmp/sysinfo/model"],
+        r2 = run_ssh(
+            device_ip,
+            ["cat", "/tmp/sysinfo/model"],
+            connect_timeout=3,
             timeout=8,
-            check=False,
+            ssh_options=["-o", "LogLevel=ERROR"],
         )
         if r2.returncode == 0:
             model = r2.stdout.strip()
 
-        r3 = run_cmd(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "LogLevel=ERROR",
-             "-o", "BatchMode=yes",
-             f"root@{device_ip}",
-             "wc", "-l", "/etc/dropbear/authorized_keys"],
+        r3 = run_ssh(
+            device_ip,
+            ["wc", "-l", "/etc/dropbear/authorized_keys"],
+            connect_timeout=3,
             timeout=8,
-            check=False,
+            ssh_options=["-o", "LogLevel=ERROR"],
         )
         if r3.returncode == 0:
             ssh_key_count = int(r3.stdout.strip().split()[0])

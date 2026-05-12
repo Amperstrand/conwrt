@@ -42,6 +42,7 @@ from typing import Optional
 
 # model_loader is in the same directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ssh_utils import ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models
 import importlib
@@ -199,59 +200,18 @@ def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None
     return "unknown"
 
 
-def _ssh_cmd(ip: str, *remote_cmds: str, key: Optional[str] = None,
-             connect_timeout: int = 3, password_auth: bool = False) -> list[str]:
-    """Build a complete SSH command list with standard options.
-
-    Always includes BatchMode=yes to prevent interactive password prompts
-    that would hang the script.  Use password_auth=True only when you
-    intentionally want to allow password authentication.
-    """
-    cmd: list[str] = ["ssh",
-                      "-o", "StrictHostKeyChecking=no",
-                      "-o", "UserKnownHostsFile=/dev/null",
-                      "-o", "BatchMode=yes",
-                      "-o", f"ConnectTimeout={connect_timeout}"]
-    if not password_auth:
-        cmd += ["-o", "PasswordAuthentication=no"]
-    if key:
-        cmd += ["-i", key]
-    cmd.append(f"root@{ip}")
-    cmd.extend(remote_cmds)
-    return cmd
-
-
-def _scp_cmd(src: str, dst: str, key: Optional[str] = None,
-             connect_timeout: int = 10) -> list[str]:
-    """Build a complete SCP command list with standard options.
-
-    Uses -O (legacy SCP protocol) for compatibility with OpenWrt's
-    dropbear SSH server, which lacks the sftp-server subsystem that
-    modern OpenSSH tries to use by default.
-    """
-    cmd: list[str] = ["scp", "-O",
-                      "-o", "StrictHostKeyChecking=no",
-                      "-o", "UserKnownHostsFile=/dev/null",
-                      "-o", "BatchMode=yes",
-                      "-o", f"ConnectTimeout={connect_timeout}"]
-    if key:
-        cmd += ["-i", key]
-    cmd += [src, dst]
-    return cmd
-
-
 def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
     """Upload firmware via SCP and run sysupgrade -n."""
     firmware_name = os.path.basename(firmware_path)
     remote_path = f"/tmp/{firmware_name}"
 
-    scp_cmd = _scp_cmd(firmware_path, f"root@{device_ip}:{remote_path}",
-                       key=ssh_key, connect_timeout=10)
+    scp_command = scp_cmd(device_ip, firmware_path, f"root@{device_ip}:{remote_path}",
+                          key=ssh_key, connect_timeout=10)
 
     size_mb = os.path.getsize(firmware_path) / 1024 / 1024
     log(f"Uploading {firmware_name} ({size_mb:.1f} MB) via SCP to {device_ip}...")
     try:
-        r = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=120, check=False)
+        r = subprocess.run(scp_command, capture_output=True, text=True, timeout=120, check=False)
         if r.returncode != 0:
             stderr_hint = r.stderr[:300] if r.stderr else "(no stderr)"
             if "permission denied" in stderr_hint.lower():
@@ -268,11 +228,11 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
         return False
 
     log(f"Firmware uploaded. Running sysupgrade -n {remote_path}...")
-    ssh_cmd = _ssh_cmd(device_ip, f"sysupgrade -n {remote_path}",
-                       key=ssh_key, connect_timeout=10)
+    ssh_command = ssh_cmd(device_ip, f"sysupgrade -n {remote_path}",
+                          key=ssh_key, connect_timeout=10)
 
     try:
-        r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30, check=False)
+        r = subprocess.run(ssh_command, capture_output=True, text=True, timeout=30, check=False)
         combined = (r.stdout or "") + (r.stderr or "")
         if (r.returncode == 0
                 or "Commencing upgrade" in combined
@@ -336,12 +296,29 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
         print("ERROR: No SSH private key found. Set [ssh].key in config.toml or install ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.", file=sys.stderr)
         return 1
 
+    verify_cmd = " && ".join([
+        "uci -q get network.mgmt.ipaddr | grep -qx '172.16.0.1'",
+        "uci -q get dhcp.mgmt.interface | grep -qx 'mgmt'",
+        "uci -q show firewall | grep -q \"\\.name='mgmt'\"",
+        "uci -q show wireless | grep -q \"\\.network='mgmt'\"",
+    ])
+    verify_result = subprocess.run(
+        ssh_cmd(args.ip, verify_cmd, key=ssh_key, connect_timeout=10),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if verify_result.returncode == 0:
+        print(f"Management WiFi already configured on {args.ip}")
+        return 0
+
     script = build_mgmt_wifi_script()
-    ssh_cmd = _ssh_cmd(args.ip, "sh -s", key=ssh_key, connect_timeout=10)
+    ssh_command = ssh_cmd(args.ip, "sh -s", key=ssh_key, connect_timeout=10)
 
     try:
         result = subprocess.run(
-            ssh_cmd,
+            ssh_command,
             input=script,
             text=True,
             capture_output=True,
@@ -360,24 +337,18 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
             print(result.stderr.strip(), file=sys.stderr)
         return result.returncode or 1
 
-    verify_cmd = " && ".join([
-        "uci -q get network.mgmt.ipaddr | grep -qx '172.16.0.1'",
-        "uci -q get dhcp.mgmt.interface | grep -qx 'mgmt'",
-        "uci -q show firewall | grep -q \"\\.name='mgmt'\"",
-        "uci -q show wireless | grep -q \"\\.network='mgmt'\"",
-    ])
-    verify_result = subprocess.run(
-        _ssh_cmd(args.ip, verify_cmd, key=ssh_key, connect_timeout=10),
+    verify_result2 = subprocess.run(
+        ssh_cmd(args.ip, verify_cmd, key=ssh_key, connect_timeout=10),
         text=True,
         capture_output=True,
         timeout=30,
         check=False,
     )
-    if verify_result.returncode != 0:
+    if verify_result2.returncode != 0:
         if result.stdout.strip():
             print(result.stdout.strip())
-        if verify_result.stderr.strip():
-            print(verify_result.stderr.strip(), file=sys.stderr)
+        if verify_result2.stderr.strip():
+            print(verify_result2.stderr.strip(), file=sys.stderr)
         print("ERROR: Management WiFi verification failed.", file=sys.stderr)
         return 1
 
@@ -589,7 +560,7 @@ def trigger_flash(profile: SimpleNamespace) -> bool:
 def check_ssh(ip: str = DEFAULT_IP) -> bool:
     try:
         r = subprocess.run(
-            _ssh_cmd(ip, "echo SSH_OK", connect_timeout=3),
+            ssh_cmd(ip, "echo SSH_OK", connect_timeout=3),
             capture_output=True, text=True, timeout=10, check=False,
         )
         return "SSH_OK" in r.stdout
@@ -602,18 +573,18 @@ def verify_router(ip: str = DEFAULT_IP) -> list[tuple[str, str]]:
     checks: list[tuple[str, str]] = []
     try:
         r = subprocess.run(
-            _ssh_cmd(ip,
-                     "echo hostname=$(cat /proc/sys/kernel/hostname); "
-                     "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
-                     "echo kernel=$(uname -r); "
-                     "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
-                     "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
-                     "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
-                     "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
-                     "echo mac_eth0=$(cat /sys/class/net/eth0/address 2>/dev/null || echo ''); "
-                     "echo 'mac_all='$(for f in /sys/class/net/*/address; do printf '%s=%s ' $(basename $(dirname $f)) $(cat $f 2>/dev/null); done); "
-                     "echo ping_ok=$(ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no)",
-                     connect_timeout=5),
+            ssh_cmd(ip,
+                    "echo hostname=$(cat /proc/sys/kernel/hostname); "
+                    "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
+                    "echo kernel=$(uname -r); "
+                    "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
+                    "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
+                    "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
+                    "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
+                    "echo mac_eth0=$(cat /sys/class/net/eth0/address 2>/dev/null || echo ''); "
+                    "echo 'mac_all='$(for f in /sys/class/net/*/address; do printf '%s=%s ' $(basename $(dirname $f)) $(cat $f 2>/dev/null); done); "
+                    "echo ping_ok=$(ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no)",
+                    connect_timeout=5),
             capture_output=True, text=True, timeout=20, check=False,
         )
         for line in r.stdout.strip().split('\n'):
@@ -655,15 +626,7 @@ def probe_router_info(ip: str = DEFAULT_IP) -> Optional[dict]:
 
 
 class PcapMonitor:
-    """Background thread that captures packets and emits events to a queue.
-
-    Uses two subprocess.Popen instances:
-    1. Writer: sudo tcpdump -i <iface> -w <path> -n -U --immediate-mode
-       This process may die when the USB ethernet adapter disconnects on reboot.
-       The monitor watches it and restarts when the interface comes back.
-    2. Reader: tcpdump -r <path> -nn -l (reads the growing pcap file in real-time)
-       Parses packets and emits events.
-    """
+    """Background thread that captures packets and emits events to a queue."""
 
     def __init__(self, config: PcapMonitorConfig, event_queue: queue.Queue):
         self.config = config
@@ -674,6 +637,8 @@ class PcapMonitor:
         self._writer_proc: Optional[subprocess.Popen] = None
         self._reader_proc: Optional[subprocess.Popen] = None
         self._known_uboot_macs: set[str] = set()
+        self._pcap_writer = None
+        self._scapy = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -725,6 +690,141 @@ class PcapMonitor:
         self._last_packet_time = ts()
         self.event_queue.put((event, ts(), detail))
 
+    def _open_pcap_writer(self, append: bool) -> None:
+        if self._scapy is None:
+            raise RuntimeError("scapy not initialized")
+        pcap_dir = os.path.dirname(self.config.pcap_path)
+        if pcap_dir:
+            os.makedirs(pcap_dir, exist_ok=True)
+        self._pcap_writer = self._scapy.PcapWriter(
+            self.config.pcap_path,
+            append=append,
+            sync=True,
+        )
+
+    def _close_pcap_writer(self) -> None:
+        if self._pcap_writer is None:
+            return
+        try:
+            self._pcap_writer.close()
+        except Exception:
+            pass
+        self._pcap_writer = None
+
+    def _write_packet(self, packet: object) -> None:
+        if self._pcap_writer is None:
+            self._open_pcap_writer(append=os.path.exists(self.config.pcap_path))
+        try:
+            self._pcap_writer.write(packet)
+        except Exception as e:
+            log(f"pcap writer error, reopening append writer: {e}")
+            self._close_pcap_writer()
+            self._open_pcap_writer(append=os.path.exists(self.config.pcap_path))
+            self._pcap_writer.write(packet)
+
+    def _packet_detail(self, packet: object) -> str:
+        try:
+            return str(packet.summary())[:120]
+        except Exception:
+            return packet.__class__.__name__[:120]
+
+    def _payload_looks_like_http(self, packet: object) -> bool:
+        if self._scapy is None or not packet.haslayer(self._scapy.Raw):
+            return False
+        try:
+            raw_layer = packet.getlayer(self._scapy.Raw)
+            if raw_layer is None:
+                return False
+            payload = bytes(getattr(raw_layer, "load", b""))
+        except Exception:
+            return False
+        return payload.startswith((
+            b"GET ",
+            b"POST ",
+            b"HEAD ",
+            b"PUT ",
+            b"DELETE ",
+            b"OPTIONS ",
+            b"PATCH ",
+            b"HTTP/1.",
+        ))
+
+    def _handle_packet(self, packet: object) -> None:
+        if self._scapy is None:
+            return
+
+        self._last_packet_time = ts()
+        self._write_packet(packet)
+
+        arp_target = self.config.recovery_ip.rsplit(".", 1)[0] + ".2"
+        detail = self._packet_detail(packet)
+
+        if packet.haslayer(self._scapy.ARP):
+            try:
+                arp = packet.getlayer(self._scapy.ARP)
+                if arp is None:
+                    raise ValueError("missing ARP layer")
+                src_mac = getattr(arp, "hwsrc", "").lower()
+                if int(getattr(arp, "op", 0)) == 1 and getattr(arp, "pdst", "") == arp_target:
+                    if self.config.router_mac_openwrt and src_mac != self.config.router_mac_openwrt.lower():
+                        self._emit(Event.UBOOT_ARP_192_168_1_2, f"src_mac={src_mac}")
+                        return
+                    self._emit(Event.UBOOT_ARP_192_168_1_2, detail)
+                    return
+            except Exception:
+                pass
+
+        if packet.haslayer(self._scapy.IP):
+            try:
+                ip = packet.getlayer(self._scapy.IP)
+                if ip is None:
+                    raise ValueError("missing IP layer")
+                if (
+                    getattr(ip, "src", "") == self.config.recovery_ip
+                    and packet.haslayer(self._scapy.TCP)
+                    and self._payload_looks_like_http(packet)
+                ):
+                    self._emit(Event.UBOOT_HTTP, detail)
+            except Exception:
+                pass
+
+        if self.config.router_mac_openwrt and packet.haslayer(self._scapy.IPv6):
+            try:
+                ether = packet.getlayer(self._scapy.Ether) if packet.haslayer(self._scapy.Ether) else None
+                ipv6 = packet.getlayer(self._scapy.IPv6)
+                if ipv6 is None:
+                    raise ValueError("missing IPv6 layer")
+                if (
+                    ether is not None
+                    and getattr(ether, "src", "").lower() == self.config.router_mac_openwrt.lower()
+                    and int(getattr(ipv6, "nh", -1)) == 58
+                ):
+                    self._emit(Event.ICMPV6_FROM_ROUTER, detail)
+            except Exception:
+                pass
+
+        if packet.haslayer(self._scapy.UDP):
+            try:
+                udp = packet.getlayer(self._scapy.UDP)
+                if udp is None:
+                    raise ValueError("missing UDP layer")
+                if int(getattr(udp, "sport", 0)) == 4919 or int(getattr(udp, "dport", 0)) == 4919:
+                    self._emit(Event.FAILSAFE_BROADCAST, detail)
+            except Exception:
+                pass
+
+    def _check_silence(self, last_silence_check: float, interval: int = 5) -> float:
+        now = ts()
+        if now - last_silence_check < interval:
+            return last_silence_check
+        if now - self._last_packet_time >= self._silence_timeout:
+            self.event_queue.put((
+                Event.NO_PACKETS_FOR_N_SECONDS, now,
+                f"no packets for {int(now - self._last_packet_time)}s",
+            ))
+            self._last_packet_time = now
+        return now
+
     def _parse_line(self, line: str) -> None:
         line = line.strip()
         if not line:
@@ -760,9 +860,7 @@ class PcapMonitor:
         if "udp" in lower and "4919" in lower:
             self._emit(Event.FAILSAFE_BROADCAST, line[:120])
 
-    def run(self) -> None:
-        log(f"Pcap monitor starting: iface={self.config.interface} pcap={self.config.pcap_path}")
-
+    def _run_tcpdump_fallback(self) -> None:
         self._writer_proc = self._start_writer()
 
         # Wait for pcap file header to be written
@@ -770,17 +868,14 @@ class PcapMonitor:
 
         self._reader_proc = self._start_reader()
 
-        silence_check_interval = 5
         last_silence_check = ts()
 
         while not self._stop.is_set():
-            # tcpdump writer dies when USB ethernet adapter disconnects on reboot
             if self._writer_proc and self._writer_proc.poll() is not None:
                 log("tcpdump writer died (interface gone?), will restart when link returns")
                 time.sleep(3)
                 if get_link_state(self.config.interface):
                     self._restart_writer()
-                    # pcap file has a gap after writer restart, restart reader
                     if self._reader_proc and self._reader_proc.poll() is None:
                         self._reader_proc.terminate()
                         self._reader_proc.wait(timeout=3)
@@ -806,15 +901,7 @@ class PcapMonitor:
                     self._reader_proc = self._start_reader()
                 time.sleep(0.2)
 
-            now = ts()
-            if now - last_silence_check >= silence_check_interval:
-                last_silence_check = now
-                if now - self._last_packet_time >= self._silence_timeout:
-                    self.event_queue.put((
-                        Event.NO_PACKETS_FOR_N_SECONDS, now,
-                        f"no packets for {int(now - self._last_packet_time)}s",
-                    ))
-                    self._last_packet_time = now
+            last_silence_check = self._check_silence(last_silence_check)
 
         if self._reader_proc and self._reader_proc.poll() is None:
             self._reader_proc.terminate()
@@ -830,7 +917,66 @@ class PcapMonitor:
             except subprocess.TimeoutExpired:
                 self._writer_proc.kill()
 
-        log("Pcap monitor stopped")
+    def run(self) -> None:
+        log(f"Pcap monitor starting: iface={self.config.interface} pcap={self.config.pcap_path}")
+        try:
+            from scapy.all import ARP, Ether, IP, IPv6, PcapWriter, Raw, TCP, UDP, sniff
+            self._scapy = SimpleNamespace(
+                ARP=ARP,
+                Ether=Ether,
+                IP=IP,
+                IPv6=IPv6,
+                PcapWriter=PcapWriter,
+                Raw=Raw,
+                TCP=TCP,
+                UDP=UDP,
+                sniff=sniff,
+            )
+        except Exception as e:
+            log(f"scapy unavailable, falling back to tcpdump capture: {e}")
+            self._run_tcpdump_fallback()
+            log("Pcap monitor stopped")
+            return
+
+        try:
+            if os.path.exists(self.config.pcap_path):
+                os.remove(self.config.pcap_path)
+            self._open_pcap_writer(append=False)
+
+            last_silence_check = ts()
+            last_link_state: Optional[bool] = None
+
+            while not self._stop.is_set():
+                link_up = get_link_state(self.config.interface)
+                if link_up != last_link_state:
+                    if link_up:
+                        log(f"scapy capture active on {self.config.interface}")
+                    else:
+                        log(f"scapy capture paused, link down on {self.config.interface}")
+                    last_link_state = link_up
+
+                if not link_up:
+                    time.sleep(0.5)
+                    last_silence_check = self._check_silence(last_silence_check)
+                    continue
+
+                try:
+                    self._scapy.sniff(
+                        iface=self.config.interface,
+                        store=False,
+                        prn=self._handle_packet,
+                        timeout=1,
+                        stop_filter=lambda _pkt: self._stop.is_set(),
+                    )
+                except Exception as e:
+                    if not self._stop.is_set():
+                        log(f"scapy sniff error on {self.config.interface}: {e}")
+                        time.sleep(1)
+
+                last_silence_check = self._check_silence(last_silence_check)
+        finally:
+            self._close_pcap_writer()
+            log("Pcap monitor stopped")
 
 
 class LinkMonitor:

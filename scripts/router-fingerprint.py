@@ -15,6 +15,9 @@ import datetime
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ssh_utils import run_ssh
+
 def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
     """Get default gateway IP address."""
     import platform
@@ -22,7 +25,7 @@ def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
         if platform.system() == "Linux" or os.path.exists('/sbin/ip'):
             cmd = ['ip', 'route', 'show', 'default']
             if interface:
-                cmd.insert(2, 'dev', interface)
+                cmd[2:2] = ['dev', interface]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
@@ -64,7 +67,7 @@ def parse_ssh_output(output: str) -> Dict[str, str]:
         result[key] = '\n'.join(value)
     return result
 
-def extract_field(text: str, field: str, pattern: str = None) -> str:
+def extract_field(text: str, field: str, pattern: Optional[str] = None) -> str:
     """Extract value from text using regex or field name."""
     if not text:
         return ''
@@ -149,18 +152,7 @@ def run_ssh_command(ip: str, quiet: bool = False) -> tuple[bool, str]:
             "echo '===DNS==='; cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || cat /tmp/resolv.conf 2>/dev/null"
         )
 
-        result = subprocess.run(
-            [
-                'ssh',
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'UserKnownHostsFile=/dev/null',
-                '-o', 'ConnectTimeout=5',
-                '-o', 'PasswordAuthentication=no',
-                f'root@{ip}',
-                commands,
-            ],
-            capture_output=True, text=True, timeout=20, check=False,
-        )
+        result = run_ssh(ip, commands, connect_timeout=5, timeout=20)
 
         if result.returncode != 0:
             print(f'[!] SSH command failed with code {result.returncode}', file=sys.stderr)
@@ -175,13 +167,6 @@ def run_ssh_command(ip: str, quiet: bool = False) -> tuple[bool, str]:
     except Exception as e:
         print(f'[!] SSH error: {e}', file=sys.stderr)
         return False, ''
-        return True
-    except subprocess.TimeoutExpired:
-        print(f'[!] SSH connection timeout after 10 seconds', file=sys.stderr)
-        return False
-    except Exception as e:
-        print(f'[!] SSH error: {e}', file=sys.stderr)
-        return False
 
 def parse_output_to_json(output: str) -> Dict[str, Any]:
     """Parse SSH output and convert to structured JSON."""
