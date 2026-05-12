@@ -3,12 +3,20 @@
 # config.toml is gitignored — your keys and passwords stay local.
 
 [ssh]
-# Public key for ASU image builds and router authorized_keys.
-# Two formats accepted (auto-detected):
+# Public keys for the router's authorized_keys.
+# First key is also used for ASU image builds (firmware bakes one key).
+# Two formats accepted per entry (auto-detected):
 #   Inline key — value starts with "ssh-" (e.g. ssh-ed25519, ssh-rsa)
 #   File path  — anything else, treated as path to .pub file
-key = "ssh-rsa AAAA...your-public-key-here... user@host"
-# key = "~/.ssh/id_ed25519.pub"
+#
+# Single key (backward compatible):
+#   key = "~/.ssh/id_ed25519.pub"
+#
+# Multiple keys (all installed on router, first used for ASU):
+keys = [
+    "~/.ssh/id_ed25519.pub",
+    # "ssh-rsa AAAA...your-second-key... user@host",
+]
 
 [password]
 # Controls root password on the flashed router.
@@ -17,9 +25,16 @@ key = "ssh-rsa AAAA...your-public-key-here... user@host"
 #   " literal" = use this exact string as the password
 mode = "key-only"
 
+[asu]
+# Extra packages appended in auto-package mode (when --packages is omitted).
+extra_packages = ["luci", "luci-app-attendedsysupgrade"]
+
 [network]
 # Allow SSH on the WAN interface (adds firewall rule, disables password on WAN).
 wan_ssh = false
+
+# Management WiFi (hidden, isolated 2.4GHz AP for SSH access)
+# mgmt_wifi = true
 
 # --- WiFi STA (client mode) ---
 # Router connects to an upstream AP (e.g. for WAN backhaul).

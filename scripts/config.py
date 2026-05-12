@@ -56,8 +56,11 @@ class ConwrtConfig:
     ssh_public_key_text: str = ""
     ssh_public_key_path: str = ""
     ssh_private_key_path: str = ""
+    ssh_all_keys: list[str] = field(default_factory=list)
+    extra_packages: list[str] = field(default_factory=lambda: ["luci", "luci-app-attendedsysupgrade"])
     password_mode: str = "random"
     wan_ssh: bool = False
+    mgmt_wifi: bool = False
     wifi_sta: Optional[WifiSTAConfig] = None
     wifi_ap: Optional[WifiAPConfig] = None
 
@@ -158,6 +161,21 @@ def _parse_wifi_ap(table: dict) -> WifiAPConfig:
     )
 
 
+def _resolve_all_keys(raw_values: list[str]) -> list[str]:
+    """Resolve a list of key specs (inline or paths) into stripped public key texts."""
+    resolved = []
+    for val in raw_values:
+        if not val or not val.strip():
+            continue
+        if _is_inline_key(val):
+            resolved.append(_strip_key_comment(val))
+        else:
+            pub_path = Path(val).expanduser().resolve()
+            if pub_path.is_file():
+                resolved.append(_strip_key_comment(pub_path.read_text().strip()))
+    return resolved
+
+
 def load_config(path: Optional[Path] = None) -> ConwrtConfig:
     """Load and validate config.toml. Returns defaults when file is missing."""
     config_path = path or _CONFIG_PATH
@@ -178,12 +196,28 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         raw = tomllib.load(f)
 
     ssh_section = raw.get("ssh", {})
+    asu_section = raw.get("asu", {})
     password_section = raw.get("password", {})
     network_section = raw.get("network", {})
 
-    pub_text, pub_path, priv_path = _resolve_ssh(ssh_section.get("key", ""))
+    raw_keys = ssh_section.get("keys", [])
+    if isinstance(raw_keys, str):
+        raw_keys = [raw_keys]
+
+    if raw_keys:
+        all_keys = _resolve_all_keys(raw_keys)
+        pub_text = all_keys[0] if all_keys else ""
+        first_spec = raw_keys[0] if raw_keys else ""
+        _, pub_path, priv_path = _resolve_ssh(first_spec)
+    else:
+        pub_text, pub_path, priv_path = _resolve_ssh(ssh_section.get("key", ""))
+        all_keys = [pub_text] if pub_text else []
 
     password_mode = password_section.get("mode", "key-only")
+    extra_packages = asu_section.get("extra_packages", ["luci", "luci-app-attendedsysupgrade"])
+    if isinstance(extra_packages, str):
+        extra_packages = [extra_packages]
+    extra_packages = [pkg for pkg in extra_packages if isinstance(pkg, str) and pkg.strip()]
 
     wifi_sta = None
     if "sta" in network_section:
@@ -197,8 +231,11 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         ssh_public_key_text=pub_text,
         ssh_public_key_path=pub_path,
         ssh_private_key_path=priv_path,
+        ssh_all_keys=all_keys,
+        extra_packages=extra_packages,
         password_mode=password_mode,
         wan_ssh=network_section.get("wan_ssh", False),
+        mgmt_wifi=network_section.get("mgmt_wifi", False),
         wifi_sta=wifi_sta,
         wifi_ap=wifi_ap,
     )

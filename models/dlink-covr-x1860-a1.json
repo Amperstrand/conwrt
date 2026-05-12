@@ -18,7 +18,7 @@
   "mac_oui": ["BC:22:28"],
   "flash_methods": {
     "recovery-http": {
-      "description": "D-Link recovery mode (hold reset pin under device while powering on)",
+      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports)",
       "recovery_ip": "192.168.0.1",
       "client_ip": "192.168.0.10",
       "client_subnet": "255.255.255.0",
@@ -28,7 +28,7 @@
       "trigger_flash_endpoint": "",
       "flash_time_seconds": 120,
       "silence_timeout": 30,
-      "reset_instructions": "Use a pin to press and hold the reset button UNDER the device.",
+      "reset_instructions": "Connect ethernet to any port (WAN or LAN). Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
       "led_pattern": "status LED blinks red"
     },
     "sysupgrade": {
