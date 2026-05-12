@@ -57,7 +57,7 @@ class ConwrtConfig:
     ssh_public_key_path: str = ""
     ssh_private_key_path: str = ""
     ssh_all_keys: list[str] = field(default_factory=list)
-    extra_packages: list[str] = field(default_factory=lambda: ["luci", "luci-app-attendedsysupgrade"])
+    extra_packages: list[str] = field(default_factory=list)
     password_mode: str = "random"
     wan_ssh: bool = False
     mgmt_wifi: bool = False
@@ -214,7 +214,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         all_keys = [pub_text] if pub_text else []
 
     password_mode = password_section.get("mode", "key-only")
-    extra_packages = asu_section.get("extra_packages", ["luci", "luci-app-attendedsysupgrade"])
+    extra_packages = asu_section.get("extra_packages", [])
     if isinstance(extra_packages, str):
         extra_packages = [extra_packages]
     extra_packages = [pkg for pkg in extra_packages if isinstance(pkg, str) and pkg.strip()]

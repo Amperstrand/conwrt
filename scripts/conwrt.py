@@ -568,7 +568,8 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
         return False
 
 
-def verify_router(ip: str = DEFAULT_IP) -> list[tuple[str, str]]:
+def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
+                  mgmt_wifi_expected: bool = False) -> list[tuple[str, str]]:
     log("Verifying router state...")
     checks: list[tuple[str, str]] = []
     try:
@@ -577,12 +578,16 @@ def verify_router(ip: str = DEFAULT_IP) -> list[tuple[str, str]]:
                     "echo hostname=$(cat /proc/sys/kernel/hostname); "
                     "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
                     "echo kernel=$(uname -r); "
+                    "echo sshkey_count=$(wc -l < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
                     "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
                     "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
                     "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
                     "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
-                    "echo mac_eth0=$(cat /sys/class/net/eth0/address 2>/dev/null || echo ''); "
                     "echo 'mac_all='$(for f in /sys/class/net/*/address; do printf '%s=%s ' $(basename $(dirname $f)) $(cat $f 2>/dev/null); done); "
+                    "echo mgmt_wifi=$(uci -q get network.mgmt.ipaddr || echo ''); "
+                    "echo mgmt_ssid=$(uci -q get wireless.@wifi-iface[0].ssid || echo ''); "
+                    "echo mgmt_radio=$(uci -q get wireless.radio0.disabled || echo ''); "
+                    "echo nmap_ok=$(which nmap >/dev/null 2>&1 && echo yes || echo no); "
                     "echo ping_ok=$(ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no)",
                     connect_timeout=5),
             capture_output=True, text=True, timeout=20, check=False,
@@ -592,16 +597,50 @@ def verify_router(ip: str = DEFAULT_IP) -> list[tuple[str, str]]:
                 key, val = line.split('=', 1)
                 checks.append((key, val))
                 log(f"  verify: {key}: {val}")
-        uci_defaults = dict(checks).get("uci_defaults", "?")
+
+        d = dict(checks)
+
+        uci_defaults = d.get("uci_defaults", "?")
         if uci_defaults == "0":
-            log("  verify OK: no uci-defaults remaining (first boot completed)")
+            log("  ✓ uci-defaults: all consumed (first boot complete)")
         else:
-            log(f"  verify WARN: {uci_defaults} uci-defaults remaining")
-        ping_ok = dict(checks).get("ping_ok", "no")
+            log(f"  ⚠ uci-defaults: {uci_defaults} remaining")
+
+        sshkey_count = d.get("sshkey_count", "0")
+        if int(sshkey_count or 0) > 0:
+            log(f"  ✓ SSH keys: {sshkey_count} authorized")
+        else:
+            log("  ⚠ SSH keys: none found")
+
+        if wan_ssh_expected:
+            wan_ssh = d.get("wan_ssh", "0")
+            if int(wan_ssh or 0) > 0:
+                log("  ✓ WAN SSH: firewall rule present")
+            else:
+                log("  ⚠ WAN SSH: no firewall rule found")
+
+        if mgmt_wifi_expected:
+            mgmt_ip = d.get("mgmt_wifi", "")
+            mgmt_ssid = d.get("mgmt_ssid", "")
+            if mgmt_ip:
+                log(f"  ✓ mgmt WiFi: network configured ({mgmt_ip})")
+            else:
+                log("  ⚠ mgmt WiFi: network not configured")
+            if mgmt_ssid.startswith("MGMT-"):
+                log(f"  ✓ mgmt WiFi: SSID={mgmt_ssid}")
+            else:
+                log(f"  ⚠ mgmt WiFi: unexpected SSID '{mgmt_ssid}'")
+
+        ping_ok = d.get("ping_ok", "no")
         if ping_ok == "yes":
-            log("  verify OK: network connectivity confirmed (ping 8.8.8.8)")
+            log("  ✓ network: connectivity confirmed (ping 8.8.8.8)")
         else:
-            log("  verify WARN: no network connectivity")
+            log("  ⚠ network: no connectivity")
+
+        nmap_ok = d.get("nmap_ok", "no")
+        if nmap_ok == "yes":
+            log("  ✓ extra package: nmap installed")
+
     except Exception as e:
         log(f"Verification failed: {e}")
     return checks
@@ -1522,7 +1561,9 @@ def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -
         ctx.timeline.ssh_available = ts()
         ctx._say_fn("Recovery complete! Router is back online.")
         log("SUCCESS — sysupgrade recovery complete.")
-        verify_router(openwrt_ip)
+        verify_router(openwrt_ip,
+                     wan_ssh_expected=ctx.wan_ssh_enabled,
+                     mgmt_wifi_expected=bool(ctx.defaults_script))
         ctx.state = State.COMPLETE
     else:
         ctx._say_fn("Device did not come back after sysupgrade.")
@@ -1841,7 +1882,9 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
                 ctx.timeline.ssh_available = event_ts
                 ctx._say_fn("Recovery complete! Router is back online.")
                 log("SUCCESS — router recovered (SSH detected during reboot phase).")
-                verify_router(openwrt_ip)
+                verify_router(openwrt_ip,
+                             wan_ssh_expected=ctx.wan_ssh_enabled,
+                             mgmt_wifi_expected=bool(ctx.defaults_script))
                 ctx.state = State.COMPLETE
                 return
             elif event == Event.LINK_UP and ctx.state == State.REBOOTING:
@@ -1852,7 +1895,9 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
             ctx.timeline.ssh_available = ts()
             ctx._say_fn("Recovery complete! Router is back online.")
             log("SUCCESS — router recovered (SSH poll detected).")
-            verify_router(openwrt_ip)
+            verify_router(openwrt_ip,
+                         wan_ssh_expected=ctx.wan_ssh_enabled,
+                         mgmt_wifi_expected=bool(ctx.defaults_script))
             ctx.state = State.COMPLETE
             return
     else:
@@ -1886,14 +1931,18 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
         ctx.timeline.ssh_available = ts()
         ctx._say_fn("Recovery complete! Router is back online.")
         log("SUCCESS — router recovered.")
-        verify_router(openwrt_ip)
+        verify_router(openwrt_ip,
+                     wan_ssh_expected=ctx.wan_ssh_enabled,
+                     mgmt_wifi_expected=bool(ctx.defaults_script))
         ctx.state = State.COMPLETE
     else:
         if check_ssh(openwrt_ip):
             ctx.timeline.ssh_available = ts()
             ctx._say_fn("Recovery complete! Router is back online.")
             log("SUCCESS — router recovered (SSH fallback check).")
-            verify_router(openwrt_ip)
+            verify_router(openwrt_ip,
+                         wan_ssh_expected=ctx.wan_ssh_enabled,
+                         mgmt_wifi_expected=bool(ctx.defaults_script))
             ctx.state = State.COMPLETE
         else:
             ctx.state = State.FAILED
