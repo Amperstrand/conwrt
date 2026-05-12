@@ -227,7 +227,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     wan_ssh: bool = args.wan_ssh
 
     if not target:
-        model_id = profile.replace("-", "_")
+        model_id = profile.replace("_", "-")
 
         try:
             model = load_model(model_id)

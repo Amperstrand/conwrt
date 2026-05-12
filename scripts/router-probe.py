@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -90,18 +91,36 @@ def probe_link_state(interface: str) -> ProbeResult:
     status = "no_link"
     detail = ""
     try:
-        r = run_cmd(["ifconfig", interface], check=False)
-        output = r.stdout
-        if "status: active" in output:
-            status = "link_up"
-            detail = "interface active"
-        elif "RUNNING" in output:
-            status = "link_up"
-            detail = "interface running"
-        elif "media:" in output:
-            m = re.search(r"media:\s*(.+)", output)
-            if m:
-                detail = m.group(1).strip()
+        import platform
+        if platform.system() == "Linux":
+            try:
+                operstate = Path(f"/sys/class/net/{interface}/operstate").read_text().strip()
+                carrier = Path(f"/sys/class/net/{interface}/carrier").read_text().strip()
+            except (OSError, PermissionError):
+                operstate = ""
+                carrier = "0"
+            if operstate == "up" and carrier == "1":
+                status = "link_up"
+                detail = "interface up"
+            try:
+                addr = Path(f"/sys/class/net/{interface}/address").read_text().strip()
+                if addr:
+                    detail = f"local_mac={addr}"
+            except (OSError, PermissionError):
+                pass
+        else:
+            r = run_cmd(["ifconfig", interface], check=False)
+            output = r.stdout
+            if "status: active" in output:
+                status = "link_up"
+                detail = "interface active"
+            elif "RUNNING" in output:
+                status = "link_up"
+                detail = "interface running"
+            elif "media:" in output:
+                m = re.search(r"media:\s*(.+)", output)
+                if m:
+                    detail = m.group(1).strip()
     except Exception as exc:
         detail = str(exc)
     return ("link_state", status, detail)
@@ -119,10 +138,19 @@ def probe_arp(mac_prefix: str, interface: str) -> ProbeResult:
                 detail = m.group(1) if m else line.strip()
                 break
         if not mac_prefix:
-            r2 = run_cmd(["ifconfig", interface], check=False)
-            ether_m = re.search(r"ether\s+([\da-fA-F:]{17})", r2.stdout)
-            if ether_m:
-                detail = f"local_mac={ether_m.group(1)}"
+            import platform
+            if platform.system() == "Linux":
+                try:
+                    addr = Path(f"/sys/class/net/{interface}/address").read_text().strip()
+                    if addr:
+                        detail = f"local_mac={addr}"
+                except (OSError, PermissionError):
+                    pass
+            else:
+                r2 = run_cmd(["ifconfig", interface], check=False)
+                ether_m = re.search(r"ether\s+([\da-fA-F:]{17})", r2.stdout)
+                if ether_m:
+                    detail = f"local_mac={ether_m.group(1)}"
     except Exception as exc:
         detail = str(exc)
     return ("arp_from_router", status, detail)
@@ -458,7 +486,7 @@ def classify_state(evidence: list[ProbeResult]) -> str:
 # ---------------------------------------------------------------------------
 
 def probe_router(
-    interface: str = "en0",
+    interface: str = "",
     ip: str = "192.168.1.1",
     mac: str = "",
     passive_timeout: int = 10,
@@ -513,7 +541,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Probe a router to identify its current boot state",
     )
-    parser.add_argument("--interface", "-i", default="en0", help="Network interface to probe on")
+    parser.add_argument("--interface", "-i", default="", help="Network interface to probe on (auto-detected if omitted)")
     parser.add_argument("--ip", default="192.168.1.1", help="Target IP address")
     parser.add_argument("--mac", default="", help="Expected router MAC address")
     parser.add_argument("--passive-timeout", type=int, default=10, help="Seconds to listen for broadcasts")

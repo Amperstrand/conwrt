@@ -99,33 +99,39 @@ def _build_profile_from_model(model_id: str) -> SimpleNamespace:
 
 
 def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
-    existing = subprocess.run(
-        ["ifconfig", interface], capture_output=True, text=True, check=False,
-    ).stdout
+    r = subprocess.run(
+        ["ip", "addr", "show", interface],
+        capture_output=True, text=True, check=False,
+    )
+    existing = r.stdout
 
     if profile.client_ip not in existing:
         result = subprocess.run(
-            ["ifconfig", interface, profile.client_ip, "netmask", profile.client_subnet, "up"],
+            ["sudo", "-n", "ip", "addr", "add",
+             f"{profile.client_ip}/24", "dev", interface],
             capture_output=True, text=True, check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and "File exists" not in result.stderr:
             print(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}", file=sys.stderr)
-            print(f"  sudo ifconfig {interface} {profile.client_ip} netmask {profile.client_subnet} up", file=sys.stderr)
+            print(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}", file=sys.stderr)
             sys.exit(1)
-        log(f"Configured {interface}: {profile.client_ip}/{profile.client_subnet}")
+        subprocess.run(["sudo", "-n", "ip", "link", "set", interface, "up"],
+                       capture_output=True, text=True, check=False)
+        log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
 
     openwrt_client = profile.openwrt_client_ip
     if openwrt_client and openwrt_client != profile.client_ip and openwrt_client not in existing:
         result = subprocess.run(
-            ["ifconfig", interface, openwrt_client, "netmask", "255.255.255.0", "alias"],
+            ["sudo", "-n", "ip", "addr", "add",
+             f"{openwrt_client}/24", "dev", interface],
             capture_output=True, text=True, check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and "File exists" not in result.stderr:
             log(f"WARNING: could not add alias {openwrt_client}: {result.stderr.strip()}")
         else:
-            log(f"Added alias {interface}: {openwrt_client}/255.255.255.0")
+            log(f"Added alias {interface}: {openwrt_client}/24")
 
 
 def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
@@ -331,7 +337,9 @@ def ts_str(t: float) -> str:
 
 
 def say(msg: str) -> None:
-    subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=10)
+    """Print bold instruction to console. macOS `say` not available on Linux."""
+    print(f"\033[1m>>> {msg}\033[0m")
+    sys.stdout.flush()
 
 
 def log(msg: str) -> None:
@@ -341,11 +349,14 @@ def log(msg: str) -> None:
 
 
 def get_link_state(interface: str) -> bool:
-    r = subprocess.run(
-        ["ifconfig", interface],
-        capture_output=True, text=True, timeout=5, check=False,
-    )
-    return "status: active" in r.stdout.lower()
+    try:
+        r = subprocess.run(
+            ["cat", f"/sys/class/net/{interface}/operstate"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        return r.stdout.strip().lower() == "up"
+    except Exception:
+        return False
 
 
 def sha256_file(path: str) -> str:
@@ -1413,38 +1424,73 @@ def _record_inventory(ctx: RecoveryContext) -> None:
 def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
     """Find the single active physical ethernet interface.
 
-    Skips en0 (WiFi), Thunderbolt bridge members, and Thunderbolt bridge
-    virtual interfaces (mtu 16000). Asserts exactly one candidate exists.
+    On Linux, looks for enp*/eth*/en* interfaces with carrier UP.
+    On macOS, scans en1..en20 skipping WiFi/Thunderbolt.
     """
-    bridge_members = set()
-    br_r = subprocess.run(["ifconfig", "bridge0"], capture_output=True, text=True, check=False)
-    for line in br_r.stdout.splitlines():
-        if "member:" in line.lower():
-            bridge_members.add(line.strip().split()[1])
+    import platform
+    if platform.system() == "Linux":
+        candidates = []
+        iface_dir = Path("/sys/class/net")
+        if iface_dir.exists():
+            for iface_path in sorted(iface_dir.iterdir()):
+                name = iface_path.name
+                if name.startswith(("lo", "wl", "docker", "br-", "virbr", "veth")):
+                    continue
+                if not name.startswith(("en", "eth")):
+                    continue
+                try:
+                    carrier = (iface_path / "carrier").read_text().strip()
+                    operstate = (iface_path / "operstate").read_text().strip()
+                    if carrier == "1" and operstate == "up":
+                        candidates.append(name)
+                except (OSError, PermissionError):
+                    continue
+        if len(candidates) == 0:
+            relaxed = []
+            for iface_path in sorted(iface_dir.iterdir()):
+                name = iface_path.name
+                if name.startswith(("lo", "wl", "docker", "br-", "virbr", "veth")):
+                    continue
+                if not name.startswith(("en", "eth")):
+                    continue
+                relaxed.append(name)
+            if len(relaxed) == 1:
+                log(f"No carrier on {relaxed[0]}, but it's the only ethernet interface — using it")
+                return relaxed[0]
+            return None
+        if len(candidates) > 1:
+            log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
+        return candidates[0]
+    else:
+        bridge_members = set()
+        br_r = subprocess.run(["ifconfig", "bridge0"], capture_output=True, text=True, check=False)
+        for line in br_r.stdout.splitlines():
+            if "member:" in line.lower():
+                bridge_members.add(line.strip().split()[1])
 
-    candidates = []
-    for n in range(1, 21):
-        iface = f"en{n}"
-        r = subprocess.run(
-            ["ifconfig", iface], capture_output=True, text=True, check=False,
-        )
-        if r.returncode != 0:
-            continue
-        if "status: active" not in r.stdout.lower():
-            continue
-        if iface in bridge_members:
-            continue
-        if "mtu 16000" in r.stdout:  # Thunderbolt bridge
-            continue
-        if "base" not in r.stdout or "duplex" not in r.stdout:
-            continue
-        candidates.append(iface)
+        candidates = []
+        for n in range(1, 21):
+            iface = f"en{n}"
+            r = subprocess.run(
+                ["ifconfig", iface], capture_output=True, text=True, check=False,
+            )
+            if r.returncode != 0:
+                continue
+            if "status: active" not in r.stdout.lower():
+                continue
+            if iface in bridge_members:
+                continue
+            if "mtu 16000" in r.stdout:
+                continue
+            if "base" not in r.stdout or "duplex" not in r.stdout:
+                continue
+            candidates.append(iface)
 
-    if len(candidates) == 0:
-        return None
-    if len(candidates) > 1:
-        log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
-    return candidates[0]
+        if len(candidates) == 0:
+            return None
+        if len(candidates) > 1:
+            log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
+        return candidates[0]
 
 
 def _build_parser() -> argparse.ArgumentParser:
