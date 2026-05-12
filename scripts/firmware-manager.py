@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
-from config import load_config as _load_config
+from config import load_config as _load_config, _strip_key_comment
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -112,10 +113,148 @@ def _read_ssh_pubkey(path: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def build_mgmt_wifi_script() -> str:
+    return textwrap.dedent(
+        """\
+        # --- management WiFi setup ---
+        # Do NOT use 'set -eu' — radio/wifi subsystem may not be fully
+        # initialised at first-boot; we handle errors explicitly instead.
+        RADIO_2G=""
+        for radio in $(uci show wireless 2>/dev/null | grep "=wifi-device" | cut -d. -f2 | cut -d= -f1 || true); do
+            band=$(uci -q get wireless.$radio.band || true)
+            hwmode=$(uci -q get wireless.$radio.hwmode || true)
+            case "$band" in
+                2g|2.4g|2ghz|2.4ghz)
+                    RADIO_2G="$radio"
+                    break
+                    ;;
+            esac
+            case "$hwmode" in
+                11g|11ng|11axg|11bg|11b)
+                    RADIO_2G="$radio"
+                    break
+                    ;;
+            esac
+        done
+        if [ -z "$RADIO_2G" ]; then
+            printf 'conwrt-mgmt-wifi: No 2.4GHz radio found, skipping\\n' >&2
+            exit 0
+        fi
+        # --- Determine MAC for SSID (retry: br-lan may not exist at first boot) ---
+        MAC=""
+        for _ in $(seq 1 30); do
+            MAC=$(cat /sys/class/net/br-lan/address 2>/dev/null || true)
+            [ -n "$MAC" ] && break
+            sleep 1
+        done
+        if [ -z "$MAC" ]; then
+            MAC=$(jsonfilter -e '@.network.lan.macaddr' < /etc/board.json 2>/dev/null || true)
+        fi
+        if [ -z "$MAC" ]; then
+            MAC=$(uci -q get wireless.$RADIO_2G.macaddr || true)
+        fi
+        if [ -z "$MAC" ]; then
+            for iface in /sys/class/net/eth*/address /sys/class/net/*/address; do
+                case "$iface" in */lo/address) continue ;; esac
+                MAC=$(cat "$iface" 2>/dev/null || true)
+                [ -n "$MAC" ] && break
+            done
+        fi
+        if [ -z "$MAC" ]; then
+            printf 'conwrt-mgmt-wifi: Could not determine MAC address, skipping\\n' >&2
+            exit 0
+        fi
+        if [ -z "$MAC" ]; then
+            for iface in /sys/class/net/*/address; do
+                case "$iface" in
+                    */lo/address) continue ;;
+                esac
+                MAC=$(cat "$iface" 2>/dev/null || true)
+                [ -n "$MAC" ] && break
+            done
+        fi
+        if [ -z "$MAC" ]; then
+            printf 'conwrt-mgmt-wifi: Could not determine MAC address, skipping\\n' >&2
+            exit 0
+        fi
+        SSID="MGMT-$(printf '%s' "$MAC" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+
+        # --- Enable the 2.4GHz radio and set regulatory domain ---
+        uci set wireless.$RADIO_2G.disabled=0
+        uci -q delete wireless.$RADIO_2G.country || true
+
+        # --- Idempotent cleanup: remove all existing wifi-ifaces and mgmt remnants ---
+        uci -q delete network.mgmt_dev
+        uci -q delete network.mgmt
+        uci -q delete dhcp.mgmt
+        idx=0
+        while uci -q get wireless.@wifi-iface[$idx] >/dev/null 2>&1; do
+            uci delete wireless.@wifi-iface[$idx]
+        done
+        for zone in $(uci show firewall 2>/dev/null | grep "=zone" | cut -d. -f2 | cut -d= -f1 || true); do
+            name=$(uci -q get firewall.$zone.name || true)
+            if [ "$name" = "mgmt" ]; then
+                uci delete firewall.$zone
+            fi
+        done
+
+        # --- Create management network bridge ---
+        uci set network.mgmt_dev=device
+        uci set network.mgmt_dev.type='bridge'
+        uci set network.mgmt_dev.name='br-mgmt'
+        uci set network.mgmt=interface
+        uci set network.mgmt.device='br-mgmt'
+        uci set network.mgmt.proto='static'
+        uci set network.mgmt.ipaddr='172.16.0.1'
+        uci set network.mgmt.netmask='255.255.255.0'
+
+        # --- Create management WiFi AP on 2.4GHz radio ---
+        uci add wireless wifi-iface
+        uci set wireless.@wifi-iface[-1].device="$RADIO_2G"
+        uci set wireless.@wifi-iface[-1].network='mgmt'
+        uci set wireless.@wifi-iface[-1].mode='ap'
+        uci set wireless.@wifi-iface[-1].ssid="$SSID"
+        uci set wireless.@wifi-iface[-1].hidden='1'
+        uci set wireless.@wifi-iface[-1].encryption='none'
+        uci set wireless.@wifi-iface[-1].disabled='0'
+
+        # --- Isolated firewall zone (no forwarding to/from other zones) ---
+        uci add firewall zone
+        uci set firewall.@zone[-1].name='mgmt'
+        uci add_list firewall.@zone[-1].network='mgmt'
+        uci set firewall.@zone[-1].input='ACCEPT'
+        uci set firewall.@zone[-1].output='ACCEPT'
+        uci set firewall.@zone[-1].forward='REJECT'
+
+        # --- DHCP on management subnet ---
+        uci set dhcp.mgmt=dhcp
+        uci set dhcp.mgmt.interface='mgmt'
+        uci set dhcp.mgmt.ignore='0'
+        uci set dhcp.mgmt.start='10'
+        uci set dhcp.mgmt.limit='21'
+        uci set dhcp.mgmt.leasetime='12h'
+
+        # --- Commit and apply ---
+        uci commit network
+        uci commit wireless
+        uci commit firewall
+        uci commit dhcp
+        /etc/init.d/network reload >/dev/null 2>&1 || true
+        wifi reload >/dev/null 2>&1 || wifi >/dev/null 2>&1 || true
+        /etc/init.d/firewall restart >/dev/null 2>&1 || true
+        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+        printf 'MGMT_WIFI_SSID=%s\\n' "$SSID"
+        printf 'MGMT_WIFI_RADIO=%s\\n' "$RADIO_2G"
+        """
+    )
+
+
 def _build_defaults(
     ssh_key_path: Optional[str],
     password: Optional[str],
     wan_ssh: bool,
+    extra_pub_keys: Optional[list[str]] = None,
+    mgmt_wifi: bool = False,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Build the shell defaults script for first-boot customization.
 
@@ -125,10 +264,21 @@ def _build_defaults(
     ssh_key_cleaned: Optional[str] = None
     ssh_key_source: Optional[str] = None
 
+    all_keys: list[str] = []
     if ssh_key_path:
         ssh_key_cleaned, ssh_key_source = _read_ssh_pubkey(ssh_key_path)
+        all_keys.append(ssh_key_cleaned)
+    if extra_pub_keys:
+        for k in extra_pub_keys:
+            stripped = _strip_key_comment(k.strip())
+            if stripped and stripped not in all_keys:
+                all_keys.append(stripped)
+
+    if all_keys:
         lines.append("mkdir -p /etc/dropbear")
-        lines.append(f"echo '{ssh_key_cleaned}' > /etc/dropbear/authorized_keys")
+        for i, key in enumerate(all_keys):
+            op = ">" if i == 0 else ">>"
+            lines.append(f"echo '{key}' {op} /etc/dropbear/authorized_keys")
         lines.append("chmod 600 /etc/dropbear/authorized_keys")
 
     if password:
@@ -145,11 +295,8 @@ def _build_defaults(
             "uci commit firewall",
         ])
 
-    if wan_ssh and ssh_key_path:
-        lines.extend([
-            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
-            "uci commit dropbear",
-        ])
+    if mgmt_wifi:
+        lines.append(build_mgmt_wifi_script().rstrip())
 
     return "\n".join(lines), ssh_key_cleaned, ssh_key_source
 
@@ -160,13 +307,16 @@ def _build_defaults(
 
 
 def _metadata_path(profile: str, request_hash: str) -> Path:
-    return IMAGES_DIR / profile / request_hash / f"{request_hash}.metadata.json"
+    return IMAGES_DIR / profile / request_hash / "build.metadata.json"
 
 
 def _read_metadata(profile: str, request_hash: str) -> Optional[dict[str, Any]]:
     path = _metadata_path(profile, request_hash)
     if not path.exists():
-        return None
+        legacy_path = IMAGES_DIR / profile / request_hash / f"{request_hash}.metadata.json"
+        if not legacy_path.exists():
+            return None
+        path = legacy_path
     try:
         return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
@@ -213,6 +363,41 @@ def _query_default_packages(
         return []
 
 
+def _fetch_profiles_packages(target: str, version: str, profile_name: str) -> tuple[list[str], list[str]]:
+    """Fetch default and device package lists from OpenWrt profiles.json."""
+    url = f"https://downloads.openwrt.org/releases/{version}/targets/{target}/profiles.json"
+    try:
+        data = _http_get_json(url, timeout=15)
+    except Exception as exc:
+        logger.warning("could not fetch profiles.json packages: %s", exc)
+        return [], []
+
+    default_packages = data.get("default_packages", [])
+    profiles = data.get("profiles", {})
+    device_packages = profiles.get(profile_name, {}).get("device_packages", [])
+
+    if not isinstance(default_packages, list):
+        default_packages = []
+    if not isinstance(device_packages, list):
+        device_packages = []
+    return default_packages, device_packages
+
+
+def _compute_cache_key(
+    distro: str,
+    version: str,
+    target: str,
+    profile: str,
+    packages: Optional[list[str]],
+    defaults_script: Optional[str],
+) -> str:
+    payload = (
+        f"{distro}\n{version}\n{target}\n{profile}\n"
+        f"{':'.join(sorted(packages or []))}\n{defaults_script or ''}"
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # request subcommand
 # ---------------------------------------------------------------------------
@@ -227,13 +412,16 @@ def cmd_request(args: argparse.Namespace) -> int:
     password: Optional[str] = args.password
     wan_ssh: bool = args.wan_ssh
 
+    cfg = _load_config()
+
     if not ssh_key_path:
-        cfg = _load_config()
         if cfg.ssh_public_key_path:
             ssh_key_path = cfg.ssh_public_key_path
 
+    extra_pub_keys = cfg.ssh_all_keys[1:] if len(cfg.ssh_all_keys) > 1 else None
+
     if not target:
-        model_id = profile.replace("-", "_")
+        model_id = profile.replace("_", "-")
 
         try:
             model = load_model(model_id)
@@ -251,8 +439,16 @@ def cmd_request(args: argparse.Namespace) -> int:
             )
             return 1
 
+    if not target:
+        logger.error("could not resolve target for profile '%s'", profile)
+        return 1
+
     defaults_script, ssh_key_cleaned, ssh_key_source = _build_defaults(
-        ssh_key_path, password, wan_ssh,
+        ssh_key_path,
+        password,
+        wan_ssh,
+        extra_pub_keys=extra_pub_keys,
+        mgmt_wifi=cfg.mgmt_wifi,
     )
 
     if defaults_script:
@@ -264,6 +460,8 @@ def cmd_request(args: argparse.Namespace) -> int:
 
     extra_packages: list[str] = []
     default_packages: list[str] = []
+    device_packages: list[str] = []
+    extras: list[str] = []
     packages_to_send: Optional[list[str]] = None
     if packages_str:
         extra_packages = [p.strip() for p in packages_str.split(",") if p.strip()]
@@ -286,7 +484,34 @@ def cmd_request(args: argparse.Namespace) -> int:
                 extra_packages,
             )
     else:
-        logger.info("packages: using server defaults (none specified)")
+        default_packages, device_packages = _fetch_profiles_packages(target, version, profile)
+        extras = list(cfg.extra_packages)
+        if default_packages or device_packages:
+            packages_to_send = list(dict.fromkeys(default_packages + device_packages + extras))
+            logger.info(
+                "packages: %d defaults + %d device + %d extras = %d total",
+                len(default_packages),
+                len(device_packages),
+                len(extras),
+                len(packages_to_send),
+            )
+        else:
+            logger.warning("profiles.json package fetch failed; falling back to ASU defaults")
+
+    cache_key = _compute_cache_key(
+        "openwrt",
+        version,
+        target,
+        profile,
+        packages_to_send,
+        defaults_script,
+    )
+
+    cached = _find_cached_firmware(profile, cache_key)
+    if cached:
+        logger.info("firmware already cached at %s (cache key=%s)", cached, cache_key[:12])
+        print(str(cached))
+        return 0
 
     build_request: dict[str, Any] = {
         "distro": "openwrt",
@@ -296,6 +521,8 @@ def cmd_request(args: argparse.Namespace) -> int:
     }
     if packages_to_send:
         build_request["packages"] = packages_to_send
+        if not packages_str:
+            build_request["diff_packages"] = True
     if defaults_script:
         build_request["defaults"] = defaults_script
 
@@ -320,12 +547,6 @@ def cmd_request(args: argparse.Namespace) -> int:
         return 1
 
     logger.info("build enqueued, request_hash=%s", request_hash)
-
-    cached = _find_cached_firmware(profile, request_hash)
-    if cached:
-        logger.info("firmware already cached at %s", cached)
-        print(str(cached))
-        return 0
 
     status_url = f"{ASU_BUILD_URL}/{request_hash}"
     deadline = time.time() + POLL_TIMEOUT
@@ -367,7 +588,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("ASU response contains no images")
         return 1
 
-    hash_dir = IMAGES_DIR / profile / request_hash
+    hash_dir = IMAGES_DIR / profile / cache_key
     hash_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded_images: list[dict[str, Any]] = []
@@ -432,6 +653,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         })
 
     metadata: dict[str, Any] = {
+        "cache_key": cache_key,
         "request_hash": request_hash,
         "distro": status_data.get("distro", "openwrt"),
         "version": status_data.get("version", version),
@@ -440,8 +662,14 @@ def cmd_request(args: argparse.Namespace) -> int:
         "profile": status_data.get("profile", profile),
         "packages_requested": extra_packages,
         "packages_default": default_packages,
-        "packages_device": status_data.get("packages_device", []),
+        "packages_device": device_packages if not packages_str else status_data.get("packages_device", []),
         "packages_all": status_data.get("packages", {}),
+        "packages": packages_to_send or [],
+        "packages_sources": {
+            "default": default_packages,
+            "device": device_packages,
+            "extra": extra_packages if packages_str else extras,
+        },
         "defaults": defaults_script if defaults_script else None,
         "ssh_key_source": ssh_key_source,
         "images": downloaded_images,
@@ -451,7 +679,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         "downloaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
-    meta_path = hash_dir / f"{request_hash}.metadata.json"
+    meta_path = hash_dir / "build.metadata.json"
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n")
     logger.info("metadata written to %s", meta_path)
 
@@ -496,12 +724,12 @@ def cmd_list(args: argparse.Namespace) -> int:
         for hash_dir in sorted(profile_dir.iterdir()):
             if not hash_dir.is_dir():
                 continue
-            request_hash = hash_dir.name
-            meta = _read_metadata(profile, request_hash)
+            cache_key = hash_dir.name
+            meta = _read_metadata(profile, cache_key)
             if meta is None:
                 entries.append({
                     "profile": profile,
-                    "hash": request_hash[:12],
+                    "hash": cache_key[:12],
                     "version": "?",
                     "build_date": "?",
                     "types": "?",
@@ -513,7 +741,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             ))
             entries.append({
                 "profile": profile,
-                "hash": request_hash[:12],
+                "hash": cache_key[:12],
                 "version": meta.get("version", "?"),
                 "build_date": meta.get("build_at", "?")[:19],
                 "types": ", ".join(image_types) if image_types else "none",
@@ -528,7 +756,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     col_widths = {
         "profile": max(len("PROFILE"), max(len(e["profile"]) for e in entries)),
-        "hash": max(len("HASH"), max(len(e["hash"]) for e in entries)),
+        "hash": max(len("CACHE KEY"), max(len(e["hash"]) for e in entries)),
         "version": max(len("VERSION"), max(len(e["version"]) for e in entries)),
         "build_date": max(len("BUILD DATE"), max(len(str(e["build_date"])) for e in entries)),
         "types": max(len("TYPES"), max(len(e["types"]) for e in entries)),
@@ -536,7 +764,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     header = (
         f"{'PROFILE':<{col_widths['profile']}}  "
-        f"{'HASH':<{col_widths['hash']}}  "
+        f"{'CACHE KEY':<{col_widths['hash']}}  "
         f"{'VERSION':<{col_widths['version']}}  "
         f"{'BUILD DATE':<{col_widths['build_date']}}  "
         f"{'TYPES':<{col_widths['types']}}"
@@ -563,23 +791,23 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_show(args: argparse.Namespace) -> int:
     profile: str = args.profile
-    request_hash: str = args.hash
+    cache_key: str = args.hash
 
-    meta = _read_metadata(profile, request_hash)
+    meta = _read_metadata(profile, cache_key)
     if meta is None:
         profile_dir = IMAGES_DIR / profile
         if profile_dir.exists():
             for d in profile_dir.iterdir():
-                if d.is_dir() and d.name.startswith(request_hash):
+                if d.is_dir() and d.name.startswith(cache_key):
                     meta = _read_metadata(profile, d.name)
-                    request_hash = d.name
+                    cache_key = d.name
                     break
 
     if meta is None:
         logger.error(
             "no metadata found for profile='%s' hash='%s'",
             profile,
-            request_hash,
+            cache_key,
         )
         return 1
 
@@ -601,13 +829,13 @@ def cmd_find(args: argparse.Namespace) -> int:
         logger.error("no cached firmware for profile '%s'", profile)
         return 1
 
-    candidates: list[tuple[str, dict[str, Any]]] = []
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
 
     for hash_dir in profile_dir.iterdir():
         if not hash_dir.is_dir():
             continue
-        request_hash = hash_dir.name
-        meta = _read_metadata(profile, request_hash)
+        cache_key = hash_dir.name
+        meta = _read_metadata(profile, cache_key)
         if meta is None:
             continue
 
@@ -619,7 +847,7 @@ def cmd_find(args: argparse.Namespace) -> int:
             continue
 
         enqueued = meta.get("enqueued_at", "")
-        candidates.append((enqueued, meta))
+        candidates.append((enqueued, cache_key, meta))
 
     if not candidates:
         if image_type:
@@ -633,10 +861,10 @@ def cmd_find(args: argparse.Namespace) -> int:
         return 1
 
     candidates.sort(key=lambda x: x[0], reverse=True)
-    newest_meta = candidates[0][1]
+    newest_cache_key = candidates[0][1]
+    newest_meta = candidates[0][2]
 
-    request_hash = newest_meta["request_hash"]
-    hash_dir = IMAGES_DIR / profile / request_hash
+    hash_dir = IMAGES_DIR / profile / newest_cache_key
 
     for img in newest_meta.get("images", []):
         if image_type and img.get("type") != image_type:
@@ -745,7 +973,7 @@ def main() -> int:
     )
     p_show.add_argument(
         "--hash", required=True,
-        help="Request hash (full or prefix)",
+        help="Cache key (full or prefix)",
     )
     p_show.set_defaults(func=cmd_show)
 
