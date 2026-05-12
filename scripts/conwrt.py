@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportCallIssue=false, reportAttributeAccessIssue=false
 """conwrt — OpenWrt flasher with auto-detection, pcap monitoring, and ASU integration.
 
 Reads device profiles from conwrt model JSON files via model_loader.
@@ -47,6 +48,7 @@ import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
 firmware_request = _firmware_manager.cmd_request
 firmware_find = _firmware_manager.cmd_find
+build_mgmt_wifi_script = _firmware_manager.build_mgmt_wifi_script
 IMAGES_DIR = _firmware_manager.IMAGES_DIR
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
@@ -129,33 +131,39 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
 
 
 def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
-    existing = subprocess.run(
-        ["ifconfig", interface], capture_output=True, text=True, check=False,
-    ).stdout
+    r = subprocess.run(
+        ["ip", "addr", "show", interface],
+        capture_output=True, text=True, check=False,
+    )
+    existing = r.stdout
 
     if profile.client_ip not in existing:
         result = subprocess.run(
-            ["ifconfig", interface, profile.client_ip, "netmask", profile.client_subnet, "up"],
+            ["sudo", "-n", "ip", "addr", "add",
+             f"{profile.client_ip}/24", "dev", interface],
             capture_output=True, text=True, check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and "File exists" not in result.stderr:
             print(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}", file=sys.stderr)
-            print(f"  sudo ifconfig {interface} {profile.client_ip} netmask {profile.client_subnet} up", file=sys.stderr)
+            print(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}", file=sys.stderr)
             sys.exit(1)
-        log(f"Configured {interface}: {profile.client_ip}/{profile.client_subnet}")
+        subprocess.run(["sudo", "-n", "ip", "link", "set", interface, "up"],
+                       capture_output=True, text=True, check=False)
+        log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
 
     openwrt_client = profile.openwrt_client_ip
     if openwrt_client and openwrt_client != profile.client_ip and openwrt_client not in existing:
         result = subprocess.run(
-            ["ifconfig", interface, openwrt_client, "netmask", "255.255.255.0", "alias"],
+            ["sudo", "-n", "ip", "addr", "add",
+             f"{openwrt_client}/24", "dev", interface],
             capture_output=True, text=True, check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and "File exists" not in result.stderr:
             log(f"WARNING: could not add alias {openwrt_client}: {result.stderr.strip()}")
         else:
-            log(f"Added alias {interface}: {openwrt_client}/255.255.255.0")
+            log(f"Added alias {interface}: {openwrt_client}/24")
 
 
 def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
@@ -191,17 +199,54 @@ def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None
     return "unknown"
 
 
+def _ssh_cmd(ip: str, *remote_cmds: str, key: Optional[str] = None,
+             connect_timeout: int = 3, password_auth: bool = False) -> list[str]:
+    """Build a complete SSH command list with standard options.
+
+    Always includes BatchMode=yes to prevent interactive password prompts
+    that would hang the script.  Use password_auth=True only when you
+    intentionally want to allow password authentication.
+    """
+    cmd: list[str] = ["ssh",
+                      "-o", "StrictHostKeyChecking=no",
+                      "-o", "UserKnownHostsFile=/dev/null",
+                      "-o", "BatchMode=yes",
+                      "-o", f"ConnectTimeout={connect_timeout}"]
+    if not password_auth:
+        cmd += ["-o", "PasswordAuthentication=no"]
+    if key:
+        cmd += ["-i", key]
+    cmd.append(f"root@{ip}")
+    cmd.extend(remote_cmds)
+    return cmd
+
+
+def _scp_cmd(src: str, dst: str, key: Optional[str] = None,
+             connect_timeout: int = 10) -> list[str]:
+    """Build a complete SCP command list with standard options.
+
+    Uses -O (legacy SCP protocol) for compatibility with OpenWrt's
+    dropbear SSH server, which lacks the sftp-server subsystem that
+    modern OpenSSH tries to use by default.
+    """
+    cmd: list[str] = ["scp", "-O",
+                      "-o", "StrictHostKeyChecking=no",
+                      "-o", "UserKnownHostsFile=/dev/null",
+                      "-o", "BatchMode=yes",
+                      "-o", f"ConnectTimeout={connect_timeout}"]
+    if key:
+        cmd += ["-i", key]
+    cmd += [src, dst]
+    return cmd
+
+
 def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
     """Upload firmware via SCP and run sysupgrade -n."""
     firmware_name = os.path.basename(firmware_path)
     remote_path = f"/tmp/{firmware_name}"
 
-    scp_cmd = ["scp", "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-o", "ConnectTimeout=10"]
-    if ssh_key:
-        scp_cmd.extend(["-i", ssh_key])
-    scp_cmd.extend([firmware_path, f"root@{device_ip}:{remote_path}"])
+    scp_cmd = _scp_cmd(firmware_path, f"root@{device_ip}:{remote_path}",
+                       key=ssh_key, connect_timeout=10)
 
     size_mb = os.path.getsize(firmware_path) / 1024 / 1024
     log(f"Uploading {firmware_name} ({size_mb:.1f} MB) via SCP to {device_ip}...")
@@ -223,16 +268,16 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
         return False
 
     log(f"Firmware uploaded. Running sysupgrade -n {remote_path}...")
-    ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-o", "ConnectTimeout=10"]
-    if ssh_key:
-        ssh_cmd.extend(["-i", ssh_key])
-    ssh_cmd.extend([f"root@{device_ip}", f"sysupgrade -n {remote_path}"])
+    ssh_cmd = _ssh_cmd(device_ip, f"sysupgrade -n {remote_path}",
+                       key=ssh_key, connect_timeout=10)
 
     try:
         r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30, check=False)
-        if r.returncode == 0 or "Upgrading" in r.stdout or "Rebooting" in r.stdout:
+        combined = (r.stdout or "") + (r.stderr or "")
+        if (r.returncode == 0
+                or "Commencing upgrade" in combined
+                or "Upgrading" in combined
+                or "Rebooting" in combined):
             log("sysupgrade initiated successfully.")
             return True
         if r.returncode != 0 and not r.stdout and not r.stderr:
@@ -242,12 +287,8 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
             log(f"SSH connection failed during sysupgrade: {r.stderr[:200]}")
             log("Hint: device may have rejected the firmware or SSH is not available")
             return False
-        if r.returncode != 0 and "Rebooting" not in r.stdout and "Upgrading" not in r.stdout:
-            log(f"WARNING: sysupgrade returned exit {r.returncode}")
-            log(f"  stdout: {r.stdout[:300]}")
-            log(f"  stderr: {r.stderr[:300]}")
         log(f"sysupgrade returned {r.returncode}: {r.stdout[:200]} {r.stderr[:200]}")
-        return r.returncode == 0 or r.returncode == 255
+        return False
     except subprocess.TimeoutExpired:
         log("sysupgrade command timed out (may have started reboot).")
         return True
@@ -284,9 +325,66 @@ def _find_model_id_by_board(board_name: str) -> Optional[str]:
     return None
 
 
- def _detect_ssh_key_path() -> str:
+def _detect_ssh_key_path() -> str:
     cfg = _load_config()
     return cfg.ssh_private_key_path
+
+
+def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
+    ssh_key = _detect_ssh_key_path()
+    if not ssh_key:
+        print("ERROR: No SSH private key found. Set [ssh].key in config.toml or install ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.", file=sys.stderr)
+        return 1
+
+    script = build_mgmt_wifi_script()
+    ssh_cmd = _ssh_cmd(args.ip, "sh -s", key=ssh_key, connect_timeout=10)
+
+    try:
+        result = subprocess.run(
+            ssh_cmd,
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"ERROR: Timed out configuring management WiFi on {args.ip}.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: Failed to run setup script over SSH: {exc}", file=sys.stderr)
+        return 1
+
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr.strip(), file=sys.stderr)
+        return result.returncode or 1
+
+    verify_cmd = " && ".join([
+        "uci -q get network.mgmt.ipaddr | grep -qx '172.16.0.1'",
+        "uci -q get dhcp.mgmt.interface | grep -qx 'mgmt'",
+        "uci -q show firewall | grep -q \"\\.name='mgmt'\"",
+        "uci -q show wireless | grep -q \"\\.network='mgmt'\"",
+    ])
+    verify_result = subprocess.run(
+        _ssh_cmd(args.ip, verify_cmd, key=ssh_key, connect_timeout=10),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if verify_result.returncode != 0:
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if verify_result.stderr.strip():
+            print(verify_result.stderr.strip(), file=sys.stderr)
+        print("ERROR: Management WiFi verification failed.", file=sys.stderr)
+        return 1
+
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    print(f"Management WiFi configured on {args.ip}")
+    return 0
 
 
 def _arp_target_for_profile(profile: SimpleNamespace) -> str:
@@ -363,10 +461,15 @@ def ts_str(t: float) -> str:
 
 
 def say(msg: str) -> None:
-    try:
-        subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=30)
-    except subprocess.TimeoutExpired:
-        pass
+    import platform
+    if platform.system() == "Darwin":
+        try:
+            subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+    else:
+        print(f"\033[1m>>> {msg}\033[0m")
+        sys.stdout.flush()
 
 
 def log(msg: str) -> None:
@@ -376,11 +479,14 @@ def log(msg: str) -> None:
 
 
 def get_link_state(interface: str) -> bool:
-    r = subprocess.run(
-        ["ifconfig", interface],
-        capture_output=True, text=True, timeout=5, check=False,
-    )
-    return "status: active" in r.stdout.lower()
+    try:
+        r = subprocess.run(
+            ["cat", f"/sys/class/net/{interface}/operstate"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        return r.stdout.strip().lower() == "up"
+    except Exception:
+        return False
 
 
 def sha256_file(path: str) -> str:
@@ -483,11 +589,7 @@ def trigger_flash(profile: SimpleNamespace) -> bool:
 def check_ssh(ip: str = DEFAULT_IP) -> bool:
     try:
         r = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=3",
-             "-o", "PasswordAuthentication=no",
-             f"root@{ip}", "echo SSH_OK"],
+            _ssh_cmd(ip, "echo SSH_OK", connect_timeout=3),
             capture_output=True, text=True, timeout=10, check=False,
         )
         return "SSH_OK" in r.stdout
@@ -500,20 +602,18 @@ def verify_router(ip: str = DEFAULT_IP) -> list[tuple[str, str]]:
     checks: list[tuple[str, str]] = []
     try:
         r = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ConnectTimeout=5",
-             "-o", "PasswordAuthentication=no",
-             f"root@{ip}",
-             "echo hostname=$(cat /proc/sys/kernel/hostname); "
-             "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
-             "echo kernel=$(uname -r); "
-             "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
-             "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
-             "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
-             "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
-             "echo mac_eth0=$(cat /sys/class/net/eth0/address 2>/dev/null || echo ''); "
-             "echo ping_ok=$(ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no)"],
+            _ssh_cmd(ip,
+                     "echo hostname=$(cat /proc/sys/kernel/hostname); "
+                     "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
+                     "echo kernel=$(uname -r); "
+                     "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
+                     "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
+                     "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
+                     "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
+                     "echo mac_eth0=$(cat /sys/class/net/eth0/address 2>/dev/null || echo ''); "
+                     "echo 'mac_all='$(for f in /sys/class/net/*/address; do printf '%s=%s ' $(basename $(dirname $f)) $(cat $f 2>/dev/null); done); "
+                     "echo ping_ok=$(ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no)",
+                     connect_timeout=5),
             capture_output=True, text=True, timeout=20, check=False,
         )
         for line in r.stdout.strip().split('\n'):
@@ -1028,6 +1128,10 @@ class RecoveryContext:
     serial_baud: int = 115200
     tftp_root: str = ""
     uboot_commands: list = field(default_factory=list)
+    request_hash: str = ""
+    cache_key: str = ""
+    packages: list = field(default_factory=list)
+    defaults_script: str = ""
     _say_fn: object = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -1090,7 +1194,7 @@ def _request_custom_image(
     wan_ssh: bool,
     flash_method: str,
     say_fn,
-) -> Optional[str]:
+) -> tuple[Optional[str], dict]:
     asu_profile = _resolve_asu_profile(model_id)
     say_fn("Requesting custom firmware image from ASU...")
     log(f"ASU profile: {asu_profile}")
@@ -1114,7 +1218,7 @@ def _request_custom_image(
         rc = firmware_request(request_args)
     if rc != 0:
         log("ERROR: ASU firmware request failed.")
-        return None
+        return None, {}
 
     recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp"}
     if flash_method in recovery_methods:
@@ -1161,10 +1265,19 @@ def _request_custom_image(
 
     if not image_path or not os.path.isfile(image_path):
         log("ERROR: No firmware image file found after ASU request.")
-        return None
+        return None, {}
+
+    metadata = {}
+    try:
+        image_obj = Path(image_path)
+        meta_path = image_obj.parent / "build.metadata.json"
+        if meta_path.is_file():
+            metadata = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        metadata = {}
 
     log(f"Firmware image: {image_path}")
-    return image_path
+    return image_path, metadata
 
 
 def _run_state_machine(
@@ -1208,6 +1321,11 @@ def _run_state_machine(
         _print_timeline(ctx)
         _record_inventory(ctx)
         return 0
+
+    _print_timeline(ctx)
+    if ctx.image_path and ctx.sha256_before:
+        log("Recording partial inventory (flash may still succeed).")
+        _record_inventory(ctx)
     return 1
 
 
@@ -1221,6 +1339,13 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     else:
         if boot_state == "uboot":
             log("Boot state: U-Boot recovery mode detected")
+            recovery_ip = ctx.profile.recovery_ip
+            found, detail = detect_uboot_http(recovery_ip)
+            if found:
+                log(f"Recovery HTTP already live at {recovery_ip} ({detail}) — skipping power cycle")
+                ctx.timeline.uboot_http_first = ts()
+                ctx.state = State.UBOOT_UPLOADING
+                return
         elif ctx.force_uboot:
             log("Boot state: forced to U-Boot recovery (--force-uboot)")
         else:
@@ -1510,21 +1635,25 @@ def setup_interface_for_serial(ctx: RecoveryContext) -> None:
     if not interface:
         return
 
-    existing = subprocess.run(
-        ["ifconfig", interface], capture_output=True, text=True, check=False,
-    ).stdout
+    r = subprocess.run(
+        ["ip", "addr", "show", interface],
+        capture_output=True, text=True, check=False,
+    )
+    existing = r.stdout
 
     if profile.client_ip and profile.client_ip not in existing:
         result = subprocess.run(
-            ["ifconfig", interface, profile.client_ip,
-             "netmask", profile.client_subnet, "up"],
+            ["sudo", "-n", "ip", "addr", "add",
+             f"{profile.client_ip}/24", "dev", interface],
             capture_output=True, text=True, check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and "File exists" not in result.stderr:
             log(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}")
-            log(f"  sudo ifconfig {interface} {profile.client_ip} netmask {profile.client_subnet} up")
+            log(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}")
         else:
-            log(f"Configured {interface}: {profile.client_ip}/{profile.client_subnet}")
+            subprocess.run(["sudo", "-n", "ip", "link", "set", interface, "up"],
+                           capture_output=True, text=True, check=False)
+            log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
 
@@ -1548,31 +1677,45 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
     ctx._say_fn("Link detected. Waiting for OpenWrt to boot.")
     log("Link up after reboot — waiting for OpenWrt")
 
-    # Phase 2: Wait for ICMPv6 (OpenWrt booting) or SSH with generous timeout
-    timeout_after_link = 180
-    result = _wait_for_event_or_timeout(
-        eq, timeout=timeout_after_link,
-        target_events={Event.ICMPV6_FROM_ROUTER, Event.SSH_UP},
-        success_state=State.OPENWRT_BOOTING,
-        fail_message=f"OpenWrt did not appear within {timeout_after_link}s after link up.",
-        fail_say="OpenWrt is taking longer than expected. Check the router.",
-        ctx=ctx,
-    )
-    if result is None:
+    # Phase 2: Wait for ICMPv6/SSH via pcap events, with active SSH polling fallback.
+    # First boot with luci on MIPS can take several minutes, so use a generous timeout
+    # and actively poll SSH in case pcap events are missed.
+    timeout_after_link = 600
+    openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+    start = ts()
+    while ts() - start < timeout_after_link:
+        try:
+            event, event_ts, detail = eq.get(timeout=5.0)
+            if event == Event.ICMPV6_FROM_ROUTER:
+                ctx.timeline.first_openwrt_packet = event_ts
+                ctx._say_fn("OpenWrt is booting.")
+                log("ICMPv6 from router MAC detected — OpenWrt is booting")
+                break
+            elif event == Event.SSH_UP:
+                ctx.timeline.ssh_available = event_ts
+                ctx._say_fn("Recovery complete! Router is back online.")
+                log("SUCCESS — router recovered (SSH detected during reboot phase).")
+                verify_router(openwrt_ip)
+                ctx.state = State.COMPLETE
+                return
+            elif event == Event.LINK_UP and ctx.state == State.REBOOTING:
+                pass
+        except queue.Empty:
+            pass
+        if check_ssh(openwrt_ip):
+            ctx.timeline.ssh_available = ts()
+            ctx._say_fn("Recovery complete! Router is back online.")
+            log("SUCCESS — router recovered (SSH poll detected).")
+            verify_router(openwrt_ip)
+            ctx.state = State.COMPLETE
+            return
+    else:
+        log(f"OpenWrt did not appear within {timeout_after_link}s after link up.")
+        ctx._say_fn("OpenWrt is taking longer than expected. Check the router.")
         ctx.state = State.FAILED
         return
 
-    if result == Event.ICMPV6_FROM_ROUTER:
-        ctx.timeline.first_openwrt_packet = ts()
-        ctx._say_fn("OpenWrt is booting.")
-        log("ICMPv6 from router MAC detected — OpenWrt is booting")
-    elif result == Event.SSH_UP:
-        ctx.timeline.ssh_available = ts()
-        ctx._say_fn("Recovery complete! Router is back online.")
-        log("SUCCESS — router recovered (SSH detected during reboot phase).")
-        openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
-        verify_router(openwrt_ip)
-        ctx.state = State.COMPLETE
+    ctx.state = State.OPENWRT_BOOTING
 
 
 def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
@@ -1715,6 +1858,7 @@ def _print_timeline(ctx: RecoveryContext) -> None:
 
 def _record_inventory(ctx: RecoveryContext) -> None:
     ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+    cfg = _load_config()
 
     fp = fingerprint_router(ip)
     if not fp:
@@ -1732,11 +1876,9 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         val = ident.get(key, "")
         if val:
             log(f"  inventory: {key}={val}")
-    for key in ["mac_brlan", "mac_eth0"]:
-        iface = key.replace("mac_", "")
-        val = macs.get(iface, "")
-        if val:
-            log(f"  inventory: {key}={val}")
+    for iface, mac in sorted(macs.items()):
+        if iface != "lo" and mac:
+            log(f"  inventory: mac_{iface}={mac}")
 
     tl = ctx.timeline
     start = tl.recovery_start or ts()
@@ -1783,14 +1925,16 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         "hostname": ident.get("hostname", ""),
         "board": board,
         "kernel": fw.get("kernel", ""),
-        "mac_addresses": list(filter(None, [
-            macs.get("br-lan", ""),
-            macs.get("eth0", ""),
-        ])),
+        "mac_addresses": {k: v for k, v in macs.items() if v and k != "lo"},
         "ssh_key_fingerprint": sec.get("ssh_fingerprint", ""),
         "ssh_key_count": sec.get("ssh_key_count", 0),
         "wan_ssh_rules": sec.get("wan_ssh_rules", 0),
         "packages_installed": sec.get("packages_installed", 0),
+        "request_hash": ctx.request_hash or "",
+        "cache_key": ctx.cache_key or "",
+        "packages": ctx.packages or [],
+        "defaults_script_hash": hashlib.sha256(ctx.defaults_script.encode()).hexdigest()[:16] if ctx.defaults_script else "",
+        "ssh_keys_installed": len(cfg.ssh_all_keys) if cfg else 0,
         "password_set": ctx.password_set,
         "auth_type": ctx.auth_type,
         "wan_ssh_enabled": ctx.wan_ssh_enabled,
@@ -1814,38 +1958,73 @@ def _record_inventory(ctx: RecoveryContext) -> None:
 def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
     """Find the single active physical ethernet interface.
 
-    Skips en0 (WiFi), Thunderbolt bridge members, and Thunderbolt bridge
-    virtual interfaces (mtu 16000). Asserts exactly one candidate exists.
+    On Linux, looks for enp*/eth*/en* interfaces with carrier UP.
+    On macOS, scans en1..en20 skipping WiFi/Thunderbolt.
     """
-    bridge_members = set()
-    br_r = subprocess.run(["ifconfig", "bridge0"], capture_output=True, text=True, check=False)
-    for line in br_r.stdout.splitlines():
-        if "member:" in line.lower():
-            bridge_members.add(line.strip().split()[1])
+    import platform
+    if platform.system() == "Linux":
+        candidates = []
+        iface_dir = Path("/sys/class/net")
+        if iface_dir.exists():
+            for iface_path in sorted(iface_dir.iterdir()):
+                name = iface_path.name
+                if name.startswith(("lo", "wl", "docker", "br-", "virbr", "veth")):
+                    continue
+                if not name.startswith(("en", "eth")):
+                    continue
+                try:
+                    carrier = (iface_path / "carrier").read_text().strip()
+                    operstate = (iface_path / "operstate").read_text().strip()
+                    if carrier == "1" and operstate == "up":
+                        candidates.append(name)
+                except (OSError, PermissionError):
+                    continue
+        if len(candidates) == 0:
+            relaxed = []
+            for iface_path in sorted(iface_dir.iterdir()):
+                name = iface_path.name
+                if name.startswith(("lo", "wl", "docker", "br-", "virbr", "veth")):
+                    continue
+                if not name.startswith(("en", "eth")):
+                    continue
+                relaxed.append(name)
+            if len(relaxed) == 1:
+                log(f"No carrier on {relaxed[0]}, but it's the only ethernet interface — using it")
+                return relaxed[0]
+            return None
+        if len(candidates) > 1:
+            log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
+        return candidates[0]
+    else:
+        bridge_members = set()
+        br_r = subprocess.run(["ifconfig", "bridge0"], capture_output=True, text=True, check=False)
+        for line in br_r.stdout.splitlines():
+            if "member:" in line.lower():
+                bridge_members.add(line.strip().split()[1])
 
-    candidates = []
-    for n in range(1, 21):
-        iface = f"en{n}"
-        r = subprocess.run(
-            ["ifconfig", iface], capture_output=True, text=True, check=False,
-        )
-        if r.returncode != 0:
-            continue
-        if "status: active" not in r.stdout.lower():
-            continue
-        if iface in bridge_members:
-            continue
-        if "mtu 16000" in r.stdout:  # Thunderbolt bridge
-            continue
-        if "base" not in r.stdout or "duplex" not in r.stdout:
-            continue
-        candidates.append(iface)
+        candidates = []
+        for n in range(1, 21):
+            iface = f"en{n}"
+            r = subprocess.run(
+                ["ifconfig", iface], capture_output=True, text=True, check=False,
+            )
+            if r.returncode != 0:
+                continue
+            if "status: active" not in r.stdout.lower():
+                continue
+            if iface in bridge_members:
+                continue
+            if "mtu 16000" in r.stdout:
+                continue
+            if "base" not in r.stdout or "duplex" not in r.stdout:
+                continue
+            candidates.append(iface)
 
-    if len(candidates) == 0:
-        return None
-    if len(candidates) > 1:
-        log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
-    return candidates[0]
+        if len(candidates) == 0:
+            return None
+        if len(candidates) > 1:
+            log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
+        return candidates[0]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1920,6 +2099,13 @@ def _build_parser() -> argparse.ArgumentParser:
     cache_clean.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt")
 
+    mgmt_parser = subparsers.add_parser("setup-mgmt-wifi",
+        help="Configure management WiFi on a running router")
+    mgmt_parser.add_argument("--ip", default="192.168.1.1",
+        help="Router IP address")
+    mgmt_parser.add_argument("--model-id", default=None,
+        help="Model ID (for SSH key detection)")
+
     return parser
 
 
@@ -1966,7 +2152,7 @@ def _cache_list(images_dir: Path) -> int:
             if not hash_dir.is_dir():
                 continue
             model_id = model_dir.name
-            request_hash = hash_dir.name
+            cache_key = hash_dir.name
             metadata_files = list(hash_dir.glob("*.metadata.json"))
             metadata = {}
             if metadata_files:
@@ -1996,7 +2182,7 @@ def _cache_list(images_dir: Path) -> int:
 
             entries.append({
                 "model": model_id,
-                "hash": request_hash[:12],
+                "hash": cache_key[:12],
                 "version": build_info,
                 "types": ", ".join(sorted(set(image_types))) or "none",
                 "size_mb": f"{total_size / 1024 / 1024:.1f}",
@@ -2135,6 +2321,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     auth_type = ""
     wan_ssh_enabled = False
     image_path = args.image
+    request_metadata: dict = {}
 
     if args.request_image:
         cfg = _load_config()
@@ -2163,7 +2350,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
         wan_ssh_enabled = args.wan_ssh or cfg.wan_ssh
 
-        image_path = _request_custom_image(
+        image_path, request_metadata = _request_custom_image(
             model_id=args.model_id,
             ssh_key_path=args.ssh_key,
             password=password,
@@ -2215,7 +2402,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log(f"WAN SSH:    {wan_ssh_enabled}")
     print()
 
-    fp = fingerprint_router(openwrt_ip)
+    fp = fingerprint_router(openwrt_ip) if use_sysupgrade else None
     if fp:
         ident = fp.get("identity", {})
         fw = fp.get("firmware", {})
@@ -2248,6 +2435,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
         initial_state = State.SERIAL_WAITING_FOR_BOOTMENU
     elif use_sysupgrade:
         initial_state = State.SYSUPGRADE_UPLOADING
+    elif boot_state == "uboot":
+        found, detail = detect_uboot_http(profile.recovery_ip)
+        if found:
+            log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
+            initial_state = State.UBOOT_UPLOADING
+        else:
+            initial_state = State.WAITING_FOR_POWER_OFF
     else:
         initial_state = State.WAITING_FOR_POWER_OFF
 
@@ -2272,6 +2466,10 @@ def cmd_flash(args: argparse.Namespace) -> int:
         serial_baud=args.serial_baud or getattr(profile, 'serial_baud', 115200),
         tftp_root=args.tftp_root or "",
         uboot_commands=getattr(profile, 'uboot_commands', []),
+        request_hash=request_metadata.get("request_hash", ""),
+        cache_key=request_metadata.get("cache_key", ""),
+        packages=request_metadata.get("packages", []),
+        defaults_script=request_metadata.get("defaults") or "",
         _say_fn=_say_fn,
         state=initial_state,
     )
@@ -2340,7 +2538,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "setup-mgmt-wifi", "-h", "--help"):
         sys.argv.insert(1, "flash")
 
     parser = _build_parser()
@@ -2350,6 +2548,8 @@ def main() -> int:
         return cmd_list(args)
     elif args.command == "cache":
         return cmd_cache(args)
+    elif args.command == "setup-mgmt-wifi":
+        return cmd_setup_mgmt_wifi(args)
     else:
         return cmd_flash(args)
 
