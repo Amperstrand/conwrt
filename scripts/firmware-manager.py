@@ -10,6 +10,7 @@ Subcommands:
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -276,7 +277,8 @@ def _build_defaults(
         lines.append("chmod 600 /etc/dropbear/authorized_keys")
 
     if password:
-        lines.append(f"printf '%s\\n%s\\n' '{password}' '{password}' | passwd root")
+        pw_b64 = base64.b64encode(password.encode()).decode()
+        lines.append(f"printf '%s\\n%s\\n' \"$(echo '{pw_b64}' | base64 -d)\" \"$(echo '{pw_b64}' | base64 -d)\" | passwd root")
 
     if wan_ssh:
         lines.extend([
