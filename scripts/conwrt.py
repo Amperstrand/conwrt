@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssh_utils import ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models
+from zycast import ensure_zycast_binary, run_zycast
 import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
 firmware_request = _firmware_manager.cmd_request
@@ -68,6 +69,9 @@ def _find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str
     for method_name, method_cfg in methods.items():
         if "recovery_ip" in method_cfg:
             return method_name, method_cfg
+    for method_name in ("zycast",):
+        if method_name in methods:
+            return method_name, methods[method_name]
     available = list(methods.keys())
     serial_methods = [m for m in available if m.startswith("serial-tftp-")]
     if serial_methods and not method_hint:
@@ -93,10 +97,14 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
     method_name, fm = _find_recovery_flash_method(model, method_hint)
 
     is_serial_tftp = method_name.startswith("serial-tftp")
+    is_zycast = method_name == "zycast"
 
     if is_serial_tftp:
         client_ip = fm.get("tftp_server_ip", "192.168.1.254")
         recovery_ip = fm.get("tftp_router_ip", "192.168.1.1")
+    elif is_zycast:
+        client_ip = "192.168.1.2"
+        recovery_ip = model["openwrt"]["default_ip"]
     else:
         client_ip = fm["client_ip"]
         recovery_ip = fm["recovery_ip"]
@@ -119,6 +127,7 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
         openwrt_ip=model["openwrt"]["default_ip"],
         openwrt_client_ip=fm.get("openwrt_client_ip", client_ip),
         is_serial_tftp=is_serial_tftp,
+        is_zycast=is_zycast,
         serial_baud=fm.get("serial_baud", 115200),
         bootmenu_timeout=fm.get("bootmenu_timeout_seconds", 30),
         bootmenu_interrupt=fm.get("bootmenu_interrupt", "ctrl-c"),
@@ -128,6 +137,9 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
         uboot_commands=fm.get("uboot_commands", []),
         images=fm.get("images", {}),
         eth_prime=fm.get("eth_prime", ""),
+        zycast_multicast_group=fm.get("multicast_group", "225.0.0.0"),
+        zycast_multicast_port=fm.get("multicast_port", 5631),
+        zycast_image_type=fm.get("image_type", "ras"),
     )
 
 
@@ -378,6 +390,8 @@ class Event(Enum):
     SERIAL_UBOOT_READY = auto()
     SERIAL_COMMAND_DONE = auto()
     SERIAL_ALL_DONE = auto()
+    ZYCAST_MULTICAST_DETECTED = auto()
+    ZYCAST_SENDING_DONE = auto()
 
 
 class State(Enum):
@@ -393,6 +407,8 @@ class State(Enum):
     SERIAL_WAITING_FOR_BOOTMENU = auto()
     SERIAL_UBOOT_INTERACTING = auto()
     SERIAL_TFTP_FLASHING = auto()
+    ZYCAST_WAITING_FOR_DEVICE = auto()
+    ZYCAST_SENDING = auto()
     REBOOTING = auto()
     OPENWRT_BOOTING = auto()
     COMPLETE = auto()
@@ -422,6 +438,8 @@ class PcapMonitorConfig:
     router_mac_uboot: str = ""
     uboot_ip: str = DEFAULT_IP
     silence_timeout: int = SILENCE_TIMEOUT_DEFAULT
+    zycast_multicast_group: str = ""
+    zycast_multicast_port: int = 0
 
 
 def ts() -> float:
@@ -850,6 +868,19 @@ class PcapMonitor:
                     raise ValueError("missing UDP layer")
                 if int(getattr(udp, "sport", 0)) == 4919 or int(getattr(udp, "dport", 0)) == 4919:
                     self._emit(Event.FAILSAFE_BROADCAST, detail)
+                if (
+                    self.config.zycast_multicast_group
+                    and packet.haslayer(self._scapy.IP)
+                ):
+                    ip_layer = packet.getlayer(self._scapy.IP)
+                    if ip_layer is not None:
+                        dst_ip = getattr(ip_layer, "dst", "")
+                        dst_port = int(getattr(udp, "dport", 0))
+                        if (
+                            dst_ip == self.config.zycast_multicast_group
+                            and dst_port == self.config.zycast_multicast_port
+                        ):
+                            self._emit(Event.ZYCAST_MULTICAST_DETECTED, detail)
             except Exception:
                 pass
 
@@ -899,6 +930,14 @@ class PcapMonitor:
         # Failsafe broadcast (UDP 4919)
         if "udp" in lower and "4919" in lower:
             self._emit(Event.FAILSAFE_BROADCAST, line[:120])
+
+        if (
+            self.config.zycast_multicast_group
+            and "udp" in lower
+            and self.config.zycast_multicast_group in line
+            and str(self.config.zycast_multicast_port) in line
+        ):
+            self._emit(Event.ZYCAST_MULTICAST_DETECTED, line[:120])
 
     def _run_tcpdump_fallback(self) -> Optional[bool]:
         self._writer_proc = self._start_writer()
@@ -1411,7 +1450,7 @@ def _request_custom_image(
 
     model = load_model(model_id)
     target = model.get("openwrt", {}).get("target", "")
-    version = model.get("openwrt", {}).get("version", "24.10.1")
+    version = model.get("openwrt", {}).get("version", "24.10.2")
 
     request_args = argparse.Namespace(
         profile=asu_profile,
@@ -1430,9 +1469,9 @@ def _request_custom_image(
         log("ERROR: ASU firmware request failed.")
         return None, {}
 
-    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp"}
+    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast"}
     if flash_method in recovery_methods:
-        preferred_types = ["recovery", "factory"]
+        preferred_types = ["recovery", "factory", "initramfs"]
     else:
         preferred_types = ["sysupgrade"]
 
@@ -1519,6 +1558,10 @@ def _run_state_machine(
             _handle_serial_waiting_for_bootmenu(ctx, event_queue)
         elif ctx.state == State.SERIAL_UBOOT_INTERACTING:
             _handle_serial_uboot_interacting(ctx, event_queue)
+        elif ctx.state == State.ZYCAST_WAITING_FOR_DEVICE:
+            _handle_zycast_waiting(ctx, event_queue)
+        elif ctx.state == State.ZYCAST_SENDING:
+            _handle_zycast_sending(ctx, event_queue)
         elif ctx.state == State.REBOOTING:
             _handle_rebooting(ctx, event_queue)
         elif ctx.state == State.OPENWRT_BOOTING:
@@ -1868,6 +1911,129 @@ def setup_interface_for_serial(ctx: RecoveryContext) -> None:
             log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
+
+
+def _handle_zycast_waiting(ctx: RecoveryContext, eq: queue.Queue) -> None:
+    profile = ctx.profile
+    ctx._say_fn("Power cycle the router now. Multicast flash will start automatically.")
+    log("Waiting for ZyXEL Multiboot multicast packets...")
+
+    multicast_group = getattr(profile, 'zycast_multicast_group', '225.0.0.0')
+    multicast_port = getattr(profile, 'zycast_multicast_port', 5631)
+    probe_timeout = 120
+    probe_start = ts()
+
+    while ts() - probe_start < probe_timeout:
+        try:
+            event, event_ts, detail = eq.get(timeout=1.0)
+            if event == Event.ZYCAST_MULTICAST_DETECTED:
+                ctx.timeline.uboot_http_first = ts()
+                log(f"ZyXEL Multiboot detected: {detail}")
+                ctx._say_fn("Multiboot detected. Starting multicast flash.")
+                ctx.state = State.ZYCAST_SENDING
+                return
+            if event == Event.LINK_UP and ctx.timeline.link_up is None:
+                ctx.timeline.link_up = event_ts
+                log("Link up — watching for multicast")
+            elif event == Event.LINK_DOWN and ctx.timeline.power_off is None:
+                ctx.timeline.power_off = event_ts
+        except queue.Empty:
+            pass
+
+        _drain_events(eq, ctx)
+
+    ctx._say_fn("No Multiboot detected. Check that the router is powered on.")
+    log(f"FAIL: No multicast packets from ZyXEL bootloader within {probe_timeout}s")
+    ctx.state = State.FAILED
+
+
+def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
+    if ctx.no_upload:
+        ctx._say_fn("Dry run. Multiboot detected but not flashing.")
+        log("DRY RUN: Would flash via zycast multicast")
+        ctx.state = State.COMPLETE
+        return
+
+    profile = ctx.profile
+    ctx.sha256_before = sha256_file(ctx.image_path)
+    log(f"SHA-256 (before zycast): {ctx.sha256_before}")
+
+    try:
+        binary = ensure_zycast_binary()
+    except RuntimeError as e:
+        log(f"ERROR: {e}")
+        ctx._say_fn("Failed to compile zycast. Install a C compiler and try again.")
+        ctx.state = State.FAILED
+        return
+
+    multicast_group = getattr(profile, 'zycast_multicast_group', '225.0.0.0')
+    multicast_port = getattr(profile, 'zycast_multicast_port', 5631)
+    image_type = getattr(profile, 'zycast_image_type', 'ras')
+
+    ctx.timeline.upload_start = ts()
+    ctx._say_fn("Sending firmware via multicast. Do not unplug.")
+    log(f"Starting zycast: {ctx.image_path} -> {multicast_group}:{multicast_port}")
+
+    try:
+        proc = run_zycast(
+            binary_path=binary,
+            image_path=ctx.image_path,
+            interface=ctx.interface,
+            multicast_group=multicast_group,
+            multicast_port=multicast_port,
+            image_type=image_type,
+        )
+    except Exception as e:
+        log(f"ERROR: Failed to start zycast: {e}")
+        ctx.state = State.FAILED
+        return
+
+    ctx._zycast_proc = proc
+
+    flash_timeout = getattr(profile, 'flash_time_seconds', 180) + 60
+    start = ts()
+    while ts() - start < flash_timeout:
+        retcode = proc.poll()
+        if retcode is not None:
+            break
+        try:
+            event, event_ts, detail = eq.get(timeout=2.0)
+            if event == Event.ZYCAST_MULTICAST_DETECTED:
+                log(f"  multicast activity: {detail[:80]}")
+        except queue.Empty:
+            pass
+
+    if proc.poll() is None:
+        log("zycast still running after timeout — terminating")
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    stdout_data = proc.stdout.read() if proc.stdout else ""
+    stderr_data = proc.stderr.read() if proc.stderr else ""
+
+    if stdout_data:
+        for line in stdout_data.strip().split("\n")[:10]:
+            log(f"  [zycast stdout] {line}")
+    if stderr_data:
+        for line in stderr_data.strip().split("\n")[:10]:
+            log(f"  [zycast stderr] {line}")
+
+    retcode = proc.returncode
+    if retcode == 0:
+        ctx.timeline.upload_complete = ts()
+        ctx.timeline.flash_complete = ts()
+        ctx.timeline.flash_triggered = ts()
+        log("zycast completed successfully")
+        ctx._say_fn("Multicast flash complete. Waiting for router to reboot.")
+        ctx.state = State.REBOOTING
+    else:
+        log(f"zycast exited with code {retcode}")
+        ctx._say_fn("Multicast flash may have failed. Check the console output.")
+        ctx.timeline.flash_complete = ts()
+        ctx.state = State.REBOOTING
 
 
 def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
@@ -2273,7 +2439,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                 help="Request custom image from ASU with baked-in settings")
 
     flash_parser.add_argument("--ssh-key", default=None,
-                        help="SSH public key to install (default: first found of ~/.ssh/id_ed25519.pub, id_rsa.pub)")
+                        help="Path to SSH public key (default: [ssh].key from config.toml)")
     flash_parser.add_argument("--password", default=None,
                         help="Set root password (default: random, printed once)")
     flash_parser.add_argument("--no-password", action="store_true",
@@ -2325,6 +2491,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Router IP address")
     mgmt_parser.add_argument("--model-id", default=None,
         help="Model ID (for SSH key detection)")
+
+    backup_parser = subparsers.add_parser("backup",
+        help="Backup MTD flash partitions from a stock ZyXEL router via SSH")
+    backup_parser.add_argument("--model-id", default="zyxel-nr7101",
+        help="Model ID (default: zyxel-nr7101)")
+    backup_parser.add_argument("--ip", default="192.168.1.1",
+        help="Router IP address (default: 192.168.1.1)")
+    backup_parser.add_argument("--serial", default=None,
+        help="Device serial number (printed on unit label). Used to generate stock SSH password.")
+    backup_parser.add_argument("--password", default=None,
+        help="Stock SSH password (overrides --serial). Use if zyxel_pwgen is unavailable.")
+    backup_parser.add_argument("--output-dir", default=None,
+        help="Output directory for partition dumps (default: data/backups/<serial>)")
+    backup_parser.add_argument("--partitions", default=None,
+        help="Comma-separated list of MTD partitions to dump (e.g. '0,1,2'). Default: all partitions.")
+    backup_parser.add_argument("--user", default="root",
+        help="SSH username (default: root)")
 
     return parser
 
@@ -2514,6 +2697,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         return 1
 
     is_serial_tftp = getattr(profile, 'is_serial_tftp', False)
+    is_zycast = getattr(profile, 'is_zycast', False)
 
     if is_serial_tftp and not args.serial_method:
         serial_methods = [k for k in load_model(args.model_id).get("flash_methods", {}).keys()
@@ -2529,7 +2713,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
 
-    if is_serial_tftp:
+    if is_serial_tftp or is_zycast:
         boot_state = "unknown"
         use_sysupgrade = False
     else:
@@ -2613,9 +2797,11 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log(f"Serial:     {args.serial_port or 'auto-detect'} @ {getattr(profile, 'serial_baud', 115200)} baud")
         if getattr(profile, 'lan_port', ''):
             log(f"LAN port:   {profile.lan_port} (for TFTP)")
+    elif is_zycast and not use_sysupgrade:
+        log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
     else:
         log(f"Flash path: {'sysupgrade' if use_sysupgrade else 'U-Boot recovery'}")
-    if not use_sysupgrade and not is_serial_tftp:
+    if not use_sysupgrade and not is_serial_tftp and not is_zycast:
         log(f"LED signal: {profile.led_pattern}")
     if args.request_image:
         log(f"Auth type:  {auth_type}")
@@ -2653,6 +2839,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     if is_serial_tftp:
         initial_state = State.SERIAL_WAITING_FOR_BOOTMENU
+    elif is_zycast and not use_sysupgrade:
+        initial_state = State.ZYCAST_WAITING_FOR_DEVICE
     elif use_sysupgrade:
         initial_state = State.SYSUPGRADE_UPLOADING
     elif boot_state == "uboot":
@@ -2723,6 +2911,43 @@ def cmd_flash(args: argparse.Namespace) -> int:
                 tftp_mgr.stop()
         return rc
 
+    if is_zycast:
+        _say_fn(f"Starting {profile.description} multicast recovery.")
+        log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
+
+        monitor_config = PcapMonitorConfig(
+            interface=interface,
+            pcap_path=pcap_path,
+            recovery_ip=profile.recovery_ip,
+            router_mac_openwrt=args.router_mac,
+            router_mac_uboot=args.uboot_mac,
+            silence_timeout=args.silence_timeout,
+            zycast_multicast_group=profile.zycast_multicast_group,
+            zycast_multicast_port=profile.zycast_multicast_port,
+        )
+
+        pcap_monitor = PcapMonitor(monitor_config, event_queue)
+        link_monitor = LinkMonitor(interface, event_queue)
+
+        pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
+        link_thread = threading.Thread(target=link_monitor.run, daemon=True)
+        pcap_thread.start()
+        link_thread.start()
+
+        try:
+            rc = _run_state_machine(ctx, event_queue, pcap_monitor, link_monitor)
+        except KeyboardInterrupt:
+            log("Interrupted by user.")
+            rc = 1
+        finally:
+            pcap_monitor.stop()
+            link_monitor.stop()
+            pcap_thread.join(timeout=5)
+            zycast_proc = getattr(ctx, '_zycast_proc', None)
+            if zycast_proc and zycast_proc.poll() is None:
+                zycast_proc.terminate()
+        return rc
+
     _setup_interface_ips(interface, profile)
 
     monitor_config = PcapMonitorConfig(
@@ -2757,8 +2982,195 @@ def cmd_flash(args: argparse.Namespace) -> int:
     return rc
 
 
+def _generate_zyxel_password(serial: str) -> Optional[str]:
+    import shutil
+    pwgen = shutil.which("zyxel_pwgen")
+    if not pwgen:
+        return None
+    try:
+        result = subprocess.run(
+            [pwgen, serial],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")[-1].strip()
+    except Exception:
+        pass
+    return None
+
+
+def _ssh_with_password(ip: str, user: str, password: str, command: str,
+                        timeout: int = 30) -> subprocess.CompletedProcess:
+    import shutil
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return subprocess.CompletedProcess(
+            args=[], returncode=127,
+            stdout="", stderr="sshpass not found. Install with: brew install hudochenkov/sshpass/sshpass",
+        )
+    cmd = [
+        sshpass, "-p", password,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", f"ConnectTimeout=10",
+        f"{user}@{ip}",
+        command,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _scp_with_password(ip: str, user: str, password: str,
+                       remote_src: str, local_dst: str,
+                       timeout: int = 120) -> subprocess.CompletedProcess:
+    import shutil
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return subprocess.CompletedProcess(
+            args=[], returncode=127,
+            stdout="", stderr="sshpass not found.",
+        )
+    cmd = [
+        sshpass, "-p", password,
+        "scp", "-O",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        f"{user}@{ip}:{remote_src}",
+        local_dst,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    model = load_model(args.model_id)
+    backup_config = model.get("backup", {})
+    partition_layout = model.get("partition_layout", {})
+
+    if not backup_config.get("method") == "ssh":
+        print(f"ERROR: Model '{args.model_id}' does not support SSH backup.", file=sys.stderr)
+        return 1
+
+    password = args.password
+    serial = args.serial
+
+    if not password and serial:
+        password = _generate_zyxel_password(serial)
+        if password:
+            log(f"Generated stock SSH password from serial {serial}")
+        else:
+            print("ERROR: --serial provided but zyxel_pwgen not found.", file=sys.stderr)
+            print("  Install zyxel_pwgen or use --password to provide the password manually.", file=sys.stderr)
+            return 1
+
+    if not password:
+        print("ERROR: Provide --serial (for auto password generation) or --password.", file=sys.stderr)
+        return 1
+
+    ip = args.ip
+    user = args.user
+
+    log(f"Connecting to {user}@{ip} (stock firmware SSH)...")
+
+    list_result = _ssh_with_password(ip, user, password, "cat /proc/mtd", timeout=15)
+    if list_result.returncode != 0:
+        print(f"ERROR: SSH connection failed: {list_result.stderr.strip()}", file=sys.stderr)
+        if "sshpass not found" in list_result.stderr:
+            print("  Install sshpass: brew install hudochenkov/sshpass/sshpass", file=sys.stderr)
+        return 1
+
+    mtd_output = list_result.stdout.strip()
+    if not mtd_output:
+        print("ERROR: No MTD partitions found on device.", file=sys.stderr)
+        return 1
+
+    mtd_partitions = []
+    for line in mtd_output.split("\n"):
+        parts = line.split()
+        if len(parts) >= 3:
+            mtd_name = parts[0]
+            mtd_size = parts[1]
+            mtd_label = parts[2].strip('"')
+            mtd_index = mtd_name.replace("mtd", "").replace(":", "")
+            mtd_partitions.append({
+                "index": mtd_index,
+                "name": mtd_name.rstrip(":"),
+                "size": mtd_size,
+                "label": mtd_label,
+                "device": f"/dev/{mtd_name.rstrip(':')}",
+            })
+
+    if args.partitions:
+        requested = set(args.partitions.split(","))
+        mtd_partitions = [p for p in mtd_partitions if p["index"] in requested]
+
+    critical_names = set(backup_config.get("critical_partitions", []))
+
+    output_dir = args.output_dir
+    if not output_dir:
+        base_dir = Path(__file__).resolve().parent.parent / "data" / "backups"
+        device_id = serial or model.get("id", "unknown")
+        output_dir = str(base_dir / device_id)
+
+    os.makedirs(output_dir, exist_ok=True)
+    log(f"Backing up {len(mtd_partitions)} MTD partitions to {output_dir}")
+
+    print()
+    print(f"{'MTD':<10s} {'Label':<15s} {'Size':<12s} {'Critical':<10s} {'Status'}")
+    print("-" * 70)
+
+    failed = []
+    for part in mtd_partitions:
+        label = part["label"]
+        is_critical = label in critical_names
+        critical_str = "*** YES ***" if is_critical else ""
+        local_path = os.path.join(output_dir, f"mtd{part['index']}_{label}.bin")
+        remote_path = f"/tmp/mtd{part['index']}.bin"
+
+        dump_cmd = f"nanddump -f {remote_path} {part['device']}"
+        if is_critical:
+            log(f"Dumping CRITICAL partition {part['name']} ({label})...")
+
+        dump_result = _ssh_with_password(ip, user, password, dump_cmd, timeout=60)
+        if dump_result.returncode != 0:
+            print(f"{part['name']:<10s} {label:<15s} {part['size']:<12s} {critical_str:<10s} FAILED (nanddump)")
+            if dump_result.stderr:
+                log(f"  nanddump error: {dump_result.stderr[:200]}")
+            failed.append(part)
+            continue
+
+        scp_result = _scp_with_password(ip, user, password, remote_path, local_path, timeout=120)
+        if scp_result.returncode != 0:
+            print(f"{part['name']:<10s} {label:<15s} {part['size']:<12s} {critical_str:<10s} FAILED (scp)")
+            if scp_result.stderr:
+                log(f"  scp error: {scp_result.stderr[:200]}")
+            failed.append(part)
+            continue
+
+        file_size = os.path.getsize(local_path)
+        print(f"{part['name']:<10s} {label:<15s} {part['size']:<12s} {critical_str:<10s} OK ({file_size} bytes)")
+
+        _ssh_with_password(ip, user, password, f"rm -f {remote_path}", timeout=10)
+
+    print()
+    if failed:
+        log(f"WARNING: {len(failed)} partition(s) failed to backup:")
+        for p in failed:
+            log(f"  mtd{p['index']} ({p['label']})")
+    else:
+        log(f"All {len(mtd_partitions)} partitions backed up successfully to {output_dir}")
+
+    if critical_names:
+        missing_critical = critical_names - {p["label"] for p in mtd_partitions if p not in failed}
+        if missing_critical:
+            log(f"WARNING: Critical partitions NOT backed up: {missing_critical}")
+            log("DO NOT flash this device until these partitions are backed up!")
+            return 1
+
+    return 1 if failed else 0
+
+
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "setup-mgmt-wifi", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "setup-mgmt-wifi", "backup", "-h", "--help"):
         sys.argv.insert(1, "flash")
 
     parser = _build_parser()
@@ -2770,6 +3182,8 @@ def main() -> int:
         return cmd_cache(args)
     elif args.command == "setup-mgmt-wifi":
         return cmd_setup_mgmt_wifi(args)
+    elif args.command == "backup":
+        return cmd_backup(args)
     else:
         return cmd_flash(args)
 

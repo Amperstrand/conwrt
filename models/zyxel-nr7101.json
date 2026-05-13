@@ -1,0 +1,126 @@
+{
+  "id": "zyxel_nr7101",
+  "vendor": "Zyxel",
+  "description": "NR7101 \u2014 5G/NR outdoor router, MediaTek MT7621",
+  "openwrt": {
+    "target": "ramips/mt7621",
+    "device": "zyxel,nr7101",
+    "profile": "zyxel_nr7101",
+    "default_ip": "192.168.1.1",
+    "version": "24.10.2"
+  },
+  "hardware": {
+    "soc": "MT7621A (MediaTek) dual-core MIPS @ 880MHz",
+    "flash": "SPI NAND 256MB",
+    "ram": "256MB DDR3",
+    "ethernet_ports": "1x GigE (PoE 802.3at)",
+    "wifi": "none (5G/NR modem only, no WiFi radio)",
+    "modem": "Quectel RG502Q-EA (5G NR Sub-6, NSA/SA)",
+    "serial": "UART, 115200 8N1, internal header",
+    "note": "IP68 outdoor enclosure. PoE powered. No WiFi \u2014 5G modem only."
+  },
+  "mac_oui": [
+    "E8:9F:80"
+  ],
+  "flash_methods": {
+    "zycast": {
+      "description": "Flash via ZyXEL multicast protocol (zycast). No password required.",
+      "multicast_group": "225.0.0.0",
+      "multicast_port": 5631,
+      "image_type": "ras",
+      "flash_both_partitions": true,
+      "flash_time_seconds": 180,
+      "silence_timeout": 30,
+      "reset_instructions": "Power cycle the device. No button press needed.",
+      "led_pattern": "no specific LED \u2014 watch console or multicast traffic",
+      "firmware_type": "initramfs-recovery",
+      "images": {
+        "initramfs": {
+          "filename": "*-ramips-mt7621-zyxel_nr7101-initramfs-recovery.bin",
+          "type": "ras"
+        }
+      }
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    }
+  },
+  "signatures": {
+    "zycast_listening": {
+      "source": "bmork forum post 2023-08-06",
+      "protocol": "multicast",
+      "multicast_group": "225.0.0.0",
+      "multicast_port": 5631,
+      "magic": "zyx\\x00",
+      "bootloader_banner": "Z-LOADER V1.30",
+      "console_message": "Multiboot Listening..."
+    },
+    "openwrt_booting": {
+      "source": "inferred from mt7621 behavior",
+      "first_packet_protocol": "icmpv6_mldv2",
+      "first_dhcp": "DHCP reply from 192.168.1.1:67"
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 60
+    }
+  },
+  "partition_layout": {
+    "source": "forum.openwrt.org, verified by bmork",
+    "mtd0": {
+      "name": "Bootloader",
+      "size": "512KB"
+    },
+    "mtd1": {
+      "name": "Config",
+      "size": "512KB"
+    },
+    "mtd2": {
+      "name": "Factory",
+      "size": "256KB",
+      "irreplaceable": true,
+      "note": "Serial, certs, calibration \u2014 MUST backup before zycast"
+    },
+    "mtd3": {
+      "name": "Kernel",
+      "size": "~31MB",
+      "note": "Primary firmware \u2014 overwritten by zycast"
+    },
+    "mtd4": {
+      "name": "ubi",
+      "size": "~27MB"
+    },
+    "mtd5": {
+      "name": "Kernel2",
+      "size": "~31MB",
+      "note": "Backup firmware \u2014 ALSO overwritten by zycast"
+    },
+    "mtd6": {
+      "name": "wwan",
+      "size": "1MB"
+    },
+    "mtd7": {
+      "name": "data",
+      "size": "16MB"
+    },
+    "mtd8": {
+      "name": "rom-d",
+      "size": "1MB"
+    },
+    "mtd9": {
+      "name": "reserve",
+      "size": "512KB"
+    }
+  },
+  "backup": {
+    "method": "ssh",
+    "requires_password": true,
+    "password_tool": "zyxel_pwgen",
+    "password_input": "device serial number (printed on unit)",
+    "critical_partitions": [
+      "Factory"
+    ],
+    "note": "SSH as root/supervisor with generated password. Dump all MTD partitions before zycast. Factory partition is irreplaceable."
+  }
+}

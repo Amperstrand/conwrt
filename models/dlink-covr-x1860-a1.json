@@ -6,7 +6,8 @@
     "target": "ramips/mt7621",
     "device": "dlink,covr-x1860-a1",
     "default_ip": "192.168.1.1",
-    "arch": "mipsel_24kc"
+    "profile": "dlink_covr-x1860-a1",
+    "version": "24.10.2"
   },
   "hardware": {
     "soc": "MT7621AT",
@@ -15,7 +16,9 @@
     "ethernet_ports": "4x 1G (1 WAN + 3 LAN)",
     "wifi": "2.4GHz + 5GHz (MT7612N)"
   },
-  "mac_oui": ["BC:22:28"],
+  "mac_oui": [
+    "BC:22:28"
+  ],
   "flash_methods": {
     "recovery-http": {
       "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports)",

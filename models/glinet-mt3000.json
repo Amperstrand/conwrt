@@ -6,7 +6,8 @@
     "target": "mediatek/filogic",
     "device": "glinet,gl-mt3000",
     "default_ip": "192.168.1.1",
-    "arch": "aarch64_cortex-a53"
+    "profile": "glinet_gl-mt3000",
+    "version": "24.10.2"
   },
   "hardware": {
     "soc": "MT7981B (Filogic 820) dual-core Cortex-A53 @ 1.3GHz",
@@ -16,7 +17,9 @@
     "wifi": "2.4GHz + 5GHz WiFi 6 (MT7981B + MT7976C)",
     "power": "USB-C 5V/3A"
   },
-  "mac_oui": ["94:83:C4"],
+  "mac_oui": [
+    "94:83:C4"
+  ],
   "stock_default_ip": "192.168.8.1",
   "flash_methods": {
     "uboot-http": {

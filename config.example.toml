@@ -36,6 +36,11 @@ wan_ssh = false
 # Management WiFi (hidden, isolated 2.4GHz AP for SSH access)
 # mgmt_wifi = true
 
+# TxPower override for the management radio (dBm).
+# Commented out = use OpenWrt default (usually 20 dBm / 100 mW).
+# Lower values restrict range to device-adjacent only (e.g. 5 = ~3 mW).
+# mgmt_wifi_txpower = 5
+
 # --- WiFi STA (client mode) ---
 # Router connects to an upstream AP (e.g. for WAN backhaul).
 # Uncomment to enable. The correct radio is auto-detected from the band.

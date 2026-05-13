@@ -6,7 +6,8 @@
     "target": "ath79/generic",
     "device": "glinet,gl-ar150",
     "default_ip": "192.168.8.1",
-    "arch": "mips_24kc"
+    "profile": "glinet_gl-ar150",
+    "version": "24.10.2"
   },
   "hardware": {
     "soc": "AR9331 (MIPS 24Kc) @ 400MHz",
@@ -17,7 +18,9 @@
     "usb": "1x USB 2.0 Type-A",
     "power": "5V/1A micro-USB"
   },
-  "mac_oui": ["94:83:C4"],
+  "mac_oui": [
+    "94:83:C4"
+  ],
   "stock_default_ip": "192.168.8.1",
   "flash_methods": {
     "sysupgrade": {

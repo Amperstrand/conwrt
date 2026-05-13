@@ -91,6 +91,20 @@ def _is_inline_key(value: str) -> bool:
     return value.strip().startswith("ssh-")
 
 
+def _assert_public_key(path_or_text: str) -> None:
+    if "PRIVATE KEY" in path_or_text:
+        raise ValueError(
+            "[ssh].key appears to contain a private key. "
+            "Only public keys are accepted — use the .pub file or inline public key text."
+        )
+    p = Path(path_or_text).expanduser()
+    if p.is_file() and "PRIVATE KEY" in p.read_text():
+        raise ValueError(
+            f"[ssh].key points to a private key file: {p}. "
+            "Only public key files (.pub) are accepted."
+        )
+
+
 def _resolve_private_from_public(pub_path: str) -> str:
     if pub_path.endswith(".pub"):
         return pub_path[:-4]
@@ -109,6 +123,8 @@ def _resolve_ssh(raw_key_value: str) -> tuple[str, str, str]:
     """Resolve the [ssh].key field into (public_key_text, public_key_path, private_key_path)."""
     if not raw_key_value:
         return "", "", _detect_home_private_key()
+
+    _assert_public_key(raw_key_value)
 
     if _is_inline_key(raw_key_value):
         pub_text = _strip_key_comment(raw_key_value)

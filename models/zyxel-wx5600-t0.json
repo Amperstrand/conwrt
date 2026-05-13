@@ -1,12 +1,13 @@
 {
   "id": "zyxel_wx5600-t0",
   "vendor": "Zyxel",
-  "description": "WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B",
+  "description": "WX5600-T0 (AX6000) \u2014 Altibox/Lyse ISP build, MediaTek MT7986B",
   "openwrt": {
     "target": "mediatek/filogic",
     "device": "zyxel,wx5600-t0-ubootmod",
     "default_ip": "192.168.1.1",
-    "arch": "aarch64_cortex-a53"
+    "profile": "zyxel_wx5600-t0-ubootmod",
+    "version": "24.10.2"
   },
   "hardware": {
     "soc": "MT7986B (Filogic 830) quad-core Cortex-A53 @ 1.6GHz",
@@ -17,7 +18,10 @@
     "serial": "UART0, 115200 8N1, 3.3V, 4-pin header (Pin1=GND, Pin2=NC, Pin3=TX, Pin4=RX)",
     "note": "U-Boot TFTP only works on LAN2 port. Must use static IP on host (no DHCP)."
   },
-  "mac_oui": ["48:ED:E6", "FC:22:F4"],
+  "mac_oui": [
+    "48:ED:E6",
+    "FC:22:F4"
+  ],
   "flash_methods": {
     "serial-tftp-openwrt": {
       "description": "Flash OpenWrt via serial + TFTP. Requires FTDI adapter (3.3V) and case opening.",
@@ -34,7 +38,7 @@
       "flash_time_seconds": 120,
       "silence_timeout": 30,
       "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
-      "led_pattern": "no specific LED pattern — watch serial output",
+      "led_pattern": "no specific LED pattern \u2014 watch serial output",
       "images": {
         "preloader": {
           "filename": "*-ubootmod-preloader.bin",
@@ -85,7 +89,7 @@
       "flash_time_seconds": 300,
       "silence_timeout": 30,
       "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
-      "led_pattern": "no specific LED pattern — watch serial output",
+      "led_pattern": "no specific LED pattern \u2014 watch serial output",
       "images": {
         "stock_bl2": {
           "filename": "zyxel-bl2.bin",
@@ -162,11 +166,36 @@
   },
   "partition_layout": {
     "source": "AGENTS.md, verified on hardware",
-    "mtd0": {"name": "bl2",      "offset": "0x000000", "size": "1MB"},
-    "mtd1": {"name": "u-boot-env","offset": "0x100000", "size": "512KB"},
-    "mtd2": {"name": "factory",  "offset": "0x180000", "size": "2MB", "irreplaceable": true},
-    "mtd3": {"name": "fip",      "offset": "0x380000", "size": "1.75MB"},
-    "mtd4": {"name": "zloader",  "offset": "0x540000", "size": "256KB"},
-    "mtd5": {"name": "ubi",      "offset": "0x580000", "size": "~496MB"}
+    "mtd0": {
+      "name": "bl2",
+      "offset": "0x000000",
+      "size": "1MB"
+    },
+    "mtd1": {
+      "name": "u-boot-env",
+      "offset": "0x100000",
+      "size": "512KB"
+    },
+    "mtd2": {
+      "name": "factory",
+      "offset": "0x180000",
+      "size": "2MB",
+      "irreplaceable": true
+    },
+    "mtd3": {
+      "name": "fip",
+      "offset": "0x380000",
+      "size": "1.75MB"
+    },
+    "mtd4": {
+      "name": "zloader",
+      "offset": "0x540000",
+      "size": "256KB"
+    },
+    "mtd5": {
+      "name": "ubi",
+      "offset": "0x580000",
+      "size": "~496MB"
+    }
   }
 }
