@@ -2474,6 +2474,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list", help="List available device models")
 
+    uc_parser = subparsers.add_parser("list-use-cases",
+        help="List available use case presets")
+    uc_parser.add_argument("--model-id", default=None,
+        help="Show compatibility for a specific model")
+
     cache_parser = subparsers.add_parser("cache", help="Manage cached firmware images")
     cache_sub = cache_parser.add_subparsers(dest="cache_command")
     cache_sub.add_parser("list", help="List cached firmware images")
@@ -2527,6 +2532,67 @@ def cmd_list(args: argparse.Namespace) -> int:
         methods = ", ".join(model.get("flash_methods", {}).keys()) or "none"
         desc = model.get("description", "")
         print(f"{model_id:<40s}  {vendor:<12s}  {target:<22s}  [{methods}]  {desc}")
+    return 0
+
+
+def cmd_list_use_cases(args: argparse.Namespace) -> int:
+    """List all available use case presets with optional model compatibility."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from use_cases import registry as _uc_registry
+
+    uc_reg = _uc_registry()
+    if not uc_reg:
+        print("No use case presets found in scripts/use_cases/.", file=sys.stderr)
+        return 1
+
+    model_caps: list[str] = []
+    model_name = ""
+    if args.model_id:
+        try:
+            model = load_model(args.model_id)
+            model_caps = model.get("capabilities", [])
+            model_name = model.get("id", args.model_id)
+        except Exception as e:
+            print(f"Warning: could not load model '{args.model_id}': {e}", file=sys.stderr)
+
+    print(f"{'Use Case':<25s}  {'Description':<45s}  {'Pkgs':<5s}  {'Caps':<12s}  {'Post-Flash'}")
+    print("-" * 110)
+    for name in sorted(uc_reg.keys()):
+        uc = uc_reg[name]
+        pkg_count = len(uc.packages)
+        caps = ", ".join(uc.requires_capabilities) if uc.requires_capabilities else "-"
+        post_flash = "yes" if uc.requires_post_flash else "-"
+
+        if model_caps and uc.requires_capabilities:
+            missing = set(uc.requires_capabilities) - set(model_caps)
+            status = "INCOMPAT" if missing else "ok"
+        elif model_caps and not uc.requires_capabilities:
+            status = "ok"
+        else:
+            status = ""
+
+        line = f"{name:<25s}  {uc.description[:45]:<45s}  {pkg_count:<5d}  {caps:<12s}  {post_flash}"
+        if status == "INCOMPAT":
+            line += f"  ** incompatible with {model_name} **"
+        elif status == "ok":
+            line += f"  compatible"
+        print(line)
+
+    if model_name:
+        print(f"\nModel: {model_name}  Capabilities: {', '.join(sorted(model_caps)) or 'none'}")
+
+    print("\nConfig snippet:")
+    print("  [use_cases]")
+    names = ", ".join(f'"{n}"' for n in sorted(uc_reg.keys())[:3])
+    print(f"  enabled = [{names}, ...]")
+    for name in sorted(uc_reg.keys())[:3]:
+        uc = uc_reg[name]
+        required = [p for p, d in uc.params.items() if d.required]
+        if required:
+            print(f"  [use_cases.{name}]")
+            for p in required:
+                print(f"  # {p} = \"...\"  # {uc.params[p].description}")
+
     return 0
 
 
@@ -3170,7 +3236,7 @@ def cmd_backup(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "cache", "setup-mgmt-wifi", "backup", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup", "-h", "--help"):
         sys.argv.insert(1, "flash")
 
     parser = _build_parser()
@@ -3178,6 +3244,8 @@ def main() -> int:
 
     if args.command == "list":
         return cmd_list(args)
+    elif args.command == "list-use-cases":
+        return cmd_list_use_cases(args)
     elif args.command == "cache":
         return cmd_cache(args)
     elif args.command == "setup-mgmt-wifi":

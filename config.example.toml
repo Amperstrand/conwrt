@@ -64,7 +64,7 @@ wan_ssh = false
 
 # --- Use case presets ---
 # Enable pre-configured use cases. Each adds packages + first-boot config.
-# Available: android-tether, iphone-tether, mesh11sd, mwan3, tollgate
+# Use 'python3 scripts/conwrt.py list-use-cases' to discover available presets.
 # Use cases requiring hardware not present on your device are auto-skipped.
 #
 # [use_cases]
@@ -88,7 +88,46 @@ wan_ssh = false
 # secondary = "usbwan"        # secondary WAN interface (from USB tethering)
 # policy = "failover"         # "failover" or "balanced"
 #
+# [use_cases.sqm]
+# download_kbps = 340000      # required — 85-95% of actual download speed
+# upload_kbps = 19000         # required — 85-95% of actual upload speed
+# qdisc = "cake"              # "cake" or "fq_codel"
+# link_layer = "ethernet"     # "none", "ethernet", "atm"
+# overhead = 18               # per-packet overhead in bytes
+#
 # [use_cases.tollgate]
 # mint_url = ""               # Cashu mint URL
 # lightning_address = ""      # Lightning address for payouts
 # price_per_minute = 1        # Price in sats per minute
+#
+# [use_cases.wireguard-client]
+# private_key = "..."         # required — WireGuard private key for the router
+# peer_public_key = "..."     # required — VPN server public key
+# endpoint_host = "vpn.example.com"  # required — VPN server hostname or IP
+# endpoint_port = 51820       # VPN server UDP port
+# address = "10.67.0.2/32"   # Tunnel IP address with CIDR
+# kill_switch = true          # Block all traffic if VPN drops
+#
+# [use_cases.wireguard-server]
+# private_key = "..."         # required — WireGuard private key for the server
+# listen_port = 51820         # UDP listen port
+# subnet = "10.1.99.1/24"    # VPN client subnet (server IP + CIDR)
+# peer1_public_key = "..."    # First peer's public key
+# peer1_allowed_ips = "10.1.99.2/32"  # First peer's allowed IPs
+#
+# [use_cases.travelmate]
+# radio = "radio0"            # WiFi radio for upstream scanning
+# timeout = 60                # Overall retry timeout in seconds
+# retry = 5                   # Retry count to find a suitable uplink
+# captive = true              # Enable captive portal detection
+#
+# [use_cases.adguard]
+# listen_ip = "0.0.0.0"      # Web UI listen address
+# web_port = 3000             # Web UI port (initial setup)
+# dns_port = 5353             # DNS listen port (avoids conflict with dnsmasq)
+# bootstrap_dns = "1.1.1.1,8.8.8.8"  # Upstream DNS for bootstrap
+#
+# [use_cases.openclash]
+# proxy_type = "ss"           # Default proxy protocol: ss, vmess, trojan, vless
+# core_type = "Meta"          # Clash core: Meta (Mihomo), Dev, Tun
+# dns_mode = "redir-host"     # DNS mode: redir-host or fake-ip
