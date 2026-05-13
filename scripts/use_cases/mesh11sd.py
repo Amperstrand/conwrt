@@ -60,4 +60,5 @@ register(UseCase(
                                 description="0=disabled, 1=auto, 2=auto+commit"),
     },
     build_defaults=_build_mesh11sd,
+    requires_capabilities=["wifi"],
 ))

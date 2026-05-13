@@ -251,6 +251,7 @@ def _build_defaults(
     mgmt_wifi: bool = False,
     mgmt_wifi_txpower: Optional[int] = None,
     use_cases: Optional[list[UseCaseConfig]] = None,
+    model_capabilities: Optional[list[str]] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Build the shell defaults script for first-boot customization.
 
@@ -303,6 +304,14 @@ def _build_defaults(
             if uc is None:
                 logger.warning("unknown use case '%s', skipping", uc_cfg.name)
                 continue
+            if model_capabilities and uc.requires_capabilities:
+                missing = set(uc.requires_capabilities) - set(model_capabilities)
+                if missing:
+                    logger.warning(
+                        "use case '%s' requires %s but model only has %s — skipping",
+                        uc.name, sorted(missing), sorted(model_capabilities),
+                    )
+                    continue
             resolved = _apply_defaults(uc_cfg.name, uc_cfg.params)
             script = uc.build_defaults(resolved)
             if script:
@@ -393,16 +402,20 @@ def cmd_request(args: argparse.Namespace) -> int:
 
     extra_pub_keys = cfg.ssh_all_keys[1:] if len(cfg.ssh_all_keys) > 1 else None
 
+    model_data = None
+    model_capabilities: Optional[list[str]] = None
+
     if not target:
         model_id = profile.replace("_", "-")
 
         try:
-            model = load_model(model_id)
-            target = model["openwrt"]["target"]
+            model_data = load_model(model_id)
+            target = model_data["openwrt"]["target"]
+            model_capabilities = model_data.get("capabilities", [])
             logger.info(
                 "resolved target=%s from model %s",
                 target,
-                model.get("vendor", model_id),
+                model_data.get("vendor", model_id),
             )
         except FileNotFoundError as exc:
             logger.error(
@@ -424,6 +437,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         mgmt_wifi=cfg.mgmt_wifi,
         mgmt_wifi_txpower=cfg.mgmt_wifi_txpower,
         use_cases=cfg.use_cases,
+        model_capabilities=model_capabilities,
     )
 
     if defaults_script:
@@ -453,7 +467,6 @@ def cmd_request(args: argparse.Namespace) -> int:
             extras.extend(uc.packages)
             uc_remove.extend(uc.packages_remove)
         extras = [p for p in extras if p not in uc_remove]
-
     if extras:
         packages_to_send = list(dict.fromkeys(extras))
         logger.info("extra packages (%d): %s", len(packages_to_send), packages_to_send)

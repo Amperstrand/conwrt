@@ -122,5 +122,9 @@
       "Factory"
     ],
     "note": "SSH as root/supervisor with generated password. Dump all MTD partitions before zycast. Factory partition is irreplaceable."
-  }
+  },
+  "capabilities": [
+    "ethernet",
+    "cellular"
+  ]
 }

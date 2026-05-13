@@ -71,4 +71,5 @@ register(UseCase(
                               description="OpenWrt network interface name for USB WAN"),
     },
     build_defaults=_build_android_tether,
+    requires_capabilities=["usb"],
 ))

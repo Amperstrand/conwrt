@@ -197,5 +197,9 @@
       "offset": "0x580000",
       "size": "~496MB"
     }
-  }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi"
+  ]
 }

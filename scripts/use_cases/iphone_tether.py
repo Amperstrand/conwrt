@@ -76,4 +76,5 @@ register(UseCase(
                               description="OpenWrt network interface name for USB WAN"),
     },
     build_defaults=_build_iphone_tether,
+    requires_capabilities=["usb"],
 ))

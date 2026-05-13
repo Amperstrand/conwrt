@@ -33,13 +33,14 @@ class ParamDef:
 
 @dataclass
 class UseCase:
-    """A registered use case preset."""
     name: str
     description: str
     packages: list[str] = field(default_factory=list)
     packages_remove: list[str] = field(default_factory=list)
     params: dict[str, ParamDef] = field(default_factory=dict)
     build_defaults: Callable[[dict[str, Any]], str] = field(default=lambda _: "")
+    requires_capabilities: list[str] = field(default_factory=list)
+    requires_post_flash: bool = False
 
 
 _registry: dict[str, UseCase] = {}

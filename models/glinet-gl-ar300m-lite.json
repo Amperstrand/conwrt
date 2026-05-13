@@ -28,5 +28,10 @@
       "command": "sysupgrade -n /tmp/firmware.bin",
       "exit_code": 246
     }
-  }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "usb"
+  ]
 }

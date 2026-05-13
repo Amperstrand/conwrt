@@ -68,5 +68,9 @@
       "ssh_port": 22,
       "ssh_ready_after_boot_seconds": 60
     }
-  }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi"
+  ]
 }

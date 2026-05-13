@@ -64,7 +64,8 @@ wan_ssh = false
 
 # --- Use case presets ---
 # Enable pre-configured use cases. Each adds packages + first-boot config.
-# Available: android-tether, iphone-tether, mesh11sd
+# Available: android-tether, iphone-tether, mesh11sd, mwan3, tollgate
+# Use cases requiring hardware not present on your device are auto-skipped.
 #
 # [use_cases]
 # enabled = ["android-tether"]
@@ -81,3 +82,13 @@ wan_ssh = false
 # encryption = "1"            # 0=none, 1=wpa3, 2=wpa2, 3=mixed
 # key = "MySecretKey"         # WiFi password for mesh gate AP
 # auto_config = "0"           # 0=disabled, 1=auto, 2=auto+commit
+#
+# [use_cases.mwan3]
+# primary = "wan"             # primary WAN interface
+# secondary = "usbwan"        # secondary WAN interface (from USB tethering)
+# policy = "failover"         # "failover" or "balanced"
+#
+# [use_cases.tollgate]
+# mint_url = ""               # Cashu mint URL
+# lightning_address = ""      # Lightning address for payouts
+# price_per_minute = 1        # Price in sats per minute
