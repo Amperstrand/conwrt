@@ -61,3 +61,23 @@ wan_ssh = false
 # encryption = "psk2"
 # key = "passphrase"
 # channel = "auto"           # auto, 1-13 (2.4GHz), 36-165 (5GHz)
+
+# --- Use case presets ---
+# Enable pre-configured use cases. Each adds packages + first-boot config.
+# Available: android-tether, iphone-tether, mesh11sd
+#
+# [use_cases]
+# enabled = ["android-tether"]
+#
+# [use_cases.android-tether]
+# interface = "usbwan"
+#
+# [use_cases.iphone-tether]
+# interface = "usbwan"
+#
+# [use_cases.mesh11sd]
+# mesh_id = "MyMeshID"       # required — must match on all mesh nodes
+# ssid = "MeshNet"            # AP SSID broadcast by mesh gate
+# encryption = "1"            # 0=none, 1=wpa3, 2=wpa2, 3=mixed
+# key = "MySecretKey"         # WiFi password for mesh gate AP
+# auto_config = "0"           # 0=disabled, 1=auto, 2=auto+commit

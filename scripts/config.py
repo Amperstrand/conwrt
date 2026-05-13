@@ -35,6 +35,12 @@ _VALID_BANDS = {"2.4ghz", "5ghz", "5ghz-low", "5ghz-high"}
 
 
 @dataclass
+class UseCaseConfig:
+    name: str
+    params: dict = field(default_factory=dict)
+
+
+@dataclass
 class WifiSTAConfig:
     band: str = "2.4ghz"
     ssid: str = ""
@@ -64,6 +70,7 @@ class ConwrtConfig:
     mgmt_wifi_txpower: Optional[int] = None
     wifi_sta: Optional[WifiSTAConfig] = None
     wifi_ap: Optional[WifiAPConfig] = None
+    use_cases: list[UseCaseConfig] = field(default_factory=list)
 
     @property
     def password_is_random(self) -> bool:
@@ -244,6 +251,17 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
     if "ap" in network_section:
         wifi_ap = _parse_wifi_ap(network_section["ap"])
 
+    uc_section = raw.get("use_cases", {})
+    uc_enabled = uc_section.get("enabled", [])
+    if isinstance(uc_enabled, str):
+        uc_enabled = [uc_enabled]
+    use_cases_list: list[UseCaseConfig] = []
+    for uc_name in uc_enabled:
+        uc_params = uc_section.get(uc_name, {})
+        if not isinstance(uc_params, dict):
+            uc_params = {}
+        use_cases_list.append(UseCaseConfig(name=uc_name, params=uc_params))
+
     return ConwrtConfig(
         ssh_public_key_text=pub_text,
         ssh_public_key_path=pub_path,
@@ -256,4 +274,5 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
         wifi_sta=wifi_sta,
         wifi_ap=wifi_ap,
+        use_cases=use_cases_list,
     )

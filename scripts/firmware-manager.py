@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
-from config import load_config as _load_config, _strip_key_comment
+from config import load_config as _load_config, _strip_key_comment, UseCaseConfig
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -250,6 +250,7 @@ def _build_defaults(
     extra_pub_keys: Optional[list[str]] = None,
     mgmt_wifi: bool = False,
     mgmt_wifi_txpower: Optional[int] = None,
+    use_cases: Optional[list[UseCaseConfig]] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Build the shell defaults script for first-boot customization.
 
@@ -293,6 +294,21 @@ def _build_defaults(
 
     if mgmt_wifi:
         lines.append(build_mgmt_wifi_script(txpower=mgmt_wifi_txpower).rstrip())
+
+    if use_cases:
+        from use_cases import registry as _uc_registry, apply_defaults as _apply_defaults
+        uc_reg = _uc_registry()
+        for uc_cfg in use_cases:
+            uc = uc_reg.get(uc_cfg.name)
+            if uc is None:
+                logger.warning("unknown use case '%s', skipping", uc_cfg.name)
+                continue
+            resolved = _apply_defaults(uc_cfg.name, uc_cfg.params)
+            script = uc.build_defaults(resolved)
+            if script:
+                lines.append("")
+                lines.append(script.rstrip())
+                logger.info("use case '%s': added %d lines to defaults script", uc.name, len(script.splitlines()))
 
     return "\n".join(lines), ssh_key_cleaned, ssh_key_source
 
@@ -407,6 +423,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         extra_pub_keys=extra_pub_keys,
         mgmt_wifi=cfg.mgmt_wifi,
         mgmt_wifi_txpower=cfg.mgmt_wifi_txpower,
+        use_cases=cfg.use_cases,
     )
 
     if defaults_script:
@@ -424,6 +441,19 @@ def cmd_request(args: argparse.Namespace) -> int:
     extras = list(cfg.extra_packages)
     if packages_str:
         extras += [p.strip() for p in packages_str.split(",") if p.strip()]
+
+    if cfg.use_cases:
+        from use_cases import registry as _uc_registry
+        uc_reg = _uc_registry()
+        uc_remove: list[str] = []
+        for uc_cfg in cfg.use_cases:
+            uc = uc_reg.get(uc_cfg.name)
+            if uc is None:
+                continue
+            extras.extend(uc.packages)
+            uc_remove.extend(uc.packages_remove)
+        extras = [p for p in extras if p not in uc_remove]
+
     if extras:
         packages_to_send = list(dict.fromkeys(extras))
         logger.info("extra packages (%d): %s", len(packages_to_send), packages_to_send)
