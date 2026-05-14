@@ -56,6 +56,8 @@ _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 save_fingerprint = _router_fingerprint.save_fingerprint
 
+from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps
+
 
 DEFAULT_IP = "192.168.1.1"
 REBOOT_TIMEOUT = 360
@@ -151,28 +153,28 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
     existing = r.stdout
 
     if profile.client_ip not in existing:
-        result = subprocess.run(
-            ["sudo", "-n", "ip", "addr", "add",
-             f"{profile.client_ip}/24", "dev", interface],
-            capture_output=True, text=True, check=False,
-        )
+        cmd = ["ip", "addr", "add", f"{profile.client_ip}/24", "dev", interface]
+        if not is_root():
+            cmd = ["sudo", "-n"] + cmd
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0 and "File exists" not in result.stderr:
             print(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}", file=sys.stderr)
             print(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}", file=sys.stderr)
             sys.exit(1)
-        subprocess.run(["sudo", "-n", "ip", "link", "set", interface, "up"],
-                       capture_output=True, text=True, check=False)
+        link_cmd = ["ip", "link", "set", interface, "up"]
+        if not is_root():
+            link_cmd = ["sudo", "-n"] + link_cmd
+        subprocess.run(link_cmd, capture_output=True, text=True, check=False)
         log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
 
     openwrt_client = profile.openwrt_client_ip
     if openwrt_client and openwrt_client != profile.client_ip and openwrt_client not in existing:
-        result = subprocess.run(
-            ["sudo", "-n", "ip", "addr", "add",
-             f"{openwrt_client}/24", "dev", interface],
-            capture_output=True, text=True, check=False,
-        )
+        cmd = ["ip", "addr", "add", f"{openwrt_client}/24", "dev", interface]
+        if not is_root():
+            cmd = ["sudo", "-n"] + cmd
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0 and "File exists" not in result.stderr:
             log(f"WARNING: could not add alias {openwrt_client}: {result.stderr.strip()}")
         else:
@@ -1370,6 +1372,7 @@ class RecoveryContext:
     auth_type: str = ""          # "key-and-password", "key-only", or "password-only"
     wan_ssh_enabled: bool = False
     force_uboot: bool = False
+    no_pcap: bool = False
     boot_state: str = "unknown"
     ssh_key_path: str = ""
     serial_port: str = ""
@@ -1532,7 +1535,7 @@ def _request_custom_image(
 def _run_state_machine(
     ctx: RecoveryContext,
     event_queue: queue.Queue,
-    pcap_monitor: PcapMonitor,
+    pcap_monitor: Optional[PcapMonitor],
     link_monitor: LinkMonitor,
 ) -> int:
     ctx.timeline.recovery_start = ts()
@@ -1764,7 +1767,15 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     ctx.state = State.UBOOT_FLASHING
 
 
-def _handle_uboot_flashing(ctx: RecoveryContext, eq: queue.Queue, pcap_monitor: PcapMonitor) -> None:
+def _handle_uboot_flashing(ctx: RecoveryContext, eq: queue.Queue, pcap_monitor: Optional[PcapMonitor]) -> None:
+    if pcap_monitor is None:
+        timeout = ctx.profile.flash_time_seconds + 30
+        log(f"Waiting {timeout}s for flash to complete (polling-only mode)...")
+        time.sleep(timeout)
+        ctx.timeline.flash_complete = ts()
+        ctx.state = State.REBOOTING
+        return
+
     profile = ctx.profile
     timeout = profile.flash_time_seconds + 120
     result = _wait_for_event_or_timeout(
@@ -2451,6 +2462,8 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
     flash_parser.add_argument("--no-upload", action="store_true",
                         help="Stop after detecting U-Boot (dry run)")
+    flash_parser.add_argument("--no-pcap", action="store_true",
+                        help="Disable pcap monitoring (polling-only mode, no scapy needed)")
     flash_parser.add_argument("--force-uboot", action="store_true",
                         help="Force U-Boot recovery mode even if OpenWrt is detected")
     flash_parser.add_argument("--capture", default=None,
@@ -2933,6 +2946,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         auth_type=auth_type,
         wan_ssh_enabled=wan_ssh_enabled,
         force_uboot=args.force_uboot,
+        no_pcap=getattr(args, 'no_pcap', False),
         boot_state=boot_state,
         ssh_key_path=ssh_key_path,
         serial_port=args.serial_port or "",
@@ -3016,21 +3030,26 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     _setup_interface_ips(interface, profile)
 
-    monitor_config = PcapMonitorConfig(
-        interface=interface,
-        pcap_path=pcap_path,
-        recovery_ip=profile.recovery_ip,
-        router_mac_openwrt=args.router_mac,
-        router_mac_uboot=args.uboot_mac,
-        silence_timeout=args.silence_timeout,
-    )
+    pcap_available = not getattr(args, 'no_pcap', False) and has_scapy() and has_tcpdump()
+    if pcap_available:
+        monitor_config = PcapMonitorConfig(
+            interface=interface,
+            pcap_path=pcap_path,
+            recovery_ip=profile.recovery_ip,
+            router_mac_openwrt=args.router_mac,
+            router_mac_uboot=args.uboot_mac,
+            silence_timeout=args.silence_timeout,
+        )
+        pcap_monitor = PcapMonitor(monitor_config, event_queue)
+        pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
+        pcap_thread.start()
+    else:
+        pcap_monitor = None
+        pcap_thread = None
+        log("pcap monitoring disabled (polling-only mode)")
 
-    pcap_monitor = PcapMonitor(monitor_config, event_queue)
     link_monitor = LinkMonitor(interface, event_queue)
-
-    pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
     link_thread = threading.Thread(target=link_monitor.run, daemon=True)
-    pcap_thread.start()
     link_thread.start()
 
     _say_fn(f"Starting {profile.description} recovery. Listen for instructions.")
@@ -3041,9 +3060,11 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log("Interrupted by user.")
         rc = 1
     finally:
-        pcap_monitor.stop()
+        if pcap_monitor:
+            pcap_monitor.stop()
         link_monitor.stop()
-        pcap_thread.join(timeout=5)
+        if pcap_thread:
+            pcap_thread.join(timeout=5)
 
     return rc
 

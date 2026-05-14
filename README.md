@@ -248,6 +248,55 @@ Presets requiring post-flash setup need SSH access after first boot to complete 
 
 The long-term vision is an interactive menu system that interviews the user before flashing: "Do you want USB tethering? SQM? A VPN?" — then builds a firmware image with everything pre-configured. The current `config.toml` approach is the declarative foundation for that interactive layer.
 
+## Running on OpenWrt (Router-to-Router Flashing)
+
+conwrt can run FROM an OpenWrt router to flash another router — fully automated router-to-router provisioning without a laptop.
+
+**Status: Proof of concept.** Validated flow: x1860 recovery-http (uboot).
+
+### Setup
+
+1. Install dependencies on the host OpenWrt router:
+   ```bash
+   opkg update
+   opkg install python3-base python3-light python3-urllib python3-json \
+     python3-codecs python3-ctypes python3-email curl tcpdump
+   ```
+   See `scripts/openwrt-requirements.txt` for the full list.
+
+2. Copy conwrt to the router:
+   ```bash
+   scp -r scripts/ root@192.168.1.1:/tmp/conwrt/
+   scp -r models/ root@192.168.1.1:/tmp/conwrt/
+   scp firmware.bin root@192.168.1.1:/tmp/
+   ```
+
+3. Run conwrt from the router:
+   ```bash
+   ssh root@192.168.1.1
+   cd /tmp/conwrt/scripts
+   python3 conwrt.py --model-id dlink-covr-x1860-a1 \
+     --image /tmp/firmware.bin --no-pcap --no-voice \
+     --interface br-lan
+   ```
+
+### How It Works
+
+The host router's LAN interface gets a temporary IP alias on the recovery subnet (e.g. `192.168.0.10/24`). The target router's uboot recovery HTTP server is detected via curl, firmware is uploaded via HTTP POST, and boot completion is verified via SSH polling.
+
+**Important:** The SSH session to the host router will drop when the interface is reconfigured. Use `nohup` or a serial console:
+```bash
+nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
+  --image /tmp/firmware.bin --no-pcap --no-voice &!
+```
+
+### Limitations (PoC)
+
+- Only x1860 recovery-http flow tested
+- No pcap/scapy — polling-only mode (less precise event timing)
+- No voice guidance
+- Interface must be specified manually (`--interface`)
+
 ## Privacy
 
 All captures, images, and data directories are gitignored. SSH key user@host comments are stripped before embedding in firmware. Inventory stays local. No personal data in model definitions.
