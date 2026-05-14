@@ -59,8 +59,7 @@ def _handle_rrq(data, addr, server_sock, serve_dir):
             with open(filepath, "rb") as f:
                 while True:
                     chunk = f.read(BLOCK_SIZE)
-                    if not chunk and block > 1:
-                        break
+
                     pkt = struct.pack("!HH", OP_DATA, block) + (chunk or b"")
 
                     for attempt in range(RETRIES):
@@ -75,7 +74,7 @@ def _handle_rrq(data, addr, server_sock, serve_dir):
                                 return
                             continue
 
-                    if len(chunk or b"") < BLOCK_SIZE:
+                    if len(chunk) < BLOCK_SIZE:
                         break
                     block = (block % 65535) + 1
 
