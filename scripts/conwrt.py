@@ -56,7 +56,7 @@ _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 save_fingerprint = _router_fingerprint.save_fingerprint
 
-from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps
+from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state
 
 
 DEFAULT_IP = "192.168.1.1"
@@ -471,14 +471,7 @@ def log(msg: str) -> None:
 
 
 def get_link_state(interface: str) -> bool:
-    try:
-        r = subprocess.run(
-            ["cat", f"/sys/class/net/{interface}/operstate"],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        return r.stdout.strip().lower() == "up"
-    except Exception:
-        return False
+    return platform_get_link_state(interface)
 
 
 def sha256_file(path: str) -> str:
@@ -2743,6 +2736,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
     validation_error = _validate_args(args)
     if validation_error:
         parser.error(validation_error)
+
+    # Platform detection — warn about missing deps on OpenWrt
+    if detect_platform() == "openwrt":
+        missing = check_external_deps()
+        if missing:
+            log(f"WARNING: missing dependencies: {', '.join(missing)}")
+            log("Install via: opkg update && opkg install " + " ".join(missing))
 
     if args.request_image and not args.ssh_key:
         cfg = _load_config()
