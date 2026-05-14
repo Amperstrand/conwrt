@@ -276,9 +276,10 @@ conwrt can run FROM an OpenWrt router to flash another router — fully automate
    ssh root@192.168.1.1
    cd /tmp/conwrt/scripts
    python3 conwrt.py --model-id dlink-covr-x1860-a1 \
-     --image /tmp/firmware.bin --no-pcap --no-voice \
-     --interface br-lan
+     --image /tmp/firmware.bin --no-pcap --no-voice
    ```
+
+   The interface is auto-detected as `br-lan` on OpenWrt.
 
 ### How It Works
 
@@ -302,7 +303,7 @@ nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
 |--------|--------|-------|
 | sysupgrade | Supported | SSH/SCP via dropbear — works with any sysupgrade-capable model |
 | uboot recovery-http | PoC | Tested with x1860 — tcpdump event monitoring or polling-only |
-| tftp | Untested | dnsmasq skipped on OpenWrt (conflicts with DNS/DHCP); needs tftp-server.py |
+| tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |
 

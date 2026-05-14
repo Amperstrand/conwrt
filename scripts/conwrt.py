@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssh_utils import ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models
-from zycast import ensure_zycast_binary, run_zycast
+from zycast import run_zycast_auto
 import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
 firmware_request = _firmware_manager.cmd_request
@@ -2023,14 +2023,6 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
     ctx.sha256_before = sha256_file(ctx.image_path)
     log(f"SHA-256 (before zycast): {ctx.sha256_before}")
 
-    try:
-        binary = ensure_zycast_binary()
-    except RuntimeError as e:
-        log(f"ERROR: {e}")
-        ctx._say_fn("Failed to compile zycast. Install a C compiler and try again.")
-        ctx.state = State.FAILED
-        return
-
     multicast_group = getattr(profile, 'zycast_multicast_group', '225.0.0.0')
     multicast_port = getattr(profile, 'zycast_multicast_port', 5631)
     image_type = getattr(profile, 'zycast_image_type', 'ras')
@@ -2040,8 +2032,7 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
     log(f"Starting zycast: {ctx.image_path} -> {multicast_group}:{multicast_port}")
 
     try:
-        proc = run_zycast(
-            binary_path=binary,
+        proc = run_zycast_auto(
             image_path=ctx.image_path,
             interface=ctx.interface,
             multicast_group=multicast_group,
