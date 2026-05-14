@@ -294,7 +294,7 @@ nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
 
 - Only x1860 recovery-http flow tested
 - No voice guidance
-- Interface must be specified manually (`--interface`)
+- Auto-detects `br-lan` on OpenWrt (no `--interface` needed)
 
 ### Supported Flash Methods
 
@@ -302,7 +302,8 @@ nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
 |--------|--------|-------|
 | sysupgrade | Supported | SSH/SCP via dropbear — works with any sysupgrade-capable model |
 | uboot recovery-http | PoC | Tested with x1860 — tcpdump event monitoring or polling-only |
-| tftp | Not yet | Future milestone |
+| tftp | Untested | dnsmasq skipped on OpenWrt (conflicts with DNS/DHCP); needs tftp-server.py |
+| zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |
 
 ### Monitoring Modes

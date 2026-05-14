@@ -1213,10 +1213,14 @@ class TFTPServerManager:
         if os.path.isfile(tftp_script):
             tftp_cmd = [sys.executable, tftp_script, self.tftp_root]
         else:
-            import shutil
-            dnsmasq = shutil.which("dnsmasq")
-            if dnsmasq:
-                tftp_cmd = [dnsmasq, f"--tftp-root={self.tftp_root}", "--no-daemon", "--port=0"]
+            if detect_platform() != "openwrt":
+                import shutil
+                dnsmasq = shutil.which("dnsmasq")
+                if dnsmasq:
+                    tftp_cmd = [dnsmasq, f"--tftp-root={self.tftp_root}", "--no-daemon", "--port=0"]
+            else:
+                log("On OpenWrt: skipping dnsmasq (conflicts with existing DNS/DHCP)")
+                log("  Place tftp-server.py in scripts/ directory for TFTP support")
 
         if not tftp_cmd:
             log("WARNING: No TFTP server script found. U-Boot TFTP commands may fail.")
@@ -1957,17 +1961,18 @@ def setup_interface_for_serial(ctx: RecoveryContext) -> None:
     existing = r.stdout
 
     if profile.client_ip and profile.client_ip not in existing:
-        result = subprocess.run(
-            ["sudo", "-n", "ip", "addr", "add",
-             f"{profile.client_ip}/24", "dev", interface],
-            capture_output=True, text=True, check=False,
-        )
+        cmd = ["ip", "addr", "add", f"{profile.client_ip}/24", "dev", interface]
+        if not is_root():
+            cmd = ["sudo", "-n"] + cmd
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False,)
         if result.returncode != 0 and "File exists" not in result.stderr:
             log(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}")
             log(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}")
         else:
-            subprocess.run(["sudo", "-n", "ip", "link", "set", interface, "up"],
-                           capture_output=True, text=True, check=False)
+            cmd = ["ip", "link", "set", interface, "up"]
+            if not is_root():
+                cmd = ["sudo", "-n"] + cmd
+            subprocess.run(cmd, capture_output=True, text=True, check=False)
             log(f"Configured {interface}: {profile.client_ip}/24")
     else:
         log(f"Interface {interface} already has {profile.client_ip}")
@@ -2404,11 +2409,17 @@ def _record_inventory(ctx: RecoveryContext) -> None:
 def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
     """Find the single active physical ethernet interface.
 
+    On OpenWrt, returns br-lan directly (all LAN ports are bridged).
     On Linux, looks for enp*/eth*/en* interfaces with carrier UP.
     On macOS, scans en1..en20 skipping WiFi/Thunderbolt.
     """
     import platform
     if platform.system() == "Linux":
+        # On OpenWrt, all LAN ports are bridged under br-lan
+        if detect_platform() == "openwrt":
+            if (Path("/sys/class/net/br-lan")).exists():
+                log("OpenWrt detected — using br-lan as default interface")
+                return "br-lan"
         candidates = []
         iface_dir = Path("/sys/class/net")
         if iface_dir.exists():
