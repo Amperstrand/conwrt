@@ -43,7 +43,8 @@ conwrt/
 │   ├── firmware-manager.py    # ASU firmware build/download/cache management
 │   ├── model_loader.py        # Shared model registry reader
 │   ├── router-probe.py        # Device boot state detection (off/uboot/openwrt)
-│   └── inventory.py           # Inventory utilities
+│   ├── inventory.py           # Inventory utilities
+│   └── use_cases/             # Use case presets (auto-discovered plugins)
 ├── data/                # Runtime data (gitignored)
 │   ├── inventory.jsonl         # Append-only device inventory (specimen-level)
 │   └── *.bin                   # Cached firmware images
@@ -178,9 +179,74 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 - SHA-256 firmware verification
 - SSH verification and inventory collection after flash
 - ASU integration for custom firmware builds with baked-in SSH keys, passwords, WAN SSH
+- Use case presets — flash OpenWrt pre-configured for tethering, SQM, VPN, etc.
 - Firmware cache management (`conwrt cache list/clean`)
 - Automatic ethernet interface detection
 - Link monitoring survives pcap writer death during reboot
+
+## Use Case Presets
+
+conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for a specific use case**. Instead of flashing a stock image and then reading wiki docs to manually configure your router, you declare what you want in `config.toml` and the firmware arrives ready to go.
+
+**Status: All presets are untested on hardware.** The uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
+
+### How It Works
+
+Each preset is a single Python file in `scripts/use_cases/` that declares:
+- Packages to include in the ASU firmware build
+- A shell script of uci commands that runs on first boot
+- Required hardware capabilities (auto-skipped if your device lacks USB, WiFi, etc.)
+
+Enable them in `config.toml`:
+
+```toml
+[use_cases]
+enabled = ["android-tether", "sqm"]
+
+[use_cases.sqm]
+download_kbps = 340000
+upload_kbps = 19000
+```
+
+Or discover what's available:
+```bash
+python3 scripts/conwrt.py list-use-cases
+python3 scripts/conwrt.py list-use-cases --model-id glinet-mt3000
+```
+
+### Priority Presets (near-zero configuration)
+
+These three use cases are the most immediately useful because they require almost no user configuration:
+
+| Preset | What it does | User provides |
+|--------|-------------|---------------|
+| **android-tether** | USB WAN from Android phone via RNDIS/CDC-ether | Nothing (plug in USB) |
+| **iphone-tether** | USB WAN from iPhone via ipheth + usbmuxd | Nothing (plug in USB) |
+| **sqm** | Smart Queue Management with CAKE — eliminates bufferbloat | Download/upload speeds in Kbit/s |
+| **travelmate** | Auto-connect to hotel/airport WiFi with captive portal detection | Nothing (auto-scans) |
+
+These are the "flash and forget" cases — no wiki reading, no manual uci editing, no VPN keys to generate. Flash the image, plug in your phone (tethering) or connect to upstream WiFi (travelmate), or set your bandwidth (SQM), and it works.
+
+### All Available Presets
+
+| Preset | Description | Post-flash? |
+|--------|-------------|-------------|
+| `android-tether` | USB WAN from Android phone | No |
+| `iphone-tether` | USB WAN from iPhone | No |
+| `sqm` | Bufferbloat fix via CAKE/fq_codel | No |
+| `mwan3` | Multi-WAN failover or load balancing | No |
+| `travelmate` | Auto-connect to captive portal WiFi | No |
+| `tollgate` | Bitcoin/Lightning payment gateway | Yes (binary deploy) |
+| `wireguard-client` | VPN tunnel with kill switch | No |
+| `wireguard-server` | VPN server for remote access | Yes (QR codes, peers) |
+| `adguard` | Network-wide ad blocking | Yes (web setup wizard) |
+| `openclash` | Transparent proxy for censorship bypass | Yes (subscription import) |
+
+Presets requiring post-flash setup need SSH access after first boot to complete configuration (importing VPN configs, running setup wizards, etc.).
+
+### Future Direction
+
+The long-term vision is an interactive menu system that interviews the user before flashing: "Do you want USB tethering? SQM? A VPN?" — then builds a firmware image with everything pre-configured. The current `config.toml` approach is the declarative foundation for that interactive layer.
 
 ## Privacy
 
