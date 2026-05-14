@@ -55,14 +55,29 @@ def configure_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> 
 
 def get_link_state(interface: str) -> bool:
     """Check if an interface has carrier (link up)."""
+    # Linux/OpenWrt: /sys/class/net/ (Linux kernel sysfs)
     try:
         r = subprocess.run(
             ["cat", f"/sys/class/net/{interface}/operstate"],
             capture_output=True, text=True, timeout=5, check=False,
         )
-        return r.stdout.strip().lower() == "up"
+        if r.returncode == 0:
+            return r.stdout.strip().lower() == "up"
     except Exception:
-        return False
+        pass
+
+    # macOS fallback: parse ifconfig output
+    try:
+        r = subprocess.run(
+            ["ifconfig", interface],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if r.returncode == 0 and "status: active" in r.stdout.lower():
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def has_scapy() -> bool:

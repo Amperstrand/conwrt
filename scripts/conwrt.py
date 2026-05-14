@@ -698,10 +698,13 @@ class PcapMonitor:
 
     def _start_writer(self) -> Optional[subprocess.Popen]:
         try:
+            tcpdump_cmd = ["tcpdump", "-i", self.config.interface,
+                           "-w", self.config.pcap_path, "-n", "-U", "--immediate-mode",
+                           "--buffer-size=16384"]
+            if not is_root():
+                tcpdump_cmd = ["sudo", "-n"] + tcpdump_cmd
             proc = subprocess.Popen(
-                ["sudo", "-n", "tcpdump", "-i", self.config.interface,
-                 "-w", self.config.pcap_path, "-n", "-U", "--immediate-mode",
-                 "--buffer-size=16384"],
+                tcpdump_cmd,
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             )
             time.sleep(0.5)
