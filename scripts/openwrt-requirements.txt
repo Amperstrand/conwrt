@@ -1,0 +1,20 @@
+# conwrt on OpenWrt — required opkg packages
+# Tested on: D-Link COVR-X1860 A1 (ramips/mt7621, 128MB flash, 256MB RAM)
+#
+# Install: opkg update && opkg install $(grep -v '^#' openwrt-requirements.txt | grep -v '^$' | tr '\n' ' ')
+
+python3-base
+python3-codecs
+python3-ctypes
+python3-email
+python3-json
+python3-light
+python3-urllib
+curl
+tcpdump
+
+# Optional: for pcap-based monitoring (more precise event detection)
+# python3-pip  # then: pip install scapy
+
+# SSH is provided by dropbear (pre-installed on OpenWrt)
+# ip is provided by busybox (pre-installed on OpenWrt)
