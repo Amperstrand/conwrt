@@ -1131,6 +1131,59 @@ class SSHMonitor:
             self._stop.wait(self._poll_interval)
 
 
+def _setup_monitors(
+    interface: str,
+    event_queue: queue.Queue,
+    pcap_path: str,
+    profile: object,
+    args: argparse.Namespace,
+    pcap_enabled: bool = True,
+) -> tuple[Optional[PcapMonitor], Optional[threading.Thread], LinkMonitor, threading.Thread]:
+    """Create and start PcapMonitor (optional) and LinkMonitor."""
+    pcap_monitor = None
+    pcap_thread = None
+
+    if pcap_enabled and not getattr(args, 'no_pcap', False) and has_scapy() and has_tcpdump():
+        zycast_group = getattr(profile, 'zycast_multicast_group', '')
+        zycast_port = getattr(profile, 'zycast_multicast_port', 0)
+        monitor_config = PcapMonitorConfig(
+            interface=interface,
+            pcap_path=pcap_path,
+            recovery_ip=profile.recovery_ip,
+            router_mac_openwrt=args.router_mac,
+            router_mac_uboot=args.uboot_mac,
+            silence_timeout=args.silence_timeout,
+            zycast_multicast_group=zycast_group,
+            zycast_multicast_port=zycast_port,
+        )
+        pcap_monitor = PcapMonitor(monitor_config, event_queue)
+        pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
+        pcap_thread.start()
+    elif pcap_enabled:
+        log("pcap monitoring disabled (polling-only mode)")
+
+    link_monitor = LinkMonitor(interface, event_queue)
+    link_thread = threading.Thread(target=link_monitor.run, daemon=True)
+    link_thread.start()
+
+    return pcap_monitor, pcap_thread, link_monitor, link_thread
+
+
+def _teardown_monitors(
+    pcap_monitor: Optional[PcapMonitor],
+    pcap_thread: Optional[threading.Thread],
+    link_monitor: LinkMonitor,
+    link_thread: threading.Thread,
+) -> None:
+    """Stop and join monitor threads."""
+    if pcap_monitor:
+        pcap_monitor.stop()
+    link_monitor.stop()
+    if pcap_thread:
+        pcap_thread.join(timeout=5)
+    link_thread.join(timeout=5)
+
+
 def _auto_detect_serial_port() -> str:
     import glob as globmod
     candidates = sorted(globmod.glob("/dev/cu.usbserial*") + globmod.glob("/dev/cu.SLAB_USBtoUART*"))
@@ -2969,11 +3022,15 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     if use_sysupgrade:
         _say_fn(f"Starting {profile.description} sysupgrade recovery.")
+        _, _, link_mon, link_thr = _setup_monitors(
+            interface, event_queue, pcap_path, profile, args, pcap_enabled=False)
         try:
-            rc = _run_state_machine(ctx, event_queue, None, None)
+            rc = _run_state_machine(ctx, event_queue, None, link_mon)
         except KeyboardInterrupt:
             log("Interrupted by user.")
             rc = 1
+        finally:
+            _teardown_monitors(None, None, link_mon, link_thr)
         return rc
 
     if is_serial_tftp:
@@ -2998,34 +3055,16 @@ def cmd_flash(args: argparse.Namespace) -> int:
         _say_fn(f"Starting {profile.description} multicast recovery.")
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
 
-        monitor_config = PcapMonitorConfig(
-            interface=interface,
-            pcap_path=pcap_path,
-            recovery_ip=profile.recovery_ip,
-            router_mac_openwrt=args.router_mac,
-            router_mac_uboot=args.uboot_mac,
-            silence_timeout=args.silence_timeout,
-            zycast_multicast_group=profile.zycast_multicast_group,
-            zycast_multicast_port=profile.zycast_multicast_port,
-        )
-
-        pcap_monitor = PcapMonitor(monitor_config, event_queue)
-        link_monitor = LinkMonitor(interface, event_queue)
-
-        pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
-        link_thread = threading.Thread(target=link_monitor.run, daemon=True)
-        pcap_thread.start()
-        link_thread.start()
+        pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
+            interface, event_queue, pcap_path, profile, args, pcap_enabled=True)
 
         try:
-            rc = _run_state_machine(ctx, event_queue, pcap_monitor, link_monitor)
+            rc = _run_state_machine(ctx, event_queue, pcap_mon, link_mon)
         except KeyboardInterrupt:
             log("Interrupted by user.")
             rc = 1
         finally:
-            pcap_monitor.stop()
-            link_monitor.stop()
-            pcap_thread.join(timeout=5)
+            _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)
             zycast_proc = getattr(ctx, '_zycast_proc', None)
             if zycast_proc and zycast_proc.poll() is None:
                 zycast_proc.terminate()
@@ -3033,41 +3072,18 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     _setup_interface_ips(interface, profile)
 
-    pcap_available = not getattr(args, 'no_pcap', False) and has_scapy() and has_tcpdump()
-    if pcap_available:
-        monitor_config = PcapMonitorConfig(
-            interface=interface,
-            pcap_path=pcap_path,
-            recovery_ip=profile.recovery_ip,
-            router_mac_openwrt=args.router_mac,
-            router_mac_uboot=args.uboot_mac,
-            silence_timeout=args.silence_timeout,
-        )
-        pcap_monitor = PcapMonitor(monitor_config, event_queue)
-        pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
-        pcap_thread.start()
-    else:
-        pcap_monitor = None
-        pcap_thread = None
-        log("pcap monitoring disabled (polling-only mode)")
-
-    link_monitor = LinkMonitor(interface, event_queue)
-    link_thread = threading.Thread(target=link_monitor.run, daemon=True)
-    link_thread.start()
+    pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
+        interface, event_queue, pcap_path, profile, args, pcap_enabled=True)
 
     _say_fn(f"Starting {profile.description} recovery. Listen for instructions.")
 
     try:
-        rc = _run_state_machine(ctx, event_queue, pcap_monitor, link_monitor)
+        rc = _run_state_machine(ctx, event_queue, pcap_mon, link_mon)
     except KeyboardInterrupt:
         log("Interrupted by user.")
         rc = 1
     finally:
-        if pcap_monitor:
-            pcap_monitor.stop()
-        link_monitor.stop()
-        if pcap_thread:
-            pcap_thread.join(timeout=5)
+        _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)
 
     return rc
 

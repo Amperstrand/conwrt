@@ -293,9 +293,28 @@ nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
 ### Limitations (PoC)
 
 - Only x1860 recovery-http flow tested
-- No pcap/scapy — polling-only mode (less precise event timing)
 - No voice guidance
 - Interface must be specified manually (`--interface`)
+
+### Supported Flash Methods
+
+| Method | Status | Notes |
+|--------|--------|-------|
+| sysupgrade | Supported | SSH/SCP via dropbear — works with any sysupgrade-capable model |
+| uboot recovery-http | PoC | Tested with x1860 — tcpdump event monitoring or polling-only |
+| tftp | Not yet | Future milestone |
+| serial | Not yet | Requires USB-serial adapter |
+
+### Monitoring Modes
+
+| Mode | Requires | Events Detected |
+|------|----------|-----------------|
+| scapy (full) | python3-scapy | All: ARP, HTTP, ICMPv6, UDP |
+| tcpdump (events) | tcpdump only | All: parsed from tcpdump output |
+| polling-only | curl + ssh | Limited: link state + SSH availability |
+
+On OpenWrt, tcpdump event monitoring is recommended — install via `opkg install tcpdump`.
+Use `--no-pcap` for polling-only mode (no tcpdump needed).
 
 ## Privacy
 
