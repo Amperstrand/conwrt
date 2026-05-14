@@ -22,8 +22,29 @@ def is_root() -> bool:
 
 
 def configure_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> bool:
-    """Add an IP address to a network interface via `ip addr add`.
-    Works on Linux, macOS, and OpenWrt (busybox ip)."""
+    """Add an IP address to a network interface.
+
+    Uses ``ip addr`` on Linux/OpenWrt and ``ifconfig`` on macOS.
+    """
+    plat = detect_platform()
+
+    if plat == "darwin":
+        # macOS: check with ifconfig, add with ifconfig alias
+        r = subprocess.run(
+            ["ifconfig", interface],
+            capture_output=True, text=True, check=False,
+        )
+        if ip_addr in r.stdout:
+            return True
+        cmd = ["ifconfig", interface, "inet", f"{ip_addr}/{subnet}", "alias"]
+        if not is_root():
+            cmd = ["sudo"] + cmd
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return False
+        return True
+
+    # Linux/OpenWrt: use ip addr
     r = subprocess.run(
         ["ip", "addr", "show", interface],
         capture_output=True, text=True, check=False,

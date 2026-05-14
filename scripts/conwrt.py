@@ -56,7 +56,7 @@ _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 save_fingerprint = _router_fingerprint.save_fingerprint
 
-from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state
+from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state, configure_interface_ip
 
 
 DEFAULT_IP = "192.168.1.1"
@@ -146,39 +146,11 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
 
 
 def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
-    r = subprocess.run(
-        ["ip", "addr", "show", interface],
-        capture_output=True, text=True, check=False,
-    )
-    existing = r.stdout
-
-    if profile.client_ip not in existing:
-        cmd = ["ip", "addr", "add", f"{profile.client_ip}/24", "dev", interface]
-        if not is_root():
-            cmd = ["sudo", "-n"] + cmd
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0 and "File exists" not in result.stderr:
-            print(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}", file=sys.stderr)
-            print(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}", file=sys.stderr)
-            sys.exit(1)
-        link_cmd = ["ip", "link", "set", interface, "up"]
-        if not is_root():
-            link_cmd = ["sudo", "-n"] + link_cmd
-        subprocess.run(link_cmd, capture_output=True, text=True, check=False)
-        log(f"Configured {interface}: {profile.client_ip}/24")
-    else:
-        log(f"Interface {interface} already has {profile.client_ip}")
-
+    if profile.client_ip:
+        configure_interface_ip(interface, profile.client_ip, "24")
     openwrt_client = profile.openwrt_client_ip
-    if openwrt_client and openwrt_client != profile.client_ip and openwrt_client not in existing:
-        cmd = ["ip", "addr", "add", f"{openwrt_client}/24", "dev", interface]
-        if not is_root():
-            cmd = ["sudo", "-n"] + cmd
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0 and "File exists" not in result.stderr:
-            log(f"WARNING: could not add alias {openwrt_client}: {result.stderr.strip()}")
-        else:
-            log(f"Added alias {interface}: {openwrt_client}/24")
+    if openwrt_client and openwrt_client != profile.client_ip:
+        configure_interface_ip(interface, openwrt_client, "24")
 
 
 def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
@@ -1954,28 +1926,8 @@ def setup_interface_for_serial(ctx: RecoveryContext) -> None:
     if not interface:
         return
 
-    r = subprocess.run(
-        ["ip", "addr", "show", interface],
-        capture_output=True, text=True, check=False,
-    )
-    existing = r.stdout
-
-    if profile.client_ip and profile.client_ip not in existing:
-        cmd = ["ip", "addr", "add", f"{profile.client_ip}/24", "dev", interface]
-        if not is_root():
-            cmd = ["sudo", "-n"] + cmd
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False,)
-        if result.returncode != 0 and "File exists" not in result.stderr:
-            log(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}")
-            log(f"  sudo ip addr add {profile.client_ip}/24 dev {interface}")
-        else:
-            cmd = ["ip", "link", "set", interface, "up"]
-            if not is_root():
-                cmd = ["sudo", "-n"] + cmd
-            subprocess.run(cmd, capture_output=True, text=True, check=False)
-            log(f"Configured {interface}: {profile.client_ip}/24")
-    else:
-        log(f"Interface {interface} already has {profile.client_ip}")
+    if profile.client_ip:
+        configure_interface_ip(interface, profile.client_ip, "24")
 
 
 def _handle_zycast_waiting(ctx: RecoveryContext, eq: queue.Queue) -> None:
