@@ -142,6 +142,120 @@ Search for community reports on running OpenWrt on this specific device:
 
 ---
 
+## Manufacturer Web UI Firmware Upload (Alternative Flash Method)
+
+Most router manufacturers expose firmware upgrade functionality through their stock web UI.
+In many cases, this functionality is backed by a proprietary API that can be used to upload
+custom firmware (including OpenWrt) without entering recovery mode or using serial access.
+This section provides a framework for identifying and documenting these APIs.
+
+### Why This Matters
+
+Recovery mode (uboot HTTP server, TFTP) is the traditional way to flash OpenWrt, but it has
+drawbacks: some devices require physical reset button holds, uboot HTTP servers are sometimes
+unreliable, and TFTP requires knowing the exact timing window. The manufacturer's own firmware
+upload API is often a simpler, faster path. If the stock firmware accepts an arbitrary binary
+through its upgrade mechanism, it can usually be used to install OpenWrt directly.
+
+### Discovery Pattern: Read JavaScript Source Files
+
+The most efficient discovery technique is reading the device's client-side JavaScript. Most
+manufacturer web UIs do not protect static `.js` files behind authentication, and the JavaScript
+contains the complete API client logic including endpoint URLs, authentication headers, request
+construction, and response handling.
+
+**Key JavaScript files to look for (with what they reveal):**
+
+| File pattern | What it reveals |
+|-------------|----------------|
+| `Login.js` / `auth.js` | Authentication flow: challenge/response mechanism, token construction, cookie handling |
+| `hnap.js` / `jnap.js` / `tr069.js` | Proprietary API client: request construction, header generation, action dispatch |
+| `upload.js` / `firmware.js` / `upgrade.js` | Firmware upload mechanism: endpoint, form field name, multipart construction |
+| `SOAP/*.js` (directory) | SOAP action structures: action names, request/response XML schemas |
+| `menu.js` / `navigation.js` | Page structure: hidden admin pages, feature flags, wizard state |
+| `SOAPAction.js` (or similar) | SOAP action dispatcher: maps action names to endpoints |
+
+### Common Manufacturer API Patterns
+
+| Manufacturer | API protocol | Typical endpoint | Auth mechanism |
+|-------------|-------------|-----------------|----------------|
+| D-Link | HNAP (SOAP) | `/HNAP1/` | HMAC-MD5 challenge-response |
+| Linksys | JNAP | `/JNAP/` | Session token in header |
+| TP-Link | TR-069 or custom | `/cgi-bin/` or `/stok/` | Token-based |
+| Netgear | SOAP-like | `/soap/server_sa/` | Cookie + digest |
+| ASUS | Custom REST | `/api/` | Token-based |
+
+### Reference: D-Link HNAP Firmware Upload Flow
+
+The D-Link COVR-X1860 reverse-engineering effort revealed a complete HNAP-based firmware
+upload flow. This pattern likely applies to other D-Link devices and illustrates the general
+approach for other manufacturers.
+
+**HNAP Authentication (challenge-response HMAC-MD5):**
+
+1. Send `Login` SOAP action with empty challenge to `/HNAP1/`
+2. Response contains: `Challenge`, `Cookie`, `PublicKey`
+3. Compute `PrivateKey = HMAC_MD5(PublicKey + password, Challenge).upper()`
+4. Compute `LoginPassword = HMAC_MD5(PrivateKey, Challenge).upper()`
+5. Send `Login` SOAP action with `LoginPassword` and received `Cookie`
+6. On success, `PrivateKey` is used for `HNAP_AUTH` headers on all subsequent requests
+7. `HNAP_AUTH` header = `HMAC_MD5(PrivateKey, URL_path + timestamp)` (format varies by firmware)
+
+**Firmware Upload:**
+
+1. Send `FirmwareUpload` action as a multipart form POST to `/HNAP1/`
+2. Binary payload goes in form field `FWFile` (not in the SOAP body)
+3. Include `SOAPAction: "http://purenetworks.com/HNAP1/FirmwareUpload"` header
+4. Include `HNAP_AUTH` header computed from PrivateKey
+5. On success, the device stores the firmware image
+
+**Trigger the Flash:**
+
+1. Call `GetFirmwareValidation` SOAP action
+2. Response contains `IsValid=true`, `CountDown=150`, `Result=REBOOT`
+3. The device reboots and flashes the uploaded image during the countdown period
+
+**Gotchas discovered:**
+
+- Fresh devices show a setup wizard on first login. The wizard must be completed before the
+  management menu (including firmware upgrade) becomes accessible in the web UI. However, the
+  HNAP API works regardless of wizard state.
+- After the wizard sets a hostname (e.g., `covr5164.local`), the web UI may reject requests
+  without the correct `Host` header. The HNAP API works fine without matching hostname.
+- Session timeouts are very short (minutes). An API-driven approach avoids timeout issues.
+- The `GetFirmwareStatus` action may report a `fwupload.cgi` endpoint, but this endpoint only
+  exists in recovery mode. The stock firmware upload goes through `/HNAP1/` with the `FirmwareUpload`
+  SOAP action.
+
+### Applying This Pattern to Other Manufacturers
+
+When analyzing a new device, follow this sequence:
+
+1. **Collect JavaScript sources** from the device web server (see step-02 "Hidden Firmware Upload
+   API Discovery" subsection). No authentication is typically needed for `.js` files.
+2. **Identify the API protocol** from the JavaScript. Look for keywords like `HNAP`, `JNAP`,
+   `TR069`, `SOAP`, or custom REST patterns.
+3. **Trace the authentication flow** from `Login.js` or equivalent. Document the challenge/response
+   mechanism, token construction, and required headers.
+4. **Trace the upload mechanism** from `upload.js` or equivalent. Document the endpoint, HTTP
+   method, content type, form field name, and any required preconditions.
+5. **Look for validation/trigger actions** after upload. Many devices separate the upload from
+   the flash trigger (like D-Link's `GetFirmwareValidation`).
+6. **Document gotchas**: wizard requirements, hostname validation, session timeouts, CSRF tokens.
+7. **Record all findings** in `$STEP_DIR/raw/notes.md` under a "Manufacturer Web UI Firmware
+   Upload" heading, even if the API was not fully reverse-engineered. Partial findings help
+   future sessions.
+
+### Safety Note
+
+This section describes how to _identify_ and _document_ manufacturer firmware upload APIs.
+Actually uploading firmware through these APIs is NOT part of stage 1 (discovery). The AI
+assistant must not attempt to authenticate to or upload firmware through these APIs during
+steps 01-04. The purpose here is to record enough information that a human operator or stage 2
+automation can use the API later.
+
+---
+
 ## Recommendation Levels
 
 Your analysis must assign one of these recommendation levels:

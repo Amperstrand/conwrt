@@ -38,6 +38,16 @@
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
       "exit_code": 246
+    },
+    "dlink-hnap": {
+      "description": "D-Link stock firmware HNAP SOAP API firmware upload (no reset needed, works when router is running stock firmware)",
+      "default_password": "password",
+      "api_endpoint": "/HNAP1/",
+      "upload_action": "FirmwareUpload",
+      "validation_action": "GetFirmwareValidation",
+      "upload_field": "FWFile",
+      "flash_time_seconds": 150,
+      "notes": "HNAP challenge-response auth with HMAC-MD5. Login with default password, upload factory image via multipart POST, validate triggers flash+reboot."
     }
   },
   "signatures": {
@@ -72,5 +82,26 @@
   "capabilities": [
     "ethernet",
     "wifi"
-  ]
+  ],
+  "tested_hardware": {
+    "recovery-http": {
+      "tested": true,
+      "date": "2026-05-08",
+      "notes": "Flashed from macOS via recovery mode (hold reset pin, power on). ~1m47s total."
+    },
+    "dlink-hnap": {
+      "tested": true,
+      "date": "2026-05-15",
+      "notes": "Flashed from macOS via HNAP SOAP API through SSH tunnel to x1860 #1 (OpenWrt) to x1860 #2 (stock firmware). ~2.5min flash time."
+    },
+    "sysupgrade": {
+      "tested": false,
+      "notes": "Standard OpenWrt sysupgrade - not yet tested on this model"
+    },
+    "wifi_sta_ap": {
+      "tested": true,
+      "date": "2026-05-15",
+      "notes": "Post-flash WiFi config verified: radio0=2g, radio1=5g. STA only, AP only, STA+AP all verified on real hardware."
+    }
+  }
 }

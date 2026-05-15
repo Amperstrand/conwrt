@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -33,6 +34,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from contextlib import redirect_stdout
 from enum import Enum, auto
@@ -71,7 +74,7 @@ def _find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str
     for method_name, method_cfg in methods.items():
         if "recovery_ip" in method_cfg:
             return method_name, method_cfg
-    for method_name in ("zycast",):
+    for method_name in ("zycast", "dlink-hnap"):
         if method_name in methods:
             return method_name, methods[method_name]
     available = list(methods.keys())
@@ -142,6 +145,7 @@ def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleN
         zycast_multicast_group=fm.get("multicast_group", "225.0.0.0"),
         zycast_multicast_port=fm.get("multicast_port", 5631),
         zycast_image_type=fm.get("image_type", "ras"),
+        default_password=fm.get("default_password", ""),
     )
 
 
@@ -480,6 +484,7 @@ def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 30
         r = subprocess.run(
             [
                 "curl", "-sk", "--show-error",
+                "-H", "Expect:",
                 "--max-time", str(timeout),
                 "-F", f"{profile.upload_field}=@{image_path};type=application/octet-stream",
                 endpoint,
@@ -543,6 +548,273 @@ def trigger_flash(profile: SimpleNamespace) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# D-Link HNAP flash method
+# ---------------------------------------------------------------------------
+
+_HNAP_NS = "http://purenetworks.com/HNAP1/"
+
+
+def _hmac_md5_hex(key: str, msg: str) -> str:
+    """Return hex HMAC-MD5 of *msg* using string *key*."""
+    return hmac.new(key.encode(), msg.encode(), hashlib.md5).hexdigest()
+
+
+def _chang_text(s: str) -> str:
+    """Swap case of each character (D-Link HNAP_AUTH helper)."""
+    return s.swapcase()
+
+
+def _build_soap_body(inner_xml: str) -> bytes:
+    """Wrap *inner_xml* in a standard HNAP SOAP envelope."""
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+        f"<soap:Body>{inner_xml}</soap:Body>"
+        "</soap:Envelope>"
+    )
+    return xml.encode("utf-8")
+
+
+def _hnap_auth_header(private_key: str, soap_action: str, timestamp: str) -> str:
+    """Compute the HNAP_AUTH header value.
+
+    Format: changText(HMAC_MD5(PrivateKey, timestamp + soapaction)) + " " + timestamp
+    """
+    auth_hash = _hmac_md5_hex(private_key, timestamp + soap_action)
+    return f"{_chang_text(auth_hash)} {timestamp}"
+
+
+def _parse_hnap_response(body_bytes: bytes) -> dict[str, str]:
+    """Extract text values from an HNAP SOAP XML response.
+
+    Returns a dict mapping local tag names to their text content.
+    """
+    result: dict[str, str] = {}
+    try:
+        root = ET.fromstring(body_bytes)
+        for elem in root.iter():
+            tag = elem.tag
+            # Strip namespace prefix like {http://purenetworks.com/HNAP1/}
+            if "}" in tag:
+                tag = tag.split("}", 1)[1]
+            if elem.text and elem.text.strip():
+                result[tag] = elem.text.strip()
+    except ET.ParseError:
+        pass
+    return result
+
+
+def _hnap_post(
+    url: str,
+    body: bytes,
+    soap_action: str,
+    private_key: str = "",
+    cookie: str = "",
+    content_type: str = "text/xml",
+    timeout: int = 60,
+) -> tuple[int, bytes, dict[str, str]]:
+    """Send an HTTP POST to an HNAP endpoint.
+
+    Returns (status_code, response_body, response_headers_dict).
+    """
+    headers: dict[str, str] = {
+        "Content-Type": content_type,
+        "SOAPACTION": f'"{soap_action}"',
+    }
+    if private_key:
+        ts = str(int(time.time() * 1000))
+        headers["HNAP_AUTH"] = _hnap_auth_header(private_key, soap_action, ts)
+    if cookie:
+        headers["Cookie"] = cookie
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+            return resp.status, resp.read(), resp_headers
+    except urllib.error.HTTPError as exc:
+        resp_body = exc.read() if exc.fp else b""
+        resp_headers = {k.lower(): v for k, v in exc.headers.items()}
+        return exc.code, resp_body, resp_headers
+    except urllib.error.URLError as exc:
+        log(f"HNAP request failed (URLError): {exc.reason}")
+        return 0, b"", {}
+
+
+def _flash_via_dlink_hnap(
+    image_path: str,
+    profile: SimpleNamespace,
+    timeout: int = 300,
+) -> tuple[bool, str]:
+    """Upload firmware to a D-Link router via the HNAP SOAP API.
+
+    Implements the full HNAP auth flow:
+      1. Login challenge-request → get Challenge, PublicKey, Cookie
+      2. Derive PrivateKey and LoginPassword via HMAC-MD5
+      3. Login final with LoginPassword
+      4. FirmwareUpload via multipart POST
+      5. GetFirmwareValidation to trigger the flash
+
+    The password comes from profile.default_password (set in model JSON
+    flash_methods.dlink-hnap.default_password).
+    """
+    router_ip = profile.recovery_ip
+    base_url = f"http://{router_ip}/HNAP1/"
+    password = getattr(profile, "default_password", "")
+
+    if not password:
+        return False, "No default_password configured for dlink-hnap flash method"
+
+    soap_login = f"{_HNAP_NS}Login"
+
+    # --- Step 1: Login challenge-request ---
+    log("HNAP: Sending login challenge-request...")
+    login_request_body = _build_soap_body(
+        f'<Login xmlns="{_HNAP_NS}">'
+        "<Action>request</Action>"
+        "<Username>Admin</Username>"
+        "<LoginPassword></LoginPassword>"
+        "<Captcha></Captcha>"
+        "</Login>"
+    )
+    status, resp_body, resp_headers = _hnap_post(
+        base_url, login_request_body, soap_login,
+    )
+    if status != 200:
+        return False, f"HNAP login request failed (HTTP {status})"
+
+    parsed = _parse_hnap_response(resp_body)
+    challenge = parsed.get("Challenge", "")
+    public_key = parsed.get("PublicKey", "")
+    cookie_value = resp_headers.get("set-cookie", "")
+    # Extract uid cookie: "uid=XXXXX; ..."
+    cookie_uid = ""
+    if cookie_value:
+        for part in cookie_value.split(";"):
+            part = part.strip()
+            if part.lower().startswith("uid="):
+                cookie_uid = part
+                break
+    if not cookie_uid:
+        # Fallback: try case-insensitive header lookup
+        for header_name, header_val in resp_headers.items():
+            if header_name == "set-cookie" and "uid=" in header_val:
+                for part in header_val.split(";"):
+                    part = part.strip()
+                    if part.lower().startswith("uid="):
+                        cookie_uid = part
+                        break
+
+    if not challenge or not public_key:
+        return False, f"HNAP login challenge missing Challenge/PublicKey: {parsed}"
+
+    log(f"HNAP: Got challenge (len={len(challenge)}), public_key (len={len(public_key)})")
+
+    # --- Step 2: Derive PrivateKey and LoginPassword ---
+    private_key = _hmac_md5_hex(public_key + password, challenge).upper()
+    login_password = _hmac_md5_hex(private_key, challenge).upper()
+
+    # --- Step 3: Login final ---
+    log("HNAP: Sending login (final)...")
+    login_final_body = _build_soap_body(
+        f'<Login xmlns="{_HNAP_NS}">'
+        "<Action>login</Action>"
+        "<Username>Admin</Username>"
+        f"<LoginPassword>{login_password}</LoginPassword>"
+        "</Login>"
+    )
+    status, resp_body, _ = _hnap_post(
+        base_url, login_final_body, soap_login,
+        private_key=private_key, cookie=cookie_uid,
+    )
+    if status != 200:
+        return False, f"HNAP login final failed (HTTP {status})"
+
+    parsed = _parse_hnap_response(resp_body)
+    login_result = parsed.get("LoginResult", "").lower()
+    if login_result != "success":
+        return False, f"HNAP login failed: {parsed}"
+
+    log("HNAP: Login successful")
+
+    # --- Step 4: FirmwareUpload via multipart POST ---
+    soap_upload = f"{_HNAP_NS}FirmwareUpload"
+    size_mb = os.path.getsize(image_path) / 1024 / 1024
+    log(f"HNAP: Uploading firmware ({size_mb:.1f} MB)...")
+
+    # Build multipart form-data manually (urllib doesn't have a multipart helper)
+    boundary = f"----ConwrtBoundary{secrets.token_hex(8)}"
+    filename = os.path.basename(image_path)
+    with open(image_path, "rb") as f:
+        file_data = f.read()
+
+    parts = []
+    # FWFile field
+    parts.append(f"--{boundary}\r\n".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="FWFile"; filename="{filename}"\r\n'.encode()
+    )
+    parts.append(b"Content-Type: application/octet-stream\r\n\r\n")
+    parts.append(file_data)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    multipart_body = b"".join(parts)
+
+    upload_headers: dict[str, str] = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "SOAPACTION": f'"{soap_upload}"',
+    }
+    ts = str(int(time.time() * 1000))
+    upload_headers["HNAP_AUTH"] = _hnap_auth_header(private_key, soap_upload, ts)
+    upload_headers["Cookie"] = cookie_uid
+
+    req = urllib.request.Request(
+        base_url, data=multipart_body, headers=upload_headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp_body = resp.read()
+    except urllib.error.HTTPError as exc:
+        resp_body = exc.read() if exc.fp else b""
+        if exc.code >= 400:
+            return False, f"HNAP firmware upload failed (HTTP {exc.code}): {resp_body[:300]}"
+    except urllib.error.URLError as exc:
+        return False, f"HNAP firmware upload connection failed: {exc.reason}"
+
+    parsed = _parse_hnap_response(resp_body)
+    upload_result = parsed.get("FirmwareUploadResult", "").lower()
+    if upload_result not in ("ok", "success"):
+        # Some firmwares return non-standard results; log but continue
+        log(f"HNAP: FirmwareUpload result: {parsed} (proceeding anyway)")
+
+    log("HNAP: Firmware uploaded successfully")
+
+    # --- Step 5: GetFirmwareValidation to trigger flash ---
+    soap_validate = f"{_HNAP_NS}GetFirmwareValidation"
+    log("HNAP: Triggering firmware validation/flash...")
+
+    validate_body = _build_soap_body(
+        f'<GetFirmwareValidation xmlns="{_HNAP_NS}" />'
+    )
+    status, resp_body, _ = _hnap_post(
+        base_url, validate_body, soap_validate,
+        private_key=private_key, cookie=cookie_uid,
+        timeout=30,
+    )
+    if status not in (200, 0):
+        log(f"HNAP: GetFirmwareValidation returned HTTP {status} (non-fatal)")
+    else:
+        parsed = _parse_hnap_response(resp_body)
+        is_valid = parsed.get("IsValid", "").lower()
+        result = parsed.get("Result", "")
+        countdown = parsed.get("CountDown", "")
+        log(f"HNAP: Validation response — IsValid={is_valid}, Result={result}, CountDown={countdown}")
+
+    return True, "HNAP firmware upload and validation triggered"
+
+
 def check_ssh(ip: str = DEFAULT_IP) -> bool:
     try:
         r = subprocess.run(
@@ -552,6 +824,170 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
         return "SSH_OK" in r.stdout
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# WiFi STA/AP configuration (post-flash via SSH, reusable for ASU defaults)
+# ---------------------------------------------------------------------------
+
+_BAND_TO_UCI = {
+    "2.4ghz": "2g",
+    "5ghz": "5g",
+    "5ghz-low": "5g",
+    "5ghz-high": "5g",
+    "6ghz": "6g",
+}
+
+
+def _wifi_detect_radio_shell(band: str) -> str:
+    """Return a shell script snippet that prints the radio name matching *band*.
+
+    The script iterates all ``wifi-device`` sections in ``/etc/config/wireless``
+    and checks the ``band`` option (modern OpenWrt 23.05+) or falls back to
+    channel-based detection (legacy).  Prints e.g. ``radio1`` on stdout.
+    Prints nothing if no matching radio is found.
+
+    This is intentionally a pure shell string so it can be embedded in both
+    SSH commands (post-flash) and first-boot ``uci-defaults`` scripts (ASU).
+    """
+    uci_band = _BAND_TO_UCI.get(band, band)
+    # For "5ghz-low"/"5ghz-high" we match 5g — channel selection happens later.
+    # Probe radio0..radio3 directly (avoids grep/sed escaping issues over SSH).
+    return (
+        "for _r in radio0 radio1 radio2 radio3; do "
+        "uci -q get wireless.$_r.type >/dev/null || continue; "
+        f'_b=$(uci -q get "wireless.$_r.band"); '
+        f'if [ "$_b" = "{uci_band}" ]; then echo "$_r"; exit 0; fi; '
+        # Legacy fallback: channel 1-14 = 2g, 36+ = 5g
+        f'_ch=$(uci -q get "wireless.$_r.channel"); '
+        'case "$_ch" in '
+        r"'') ;; "
+        '[0-9]|1[0-4]) '
+        f'if [ "{uci_band}" = "2g" ]; then echo "$_r"; exit 0; fi ;; '
+        '3[0-9]|4[0-9]|5[0-9]|6[0-9]|1[0-6][0-9]) '
+        f'if [ "{uci_band}" = "5g" ]; then echo "$_r"; exit 0; fi ;; '
+        'esac; '
+        "done"
+    )
+
+
+def _wifi_sta_uci_commands(radio: str, ssid: str, encryption: str,
+                           key: str, network: str = "wan") -> list[str]:
+    """Return uci command lines to configure a radio in STA (client) mode."""
+    lines = [
+        f"# WiFi STA: {ssid} via {radio}",
+        # Ensure the iface section exists (may have been removed by earlier config)
+        f"uci set wireless.default_{radio}=wifi-iface",
+        f"uci set wireless.default_{radio}.device='{radio}'",
+        f"uci set wireless.{radio}.disabled='0'",
+        f"uci set wireless.default_{radio}.mode='sta'",
+        f"uci set wireless.default_{radio}.ssid='{ssid}'",
+        f"uci set wireless.default_{radio}.encryption='{encryption}'",
+    ]
+    if key:
+        lines.append(f"uci set wireless.default_{radio}.key='{key}'")
+    lines += [
+        f"uci set wireless.default_{radio}.network='{network}'",
+        "uci commit wireless",
+        "wifi reload",
+    ]
+    return lines
+
+
+def _wifi_ap_uci_commands(radio: str, ssid: str, encryption: str,
+                          key: str, channel: str = "auto",
+                          network: str = "lan") -> list[str]:
+    """Return uci command lines to customize AP settings on a radio."""
+    lines = [
+        f"# WiFi AP: {ssid} via {radio}",
+        f"uci set wireless.default_{radio}=wifi-iface",
+        f"uci set wireless.default_{radio}.device='{radio}'",
+        f"uci set wireless.{radio}.disabled='0'",
+    ]
+    if channel and channel != "auto":
+        lines.append(f"uci set wireless.{radio}.channel='{channel}'")
+    lines += [
+        f"uci set wireless.default_{radio}.mode='ap'",
+        f"uci set wireless.default_{radio}.ssid='{ssid}'",
+        f"uci set wireless.default_{radio}.encryption='{encryption}'",
+    ]
+    if key:
+        lines.append(f"uci set wireless.default_{radio}.key='{key}'")
+    lines += [
+        f"uci set wireless.default_{radio}.network='{network}'",
+        "uci commit wireless",
+        "wifi reload",
+    ]
+    return lines
+
+
+def _apply_wifi_config_post_flash(ip: str, ssh_key: str = "",
+                                   cfg: object = None) -> None:
+    """Apply [network.sta] and [network.ap] config via SSH after flashing.
+
+    Detects the right radio for each band and applies uci commands.
+    This is the post-flash SSH flow — the ASU first-boot flow reuses the
+    same uci command generators via ``_build_defaults()``.
+    """
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return
+    sta = cfg.wifi_sta
+    ap = cfg.wifi_ap
+    if not sta and not ap:
+        return
+
+    log("Applying WiFi configuration via SSH...")
+
+    if sta:
+        log(f"  STA: detecting radio for band '{sta.band}'...")
+        detect_cmd = _wifi_detect_radio_shell(sta.band)
+        r = subprocess.run(
+            ssh_cmd(ip, detect_cmd, key=ssh_key or None, connect_timeout=10),
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        radio = r.stdout.strip()
+        if not radio:
+            log(f"  ⚠ STA: no radio found for band '{sta.band}' — skipping")
+        else:
+            log(f"  STA: using {radio} for SSID '{sta.ssid}'")
+            cmds = _wifi_sta_uci_commands(radio, sta.ssid, sta.encryption, sta.key)
+            uci_chain = " && ".join(c for c in cmds if not c.startswith("#"))
+            r2 = subprocess.run(
+                ssh_cmd(ip, uci_chain, key=ssh_key or None, connect_timeout=10),
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            if r2.returncode == 0:
+                log(f"  ✓ STA: configured on {radio}")
+            else:
+                log(f"  ⚠ STA: uci commands failed (rc={r2.returncode})")
+                if r2.stderr:
+                    log(f"    stderr: {r2.stderr.strip()[:200]}")
+
+    if ap:
+        log(f"  AP: detecting radio for band '{ap.band}'...")
+        detect_cmd = _wifi_detect_radio_shell(ap.band)
+        r = subprocess.run(
+            ssh_cmd(ip, detect_cmd, key=ssh_key or None, connect_timeout=10),
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        radio = r.stdout.strip()
+        if not radio:
+            log(f"  ⚠ AP: no radio found for band '{ap.band}' — skipping")
+        else:
+            log(f"  AP: using {radio} for SSID '{ap.ssid}'")
+            cmds = _wifi_ap_uci_commands(radio, ap.ssid, ap.encryption, ap.key, ap.channel)
+            uci_chain = " && ".join(c for c in cmds if not c.startswith("#"))
+            r2 = subprocess.run(
+                ssh_cmd(ip, uci_chain, key=ssh_key or None, connect_timeout=10),
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            if r2.returncode == 0:
+                log(f"  ✓ AP: configured on {radio}")
+            else:
+                log(f"  ⚠ AP: uci commands failed (rc={r2.returncode})")
+                if r2.stderr:
+                    log(f"    stderr: {r2.stderr.strip()[:200]}")
 
 
 def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
@@ -1497,7 +1933,7 @@ def _request_custom_image(
         log("ERROR: ASU firmware request failed.")
         return None, {}
 
-    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast"}
+    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast", "dlink-hnap"}
     if flash_method in recovery_methods:
         preferred_types = ["recovery", "factory", "initramfs"]
     else:
@@ -1601,6 +2037,9 @@ def _run_state_machine(
     if ctx.state == State.COMPLETE:
         _print_timeline(ctx)
         _record_inventory(ctx)
+        cfg = _load_config()
+        openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+        _apply_wifi_config_post_flash(openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg)
         return 0
 
     _print_timeline(ctx)
@@ -1627,6 +2066,12 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
                 ctx.timeline.uboot_http_first = ts()
                 ctx.state = State.UBOOT_UPLOADING
                 return
+        if ctx.profile.flash_method == "dlink-hnap":
+            # D-Link stock firmware: HNAP is available without reset-button dance
+            log("Boot state: D-Link stock firmware — HNAP flash method")
+            ctx._say_fn("D-Link router detected. Uploading via HNAP.")
+            ctx.state = State.UBOOT_UPLOADING
+            return
         elif ctx.force_uboot:
             log("Boot state: forced to U-Boot recovery (--force-uboot)")
         else:
@@ -1766,7 +2211,11 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     log(f"SHA-256 (before upload): {ctx.sha256_before}")
 
     ctx.timeline.upload_start = ts()
-    ok, response = upload_firmware(ctx.image_path, profile)
+
+    if profile.flash_method == "dlink-hnap":
+        ok, response = _flash_via_dlink_hnap(ctx.image_path, profile)
+    else:
+        ok, response = upload_firmware(ctx.image_path, profile)
     if not ok:
         ctx._say_fn(f"Upload failed. Try a browser at http://{profile.recovery_ip} instead.")
         ctx.state = State.FAILED
@@ -1781,7 +2230,7 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     else:
         log(f"SHA-256 verified (after upload): {ctx.sha256_after}")
 
-    if trigger_flash(profile):
+    if profile.flash_method != "dlink-hnap" and trigger_flash(profile):
         ctx.timeline.flash_triggered = ts()
         eq.put((Event.FLASH_TRIGGERED, ts(), ""))
     else:

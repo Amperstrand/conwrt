@@ -82,6 +82,7 @@ You MAY use the following tools:
 | Browser (Playwright MCP) | Read-only navigation, screenshots only | Do NOT submit forms, do NOT click save/apply/login |
 | `whois` | Lookup vendor domain names | Read-only public data |
 | `nikto -Tuning x6` | Info-disclosure scan ONLY | Category 6 = information disclosure only. MUST exclude categories 1/4/5/7/8 |
+| `curl` (GET .js files from device) | Fetch JavaScript source files from the device's web server | Static files typically require no auth. Read-only. Used to discover hidden API endpoints and firmware upload mechanisms |
 
 ---
 
@@ -137,6 +138,39 @@ Use Playwright MCP to navigate to the device web UI (HTTP and HTTPS):
 
 Do NOT click submit, save, apply, or login buttons. Do NOT fill in any forms.
 Save screenshots to `$STEP_DIR/raw/screenshots/`.
+
+#### Hidden Firmware Upload API Discovery
+
+Manufacturer web UIs often embed firmware upload logic in client-side JavaScript that reveals
+hidden API endpoints not visible in the HTML. This is a critical discovery step because many
+devices (D-Link, TP-Link, Netgear, Linksys) expose firmware upgrade through proprietary APIs
+rather than simple form POST endpoints.
+
+**Procedure:**
+
+1. View the page source and collect all `<script src="...">` URLs
+2. For each JavaScript file, fetch it via `curl -s http://<target_ip>/js/<filename>.js` (no auth required for static JS files on most devices)
+3. Search the fetched JavaScript for these keywords:
+   - `upload`, `firmware`, `upgrade`, `flash`, `FirmwareUpload`, `fwupload`
+   - `HNAP`, `JNAP`, `TR069`, `SOAP`, `soapAction`
+   - `multipart`, `FormData`, `FileUpload`
+4. Document any discovered:
+   - API endpoint paths (e.g., `/HNAP1/`, `/cgi-bin/fwupload.cgi`, `/api/firmware`)
+   - HTTP methods and expected headers
+   - Form field names used for the firmware binary (e.g., `FWFile`, `firmware`, `file`)
+   - Authentication scheme required (HNAP challenge-response, cookie-based, digest)
+5. Pay special attention to these common JavaScript file patterns:
+   - `/js/Login.js` or `/js/auth.js` — authentication flow, challenge/response logic
+   - `/js/hnap.js` or `/js/jnap.js` — proprietary API client construction
+   - `/js/upload.js` or `/js/firmware.js` — firmware upload mechanism
+   - `/js/SOAP/` directory — SOAP action structures and dispatchers
+   - `/js/menu.js` — page structure, may reveal hidden admin pages
+6. Record findings in `$STEP_DIR/raw/notes.md` under a "Firmware Upload API" heading
+
+**Why this matters:** Devices that appear to only support firmware upgrade through the web UI
+wizard often have underlying APIs that can be scripted. For example, D-Link devices use HNAP
+SOAP with multipart form upload. The JavaScript source is the fastest way to discover these
+mechanisms without authentication or packet capture.
 
 ### Step 4: Firmware Version Cross-Check
 

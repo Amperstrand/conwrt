@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
-from config import load_config as _load_config, _strip_key_comment, UseCaseConfig
+from config import load_config as _load_config, _strip_key_comment, UseCaseConfig, WifiSTAConfig, WifiAPConfig
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -252,6 +252,8 @@ def _build_defaults(
     mgmt_wifi_txpower: Optional[int] = None,
     use_cases: Optional[list[UseCaseConfig]] = None,
     model_capabilities: Optional[list[str]] = None,
+    wifi_sta: Optional[WifiSTAConfig] = None,
+    wifi_ap: Optional[WifiAPConfig] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Build the shell defaults script for first-boot customization.
 
@@ -295,6 +297,58 @@ def _build_defaults(
 
     if mgmt_wifi:
         lines.append(build_mgmt_wifi_script(txpower=mgmt_wifi_txpower).rstrip())
+
+    if wifi_sta:
+        lines.append("")
+        lines.append(f"# WiFi STA: {wifi_sta.ssid} ({wifi_sta.band})")
+        band_uci = {"2.4ghz": "2g", "5ghz": "5g", "5ghz-low": "5g", "5ghz-high": "5g", "6ghz": "6g"}.get(wifi_sta.band, "2g")
+        detect = (
+            "for _r in radio0 radio1 radio2 radio3; do "
+            "uci -q get wireless.$_r.type >/dev/null || continue; "
+            f'_b=$(uci -q get "wireless.$_r.band"); '
+            f'if [ "$_b" = "{band_uci}" ]; then '
+            f"uci set wireless.$_r.disabled='0'; "
+            f"uci set wireless.default_$_r=wifi-iface; "
+            f"uci set wireless.default_$_r.device='$_r'; "
+            f"uci set wireless.default_$_r.mode='sta'; "
+            f"uci set wireless.default_$_r.ssid='{wifi_sta.ssid}'; "
+            f"uci set wireless.default_$_r.encryption='{wifi_sta.encryption}'; "
+        )
+        if wifi_sta.key:
+            detect += f"uci set wireless.default_$_r.key='{wifi_sta.key}'; "
+        detect += (
+            f"uci set wireless.default_$_r.network='wan'; "
+            "uci commit wireless; wifi reload; exit 0; fi; done"
+        )
+        lines.append(detect)
+
+    if wifi_ap:
+        lines.append("")
+        lines.append(f"# WiFi AP: {wifi_ap.ssid} ({wifi_ap.band})")
+        band_uci = {"2.4ghz": "2g", "5ghz": "5g", "5ghz-low": "5g", "5ghz-high": "5g", "6ghz": "6g"}.get(wifi_ap.band, "2g")
+        detect = (
+            "for _r in radio0 radio1 radio2 radio3; do "
+            "uci -q get wireless.$_r.type >/dev/null || continue; "
+            f'_b=$(uci -q get "wireless.$_r.band"); '
+            f'if [ "$_b" = "{band_uci}" ]; then '
+            f"uci set wireless.$_r.disabled='0'; "
+        )
+        if wifi_ap.channel and wifi_ap.channel != "auto":
+            detect += f"uci set wireless.$_r.channel='{wifi_ap.channel}'; "
+        detect += (
+            f"uci set wireless.default_$_r=wifi-iface; "
+            f"uci set wireless.default_$_r.device='$_r'; "
+            f"uci set wireless.default_$_r.mode='ap'; "
+            f"uci set wireless.default_$_r.ssid='{wifi_ap.ssid}'; "
+            f"uci set wireless.default_$_r.encryption='{wifi_ap.encryption}'; "
+        )
+        if wifi_ap.key:
+            detect += f"uci set wireless.default_$_r.key='{wifi_ap.key}'; "
+        detect += (
+            "uci set wireless.default_$_r.network='lan'; "
+            "uci commit wireless; exit 0; fi; done"
+        )
+        lines.append(detect)
 
     if use_cases:
         from use_cases import registry as _uc_registry, apply_defaults as _apply_defaults
@@ -438,6 +492,8 @@ def cmd_request(args: argparse.Namespace) -> int:
         mgmt_wifi_txpower=cfg.mgmt_wifi_txpower,
         use_cases=cfg.use_cases,
         model_capabilities=model_capabilities,
+        wifi_sta=cfg.wifi_sta,
+        wifi_ap=cfg.wifi_ap,
     )
 
     if defaults_script:

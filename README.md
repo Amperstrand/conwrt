@@ -16,13 +16,27 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 ## Supported Devices
 
-| Device | Method | Status |
-|--------|--------|--------|
-| D-Link COVR-X1860 A1 | recovery-http | Tested on hardware |
-| GL.iNet MT3000 | uboot-http | Tested on hardware |
-| GL.iNet AR150 | sysupgrade | Model defined, not tested |
-| GL.iNet AR300M (lite/nand/nor) | sysupgrade | Model defined, not tested |
-| Linksys WHW03 V1/V2 | sysupgrade | Model defined, signatures needed |
+### Flash Methods
+
+| Method | How it works | Requires | Speed |
+|--------|-------------|----------|-------|
+| sysupgrade | SSH + SCP, runs sysupgrade -n | Running OpenWrt + SSH | ~3 min |
+| recovery-http | Reset button, uboot HTTP server | Physical access + reset pin | ~2 min |
+| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ~2.5 min |
+| tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
+| zycast | Multicast to many devices simultaneously | Network broadcast domain | varies |
+
+### Device Support Matrix
+
+| Device | sysupgrade | recovery-http | dlink-hnap | tftp | zycast | WiFi STA/AP |
+|--------|:----------:|:------------:|:----------:|:----:|:------:|:-----------:|
+| D-Link COVR-X1860 A1 | o | tested | tested | -- | -- | tested |
+| GL.iNet MT3000 | o | tested | -- | -- | -- | -- |
+| GL.iNet AR150 | o | -- | -- | -- | -- | -- |
+| GL.iNet AR300M (lite/nand/nor) | o | -- | -- | -- | -- | -- |
+| Linksys WHW03 V1/V2 | o | -- | -- | -- | -- | -- |
+
+Legend: tested = Tested on hardware | o = Model defined, not tested | -- = Not applicable
 
 ## Layout
 
@@ -248,35 +262,116 @@ Presets requiring post-flash setup need SSH access after first boot to complete 
 
 The long-term vision is an interactive menu system that interviews the user before flashing: "Do you want USB tethering? SQM? A VPN?" — then builds a firmware image with everything pre-configured. The current `config.toml` approach is the declarative foundation for that interactive layer.
 
+## WiFi STA/AP Configuration
+
+conwrt automatically configures WiFi after flashing based on `[network.sta]` and `[network.ap]` in `config.toml`. No manual uci editing needed.
+
+**Status: Tested on hardware** (D-Link COVR-X1860 A1). Radio auto-detection verified: radio0=2.4GHz, radio1=5GHz.
+
+### How It Works
+
+1. **Post-flash SSH** (default): After flashing and SSH verification, conwrt detects the correct radio for each band via `uci get wireless.radioN.band` and applies STA/AP uci commands over SSH.
+2. **ASU first-boot** (via `--request-image`): The same uci commands are baked into the firmware's first-boot script, so WiFi is configured before first SSH.
+
+Both flows use the same radio detection logic — iterate `radio0..radio3`, check `band` option, match to the configured band.
+
+### Example: WiFi WAN backhaul
+
+```toml
+[network.sta]
+band = "5ghz"
+ssid = "UpstreamNetwork"
+encryption = "psk2"
+key = "passphrase"
+```
+
+The router connects to the upstream network on the 5GHz radio (auto-detected) and uses it as WAN. Firewall zone is `wan`.
+
+### Example: Custom AP + STA simultaneously
+
+```toml
+[network.sta]
+band = "5ghz"
+ssid = "UpstreamNetwork"
+encryption = "psk2"
+key = "passphrase"
+
+[network.ap]
+band = "2.4ghz"
+ssid = "MyNetwork"
+encryption = "psk2"
+key = "network-password"
+```
+
+STA on 5GHz for upstream WAN, AP on 2.4GHz for local clients. Both radios configured independently.
+
+### Supported bands
+
+| Config value | OpenWrt band | Notes |
+|-------------|-------------|-------|
+| `2.4ghz` | `2g` | 802.11b/g/n/ax |
+| `5ghz` | `5g` | 802.11a/n/ac/ax |
+| `5ghz-low` | `5g` | Lower 5GHz channels (UNII-1) |
+| `5ghz-high` | `5g` | Upper 5GHz channels (UNII-3) |
+| `6ghz` | `6g` | WiFi 6E (if hardware supports) |
+
+## D-Link HNAP Flash Method
+
+conwrt can flash D-Link routers running stock firmware without entering recovery mode, directly through the manufacturer's web UI API.
+
+**How it works**: The HNAP (Home Network Administration Protocol) SOAP API accepts firmware uploads when properly authenticated. conwrt performs a challenge-response login (HMAC-MD5), uploads the OpenWrt factory image via multipart POST, and triggers the flash via `GetFirmwareValidation`. The router reboots into OpenWrt automatically.
+
+**Advantages over recovery-http**:
+- No physical reset button press needed
+- Works remotely over the network
+- Faster setup (no recovery mode dance)
+
+**Requirements**:
+- Router running D-Link stock firmware with known admin password
+- Network access to the router's web UI (HTTP)
+- OpenWrt factory image (not sysupgrade)
+
+**Usage**:
+```bash
+python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 \
+  --image firmware.bin --flash-method dlink-hnap
+```
+
+The default password ("password") and API endpoints are defined in the model JSON.
+
 ## Running on OpenWrt (Router-to-Router Flashing)
 
-conwrt can run FROM an OpenWrt router to flash another router — fully automated router-to-router provisioning without a laptop.
+conwrt can run FROM an OpenWrt router to flash another router, or from macOS/Linux, with multiple flash methods. Router-to-router provisioning and stock-firmware flashing are both supported.
 
-**Status: Proof of concept.** Validated flow: x1860 recovery-http (uboot).
+**Status: Tested.** x1860 to x1860 recovery-http verified, macOS to x1860 dlink-hnap (stock firmware) verified, WiFi STA/AP post-flash config verified.
 
 ### Setup
 
-1. Install dependencies on the host OpenWrt router:
+1. Flash the host router with OpenWrt (via conwrt from macOS/Linux).
+   Configure `[network.sta]` in config.toml so it gets WiFi WAN after flashing.
+
+2. Install dependencies on the host OpenWrt router:
    ```bash
    opkg update
    opkg install python3-base python3-light python3-urllib python3-json \
-     python3-codecs python3-ctypes python3-email curl tcpdump
+     python3-codecs python3-ctypes python3-email python3-logging \
+     python3-openssl python3-struct python3-fcntl curl
    ```
    See `scripts/openwrt-requirements.txt` for the full list.
 
-2. Copy conwrt to the router:
+3. Copy conwrt to the router:
    ```bash
-   scp -r scripts/ root@192.168.1.1:/tmp/conwrt/
-   scp -r models/ root@192.168.1.1:/tmp/conwrt/
-   scp firmware.bin root@192.168.1.1:/tmp/
+   scp -O -r scripts/ root@<host-ip>:/tmp/conwrt/
+   scp -O models/<model>.json root@<host-ip>:/tmp/conwrt/models/
+   scp -O firmware.bin root@<host-ip>:/tmp/conwrt/
    ```
 
-3. Run conwrt from the router:
+4. Run conwrt from the router:
    ```bash
-   ssh root@192.168.1.1
+   ssh root@<host-ip>
    cd /tmp/conwrt/scripts
    python3 conwrt.py --model-id dlink-covr-x1860-a1 \
-     --image /tmp/firmware.bin --no-pcap --no-voice
+     --image /tmp/conwrt/firmware.bin --no-pcap --no-voice
    ```
 
    The interface is auto-detected as `br-lan` on OpenWrt.
@@ -285,24 +380,21 @@ conwrt can run FROM an OpenWrt router to flash another router — fully automate
 
 The host router's LAN interface gets a temporary IP alias on the recovery subnet (e.g. `192.168.0.10/24`). The target router's uboot recovery HTTP server is detected via curl, firmware is uploaded via HTTP POST, and boot completion is verified via SSH polling.
 
-**Important:** The SSH session to the host router will drop when the interface is reconfigured. Use `nohup` or a serial console:
+**Important:** The SSH session to the host router will drop when the interface is reconfigured. Run in background:
 ```bash
-nohup python3 conwrt.py --model-id dlink-covr-x1860-a1 \
-  --image /tmp/firmware.bin --no-pcap --no-voice &!
+python3 conwrt.py --model-id dlink-covr-x1860-a1 \
+  --image /tmp/conwrt/firmware.bin --no-pcap --no-voice \
+  > /tmp/conwrt/flash.log 2>&1 &
+disown %1
 ```
-
-### Limitations (PoC)
-
-- Only x1860 recovery-http flow tested
-- No voice guidance
-- Auto-detects `br-lan` on OpenWrt (no `--interface` needed)
 
 ### Supported Flash Methods
 
 | Method | Status | Notes |
 |--------|--------|-------|
-| sysupgrade | Supported | SSH/SCP via dropbear — works with any sysupgrade-capable model |
-| uboot recovery-http | PoC | Tested with x1860 — tcpdump event monitoring or polling-only |
+| sysupgrade | Supported | SSH/SCP via Dropbear, works with any sysupgrade-capable model |
+| recovery-http | Tested | Tested x1860 to x1860, polling-only mode |
+| dlink-hnap | Tested | D-Link stock firmware to OpenWrt via HNAP API (no reset needed) |
 | tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |
