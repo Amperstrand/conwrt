@@ -41,13 +41,19 @@
     },
     "dlink-hnap": {
       "description": "D-Link stock firmware HNAP SOAP API firmware upload (no reset needed, works when router is running stock firmware)",
+      "recovery_ip": "192.168.0.1",
+      "client_ip": "192.168.0.10",
+      "client_subnet": "255.255.255.0",
+      "openwrt_client_ip": "192.168.1.254",
       "default_password": "password",
       "api_endpoint": "/HNAP1/",
       "upload_action": "FirmwareUpload",
       "validation_action": "GetFirmwareValidation",
       "upload_field": "FWFile",
       "flash_time_seconds": 150,
-      "notes": "HNAP challenge-response auth with HMAC-MD5. Login with default password, upload factory image via multipart POST, validate triggers flash+reboot."
+      "silence_timeout": 30,
+      "notes": "HNAP challenge-response auth with HMAC-MD5 + custom AES (HNAP_CONTENT). Login with default password, upload factory image via multipart POST. WARNING: GetFirmwareValidation rejects OpenWrt images on stock v1.02 (IsValid=false). Use recovery-http for reliable flashing.",
+      "caveat": "Firmware upload API returns OK but stock firmware validation blocks non-D-Link images. The GPL RSA signing key is a test key, not the production key. Recovery-http (U-Boot) bypasses all validation."
     }
   },
   "signatures": {
@@ -83,6 +89,27 @@
     "ethernet",
     "wifi"
   ],
+  "sticker_credentials": {
+    "partition_name": "config2",
+    "format": "ascii_key_value",
+    "description": "Factory WiFi SSID/password and MAC addresses stored in NAND config2 partition",
+    "known_keys": {
+      "factory_mac": "LAN MAC address printed on device sticker",
+      "wlan_ssid": "2.4 GHz WiFi SSID (default: dlink-XXXX)",
+      "wlan_wpa_key": "2.4 GHz WiFi password",
+      "wlan1_ssid": "5 GHz WiFi SSID",
+      "wlan1_wpa_key": "5 GHz WiFi password"
+    },
+    "mac_derivation": {
+      "wan": 3,
+      "wifi_24g": 1,
+      "wifi_5g": 2
+    },
+    "mac_derivation_note": "Offsets added to factory_mac (LAN). WAN=factory+3, 2.4GHz=factory+1, 5GHz=factory+2",
+    "ssid_format": "dlink-XXXX where XXXX is last 4 hex chars of MAC or random",
+    "password_format": "8-10 character alphanumeric",
+    "extraction_script": "scripts/sticker_creds.py"
+  },
   "tested_hardware": {
     "recovery-http": {
       "tested": true,
@@ -91,8 +118,8 @@
     },
     "dlink-hnap": {
       "tested": true,
-      "date": "2026-05-15",
-      "notes": "Flashed from macOS via HNAP SOAP API through SSH tunnel to x1860 #1 (OpenWrt) to x1860 #2 (stock firmware). ~2.5min flash time."
+      "date": "2026-05-16",
+      "notes": "HNAP auth + upload works perfectly. GetFirmwareValidation returns IsValid=false for OpenWrt images — stock firmware blocks non-D-Link firmware. Use recovery-http instead. Previously tested 2026-05-15 on x1860 #2 (result unclear)."
     },
     "sysupgrade": {
       "tested": false,

@@ -11,6 +11,8 @@ Usage as module:
     from router_probe import probe_router, RouterState
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging

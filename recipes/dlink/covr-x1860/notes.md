@@ -52,6 +52,42 @@
 - No mDNS from device
 - No SSH SYN from device (SSH is server, not client)
 
+## HNAP API (stock firmware, reverse-engineered 2026-05-16)
+
+### Auth Flow (verified working)
+1. **Login challenge**: POST to `/HNAP1/` with `SOAPAction: "http://purenetworks.com/HNAP1/Login"`, `HNAP_AUTH` using key `"withoutloginkey"`. No `HNAP_CONTENT` on Login or GetDeviceSettings.
+2. **Derive keys**:
+   - `PrivateKey = HMAC-MD5(PublicKey + password, Challenge).upper()`
+   - `LoginPassword = HMAC-MD5(PrivateKey, Challenge).upper()`
+3. **Login final**: POST with derived `LoginPassword`, returns `success`
+4. **HNAP_AUTH for subsequent calls**: `HMAC-MD5(PrivateKey, timestamp_ms + SOAPAction).upper() + " " + timestamp_ms`
+5. **HNAP_CONTENT**: `AES_Encrypt128(MD5(body).upper()).upper()` — D-Link's custom simplified AES (no MixColumns, 1 round). Required for all calls except Login and GetDeviceSettings.
+6. **Cookie**: Session cookie from challenge XML `<Cookie>` element, sent as `uid=<value>`
+
+### Custom AES
+- NOT standard AES-128 — simplified implementation with SubBytes + ShiftRows + AddRoundKey only (no MixColumns)
+- Key: PrivateKey (truncated to 32 hex chars / 16 bytes). If not valid hex (e.g. "withoutloginkey"), convert via str2hex.
+- Input: 4 blocks of 16 bytes (64 bytes total), padded with zeros
+- Source: `/js/AES.js` in stock firmware
+
+### Firmware Upload (tested, API works)
+- `FirmwareUpload` action accessible via HNAP, returns `OK` when auth is correct
+- Upload via multipart POST with field `FWFile` or `file`
+- `GetFirmwareValidation` checks staged firmware → returns `IsValid: true/false`
+
+### CRITICAL: Stock Firmware Validation Blocks OpenWrt
+- `GetFirmwareValidation` returns `IsValid: false` for OpenWrt factory images
+- The stock firmware's validation checks RSA signatures against **production keys** not included in the GPL source
+- The GPL RSA key (password: `12345678`) is a **test key** — production devices use different keys burned into the bootloader
+- Both signed (GPL key) and unsigned OpenWrt images are rejected
+- **Result**: HNAP upload mechanism works perfectly, but the firmware validation blocks non-D-Link firmware on stock v1.02
+- **Solution**: Use recovery-http (U-Boot) method to bypass firmware validation entirely
+
+### Files
+- `/tmp/hnap_upload.py`: Working standalone HNAP login + upload script (Python, uses `requests`)
+- `/Users/macbook/src/conwrt/scripts/dlink_sge_sign.py`: Firmware RSA signing tool (GPL key — NOT production)
+- `/Users/macbook/src/conwrt/scripts/conwrt.py`: Main flasher, HNAP auth integrated at lines 580-886
+
 ## Gotchas
 - **Recovery mode works on both WAN and LAN ports** — validated on both 2026-05-12. Recovery IP is 192.168.0.1 regardless of which port is used.
 - Recovery mode is at 192.168.0.1, OpenWrt boots at 192.168.1.1 — different subnets!
@@ -62,3 +98,6 @@
 - "Upgrade successfully!" response comes BEFORE flash is done — device flashes in background
 - No browser restriction (unlike GL.iNet which warns about Firefox)
 - Post-flash WAN port: OpenWrt configures WAN as DHCP client. If still on WAN port after flash, device sends DHCP requests — need to move cable to LAN for SSH access.
+- **HNAP firmware upload returns OK but stock v1.02 rejects OpenWrt during validation** — use recovery-http instead
+- **Stock firmware wizard is aggressive**: session times out after ~170s of inactivity, redirects to Login.html
+- **GetFirmwareSettings confirms `UpdateMethods: HNAP_UPLOAD`** — the device claims to support it, but validation blocks non-OEM firmware

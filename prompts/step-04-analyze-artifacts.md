@@ -191,15 +191,24 @@ The D-Link COVR-X1860 reverse-engineering effort revealed a complete HNAP-based 
 upload flow. This pattern likely applies to other D-Link devices and illustrates the general
 approach for other manufacturers.
 
-**HNAP Authentication (challenge-response HMAC-MD5):**
+**HNAP Authentication (challenge-response HMAC-MD5 + custom AES):**
 
-1. Send `Login` SOAP action with empty challenge to `/HNAP1/`
+1. Send `Login` SOAP action with empty challenge to `/HNAP1/`, using `"withoutloginkey"` as HMAC key
 2. Response contains: `Challenge`, `Cookie`, `PublicKey`
 3. Compute `PrivateKey = HMAC_MD5(PublicKey + password, Challenge).upper()`
 4. Compute `LoginPassword = HMAC_MD5(PrivateKey, Challenge).upper()`
 5. Send `Login` SOAP action with `LoginPassword` and received `Cookie`
 6. On success, `PrivateKey` is used for `HNAP_AUTH` headers on all subsequent requests
-7. `HNAP_AUTH` header = `HMAC_MD5(PrivateKey, URL_path + timestamp)` (format varies by firmware)
+7. `HNAP_AUTH` header = `HMAC_MD5(PrivateKey, timestamp_ms + SOAPAction).upper() + " " + timestamp_ms`
+8. `HNAP_CONTENT` header = `AES_Encrypt128(MD5(body).upper()).upper()` — **NOT** sent for Login and GetDeviceSettings, sent for all other actions including FirmwareUpload
+
+**HNAP_CONTENT Custom AES:**
+
+D-Link uses a **simplified AES-128** (not standard AES) found in `/js/AES.js`:
+- Only SubBytes + ShiftRows + AddRoundKey (no MixColumns!)
+- Key: PrivateKey truncated to 16 bytes (32 hex chars)
+- Input: MD5 of SOAP body, padded to 64 bytes (4 blocks × 16 bytes)
+- This must be reverse-engineered per device from the JavaScript source
 
 **Firmware Upload:**
 
@@ -212,8 +221,9 @@ approach for other manufacturers.
 **Trigger the Flash:**
 
 1. Call `GetFirmwareValidation` SOAP action
-2. Response contains `IsValid=true`, `CountDown=150`, `Result=REBOOT`
-3. The device reboots and flashes the uploaded image during the countdown period
+2. Response contains `IsValid`, `CountDown`, `GetFirmwareValidationResult`
+3. If `IsValid=true`, device reboots and flashes during countdown
+4. **If `IsValid=false`**: Firmware was rejected by the stock firmware's validation (RSA signature check). The GPL source signing key is typically a **test key** — production devices use different keys. Use U-Boot recovery mode instead.
 
 **Gotchas discovered:**
 
@@ -226,6 +236,9 @@ approach for other manufacturers.
 - The `GetFirmwareStatus` action may report a `fwupload.cgi` endpoint, but this endpoint only
   exists in recovery mode. The stock firmware upload goes through `/HNAP1/` with the `FirmwareUpload`
   SOAP action.
+- **Firmware validation may block non-OEM images**: Even when the upload API returns `OK`, the device's `GetFirmwareValidation` may return `IsValid: false`. This happens because the bootloader validates RSA signatures against production keys not included in the GPL source. The GPL signing key (often with a trivial password like `12345678`) is a development/test key. If this happens, U-Boot recovery mode bypasses all validation.
+- **HNAP_CONTENT is required for most actions**: Login and GetDeviceSettings don't need it, but FirmwareUpload and GetFirmwareValidation do. Without it, those calls return 401 Unauthorized.
+- **Session timeout is ~170 seconds**: The stock firmware removes the PrivateKey from sessionStorage after ~170s of no HNAP activity. API scripts must complete within this window or re-login.
 
 ### Applying This Pattern to Other Manufacturers
 

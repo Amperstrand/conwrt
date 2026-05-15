@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssh_utils import ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models
+from sticker_creds import dump_and_extract_config2, apply_credentials_to_openwrt
 from zycast import run_zycast_auto
 import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
@@ -91,14 +92,20 @@ def _find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str
     )
 
 
-def _build_profile_from_model(model_id: str, serial_method: str = "") -> SimpleNamespace:
+def _build_profile_from_model(model_id: str, serial_method: str = "",
+                               flash_method: str = "") -> SimpleNamespace:
     """Load a model and build a runtime profile namespace for the recovery script.
 
     Returns a SimpleNamespace with the same attributes that DeviceProfile used to have,
     so the rest of the state machine code works unchanged.
     """
     model = load_model(model_id)
-    method_hint = f"serial-tftp-{serial_method}" if serial_method else ""
+    if flash_method:
+        method_hint = flash_method
+    elif serial_method:
+        method_hint = f"serial-tftp-{serial_method}"
+    else:
+        method_hint = ""
     method_name, fm = _find_recovery_flash_method(model, method_hint)
 
     is_serial_tftp = method_name.startswith("serial-tftp")
@@ -160,7 +167,7 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
 def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
     """Probe the device to determine its current state.
 
-    Returns: "openwrt", "uboot", or "unknown"
+    Returns: "openwrt", "uboot", "stock-hnap", or "unknown"
     """
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
@@ -171,6 +178,22 @@ def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None
             return "openwrt"
     except Exception as e:
         log(f"SSH probe failed for {openwrt_ip}: {e}")
+
+    # When flash_method is dlink-hnap, check HNAP FIRST — the stock firmware
+    # also responds with HTML at the recovery IP, so detect_uboot_http would
+    # falsely classify it as "uboot" (line 492: startsWith("<!DOCTYPE")).
+    if profile and getattr(profile, 'flash_method', '') == 'dlink-hnap':
+        try:
+            hnap_url = f"http://{recovery_ip}/HNAP1/"
+            r = subprocess.run(
+                ["curl", "-s", "--max-time", "3", hnap_url],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if "HNAP" in r.stdout or "soap" in r.stdout.lower():
+                log(f"HNAP API detected at {recovery_ip} — device is running stock firmware")
+                return "stock-hnap"
+        except Exception:
+            pass
 
     try:
         found, detail = detect_uboot_http(recovery_ip)
@@ -467,10 +490,17 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
             ["curl", "-s", "--max-time", "2", f"http://{recovery_ip}/"],
             capture_output=True, text=True, timeout=5, check=False,
         )
+        # U-Boot recovery pages contain these distinctive markers.
+        # D-Link stock firmware also returns HTML but with "D-LINK" in title,
+        # so exclude that to avoid false "uboot" classification.
         if "FIRMWARE UPDATE" in r.stdout or "firmware" in r.stdout.lower():
-            return True, "firmware page"
+            if "D-LINK" not in r.stdout and "D-Link" not in r.stdout:
+                return True, "firmware page"
+        if "Recovery" in r.stdout and ("D-Link" not in r.stdout or "Recovery Mode" in r.stdout):
+            return True, "recovery page"
         if r.stdout.strip().startswith("<!DOCTYPE"):
-            return True, "HTML response"
+            if "HNAP1" not in r.stdout and "D-LINK" not in r.stdout:
+                return True, "HTML response"
         return False, r.stdout[:100] if r.stdout.strip() else "no response"
     except Exception as e:
         return False, str(e)[:80]
@@ -549,6 +579,87 @@ def trigger_flash(profile: SimpleNamespace) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# D-Link HNAP custom AES-128 (simplified — no MixColumns)
+# ---------------------------------------------------------------------------
+
+_AES_Sbox = [
+    99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,
+    202,130,201,125,250,89,71,240,173,212,162,175,156,164,114,192,
+    183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,4,
+    199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,9,131,44,
+    26,27,110,90,160,82,59,214,179,41,227,47,132,83,209,0,237,32,
+    252,177,91,106,203,190,57,74,76,88,207,208,239,170,251,67,77,
+    51,133,69,249,2,127,80,60,159,168,81,163,64,143,146,157,56,
+    245,188,182,218,33,16,255,243,210,205,12,19,236,95,151,68,23,
+    196,167,126,61,100,93,25,115,96,129,79,220,34,42,144,136,70,
+    238,184,20,222,94,11,219,224,50,58,10,73,6,36,92,194,211,172,
+    98,145,149,228,121,231,200,55,109,141,213,78,169,108,86,244,
+    234,101,122,174,8,186,120,37,46,28,166,180,198,232,221,116,31,
+    75,189,139,138,112,62,181,102,72,3,246,14,97,53,87,185,134,
+    193,29,158,225,248,152,17,105,217,142,148,155,30,135,233,206,
+    85,40,223,140,161,137,13,191,230,66,104,65,153,45,15,176,84,
+    187,22
+]
+
+_AES_ShiftRowTab = [0,5,10,15,4,9,14,3,8,13,2,7,12,1,6,11]
+
+
+def _aes_encrypt(state, key_schedule):
+    for i in range(16):
+        state[i] ^= key_schedule[i]
+    s = 16
+    while s < len(key_schedule) - 16:
+        for i in range(16):
+            state[i] = _AES_Sbox[state[i]]
+        tmp = list(state)
+        for i in range(16):
+            state[i] = tmp[_AES_ShiftRowTab[i]]
+        for i in range(16):
+            state[i] ^= key_schedule[s + i]
+        s += 16
+    for i in range(16):
+        state[i] = _AES_Sbox[state[i]]
+    tmp = list(state)
+    for i in range(16):
+        state[i] = tmp[_AES_ShiftRowTab[i]]
+    for i in range(16):
+        state[i] ^= key_schedule[s + i]
+    return state
+
+
+def _str2hex(s):
+    return ''.join(f'{ord(c):02x}' for c in s)
+
+
+def _hexstr2arr(hexstr, length):
+    result = [0] * length
+    for i in range(min(len(hexstr) // 2, length)):
+        result[i] = int(hexstr[2*i:2*i+2], 16)
+    return result
+
+
+def _arr2hex(arr):
+    return ''.join(f'{b:02x}' for b in arr)
+
+
+def _aes_encrypt128(plaintext, private_key):
+    if not all(c in '0123456789abcdefABCDEF' for c in private_key):
+        private_key = _str2hex(private_key)
+    if len(private_key) > 32:
+        private_key = private_key[:32]
+    key_arr = _hexstr2arr(private_key, 32)
+    pt_hex = _str2hex(plaintext)
+    pt_arr = _hexstr2arr(pt_hex, 64)
+    output = [0] * 64
+    for block in range(4):
+        state = [pt_arr[16*block + i] for i in range(16)]
+        state = _aes_encrypt(state, key_arr)
+        for i in range(16):
+            output[16*block + i] = state[i]
+    return _arr2hex(output)
+
+
+# ---------------------------------------------------------------------------
 # D-Link HNAP flash method
 # ---------------------------------------------------------------------------
 
@@ -579,12 +690,13 @@ def _build_soap_body(inner_xml: str) -> bytes:
 
 
 def _hnap_auth_header(private_key: str, soap_action: str, timestamp: str) -> str:
-    """Compute the HNAP_AUTH header value.
-
-    Format: changText(HMAC_MD5(PrivateKey, timestamp + soapaction)) + " " + timestamp
-    """
     auth_hash = _hmac_md5_hex(private_key, timestamp + soap_action)
     return f"{_chang_text(auth_hash)} {timestamp}"
+
+
+def _hnap_content_header(body: bytes, private_key: str) -> str:
+    body_md5 = hashlib.md5(body).hexdigest().upper()
+    return _aes_encrypt128(body_md5, private_key).upper()
 
 
 def _parse_hnap_response(body_bytes: bytes) -> dict[str, str]:
@@ -615,11 +727,8 @@ def _hnap_post(
     cookie: str = "",
     content_type: str = "text/xml",
     timeout: int = 60,
+    send_hnap_content: bool = False,
 ) -> tuple[int, bytes, dict[str, str]]:
-    """Send an HTTP POST to an HNAP endpoint.
-
-    Returns (status_code, response_body, response_headers_dict).
-    """
     headers: dict[str, str] = {
         "Content-Type": content_type,
         "SOAPACTION": f'"{soap_action}"',
@@ -627,6 +736,8 @@ def _hnap_post(
     if private_key:
         ts = str(int(time.time() * 1000))
         headers["HNAP_AUTH"] = _hnap_auth_header(private_key, soap_action, ts)
+        if send_hnap_content:
+            headers["HNAP_CONTENT"] = _hnap_content_header(body, private_key)
     if cookie:
         headers["Cookie"] = cookie
 
@@ -642,6 +753,94 @@ def _hnap_post(
     except urllib.error.URLError as exc:
         log(f"HNAP request failed (URLError): {exc.reason}")
         return 0, b"", {}
+
+
+def _hnap_login(base_url: str, soap_login: str, password: str) -> Optional[tuple[str, str]]:
+    """Perform the 3-step HNAP challenge-response login.
+
+    Returns (private_key, cookie_uid) on success, None on failure.
+    Raises URLError/OSError on network errors (for retry handling).
+    """
+    log("HNAP: Sending login challenge-request...")
+    login_request_body = _build_soap_body(
+        f'<Login xmlns="{_HNAP_NS}">'
+        "<Action>request</Action>"
+        "<Username>Admin</Username>"
+        "<LoginPassword></LoginPassword>"
+        "<Captcha></Captcha>"
+        "</Login>"
+    )
+    # D-Link HNAP requires HNAP_AUTH header even on the initial challenge-request,
+    # using the literal string "withoutloginkey" as the HMAC key (per Login.js).
+    status, resp_body, resp_headers = _hnap_post(
+        base_url, login_request_body, soap_login,
+        private_key="withoutloginkey",
+    )
+    if status != 200:
+        log(f"HNAP: login request failed (HTTP {status})")
+        return None
+
+    parsed = _parse_hnap_response(resp_body)
+    challenge = parsed.get("Challenge", "")
+    public_key = parsed.get("PublicKey", "")
+
+    # Extract session cookie: D-Link returns it in the XML <Cookie> element,
+    # not as an HTTP Set-Cookie header.  Build "uid=<value>" for subsequent
+    # requests.
+    cookie_uid = ""
+    xml_cookie = parsed.get("Cookie", "")
+    if xml_cookie:
+        cookie_uid = f"uid={xml_cookie}"
+    if not cookie_uid:
+        cookie_value = resp_headers.get("set-cookie", "")
+        if cookie_value:
+            for part in cookie_value.split(";"):
+                part = part.strip()
+                if part.lower().startswith("uid="):
+                    cookie_uid = part
+                    break
+    if not cookie_uid:
+        for header_val in resp_headers.values():
+            if "uid=" in header_val:
+                for part in header_val.split(";"):
+                    part = part.strip()
+                    if part.lower().startswith("uid="):
+                        cookie_uid = part
+                        break
+
+    if not challenge or not public_key:
+        log(f"HNAP: login challenge missing Challenge/PublicKey: {parsed}")
+        return None
+
+    log(f"HNAP: Got challenge (len={len(challenge)}), public_key (len={len(public_key)})")
+
+    private_key = _hmac_md5_hex(public_key + password, challenge).upper()
+    login_password = _hmac_md5_hex(private_key, challenge).upper()
+
+    log("HNAP: Sending login (final)...")
+    login_final_body = _build_soap_body(
+        f'<Login xmlns="{_HNAP_NS}">'
+        "<Action>login</Action>"
+        "<Username>Admin</Username>"
+        f"<LoginPassword>{login_password}</LoginPassword>"
+        "</Login>"
+    )
+    status, resp_body, _ = _hnap_post(
+        base_url, login_final_body, soap_login,
+        private_key=private_key, cookie=cookie_uid,
+    )
+    if status != 200:
+        log(f"HNAP: login final failed (HTTP {status})")
+        return None
+
+    parsed = _parse_hnap_response(resp_body)
+    login_result = parsed.get("LoginResult", "").lower()
+    if login_result != "success":
+        log(f"HNAP: login rejected: {parsed}")
+        return None
+
+    log("HNAP: Login successful")
+    return private_key, cookie_uid
 
 
 def _flash_via_dlink_hnap(
@@ -670,89 +869,41 @@ def _flash_via_dlink_hnap(
 
     soap_login = f"{_HNAP_NS}Login"
 
-    # --- Step 1: Login challenge-request ---
-    log("HNAP: Sending login challenge-request...")
-    login_request_body = _build_soap_body(
-        f'<Login xmlns="{_HNAP_NS}">'
-        "<Action>request</Action>"
-        "<Username>Admin</Username>"
-        "<LoginPassword></LoginPassword>"
-        "<Captcha></Captcha>"
-        "</Login>"
-    )
-    status, resp_body, resp_headers = _hnap_post(
-        base_url, login_request_body, soap_login,
-    )
-    if status != 200:
-        return False, f"HNAP login request failed (HTTP {status})"
-
-    parsed = _parse_hnap_response(resp_body)
-    challenge = parsed.get("Challenge", "")
-    public_key = parsed.get("PublicKey", "")
-    cookie_value = resp_headers.get("set-cookie", "")
-    # Extract uid cookie: "uid=XXXXX; ..."
-    cookie_uid = ""
-    if cookie_value:
-        for part in cookie_value.split(";"):
-            part = part.strip()
-            if part.lower().startswith("uid="):
-                cookie_uid = part
+    max_retries = 2
+    last_error = ""
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = _hnap_login(base_url, soap_login, password)
+            if result is not None:
+                private_key, cookie_uid = result
                 break
-    if not cookie_uid:
-        # Fallback: try case-insensitive header lookup
-        for header_name, header_val in resp_headers.items():
-            if header_name == "set-cookie" and "uid=" in header_val:
-                for part in header_val.split(";"):
-                    part = part.strip()
-                    if part.lower().startswith("uid="):
-                        cookie_uid = part
-                        break
-
-    if not challenge or not public_key:
-        return False, f"HNAP login challenge missing Challenge/PublicKey: {parsed}"
-
-    log(f"HNAP: Got challenge (len={len(challenge)}), public_key (len={len(public_key)})")
-
-    # --- Step 2: Derive PrivateKey and LoginPassword ---
-    private_key = _hmac_md5_hex(public_key + password, challenge).upper()
-    login_password = _hmac_md5_hex(private_key, challenge).upper()
-
-    # --- Step 3: Login final ---
-    log("HNAP: Sending login (final)...")
-    login_final_body = _build_soap_body(
-        f'<Login xmlns="{_HNAP_NS}">'
-        "<Action>login</Action>"
-        "<Username>Admin</Username>"
-        f"<LoginPassword>{login_password}</LoginPassword>"
-        "</Login>"
-    )
-    status, resp_body, _ = _hnap_post(
-        base_url, login_final_body, soap_login,
-        private_key=private_key, cookie=cookie_uid,
-    )
-    if status != 200:
-        return False, f"HNAP login final failed (HTTP {status})"
-
-    parsed = _parse_hnap_response(resp_body)
-    login_result = parsed.get("LoginResult", "").lower()
-    if login_result != "success":
-        return False, f"HNAP login failed: {parsed}"
+            last_error = "HNAP login failed (auth rejected)"
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            last_error = f"HNAP login network error: {exc}"
+            if attempt < max_retries:
+                log(f"HNAP: login attempt {attempt} failed ({exc}), retrying in 5s...")
+                time.sleep(5)
+        else:
+            if attempt == max_retries:
+                return False, last_error
+    else:
+        return False, last_error
 
     log("HNAP: Login successful")
 
-    # --- Step 4: FirmwareUpload via multipart POST ---
     soap_upload = f"{_HNAP_NS}FirmwareUpload"
     size_mb = os.path.getsize(image_path) / 1024 / 1024
     log(f"HNAP: Uploading firmware ({size_mb:.1f} MB)...")
 
-    # Build multipart form-data manually (urllib doesn't have a multipart helper)
+    if size_mb > 50:
+        log(f"WARNING: Firmware is {size_mb:.1f} MB — loading into memory for multipart upload")
+
     boundary = f"----ConwrtBoundary{secrets.token_hex(8)}"
     filename = os.path.basename(image_path)
     with open(image_path, "rb") as f:
         file_data = f.read()
 
     parts = []
-    # FWFile field
     parts.append(f"--{boundary}\r\n".encode())
     parts.append(
         f'Content-Disposition: form-data; name="FWFile"; filename="{filename}"\r\n'.encode()
@@ -768,6 +919,7 @@ def _flash_via_dlink_hnap(
     }
     ts = str(int(time.time() * 1000))
     upload_headers["HNAP_AUTH"] = _hnap_auth_header(private_key, soap_upload, ts)
+    upload_headers["HNAP_CONTENT"] = _hnap_content_header(b"", private_key)
     upload_headers["Cookie"] = cookie_uid
 
     req = urllib.request.Request(
@@ -801,16 +953,23 @@ def _flash_via_dlink_hnap(
     status, resp_body, _ = _hnap_post(
         base_url, validate_body, soap_validate,
         private_key=private_key, cookie=cookie_uid,
-        timeout=30,
+        timeout=30, send_hnap_content=True,
     )
     if status not in (200, 0):
         log(f"HNAP: GetFirmwareValidation returned HTTP {status} (non-fatal)")
     else:
         parsed = _parse_hnap_response(resp_body)
         is_valid = parsed.get("IsValid", "").lower()
-        result = parsed.get("Result", "")
+        result = parsed.get("GetFirmwareValidationResult", "")
         countdown = parsed.get("CountDown", "")
-        log(f"HNAP: Validation response — IsValid={is_valid}, Result={result}, CountDown={countdown}")
+        if is_valid == "false":
+            log("WARNING: Firmware validation FAILED — device rejected the firmware image. "
+                "The stock firmware's bootloader validation blocks non-OEM firmware. "
+                "Use recovery-http (U-Boot) method instead.")
+        elif is_valid == "true" and countdown:
+            log(f"HNAP: Flash in progress — CountDown={countdown}s")
+        else:
+            log(f"HNAP: Validation response — IsValid={is_valid}, Result={result}, CountDown={countdown}")
 
     return True, "HNAP firmware upload and validation triggered"
 
@@ -988,6 +1147,57 @@ def _apply_wifi_config_post_flash(ip: str, ssh_key: str = "",
                 log(f"  ⚠ AP: uci commands failed (rc={r2.returncode})")
                 if r2.stderr:
                     log(f"    stderr: {r2.stderr.strip()[:200]}")
+
+
+def _apply_sticker_credentials_post_flash(
+    ip: str, ssh_key: str = "", model_id: str = "", cfg: object = None,
+) -> None:
+    """Restore factory sticker WiFi credentials after flashing.
+
+    Only activates when the model has a ``sticker_credentials`` section in
+    its model JSON AND the user hasn't configured an explicit WiFi AP in
+    config.toml (sticker creds are the fallback/default).
+    """
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return
+
+    if cfg.wifi_ap:
+        return
+
+    if not model_id:
+        return
+    try:
+        model = load_model(model_id)
+    except FileNotFoundError:
+        return
+    if "sticker_credentials" not in model:
+        return
+
+    log("Restoring factory sticker WiFi credentials...")
+    key = ssh_key or None
+    try:
+        data = dump_and_extract_config2(ip, key=key)
+    except RuntimeError as exc:
+        log(f"  ⚠ sticker creds: dump failed — {exc}")
+        return
+
+    wifi = data.get("wifi", {})
+    macs = data.get("macs", {})
+    ssid_24g = wifi.get("ssid_24g", "")
+    ssid_5g = wifi.get("ssid_5g", "")
+    log(f"  Extracted: 2.4G SSID={ssid_24g or '(none)'}, "
+        f"5G SSID={ssid_5g or '(none)'}")
+    if macs.get("factory_mac"):
+        log(f"  Factory MAC: {macs['factory_mac']}")
+
+    try:
+        apply_credentials_to_openwrt(ip, wifi, key=key, model_id=model_id)
+    except RuntimeError as exc:
+        log(f"  ⚠ sticker creds: apply failed — {exc}")
+        return
+
+    log("  ✓ sticker credentials applied")
 
 
 def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
@@ -2040,6 +2250,10 @@ def _run_state_machine(
         cfg = _load_config()
         openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         _apply_wifi_config_post_flash(openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg)
+        _apply_sticker_credentials_post_flash(
+            openwrt_ip, ssh_key=ctx.ssh_key_path,
+            model_id=ctx.profile.name, cfg=cfg,
+        )
         return 0
 
     _print_timeline(ctx)
@@ -2056,6 +2270,10 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
         ctx._say_fn("OpenWrt detected. Using sysupgrade for faster re-flash.")
         log("Boot state: OpenWrt — using sysupgrade path")
         ctx.state = State.SYSUPGRADE_UPLOADING
+    elif boot_state == "stock-hnap" or ctx.profile.flash_method == "dlink-hnap":
+        ctx._say_fn("D-Link router detected. Uploading via HNAP.")
+        log("Boot state: stock firmware with HNAP API — uploading directly")
+        ctx.state = State.UBOOT_UPLOADING
     else:
         if boot_state == "uboot":
             log("Boot state: U-Boot recovery mode detected")
@@ -2066,13 +2284,7 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
                 ctx.timeline.uboot_http_first = ts()
                 ctx.state = State.UBOOT_UPLOADING
                 return
-        if ctx.profile.flash_method == "dlink-hnap":
-            # D-Link stock firmware: HNAP is available without reset-button dance
-            log("Boot state: D-Link stock firmware — HNAP flash method")
-            ctx._say_fn("D-Link router detected. Uploading via HNAP.")
-            ctx.state = State.UBOOT_UPLOADING
-            return
-        elif ctx.force_uboot:
+        if ctx.force_uboot:
             log("Boot state: forced to U-Boot recovery (--force-uboot)")
         else:
             log("Boot state: unknown — proceeding with U-Boot recovery")
@@ -2929,6 +3141,10 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--serial-port", default=None,
                         help="Serial port for serial-tftp method (e.g. /dev/cu.usbserial-A50285BI). "
                              "Auto-detected if omitted.")
+    flash_parser.add_argument("--flash-method", default=None,
+                        help="Flash method to use (e.g. recovery-http, dlink-hnap, sysupgrade, zycast). "
+                             "Auto-detected if omitted: sysupgrade if OpenWrt is running, "
+                             "otherwise the first recovery method in the model JSON.")
     flash_parser.add_argument("--serial-method", default=None,
                         help="Serial flash method variant (e.g. openwrt-flash, stock-restore). "
                              "Selects the serial-tftp-{method} flash_method from model JSON.")
@@ -2978,6 +3194,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated list of MTD partitions to dump (e.g. '0,1,2'). Default: all partitions.")
     backup_parser.add_argument("--user", default="root",
         help="SSH username (default: root)")
+
+    auto_parser = subparsers.add_parser("auto",
+        help="Auto-detect connected router and offer to flash it")
+    auto_parser.add_argument("--interface", default=None,
+        help="Ethernet interface (auto-detected if omitted)")
+    auto_parser.add_argument("--passive-timeout", type=int, default=10,
+        help="Seconds to listen for passive detection (default: 10)")
+    auto_parser.add_argument("--no-menu", action="store_true",
+        help="Print detection results and exit (non-interactive)")
 
     return parser
 
@@ -3229,7 +3454,9 @@ def cmd_flash(args: argparse.Namespace) -> int:
             parser.error("--model-id is required when device is not reachable via SSH.")
 
     try:
-        profile = _build_profile_from_model(args.model_id, serial_method=args.serial_method or "")
+        profile = _build_profile_from_model(args.model_id,
+                                             serial_method=args.serial_method or "",
+                                             flash_method=getattr(args, 'flash_method', '') or "")
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
@@ -3242,7 +3469,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
                           if k.startswith("serial-tftp-")]
         if len(serial_methods) == 1:
             method_suffix = serial_methods[0].replace("serial-tftp-", "")
-            profile = _build_profile_from_model(args.model_id, serial_method=method_suffix)
+            profile = _build_profile_from_model(args.model_id, serial_method=method_suffix,
+                                                 flash_method=getattr(args, 'flash_method', '') or "")
             log(f"Auto-selected serial method: {serial_methods[0]}")
         elif len(serial_methods) > 1:
             print(f"ERROR: Multiple serial methods available: {serial_methods}. "
@@ -3678,8 +3906,39 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_auto(args: argparse.Namespace) -> int:
+    from auto_detect import auto_detect, interactive_menu
+
+    interface = args.interface or auto_detect_interface()
+    if not interface:
+        print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
+        return 1
+
+    print(f"Auto-detecting routers on {interface}...")
+    print()
+
+    routers = auto_detect(interface, passive_timeout=args.passive_timeout)
+
+    if not routers:
+        print("No routers detected. Check that:")
+        print("  - Ethernet cable is connected")
+        print("  - Router is powered on")
+        print("  - Interface is correct (use --interface)")
+        return 1
+
+    if args.no_menu:
+        for r in routers:
+            print(f"  IP: {r.ip}  MAC: {r.mac}  Vendor: {r.vendor}  "
+                  f"Model: {r.model_name or '?'}  State: {r.firmware_state}  "
+                  f"Confidence: {r.confidence}")
+        return 0
+
+    interactive_menu(routers)
+    return 0
+
+
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup", "auto", "-h", "--help"):
         sys.argv.insert(1, "flash")
 
     parser = _build_parser()
@@ -3695,6 +3954,8 @@ def main() -> int:
         return cmd_setup_mgmt_wifi(args)
     elif args.command == "backup":
         return cmd_backup(args)
+    elif args.command == "auto":
+        return cmd_auto(args)
     else:
         return cmd_flash(args)
 

@@ -319,9 +319,11 @@ STA on 5GHz for upstream WAN, AP on 2.4GHz for local clients. Both radios config
 
 conwrt can flash D-Link routers running stock firmware without entering recovery mode, directly through the manufacturer's web UI API.
 
-**How it works**: The HNAP (Home Network Administration Protocol) SOAP API accepts firmware uploads when properly authenticated. conwrt performs a challenge-response login (HMAC-MD5), uploads the OpenWrt factory image via multipart POST, and triggers the flash via `GetFirmwareValidation`. The router reboots into OpenWrt automatically.
+**How it works**: The HNAP (Home Network Administration Protocol) SOAP API accepts firmware uploads when properly authenticated. conwrt performs a challenge-response login (HMAC-MD5 + custom AES), uploads the OpenWrt factory image via multipart POST, and triggers the flash via `GetFirmwareValidation`.
 
-**Advantages over recovery-http**:
+**⚠️ Important limitation (COVR-X1860 stock v1.02)**: The stock firmware's `GetFirmwareValidation` returns `IsValid: false` for OpenWrt images. The firmware upload API accepts the binary (returns `OK`), but the device's bootloader-level validation rejects non-D-Link firmware. The GPL RSA signing key (password: `12345678`) is a test key — production devices use different keys. **Use `recovery-http` (U-Boot) for reliable flashing.**
+
+**Advantages over recovery-http** (when it works):
 - No physical reset button press needed
 - Works remotely over the network
 - Faster setup (no recovery mode dance)
