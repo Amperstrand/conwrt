@@ -22,7 +22,7 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 |--------|-------------|----------|-------|
 | sysupgrade | SSH + SCP, runs sysupgrade -n | Running OpenWrt + SSH | ~3 min |
 | recovery-http | Reset button, uboot HTTP server | Physical access + reset pin | ~2 min |
-| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ~2.5 min |
+| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ⚠️ validation blocks |
 | tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
 | zycast | Multicast to many devices simultaneously | Network broadcast domain | varies |
 
@@ -30,7 +30,7 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 | Device | sysupgrade | recovery-http | dlink-hnap | tftp | zycast | WiFi STA/AP |
 |--------|:----------:|:------------:|:----------:|:----:|:------:|:-----------:|
-| D-Link COVR-X1860 A1 | o | tested | tested | -- | -- | tested |
+| D-Link COVR-X1860 A1 | o | tested | upload works, validation blocks | -- | -- | tested |
 | GL.iNet MT3000 | o | tested | -- | -- | -- | -- |
 | GL.iNet AR150 | o | -- | -- | -- | -- | -- |
 | GL.iNet AR300M (lite/nand/nor) | o | -- | -- | -- | -- | -- |
@@ -396,7 +396,7 @@ disown %1
 |--------|--------|-------|
 | sysupgrade | Supported | SSH/SCP via Dropbear, works with any sysupgrade-capable model |
 | recovery-http | Tested | Tested x1860 to x1860, polling-only mode |
-| dlink-hnap | Tested | D-Link stock firmware to OpenWrt via HNAP API (no reset needed) |
+| dlink-hnap | Upload works, validation blocks | HNAP auth works, firmware upload returns OK, but GetFirmwareValidation rejects OpenWrt images |
 | tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |

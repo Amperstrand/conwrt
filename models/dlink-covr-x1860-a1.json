@@ -117,9 +117,8 @@
       "notes": "Flashed from macOS via recovery mode (hold reset pin, power on). ~1m47s total."
     },
     "dlink-hnap": {
-      "tested": true,
-      "date": "2026-05-16",
-      "notes": "HNAP auth + upload works perfectly. GetFirmwareValidation returns IsValid=false for OpenWrt images — stock firmware blocks non-D-Link firmware. Use recovery-http instead. Previously tested 2026-05-15 on x1860 #2 (result unclear)."
+      "tested": false,
+      "notes": "Auth + upload works (returns OK). GetFirmwareValidation returns IsValid=false for OpenWrt images — stock firmware validation blocks non-D-Link firmware. Recovery-http is the proven method."
     },
     "sysupgrade": {
       "tested": false,
