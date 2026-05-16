@@ -166,7 +166,7 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--image PATH` | Path to firmware image |
 | `--request-image` | Request custom image from ASU with baked-in settings |
 | `--ssh-key PATH` | SSH public key to embed (auto-detected: id_ed25519.pub or id_rsa.pub) |
-| `--password PASS` | Set root password (default: random, printed once) |
+| `--password PASS` | Set root password (default: random, printed once, saved in inventory) |
 | `--no-password` | Skip password, key-only auth |
 | `--wan-ssh` | Open SSH on WAN interface (disables password login on WAN) |
 | `--force-uboot` | Force U-Boot recovery even if OpenWrt is running |
@@ -251,12 +251,57 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 | `mwan3` | Multi-WAN failover or load balancing | No |
 | `travelmate` | Auto-connect to captive portal WiFi | No |
 | `tollgate` | Bitcoin/Lightning payment gateway | Yes (binary deploy) |
-| `wireguard-client` | VPN tunnel with kill switch | No |
+| `wireguard-client` | VPN tunnel (auto-generates keys per device) | No |
 | `wireguard-server` | VPN server for remote access | Yes (QR codes, peers) |
 | `adguard` | Network-wide ad blocking | Yes (web setup wizard) |
 | `openclash` | Transparent proxy for censorship bypass | Yes (subscription import) |
 
 Presets requiring post-flash setup need SSH access after first boot to complete configuration (importing VPN configs, running setup wizards, etc.).
+
+### WireGuard VPN
+
+conwrt builds WireGuard into the firmware image via the `wireguard-client` use case. Each device auto-generates its own Curve25519 keypair on first boot — **no private keys ever exist in the firmware image**.
+
+**How it works:**
+
+1. Set `private_key = "generate"` (the default) in config.toml — OpenWrt's wireguard-tools generates a unique key on first interface bringup and saves it to UCI
+2. Keys survive sysupgrade automatically (stored in UCI overlay)
+3. Post-flash: read the generated public key via SSH and register it with the VPN server
+4. Public key is saved to device inventory (`data/inventory.jsonl`)
+
+**Example: Management VPN (split tunnel)**
+
+```toml
+[use_cases]
+enabled = ["wireguard-client"]
+
+[use_cases.wireguard-client]
+peer_public_key = "SERVER_PUBLIC_KEY"
+endpoint_host = "vpn.example.com"
+endpoint_port = 51820
+address = "10.0.0.2/32"
+allowed_ips = "10.0.0.0/24"
+kill_switch = false
+```
+
+**Example: Full tunnel VPN**
+
+```toml
+[use_cases]
+enabled = ["wireguard-client"]
+
+[use_cases.wireguard-client]
+peer_public_key = "SERVER_PUBLIC_KEY"
+endpoint_host = "vpn.example.com"
+address = "10.0.0.2/32"
+kill_switch = true
+```
+
+`wg-setup.py` can apply WireGuard config post-flash from pre-generated server peer configs:
+
+```bash
+python3 scripts/wg-setup.py --peer 3 --server my-vpn-host
+```
 
 ### Future Direction
 
