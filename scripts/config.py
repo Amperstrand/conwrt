@@ -237,7 +237,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         pub_text, pub_path, priv_path = _resolve_ssh(ssh_section.get("key", ""))
         all_keys = [pub_text] if pub_text else []
 
-    password_mode = password_section.get("mode", "key-only")
+    password_mode = password_section.get("mode", "random")
     extra_packages = asu_section.get("extra_packages", [])
     if isinstance(extra_packages, str):
         extra_packages = [extra_packages]

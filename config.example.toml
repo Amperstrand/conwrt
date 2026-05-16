@@ -20,10 +20,10 @@ keys = [
 
 [password]
 # Controls root password on the flashed router.
-#   "key-only" = no password, SSH key auth only (default, most secure)
-#   "random"   = generate a random password, print it once
+#   "random"   = generate a random password, print it once (default)
+#   "key-only" = no password, SSH key auth only
 #   " literal" = use this exact string as the password
-mode = "key-only"
+mode = "random"
 
 [asu]
 # Extra packages appended in auto-package mode (when --packages is omitted).
@@ -101,6 +101,18 @@ wan_ssh = false
 # price_per_minute = 1        # Price in sats per minute
 #
 # [use_cases.wireguard-client]
+# # Management VPN (split tunnel — reach router remotely via VPN server)
+# # private_key defaults to "generate" — each device auto-generates a unique key on first boot.
+# # Post-flash: SSH in, run `uci get network.wg0.private_key | wg pubkey` to get the public key.
+# # Register the public key with the VPN server.
+# peer_public_key = "..."     # required — VPN server public key
+# endpoint_host = "vpn.example.com"  # required — VPN server hostname or IP
+# endpoint_port = 51820       # VPN server UDP port
+# address = "10.67.0.2/32"   # Tunnel IP address with CIDR (must be unique per device)
+# allowed_ips = "10.67.0.0/24"  # Only route VPN subnet (split tunnel)
+# kill_switch = false         # No kill switch for management VPN
+#
+# # Full tunnel VPN (route all traffic through VPN)
 # private_key = "..."         # required — WireGuard private key for the router
 # peer_public_key = "..."     # required — VPN server public key
 # endpoint_host = "vpn.example.com"  # required — VPN server hostname or IP

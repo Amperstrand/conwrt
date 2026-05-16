@@ -22,7 +22,7 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 |--------|-------------|----------|-------|
 | sysupgrade | SSH + SCP, runs sysupgrade -n | Running OpenWrt + SSH | ~3 min |
 | recovery-http | Reset button, uboot HTTP server | Physical access + reset pin | ~2 min |
-| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ⚠️ validation blocks |
+| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ❌ validation blocks flash |
 | tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
 | zycast | Multicast to many devices simultaneously | Network broadcast domain | varies |
 
@@ -30,7 +30,7 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 | Device | sysupgrade | recovery-http | dlink-hnap | tftp | zycast | WiFi STA/AP |
 |--------|:----------:|:------------:|:----------:|:----:|:------:|:-----------:|
-| D-Link COVR-X1860 A1 | o | tested | upload works, validation blocks | -- | -- | tested |
+| D-Link COVR-X1860 A1 | o | tested | ❌ validation blocks | -- | -- | tested |
 | GL.iNet MT3000 | o | tested | -- | -- | -- | -- |
 | GL.iNet AR150 | o | -- | -- | -- | -- | -- |
 | GL.iNet AR300M (lite/nand/nor) | o | -- | -- | -- | -- | -- |
@@ -321,7 +321,7 @@ conwrt can flash D-Link routers running stock firmware without entering recovery
 
 **How it works**: The HNAP (Home Network Administration Protocol) SOAP API accepts firmware uploads when properly authenticated. conwrt performs a challenge-response login (HMAC-MD5 + custom AES), uploads the OpenWrt factory image via multipart POST, and triggers the flash via `GetFirmwareValidation`.
 
-**⚠️ Important limitation (COVR-X1860 stock v1.02)**: The stock firmware's `GetFirmwareValidation` returns `IsValid: false` for OpenWrt images. The firmware upload API accepts the binary (returns `OK`), but the device's bootloader-level validation rejects non-D-Link firmware. The GPL RSA signing key (password: `12345678`) is a test key — production devices use different keys. **Use `recovery-http` (U-Boot) for reliable flashing.**
+**⚠️ DOES NOT WORK (COVR-X1860 stock v1.02):** The stock firmware's `GetFirmwareValidation` returns `IsValid: false` for OpenWrt images. The firmware upload API accepts the binary (returns `OK`), and the device reboots, but the bootloader-level validation rejects non-D-Link firmware and boots back to stock. The GPL RSA signing key (password: `12345678`) is a test key — production devices use different keys. **No router has ever been successfully flashed via HNAP. Use `recovery-http` (U-Boot) for reliable flashing.**
 
 **Advantages over recovery-http** (when it works):
 - No physical reset button press needed
@@ -345,7 +345,7 @@ The default password ("password") and API endpoints are defined in the model JSO
 
 conwrt can run FROM an OpenWrt router to flash another router, or from macOS/Linux, with multiple flash methods. Router-to-router provisioning and stock-firmware flashing are both supported.
 
-**Status: Tested.** x1860 to x1860 recovery-http verified, macOS to x1860 dlink-hnap (stock firmware) verified, WiFi STA/AP post-flash config verified.
+**Status: Tested.** x1860 to x1860 recovery-http verified, WiFi STA/AP post-flash config verified. HNAP auth + upload API verified working but does NOT produce a successful flash — stock firmware validation blocks OpenWrt images.
 
 ### Setup
 
@@ -396,7 +396,7 @@ disown %1
 |--------|--------|-------|
 | sysupgrade | Supported | SSH/SCP via Dropbear, works with any sysupgrade-capable model |
 | recovery-http | Tested | Tested x1860 to x1860, polling-only mode |
-| dlink-hnap | Upload works, validation blocks | HNAP auth works, firmware upload returns OK, but GetFirmwareValidation rejects OpenWrt images |
+| dlink-hnap | ❌ upload OK, flash fails | HNAP auth + upload works, but GetFirmwareValidation rejects OpenWrt images — no successful flash ever recorded |
 | tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |

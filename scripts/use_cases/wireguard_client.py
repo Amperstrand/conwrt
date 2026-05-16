@@ -8,7 +8,7 @@ from . import ParamDef, UseCase, register
 
 
 def _build_wireguard_client(params: dict[str, Any]) -> str:
-    private_key = params.get("private_key", "")
+    private_key = params.get("private_key", "generate")
     peer_public_key = params.get("peer_public_key", "")
     endpoint_host = params.get("endpoint_host", "")
     endpoint_port = params.get("endpoint_port", 51820)
@@ -89,8 +89,8 @@ register(UseCase(
     ],
     packages_remove=[],
     params={
-        "private_key": ParamDef(type=str, required=True,
-                                description="WireGuard private key for the router"),
+        "private_key": ParamDef(type=str, default="generate",
+                                description="WireGuard private key ('generate' = auto-generate on first boot)"),
         "peer_public_key": ParamDef(type=str, required=True,
                                      description="VPN server public key"),
         "endpoint_host": ParamDef(type=str, required=True,

@@ -23,6 +23,8 @@ node_modules/
 # --- Certificates and keys ---
 *.pem
 *.key
+wireguard/
+*.wg*.conf
 
 # --- OpenCode / tooling workspaces ---
 .opencode/

@@ -13,15 +13,15 @@
     "soc": "MT7621AT",
     "flash": "NAND 128MB",
     "ram": "256MB",
-    "ethernet_ports": "4x 1G (1 WAN + 3 LAN)",
-    "wifi": "2.4GHz + 5GHz (MT7612N)"
+    "ethernet_ports": "2x 1G (1 WAN + 1 LAN)",
+    "wifi": "2.4GHz + 5GHz WiFi 6 (MT7915DAN + MT7975DN, ax, DBDC)"
   },
   "mac_oui": [
     "BC:22:28"
   ],
   "flash_methods": {
     "recovery-http": {
-      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports)",
+      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery.",
       "recovery_ip": "192.168.0.1",
       "client_ip": "192.168.0.10",
       "client_subnet": "255.255.255.0",

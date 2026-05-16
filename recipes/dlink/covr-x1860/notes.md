@@ -4,10 +4,11 @@
 - SoC: MediaTek MT7621AT (MIPS) @ 880MHz
 - RAM: 256MB
 - Flash: 128MB NAND
-- Ethernet: 4x 1G (1 WAN + 3 LAN)
-- WiFi: 2.4GHz (MT7603EN) + 5GHz (MT7612N)
+- Ethernet: 2x 1G (1 WAN + 1 LAN)
+- WiFi: 2.4GHz + 5GHz (MT7915DAN + MT7975DN, WiFi 6/ax, DBDC)
 - Reset button: recessed, UNDER the device (needs a pin)
-- LEDs: status LED on top
+- LEDs: 3 LEDs (red, orange, white) routed to one indicator on top
+- Serial: labeled on board (VCC, TX, RX, GND), 3.3V, 115200 8n1
 
 ## OpenWrt
 - Target: ramips/mt7621
@@ -15,7 +16,32 @@
 - Arch: mipsel_24kc
 - Default OpenWrt IP: 192.168.1.1
 
-## Recovery Mode (Validated on hardware 2026-05-07, retested 2026-05-12)
+## Known Good State (validated 2026-05-16)
+
+### Image format is critical
+- **U-Boot recovery mode** → MUST use `squashfs-recovery.bin` (NOT factory.bin)
+- **OEM web UI flash** → use `squashfs-factory.bin`
+- **sysupgrade** → use `squashfs-sysupgrade.bin`
+- Using factory.bin via U-Boot recovery causes a red LED / boot failure on some devices
+- Source: official OpenWrt git commit `0a18259e` and tested on hardware 2026-05-16
+- conwrt.py correctly prefers `recovery.bin` for U-Boot mode (`preferred_types = ["recovery", "factory", "initramfs"]`)
+
+### Working flash procedure (validated 2026-05-16, 3 successful devices)
+1. Power off router, connect ethernet to **any port** (WAN or LAN both work for recovery)
+2. Hold reset pin under device, plug in power, hold ~10-12s until LED blinks red
+3. Recovery HTTP at http://192.168.0.1/
+4. Upload `recovery.bin`: `curl -F "firmware=@recovery.bin;type=application/octet-stream" http://192.168.0.1/upload`
+5. Wait ~90 seconds for flash + reboot
+6. Move cable to a **LAN port** for SSH access at 192.168.1.1
+7. SSH key auth works (key baked in via ASU defaults)
+
+### Gotchas
+- Do NOT use factory.bin for U-Boot recovery — it uploads successfully ("Upgrade successfully!") but causes boot failure (solid red LED)
+- Do NOT abort conwrt.py during the 150s flash wait — let it run to completion
+- After flash, cable MUST be on a LAN port (not WAN) for SSH — OpenWrt WAN is DHCP client, not server
+- Multiple rapid re-flashes in succession can leave the device in a bad state — re-enter recovery and use recovery.bin to fix
+
+## Recovery Mode (Validated 2026-05-07, 2026-05-12, 2026-05-16)
 - Procedure:
   1. Power off router, connect ethernet to **any port** (WAN and LAN both validated)
   2. Use a pin to press and hold the reset button UNDER the device
@@ -75,11 +101,12 @@
 - Upload via multipart POST with field `FWFile` or `file`
 - `GetFirmwareValidation` checks staged firmware → returns `IsValid: true/false`
 
-### CRITICAL: Stock Firmware Validation Blocks OpenWrt
+### CRITICAL: HNAP Does NOT Flash OpenWrt (Verified Failed)
 - `GetFirmwareValidation` returns `IsValid: false` for OpenWrt factory images
 - The stock firmware's validation checks RSA signatures against **production keys** not included in the GPL source
 - The GPL RSA key (password: `12345678`) is a **test key** — production devices use different keys burned into the bootloader
 - Both signed (GPL key) and unsigned OpenWrt images are rejected
+- **No router has ever been successfully flashed via HNAP** — both x1860 flashes used recovery-http (U-Boot)
 - **Result**: HNAP upload mechanism works perfectly, but the firmware validation blocks non-D-Link firmware on stock v1.02
 - **Solution**: Use recovery-http (U-Boot) method to bypass firmware validation entirely
 
@@ -88,7 +115,20 @@
 - `/Users/macbook/src/conwrt/scripts/dlink_sge_sign.py`: Firmware RSA signing tool (GPL key — NOT production)
 - `/Users/macbook/src/conwrt/scripts/conwrt.py`: Main flasher, HNAP auth integrated at lines 580-886
 
+## WireGuard Key Architecture (decided 2026-05-16)
+
+**`private_key='generate'`** — selected for production use.
+
+- OpenWrt wireguard-tools natively supports `private_key='generate'` (commit `54066840`)
+- On first interface bringup, the proto handler auto-generates a Curve25519 key pair, saves the private key to UCI, replaces `'generate'` with the actual key
+- Same firmware image works for all devices — each generates a unique key on first boot
+- Keys survive sysupgrade automatically (stored in UCI overlay)
+- Post-flash workflow: SSH in → `uci get network.wg0.private_key | wg pubkey` → register pubkey with VPN server → save to inventory
+- WireGuard pubkey should be saved in device inventory (`data/inventory.jsonl`) for tracking
+- Future: U-Boot env or unused MTD partition (e.g. `private` mtd8, 20MB) for persistence across full recovery reflash
+
 ## Gotchas
+- **Use recovery.bin (NOT factory.bin) for U-Boot recovery mode** — factory.bin uploads OK but causes red LED boot failure. recovery.bin is the correct format per official OpenWrt commit.
 - **Recovery mode works on both WAN and LAN ports** — validated on both 2026-05-12. Recovery IP is 192.168.0.1 regardless of which port is used.
 - Recovery mode is at 192.168.0.1, OpenWrt boots at 192.168.1.1 — different subnets!
 - Client needs IPs on both subnets (192.168.0.10 + 192.168.1.254) if flashing from the same interface
@@ -98,6 +138,6 @@
 - "Upgrade successfully!" response comes BEFORE flash is done — device flashes in background
 - No browser restriction (unlike GL.iNet which warns about Firefox)
 - Post-flash WAN port: OpenWrt configures WAN as DHCP client. If still on WAN port after flash, device sends DHCP requests — need to move cable to LAN for SSH access.
-- **HNAP firmware upload returns OK but stock v1.02 rejects OpenWrt during validation** — use recovery-http instead
+- **HNAP firmware upload returns OK but stock v1.02 rejects OpenWrt during validation — NO successful flash ever recorded. Use recovery-http instead**
 - **Stock firmware wizard is aggressive**: session times out after ~170s of inactivity, redirects to Login.html
 - **GetFirmwareSettings confirms `UpdateMethods: HNAP_UPLOAD`** — the device claims to support it, but validation blocks non-OEM firmware
