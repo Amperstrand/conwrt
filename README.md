@@ -28,15 +28,16 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 ### Device Support Matrix
 
-| Device | sysupgrade | recovery-http | dlink-hnap | tftp | zycast | WiFi STA/AP |
-|--------|:----------:|:------------:|:----------:|:----:|:------:|:-----------:|
-| D-Link COVR-X1860 A1 | o | tested | ❌ validation blocks | -- | -- | tested |
-| GL.iNet MT3000 | o | tested | -- | -- | -- | -- |
-| GL.iNet AR150 | o | -- | -- | -- | -- | -- |
-| GL.iNet AR300M (lite/nand/nor) | o | -- | -- | -- | -- | -- |
-| Linksys WHW03 V1/V2 | o | -- | -- | -- | -- | -- |
+See **[device support matrix](https://amperstrand.github.io/conwrt/)** — auto-generated from `models/*.json` (the authoritative single source of truth).
 
-Legend: tested = Tested on hardware | o = Model defined, not tested | -- = Not applicable
+Tested devices are tracked in each model's `tested_hardware` field. To mark a device as tested, add a `tested_hardware` entry to its JSON:
+
+```json
+"tested_hardware": {
+  "recovery-http": { "tested": true, "date": "2026-05-16", "notes": "..." },
+  "wifi_sta_ap": { "tested": true, "date": "2026-05-16", "notes": "..." }
+}
+```
 
 ## Layout
 

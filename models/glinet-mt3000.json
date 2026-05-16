@@ -72,5 +72,22 @@
     "ethernet",
     "wifi",
     "usb"
-  ]
+  ],
+  "tested_hardware": {
+    "uboot-http": {
+      "tested": true,
+      "date": "2026-05-16",
+      "notes": "Flashed from macOS. U-Boot recovery mode via reset button. ~70s total."
+    },
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-05-16",
+      "notes": "Sysupgrade from existing OpenWrt. ~98s total including reboot."
+    },
+    "usb_tether_android": {
+      "tested": true,
+      "date": "2026-05-16",
+      "notes": "Android USB tethering via RNDIS. Motorola moto g(8) plus. ADB auto-enable verified."
+    }
+  }
 }

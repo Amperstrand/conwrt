@@ -102,15 +102,29 @@ def _adb_hotplug_script() -> str:
         cat > /etc/hotplug.d/usb/99-usb-tether-adb << 'HOTPLUG_EOF'
         [ "$ACTION" = "bind" ] || exit 0
         [ "$PRODUCT" ] || exit 0
+        (
         HOME=/root
         export HOME
         command -v adb >/dev/null 2>&1 || exit 0
-        sleep 2
-        if ip addr show usb0 2>/dev/null | grep -q "inet "; then
-            exit 0
-        fi
-        adb devices 2>/dev/null | grep -q "device$" || exit 0
-        adb shell svc usb setFunctions rndis 2>/dev/null
+        DELAY=1
+        for attempt in 1 2 3 4 5 6 7; do
+            sleep $DELAY
+            if ip addr show usb0 2>/dev/null | grep -q "inet "; then
+                exit 0
+            fi
+            STATE=$(adb get-state 2>/dev/null)
+            if [ "$STATE" = "device" ]; then
+                adb shell svc usb setFunctions rndis 2>/dev/null
+                sleep 3
+                if ip addr show usb0 2>/dev/null | grep -q "inet "; then
+                    logger -t usb-tether "ADB enabled tethering (attempt $attempt)"
+                    exit 0
+                fi
+            fi
+            DELAY=$((DELAY * 2))
+        done
+        logger -t usb-tether "ADB tethering gave up after $attempt attempts"
+        ) &
         HOTPLUG_EOF
     """)
 
