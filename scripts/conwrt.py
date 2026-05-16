@@ -1200,6 +1200,98 @@ def _apply_sticker_credentials_post_flash(
     log("  ✓ sticker credentials applied")
 
 
+def _register_wireguard_post_flash(
+    ip: str, ssh_key: str = "", cfg: object = None,
+) -> str:
+    """Read the auto-generated WireGuard public key from the router and
+    register it with the VPN server.
+
+    Returns the public key string, or empty string on failure.
+    """
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return ""
+    if not cfg.wireguard or not cfg.wireguard.registration_server:
+        return ""
+
+    server = cfg.wireguard.registration_server
+    wg_if = cfg.wireguard.wg_interface
+    key = ssh_key or None
+
+    # Try to read the public key directly (interface may already be up)
+    r = subprocess.run(
+        ssh_cmd(ip, "wg show wg0 public-key 2>/dev/null", key=key, connect_timeout=10),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    pub_key = r.stdout.strip()
+
+    # If interface isn't up yet, derive from private key without leaking it
+    # to the process table (pipe via stdin, not command-line args)
+    if not pub_key or len(pub_key) < 40:
+        r1 = subprocess.run(
+            ssh_cmd(ip, "uci -q get network.wg0.private_key", key=key, connect_timeout=10),
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        priv_key = r1.stdout.strip()
+        if not priv_key or priv_key == "generate":
+            log("  WG: no private key found on router (WireGuard not configured)")
+            return ""
+
+        # Pipe private key through stdin to avoid exposing it in ps/process args
+        r2 = subprocess.run(
+            ssh_cmd(ip, "wg pubkey", key=key, connect_timeout=10),
+            input=priv_key, capture_output=True, text=True, timeout=15, check=False,
+        )
+        pub_key = r2.stdout.strip()
+        if not pub_key or len(pub_key) < 40:
+            log(f"  ⚠ WG: could not derive public key (got {len(pub_key)} chars)")
+            return ""
+
+    log(f"  WG: public key = {pub_key}")
+
+    # Read the tunnel address from the router
+    r3 = subprocess.run(
+        ssh_cmd(ip, "uci -q get network.wg0.addresses", key=key, connect_timeout=10),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    address = r3.stdout.strip()
+    if not address:
+        address = "0.0.0.0/0"
+
+    # Register the peer with the VPN server
+    log(f"  WG: registering peer {address} with {server}...")
+    reg_cmd = f"wg set {wg_if} peer {pub_key} allowed-ips {address}"
+    r4 = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", "BatchMode=yes",
+         "-o", "ConnectTimeout=10",
+         server, reg_cmd],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if r4.returncode == 0:
+        log(f"  ✓ WG: peer registered with {server}")
+    else:
+        log(f"  ⚠ WG: registration failed — {r4.stderr.strip()[:200]}")
+
+    addr_host = address.split("/")[0]
+    persist_cmd = (
+        f"grep -q '{pub_key}' /etc/wireguard/{wg_if}.conf 2>/dev/null || "
+        f"printf '\\n[Peer]\\nPublicKey = {pub_key}\\nAllowedIPs = {addr_host}/32\\n' "
+        f">> /etc/wireguard/{wg_if}.conf"
+    )
+    subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", "BatchMode=yes",
+         "-o", "ConnectTimeout=10",
+         server, persist_cmd],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+
+    return pub_key
+
+
 def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
                   mgmt_wifi_expected: bool = False) -> list[tuple[str, str]]:
     log("Verifying router state...")
@@ -2041,6 +2133,7 @@ class RecoveryContext:
     generated_password: str = ""
     password_set: bool = False
     auth_type: str = ""          # "key-and-password", "key-only", or "password-only"
+    wireguard_pubkey: str = ""
     wan_ssh_enabled: bool = False
     force_uboot: bool = False
     no_pcap: bool = False
@@ -2246,7 +2339,6 @@ def _run_state_machine(
 
     if ctx.state == State.COMPLETE:
         _print_timeline(ctx)
-        _record_inventory(ctx)
         cfg = _load_config()
         openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         _apply_wifi_config_post_flash(openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg)
@@ -2254,6 +2346,11 @@ def _run_state_machine(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
             model_id=ctx.profile.name, cfg=cfg,
         )
+        wg_pubkey = _register_wireguard_post_flash(
+            openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg,
+        )
+        ctx.wireguard_pubkey = wg_pubkey
+        _record_inventory(ctx)
         return 0
 
     _print_timeline(ctx)
@@ -2993,6 +3090,7 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         "password_set": ctx.password_set,
         "auth_type": ctx.auth_type,
         "wan_ssh_enabled": ctx.wan_ssh_enabled,
+        "wireguard_pubkey": ctx.wireguard_pubkey,
         "sha256_firmware": ctx.sha256_before,
         "flashed_by": os.environ.get("USER", ""),
         "timeline": timeline_durations,

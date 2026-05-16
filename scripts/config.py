@@ -58,6 +58,12 @@ class WifiAPConfig:
 
 
 @dataclass
+class WireguardConfig:
+    registration_server: str = ""
+    wg_interface: str = "wg0"
+
+
+@dataclass
 class ConwrtConfig:
     ssh_public_key_text: str = ""
     ssh_public_key_path: str = ""
@@ -70,6 +76,7 @@ class ConwrtConfig:
     mgmt_wifi_txpower: Optional[int] = None
     wifi_sta: Optional[WifiSTAConfig] = None
     wifi_ap: Optional[WifiAPConfig] = None
+    wireguard: Optional[WireguardConfig] = None
     use_cases: list[UseCaseConfig] = field(default_factory=list)
 
     @property
@@ -262,6 +269,14 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
             uc_params = {}
         use_cases_list.append(UseCaseConfig(name=uc_name, params=uc_params))
 
+    wg_section = raw.get("wireguard", {})
+    wg_cfg = None
+    if wg_section.get("registration_server"):
+        wg_cfg = WireguardConfig(
+            registration_server=wg_section.get("registration_server", ""),
+            wg_interface=wg_section.get("wg_interface", "wg0"),
+        )
+
     return ConwrtConfig(
         ssh_public_key_text=pub_text,
         ssh_public_key_path=pub_path,
@@ -274,5 +289,6 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
         wifi_sta=wifi_sta,
         wifi_ap=wifi_ap,
+        wireguard=wg_cfg,
         use_cases=use_cases_list,
     )

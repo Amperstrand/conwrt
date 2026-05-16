@@ -69,6 +69,19 @@ wan_ssh = false
 #
 # [use_cases]
 # enabled = ["android-tether"]
+
+# --- WireGuard VPN server registration ---
+# After flashing, conwrt reads the auto-generated WireGuard public key from
+# the router and registers it with the VPN server via SSH.
+# Requires [use_cases.wireguard-client] to be enabled and the server to have
+# the WireGuard public key in the server's authorized_keys.
+#
+# [wireguard]
+# registration_server = "my-vpn-server"  # SSH host alias from ~/.ssh/config
+# wg_interface = "wg0"                   # WireGuard interface on the server
+#
+# [use_cases]
+# enabled = ["android-tether"]
 #
 # [use_cases.android-tether]
 # interface = "usbwan"
