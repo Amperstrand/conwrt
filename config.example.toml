@@ -68,7 +68,11 @@ wan_ssh = false
 # Use cases requiring hardware not present on your device are auto-skipped.
 #
 # [use_cases]
-# enabled = ["android-tether"]
+# enabled = ["usb-tether"]
+#
+# [use_cases.usb-tether]
+# interface = "usbwan"
+# enable_adb = true
 
 # --- WireGuard VPN server registration ---
 # After flashing, conwrt reads the auto-generated WireGuard public key from
@@ -79,15 +83,6 @@ wan_ssh = false
 # [wireguard]
 # registration_server = "my-vpn-server"  # SSH host alias from ~/.ssh/config
 # wg_interface = "wg0"                   # WireGuard interface on the server
-#
-# [use_cases]
-# enabled = ["android-tether"]
-#
-# [use_cases.android-tether]
-# interface = "usbwan"
-#
-# [use_cases.iphone-tether]
-# interface = "usbwan"
 #
 # [use_cases.mesh11sd]
 # mesh_id = "MyMeshID"       # required — must match on all mesh nodes

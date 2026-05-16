@@ -202,7 +202,7 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 
 conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for a specific use case**. Instead of flashing a stock image and then reading wiki docs to manually configure your router, you declare what you want in `config.toml` and the firmware arrives ready to go.
 
-**Status: All presets are untested on hardware.** The uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
+**Status: `usb-tether` tested on hardware** (GL.iNet MT3000, Android RNDIS). All other presets are untested — the uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
 
 ### How It Works
 
@@ -230,28 +230,29 @@ python3 scripts/conwrt.py list-use-cases --model-id glinet-mt3000
 
 ### Priority Presets (near-zero configuration)
 
-These three use cases are the most immediately useful because they require almost no user configuration:
+These use cases are the most immediately useful because they require almost no user configuration:
 
 | Preset | What it does | User provides |
 |--------|-------------|---------------|
-| **android-tether** | USB WAN from Android phone via RNDIS/CDC-ether | Nothing (plug in USB) |
-| **iphone-tether** | USB WAN from iPhone via ipheth + usbmuxd | Nothing (plug in USB) |
+| **usb-tether** | USB WAN from Android or iPhone (auto-detects) | Plug in USB cable |
 | **sqm** | Smart Queue Management with CAKE — eliminates bufferbloat | Download/upload speeds in Kbit/s |
 | **travelmate** | Auto-connect to hotel/airport WiFi with captive portal detection | Nothing (auto-scans) |
 
-These are the "flash and forget" cases — no wiki reading, no manual uci editing, no VPN keys to generate. Flash the image, plug in your phone (tethering) or connect to upstream WiFi (travelmate), or set your bandwidth (SQM), and it works.
+These are the "flash and forget" cases — no wiki reading, no manual uci editing. Flash the image, plug in your phone or connect to upstream WiFi, and it works.
 
 ### All Available Presets
 
 | Preset | Description | Post-flash? |
 |--------|-------------|-------------|
-| `android-tether` | USB WAN from Android phone | No |
-| `iphone-tether` | USB WAN from iPhone | No |
+| `usb-tether` | USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable) | No |
+| `usb-tether-android` | USB WAN from Android only (user enables tethering manually) | No |
+| `usb-tether-android-adb` | USB WAN from Android + ADB auto-enable tethering | No |
+| `usb-tether-ios` | USB WAN from iPhone (ipheth + usbmuxd) | No |
 | `sqm` | Bufferbloat fix via CAKE/fq_codel | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |
 | `travelmate` | Auto-connect to captive portal WiFi | No |
 | `tollgate` | Bitcoin/Lightning payment gateway | Yes (binary deploy) |
-| `wireguard-client` | VPN tunnel (auto-generates keys per device) | No |
+| `wireguard-client` | VPN tunnel (auto-generates keys per device) | Auto (registration) |
 | `wireguard-server` | VPN server for remote access | Yes (QR codes, peers) |
 | `adguard` | Network-wide ad blocking | Yes (web setup wizard) |
 | `openclash` | Transparent proxy for censorship bypass | Yes (subscription import) |
@@ -260,16 +261,39 @@ Presets requiring post-flash setup need SSH access after first boot to complete 
 
 ### WireGuard VPN
 
-conwrt builds WireGuard into the firmware image via the `wireguard-client` use case. Each device auto-generates its own Curve25519 keypair on first boot — **no private keys ever exist in the firmware image**.
+**Status: Tested on hardware** (D-Link COVR-X1860 A1). WireGuard client, key generation, and post-flash registration all verified.
 
-**How it works:**
+conwrt handles WireGuard in two stages: **firmware build** (use case preset) and **post-flash registration** (automatic). Each device auto-generates its own Curve25519 keypair on first boot — **no private keys ever exist in the firmware image**.
 
-1. Set `private_key = "generate"` (the default) in config.toml — OpenWrt's wireguard-tools generates a unique key on first interface bringup and saves it to UCI
-2. Keys survive sysupgrade automatically (stored in UCI overlay)
-3. Post-flash: read the generated public key via SSH and register it with the VPN server
-4. Public key is saved to device inventory (`data/inventory.jsonl`)
+#### Stage 1: WireGuard client in firmware
 
-**Example: Management VPN (split tunnel)**
+Enable the `wireguard-client` use case in `config.toml`. This bakes `wireguard-tools` and a first-boot `uci` script into the firmware image. On first boot, OpenWrt generates a unique private key and configures the `wg0` interface with your server's endpoint.
+
+The firmware includes:
+- `wg0` WireGuard interface with `private_key='generate'` (unique per device)
+- Peer config (server public key, endpoint, allowed IPs)
+- Firewall `vpn` zone + LAN→VPN forwarding
+- Optional kill switch (block all traffic if VPN drops)
+
+#### Stage 2: Post-flash registration
+
+After the router boots, conwrt automatically registers the device with your VPN server. This requires a `[wireguard]` section in `config.toml` with an SSH alias to your VPN server:
+
+```toml
+[wireguard]
+registration_server = "my-vpn-server"  # SSH alias from ~/.ssh/config
+wg_interface = "wg0"                   # WireGuard interface on the server
+```
+
+The registration flow:
+1. SSH to router → read the auto-generated public key via `wg show wg0 public-key`
+2. SSH to VPN server → run `wg set wg0 peer <pubkey> allowed-ips <address>` (live registration)
+3. Append `[Peer]` block to `/etc/wireguard/wg0.conf` on the server (persistence)
+4. Save public key to device inventory
+
+The router's SSH key must be in the VPN server's `authorized_keys`. conwrt uses `BatchMode=yes` (key-only auth) for the server connection.
+
+#### Full config example: Management VPN (split tunnel)
 
 ```toml
 [use_cases]
@@ -280,11 +304,15 @@ peer_public_key = "SERVER_PUBLIC_KEY"
 endpoint_host = "vpn.example.com"
 endpoint_port = 51820
 address = "10.0.0.2/32"
-allowed_ips = "10.0.0.0/24"
+allowed_ips = "10.0.0.0/24"    # only management subnet through tunnel
 kill_switch = false
+
+[wireguard]
+registration_server = "my-vpn-server"
+wg_interface = "wg0"
 ```
 
-**Example: Full tunnel VPN**
+#### Full config example: Full tunnel VPN
 
 ```toml
 [use_cases]
@@ -294,10 +322,24 @@ enabled = ["wireguard-client"]
 peer_public_key = "SERVER_PUBLIC_KEY"
 endpoint_host = "vpn.example.com"
 address = "10.0.0.2/32"
-kill_switch = true
+kill_switch = true              # block all traffic if VPN drops
+
+[wireguard]
+registration_server = "my-vpn-server"
+wg_interface = "wg0"
 ```
 
-`wg-setup.py` can apply WireGuard config post-flash from pre-generated server peer configs:
+#### Key properties
+
+- Same firmware image works for all devices — each generates unique keys on first boot
+- Private key never leaves the router (generated on-device, stored in UCI overlay)
+- Keys survive `sysupgrade` (UCI overlay preserved by default)
+- Public key recorded in inventory for auditing and re-registration
+- No secrets committed to git — `config.toml` is gitignored
+
+#### Manual post-flash setup
+
+`wg-setup.py` can apply WireGuard config post-flash from pre-generated server peer configs, without going through the full conwrt flash flow:
 
 ```bash
 python3 scripts/wg-setup.py --peer 3 --server my-vpn-host
