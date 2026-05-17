@@ -236,6 +236,12 @@
       "tested": true,
       "date": "2026-05-17",
       "notes": "Android phone via USB. Installed kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, adb manually via SCP (no internet on router). ADB authorized (one-time phone-side accept). adb shell svc usb setFunctions rndis → usb0 appears (RNDIS). DHCP lease from phone. Ping 8.8.8.8 succeeds (38-178ms). Required packages: kmod-mii, kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-rndis, adb, zlib, libopenssl3, libatomic1."
+    },
+    "sqm": {
+      "tested": true,
+      "date": "2026-05-17",
+      "experimental": true,
+      "notes": "EXPERIMENTAL — not broadly tested. CAKE with piece_of_cake.qos on usb0 (cell tether). Static 15000/5000 kbit/s on QCA9533 (650MHz, 128MB RAM). CPU headroom confirmed at ~30 Mbit/s cell speeds (~27% CPU). Auto-SQM architecture designed (hotplug + byte-counter measurement + cron re-tune for variable links) but not implemented. Cell link is the bottleneck, not USB 2.0. Needs: more devices tested, dynamic bandwidth tuning, verification on ethernet/fiber WAN links."
     }
   },
   "sysupgrade": {
