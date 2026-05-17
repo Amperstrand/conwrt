@@ -1,0 +1,83 @@
+{
+  "id": "glinet_gl-ar300m-lite",
+  "vendor": "GL.iNet",
+  "description": "AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)",
+  "openwrt": {
+    "target": "ath79/generic",
+    "device": "glinet,gl-ar300m-lite",
+    "default_ip": "192.168.1.1",
+    "profile": "glinet_gl-ar300m-lite",
+    "version": "24.10.2"
+  },
+  "hardware": {
+    "soc": "QCA9533 v2 (MIPS 24Kc) @ 650MHz",
+    "flash": "NOR 16MB (Winbond W25Q128) only — no NAND",
+    "ram": "128MB DDR2",
+    "ethernet_ports": "2x 10/100 (1 WAN eth1 + 1 LAN eth0)",
+    "wifi": "2.4GHz 802.11b/g/n (QCA9533 integrated)",
+    "usb": "1x USB 2.0 Type-A",
+    "power": "5V/2A micro-USB"
+  },
+  "mac_oui": [
+    "E4:95:6E"
+  ],
+  "stock_default_ip": "192.168.8.1",
+  "switch": {
+    "description": "No physical switch on this model — always boots from NOR. This is a NOR-only device (AR300M16/AR300M-Lite) with no NAND flash."
+  },
+  "flash_layout": {
+    "nor": {
+      "chip": "Winbond W25Q128",
+      "size": "16MB",
+      "partitions": [
+        {"mtd": 0, "name": "u-boot", "offset": "0x000000", "size": "256KB"},
+        {"mtd": 1, "name": "u-boot-env", "offset": "0x040000", "size": "64KB"},
+        {"mtd": 2, "name": "firmware", "offset": "0x050000", "size": "15.6MB"},
+        {"mtd": 3, "name": "art", "offset": "0xFF0000", "size": "64KB"}
+      ]
+    }
+  },
+  "flash_methods": {
+    "recovery-http": {
+      "description": "U-Boot HTTP recovery via pepe2k/u-boot_mod (hold reset button while powering on). NOR-only model uses nor__firmware upload field.",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.2",
+      "client_subnet": "255.255.255.0",
+      "upload_endpoint": "/",
+      "upload_field": "nor__firmware",
+      "firmware_extensions": {
+        "nor": [".bin"]
+      },
+      "http_server": "uIP/0.9",
+      "http_version": "1.0",
+      "flash_time_seconds": 60,
+      "silence_timeout": 30,
+      "reset_instructions": "Hold reset button while connecting power. Hold for ~5 seconds until LEDs flash.",
+      "led_pattern": "LEDs flash 5 times during U-Boot entry"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  },
+  "signatures": {
+    "recovery": {
+      "source": "inferred from NAND model (same U-Boot, same SoC)",
+      "recovery_mac_prefix": "00:03:7F",
+      "http_server_header": "uIP/0.9",
+      "http_detection_string": "pepe2k/u-boot_mod",
+      "no_icmp_response": true
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 60
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "usb"
+  ],
+  "tested_hardware": {}
+}

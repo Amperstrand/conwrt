@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>conwrt — Device Support Matrix</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; padding: 2rem; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.3rem; margin: 2rem 0 1rem; color: #555; }
+  .subtitle { color: #666; margin-bottom: 2rem; }
+  .gen-time { color: #999; font-size: 0.85rem; margin-bottom: 2rem; }
+  table { border-collapse: collapse; width: 100%; overflow-x: auto; display: block; }
+  th, td { border: 1px solid #ddd; padding: 0.5rem 0.6rem; text-align: center; font-size: 0.85rem; }
+  th { background: #f5f5f5; font-weight: 600; position: sticky; top: 0; white-space: nowrap; }
+  td.vendor { font-weight: 600; white-space: nowrap; }
+  td.model { text-align: left; min-width: 180px; }
+  td.soc { text-align: left; font-size: 0.8rem; }
+  td.caps { text-align: left; }
+  .id { color: #999; }
+  .cap { display: inline-block; background: #e8e8e8; border-radius: 3px; padding: 1px 5px; font-size: 0.75rem; margin: 1px; }
+  .badge { display: inline-block; border-radius: 3px; padding: 1px 6px; font-size: 0.7rem; font-weight: 600; }
+  .badge.tested { background: #d4edda; color: #155724; }
+  .badge.defined { background: #fff3cd; color: #856404; }
+  .badge.blocked { background: #f8d7da; color: #721c24; }
+  .legend { margin: 1rem 0 2rem; display: flex; gap: 1.5rem; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+  footer { margin-top: 3rem; color: #999; font-size: 0.8rem; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<h1>conwrt Device Support Matrix</h1>
+<p class="subtitle">Auto-generated from <code>models/*.json</code> — the authoritative single source of truth.</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="badge tested">tested</span> Verified on real hardware</div>
+  <div class="legend-item"><span class="badge defined">defined</span> Model defined, not yet tested</div>
+  <div class="legend-item"><span class="badge blocked">blocked</span> Known to not work</div>
+</div>
+
+<h2>Flash Methods</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Vendor</th>
+      <th>Device</th>
+      <th>SoC</th>
+      <th>RAM</th>
+      <th>Flash</th>
+          <th>sysupgrade</th>
+          <th>recovery<br>http</th>
+          <th>uboot<br>http</th>
+          <th>dlink<br>hnap</th>
+          <th>tftp</th>
+          <th>serial<br>tftp<br>openwrt</th>
+          <th>zycast</th>
+      <th>WiFi<br>STA/AP</th>
+      <th>Caps</th>
+    </tr>
+  </thead>
+  <tbody>
+        <tr>
+          <td class="vendor">D-Link</td>
+          <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink_covr-x1860-a1</small></td>
+          <td class="soc">MT7621AT</td>
+          <td>256MB</td>
+          <td>NAND 128MB</td>
+<td><span class="badge blocked">blocked</span></td>
+<td><span class="badge tested">tested</span></td>
+<td></td>
+<td><span class="badge blocked">blocked</span></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge tested">tested</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR150 Mini Router (all variants)<br><small class="id">glinet_gl-ar150</small></td>
+          <td class="soc">AR9331 (MIPS 24Kc) @ 400MHz</td>
+          <td>64MB DDR2</td>
+          <td>NOR 16MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only)<br><small class="id">glinet_gl-ar300m-lite</small></td>
+          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td>128MB DDR2</td>
+          <td>NOR 16MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR300M / AR300M-Ext / AR300MD (NAND boot)<br><small class="id">glinet_gl-ar300m-nand</small></td>
+          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td>128MB DDR2</td>
+          <td>NAND 128MB + NOR 16MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR300M / AR300M-Ext (NOR boot, NAND-aware)<br><small class="id">glinet_gl-ar300m-nor</small></td>
+          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td>128MB DDR2</td>
+          <td>NOR 16MB + NAND 128MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">Beryl AX (GL-MT3000) WiFi 6 travel router<br><small class="id">glinet_gl-mt3000</small></td>
+          <td class="soc">MT7981B (Filogic 820) dual-core Cortex-A53 @ 1.3GHz</td>
+          <td>512MB DDR4</td>
+          <td>NAND 256MB</td>
+<td><span class="badge tested">tested</span></td>
+<td></td>
+<td><span class="badge tested">tested</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Linksys</td>
+          <td class="model">Velop Tri-Band V1 (WHW03) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys_whw03</small></td>
+          <td class="soc">IPQ4019 (quad-core Cortex-A7) @ 716MHz</td>
+          <td>512MB DDR3</td>
+          <td>eMMC 4GB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Linksys</td>
+          <td class="model">Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys_whw03v2</small></td>
+          <td class="soc">IPQ4019 (quad-core Cortex-A7) @ 716MHz</td>
+          <td>512MB DDR3</td>
+          <td>NAND 512MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel_nr7101</small></td>
+          <td class="soc">MT7621A (MediaTek) dual-core MIPS @ 880MHz</td>
+          <td>256MB DDR3</td>
+          <td>SPI NAND 256MB</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+          <td></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">cellular</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B<br><small class="id">zyxel_wx5600-t0</small></td>
+          <td class="soc">MT7986B (Filogic 830) quad-core Cortex-A53 @ 1.6GHz</td>
+          <td>512MB DDR3</td>
+          <td>SPI NAND 512MB (Micron MT29F4G01ABAFD, NMBM enabled)</td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+  </tbody>
+</table>
+
+<h2>Use Case Presets</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Requires</th>
+      <th>Packages</th>
+    </tr>
+  </thead>
+  <tbody>
+        <tr>
+          <td><code>adguard</code></td>
+          <td>Network-wide ad blocking via AdGuard Home (post-flash setup)</td>
+          <td>none</td>
+          <td><small>adguardhome, luci-app-adguardhome</small></td>
+        </tr>
+        <tr>
+          <td><code>android-tether</code></td>
+          <td>USB WAN from Android phone (RNDIS/CDC-ether)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+        </tr>
+        <tr>
+          <td><code>iphone-tether</code></td>
+          <td>USB WAN from iPhone (ipheth + usbmuxd)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-ipheth, usbmuxd, libimobiledevice +2 more</small></td>
+        </tr>
+        <tr>
+          <td><code>mesh11sd</code></td>
+          <td>802.11s mesh networking with auto-config via mesh11sd</td>
+          <td>wifi</td>
+          <td><small>mesh11sd, ip-full, kmod-nft-bridge, vxlan</small></td>
+        </tr>
+        <tr>
+          <td><code>mwan3</code></td>
+          <td>Multi-WAN failover or load balancing via mwan3</td>
+          <td>none</td>
+          <td><small>mwan3</small></td>
+        </tr>
+        <tr>
+          <td><code>openclash</code></td>
+          <td>Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)</td>
+          <td>none</td>
+          <td><small>luci-app-openclash, coreutils-nohup, bash, iptables, dnsmasq-full +4 more</small></td>
+        </tr>
+        <tr>
+          <td><code>sqm</code></td>
+          <td>Smart Queue Management with CAKE to eliminate bufferbloat</td>
+          <td>none</td>
+          <td><small>sqm-scripts, luci-app-sqm</small></td>
+        </tr>
+        <tr>
+          <td><code>tollgate</code></td>
+          <td>OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)</td>
+          <td>none</td>
+          <td><small>nodogsplash, libustream-wolfssl, ca-bundle, ca-certificates</small></td>
+        </tr>
+        <tr>
+          <td><code>travelmate</code></td>
+          <td>Travel router auto-connect for captive portal WiFi (hotels, airports)</td>
+          <td>wifi</td>
+          <td><small>travelmate, luci-app-travelmate, ca-bundle, ca-certificates</small></td>
+        </tr>
+        <tr>
+          <td><code>usb-tether</code></td>
+          <td>USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable for Android)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
+        </tr>
+        <tr>
+          <td><code>usb-tether-android</code></td>
+          <td>USB WAN from Android phone (RNDIS/CDC-ether, user enables tethering manually)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+        </tr>
+        <tr>
+          <td><code>usb-tether-android-adb</code></td>
+          <td>USB WAN from Android phone (RNDIS/CDC-ether + ADB auto-enable tethering)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
+        </tr>
+        <tr>
+          <td><code>usb-tether-ios</code></td>
+          <td>USB WAN from iPhone (ipheth + usbmuxd, user enables Personal Hotspot)</td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
+        </tr>
+        <tr>
+          <td><code>wireguard-client</code></td>
+          <td>WireGuard VPN client — route traffic through a VPN tunnel</td>
+          <td>none</td>
+          <td><small>wireguard-tools, luci-proto-wireguard</small></td>
+        </tr>
+        <tr>
+          <td><code>wireguard-server</code></td>
+          <td>WireGuard VPN server — remote access to home network</td>
+          <td>none</td>
+          <td><small>wireguard-tools, luci-proto-wireguard, qrencode</small></td>
+        </tr>
+  </tbody>
+</table>
+
+<footer>
+  Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
+  Last update: 2026-05-16 20:01 UTC
+</footer>
+
+</body>
+</html>

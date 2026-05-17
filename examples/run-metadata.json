@@ -1,0 +1,13 @@
+{
+  "run_id": "20260101-120000-velop-mesh",
+  "created_at": "2026-01-01T12:00:00Z",
+  "target": {
+    "interface": "eth0",
+    "subnet": "192.168.1.0/24",
+    "target_ip": "192.168.1.1",
+    "target_mac_oui": "E8:9F:80"
+  },
+  "operator": "example-operator",
+  "conwrt_version": "0.1.0-alpha",
+  "steps_completed": ["step-01"]
+}

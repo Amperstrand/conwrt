@@ -1,0 +1,36 @@
+{
+  "step_id": "step-01",
+  "step_name": "Device Discovery",
+  "started_at": "2026-01-01T12:00:05Z",
+  "completed_at": "2026-01-01T12:01:32Z",
+  "status": "ok",
+  "summary": "Linksys Velop WHW03 v2 mesh node confirmed via JNAP API",
+  "candidates": [
+    {
+      "manufacturer": "Linksys",
+      "model": "WHW03 v2",
+      "hardware_revision": "v2.0",
+      "firmware_version": "1.1.12.213490.prod",
+      "confidence": "confirmed",
+      "evidence_summary": "JNAP Identify response confirms Linksys WHW03 v2. MAC OUI E8:9F:80 matches known Linksys assignment. Device responds on port 2200 with JNAP protocol. Firmware version and model number verified via /JNAP/Identify endpoint.",
+      "mac_oui": "E8:9F:80",
+      "open_ports": [80, 443, 2200, 8080]
+    }
+  ],
+  "evidence_files": [
+    "examples/redacted-step-output.md"
+  ],
+  "next_step_input": {
+    "recommended_step": "step-02",
+    "rationale": "Device confirmed as Linksys Velop WHW03 v2. Proceed to firmware analysis and exploit surface mapping.",
+    "parameters": {
+      "target_ip": "192.168.1.1",
+      "model": "WHW03 v2"
+    },
+    "safety_notes": [
+      "Read-only probing only. Do not attempt firmware modification.",
+      "All findings must be redacted before storage.",
+      "No credentials should be stored in plaintext."
+    ]
+  }
+}

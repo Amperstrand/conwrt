@@ -1,0 +1,7 @@
+# Redaction allowlist — one regex per line, lines starting with # are comments
+# Hostnames that should NOT be redacted (vendor-default, publicly known)
+linksyssmartwifi\.com
+myrouter\.local
+velop\.linksys\.com
+openwrt\.org
+downloads\.openwrt\.org

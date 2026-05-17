@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/TODO/conwrt/schemas/run-metadata.json",
+  "title": "Run Metadata",
+  "description": "Metadata written by init-run.sh at the start of each conwrt run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "created_at", "target", "conwrt_version", "steps_completed"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$",
+      "description": "Unique run identifier in format YYYYMMDD-HHMMSS-slug"
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$",
+      "description": "ISO 8601 timestamp when this run was initialized"
+    },
+    "target": {
+      "type": "object",
+      "description": "Target device identification info",
+      "additionalProperties": false,
+      "required": ["target_ip"],
+      "properties": {
+        "interface": { "type": "string", "description": "Local network interface used" },
+        "subnet": { "type": "string", "description": "Target subnet CIDR" },
+        "target_ip": { "type": "string", "description": "Target device IP address" },
+        "target_mac_oui": { "type": "string", "description": "OUI prefix of target MAC (first 3 octets)", "pattern": "^[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}$" }
+      }
+    },
+    "operator": {
+      "type": "string",
+      "description": "Operator username who initiated this run"
+    },
+    "conwrt_version": {
+      "type": "string",
+      "description": "conwrt framework version string"
+    },
+    "steps_completed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of completed step IDs in order"
+    }
+  }
+}

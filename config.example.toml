@@ -1,0 +1,153 @@
+# conwrt configuration
+# Copy this file to config.toml and fill in your values.
+# config.toml is gitignored — your keys and passwords stay local.
+
+[ssh]
+# Public keys for the router's authorized_keys.
+# First key is also used for ASU image builds (firmware bakes one key).
+# Two formats accepted per entry (auto-detected):
+#   Inline key — value starts with "ssh-" (e.g. ssh-ed25519, ssh-rsa)
+#   File path  — anything else, treated as path to .pub file
+#
+# Single key (backward compatible):
+#   key = "~/.ssh/id_ed25519.pub"
+#
+# Multiple keys (all installed on router, first used for ASU):
+keys = [
+    "~/.ssh/id_ed25519.pub",
+    # "ssh-rsa AAAA...your-second-key... user@host",
+]
+
+[password]
+# Controls root password on the flashed router.
+#   "random"   = generate a random password, print it once (default)
+#   "key-only" = no password, SSH key auth only
+#   " literal" = use this exact string as the password
+mode = "random"
+
+[asu]
+# Extra packages appended in auto-package mode (when --packages is omitted).
+extra_packages = ["luci", "luci-app-attendedsysupgrade"]
+
+[network]
+# Allow SSH on the WAN interface (adds firewall rule, disables password on WAN).
+wan_ssh = false
+
+# Management WiFi (hidden, isolated 2.4GHz AP for SSH access)
+# mgmt_wifi = true
+
+# TxPower override for the management radio (dBm).
+# Commented out = use OpenWrt default (usually 20 dBm / 100 mW).
+# Lower values restrict range to device-adjacent only (e.g. 5 = ~3 mW).
+# mgmt_wifi_txpower = 5
+
+# --- WiFi STA (client mode) ---
+# Router connects to an upstream AP (e.g. for WAN backhaul).
+# Uncomment to enable. The correct radio is auto-detected from the band.
+#
+# [network.sta]
+# band = "2.4ghz"           # "2.4ghz", "5ghz", "5ghz-low", "5ghz-high"
+# ssid = "UpstreamNetwork"
+# encryption = "psk2"        # psk2, psk3, sae, none
+# key = "passphrase"
+
+# --- WiFi AP (access point mode) ---
+# Router broadcasts its own network.
+# Uncomment to customize. When commented out, OpenWrt stock defaults apply.
+#
+# [network.ap]
+# band = "2.4ghz"
+# ssid = "MyOpenWrt"
+# encryption = "psk2"
+# key = "passphrase"
+# channel = "auto"           # auto, 1-13 (2.4GHz), 36-165 (5GHz)
+
+# --- Use case presets ---
+# Enable pre-configured use cases. Each adds packages + first-boot config.
+# Use 'python3 scripts/conwrt.py list-use-cases' to discover available presets.
+# Use cases requiring hardware not present on your device are auto-skipped.
+#
+# [use_cases]
+# enabled = ["usb-tether"]
+#
+# [use_cases.usb-tether]
+# interface = "usbwan"
+# enable_adb = true
+
+# --- WireGuard VPN server registration ---
+# After flashing, conwrt reads the auto-generated WireGuard public key from
+# the router and registers it with the VPN server via SSH.
+# Requires [use_cases.wireguard-client] to be enabled and the server to have
+# the WireGuard public key in the server's authorized_keys.
+#
+# [wireguard]
+# registration_server = "my-vpn-server"  # SSH host alias from ~/.ssh/config
+# wg_interface = "wg0"                   # WireGuard interface on the server
+#
+# [use_cases.mesh11sd]
+# mesh_id = "MyMeshID"       # required — must match on all mesh nodes
+# ssid = "MeshNet"            # AP SSID broadcast by mesh gate
+# encryption = "1"            # 0=none, 1=wpa3, 2=wpa2, 3=mixed
+# key = "MySecretKey"         # WiFi password for mesh gate AP
+# auto_config = "0"           # 0=disabled, 1=auto, 2=auto+commit
+#
+# [use_cases.mwan3]
+# primary = "wan"             # primary WAN interface
+# secondary = "usbwan"        # secondary WAN interface (from USB tethering)
+# policy = "failover"         # "failover" or "balanced"
+#
+# [use_cases.sqm]
+# download_kbps = 340000      # required — 85-95% of actual download speed
+# upload_kbps = 19000         # required — 85-95% of actual upload speed
+# qdisc = "cake"              # "cake" or "fq_codel"
+# link_layer = "ethernet"     # "none", "ethernet", "atm"
+# overhead = 18               # per-packet overhead in bytes
+#
+# [use_cases.tollgate]
+# mint_url = ""               # Cashu mint URL
+# lightning_address = ""      # Lightning address for payouts
+# price_per_minute = 1        # Price in sats per minute
+#
+# [use_cases.wireguard-client]
+# # Management VPN (split tunnel — reach router remotely via VPN server)
+# # private_key defaults to "generate" — each device auto-generates a unique key on first boot.
+# # Post-flash: SSH in, run `uci get network.wg0.private_key | wg pubkey` to get the public key.
+# # Register the public key with the VPN server.
+# peer_public_key = "..."     # required — VPN server public key
+# endpoint_host = "vpn.example.com"  # required — VPN server hostname or IP
+# endpoint_port = 51820       # VPN server UDP port
+# address = "10.67.0.2/32"   # Tunnel IP address with CIDR (must be unique per device)
+# allowed_ips = "10.67.0.0/24"  # Only route VPN subnet (split tunnel)
+# kill_switch = false         # No kill switch for management VPN
+#
+# # Full tunnel VPN (route all traffic through VPN)
+# private_key = "..."         # required — WireGuard private key for the router
+# peer_public_key = "..."     # required — VPN server public key
+# endpoint_host = "vpn.example.com"  # required — VPN server hostname or IP
+# endpoint_port = 51820       # VPN server UDP port
+# address = "10.67.0.2/32"   # Tunnel IP address with CIDR
+# kill_switch = true          # Block all traffic if VPN drops
+#
+# [use_cases.wireguard-server]
+# private_key = "..."         # required — WireGuard private key for the server
+# listen_port = 51820         # UDP listen port
+# subnet = "10.1.99.1/24"    # VPN client subnet (server IP + CIDR)
+# peer1_public_key = "..."    # First peer's public key
+# peer1_allowed_ips = "10.1.99.2/32"  # First peer's allowed IPs
+#
+# [use_cases.travelmate]
+# radio = "radio0"            # WiFi radio for upstream scanning
+# timeout = 60                # Overall retry timeout in seconds
+# retry = 5                   # Retry count to find a suitable uplink
+# captive = true              # Enable captive portal detection
+#
+# [use_cases.adguard]
+# listen_ip = "0.0.0.0"      # Web UI listen address
+# web_port = 3000             # Web UI port (initial setup)
+# dns_port = 5353             # DNS listen port (avoids conflict with dnsmasq)
+# bootstrap_dns = "1.1.1.1,8.8.8.8"  # Upstream DNS for bootstrap
+#
+# [use_cases.openclash]
+# proxy_type = "ss"           # Default proxy protocol: ss, vmess, trojan, vless
+# core_type = "Meta"          # Clash core: Meta (Mihomo), Dev, Tun
+# dns_mode = "redir-host"     # DNS mode: redir-host or fake-ip
