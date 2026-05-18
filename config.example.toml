@@ -73,6 +73,13 @@ wan_ssh = false
 # [use_cases.usb-tether]
 # interface = "usbwan"
 # enable_adb = true
+#
+# [use_cases.ssh-hardening]
+# disable_password_auth = true   # key-only auth (requires SSH key in [ssh])
+# idle_timeout = 300             # disconnect idle sessions after N seconds (0 = off)
+# max_auth_tries = 3             # max auth attempts before disconnect
+# port = 22                      # SSH listen port
+# disable_gateway_ports = true   # block remote port forwarding
 
 # --- WireGuard VPN server registration ---
 # After flashing, conwrt reads the auto-generated WireGuard public key from
@@ -103,7 +110,28 @@ wan_ssh = false
 # link_layer = "ethernet"     # "none", "ethernet", "atm"
 # overhead = 18               # per-packet overhead in bytes
 #
+# [use_cases.auto-sqm]
+# # Auto-measure WAN speed and configure SQM automatically.
+# # Experimental — not broadly tested across devices and link types.
+# mode = "static"             # "static" (fixed speeds) or "dynamic" (auto-measure + cron)
+# interface = "wan"           # WAN interface name
+# device = "eth0"             # Physical device for byte counters
+# target_percent = 90         # Apply SQM at this % of measured speed
+# measurement_mode = "wget"   # "wget" (slow/cell links) or "iperf3" (fast links >50 Mbit/s)
+# download_kbps = 0           # Static: 0 = measure on first boot, >0 = use this value
+# upload_kbps = 0             # Static: 0 = use upload_fallback, >0 = use this value
+# iperf3_host = ""            # iperf3 server (required if measurement_mode=iperf3)
+# iperf3_port = 5201          # iperf3 server port
+# test_url = "http://speedtest.tele2.net/10MB.zip"  # wget speed test file
+# upload_fallback_kbps = 5000 # Fallback upload speed when can't measure
+# hysteresis_percent = 10     # Don't reconfigure if change < this %
+# dynamic_interval_hours = 4  # Re-tune interval (dynamic mode only)
+#
 # [use_cases.tollgate]
+# deploy_mode = "post-flash"  # "post-flash" (host downloads ipk, SCP+opkg) or "bake" (first-boot wget)
+# version = "latest"          # "latest" (main branch CI build) or specific run ID
+# ipk_url = ""                # Direct URL to ipk (overrides version lookup, for offline/custom builds)
+# arch = ""                   # Target architecture (auto-detected from model if empty)
 # mint_url = ""               # Cashu mint URL
 # lightning_address = ""      # Lightning address for payouts
 # price_per_minute = 1        # Price in sats per minute

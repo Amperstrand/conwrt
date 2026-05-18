@@ -34,6 +34,8 @@ def _build_wireguard_server(params: dict[str, Any]) -> str:
                 f"uci set network.wg0_peer1.preshared_key='{peer1_psk}'"
             )
 
+    peer_block = "\n".join(peer_lines) if peer_lines else ""
+
     return textwrap.dedent(f"""\
         # --- WireGuard VPN server ---
         uci set network.wg0=interface
@@ -41,7 +43,7 @@ def _build_wireguard_server(params: dict[str, Any]) -> str:
         uci set network.wg0.private_key='{private_key}'
         uci set network.wg0.listen_port='{listen_port}'
         uci add_list network.wg0.addresses='{subnet}'
-        {('\n'.join(peer_lines) if peer_lines else '')}
+        {peer_block}
 
         uci add firewall zone
         uci set firewall.@zone[-1].name='vpn'

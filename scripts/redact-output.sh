@@ -26,19 +26,19 @@ RUN_DIR="$(conwrt::resolve_run_id "$RUN_ID")"
 
 # ── Allowlist ────────────────────────────────────────────────────────────────
 
-declare -A ALLOWLIST=()
+ALLOWLIST=()
 if [[ -f "$ALLOWLIST_FILE" ]]; then
   while IFS= read -r _line || [[ -n "$_line" ]]; do
     [[ "$_line" =~ ^[[:space:]]*# ]] && continue
     [[ "$_line" =~ ^[[:space:]]*$ ]] && continue
-    ALLOWLIST["$_line"]=1
+    ALLOWLIST+=("$_line")
   done < "$ALLOWLIST_FILE"
 fi
 
 is_allowlisted() {
   local candidate="${1:?}"
   local _pat
-  for _pat in "${!ALLOWLIST[@]}"; do
+  for _pat in "${ALLOWLIST[@]}"; do
     [[ "$candidate" =~ $_pat ]] && return 0
   done
   return 1
@@ -119,18 +119,20 @@ redact_public_ipv6() {
   local _line
   while IFS= read -r _line || [[ -n "$_line" ]]; do
     if [[ "$_line" =~ [0-9a-fA-F]{0,4}(:[0-9a-fA-F]{0,4}){2,7} ]]; then
-      local _matches=()
+      local -a _matches=()
       while IFS= read -r _m; do
         [[ -n "$_m" ]] && _matches+=("$_m")
       done < <(grep -oP '[0-9a-fA-F]{0,4}(:[0-9a-fA-F]{0,4}){2,7}' <<< "$_line" 2>/dev/null || true)
 
-      for _addr in "${_matches[@]}"; do
-        local _skip=0
-        [[ "$_addr" == "::1" ]] && _skip=1
-        [[ "$_addr" =~ ^fe80: ]] && _skip=1
-        [[ "$_addr" =~ ^f[cde][0-9a-fA-F]: ]] && _skip=1
-        [[ "$_skip" -eq 0 ]] && _line="${_line//$_addr/<REDACTED:PUBLIC-IP6>}"
-      done
+      if [[ "${#_matches[@]}" -gt 0 ]]; then
+        for _addr in "${_matches[@]}"; do
+          local _skip=0
+          [[ "$_addr" == "::1" ]] && _skip=1
+          [[ "$_addr" =~ ^fe80: ]] && _skip=1
+          [[ "$_addr" =~ ^f[cde][0-9a-fA-F]: ]] && _skip=1
+          [[ "$_skip" -eq 0 ]] && _line="${_line//$_addr/<REDACTED:PUBLIC-IP6>}"
+        done
+      fi
     fi
     echo "$_line"
   done
@@ -170,16 +172,18 @@ is_private_ipv4() {
 redact_public_ipv4() {
   local _line
   while IFS= read -r _line || [[ -n "$_line" ]]; do
-    local _ips=()
+    local -a _ips=()
     while IFS= read -r _m; do
       [[ -n "$_m" ]] && _ips+=("$_m")
     done < <(grep -oP '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' <<< "$_line" 2>/dev/null || true)
 
-    for _ip in "${_ips[@]}"; do
-      if ! is_private_ipv4 "$_ip" && ! is_allowlisted "$_ip"; then
-        _line="${_line//$_ip/<REDACTED:PUBLIC-IP>}"
-      fi
-    done
+    if [[ "${#_ips[@]}" -gt 0 ]]; then
+      for _ip in "${_ips[@]}"; do
+        if ! is_private_ipv4 "$_ip" && ! is_allowlisted "$_ip"; then
+          _line="${_line//$_ip/<REDACTED:PUBLIC-IP>}"
+        fi
+      done
+    fi
     echo "$_line"
   done
 }
@@ -188,14 +192,16 @@ redact_public_ipv4() {
 redact_hostname() {
   local _line
   while IFS= read -r _line || [[ -n "$_line" ]]; do
-    local _hosts=()
+    local -a _hosts=()
     while IFS= read -r _m; do
       [[ -n "$_m" ]] && _hosts+=("$_m")
     done < <(grep -oP '([a-zA-Z0-9][-a-zA-Z0-9]*\.)+(local|lan|internal|home|corp)' <<< "$_line" 2>/dev/null || true)
 
-    for _h in "${_hosts[@]}"; do
-      is_allowlisted "$_h" || _line="${_line//$_h/<REDACTED:HOSTNAME>}"
-    done
+    if [[ "${#_hosts[@]}" -gt 0 ]]; then
+      for _h in "${_hosts[@]}"; do
+        is_allowlisted "$_h" || _line="${_line//$_h/<REDACTED:HOSTNAME>}"
+      done
+    fi
     echo "$_line"
   done
 }

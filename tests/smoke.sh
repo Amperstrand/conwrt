@@ -60,7 +60,7 @@ echo "=== conwrt smoke test ==="
 echo ""
 
 echo "[1/5] init-run"
-RUN_DIR="$("$SMOKE_TMPDIR/scripts/init-run.sh" --target 192.168.1.1 --operator smoke-test)"
+RUN_DIR="$("$SMOKE_TMPDIR/scripts/init-run.sh" --target 192.168.1.1 --operator smoke-test --interface smoke0)"
 RUN_ID="$(basename "$RUN_DIR")"
 [[ -n "$RUN_ID" ]] || fail "no run directory created"
 [[ -f "$RUN_DIR/run-metadata.json" ]] || fail "missing run-metadata.json"

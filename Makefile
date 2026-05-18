@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint validate-schemas init run-step redact validate commit-run test smoke clean
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci clean
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -11,7 +11,9 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-lint: ## Check shell scripts syntax (bash -n)
+lint: ## Run ruff and shell script syntax checks
+	@echo "Running ruff..."
+	@ruff check scripts tests
 	@echo "Linting shell scripts..."
 	@FAIL=0; \
 	for f in $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh; do \
@@ -26,6 +28,9 @@ lint: ## Check shell scripts syntax (bash -n)
 	done; \
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
 
+typecheck: ## Run Python static type checking
+	@pyright scripts tests
+
 validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 	@echo "Validating schemas..."
 	@FAIL=0; \
@@ -38,6 +43,9 @@ validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 		fi; \
 	done; \
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
+
+validate-models: ## Validate all models/*.json against schemas/model.schema.json
+	@python3 scripts/validate_models.py
 
 init: ## Initialize a new run (wraps scripts/init-run.sh)
 	@echo "Initializing run..."
@@ -61,23 +69,27 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@echo "Committing run artifacts..."
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
 
-test: ## Run bats test suite (tests/)
-	@if ! command -v bats >/dev/null 2>&1; then \
-		echo "bats-core is not installed. Install with: npm install -g bats-core"; \
-		exit 1; \
+test: ## Run Python unit tests plus existing safe shell smoke test
+	@pytest tests
+	@$(MAKE) smoke
+	@if command -v bats >/dev/null 2>&1; then \
+		bats tests/*.bats; \
+	else \
+		echo "bats-core is not installed; skipping bats tests (smoke still ran)"; \
 	fi
-	@if [ ! -d tests ]; then \
-		echo "tests/ directory not yet created (Wave 3 T17 will create it)."; \
-		exit 0; \
-	fi
-	@bats tests/
-
 smoke: ## End-to-end smoke test
 	@if [ ! -f tests/smoke.sh ]; then \
 		echo "smoke test not yet created"; \
 		exit 0; \
 	fi
 	@bash tests/smoke.sh
+
+ci: ## Run all hardware-safe CI checks
+	@$(MAKE) lint
+	@$(MAKE) typecheck
+	@$(MAKE) validate-schemas
+	@$(MAKE) validate-models
+	@$(MAKE) test
 
 clean: ## Remove .tmp files from runs/
 	@echo "Cleaning .tmp directories..."

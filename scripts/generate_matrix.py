@@ -234,7 +234,7 @@ def main():
     models = load_models()
     use_cases = load_use_cases()
     html = generate_html(models, use_cases)
-    html = html.replace("__TIMESTAMP__", datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC"))
+    html = html.replace("__TIMESTAMP__", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
 
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)

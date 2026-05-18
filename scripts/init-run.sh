@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 source "$(dirname "$0")/lib/common.sh"
 
-for cmd in bash git curl jq nmap npx; do
+for cmd in bash git curl jq npx; do
   conwrt::require_cmd "$cmd"
 done
 
@@ -26,6 +26,7 @@ if [[ -z "$target_ip" ]]; then
 fi
 
 if [[ -z "$iface" ]]; then
+  conwrt::require_cmd nmap
   iface="$(ip route show default 2>/dev/null | awk '/default/ { for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit }')"
   if [[ -z "$iface" ]]; then
     conwrt::die "Could not auto-detect default interface. Specify --interface."

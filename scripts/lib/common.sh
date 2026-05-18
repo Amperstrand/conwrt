@@ -23,8 +23,10 @@ conwrt::log() {
   local level="${1:?level required}"
   local msg="${2:?message required}"
   local ts
+  local upper_level
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo "[${level^^}] ${ts} ${msg}" >&2
+  upper_level="$(printf '%s' "$level" | tr '[:lower:]' '[:upper:]')"
+  echo "[${upper_level}] ${ts} ${msg}" >&2
 }
 
 conwrt::die() {

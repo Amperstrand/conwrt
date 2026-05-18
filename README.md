@@ -14,6 +14,30 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 - Python 3.10+
 - An ethernet cable and a router to flash
 
+## Development setup
+
+Hardware-safe development and CI do not require a router:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+make ci
+```
+
+Useful targets:
+
+| Target | What it does | Hardware safe |
+|--------|--------------|---------------|
+| `make lint` | Ruff plus shell syntax checks | Yes |
+| `make typecheck` | Pyright static checks | Yes |
+| `make validate-models` | Validate every `models/*.json` against `schemas/model.schema.json` | Yes |
+| `make test` | Python unit tests plus the existing smoke test | Yes |
+| `make ci` | lint + typecheck + schemas + models + tests | Yes |
+
+Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or other network-mutating commands from tests. Use mocks/stubs only. Commands such as `python3 scripts/conwrt.py ...`, `scripts/tftp-server.py`, and router SSH/SCP helpers can mutate real devices and should only be run intentionally against hardware you control.
+
 ## Supported Devices
 
 ### Flash Methods
@@ -249,10 +273,11 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 | `usb-tether-android` | USB WAN from Android only (user enables tethering manually) | No |
 | `usb-tether-android-adb` | USB WAN from Android + ADB auto-enable tethering | No |
 | `usb-tether-ios` | USB WAN from iPhone (ipheth + usbmuxd) | No |
-| `sqm` | Bufferbloat fix via CAKE/fq_codel | No |
+| `sqm` | Bufferbloat fix via CAKE/fq_codel (manual speeds) | No |
+| `auto-sqm` | Auto-measure WAN speed + configure SQM (experimental) | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |
 | `travelmate` | Auto-connect to captive portal WiFi | No |
-| `tollgate` | Bitcoin/Lightning payment gateway | Yes (binary deploy) |
+| `tollgate` | Bitcoin/Lightning payment gateway (ipk from GitHub CI) | Yes (ipk deploy) |
 | `wireguard-client` | VPN tunnel (auto-generates keys per device) | Auto (registration) |
 | `wireguard-server` | VPN server for remote access | Yes (QR codes, peers) |
 | `adguard` | Network-wide ad blocking | Yes (web setup wizard) |

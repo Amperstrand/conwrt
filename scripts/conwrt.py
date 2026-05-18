@@ -3251,7 +3251,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--no-password", action="store_true",
                         help="Skip password (key-only auth)")
     flash_parser.add_argument("--wan-ssh", action="store_true",
-                        help="Open SSH on WAN port (disables password login on WAN)")
+                        help="Open SSH on WAN port (requires --ssh-key, disables password auth)")
     flash_parser.add_argument("--interface", default=None,
                         help="Ethernet interface (auto-detected if omitted)")
     flash_parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
@@ -4111,6 +4111,12 @@ def cmd_flash(args: argparse.Namespace) -> int:
             auth_type = "key-only"
 
         wan_ssh_enabled = args.wan_ssh or cfg.wan_ssh
+
+        if wan_ssh_enabled:
+            if not args.ssh_key and not cfg.ssh_public_key_path:
+                parser.error("--wan-ssh requires an SSH key. Set [ssh].key in config.toml or use --ssh-key.")
+            if args.no_password and not args.ssh_key:
+                parser.error("--wan-ssh with --no-password requires --ssh-key (no way to log in otherwise).")
 
         image_path, request_metadata = _request_custom_image(
             model_id=args.model_id,

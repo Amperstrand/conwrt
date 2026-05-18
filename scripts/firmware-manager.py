@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 from model_loader import load_model
 from config import load_config as _load_config, _strip_key_comment, UseCaseConfig, WifiSTAConfig, WifiAPConfig
+from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -250,26 +251,31 @@ def build_mgmt_wifi_script(txpower: Optional[int] = None) -> str:
 
 def _band_to_uci(band: str) -> str:
     """Convert config band name (e.g. '5ghz') to UCI band value (e.g. '5g')."""
+    wifi_band(band)
     return {
         "2.4ghz": "2g", "5ghz": "5g",
         "5ghz-low": "5g", "5ghz-high": "5g", "6ghz": "6g",
-    }.get(band, "2g")
+    }[band]
 
 
 def wifi_sta_uci_lines(radio: str, ssid: str, encryption: str,
                        key: str = "", network: str = "wan") -> list[str]:
     """STA UCI commands. radio='radio0' for post-flash, '$_r' for ASU."""
+    radio = radio_ref(radio)
+    wifi_encryption(encryption)
+    network = interface_name(network, "network")
+    section = radio_ref(f"default_{radio}")
     lines = [
         f"uci set wireless.{radio}.disabled='0'",
-        f"uci set wireless.default_{radio}=wifi-iface",
-        f"uci set wireless.default_{radio}.device='{radio}'",
-        f"uci set wireless.default_{radio}.mode='sta'",
-        f"uci set wireless.default_{radio}.ssid='{ssid}'",
-        f"uci set wireless.default_{radio}.encryption='{encryption}'",
+        f"uci set wireless.{section}=wifi-iface",
+        f"uci set wireless.{section}.device={sh_quote(radio)}",
+        f"uci set wireless.{section}.mode='sta'",
+        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
+        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
     ]
     if key:
-        lines.append(f"uci set wireless.default_{radio}.key='{key}'")
-    lines.append(f"uci set wireless.default_{radio}.network='{network}'")
+        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
+    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
     return lines
 
 
@@ -277,21 +283,25 @@ def wifi_ap_uci_lines(radio: str, ssid: str, encryption: str,
                       key: str = "", channel: str = "auto",
                       network: str = "lan") -> list[str]:
     """AP UCI commands. radio='radio0' for post-flash, '$_r' for ASU."""
+    radio = radio_ref(radio)
+    wifi_encryption(encryption)
+    network = interface_name(network, "network")
+    section = radio_ref(f"default_{radio}")
     lines = [
         f"uci set wireless.{radio}.disabled='0'",
     ]
     if channel and channel != "auto":
-        lines.append(f"uci set wireless.{radio}.channel='{channel}'")
+        lines.append(f"uci set wireless.{radio}.channel={sh_quote(channel)}")
     lines += [
-        f"uci set wireless.default_{radio}=wifi-iface",
-        f"uci set wireless.default_{radio}.device='{radio}'",
-        f"uci set wireless.default_{radio}.mode='ap'",
-        f"uci set wireless.default_{radio}.ssid='{ssid}'",
-        f"uci set wireless.default_{radio}.encryption='{encryption}'",
+        f"uci set wireless.{section}=wifi-iface",
+        f"uci set wireless.{section}.device={sh_quote(radio)}",
+        f"uci set wireless.{section}.mode='ap'",
+        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
+        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
     ]
     if key:
-        lines.append(f"uci set wireless.default_{radio}.key='{key}'")
-    lines.append(f"uci set wireless.default_{radio}.network='{network}'")
+        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
+    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
     return lines
 
 
@@ -381,6 +391,9 @@ def _build_defaults(
             "uci set firewall.@rule[-1].proto='tcp'",
             "uci set firewall.@rule[-1].target='ACCEPT'",
             "uci commit firewall",
+            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+            "uci commit dropbear",
         ])
 
     if mgmt_wifi:
@@ -1018,7 +1031,7 @@ def main() -> int:
     )
     p_request.add_argument(
         "--wan-ssh", action="store_true",
-        help="Add firewall rule to allow SSH on WAN interface",
+        help="Open SSH on WAN (requires --ssh-key, forces key-only auth)",
     )
     p_request.set_defaults(func=cmd_request)
 

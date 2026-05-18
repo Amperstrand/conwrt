@@ -39,6 +39,8 @@ captures/
 # --- Python ---
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
 
 # --- Firmware image cache ---
 images/

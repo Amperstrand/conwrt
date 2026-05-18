@@ -4,31 +4,35 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
+from shell_safe import int_range, interface_name, sh_quote, uci_name
+
 from . import ParamDef, UseCase, register
 
 
 def _build_sqm(params: dict[str, Any]) -> str:
     download_kbps = params.get("download_kbps", 10000)
     upload_kbps = params.get("upload_kbps", 5000)
-    interface = params.get("interface", "wan")
-    qdisc = params.get("qdisc", "cake")
-    script = params.get("script", "piece_of_cake.qos")
-    link_layer = params.get("link_layer", "none")
-    overhead = params.get("overhead", 0)
+    interface = uci_name(interface_name(params.get("interface", "wan"), "SQM interface"), "SQM interface")
+    qdisc = str(params.get("qdisc", "cake"))
+    script = str(params.get("script", "piece_of_cake.qos"))
+    link_layer = str(params.get("link_layer", "none"))
+    overhead = int_range(params.get("overhead", 0), "overhead", 0, 512)
+    download_kbps = int_range(download_kbps, "download_kbps", 1)
+    upload_kbps = int_range(upload_kbps, "upload_kbps", 1)
 
     return textwrap.dedent(f"""\
         # --- SQM Smart Queue Management ---
         uci -q delete sqm >/dev/null 2>&1 || true
 
         uci set sqm.{interface}=queue
-        uci set sqm.{interface}.interface='{interface}'
+        uci set sqm.{interface}.interface={sh_quote(interface)}
         uci set sqm.{interface}.enabled='1'
-        uci set sqm.{interface}.script='{script}'
-        uci set sqm.{interface}.qdisc='{qdisc}'
-        uci set sqm.{interface}.linklayer='{link_layer}'
-        uci set sqm.{interface}.overhead='{overhead}'
-        uci set sqm.{interface}.download='{download_kbps}'
-        uci set sqm.{interface}.upload='{upload_kbps}'
+        uci set sqm.{interface}.script={sh_quote(script)}
+        uci set sqm.{interface}.qdisc={sh_quote(qdisc)}
+        uci set sqm.{interface}.linklayer={sh_quote(link_layer)}
+        uci set sqm.{interface}.overhead={sh_quote(overhead)}
+        uci set sqm.{interface}.download={sh_quote(download_kbps)}
+        uci set sqm.{interface}.upload={sh_quote(upload_kbps)}
         uci set sqm.{interface}.linklayer_adaptation_mechanism='default'
         uci set sqm.{interface}.debug_logging='0'
         uci set sqm.{interface}.verbosity='5'

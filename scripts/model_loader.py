@@ -28,6 +28,11 @@ def load_model(model_id: str) -> dict[str, Any]:
     """
     path = MODELS_DIR / f"{model_id}.json"
     if not path.is_file():
+        for candidate in sorted(MODELS_DIR.glob("*.json")):
+            with open(candidate) as f:
+                model = json.load(f)
+            if model.get("id") == model_id:
+                return model
         available = [p.stem for p in MODELS_DIR.glob("*.json")]
         raise FileNotFoundError(
             f"Model '{model_id}' not found. Available: {', '.join(sorted(available))}"
