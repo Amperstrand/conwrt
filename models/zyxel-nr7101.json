@@ -211,10 +211,12 @@
       "signal": "uqmi -s -d /dev/cdc-wdm0 --get-signal-info"
     }
   },
-    "tested_hardware": {
+  "tested_hardware": {
     "sysupgrade": {
       "tested": true,
       "date": "2026-05-19",
+      "commit": "5b45579",
+      "verified_with": "sysupgrade -n 24.10.5→25.12.4, SSH key auth after ~60s boot",
       "notes": "sysupgrade -n from 24.10.5 to 25.12.4. SCP required -O flag (legacy SCP protocol) because dropbear lacks SFTP server. Boot took ~60s. SSH key auth worked immediately after boot. LuCI available on port 80."
     },
     "zycast": {
@@ -224,11 +226,15 @@
     "modem_inventory": {
       "tested": true,
       "date": "2026-05-19",
+      "commit": "5b45579",
+      "verified_with": "AT commands on /dev/ttyUSB2: ATI, AT+GMR, AT+QCCID all responded",
       "notes": "Quectel RG502Q-EA identified via sysfs (vendor=2c7c, product=0800). AT commands on /dev/ttyUSB2 work reliably for model, firmware, SIM status, ICCID. Firmware: RG502QEAACR13A03M4G_ZYXEL (Zyxel-custom). SIM present. Modem in QMI mode (qmi_wwan driver). uqmi returns 'Failed to connect to service' after sysupgrade -n (modem interface unconfigured). AT commands always work regardless of network config."
     },
     "cellular_data": {
       "tested": true,
       "date": "2026-05-19",
+      "commit": "b68de06",
+      "verified_with": "SIM card (ice+), ping 8.8.8.8 via LTE, 56Mbps down, 43ms latency",
       "carrier": "ice+ Norway (MCC 242, MNC 14)",
       "apn": "ice.net",
       "auth": "none",

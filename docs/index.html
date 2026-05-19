@@ -11,7 +11,7 @@
   h2 { font-size: 1.3rem; margin: 2rem 0 1rem; color: #555; }
   .subtitle { color: #666; margin-bottom: 2rem; }
   .gen-time { color: #999; font-size: 0.85rem; margin-bottom: 2rem; }
-  table { border-collapse: collapse; width: 100%; overflow-x: auto; display: block; }
+  table { border-collapse: collapse; width: 100%; overflow-x: auto; display: block; margin-bottom: 2rem; }
   th, td { border: 1px solid #ddd; padding: 0.5rem 0.6rem; text-align: center; font-size: 0.85rem; }
   th { background: #f5f5f5; font-weight: 600; position: sticky; top: 0; white-space: nowrap; }
   td.vendor { font-weight: 600; white-space: nowrap; }
@@ -24,11 +24,36 @@
   .badge.tested { background: #d4edda; color: #155724; }
   .badge.defined { background: #fff3cd; color: #856404; }
   .badge.blocked { background: #f8d7da; color: #721c24; }
+  .badge.untested { background: #e9ecef; color: #6c757d; }
   .legend { margin: 1rem 0 2rem; display: flex; gap: 1.5rem; flex-wrap: wrap; }
   .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
   footer { margin-top: 3rem; color: #999; font-size: 0.8rem; }
   a { color: #0366d6; text-decoration: none; }
   a:hover { text-decoration: underline; }
+
+  /* Commit links */
+  .commit-link { color: #0366d6; text-decoration: none; font-size: 0.75rem; }
+  .commit-link:hover { text-decoration: underline; }
+  .commit-link code { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.7rem; background: #f0f0f0; padding: 1px 4px; border-radius: 2px; }
+
+  /* Device Testing Log */
+  table.testing-log td.test-entries { text-align: left; min-width: 320px; }
+  .test-entry { display: inline-block; margin: 2px 4px 2px 0; padding: 4px 8px; border-left: 3px solid #ccc; background: #fff; font-size: 0.8rem; vertical-align: top; border-radius: 0 3px 3px 0; }
+  .test-entry.tested { border-left-color: #28a745; background: #f0faf3; }
+  .test-entry.defined { border-left-color: #ffc107; background: #fffdf3; }
+  .test-entry.untested { border-left-color: #adb5bd; background: #f8f9fa; }
+  .test-entry code { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.75rem; }
+  .test-entry .badge { margin: 0 3px; }
+  .test-entry .verified { display: block; color: #666; font-style: italic; font-size: 0.75rem; margin-top: 2px; }
+  .test-entry .date { color: #999; font-size: 0.7rem; margin-left: 4px; }
+
+  /* Use case command details */
+  details { margin-top: 4px; }
+  details summary { cursor: pointer; color: #0366d6; font-size: 0.8rem; }
+  details summary:hover { text-decoration: underline; }
+  details pre { margin-top: 6px; padding: 8px; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; line-height: 1.4; }
+  details code { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }
+  .note { color: #999; font-size: 0.8rem; font-style: italic; }
 </style>
 </head>
 <body>
@@ -51,12 +76,14 @@
       <th>SoC</th>
       <th>RAM</th>
       <th>Flash</th>
+          <th>oem<br>playwright</th>
           <th>sysupgrade</th>
           <th>recovery<br>http</th>
           <th>uboot<br>http</th>
           <th>dlink<br>hnap</th>
           <th>tftp</th>
           <th>serial<br>tftp<br>openwrt</th>
+          <th>mtd<br>write</th>
           <th>zycast</th>
       <th>WiFi<br>STA/AP</th>
       <th>Caps</th>
@@ -65,14 +92,16 @@
   <tbody>
         <tr>
           <td class="vendor">D-Link</td>
-          <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink_covr-x1860-a1</small></td>
+          <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink-covr-x1860-a1</small></td>
           <td class="soc">MT7621AT</td>
           <td>256MB</td>
           <td>NAND 128MB</td>
-<td><span class="badge blocked">blocked</span></td>
+<td></td>
+<td><span class="badge tested">tested</span></td>
 <td><span class="badge tested">tested</span></td>
 <td></td>
 <td><span class="badge blocked">blocked</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -81,11 +110,13 @@
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
-          <td class="model">AR150 Mini Router (all variants)<br><small class="id">glinet_gl-ar150</small></td>
+          <td class="model">AR150 Mini Router (all variants)<br><small class="id">glinet-gl-ar150</small></td>
           <td class="soc">AR9331 (MIPS 24Kc) @ 400MHz</td>
           <td>64MB DDR2</td>
           <td>NOR 16MB</td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -97,10 +128,12 @@
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
-          <td class="model">AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only)<br><small class="id">glinet_gl-ar300m-lite</small></td>
-          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td class="model">AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)<br><small class="id">glinet-gl-ar300m-lite</small></td>
+          <td class="soc">QCA9533 v2 (MIPS 24Kc) @ 650MHz</td>
           <td>128MB DDR2</td>
-          <td>NOR 16MB</td>
+          <td>NOR 16MB (Winbond W25Q128) only — no NAND</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
 <td><span class="badge defined">defined</span></td>
 <td></td>
 <td></td>
@@ -113,11 +146,13 @@
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
-          <td class="model">AR300M / AR300M-Ext / AR300MD (NAND boot)<br><small class="id">glinet_gl-ar300m-nand</small></td>
-          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td class="model">AR300M / AR300M-Ext / AR300MD (NAND boot, switch LEFT)<br><small class="id">glinet-gl-ar300m-nand</small></td>
+          <td class="soc">QCA9533 v2 (MIPS 24Kc) @ 650MHz</td>
           <td>128MB DDR2</td>
-          <td>NAND 128MB + NOR 16MB</td>
+          <td>NAND 128MB (GigaDevice SPI NAND) + NOR 16MB (Winbond W25Q128)</td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
+<td><span class="badge tested">tested</span></td>
 <td></td>
 <td></td>
 <td></td>
@@ -129,10 +164,12 @@
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
-          <td class="model">AR300M / AR300M-Ext (NOR boot, NAND-aware)<br><small class="id">glinet_gl-ar300m-nor</small></td>
-          <td class="soc">AR9344 (MIPS 24Kc) @ 533MHz</td>
+          <td class="model">AR300M / AR300M-Ext (NOR boot). NOT recommended for general use — NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.<br><small class="id">glinet-gl-ar300m-nor</small></td>
+          <td class="soc">QCA9533 v2 (MIPS 24Kc) @ 650MHz</td>
           <td>128MB DDR2</td>
-          <td>NOR 16MB + NAND 128MB</td>
+          <td>NAND 128MB (GigaDevice SPI NAND) + NOR 16MB (Winbond W25Q128)</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
 <td><span class="badge defined">defined</span></td>
 <td></td>
 <td></td>
@@ -145,13 +182,15 @@
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
-          <td class="model">Beryl AX (GL-MT3000) WiFi 6 travel router<br><small class="id">glinet_gl-mt3000</small></td>
+          <td class="model">Beryl AX (GL-MT3000) WiFi 6 travel router<br><small class="id">glinet-mt3000</small></td>
           <td class="soc">MT7981B (Filogic 820) dual-core Cortex-A53 @ 1.3GHz</td>
           <td>512MB DDR4</td>
           <td>NAND 256MB</td>
+<td></td>
 <td><span class="badge tested">tested</span></td>
 <td></td>
 <td><span class="badge tested">tested</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -161,11 +200,13 @@
         </tr>
         <tr>
           <td class="vendor">Linksys</td>
-          <td class="model">Velop Tri-Band V1 (WHW03) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys_whw03</small></td>
+          <td class="model">Velop Tri-Band V1 (WHW03) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys-whw03-v1</small></td>
           <td class="soc">IPQ4019 (quad-core Cortex-A7) @ 716MHz</td>
           <td>512MB DDR3</td>
           <td>eMMC 4GB</td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -177,11 +218,13 @@
         </tr>
         <tr>
           <td class="vendor">Linksys</td>
-          <td class="model">Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys_whw03v2</small></td>
+          <td class="model">Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys-whw03-v2</small></td>
           <td class="soc">IPQ4019 (quad-core Cortex-A7) @ 716MHz</td>
           <td>512MB DDR3</td>
           <td>NAND 512MB</td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -193,11 +236,49 @@
         </tr>
         <tr>
           <td class="vendor">Zyxel</td>
-          <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel_nr7101</small></td>
-          <td class="soc">MT7621A (MediaTek) dual-core MIPS @ 880MHz</td>
+          <td class="model">EX5700 (Telenor) — MediaTek MT7986B, WiFi 6 tri-band<br><small class="id">zyxel-ex5700-telenor</small></td>
+          <td class="soc">MT7986B (Filogic 830) quad-core Cortex-A53</td>
+          <td>1GB DDR3</td>
+          <td>SPI NAND ~486MB (UBI)</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td><span class="badge defined">defined</span></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M<br><small class="id">zyxel-gs1900-24e</small></td>
+          <td class="soc">Realtek RTL8382M MIPS 4KEc @ 500MHz</td>
+          <td>128 MiB DDR2 SDRAM</td>
+          <td>16 MiB SPI NOR (Macronix MX25L12835F)</td>
+<td><a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link"><span class="badge tested">tested</span><br><code>bbaf09c</code></a></td>
+<td><a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link"><span class="badge tested">tested</span><br><code>bbaf09c</code></a></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td><a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link"><span class="badge tested">tested</span><br><code>bbaf09c</code></a></td>
+<td></td>
+          <td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel-nr7101</small></td>
+          <td class="soc">MT7621A (MediaTek) dual-core MIPS 1004Kc @ 880MHz</td>
           <td>256MB DDR3</td>
           <td>SPI NAND 256MB</td>
-<td><span class="badge defined">defined</span></td>
+<td></td>
+<td><a href="https://github.com/amperstrand/conwrt/commit/5b45579" class="commit-link"><span class="badge tested">tested</span><br><code>5b45579</code></a></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -209,19 +290,86 @@
         </tr>
         <tr>
           <td class="vendor">Zyxel</td>
-          <td class="model">WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B<br><small class="id">zyxel_wx5600-t0</small></td>
+          <td class="model">WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B<br><small class="id">zyxel-wx5600-t0</small></td>
           <td class="soc">MT7986B (Filogic 830) quad-core Cortex-A53 @ 1.6GHz</td>
           <td>512MB DDR3</td>
           <td>SPI NAND 512MB (Micron MT29F4G01ABAFD, NMBM enabled)</td>
-<td><span class="badge defined">defined</span></td>
-<td></td>
-<td></td>
-<td></td>
 <td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
           <td><span class="badge defined">defined</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+  </tbody>
+</table>
+
+<h2>Device Testing Log</h2>
+<p class="subtitle">Per-device tested capabilities with commit links.</p>
+<table class="testing-log">
+  <thead>
+    <tr>
+      <th>Vendor</th>
+      <th>Device</th>
+      <th>Tested Capabilities</th>
+    </tr>
+  </thead>
+  <tbody>
+        <tr>
+          <td class="vendor">D-Link</td>
+          <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink-covr-x1860-a1</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>recovery-http</code> <span class="badge tested">tested</span> <span class="date">2026-05-18</span></div>
+<div class="test-entry defined"><code>dlink-hnap</code> <span class="badge defined">defined</span></div>
+<div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <span class="date">2026-05-18</span></div>
+<div class="test-entry tested"><code>wifi_sta_ap</code> <span class="badge tested">tested</span> <span class="date">2026-05-15</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR300M / AR300M-Ext / AR300MD (NAND boot, switch LEFT)<br><small class="id">glinet-gl-ar300m-nand</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>recovery-http</code> <span class="badge tested">tested</span> <span class="date">2026-05-16</span></div>
+<div class="test-entry tested"><code>nand_boot</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nor_setup</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nor_boot_switch_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nor_boot_bootcount_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nand_boot_after_nor</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>usb-tether-android-adb</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>sqm</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">AR300M / AR300M-Ext (NOR boot). NOT recommended for general use — NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.<br><small class="id">glinet-gl-ar300m-nor</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>nor_boot_bootcount</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nor_boot_switch</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>nand_boot_after_nor</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">Beryl AX (GL-MT3000) WiFi 6 travel router<br><small class="id">glinet-mt3000</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>uboot-http</code> <span class="badge tested">tested</span> <span class="date">2026-05-16</span></div>
+<div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <span class="date">2026-05-16</span></div>
+<div class="test-entry tested"><code>usb_tether_android</code> <span class="badge tested">tested</span> <span class="date">2026-05-16</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M<br><small class="id">zyxel-gs1900-24e</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>oem-playwright</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">Uploaded initramfs via Playwright, device booted into OpenWrt initramfs in ~90s</span> <span class="date">2026-05-18</span></div>
+<div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">sysupgrade -n completed, SSH access after ~120s boot</span> <span class="date">2026-05-18</span></div>
+<div class="test-entry tested"><code>mtd-write</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">mtd -r write succeeded, device booted into 25.12.1 initramfs</span> <span class="date">2026-05-18</span></div>
+<div class="test-entry defined"><code>serial-tftp-openwrt</code> <span class="badge defined">defined</span></div>
+<div class="test-entry tested"><code>uboot_env_modification</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">fw_setenv + fw_printenv confirmed serverip change</span> <span class="date">2026-05-18</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel-nr7101</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/5b45579" class="commit-link">@<code>5b45579</code></a> <span class="verified">sysupgrade -n 24.10.5→25.12.4, SSH key auth after ~60s boot</span> <span class="date">2026-05-19</span></div>
+<div class="test-entry defined"><code>zycast</code> <span class="badge defined">defined</span></div>
+<div class="test-entry tested"><code>modem_inventory</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/5b45579" class="commit-link">@<code>5b45579</code></a> <span class="verified">AT commands on /dev/ttyUSB2: ATI, AT+GMR, AT+QCCID all responded</span> <span class="date">2026-05-19</span></div>
+<div class="test-entry tested"><code>cellular_data</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/b68de06" class="commit-link">@<code>b68de06</code></a> <span class="verified">SIM card (ice+), ping 8.8.8.8 via LTE, 56Mbps down, 43ms latency</span> <span class="date">2026-05-19</span></div></td>
         </tr>
   </tbody>
 </table>
@@ -232,107 +380,817 @@
     <tr>
       <th>Name</th>
       <th>Description</th>
+      <th>Status</th>
       <th>Requires</th>
       <th>Packages</th>
+      <th>Commands</th>
     </tr>
   </thead>
   <tbody>
         <tr>
           <td><code>adguard</code></td>
           <td>Network-wide ad blocking via AdGuard Home (post-flash setup)</td>
+          <td><span class="badge untested">untested</span><br><small>web setup wizard after install</small></td>
           <td>none</td>
           <td><small>adguardhome, luci-app-adguardhome</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- AdGuard Home ---
+uci set adguardhome.adguardhome=adguardhome
+uci set adguardhome.adguardhome.enabled=&#x27;1&#x27;
+uci set adguardhome.adguardhome.http_address=&#x27;0.0.0.0:3000&#x27;
+uci set adguardhome.adguardhome.dns_port=&#x27;5353&#x27;
+uci commit adguardhome
+/etc/init.d/adguardhome enable
+/etc/init.d/adguardhome start 2&gt;/dev/null || true
+
+uci set dhcp.@dnsmasq[0].noresolv=&#x27;1&#x27;
+uci add_list dhcp.@dnsmasq[0].server=&#x27;127.0.0.1#5353&#x27;
+uci commit dhcp
+/etc/init.d/dnsmasq restart 2&gt;/dev/null || true
+echo &quot;AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>android-tether</code></td>
           <td>USB WAN from Android phone (RNDIS/CDC-ether)</td>
+          <td><span class="badge defined">experimental</span><br><small>superseded by usb-tether</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- Android USB tethering ---
+# Wait for USB network device to appear (up to 30s)
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 30); do
+    for dev in /sys/class/net/*; do
+        name=$(basename &quot;$dev&quot;)
+        case &quot;$name&quot; in
+            lo|br-lan|eth0|wlan*) continue ;;
+        esac
+        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+            USB_DEV=&quot;$name&quot;
+            break 2
+        fi
+    done
+    sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+    # Fallback: look for usb0 or any new ethX that appeared
+    for cand in usb0 usb1 eth1 eth2; do
+        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+    done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    # Add to wan firewall zone
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</code></pre></details></td>
+        </tr>
+        <tr>
+          <td><code>auto-sqm</code></td>
+          <td>Auto-measure WAN speed and configure SQM to eliminate bufferbloat</td>
+          <td><span class="badge defined">experimental</span><br><small>not validated on hardware</small></td>
+          <td>none</td>
+          <td><small>sqm-scripts, luci-app-sqm, jsonfilter, iperf3</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- Auto-SQM ---
+
+touch /etc/config/auto_sqm
+uci set auto_sqm.config=auto_sqm
+uci set auto_sqm.config.mode=&#x27;static&#x27;
+uci set auto_sqm.config.interface=&#x27;wan&#x27;
+uci set auto_sqm.config.device=&#x27;eth0&#x27;
+uci set auto_sqm.config.target_percent=&#x27;90&#x27;
+uci set auto_sqm.config.qdisc=&#x27;cake&#x27;
+uci set auto_sqm.config.script=&#x27;piece_of_cake.qos&#x27;
+uci set auto_sqm.config.measurement_mode=&#x27;wget&#x27;
+uci set auto_sqm.config.iperf3_host=&#x27;&#x27;
+uci set auto_sqm.config.iperf3_port=&#x27;5201&#x27;
+uci set auto_sqm.config.test_url=&#x27;http://speedtest.tele2.net/10MB.zip&#x27;
+uci set auto_sqm.config.download_kbps=&#x27;0&#x27;
+uci set auto_sqm.config.upload_kbps=&#x27;0&#x27;
+uci set auto_sqm.config.upload_fallback_kbps=&#x27;5000&#x27;
+uci set auto_sqm.config.hysteresis_percent=&#x27;10&#x27;
+uci set auto_sqm.config.dynamic_interval_hours=&#x27;4&#x27;
+uci commit auto_sqm
+
+cat &lt;&lt;&#x27;AUTO_SQM_EOF&#x27; &gt; /usr/sbin/auto-sqm
+#!/bin/sh
+# auto-sqm — measure WAN link speed and configure SQM
+
+MODE=$(uci -q get auto_sqm.config.mode || echo &quot;static&quot;)
+INTERFACE=$(uci -q get auto_sqm.config.interface || echo &quot;wan&quot;)
+DEVICE=$(uci -q get auto_sqm.config.device || echo &quot;eth0&quot;)
+TARGET_PCT=$(uci -q get auto_sqm.config.target_percent || echo &quot;90&quot;)
+QDISC=$(uci -q get auto_sqm.config.qdisc || echo &quot;cake&quot;)
+QOS_SCRIPT=$(uci -q get auto_sqm.config.script || echo &quot;piece_of_cake.qos&quot;)
+MEAS_MODE=$(uci -q get auto_sqm.config.measurement_mode || echo &quot;wget&quot;)
+IPERF3_HOST=$(uci -q get auto_sqm.config.iperf3_host || echo &quot;&quot;)
+IPERF3_PORT=$(uci -q get auto_sqm.config.iperf3_port || echo &quot;5201&quot;)
+TEST_URL=$(uci -q get auto_sqm.config.test_url || echo &quot;&quot;)
+UPLOAD_FALLBACK=$(uci -q get auto_sqm.config.upload_fallback_kbps || echo &quot;5000&quot;)
+HYSTERESIS=$(uci -q get auto_sqm.config.hysteresis_percent || echo &quot;10&quot;)
+
+DL_SPEED=0
+UL_SPEED=0
+
+measure_wget() {
+    [ -z &quot;$DEVICE&quot; ] &amp;&amp; return 1
+    [ -z &quot;$TEST_URL&quot; ] &amp;&amp; return 1
+    bytes_before=$(cat /sys/class/net/&quot;$DEVICE&quot;/statistics/rx_bytes 2&gt;/dev/null) || return 1
+    t1=$(date +%s)
+    wget -O /dev/null -T 30 &quot;$TEST_URL&quot; 2&gt;/dev/null || return 1
+    t2=$(date +%s)
+    bytes_after=$(cat /sys/class/net/&quot;$DEVICE&quot;/statistics/rx_bytes 2&gt;/dev/null) || return 1
+    elapsed=$((t2 - t1))
+    [ &quot;$elapsed&quot; -eq 0 ] &amp;&amp; elapsed=1
+    speed_bps=$(( (bytes_after - bytes_before) * 8 / elapsed ))
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
+
+measure_iperf3() {
+    [ -z &quot;$IPERF3_HOST&quot; ] &amp;&amp; return 1
+    command -v iperf3 &gt;/dev/null 2&gt;&amp;1 || return 1
+    json_out=$(iperf3 -c &quot;$IPERF3_HOST&quot; -p &quot;$IPERF3_PORT&quot; -t 5 -J 2&gt;/dev/null) || return 1
+    speed_bps=$(echo &quot;$json_out&quot; | jsonfilter -e &quot;@.end.sum_received.bits_per_second&quot; 2&gt;/dev/null) || return 1
+    speed_bps=$(echo &quot;$speed_bps&quot; | cut -d. -f1)
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
+
+apply_sqm() {
+    dl=$1
+    ul=$2
+    [ &quot;$dl&quot; -eq 0 ] &amp;&amp; return 1
+
+    cur_dl=$(uci -q get sqm.&quot;$INTERFACE&quot;.download || echo &quot;0&quot;)
+    cur_ul=$(uci -q get sqm.&quot;$INTERFACE&quot;.upload || echo &quot;0&quot;)
+
+    if [ &quot;$cur_dl&quot; -gt 0 ] &amp;&amp; [ &quot;$cur_ul&quot; -gt 0 ]; then
+        lo=$((100 - HYSTERESIS))
+        hi=$((100 + HYSTERESIS))
+        pct_dl=$((cur_dl * 100 / dl))
+        pct_ul=$((cur_ul * 100 / ul))
+        if [ &quot;$pct_dl&quot; -ge &quot;$lo&quot; ] &amp;&amp; [ &quot;$pct_dl&quot; -le &quot;$hi&quot; ] &amp;&amp; [ &quot;$pct_ul&quot; -ge &quot;$lo&quot; ] &amp;&amp; [ &quot;$pct_ul&quot; -le &quot;$hi&quot; ]; then
+            echo &quot;auto-sqm: change within hysteresis, skipping&quot;
+            return 0
+        fi
+    fi
+
+    touch /etc/config/sqm
+
+    uci set sqm.$INTERFACE=queue
+    uci set sqm.$INTERFACE.interface=&quot;$INTERFACE&quot;
+    uci set sqm.$INTERFACE.enabled=&#x27;1&#x27;
+    uci set sqm.$INTERFACE.script=&quot;$QOS_SCRIPT&quot;
+    uci set sqm.$INTERFACE.qdisc=&quot;$QDISC&quot;
+    uci set sqm.$INTERFACE.linklayer=&#x27;none&#x27;
+    uci set sqm.$INTERFACE.overhead=&#x27;0&#x27;
+    uci set sqm.$INTERFACE.linklayer_adaptation_mechanism=&#x27;default&#x27;
+    uci set sqm.$INTERFACE.debug_logging=&#x27;0&#x27;
+    uci set sqm.$INTERFACE.verbosity=&#x27;5&#x27;
+    uci set sqm.$INTERFACE.download=&quot;$dl&quot;
+    uci set sqm.$INTERFACE.upload=&quot;$ul&quot;
+    uci commit sqm
+
+    /etc/init.d/sqm enable
+    /etc/init.d/sqm restart 2&gt;/dev/null || true
+
+    echo &quot;auto-sqm: SQM applied ${dl}/${ul} kbit/s (${QDISC})&quot;
+}
+
+STATIC_DL=$(uci -q get auto_sqm.config.download_kbps || echo &quot;0&quot;)
+STATIC_UL=$(uci -q get auto_sqm.config.upload_kbps || echo &quot;0&quot;)
+
+if [ &quot;$MODE&quot; = &quot;static&quot; ] &amp;&amp; [ &quot;$STATIC_DL&quot; -gt 0 ]; then
+    DL_SPEED=$((STATIC_DL * TARGET_PCT / 100))
+    if [ &quot;$STATIC_UL&quot; -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+else
+    if [ &quot;$MEAS_MODE&quot; = &quot;iperf3&quot; ] &amp;&amp; [ -n &quot;$IPERF3_HOST&quot; ]; then
+        measure_iperf3 || measure_wget
+    else
+        measure_wget || measure_iperf3
+    fi
+
+    if [ &quot;$DL_SPEED&quot; -eq 0 ]; then
+        echo &quot;auto-sqm: measurement failed, will retry on next trigger&quot; &gt;&amp;2
+        exit 1
+    fi
+
+    if [ &quot;$STATIC_UL&quot; -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+fi
+
+apply_sqm &quot;$DL_SPEED&quot; &quot;$UL_SPEED&quot;
+AUTO_SQM_EOF
+chmod +x /usr/sbin/auto-sqm
+
+mkdir -p /etc/hotplug.d/iface
+cat &lt;&lt;&#x27;HOTPLUG_EOF&#x27; &gt; /etc/hotplug.d/iface/10-sqm-autotune
+#!/bin/sh
+[ &quot;$ACTION&quot; = &quot;ifup&quot; ] &amp;&amp; [ &quot;$INTERFACE&quot; = &quot;wan&quot; ] &amp;&amp; /usr/sbin/auto-sqm &amp;
+HOTPLUG_EOF
+chmod +x /etc/hotplug.d/iface/10-sqm-autotune
+
+echo &#x27;auto-sqm: will measure and configure on WAN ifup&#x27;
+echo &#x27;Auto-SQM configured&#x27;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>iphone-tether</code></td>
           <td>USB WAN from iPhone (ipheth + usbmuxd)</td>
+          <td><span class="badge defined">experimental</span><br><small>superseded by usb-tether</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-ipheth, usbmuxd, libimobiledevice +2 more</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- iPhone USB tethering ---
+# Start usbmuxd to poke iOS into sharing
+/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+    for dev in /sys/class/net/*; do
+        name=$(basename &quot;$dev&quot;)
+        case &quot;$name&quot; in
+            lo|br-lan|eth0|wlan*) continue ;;
+        esac
+        iface_desc=&quot;&quot;
+        if [ -e &quot;$dev/device/interface&quot; ]; then
+            iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
+        fi
+        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+        if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot; || echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
+            USB_DEV=&quot;$name&quot;
+            break 2
+        fi
+    done
+    sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+    for cand in eth1 eth2 eth3 usb0; do
+        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+    done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;iPhone tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;iPhone tethering: no iPhone USB device found, skipping&quot; &gt;&amp;2
+fi</code></pre></details></td>
         </tr>
         <tr>
           <td><code>mesh11sd</code></td>
           <td>802.11s mesh networking with auto-config via mesh11sd</td>
+          <td><span class="badge untested">untested</span></td>
           <td>wifi</td>
           <td><small>mesh11sd, ip-full, kmod-nft-bridge, vxlan</small></td>
+          <td><em class="note">requires configuration</em></td>
         </tr>
         <tr>
           <td><code>mwan3</code></td>
           <td>Multi-WAN failover or load balancing via mwan3</td>
+          <td><span class="badge untested">untested</span></td>
           <td>none</td>
           <td><small>mwan3</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- mwan3 multi-WAN ---
+        uci -q delete mwan3 &gt;/dev/null 2&gt;&amp;1 || true
+
+        uci set mwan3.wan=interface
+        uci set mwan3.wan.enabled=&#x27;1&#x27;
+	list track_ip &#x27;1.0.0.1&#x27;
+	list track_ip &#x27;1.1.1.1&#x27;
+	list track_ip &#x27;8.8.8.8&#x27;
+	list track_ip &#x27;8.8.4.4&#x27;
+        uci set mwan3.wan.family=&#x27;ipv4&#x27;
+        uci set mwan3.wan.reliability=&#x27;1&#x27;
+        uci set mwan3.wan.count=&#x27;1&#x27;
+        uci set mwan3.wan.timeout=&#x27;2&#x27;
+        uci set mwan3.wan.interval=&#x27;5&#x27;
+        uci set mwan3.wan.down=&#x27;3&#x27;
+        uci set mwan3.wan.up=&#x27;8&#x27;
+
+        uci set mwan3.usbwan=interface
+        uci set mwan3.usbwan.enabled=&#x27;1&#x27;
+	list track_ip &#x27;1.0.0.1&#x27;
+	list track_ip &#x27;1.1.1.1&#x27;
+	list track_ip &#x27;8.8.8.8&#x27;
+	list track_ip &#x27;8.8.4.4&#x27;
+        uci set mwan3.usbwan.family=&#x27;ipv4&#x27;
+        uci set mwan3.usbwan.reliability=&#x27;1&#x27;
+        uci set mwan3.usbwan.count=&#x27;1&#x27;
+        uci set mwan3.usbwan.timeout=&#x27;2&#x27;
+        uci set mwan3.usbwan.interval=&#x27;5&#x27;
+        uci set mwan3.usbwan.down=&#x27;3&#x27;
+        uci set mwan3.usbwan.up=&#x27;8&#x27;
+
+        uci set mwan3.wan_m1_w1=member
+        uci set mwan3.wan_m1_w1.interface=&#x27;wan&#x27;
+        uci set mwan3.wan_m1_w1.metric=&#x27;1&#x27;
+        uci set mwan3.wan_m1_w1.weight=&#x27;1&#x27;
+
+        uci set mwan3.usbwan_m2_w1=member
+        uci set mwan3.usbwan_m2_w1.interface=&#x27;usbwan&#x27;
+        uci set mwan3.usbwan_m2_w1.metric=&#x27;2&#x27;
+        uci set mwan3.usbwan_m2_w1.weight=&#x27;1&#x27;
+
+        uci set mwan3.wan_policy=policy
+        uci add_list mwan3.wan_policy.use_member=&#x27;wan_m1_w1&#x27;
+        uci add_list mwan3.wan_policy.use_member=&#x27;usbwan_m2_w1&#x27;
+        uci set mwan3.wan_policy.last_resort=&#x27;default&#x27;
+
+        uci set mwan3.default_rule_v4=rule
+        uci set mwan3.default_rule_v4.dest_ip=&#x27;0.0.0.0/0&#x27;
+        uci set mwan3.default_rule_v4.use_policy=&#x27;wan_policy&#x27;
+        uci set mwan3.default_rule_v4.family=&#x27;ipv4&#x27;
+
+        uci set mwan3.https_rule=rule
+        uci set mwan3.https_rule.dest_port=&#x27;443&#x27;
+        uci set mwan3.https_rule.proto=&#x27;tcp&#x27;
+        uci set mwan3.https_rule.sticky=&#x27;1&#x27;
+        uci set mwan3.https_rule.use_policy=&#x27;wan_policy&#x27;
+
+        uci commit mwan3
+        /etc/init.d/mwan3 restart 2&gt;/dev/null || true
+        echo &quot;mwan3 configured: wan (primary) + usbwan (failover)&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>openclash</code></td>
           <td>Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)</td>
+          <td><span class="badge untested">untested</span><br><small>subscription import via LuCI</small></td>
           <td>none</td>
           <td><small>luci-app-openclash, coreutils-nohup, bash, iptables, dnsmasq-full +4 more</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- OpenClash transparent proxy ---
+mkdir -p /etc/openclash/config
+uci set openclash.config.enable=&#x27;1&#x27;
+uci set openclash.config.config_path=&#x27;/etc/openclash/config/config.yaml&#x27;
+uci set openclash.config.proxy_type=&#x27;ss&#x27;
+uci set openclash.config.core_type=&#x27;Meta&#x27;
+uci set openclash.config.dashboard_type=&#x27;Official&#x27;
+uci set openclash.config.dns_mode=&#x27;redir-host&#x27;
+uci set openclash.config.operation_mode=&#x27;redir-host&#x27;
+uci commit openclash
+/etc/init.d/openclash enable
+echo &quot;OpenClash configured: Meta core, ss proxy&quot;
+echo &quot;Post-flash: import your subscription config via the LuCI web UI&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>sqm</code></td>
           <td>Smart Queue Management with CAKE to eliminate bufferbloat</td>
+          <td><span class="badge defined">experimental</span><br><small>uci from OpenWrt wiki</small></td>
           <td>none</td>
           <td><small>sqm-scripts, luci-app-sqm</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- SQM Smart Queue Management ---
+uci -q delete sqm &gt;/dev/null 2&gt;&amp;1 || true
+
+uci set sqm.wan=queue
+uci set sqm.wan.interface=&#x27;wan&#x27;
+uci set sqm.wan.enabled=&#x27;1&#x27;
+uci set sqm.wan.script=&#x27;piece_of_cake.qos&#x27;
+uci set sqm.wan.qdisc=&#x27;cake&#x27;
+uci set sqm.wan.linklayer=&#x27;none&#x27;
+uci set sqm.wan.overhead=&#x27;0&#x27;
+uci set sqm.wan.download=&#x27;10000&#x27;
+uci set sqm.wan.upload=&#x27;5000&#x27;
+uci set sqm.wan.linklayer_adaptation_mechanism=&#x27;default&#x27;
+uci set sqm.wan.debug_logging=&#x27;0&#x27;
+uci set sqm.wan.verbosity=&#x27;5&#x27;
+uci commit sqm
+
+/etc/init.d/sqm enable
+/etc/init.d/sqm restart 2&gt;/dev/null || true
+echo &quot;SQM configured: 10000/5000 kbit/s (cake)&quot;</code></pre></details></td>
+        </tr>
+        <tr>
+          <td><code>ssh-hardening</code></td>
+          <td>Optional Dropbear hardening: disable password auth, idle timeout, rate limit</td>
+          <td><span class="badge untested">untested</span></td>
+          <td>none</td>
+          <td><small></small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- SSH hardening ---
+uci set dropbear.@dropbear[0].PasswordAuth=&#x27;off&#x27;
+uci set dropbear.@dropbear[0].RootPasswordAuth=&#x27;off&#x27;
+uci set dropbear.@dropbear[0].Port=&#x27;22&#x27;
+uci set dropbear.@dropbear[0].IdleTimeout=&#x27;300&#x27;
+uci set dropbear.@dropbear[0].MaxAuthTries=&#x27;3&#x27;
+uci set dropbear.@dropbear[0].GatewayPorts=&#x27;no&#x27;
+uci commit dropbear
+/etc/init.d/dropbear restart 2&gt;/dev/null || true
+echo &quot;SSH hardened: password_auth=off idle=300s max_tries=3 port=22&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>tollgate</code></td>
           <td>OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)</td>
+          <td><span class="badge untested">untested</span><br><small>post-flash ipk deploy</small></td>
           <td>none</td>
           <td><small>nodogsplash, libustream-wolfssl, ca-bundle, ca-certificates</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- TollGate base setup ---
+# ipk will be deployed post-flash via SSH (SCP + opkg)
+uci set nodogsplash.@nodogsplash[0].enabled=&#x27;1&#x27; 2&gt;/dev/null || true
+uci commit nodogsplash 2&gt;/dev/null || true
+/etc/init.d/nodogsplash enable 2&gt;/dev/null || true
+/etc/init.d/nodogsplash restart 2&gt;/dev/null || true
+echo &quot;TollGate: nodogsplash configured, awaiting ipk deploy&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>travelmate</code></td>
           <td>Travel router auto-connect for captive portal WiFi (hotels, airports)</td>
+          <td><span class="badge defined">experimental</span><br><small>wiki-based</small></td>
           <td>wifi</td>
           <td><small>travelmate, luci-app-travelmate, ca-bundle, ca-certificates</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- Travelmate travel router ---
+uci set travelmate.global.trm_enabled=&#x27;1&#x27;
+uci set travelmate.global.trm_automatic=&#x27;1&#x27;
+uci set travelmate.global.trm_captive=&#x27;1&#x27;
+uci set travelmate.global.trm_timeout=&#x27;60&#x27;
+uci set travelmate.global.trm_retry=&#x27;5&#x27;
+uci set travelmate.global.trm_radio=&#x27;radio0&#x27;
+uci commit travelmate
+/etc/init.d/travelmate enable
+/etc/init.d/travelmate restart 2&gt;/dev/null || true
+echo &quot;Travelmate configured: auto-connect on radio0&quot;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>usb-tether</code></td>
           <td>USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable for Android)</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000, Android RNDIS</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android + iPhone) ---
+/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
+        USB_DEV=&quot;&quot;
+        for _ in $(seq 1 45); do
+            for dev in /sys/class/net/*; do
+                name=$(basename &quot;$dev&quot;)
+                case &quot;$name&quot; in
+                    lo|br-lan|eth0|wlan*) continue ;;
+                esac
+                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+                if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet\|ipheth&quot;; then
+                    USB_DEV=&quot;$name&quot;
+                    break 2
+                fi
+                iface_desc=&quot;&quot;
+[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
+if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
+    USB_DEV=&quot;$name&quot;
+    break 2
+fi
+            done
+            sleep 1
+        done
+        if [ -z &quot;$USB_DEV&quot; ]; then
+            for cand in usb0 usb1; do
+                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+            done
+        fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi
+mkdir -p /etc/hotplug.d/usb
+cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
+[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
+[ &quot;$PRODUCT&quot; ] || exit 0
+(
+HOME=/root
+export HOME
+command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
+DELAY=1
+for attempt in 1 2 3 4 5 6 7; do
+    sleep $DELAY
+    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+        exit 0
+    fi
+    STATE=$(adb get-state 2&gt;/dev/null)
+    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
+        adb shell svc usb setFunctions rndis 2&gt;/dev/null
+        sleep 3
+        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
+            exit 0
+        fi
+    fi
+    DELAY=$((DELAY * 2))
+done
+logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
+) &amp;
+HOTPLUG_EOF</code></pre></details></td>
         </tr>
         <tr>
           <td><code>usb-tether-android</code></td>
           <td>USB WAN from Android phone (RNDIS/CDC-ether, user enables tethering manually)</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android) ---
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+    for dev in /sys/class/net/*; do
+        name=$(basename &quot;$dev&quot;)
+        case &quot;$name&quot; in
+            lo|br-lan|eth0|wlan*) continue ;;
+        esac
+        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+            USB_DEV=&quot;$name&quot;
+            break 2
+        fi
+
+    done
+    sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+    for cand in usb0 usb1; do
+        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+    done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</code></pre></details></td>
         </tr>
         <tr>
           <td><code>usb-tether-android-adb</code></td>
           <td>USB WAN from Android phone (RNDIS/CDC-ether + ADB auto-enable tethering)</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android + ADB auto-enable) ---
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+    for dev in /sys/class/net/*; do
+        name=$(basename &quot;$dev&quot;)
+        case &quot;$name&quot; in
+            lo|br-lan|eth0|wlan*) continue ;;
+        esac
+        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+            USB_DEV=&quot;$name&quot;
+            break 2
+        fi
+
+    done
+    sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+    for cand in usb0 usb1; do
+        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+    done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi
+mkdir -p /etc/hotplug.d/usb
+cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
+[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
+[ &quot;$PRODUCT&quot; ] || exit 0
+(
+HOME=/root
+export HOME
+command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
+DELAY=1
+for attempt in 1 2 3 4 5 6 7; do
+    sleep $DELAY
+    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+        exit 0
+    fi
+    STATE=$(adb get-state 2&gt;/dev/null)
+    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
+        adb shell svc usb setFunctions rndis 2&gt;/dev/null
+        sleep 3
+        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
+            exit 0
+        fi
+    fi
+    DELAY=$((DELAY * 2))
+done
+logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
+) &amp;
+HOTPLUG_EOF</code></pre></details></td>
         </tr>
         <tr>
           <td><code>usb-tether-ios</code></td>
           <td>USB WAN from iPhone (ipheth + usbmuxd, user enables Personal Hotspot)</td>
+          <td><span class="badge defined">experimental</span><br><small>wiki-based; needs hardware</small></td>
           <td>usb</td>
           <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (iPhone) ---
+/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
+        USB_DEV=&quot;&quot;
+        for _ in $(seq 1 45); do
+            for dev in /sys/class/net/*; do
+                name=$(basename &quot;$dev&quot;)
+                case &quot;$name&quot; in
+                    lo|br-lan|eth0|wlan*) continue ;;
+                esac
+                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+                if echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
+                    USB_DEV=&quot;$name&quot;
+                    break 2
+                fi
+                iface_desc=&quot;&quot;
+[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
+if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
+    USB_DEV=&quot;$name&quot;
+    break 2
+fi
+            done
+            sleep 1
+        done
+        if [ -z &quot;$USB_DEV&quot; ]; then
+            for cand in usb0 usb1; do
+                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+            done
+        fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</code></pre></details></td>
         </tr>
         <tr>
           <td><code>wireguard-client</code></td>
           <td>WireGuard VPN client — route traffic through a VPN tunnel</td>
+          <td><span class="badge tested">tested</span><br><small>D-Link COVR-X1860 A1</small></td>
           <td>none</td>
           <td><small>wireguard-tools, luci-proto-wireguard</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- WireGuard VPN client ---
+uci set network.wg0=interface
+uci set network.wg0.proto=&#x27;wireguard&#x27;
+uci set network.wg0.private_key=&#x27;generate&#x27;
+uci set network.wg0.addresses=&#x27;10.67.0.2/32&#x27;
+uci set network.wg0_peer=wireguard_wg0
+uci set network.wg0_peer.public_key=&#x27;&#x27;
+uci set network.wg0_peer.endpoint_host=&#x27;&#x27;
+uci set network.wg0_peer.endpoint_port=&#x27;51820&#x27;
+uci set network.wg0_peer.allowed_ips=&#x27;0.0.0.0/0, ::/0&#x27;
+uci set network.wg0_peer.route_allowed_ips=&#x27;1&#x27;
+uci set network.wg0_peer.persistent_keepalive=&#x27;25&#x27;
+
+uci add firewall zone
+uci set firewall.@zone[-1].name=&#x27;vpn&#x27;
+uci set firewall.@zone[-1].input=&#x27;REJECT&#x27;
+uci set firewall.@zone[-1].output=&#x27;ACCEPT&#x27;
+uci set firewall.@zone[-1].forward=&#x27;REJECT&#x27;
+uci set firewall.@zone[-1].masq=&#x27;1&#x27;
+uci set firewall.@zone[-1].mtu_fix=&#x27;1&#x27;
+uci set firewall.@zone[-1].network=&#x27;wg0&#x27;
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src=&#x27;lan&#x27;
+uci set firewall.@forwarding[-1].dest=&#x27;vpn&#x27;
+
+uci add firewall rule
+uci set firewall.@rule[-1].name=&#x27;KillSwitch-Reject-NonVPN&#x27;
+uci set firewall.@rule[-1].src=&#x27;lan&#x27;
+uci set firewall.@rule[-1].dest=&#x27;wan&#x27;
+uci set firewall.@rule[-1].proto=&#x27;all&#x27;
+uci set firewall.@rule[-1].target=&#x27;REJECT&#x27;
+
+uci commit network
+uci commit firewall
+/etc/init.d/network restart 2&gt;/dev/null || true
+echo &#x27;WireGuard client configured: :51820&#x27;</code></pre></details></td>
         </tr>
         <tr>
           <td><code>wireguard-server</code></td>
           <td>WireGuard VPN server — remote access to home network</td>
+          <td><span class="badge untested">untested</span><br><small>post-install peer setup</small></td>
           <td>none</td>
           <td><small>wireguard-tools, luci-proto-wireguard, qrencode</small></td>
+          <td><details><summary>Show commands</summary><pre><code># --- WireGuard VPN server ---
+uci set network.wg0=interface
+uci set network.wg0.proto=&#x27;wireguard&#x27;
+uci set network.wg0.private_key=&#x27;&#x27;
+uci set network.wg0.listen_port=&#x27;51820&#x27;
+uci add_list network.wg0.addresses=&#x27;10.1.99.1/24&#x27;
+
+
+uci add firewall zone
+uci set firewall.@zone[-1].name=&#x27;vpn&#x27;
+uci set firewall.@zone[-1].input=&#x27;ACCEPT&#x27;
+uci set firewall.@zone[-1].output=&#x27;ACCEPT&#x27;
+uci set firewall.@zone[-1].forward=&#x27;REJECT&#x27;
+uci set firewall.@zone[-1].masq=&#x27;1&#x27;
+uci set firewall.@zone[-1].mtu_fix=&#x27;1&#x27;
+uci set firewall.@zone[-1].network=&#x27;wg0&#x27;
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src=&#x27;vpn&#x27;
+uci set firewall.@forwarding[-1].dest=&#x27;lan&#x27;
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src=&#x27;vpn&#x27;
+uci set firewall.@forwarding[-1].dest=&#x27;wan&#x27;
+
+uci add firewall rule
+uci set firewall.@rule[-1].name=&#x27;Allow-WireGuard&#x27;
+uci set firewall.@rule[-1].src=&#x27;wan&#x27;
+uci set firewall.@rule[-1].dest_port=&#x27;51820&#x27;
+uci set firewall.@rule[-1].proto=&#x27;udp&#x27;
+uci set firewall.@rule[-1].target=&#x27;ACCEPT&#x27;
+
+uci commit network
+uci commit firewall
+/etc/init.d/network restart 2&gt;/dev/null || true
+echo &quot;WireGuard server configured: port 51820, subnet 10.1.99.1/24&quot;</code></pre></details></td>
         </tr>
   </tbody>
 </table>
 
 <footer>
   Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-  Last update: 2026-05-16 20:01 UTC
+  Last update: 2026-05-19 09:00 UTC
 </footer>
 
 </body>

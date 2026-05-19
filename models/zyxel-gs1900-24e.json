@@ -243,16 +243,22 @@
     "oem-playwright": {
       "tested": true,
       "date": "2026-05-18",
+      "commit": "bbaf09c",
+      "verified_with": "Uploaded initramfs via Playwright, device booted into OpenWrt initramfs in ~90s",
       "notes": "Uploaded 22.03.7 initramfs via Playwright to OEM firmware. RSA login, frameset navigation, firmware upload all worked. Firmware page cmd=5903, upload to /cgi-bin/httpupload.cgi, progress poll cmd=5911. OEM booted into initramfs in ~90s."
     },
     "sysupgrade": {
       "tested": true,
       "date": "2026-05-18",
+      "commit": "bbaf09c",
+      "verified_with": "sysupgrade -n completed, SSH access after ~120s boot",
       "notes": "sysupgrade from 25.12.1 initramfs to 25.12.1 squashfs permanent install. Used sysupgrade -n. Completed successfully, ~120s boot time. sysupgrade from 22.03.7 to 25.12.1 REJECTED due to partition layout change (dual to merged)."
     },
     "mtd-write": {
       "tested": true,
       "date": "2026-05-18",
+      "commit": "bbaf09c",
+      "verified_with": "mtd -r write succeeded, device booted into 25.12.1 initramfs",
       "notes": "Used 'mtd -r write' from 22.03.7 OpenWrt to flash 25.12.1 initramfs to firmware partition. Required because sysupgrade rejected the cross-version upgrade. Device rebooted into 25.12.1 initramfs successfully. Then sysupgrade to permanent install."
     },
     "serial-tftp-openwrt": {
@@ -262,6 +268,8 @@
     "uboot_env_modification": {
       "tested": true,
       "date": "2026-05-18",
+      "commit": "bbaf09c",
+      "verified_with": "fw_setenv + fw_printenv confirmed serverip change",
       "notes": "fw_setenv serverip 192.168.1.2 executed successfully from OpenWrt 25.12.1. Verified with fw_printenv. bootdelay was already 1 (set by OEM, not modified)."
     }
   },
