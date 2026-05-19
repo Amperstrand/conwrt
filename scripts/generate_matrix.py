@@ -113,17 +113,6 @@ def get_flash_status(model: dict, method: str) -> str:
     return STATUS_ICONS["o"]
 
 
-def get_wifi_status(model: dict) -> str:
-    tested_hw = model.get("tested_hardware", {})
-    wifi_info = tested_hw.get("wifi_sta_ap", {})
-    if wifi_info.get("tested"):
-        return STATUS_ICONS["tested"]
-    caps = model.get("capabilities", [])
-    if "wifi" in caps:
-        return STATUS_ICONS["o"]
-    return ""
-
-
 def _render_test_entries(model: dict) -> str:
     tested_hw = model.get("tested_hardware", {})
     if not tested_hw:
@@ -180,15 +169,10 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
         for method in FLASH_METHODS:
             method_cells += f"<td>{get_flash_status(m, method)}</td>\n"
 
-        wifi_cell = f"<td>{get_wifi_status(m)}</td>"
-
         cap_cell = ""
         for cap_id, _ in CAPABILITIES:
             if cap_id in m.get("capabilities", []):
                 cap_cell += f'<span class="cap">{cap_id}</span> '
-
-        tested = m.get("_tested_flash_methods", [])
-        tested_note = ", ".join(tested) if tested else ""
 
         rows += f"""        <tr>
           <td class="vendor">{vendor}</td>
@@ -196,8 +180,7 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
           <td class="soc">{soc}</td>
           <td>{ram}</td>
           <td>{flash}</td>
-{method_cells}          {wifi_cell}
-          <td class="caps">{cap_cell}</td>
+{method_cells}          <td class="caps">{cap_cell}</td>
         </tr>
 """
 
@@ -377,8 +360,7 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
       <th>SoC</th>
       <th>RAM</th>
       <th>Flash</th>
-{method_headers}      <th>WiFi<br>STA/AP</th>
-      <th>Caps</th>
+{method_headers}      <th>Caps</th>
     </tr>
   </thead>
   <tbody>
