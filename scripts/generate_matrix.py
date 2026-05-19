@@ -56,15 +56,16 @@ def load_use_cases() -> list[dict]:
     sys.path.insert(0, str(USE_CASES_DIR.parent))
     from use_cases import registry
     ucs = []
-    for name, uc in sorted(registry().items()):
+    for idx, (name, uc) in enumerate(sorted(registry().items())):
+        cmd_id = f"cmd-{idx}"
         commands_html = ""
+        raw_script = ""
         try:
             script = uc.build_configure({})
             if script and script.strip():
-                escaped = html.escape(script.strip())
+                raw_script = script.strip()
                 commands_html = (
-                    '<details><summary>Show commands</summary>'
-                    f'<pre><code>{escaped}</code></pre></details>'
+                    f'<button class="cmd-toggle" data-cmd-id="{cmd_id}">Show commands</button>'
                 )
         except (ValueError, TypeError, KeyError):
             commands_html = '<em class="note">requires configuration</em>'
@@ -81,6 +82,8 @@ def load_use_cases() -> list[dict]:
             "commands_html": commands_html,
             "packages_via": uc.packages_via,
             "configure_via": uc.configure_via,
+            "cmd_id": cmd_id,
+            "raw_script": raw_script,
         })
     return ucs
 
@@ -241,6 +244,13 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
         </tr>
 """
 
+    cmd_source_divs = ""
+    for uc in use_cases:
+        raw = uc.get("raw_script", "")
+        if raw:
+            escaped = html.escape(raw)
+            cmd_source_divs += f'<div class="cmd-source" id="{uc["cmd_id"]}">{escaped}</div>\n'
+
     method_headers = ""
     for method in FLASH_METHODS:
         label = method.replace("-", "<br>")
@@ -313,13 +323,21 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
   .test-entry .verified {{ display: block; color: #666; font-style: italic; font-size: 0.75rem; margin-top: 2px; }}
   .test-entry .date {{ color: #999; font-size: 0.7rem; margin-left: 4px; }}
 
-  /* Use case command details */
-  details {{ margin-top: 4px; }}
-  details summary {{ cursor: pointer; color: #0366d6; font-size: 0.8rem; }}
-  details summary:hover {{ text-decoration: underline; }}
-  details pre {{ margin-top: 6px; padding: 8px; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; line-height: 1.4; }}
-  details code {{ font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }}
+  /* Use case command modal */
   .note {{ color: #999; font-size: 0.8rem; font-style: italic; }}
+  .cmd-toggle {{ background: none; border: none; color: #0366d6; cursor: pointer; font-size: 0.8rem; padding: 0; text-decoration: underline; }}
+  .cmd-toggle:hover {{ color: #0257a5; }}
+  .cmd-source {{ display: none; }}
+  .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }}
+  .modal-overlay.active {{ display: flex; }}
+  .modal-content {{ background: #fff; border-radius: 8px; max-width: 720px; width: 90%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }}
+  .modal-header {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; }}
+  .modal-title {{ font-weight: 600; font-size: 0.9rem; }}
+  .modal-close {{ background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666; padding: 0 4px; line-height: 1; }}
+  .modal-close:hover {{ color: #333; }}
+  .modal-code {{ margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.8rem; line-height: 1.5; text-align: left; white-space: pre; background: #f8f9fa; }}
+  .modal-copy {{ margin: 12px 16px; padding: 6px 16px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; align-self: flex-end; }}
+  .modal-copy:hover {{ background: #0257a5; }}
 </style>
 </head>
 <body>
@@ -367,10 +385,40 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
 </table>
 
 <footer>
-  Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-  Last update: __TIMESTAMP__
+Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
+Last update: __TIMESTAMP__
 </footer>
 
+{cmd_source_divs}<div id="cmd-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><span class="modal-title">Shell Commands</span><button class="modal-close">&times;</button></div><pre class="modal-code"><code id="modal-code-content"></code></pre><button class="modal-copy">Copy</button></div></div>
+<script>
+const overlay = document.getElementById('cmd-modal');
+const codeContent = document.getElementById('modal-code-content');
+document.addEventListener('click', e => {{
+  const toggle = e.target.closest('.cmd-toggle');
+  if (toggle) {{
+    const src = document.getElementById(toggle.dataset.cmdId);
+    if (src) {{
+      codeContent.textContent = src.textContent;
+      overlay.classList.add('active');
+    }}
+    return;
+  }}
+  if (e.target === overlay || e.target.closest('.modal-close')) {{
+    overlay.classList.remove('active');
+    return;
+  }}
+  if (e.target.closest('.modal-copy')) {{
+    navigator.clipboard.writeText(codeContent.textContent).then(() => {{
+      e.target.closest('.modal-copy').textContent = 'Copied!';
+      setTimeout(() => {{ e.target.closest('.modal-copy').textContent = 'Copy'; }}, 2000);
+    }});
+    return;
+  }}
+}});
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape') overlay.classList.remove('active');
+}});
+</script>
 </body>
 </html>"""
 

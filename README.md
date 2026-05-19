@@ -281,10 +281,10 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 
 | Preset | Description | Post-flash? |
 |--------|-------------|-------------|
-| `usb-tether` | USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable) | No |
-| `usb-tether-android` | USB WAN from Android only (user enables tethering manually) | No |
-| `usb-tether-android-adb` | USB WAN from Android + ADB auto-enable tethering | No |
-| `usb-tether-ios` | USB WAN from iPhone (ipheth + usbmuxd) | No |
+| `usb-tether` | Auto-detect Android or iPhone USB WAN. Android gets ADB auto-enable. | No |
+| `android-tether` | USB WAN from Android. Enable tethering manually on the phone. | No |
+| `android-tether-adb` | USB WAN from Android + ADB auto-enable. Confirm on phone, auto-activates. | No |
+| `iphone-tether` | USB WAN from iPhone. Enable Personal Hotspot manually on the phone. | No |
 | `sqm` | Bufferbloat fix via CAKE/fq_codel (manual speeds) | No |
 | `auto-sqm` | Auto-measure WAN speed + configure SQM (experimental) | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |

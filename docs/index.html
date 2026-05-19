@@ -47,13 +47,21 @@
   .test-entry .verified { display: block; color: #666; font-style: italic; font-size: 0.75rem; margin-top: 2px; }
   .test-entry .date { color: #999; font-size: 0.7rem; margin-left: 4px; }
 
-  /* Use case command details */
-  details { margin-top: 4px; }
-  details summary { cursor: pointer; color: #0366d6; font-size: 0.8rem; }
-  details summary:hover { text-decoration: underline; }
-  details pre { margin-top: 6px; padding: 8px; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; line-height: 1.4; }
-  details code { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }
+  /* Use case command modal */
   .note { color: #999; font-size: 0.8rem; font-style: italic; }
+  .cmd-toggle { background: none; border: none; color: #0366d6; cursor: pointer; font-size: 0.8rem; padding: 0; text-decoration: underline; }
+  .cmd-toggle:hover { color: #0257a5; }
+  .cmd-source { display: none; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+  .modal-overlay.active { display: flex; }
+  .modal-content { background: #fff; border-radius: 8px; max-width: 720px; width: 90%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; }
+  .modal-title { font-weight: 600; font-size: 0.9rem; }
+  .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666; padding: 0 4px; line-height: 1; }
+  .modal-close:hover { color: #333; }
+  .modal-code { margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.8rem; line-height: 1.5; text-align: left; white-space: pre; background: #f8f9fa; }
+  .modal-copy { margin: 12px 16px; padding: 6px 16px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; align-self: flex-end; }
+  .modal-copy:hover { background: #0257a5; }
 </style>
 </head>
 <body>
@@ -337,7 +345,7 @@
 <div class="test-entry tested"><code>nor_boot_switch_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>nor_boot_bootcount_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>nand_boot_after_nor</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
-<div class="test-entry tested"><code>usb-tether-android-adb</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>android-tether-adb</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>sqm</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div></td>
         </tr>
         <tr>
@@ -393,7 +401,129 @@
           <td><span class="badge untested">untested</span><br><small>web setup wizard after install</small></td>
           <td>none</td>
           <td><small>adguardhome, luci-app-adguardhome</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- AdGuard Home ---
+          <td><button class="cmd-toggle" data-cmd-id="cmd-0">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>android-tether</code></td>
+          <td>USB WAN from Android phone. Enable tethering manually on the phone.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-1">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>android-tether-adb</code></td>
+          <td>USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-2">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>auto-sqm</code></td>
+          <td>Auto-measure WAN speed and configure SQM to eliminate bufferbloat</td>
+          <td><span class="badge defined">experimental</span><br><small>not validated on hardware</small></td>
+          <td>none</td>
+          <td><small>sqm-scripts, luci-app-sqm, jsonfilter, iperf3</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-3">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>iphone-tether</code></td>
+          <td>USB WAN from iPhone. Enable Personal Hotspot manually on the phone.</td>
+          <td><span class="badge defined">experimental</span><br><small>wiki-based; needs hardware validation</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-4">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>mesh11sd</code></td>
+          <td>802.11s mesh networking with auto-config via mesh11sd</td>
+          <td><span class="badge untested">untested</span></td>
+          <td>wifi</td>
+          <td><small>mesh11sd, ip-full, kmod-nft-bridge, vxlan</small></td>
+          <td><em class="note">requires configuration</em></td>
+        </tr>
+        <tr>
+          <td><code>mwan3</code></td>
+          <td>Multi-WAN failover or load balancing via mwan3</td>
+          <td><span class="badge untested">untested</span></td>
+          <td>none</td>
+          <td><small>mwan3</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-6">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>openclash</code></td>
+          <td>Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)</td>
+          <td><span class="badge untested">untested</span><br><small>subscription import via LuCI</small></td>
+          <td>none</td>
+          <td><small>luci-app-openclash, coreutils-nohup, bash, iptables, dnsmasq-full +4 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-7">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>sqm</code></td>
+          <td>Smart Queue Management with CAKE to eliminate bufferbloat</td>
+          <td><span class="badge defined">experimental</span><br><small>uci from OpenWrt wiki</small></td>
+          <td>none</td>
+          <td><small>sqm-scripts, luci-app-sqm</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-8">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>ssh-hardening</code></td>
+          <td>Optional Dropbear hardening: disable password auth, idle timeout, rate limit</td>
+          <td><span class="badge untested">untested</span></td>
+          <td>none</td>
+          <td><small></small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-9">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>tollgate</code></td>
+          <td>OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)</td>
+          <td><span class="badge untested">untested</span><br><small>post-flash ipk deploy</small></td>
+          <td>none</td>
+          <td><small>nodogsplash, libustream-wolfssl, ca-bundle, ca-certificates</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-10">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>travelmate</code></td>
+          <td>Travel router auto-connect for captive portal WiFi (hotels, airports)</td>
+          <td><span class="badge defined">experimental</span><br><small>wiki-based</small></td>
+          <td>wifi</td>
+          <td><small>travelmate, luci-app-travelmate, ca-bundle, ca-certificates</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-11">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>usb-tether</code></td>
+          <td>Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000, Android RNDIS</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-12">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>wireguard-client</code></td>
+          <td>WireGuard VPN client — route traffic through a VPN tunnel</td>
+          <td><span class="badge tested">tested</span><br><small>D-Link COVR-X1860 A1</small></td>
+          <td>none</td>
+          <td><small>wireguard-tools, luci-proto-wireguard</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-13">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>wireguard-server</code></td>
+          <td>WireGuard VPN server — remote access to home network</td>
+          <td><span class="badge untested">untested</span><br><small>post-install peer setup</small></td>
+          <td>none</td>
+          <td><small>wireguard-tools, luci-proto-wireguard, qrencode</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-14">Show commands</button></td>
+        </tr>
+  </tbody>
+</table>
+
+<footer>
+Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
+Last update: 2026-05-19 09:33 UTC
+</footer>
+
+<div class="cmd-source" id="cmd-0"># --- AdGuard Home ---
 uci set adguardhome.adguardhome=adguardhome
 uci set adguardhome.adguardhome.enabled=&#x27;1&#x27;
 uci set adguardhome.adguardhome.http_address=&#x27;0.0.0.0:3000&#x27;
@@ -406,18 +536,10 @@ uci set dhcp.@dnsmasq[0].noresolv=&#x27;1&#x27;
 uci add_list dhcp.@dnsmasq[0].server=&#x27;127.0.0.1#5353&#x27;
 uci commit dhcp
 /etc/init.d/dnsmasq restart 2&gt;/dev/null || true
-echo &quot;AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>android-tether</code></td>
-          <td>USB WAN from Android phone (RNDIS/CDC-ether)</td>
-          <td><span class="badge defined">experimental</span><br><small>superseded by usb-tether</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- Android USB tethering ---
-# Wait for USB network device to appear (up to 30s)
+echo &quot;AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000&quot;</div>
+<div class="cmd-source" id="cmd-1"># --- Android USB tethering (manual) ---
 USB_DEV=&quot;&quot;
-for _ in $(seq 1 30); do
+for _ in $(seq 1 45); do
     for dev in /sys/class/net/*; do
         name=$(basename &quot;$dev&quot;)
         case &quot;$name&quot; in
@@ -428,12 +550,12 @@ for _ in $(seq 1 30); do
             USB_DEV=&quot;$name&quot;
             break 2
         fi
+
     done
     sleep 1
 done
 if [ -z &quot;$USB_DEV&quot; ]; then
-    # Fallback: look for usb0 or any new ethX that appeared
-    for cand in usb0 usb1 eth1 eth2; do
+    for cand in usb0 usb1; do
         [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
     done
 fi
@@ -442,7 +564,6 @@ if [ -n &quot;$USB_DEV&quot; ]; then
     uci set network.usbwan.proto=&#x27;dhcp&#x27;
     uci set network.usbwan.device=&quot;$USB_DEV&quot;
     uci set network.usbwan.metric=&#x27;20&#x27;
-    # Add to wan firewall zone
     for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
         name=$(uci -q get firewall.$zone.name || true)
         if [ &quot;$name&quot; = &quot;wan&quot; ]; then
@@ -456,15 +577,77 @@ if [ -n &quot;$USB_DEV&quot; ]; then
     echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
 else
     echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>auto-sqm</code></td>
-          <td>Auto-measure WAN speed and configure SQM to eliminate bufferbloat</td>
-          <td><span class="badge defined">experimental</span><br><small>not validated on hardware</small></td>
-          <td>none</td>
-          <td><small>sqm-scripts, luci-app-sqm, jsonfilter, iperf3</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- Auto-SQM ---
+fi</div>
+<div class="cmd-source" id="cmd-2"># --- Android USB tethering (ADB auto-enable) ---
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+    for dev in /sys/class/net/*; do
+        name=$(basename &quot;$dev&quot;)
+        case &quot;$name&quot; in
+            lo|br-lan|eth0|wlan*) continue ;;
+        esac
+        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+            USB_DEV=&quot;$name&quot;
+            break 2
+        fi
+
+    done
+    sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+    for cand in usb0 usb1; do
+        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+    done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+    uci set network.usbwan=interface
+    uci set network.usbwan.proto=&#x27;dhcp&#x27;
+    uci set network.usbwan.device=&quot;$USB_DEV&quot;
+    uci set network.usbwan.metric=&#x27;20&#x27;
+    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
+        name=$(uci -q get firewall.$zone.name || true)
+        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
+            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
+            break
+        fi
+    done
+    uci commit network
+    uci commit firewall
+    ifup usbwan 2&gt;/dev/null || true
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi
+mkdir -p /etc/hotplug.d/usb
+cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
+[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
+[ &quot;$PRODUCT&quot; ] || exit 0
+(
+HOME=/root
+export HOME
+command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
+DELAY=1
+for attempt in 1 2 3 4 5 6 7; do
+    sleep $DELAY
+    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+        exit 0
+    fi
+    STATE=$(adb get-state 2&gt;/dev/null)
+    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
+        adb shell svc usb setFunctions rndis 2&gt;/dev/null
+        sleep 3
+        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
+            exit 0
+        fi
+    fi
+    DELAY=$((DELAY * 2))
+done
+logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
+) &amp;
+HOTPLUG_EOF</div>
+<div class="cmd-source" id="cmd-3"># --- Auto-SQM ---
 
 touch /etc/config/auto_sqm
 uci set auto_sqm.config=auto_sqm
@@ -612,41 +795,35 @@ HOTPLUG_EOF
 chmod +x /etc/hotplug.d/iface/10-sqm-autotune
 
 echo &#x27;auto-sqm: will measure and configure on WAN ifup&#x27;
-echo &#x27;Auto-SQM configured&#x27;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>iphone-tether</code></td>
-          <td>USB WAN from iPhone (ipheth + usbmuxd)</td>
-          <td><span class="badge defined">experimental</span><br><small>superseded by usb-tether</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-ipheth, usbmuxd, libimobiledevice +2 more</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- iPhone USB tethering ---
-# Start usbmuxd to poke iOS into sharing
+echo &#x27;Auto-SQM configured&#x27;</div>
+<div class="cmd-source" id="cmd-4"># --- iPhone USB tethering ---
 /usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
-USB_DEV=&quot;&quot;
-for _ in $(seq 1 45); do
-    for dev in /sys/class/net/*; do
-        name=$(basename &quot;$dev&quot;)
-        case &quot;$name&quot; in
-            lo|br-lan|eth0|wlan*) continue ;;
-        esac
-        iface_desc=&quot;&quot;
-        if [ -e &quot;$dev/device/interface&quot; ]; then
-            iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
-        fi
-        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-        if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot; || echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
-            USB_DEV=&quot;$name&quot;
-            break 2
-        fi
-    done
-    sleep 1
-done
-if [ -z &quot;$USB_DEV&quot; ]; then
-    for cand in eth1 eth2 eth3 usb0; do
-        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-    done
+        USB_DEV=&quot;&quot;
+        for _ in $(seq 1 45); do
+            for dev in /sys/class/net/*; do
+                name=$(basename &quot;$dev&quot;)
+                case &quot;$name&quot; in
+                    lo|br-lan|eth0|wlan*) continue ;;
+                esac
+                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+                if echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
+                    USB_DEV=&quot;$name&quot;
+                    break 2
+                fi
+                iface_desc=&quot;&quot;
+[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
+if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
+    USB_DEV=&quot;$name&quot;
+    break 2
 fi
+            done
+            sleep 1
+        done
+        if [ -z &quot;$USB_DEV&quot; ]; then
+            for cand in usb0 usb1; do
+                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+            done
+        fi
 if [ -n &quot;$USB_DEV&quot; ]; then
     uci set network.usbwan=interface
     uci set network.usbwan.proto=&#x27;dhcp&#x27;
@@ -662,26 +839,11 @@ if [ -n &quot;$USB_DEV&quot; ]; then
     uci commit network
     uci commit firewall
     ifup usbwan 2&gt;/dev/null || true
-    echo &quot;iPhone tethering enabled on $USB_DEV -&gt; usbwan&quot;
+    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
 else
-    echo &quot;iPhone tethering: no iPhone USB device found, skipping&quot; &gt;&amp;2
-fi</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>mesh11sd</code></td>
-          <td>802.11s mesh networking with auto-config via mesh11sd</td>
-          <td><span class="badge untested">untested</span></td>
-          <td>wifi</td>
-          <td><small>mesh11sd, ip-full, kmod-nft-bridge, vxlan</small></td>
-          <td><em class="note">requires configuration</em></td>
-        </tr>
-        <tr>
-          <td><code>mwan3</code></td>
-          <td>Multi-WAN failover or load balancing via mwan3</td>
-          <td><span class="badge untested">untested</span></td>
-          <td>none</td>
-          <td><small>mwan3</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- mwan3 multi-WAN ---
+    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</div>
+<div class="cmd-source" id="cmd-6"># --- mwan3 multi-WAN ---
         uci -q delete mwan3 &gt;/dev/null 2&gt;&amp;1 || true
 
         uci set mwan3.wan=interface
@@ -740,15 +902,8 @@ fi</code></pre></details></td>
 
         uci commit mwan3
         /etc/init.d/mwan3 restart 2&gt;/dev/null || true
-        echo &quot;mwan3 configured: wan (primary) + usbwan (failover)&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>openclash</code></td>
-          <td>Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)</td>
-          <td><span class="badge untested">untested</span><br><small>subscription import via LuCI</small></td>
-          <td>none</td>
-          <td><small>luci-app-openclash, coreutils-nohup, bash, iptables, dnsmasq-full +4 more</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- OpenClash transparent proxy ---
+        echo &quot;mwan3 configured: wan (primary) + usbwan (failover)&quot;</div>
+<div class="cmd-source" id="cmd-7"># --- OpenClash transparent proxy ---
 mkdir -p /etc/openclash/config
 uci set openclash.config.enable=&#x27;1&#x27;
 uci set openclash.config.config_path=&#x27;/etc/openclash/config/config.yaml&#x27;
@@ -760,15 +915,8 @@ uci set openclash.config.operation_mode=&#x27;redir-host&#x27;
 uci commit openclash
 /etc/init.d/openclash enable
 echo &quot;OpenClash configured: Meta core, ss proxy&quot;
-echo &quot;Post-flash: import your subscription config via the LuCI web UI&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>sqm</code></td>
-          <td>Smart Queue Management with CAKE to eliminate bufferbloat</td>
-          <td><span class="badge defined">experimental</span><br><small>uci from OpenWrt wiki</small></td>
-          <td>none</td>
-          <td><small>sqm-scripts, luci-app-sqm</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- SQM Smart Queue Management ---
+echo &quot;Post-flash: import your subscription config via the LuCI web UI&quot;</div>
+<div class="cmd-source" id="cmd-8"># --- SQM Smart Queue Management ---
 uci -q delete sqm &gt;/dev/null 2&gt;&amp;1 || true
 
 uci set sqm.wan=queue
@@ -787,15 +935,8 @@ uci commit sqm
 
 /etc/init.d/sqm enable
 /etc/init.d/sqm restart 2&gt;/dev/null || true
-echo &quot;SQM configured: 10000/5000 kbit/s (cake)&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>ssh-hardening</code></td>
-          <td>Optional Dropbear hardening: disable password auth, idle timeout, rate limit</td>
-          <td><span class="badge untested">untested</span></td>
-          <td>none</td>
-          <td><small></small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- SSH hardening ---
+echo &quot;SQM configured: 10000/5000 kbit/s (cake)&quot;</div>
+<div class="cmd-source" id="cmd-9"># --- SSH hardening ---
 uci set dropbear.@dropbear[0].PasswordAuth=&#x27;off&#x27;
 uci set dropbear.@dropbear[0].RootPasswordAuth=&#x27;off&#x27;
 uci set dropbear.@dropbear[0].Port=&#x27;22&#x27;
@@ -804,29 +945,15 @@ uci set dropbear.@dropbear[0].MaxAuthTries=&#x27;3&#x27;
 uci set dropbear.@dropbear[0].GatewayPorts=&#x27;no&#x27;
 uci commit dropbear
 /etc/init.d/dropbear restart 2&gt;/dev/null || true
-echo &quot;SSH hardened: password_auth=off idle=300s max_tries=3 port=22&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>tollgate</code></td>
-          <td>OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)</td>
-          <td><span class="badge untested">untested</span><br><small>post-flash ipk deploy</small></td>
-          <td>none</td>
-          <td><small>nodogsplash, libustream-wolfssl, ca-bundle, ca-certificates</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- TollGate base setup ---
+echo &quot;SSH hardened: password_auth=off idle=300s max_tries=3 port=22&quot;</div>
+<div class="cmd-source" id="cmd-10"># --- TollGate base setup ---
 # ipk will be deployed post-flash via SSH (SCP + opkg)
 uci set nodogsplash.@nodogsplash[0].enabled=&#x27;1&#x27; 2&gt;/dev/null || true
 uci commit nodogsplash 2&gt;/dev/null || true
 /etc/init.d/nodogsplash enable 2&gt;/dev/null || true
 /etc/init.d/nodogsplash restart 2&gt;/dev/null || true
-echo &quot;TollGate: nodogsplash configured, awaiting ipk deploy&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>travelmate</code></td>
-          <td>Travel router auto-connect for captive portal WiFi (hotels, airports)</td>
-          <td><span class="badge defined">experimental</span><br><small>wiki-based</small></td>
-          <td>wifi</td>
-          <td><small>travelmate, luci-app-travelmate, ca-bundle, ca-certificates</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- Travelmate travel router ---
+echo &quot;TollGate: nodogsplash configured, awaiting ipk deploy&quot;</div>
+<div class="cmd-source" id="cmd-11"># --- Travelmate travel router ---
 uci set travelmate.global.trm_enabled=&#x27;1&#x27;
 uci set travelmate.global.trm_automatic=&#x27;1&#x27;
 uci set travelmate.global.trm_captive=&#x27;1&#x27;
@@ -836,15 +963,8 @@ uci set travelmate.global.trm_radio=&#x27;radio0&#x27;
 uci commit travelmate
 /etc/init.d/travelmate enable
 /etc/init.d/travelmate restart 2&gt;/dev/null || true
-echo &quot;Travelmate configured: auto-connect on radio0&quot;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>usb-tether</code></td>
-          <td>USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable for Android)</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000, Android RNDIS</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android + iPhone) ---
+echo &quot;Travelmate configured: auto-connect on radio0&quot;</div>
+<div class="cmd-source" id="cmd-12"># --- USB tethering (auto-detect) ---
 /usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
         USB_DEV=&quot;&quot;
         for _ in $(seq 1 45); do
@@ -918,193 +1038,8 @@ for attempt in 1 2 3 4 5 6 7; do
 done
 logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
 ) &amp;
-HOTPLUG_EOF</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>usb-tether-android</code></td>
-          <td>USB WAN from Android phone (RNDIS/CDC-ether, user enables tethering manually)</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android) ---
-USB_DEV=&quot;&quot;
-for _ in $(seq 1 45); do
-    for dev in /sys/class/net/*; do
-        name=$(basename &quot;$dev&quot;)
-        case &quot;$name&quot; in
-            lo|br-lan|eth0|wlan*) continue ;;
-        esac
-        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
-            USB_DEV=&quot;$name&quot;
-            break 2
-        fi
-
-    done
-    sleep 1
-done
-if [ -z &quot;$USB_DEV&quot; ]; then
-    for cand in usb0 usb1; do
-        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-    done
-fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>usb-tether-android-adb</code></td>
-          <td>USB WAN from Android phone (RNDIS/CDC-ether + ADB auto-enable tethering)</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (Android + ADB auto-enable) ---
-USB_DEV=&quot;&quot;
-for _ in $(seq 1 45); do
-    for dev in /sys/class/net/*; do
-        name=$(basename &quot;$dev&quot;)
-        case &quot;$name&quot; in
-            lo|br-lan|eth0|wlan*) continue ;;
-        esac
-        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
-            USB_DEV=&quot;$name&quot;
-            break 2
-        fi
-
-    done
-    sleep 1
-done
-if [ -z &quot;$USB_DEV&quot; ]; then
-    for cand in usb0 usb1; do
-        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-    done
-fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi
-mkdir -p /etc/hotplug.d/usb
-cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
-[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
-[ &quot;$PRODUCT&quot; ] || exit 0
-(
-HOME=/root
-export HOME
-command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
-DELAY=1
-for attempt in 1 2 3 4 5 6 7; do
-    sleep $DELAY
-    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-        exit 0
-    fi
-    STATE=$(adb get-state 2&gt;/dev/null)
-    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
-        adb shell svc usb setFunctions rndis 2&gt;/dev/null
-        sleep 3
-        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
-            exit 0
-        fi
-    fi
-    DELAY=$((DELAY * 2))
-done
-logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
-) &amp;
-HOTPLUG_EOF</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>usb-tether-ios</code></td>
-          <td>USB WAN from iPhone (ipheth + usbmuxd, user enables Personal Hotspot)</td>
-          <td><span class="badge defined">experimental</span><br><small>wiki-based; needs hardware</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- USB tethering (iPhone) ---
-/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
-        USB_DEV=&quot;&quot;
-        for _ in $(seq 1 45); do
-            for dev in /sys/class/net/*; do
-                name=$(basename &quot;$dev&quot;)
-                case &quot;$name&quot; in
-                    lo|br-lan|eth0|wlan*) continue ;;
-                esac
-                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-                if echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
-                    USB_DEV=&quot;$name&quot;
-                    break 2
-                fi
-                iface_desc=&quot;&quot;
-[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
-if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
-    USB_DEV=&quot;$name&quot;
-    break 2
-fi
-            done
-            sleep 1
-        done
-        if [ -z &quot;$USB_DEV&quot; ]; then
-            for cand in usb0 usb1; do
-                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-            done
-        fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>wireguard-client</code></td>
-          <td>WireGuard VPN client — route traffic through a VPN tunnel</td>
-          <td><span class="badge tested">tested</span><br><small>D-Link COVR-X1860 A1</small></td>
-          <td>none</td>
-          <td><small>wireguard-tools, luci-proto-wireguard</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- WireGuard VPN client ---
+HOTPLUG_EOF</div>
+<div class="cmd-source" id="cmd-13"># --- WireGuard VPN client ---
 uci set network.wg0=interface
 uci set network.wg0.proto=&#x27;wireguard&#x27;
 uci set network.wg0.private_key=&#x27;generate&#x27;
@@ -1140,15 +1075,8 @@ uci set firewall.@rule[-1].target=&#x27;REJECT&#x27;
 uci commit network
 uci commit firewall
 /etc/init.d/network restart 2&gt;/dev/null || true
-echo &#x27;WireGuard client configured: :51820&#x27;</code></pre></details></td>
-        </tr>
-        <tr>
-          <td><code>wireguard-server</code></td>
-          <td>WireGuard VPN server — remote access to home network</td>
-          <td><span class="badge untested">untested</span><br><small>post-install peer setup</small></td>
-          <td>none</td>
-          <td><small>wireguard-tools, luci-proto-wireguard, qrencode</small></td>
-          <td><details><summary>Show commands</summary><pre><code># --- WireGuard VPN server ---
+echo &#x27;WireGuard client configured: :51820&#x27;</div>
+<div class="cmd-source" id="cmd-14"># --- WireGuard VPN server ---
 uci set network.wg0=interface
 uci set network.wg0.proto=&#x27;wireguard&#x27;
 uci set network.wg0.private_key=&#x27;&#x27;
@@ -1183,15 +1111,36 @@ uci set firewall.@rule[-1].target=&#x27;ACCEPT&#x27;
 uci commit network
 uci commit firewall
 /etc/init.d/network restart 2&gt;/dev/null || true
-echo &quot;WireGuard server configured: port 51820, subnet 10.1.99.1/24&quot;</code></pre></details></td>
-        </tr>
-  </tbody>
-</table>
-
-<footer>
-  Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-  Last update: 2026-05-19 09:00 UTC
-</footer>
-
+echo &quot;WireGuard server configured: port 51820, subnet 10.1.99.1/24&quot;</div>
+<div id="cmd-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><span class="modal-title">Shell Commands</span><button class="modal-close">&times;</button></div><pre class="modal-code"><code id="modal-code-content"></code></pre><button class="modal-copy">Copy</button></div></div>
+<script>
+const overlay = document.getElementById('cmd-modal');
+const codeContent = document.getElementById('modal-code-content');
+document.addEventListener('click', e => {
+  const toggle = e.target.closest('.cmd-toggle');
+  if (toggle) {
+    const src = document.getElementById(toggle.dataset.cmdId);
+    if (src) {
+      codeContent.textContent = src.textContent;
+      overlay.classList.add('active');
+    }
+    return;
+  }
+  if (e.target === overlay || e.target.closest('.modal-close')) {
+    overlay.classList.remove('active');
+    return;
+  }
+  if (e.target.closest('.modal-copy')) {
+    navigator.clipboard.writeText(codeContent.textContent).then(() => {
+      e.target.closest('.modal-copy').textContent = 'Copied!';
+      setTimeout(() => { e.target.closest('.modal-copy').textContent = 'Copy'; }, 2000);
+    });
+    return;
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') overlay.classList.remove('active');
+});
+</script>
 </body>
 </html>

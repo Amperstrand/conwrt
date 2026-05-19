@@ -1,4 +1,4 @@
-"""USB tethering — router gets WAN via USB from Android and/or iPhone."""
+"""USB tethering presets — router gets WAN via USB from Android and/or iPhone."""
 from __future__ import annotations
 
 import textwrap
@@ -129,106 +129,72 @@ def _adb_hotplug_script() -> str:
     """)
 
 
-def _build_usb_tether(params: dict[str, Any]) -> str:
-    iface = params.get("interface", "usbwan")
-    return (
-        "# --- USB tethering (Android + iPhone) ---\n"
-        + _start_usbmuxd()
-        + _detect_usb_net_device(match_android=True, match_ios=True)
-        + "\n"
-        + _setup_interface(iface)
-        + "\n"
-        + _adb_hotplug_script()
-    )
-
-
-def _build_android(params: dict[str, Any]) -> str:
-    iface = params.get("interface", "usbwan")
-    return (
-        "# --- USB tethering (Android) ---\n"
-        + _detect_usb_net_device(match_android=True, match_ios=False)
-        + "\n"
-        + _setup_interface(iface)
-        + "\n"
-    )
-
-
-def _build_android_adb(params: dict[str, Any]) -> str:
-    iface = params.get("interface", "usbwan")
-    return (
-        "# --- USB tethering (Android + ADB auto-enable) ---\n"
-        + _detect_usb_net_device(match_android=True, match_ios=False)
-        + "\n"
-        + _setup_interface(iface)
-        + "\n"
-        + _adb_hotplug_script()
-    )
-
-
-def _build_ios(params: dict[str, Any]) -> str:
-    iface = params.get("interface", "usbwan")
-    return (
-        "# --- USB tethering (iPhone) ---\n"
-        + _start_usbmuxd()
-        + _detect_usb_net_device(match_android=False, match_ios=True, timeout=45)
-        + "\n"
-        + _setup_interface(iface)
-        + "\n"
-    )
+_IFACE_PARAM = {
+    "interface": ParamDef(type=str, default="usbwan",
+                          description="OpenWrt network interface name for USB WAN"),
+}
 
 
 register(UseCase(
     name="usb-tether",
-    description="USB WAN from Android or iPhone (auto-detects, includes ADB auto-enable for Android)",
+    description="Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.",
     packages=_ANDROID_PKGS + _IOS_PKGS + _ADB_PKG,
-    params={
-        "interface": ParamDef(type=str, default="usbwan",
-                              description="OpenWrt network interface name for USB WAN"),
-    },
-    build_configure=_build_usb_tether,
+    params=_IFACE_PARAM,
+    build_configure=lambda p: (
+        "# --- USB tethering (auto-detect) ---\n"
+        + _start_usbmuxd()
+        + _detect_usb_net_device(match_android=True, match_ios=True) + "\n"
+        + _setup_interface(p.get("interface", "usbwan")) + "\n"
+        + _adb_hotplug_script()
+    ),
     test_status="tested",
     tested_notes="GL.iNet MT3000, Android RNDIS",
     requires_capabilities=["usb"],
 ))
 
 register(UseCase(
-    name="usb-tether-android",
-    description="USB WAN from Android phone (RNDIS/CDC-ether, user enables tethering manually)",
+    name="android-tether",
+    description="USB WAN from Android phone. Enable tethering manually on the phone.",
     packages=_ANDROID_PKGS,
-    params={
-        "interface": ParamDef(type=str, default="usbwan",
-                              description="OpenWrt network interface name for USB WAN"),
-    },
-    build_configure=_build_android,
+    params=_IFACE_PARAM,
+    build_configure=lambda p: (
+        "# --- Android USB tethering (manual) ---\n"
+        + _detect_usb_net_device(match_android=True, match_ios=False) + "\n"
+        + _setup_interface(p.get("interface", "usbwan")) + "\n"
+    ),
     test_status="tested",
     tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
 ))
 
 register(UseCase(
-    name="usb-tether-android-adb",
-    description="USB WAN from Android phone (RNDIS/CDC-ether + ADB auto-enable tethering)",
+    name="android-tether-adb",
+    description="USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.",
     packages=_ANDROID_PKGS + _ADB_PKG,
-    params={
-        "interface": ParamDef(type=str, default="usbwan",
-                              description="OpenWrt network interface name for USB WAN"),
-    },
-    build_configure=_build_android_adb,
+    params=_IFACE_PARAM,
+    build_configure=lambda p: (
+        "# --- Android USB tethering (ADB auto-enable) ---\n"
+        + _detect_usb_net_device(match_android=True, match_ios=False) + "\n"
+        + _setup_interface(p.get("interface", "usbwan")) + "\n"
+        + _adb_hotplug_script()
+    ),
     test_status="tested",
     tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
 ))
 
 register(UseCase(
-    name="usb-tether-ios",
-    description="USB WAN from iPhone (ipheth + usbmuxd, user enables Personal Hotspot)",
+    name="iphone-tether",
+    description="USB WAN from iPhone. Enable Personal Hotspot manually on the phone.",
     packages=_IOS_PKGS,
-    params={
-        "interface": ParamDef(type=str, default="usbwan",
-                              description="OpenWrt network interface name for USB WAN"),
-    },
-    build_configure=_build_ios,
+    params=_IFACE_PARAM,
+    build_configure=lambda p: (
+        "# --- iPhone USB tethering ---\n"
+        + _start_usbmuxd()
+        + _detect_usb_net_device(match_android=False, match_ios=True) + "\n"
+        + _setup_interface(p.get("interface", "usbwan")) + "\n"
+    ),
     test_status="experimental",
-    tested_notes="wiki-based; needs hardware",
+    tested_notes="wiki-based; needs hardware validation",
     requires_capabilities=["usb"],
 ))

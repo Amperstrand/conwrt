@@ -274,7 +274,7 @@
       "date": "2026-05-17",
       "notes": "SUCCESS. After NOR boot (bootcount was 4), switched LEFT, power cycled. NAND booted correctly: hostname switchleft, glinet,gl-ar300m-nand DTB. Bootcount auto-reset to 0 on successful NAND boot. All U-Boot env changes persisted (bootargs fix, boot_dev=on, boot_local=nor). NAND boot survives complete NOR setup cycle."
     },
-    "usb-tether-android-adb": {
+    "android-tether-adb": {
       "tested": true,
       "date": "2026-05-17",
       "notes": "Android phone via USB. Installed kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, adb manually via SCP (no internet on router). ADB authorized (one-time phone-side accept). adb shell svc usb setFunctions rndis \u2192 usb0 appears (RNDIS). DHCP lease from phone. Ping 8.8.8.8 succeeds (38-178ms). Required packages: kmod-mii, kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-rndis, adb, zlib, libopenssl3, libatomic1."
