@@ -62,9 +62,25 @@
   .modal-code { margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.8rem; line-height: 1.5; text-align: left; white-space: pre; background: #f8f9fa; }
   .modal-copy { margin: 12px 16px; padding: 6px 16px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; align-self: flex-end; }
   .modal-copy:hover { background: #0257a5; }
+
+  /* Sticky nav */
+  .sticky-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 8px 2rem; display: flex; gap: 1.5rem; align-items: center; }
+  .sticky-nav .nav-brand { font-weight: 700; font-size: 0.95rem; color: #1a1a1a; text-decoration: none; }
+  .sticky-nav .nav-brand:hover { text-decoration: none; }
+  .sticky-nav a { color: #555; font-size: 0.85rem; text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; transition: border-color 0.15s; }
+  .sticky-nav a:hover { color: #0366d6; border-bottom-color: #0366d6; text-decoration: none; }
+  .sticky-nav a.active { color: #0366d6; border-bottom-color: #0366d6; }
+  body { padding-top: 48px; }
 </style>
 </head>
 <body>
+
+<nav class="sticky-nav">
+  <a class="nav-brand" href="#">conwrt</a>
+  <a href="#flash-methods">Flash Methods</a>
+  <a href="#testing-log">Testing Log</a>
+  <a href="#use-cases">Use Cases</a>
+</nav>
 
 <h1>conwrt Device Support Matrix</h1>
 <p class="subtitle">Auto-generated from <code>models/*.json</code> — the authoritative single source of truth.</p>
@@ -75,7 +91,7 @@
   <div class="legend-item"><span class="badge blocked">blocked</span> Known to not work</div>
 </div>
 
-<h2>Flash Methods</h2>
+<h2 id="flash-methods">Flash Methods</h2>
 <table>
   <thead>
     <tr>
@@ -89,6 +105,7 @@
           <th>recovery<br>http</th>
           <th>uboot<br>http</th>
           <th>dlink<br>hnap</th>
+          <th>edgeos<br>kernel<br>swap</th>
           <th>tftp</th>
           <th>serial<br>tftp<br>openwrt</th>
           <th>mtd<br>write</th>
@@ -113,6 +130,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
           <td><span class="badge tested">tested</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
         </tr>
@@ -124,6 +142,7 @@
           <td>NOR 16MB</td>
 <td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -149,6 +168,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
           <td><span class="badge defined">defined</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
         </tr>
@@ -161,6 +181,7 @@
 <td></td>
 <td><span class="badge defined">defined</span></td>
 <td><span class="badge tested">tested</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -185,6 +206,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
           <td><span class="badge defined">defined</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
         </tr>
@@ -203,6 +225,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
           <td><span class="badge defined">defined</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
         </tr>
@@ -214,6 +237,7 @@
           <td>eMMC 4GB</td>
 <td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -239,8 +263,28 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
           <td><span class="badge defined">defined</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Ubiquiti</td>
+          <td class="model">EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi<br><small class="id">ubnt-edgerouter-6p</small></td>
+          <td class="soc">Cavium CN7130 (Octeon III)</td>
+          <td>1024MB</td>
+          <td>eMMC 4GB + SPI NOR 8MB</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge tested">tested</span></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+          <td></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">usb</span> </td>
         </tr>
         <tr>
           <td class="vendor">Zyxel</td>
@@ -250,6 +294,7 @@
           <td>SPI NAND ~486MB (UBI)</td>
 <td></td>
 <td><span class="badge defined">defined</span></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -268,6 +313,7 @@
           <td>16 MiB SPI NOR (Macronix MX25L12835F)</td>
 <td><a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link"><span class="badge tested">tested</span><br><code>bbaf09c</code></a></td>
 <td><a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link"><span class="badge tested">tested</span><br><code>bbaf09c</code></a></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -292,6 +338,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
           <td></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">cellular</span> </td>
@@ -308,6 +355,7 @@
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><span class="badge defined">defined</span></td>
 <td></td>
 <td></td>
@@ -317,7 +365,7 @@
   </tbody>
 </table>
 
-<h2>Device Testing Log</h2>
+<h2 id="testing-log">Device Testing Log</h2>
 <p class="subtitle">Per-device tested capabilities with commit links.</p>
 <table class="testing-log">
   <thead>
@@ -363,6 +411,11 @@
 <div class="test-entry tested"><code>usb_tether_android</code> <span class="badge tested">tested</span> <span class="date">2026-05-16</span></div></td>
         </tr>
         <tr>
+          <td class="vendor">Ubiquiti</td>
+          <td class="model">EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi<br><small class="id">ubnt-edgerouter-6p</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>edgeos-kernel-swap</code> <span class="badge tested">tested</span> <span class="date">2026-05-19</span></div></td>
+        </tr>
+        <tr>
           <td class="vendor">Zyxel</td>
           <td class="model">GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M<br><small class="id">zyxel-gs1900-24e</small></td>
           <td class="test-entries"><div class="test-entry tested"><code>oem-playwright</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">Uploaded initramfs via Playwright, device booted into OpenWrt initramfs in ~90s</span> <span class="date">2026-05-18</span></div>
@@ -382,7 +435,7 @@
   </tbody>
 </table>
 
-<h2>Use Case Presets</h2>
+<h2 id="use-cases">Use Case Presets</h2>
 <table>
   <thead>
     <tr>
@@ -520,7 +573,7 @@
 
 <footer>
 Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-Last update: 2026-05-19 09:33 UTC
+Last update: 2026-05-19 13:07 UTC
 </footer>
 
 <div class="cmd-source" id="cmd-0"># --- AdGuard Home ---
@@ -1141,6 +1194,23 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') overlay.classList.remove('active');
 });
+// Sticky nav: scroll offset + active highlighting
+const navLinks = document.querySelectorAll('.sticky-nav a[href^="#"]');
+const sections = [...navLinks].map(a => document.getElementById(a.getAttribute('href').slice(1))).filter(Boolean);
+navLinks.forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  const target = document.getElementById(a.getAttribute('href').slice(1));
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}));
+function updateActive() {
+  let current = '';
+  for (const s of sections) {
+    if (s.getBoundingClientRect().top <= 80) current = s.id;
+  }
+  navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current));
+}
+window.addEventListener('scroll', updateActive, { passive: true });
+updateActive();
 </script>
 </body>
 </html>

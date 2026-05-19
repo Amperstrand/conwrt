@@ -1,0 +1,84 @@
+{
+  "id": "ubnt-edgerouter-6p",
+  "vendor": "Ubiquiti",
+  "description": "EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi",
+  "openwrt": {
+    "target": "octeon/generic",
+    "device": "ubnt,edgerouter-6p",
+    "default_ip": "192.168.1.1",
+    "profile": "ubnt_edgerouter-6p",
+    "version": "25.12.4"
+  },
+  "hardware": {
+    "soc": "Cavium CN7130 (Octeon III)",
+    "flash": "eMMC 4GB + SPI NOR 8MB",
+    "ram": "1024MB",
+    "ethernet_ports": "5x GbE + 1x SFP",
+    "wifi": "none",
+    "notes": "Boot: SPI NOR (U-Boot) -> VFAT /dev/mmcblk0p1 (vmlinux.64) -> rootfs /dev/mmcblk0p2. OpenWrt maps physical eth0=lan0(WAN), eth1-eth4=lan1-lan4(LAN), SFP=lan5. No WiFi hardware."
+  },
+  "mac_oui": [],
+  "flash_methods": {
+    "edgeos-kernel-swap": {
+      "description": "Two-stage SSH-based flash without serial cable. Stage 1: SSH to EdgeOS, replace /dev/mmcblk0p1:/vmlinux.64 with OpenWrt initramfs kernel, generate vmlinux.64.md5, reboot. Stage 2: After initramfs boots on LAN port (physical eth1-eth4), SCP sysupgrade.tar and use manual dd (NOT sysupgrade -- ubus broken in initramfs). Extract kernel to /boot/vmlinux.64, dd rootfs to /dev/mmcblk0p2. Requires bootloader v003+ (TFTP recovery fallback).",
+      "edgeos_ip": "192.168.1.1",
+      "edgeos_user": "ubnt",
+      "edgeos_password": "ubnt",
+      "boot_partition": "/dev/mmcblk0p1",
+      "kernel_path": "/vmlinux.64",
+      "md5_path": "/vmlinux.64.md5",
+      "openwrt_client_ip": "192.168.1.2",
+      "initramfs_file": "openwrt-{version}-octeon-generic-ubnt_edgerouter-6p-initramfs-kernel.bin",
+      "sysupgrade_file": "openwrt-{version}-octeon-generic-ubnt_edgerouter-6p-squashfs-sysupgrade.tar",
+      "flash_time_seconds": 240,
+      "silence_timeout": 90,
+      "port_swap_required": true,
+      "port_swap_note": "After initramfs boots, move cable from physical eth0 to physical eth1+. OpenWrt maps eth0 as WAN.",
+      "reset_instructions": "For recovery: connect to physical eth0, set laptop to 192.168.1.10/24, hold reset button while powering on for 30s until all LEDs light up, TFTP signed EdgeOS recovery image (.img.signed) to 192.168.1.20. Unsigned files rejected."
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt on this device",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 255
+    },
+    "tftp": {
+      "description": "U-Boot TFTP recovery (requires serial console or reset button + bootloader v003+)",
+      "recovery_ip": "192.168.1.20",
+      "client_ip": "192.168.1.10",
+      "client_subnet": "255.255.255.0",
+      "flash_time_seconds": 300,
+      "notes": "Reset button TFTP: hold reset while powering on ~30s, router becomes TFTP server at 192.168.1.20 on physical eth0. ONLY accepts .img.signed files (cryptographic signature required). Recovery image: dl.ubnt.com/firmwares/edgemax/v2.0.x/ER-e300.recovery.v2.0.6.*.img.signed (~112MB). Manual TFTP via serial uses .vmlinux.64 files instead."
+    }
+  },
+  "signatures": {
+    "edgeos": {
+      "source": "live observation 2026-05-19",
+      "ssh_banner": "EdgeOS",
+      "ssh_user": "ubnt",
+      "bootloader_version": "e301_003_6be37",
+      "cmdline": "root=/dev/mmcblk0p2 rootdelay=10 rw rootsqimg=squashfs.img rootsqwdir=w mtdparts=spi32766.0:2048k(boot0),2048k(boot1),64k(eeprom) console=ttyS0,115200",
+      "boot_partition_contents": ["vmlinux.64", "vmlinux.64.md5"],
+      "vmlinux64_size_bytes": 6768600,
+      "md5_file_size_bytes": 33
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "usb",
+    "serial"
+  ],
+  "tested_hardware": {
+    "edgeos-kernel-swap": {
+      "tested": true,
+      "date": "2026-05-19",
+      "notes": "OpenWrt 25.12.4 on EdgeRouter 6P (MAC 74:83:c2:XX:XX:XX). Stage 1 (kernel swap) and Stage 2 (manual dd) both successful. sysupgrade from initramfs does NOT work (ubus broken) -- use manual dd instead. TFTP recovery confirmed with signed .img.signed. Total time ~7 minutes when done correctly. First attempt failed due to sysupgrade from initramfs (bricked, required TFTP recovery). See recipes/ubiquiti/edgerouter-6p/notes.md for full lessons learned."
+    }
+  },
+  "warnings": [
+    "NEVER use sysupgrade from initramfs -- ubus/procd is non-functional, will partially write kernel and brick device",
+    "TFTP recovery ONLY accepts .img.signed files -- unsigned kernels and OpenWrt images are rejected",
+    "Physical eth0 is WAN in OpenWrt (firewall blocks SSH) -- use eth1-eth4 for LAN access after initramfs boots",
+    "SCP requires -O flag (Dropbear has no sftp-server)",
+    "Initramfs only has ash/sh, not bash -- use 'sh -c' not 'bash -c' for remote commands"
+  ]
+}

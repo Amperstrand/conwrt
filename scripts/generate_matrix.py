@@ -21,6 +21,7 @@ FLASH_METHODS = [
     "recovery-http",
     "uboot-http",
     "dlink-hnap",
+    "edgeos-kernel-swap",
     "tftp",
     "serial-tftp-openwrt",
     "mtd-write",
@@ -259,7 +260,7 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
     testing_log_section = ""
     if log_rows:
         testing_log_section = f"""
-<h2>Device Testing Log</h2>
+<h2 id="testing-log">Device Testing Log</h2>
 <p class="subtitle">Per-device tested capabilities with commit links.</p>
 <table class="testing-log">
   <thead>
@@ -338,9 +339,25 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
   .modal-code {{ margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 0.8rem; line-height: 1.5; text-align: left; white-space: pre; background: #f8f9fa; }}
   .modal-copy {{ margin: 12px 16px; padding: 6px 16px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; align-self: flex-end; }}
   .modal-copy:hover {{ background: #0257a5; }}
+
+  /* Sticky nav */
+  .sticky-nav {{ position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 8px 2rem; display: flex; gap: 1.5rem; align-items: center; }}
+  .sticky-nav .nav-brand {{ font-weight: 700; font-size: 0.95rem; color: #1a1a1a; text-decoration: none; }}
+  .sticky-nav .nav-brand:hover {{ text-decoration: none; }}
+  .sticky-nav a {{ color: #555; font-size: 0.85rem; text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; transition: border-color 0.15s; }}
+  .sticky-nav a:hover {{ color: #0366d6; border-bottom-color: #0366d6; text-decoration: none; }}
+  .sticky-nav a.active {{ color: #0366d6; border-bottom-color: #0366d6; }}
+  body {{ padding-top: 48px; }}
 </style>
 </head>
 <body>
+
+<nav class="sticky-nav">
+  <a class="nav-brand" href="#">conwrt</a>
+  <a href="#flash-methods">Flash Methods</a>
+  <a href="#testing-log">Testing Log</a>
+  <a href="#use-cases">Use Cases</a>
+</nav>
 
 <h1>conwrt Device Support Matrix</h1>
 <p class="subtitle">Auto-generated from <code>models/*.json</code> — the authoritative single source of truth.</p>
@@ -351,7 +368,7 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
   <div class="legend-item"><span class="badge blocked">blocked</span> Known to not work</div>
 </div>
 
-<h2>Flash Methods</h2>
+<h2 id="flash-methods">Flash Methods</h2>
 <table>
   <thead>
     <tr>
@@ -368,7 +385,7 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
 {rows}  </tbody>
 </table>
 {testing_log_section}
-<h2>Use Case Presets</h2>
+<h2 id="use-cases">Use Case Presets</h2>
 <table>
   <thead>
     <tr>
@@ -418,6 +435,23 @@ document.addEventListener('click', e => {{
 document.addEventListener('keydown', e => {{
   if (e.key === 'Escape') overlay.classList.remove('active');
 }});
+// Sticky nav: scroll offset + active highlighting
+const navLinks = document.querySelectorAll('.sticky-nav a[href^="#"]');
+const sections = [...navLinks].map(a => document.getElementById(a.getAttribute('href').slice(1))).filter(Boolean);
+navLinks.forEach(a => a.addEventListener('click', e => {{
+  e.preventDefault();
+  const target = document.getElementById(a.getAttribute('href').slice(1));
+  if (target) target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+}}));
+function updateActive() {{
+  let current = '';
+  for (const s of sections) {{
+    if (s.getBoundingClientRect().top <= 80) current = s.id;
+  }}
+  navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current));
+}}
+window.addEventListener('scroll', updateActive, {{ passive: true }});
+updateActive();
 </script>
 </body>
 </html>"""

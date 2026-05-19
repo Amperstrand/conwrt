@@ -279,7 +279,54 @@ Do not assume a single reboot timeout fits all hardware. Flash media and first-b
 Future device recipes should include, when known:
 
 - which physical port was used successfully
-- what “stock ready” looks like for that device
-- what “post-flash alive” looks like on the wire
+- what "stock ready" looks like for that device
+- what "post-flash alive" looks like on the wire
 - expected first-boot timing range
 - rollback trigger and recovery path
+
+### Research before flashing (ER-6P lesson, 2026-05-19)
+
+When flashing an unfamiliar target, research the specific flash path through source
+code BEFORE attempting it. A failed flash that requires recovery costs 30+ minutes.
+Twenty minutes of research into how sysupgrade works on the target architecture can
+prevent the failure entirely.
+
+Specifically:
+1. Read `target/linux/$ARCH/base-files/lib/upgrade/platform.sh` — understand what
+   `platform_do_flash()` actually does
+2. Read `package/base-files/files/sbin/sysupgrade` — check for ubus/procd dependencies
+3. If flashing from initramfs, verify the flash method works in that environment
+   (ubus is often non-functional in initramfs)
+4. Check OpenWrt issue tracker for the target architecture + "initramfs" or "sysupgrade"
+5. Know the partition layout and what a partial write looks like
+
+### Verify recovery path before starting (ER-6P lesson, 2026-05-19)
+
+A recovery image you haven't downloaded and verified is not a recovery path. Before
+any flash operation:
+
+1. Download the vendor recovery image
+2. Confirm the image format matches what the bootloader accepts (signed vs unsigned)
+3. Document the exact reset-button procedure with timing
+4. Know which physical port the recovery mode uses
+5. Test the recovery path if possible (enter recovery, verify TFTP/server responds,
+   then reboot without flashing)
+
+### Port mapping awareness (ER-6P lesson, 2026-05-19)
+
+Many devices remap physical ports differently between stock firmware and OpenWrt.
+A device that appears "dead" after flashing may simply be on the wrong port.
+Always document the stock → OpenWrt port mapping before flashing, and test
+multiple physical ports before declaring a brick.
+
+### Backup completeness (ER-6P lesson, 2026-05-19)
+
+Before any flash, pull a full backup that includes:
+- Boot partition contents (kernel + sidecar files like md5 checksums)
+- Rootfs / squashfs image
+- Device configuration
+- SSH keys and credentials
+- Partition layout and mount options
+
+Store backups on the host machine, not on the device. The backup should be
+sufficient to restore the device to its exact pre-flash state.
