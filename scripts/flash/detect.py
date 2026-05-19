@@ -23,7 +23,7 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
     """Probe the device to determine its current state.
 
-    Returns: "openwrt", "uboot", "stock-hnap", or "unknown"
+    Returns: "openwrt", "uboot", "stock-hnap", "stock-edgeos", or "unknown"
     """
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
@@ -50,6 +50,31 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                 return "stock-hnap"
         except Exception:
             pass
+
+    # EdgeOS detection — check before uboot to prevent false "uboot" detection
+    # (EdgeOS web UI returns HTML, which detect_uboot_http matches)
+    if profile and getattr(profile, 'flash_method', '') == 'edgeos-kernel-swap':
+        import shutil
+        edgeos_ip = getattr(profile, 'edgeos_ip', '192.168.1.1')
+        edgeos_user = getattr(profile, 'edgeos_user', 'ubnt')
+        edgeos_password = getattr(profile, 'edgeos_password', 'ubnt')
+        sshpass = shutil.which("sshpass")
+        if sshpass:
+            try:
+                r = subprocess.run(
+                    [sshpass, "-p", edgeos_password,
+                     "ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=5",
+                     f"{edgeos_user}@{edgeos_ip}",
+                     "cat /etc/version"],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                if r.returncode == 0:
+                    log(f"EdgeOS detected at {edgeos_ip} — device is running stock firmware")
+                    return "stock-edgeos"
+            except Exception as e:
+                log(f"EdgeOS SSH probe failed for {edgeos_ip}: {e}")
 
     try:
         found, detail = detect_uboot_http(recovery_ip)

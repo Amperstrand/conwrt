@@ -30,6 +30,7 @@ class Event(Enum):
     SERIAL_ALL_DONE = auto()
     ZYCAST_MULTICAST_DETECTED = auto()
     ZYCAST_SENDING_DONE = auto()
+    EDGEOS_PORT_SWAP_DONE = auto()
 
 
 class State(Enum):
@@ -47,6 +48,11 @@ class State(Enum):
     SERIAL_TFTP_FLASHING = auto()
     ZYCAST_WAITING_FOR_DEVICE = auto()
     ZYCAST_SENDING = auto()
+    EDGEOS_STAGE1 = auto()
+    EDGEOS_STAGE1_REBOOTING = auto()
+    EDGEOS_PORT_SWAP = auto()
+    EDGEOS_STAGE2_UPLOADING = auto()
+    EDGEOS_STAGE2_FLASHING = auto()
     REBOOTING = auto()
     OPENWRT_BOOTING = auto()
     COMPLETE = auto()

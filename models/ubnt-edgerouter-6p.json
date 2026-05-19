@@ -30,7 +30,7 @@
       "openwrt_client_ip": "192.168.1.2",
       "initramfs_file": "openwrt-{version}-octeon-generic-ubnt_edgerouter-6p-initramfs-kernel.bin",
       "sysupgrade_file": "openwrt-{version}-octeon-generic-ubnt_edgerouter-6p-squashfs-sysupgrade.tar",
-      "flash_time_seconds": 240,
+      "flash_time_seconds": 420,
       "silence_timeout": 90,
       "port_swap_required": true,
       "port_swap_note": "After initramfs boots, move cable from physical eth0 to physical eth1+. OpenWrt maps eth0 as WAN.",

@@ -8,6 +8,10 @@ def find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str,
     methods = model.get("flash_methods", {})
     if method_hint and method_hint in methods:
         return method_hint, methods[method_hint]
+    # edgeos-kernel-swap is preferred for initial install from stock firmware
+    for method_name in ("edgeos-kernel-swap",):
+        if method_name in methods:
+            return method_name, methods[method_name]
     for method_name, method_cfg in methods.items():
         if "recovery_ip" in method_cfg:
             return method_name, method_cfg
@@ -50,6 +54,7 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     is_zycast = method_name == "zycast"
     is_sysupgrade_only = method_name == "sysupgrade" and "recovery_ip" not in fm
     is_mtd_write = method_name == "mtd-write"
+    is_edgeos_kernel_swap = method_name == "edgeos-kernel-swap"
 
     if is_serial_tftp:
         client_ip = fm.get("tftp_server_ip", "192.168.1.254")
@@ -60,6 +65,9 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     elif is_sysupgrade_only or is_mtd_write:
         client_ip = ""
         recovery_ip = model["openwrt"]["default_ip"]
+    elif is_edgeos_kernel_swap:
+        client_ip = fm.get("openwrt_client_ip", "")
+        recovery_ip = fm.get("edgeos_ip", "192.168.1.1")
     else:
         client_ip = fm["client_ip"]
         recovery_ip = fm["recovery_ip"]
@@ -83,6 +91,17 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
         openwrt_client_ip=fm.get("openwrt_client_ip", client_ip),
         is_serial_tftp=is_serial_tftp,
         is_zycast=is_zycast,
+        is_edgeos_kernel_swap=is_edgeos_kernel_swap,
+        edgeos_ip=fm.get("edgeos_ip", "192.168.1.1"),
+        edgeos_user=fm.get("edgeos_user", "ubnt"),
+        edgeos_password=fm.get("edgeos_password", "ubnt"),
+        boot_partition=fm.get("boot_partition", "/dev/mmcblk0p1"),
+        kernel_path=fm.get("kernel_path", "/vmlinux.64"),
+        md5_path=fm.get("md5_path", "/vmlinux.64.md5"),
+        port_swap_required=fm.get("port_swap_required", False),
+        port_swap_note=fm.get("port_swap_note", ""),
+        initramfs_file=fm.get("initramfs_file", ""),
+        sysupgrade_file=fm.get("sysupgrade_file", ""),
         serial_baud=fm.get("serial_baud", 115200),
         bootmenu_timeout=fm.get("bootmenu_timeout_seconds", 30),
         bootmenu_interrupt=fm.get("bootmenu_interrupt", "ctrl-c"),
