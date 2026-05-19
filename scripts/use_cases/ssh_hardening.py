@@ -46,7 +46,9 @@ register(UseCase(
         "disable_gateway_ports": ParamDef(type=bool, default=True,
             description="Disable remote port forwarding (GatewayPorts)"),
     },
-    build_defaults=_build_ssh_hardening,
+    build_configure=_build_ssh_hardening,
+    test_status="untested",
+    tested_notes="",
     requires_capabilities=[],
     requires_post_flash=False,
 ))

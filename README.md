@@ -151,6 +151,18 @@ python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 \
   --image fw.bin --no-upload
 ```
 
+### Profile plan and configure (dry-run)
+
+Preview operator profile from `config.toml` without changing a router:
+
+```bash
+python3 scripts/conwrt.py profile plan --model-id dlink-covr-x1860-a1
+python3 scripts/conwrt.py configure --dry-run --ip 192.168.1.1
+python3 scripts/firmware-manager.py request --profile dlink_covr-x1860-a1 --dry-run
+```
+
+Use cases and packages are defined once in `scripts/use_cases/` and applied via both ASU builds and post-install SSH.
+
 ### List available device models
 
 ```bash

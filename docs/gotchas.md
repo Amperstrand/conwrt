@@ -60,6 +60,25 @@ The HTTP form field for firmware upload is "firmware" (validated on MT3000 and A
 ### Browser requirements
 Use Chrome or Edge for U-Boot web UI. Firefox has known issues that may brick the device during upload.
 
+## Device Identity
+
+### board.json is firmware identity, NOT hardware identity
+
+`/etc/board.json` reflects what firmware was *flashed onto the device*, not what the device physically is. If someone previously force-flashed the wrong firmware (e.g., x1860 image on ex5700 hardware), board.json will lie.
+
+**The sysupgrade hardware validation check is the authoritative source of truth.** It reads from firmware metadata that is set at build time and verified against the actual device. When sysupgrade says "Device X not supported by this image, supported devices: Y", it means the hardware is X and the image is for Y.
+
+**Incident (2026-05-18):** A Zyxel EX5700 had been previously flashed with D-Link COVR-X1860 firmware. `board.json` reported `dlink,covr-x1860-a1`. conwrt auto-detected it as x1860 and sysupgraded successfully (first flash). On the second manual sysupgrade attempt, sysupgrade's hardware check correctly identified `zyxel,ex5700-telenor` and rejected the x1860 image. The operator used `sysupgrade -F` to force-flash anyway, writing x1860 firmware to ex5700 hardware — bricking the device.
+
+**Lesson:** Never override sysupgrade's device validation. If the device identity doesn't match the image, STOP and investigate. The check exists to prevent exactly this class of failure.
+
+### How to verify real hardware identity
+
+1. `sysupgrade -n /tmp/firmware.bin` without `-F` — the error message tells you the real device
+2. `cat /tmp/sysinfo/board_name` — another source of device identity from the running firmware
+3. Physical inspection — labels, MAC OUI, case markings
+4. Match MAC OUI prefixes against `models/*.json` — each model has `mac_oui_prefixes` defined
+
 ## Security
 
 ### SSH key mismatch: ASU bake vs. SSH/SCP connection

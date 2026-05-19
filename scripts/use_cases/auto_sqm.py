@@ -239,7 +239,9 @@ register(UseCase(
         "dynamic_interval_hours": ParamDef(type=int, default=4,
                                            description="Re-tune interval in hours (dynamic mode)"),
     },
-    build_defaults=_build_auto_sqm,
+    build_configure=_build_auto_sqm,
+    test_status="experimental",
+    tested_notes="not validated on hardware",
     requires_capabilities=[],
     requires_post_flash=False,
 ))

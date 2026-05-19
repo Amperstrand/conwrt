@@ -50,7 +50,9 @@ register(UseCase(
         "captive": ParamDef(type=bool, default=True,
                             description="Enable captive portal detection"),
     },
-    build_defaults=_build_travelmate,
+    build_configure=_build_travelmate,
+    test_status="experimental",
+    tested_notes="wiki-based",
     requires_capabilities=["wifi"],
     requires_post_flash=False,
 ))

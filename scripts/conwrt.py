@@ -47,113 +47,40 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssh_utils import ssh_cmd, scp_cmd
 from config import load_config as _load_config
-from model_loader import load_model, list_models
+from model_loader import load_model, list_models, openwrt_asu_profile, find_model_by_board_name
+from flash.device_profile import build_profile_from_model as _build_profile_from_model
+from flash.device_profile import find_recovery_flash_method as _find_recovery_flash_method
+from flash.context import (
+    DEFAULT_IP,
+    Event,
+    PcapMonitorConfig,
+    REBOOT_TIMEOUT,
+    SILENCE_TIMEOUT_DEFAULT,
+    State,
+    Timeline,
+    get_link_state,
+    log,
+    say,
+    sha256_file,
+    ts,
+    ts_str,
+)
+from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
+from flash.detect import check_ssh, detect_boot_state as _detect_boot_state
 from sticker_creds import dump_and_extract_config2, apply_credentials_to_openwrt
 from zycast import run_zycast_auto
 import importlib
 _firmware_manager = importlib.import_module("firmware-manager")
 firmware_request = _firmware_manager.cmd_request
 firmware_find = _firmware_manager.cmd_find
-build_mgmt_wifi_script = _firmware_manager.build_mgmt_wifi_script
 IMAGES_DIR = _firmware_manager.IMAGES_DIR
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 save_fingerprint = _router_fingerprint.save_fingerprint
 
-from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state, configure_interface_ip
-
-
-DEFAULT_IP = "192.168.1.1"
-REBOOT_TIMEOUT = 360
-SILENCE_TIMEOUT_DEFAULT = 30
-
-
-def _find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str, dict]:
-    methods = model.get("flash_methods", {})
-    if method_hint and method_hint in methods:
-        return method_hint, methods[method_hint]
-    for method_name, method_cfg in methods.items():
-        if "recovery_ip" in method_cfg:
-            return method_name, method_cfg
-    for method_name in ("zycast", "dlink-hnap"):
-        if method_name in methods:
-            return method_name, methods[method_name]
-    available = list(methods.keys())
-    serial_methods = [m for m in available if m.startswith("serial-tftp-")]
-    if serial_methods and not method_hint:
-        raise ValueError(
-            f"Model '{model.get('id', '?')}' has no HTTP recovery method. "
-            f"Use --serial-method to select a serial flash method. "
-            f"Available serial methods: {serial_methods}"
-        )
-    raise ValueError(
-        f"No HTTP recovery flash method found in model '{model.get('id', '?')}'. "
-        f"Available methods: {available}"
-    )
-
-
-def _build_profile_from_model(model_id: str, serial_method: str = "",
-                               flash_method: str = "") -> SimpleNamespace:
-    """Load a model and build a runtime profile namespace for the recovery script.
-
-    Returns a SimpleNamespace with the same attributes that DeviceProfile used to have,
-    so the rest of the state machine code works unchanged.
-    """
-    model = load_model(model_id)
-    if flash_method:
-        method_hint = flash_method
-    elif serial_method:
-        method_hint = f"serial-tftp-{serial_method}"
-    else:
-        method_hint = ""
-    method_name, fm = _find_recovery_flash_method(model, method_hint)
-
-    is_serial_tftp = method_name.startswith("serial-tftp")
-    is_zycast = method_name == "zycast"
-
-    if is_serial_tftp:
-        client_ip = fm.get("tftp_server_ip", "192.168.1.254")
-        recovery_ip = fm.get("tftp_router_ip", "192.168.1.1")
-    elif is_zycast:
-        client_ip = "192.168.1.2"
-        recovery_ip = model["openwrt"]["default_ip"]
-    else:
-        client_ip = fm["client_ip"]
-        recovery_ip = fm["recovery_ip"]
-
-    return SimpleNamespace(
-        name=model["id"],
-        vendor=model["vendor"],
-        description=model["description"],
-        flash_method=method_name,
-        recovery_ip=recovery_ip,
-        client_ip=client_ip,
-        client_subnet=fm.get("client_subnet", "255.255.255.0"),
-        reset_instructions=fm.get("reset_instructions", ""),
-        led_pattern=fm.get("led_pattern", ""),
-        upload_endpoint=fm.get("upload_endpoint", ""),
-        upload_field=fm.get("upload_field", ""),
-        trigger_flash_endpoint=fm.get("trigger_flash_endpoint", ""),
-        flash_time_seconds=fm.get("flash_time_seconds", 120),
-        silence_timeout=fm.get("silence_timeout", 30),
-        openwrt_ip=model["openwrt"]["default_ip"],
-        openwrt_client_ip=fm.get("openwrt_client_ip", client_ip),
-        is_serial_tftp=is_serial_tftp,
-        is_zycast=is_zycast,
-        serial_baud=fm.get("serial_baud", 115200),
-        bootmenu_timeout=fm.get("bootmenu_timeout_seconds", 30),
-        bootmenu_interrupt=fm.get("bootmenu_interrupt", "ctrl-c"),
-        bootmenu_select_console=fm.get("bootmenu_select_console", "0"),
-        tftp_server_ip=fm.get("tftp_server_ip", ""),
-        lan_port=fm.get("lan_port", ""),
-        uboot_commands=fm.get("uboot_commands", []),
-        images=fm.get("images", {}),
-        eth_prime=fm.get("eth_prime", ""),
-        zycast_multicast_group=fm.get("multicast_group", "225.0.0.0"),
-        zycast_multicast_port=fm.get("multicast_port", 5631),
-        zycast_image_type=fm.get("image_type", "ras"),
-        default_password=fm.get("default_password", ""),
-    )
+from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state, configure_interface_ip, remove_interface_ip
+from profile import apply_plan, build_plan, print_plan
+from profile.wifi import build_mgmt_wifi_script
 
 
 def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
@@ -162,55 +89,6 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
     openwrt_client = profile.openwrt_client_ip
     if openwrt_client and openwrt_client != profile.client_ip:
         configure_interface_ip(interface, openwrt_client, "24")
-
-
-def _detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
-    """Probe the device to determine its current state.
-
-    Returns: "openwrt", "uboot", "stock-hnap", or "unknown"
-    """
-    openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
-    recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
-
-    try:
-        if check_ssh(openwrt_ip):
-            log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
-            return "openwrt"
-    except Exception as e:
-        log(f"SSH probe failed for {openwrt_ip}: {e}")
-
-    # When flash_method is dlink-hnap, check HNAP FIRST — the stock firmware
-    # also responds with HTML at the recovery IP, so detect_uboot_http would
-    # falsely classify it as "uboot" (line 492: startsWith("<!DOCTYPE")).
-    if profile and getattr(profile, 'flash_method', '') == 'dlink-hnap':
-        try:
-            hnap_url = f"http://{recovery_ip}/HNAP1/"
-            r = subprocess.run(
-                ["curl", "-s", "--max-time", "3", hnap_url],
-                capture_output=True, text=True, timeout=5, check=False,
-            )
-            if "HNAP" in r.stdout or "soap" in r.stdout.lower():
-                log(f"HNAP API detected at {recovery_ip} — device is running stock firmware")
-                return "stock-hnap"
-        except Exception:
-            pass
-
-    try:
-        found, detail = detect_uboot_http(recovery_ip)
-        if found:
-            log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
-            return "uboot"
-    except Exception as e:
-        log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
-
-    if profile and profile.openwrt_ip and profile.recovery_ip:
-        if profile.openwrt_ip != "192.168.1.1" or profile.recovery_ip != "192.168.0.1":
-            log("No SSH or recovery HTTP detected on profile IPs — device may be on a different subnet")
-        else:
-            log("No SSH or recovery HTTP detected — device state unknown")
-    else:
-        log("No SSH or recovery HTTP detected — device state unknown")
-    return "unknown"
 
 
 def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
@@ -284,18 +162,8 @@ def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 180) -> bool:
 
 
 def _find_model_id_by_board(board_name: str) -> Optional[str]:
-    """Search models/*.json for a matching board name in openwrt.device."""
-    if not board_name:
-        return None
-    try:
-        for model_info in list_models():
-            model = load_model(model_info["id"])
-            device = model.get("openwrt", {}).get("device", "")
-            if device == board_name:
-                return model_info["id"]
-    except Exception:
-        pass
-    return None
+    model = find_model_by_board_name(board_name)
+    return model["id"] if model else None
 
 
 def _detect_ssh_key_path() -> str:
@@ -375,207 +243,6 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
 def _arp_target_for_profile(profile: SimpleNamespace) -> str:
     parts = profile.recovery_ip.rsplit(".", 1)
     return f"{parts[0]}.2"
-
-
-class Event(Enum):
-    LINK_DOWN = auto()
-    LINK_UP = auto()
-    UBOOT_HTTP = auto()
-    UBOOT_ARP_192_168_1_2 = auto()
-    ICMPV6_FROM_ROUTER = auto()
-    SSH_UP = auto()
-    FAILSAFE_BROADCAST = auto()
-    NO_PACKETS_FOR_N_SECONDS = auto()
-    UPLOAD_COMPLETE = auto()
-    FLASH_TRIGGERED = auto()
-    SERIAL_UBOOT_READY = auto()
-    SERIAL_COMMAND_DONE = auto()
-    SERIAL_ALL_DONE = auto()
-    ZYCAST_MULTICAST_DETECTED = auto()
-    ZYCAST_SENDING_DONE = auto()
-
-
-class State(Enum):
-    DETECTING = auto()
-    SYSUPGRADE_UPLOADING = auto()
-    SYSUPGRADE_FLASHING = auto()
-    SYSUPGRADE_REBOOTING = auto()
-    SYSUPGRADE_BOOTING = auto()
-    WAITING_FOR_POWER_OFF = auto()
-    WAITING_FOR_UBOOT = auto()
-    UBOOT_UPLOADING = auto()
-    UBOOT_FLASHING = auto()
-    SERIAL_WAITING_FOR_BOOTMENU = auto()
-    SERIAL_UBOOT_INTERACTING = auto()
-    SERIAL_TFTP_FLASHING = auto()
-    ZYCAST_WAITING_FOR_DEVICE = auto()
-    ZYCAST_SENDING = auto()
-    REBOOTING = auto()
-    OPENWRT_BOOTING = auto()
-    COMPLETE = auto()
-    FAILED = auto()
-
-
-@dataclass
-class Timeline:
-    power_off: Optional[float] = None
-    link_up: Optional[float] = None
-    uboot_http_first: Optional[float] = None
-    upload_start: Optional[float] = None
-    upload_complete: Optional[float] = None
-    flash_triggered: Optional[float] = None
-    flash_complete: Optional[float] = None
-    first_openwrt_packet: Optional[float] = None
-    ssh_available: Optional[float] = None
-    recovery_start: Optional[float] = None
-
-
-@dataclass
-class PcapMonitorConfig:
-    interface: str
-    pcap_path: str
-    recovery_ip: str = DEFAULT_IP
-    router_mac_openwrt: str = ""
-    router_mac_uboot: str = ""
-    uboot_ip: str = DEFAULT_IP
-    silence_timeout: int = SILENCE_TIMEOUT_DEFAULT
-    zycast_multicast_group: str = ""
-    zycast_multicast_port: int = 0
-
-
-def ts() -> float:
-    return time.time()
-
-
-def ts_str(t: float) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(t))
-
-
-def say(msg: str) -> None:
-    import platform
-    if platform.system() == "Darwin":
-        try:
-            subprocess.run(["say", "-v", "Samantha", msg], check=False, timeout=30)
-        except subprocess.TimeoutExpired:
-            pass
-    else:
-        print(f"\033[1m>>> {msg}\033[0m")
-        sys.stdout.flush()
-
-
-def log(msg: str) -> None:
-    t = time.strftime("%H:%M:%S")
-    print(f"  [{t}] {msg}")
-    sys.stdout.flush()
-
-
-def get_link_state(interface: str) -> bool:
-    return platform_get_link_state(interface)
-
-
-def sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "--max-time", "2", f"http://{recovery_ip}/"],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        # U-Boot recovery pages contain these distinctive markers.
-        # D-Link stock firmware also returns HTML but with "D-LINK" in title,
-        # so exclude that to avoid false "uboot" classification.
-        if "FIRMWARE UPDATE" in r.stdout or "firmware" in r.stdout.lower():
-            if "D-LINK" not in r.stdout and "D-Link" not in r.stdout:
-                return True, "firmware page"
-        if "Recovery" in r.stdout and ("D-Link" not in r.stdout or "Recovery Mode" in r.stdout):
-            return True, "recovery page"
-        if r.stdout.strip().startswith("<!DOCTYPE"):
-            if "HNAP1" not in r.stdout and "D-LINK" not in r.stdout:
-                return True, "HTML response"
-        return False, r.stdout[:100] if r.stdout.strip() else "no response"
-    except Exception as e:
-        return False, str(e)[:80]
-
-
-def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 300) -> tuple[bool, str]:
-    size_mb = os.path.getsize(image_path) / 1024 / 1024
-    endpoint = f"http://{profile.recovery_ip}{profile.upload_endpoint}"
-    log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB) to {profile.upload_endpoint}...")
-    try:
-        r = subprocess.run(
-            [
-                "curl", "-sk", "--show-error",
-                "-H", "Expect:",
-                "--max-time", str(timeout),
-                "-F", f"{profile.upload_field}=@{image_path};type=application/octet-stream",
-                endpoint,
-            ],
-            capture_output=True, text=True, timeout=timeout + 30, check=False,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            response_text = r.stdout.strip()
-            # D-Link and similar routers return HTML instead of "size md5hash"
-            if response_text.lower().startswith("<!doctype") or response_text.lower().startswith("<html"):
-                log("Upload accepted (HTML response)")
-                return True, response_text[:200]
-            # GL.iNet format: "size md5hash"
-            parts = response_text.split()
-            uboot_md5 = parts[1] if len(parts) > 1 else "?"
-            log(f"Upload accepted: size={parts[0]} bytes, uboot_md5={uboot_md5}")
-            return True, response_text
-        log(f"Upload failed (exit {r.returncode}): {r.stderr[:300]}")
-        return False, r.stderr[:300]
-    except subprocess.TimeoutExpired:
-        log("Upload timed out.")
-        return False, "timeout"
-    except Exception as e:
-        log(f"Upload error: {e}")
-        return False, str(e)
-
-
-def trigger_flash(profile: SimpleNamespace) -> bool:
-    if not profile.trigger_flash_endpoint:
-        return True
-    endpoint = profile.trigger_flash_endpoint
-    # GL.iNet U-Boot uses /result which blocks until flash completes.
-    # Allow up to flash_time_seconds + 60s for the response.
-    flash_timeout = profile.flash_time_seconds + 60
-    log(f"Triggering flash via {endpoint} (timeout: {flash_timeout}s)...")
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "--max-time", str(flash_timeout),
-             f"http://{profile.recovery_ip}{endpoint}"],
-            capture_output=True, text=True, timeout=flash_timeout + 30, check=False,
-        )
-        response = r.stdout.strip()
-        if response == "success":
-            log(f"Flash completed successfully ({endpoint} returned 'success').")
-            return True
-        if "Update in progress" in r.stdout:
-            log("Flash triggered — 'Update in progress' page returned.")
-            return True
-        if response:
-            log(f"Flash response: {response[:100]}")
-            if "success" in response.lower():
-                return True
-        else:
-            log(f"Empty response from {endpoint} — flash may have been consumed already.")
-            return True
-    except subprocess.TimeoutExpired:
-        log(f"Flash trigger timed out after {flash_timeout}s — flash may still be in progress.")
-        return True
-    except Exception as e:
-        log(f"Flash trigger error: {e}")
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -985,191 +652,53 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# WiFi STA/AP configuration (post-flash via SSH, reusable for ASU defaults)
-# ---------------------------------------------------------------------------
+def _apply_profile_post_flash(
+    ip: str,
+    ssh_key: str = "",
+    cfg: object = None,
+    model_id: str = "",
+    interface: str = "",
+    old_client_ip: str = "",
+    *,
+    password: Optional[str] = None,
+    wan_ssh: Optional[bool] = None,
+    ssh_key_path: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Apply config.toml profile via unified plan (WiFi, use cases, LAN IP)."""
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return ip
 
-_BAND_TO_UCI = {
-    "2.4ghz": "2g",
-    "5ghz": "5g",
-    "5ghz-low": "5g",
-    "5ghz-high": "5g",
-    "6ghz": "6g",
-}
+    model_caps: list[str] = []
+    if model_id:
+        try:
+            model = load_model(model_id)
+            model_caps = model.get("capabilities", [])
+        except FileNotFoundError:
+            pass
 
-
-def _wifi_detect_radio_shell(band: str) -> str:
-    """Return a shell script snippet that prints the radio name matching *band*.
-
-    The script iterates all ``wifi-device`` sections in ``/etc/config/wireless``
-    and checks the ``band`` option (modern OpenWrt 23.05+) or falls back to
-    channel-based detection (legacy).  Prints e.g. ``radio1`` on stdout.
-    Prints nothing if no matching radio is found.
-
-    This is intentionally a pure shell string so it can be embedded in both
-    SSH commands (post-flash) and first-boot ``uci-defaults`` scripts (ASU).
-    """
-    uci_band = _BAND_TO_UCI.get(band, band)
-    # For "5ghz-low"/"5ghz-high" we match 5g — channel selection happens later.
-    # Probe radio0..radio3 directly (avoids grep/sed escaping issues over SSH).
-    return (
-        "for _r in radio0 radio1 radio2 radio3; do "
-        "uci -q get wireless.$_r.type >/dev/null || continue; "
-        f'_b=$(uci -q get "wireless.$_r.band"); '
-        f'if [ "$_b" = "{uci_band}" ]; then echo "$_r"; exit 0; fi; '
-        # Legacy fallback: channel 1-14 = 2g, 36+ = 5g
-        f'_ch=$(uci -q get "wireless.$_r.channel"); '
-        'case "$_ch" in '
-        r"'') ;; "
-        '[0-9]|1[0-4]) '
-        f'if [ "{uci_band}" = "2g" ]; then echo "$_r"; exit 0; fi ;; '
-        '3[0-9]|4[0-9]|5[0-9]|6[0-9]|1[0-6][0-9]) '
-        f'if [ "{uci_band}" = "5g" ]; then echo "$_r"; exit 0; fi ;; '
-        'esac; '
-        "done"
+    effective_wan_ssh = cfg.wan_ssh if wan_ssh is None else wan_ssh
+    plan = build_plan(
+        cfg,
+        mode="preview" if dry_run else "post_install",
+        model_capabilities=model_caps,
+        ssh_key_path=ssh_key_path,
+        password=password,
+        wan_ssh=effective_wan_ssh,
     )
+    if not dry_run:
+        log("Applying profile via SSH...")
+    ip = apply_plan(plan, ip, ssh_key=ssh_key, dry_run=dry_run, log=log)
 
-
-def _wifi_sta_uci_commands(radio: str, ssid: str, encryption: str,
-                           key: str, network: str = "wan") -> list[str]:
-    """Return uci command lines to configure a radio in STA (client) mode.
-
-    Delegates to the shared generator in firmware-manager.
-    """
-    return _firmware_manager.wifi_sta_uci_lines(radio, ssid, encryption, key, network)
-
-
-def _wifi_ap_uci_commands(radio: str, ssid: str, encryption: str,
-                          key: str, channel: str = "auto",
-                          network: str = "lan") -> list[str]:
-    """Return uci command lines to customize AP settings on a radio.
-
-    Delegates to the shared generator in firmware-manager.
-    """
-    return _firmware_manager.wifi_ap_uci_lines(radio, ssid, encryption, key, channel, network)
-
-
-def _apply_wifi_config_post_flash(ip: str, ssh_key: str = "",
-                                   cfg: object = None) -> None:
-    """Apply [network.sta] and [network.ap] config via SSH after flashing.
-
-    Detects the right radio for each band and applies uci commands.
-    This is the post-flash SSH flow — the ASU first-boot flow reuses the
-    same uci command generators via ``_build_defaults()``.
-    """
-    from config import ConwrtConfig
-    if not isinstance(cfg, ConwrtConfig):
-        return
-    sta = cfg.wifi_sta
-    ap = cfg.wifi_ap
-    if not sta and not ap:
-        return
-
-    log("Applying WiFi configuration via SSH...")
-
-    if sta:
-        log(f"  STA: detecting radio for band '{sta.band}'...")
-        detect_cmd = _wifi_detect_radio_shell(sta.band)
-        r = subprocess.run(
-            ssh_cmd(ip, detect_cmd, key=ssh_key or None, connect_timeout=10),
-            capture_output=True, text=True, timeout=30, check=False,
+    if not dry_run and cfg.lan_ip and interface:
+        new_ip = _apply_lan_ip_post_flash(
+            ip, ssh_key=ssh_key, cfg=cfg,
+            interface=interface, old_client_ip=old_client_ip,
         )
-        radio = r.stdout.strip()
-        if not radio:
-            log(f"  ⚠ STA: no radio found for band '{sta.band}' — skipping")
-        else:
-            log(f"  STA: using {radio} for SSID '{sta.ssid}'")
-            cmds = _wifi_sta_uci_commands(radio, sta.ssid, sta.encryption, sta.key)
-            cmds += ["uci commit wireless", "wifi reload"]
-            uci_chain = " && ".join(cmds)
-            r2 = subprocess.run(
-                ssh_cmd(ip, uci_chain, key=ssh_key or None, connect_timeout=10),
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            if r2.returncode == 0:
-                log(f"  ✓ STA: configured on {radio}")
-            else:
-                log(f"  ⚠ STA: uci commands failed (rc={r2.returncode})")
-                if r2.stderr:
-                    log(f"    stderr: {r2.stderr.strip()[:200]}")
-
-    if ap:
-        log(f"  AP: detecting radio for band '{ap.band}'...")
-        detect_cmd = _wifi_detect_radio_shell(ap.band)
-        r = subprocess.run(
-            ssh_cmd(ip, detect_cmd, key=ssh_key or None, connect_timeout=10),
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-        radio = r.stdout.strip()
-        if not radio:
-            log(f"  ⚠ AP: no radio found for band '{ap.band}' — skipping")
-        else:
-            log(f"  AP: using {radio} for SSID '{ap.ssid}'")
-            cmds = _wifi_ap_uci_commands(radio, ap.ssid, ap.encryption, ap.key, ap.channel)
-            cmds += ["uci commit wireless", "wifi reload"]
-            uci_chain = " && ".join(cmds)
-            r2 = subprocess.run(
-                ssh_cmd(ip, uci_chain, key=ssh_key or None, connect_timeout=10),
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            if r2.returncode == 0:
-                log(f"  ✓ AP: configured on {radio}")
-            else:
-                log(f"  ⚠ AP: uci commands failed (rc={r2.returncode})")
-                if r2.stderr:
-                    log(f"    stderr: {r2.stderr.strip()[:200]}")
-
-
-def _apply_use_cases_post_flash(
-    ip: str, ssh_key: str = "", cfg: object = None,
-    model_capabilities: Optional[list[str]] = None,
-) -> None:
-    from config import ConwrtConfig
-    if not isinstance(cfg, ConwrtConfig):
-        return
-    if not cfg.use_cases:
-        return
-
-    from use_cases import registry as _uc_registry, apply_defaults as _apply_defaults
-    uc_reg = _uc_registry()
-
-    for uc_cfg in cfg.use_cases:
-        uc = uc_reg.get(uc_cfg.name)
-        if uc is None:
-            log(f"  ⚠ use case '{uc_cfg.name}': unknown, skipping")
-            continue
-        if uc.packages:
-            log(f"  ⊘ use case '{uc_cfg.name}': skipped (requires packages: {', '.join(uc.packages)})")
-            continue
-        if model_capabilities and uc.requires_capabilities:
-            missing = set(uc.requires_capabilities) - set(model_capabilities)
-            if missing:
-                log(f"  ⊘ use case '{uc_cfg.name}': skipped (missing capabilities: {', '.join(sorted(missing))})")
-                continue
-
-        resolved = _apply_defaults(uc_cfg.name, uc_cfg.params)
-        script = uc.build_defaults(resolved)
-        if not script or not script.strip():
-            continue
-
-        log(f"  use case '{uc_cfg.name}': applying via SSH...")
-        uci_chain = "; ".join(
-            line for line in script.strip().splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        )
-        if not uci_chain:
-            continue
-
-        r = subprocess.run(
-            ssh_cmd(ip, uci_chain, key=ssh_key or None, connect_timeout=10),
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        if r.returncode == 0:
-            log(f"  ✓ use case '{uc_cfg.name}': applied")
-        else:
-            log(f"  ⚠ use case '{uc_cfg.name}': failed (rc={r.returncode})")
-            if r.stderr:
-                log(f"    stderr: {r.stderr.strip()[:200]}")
+        if new_ip:
+            ip = new_ip
+    return ip
 
 
 def _apply_sticker_credentials_post_flash(
@@ -1313,6 +842,92 @@ def _register_wireguard_post_flash(
     )
 
     return pub_key
+
+
+def _client_ip_for_subnet(router_ip: str) -> str:
+    """Derive a client IP on the same /24 subnet as router_ip.
+
+    Takes the first three octets from router_ip and uses .254 as the client.
+    """
+    octets = router_ip.split(".")
+    if len(octets) != 4:
+        return ""
+    return f"{octets[0]}.{octets[1]}.{octets[2]}.254"
+
+
+def _apply_lan_ip_post_flash(
+    ip: str, ssh_key: str = "", cfg: object = None,
+    interface: str = "", old_client_ip: str = "",
+) -> str:
+    """Change the router's LAN IP and reconnect on the new subnet.
+
+    This MUST be the last post-flash step — the network restart will drop SSH.
+    After changing the router's LAN IP:
+      1. Remove old client IP alias from the interface
+      2. Add new client IP alias on the new subnet
+      3. Wait for the router to come back on the new IP
+      4. Verify SSH on the new IP
+
+    Returns the new router IP, or empty string on failure.
+    """
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return ""
+    if not cfg.lan_ip:
+        return ""
+    if not interface:
+        log("  ⚠ LAN IP: no interface — skipping IP change")
+        return ""
+
+    new_ip = cfg.lan_ip
+    if new_ip == ip:
+        return new_ip
+
+    new_client_ip = _client_ip_for_subnet(new_ip)
+    if not new_client_ip:
+        log(f"  ⚠ LAN IP: invalid target IP '{new_ip}'")
+        return ""
+
+    log(f"  Changing LAN IP from {ip} to {new_ip}...")
+    key = ssh_key or None
+
+    uci_commands = " && ".join([
+        f"uci set network.lan.ipaddr='{new_ip}'",
+        "uci commit network",
+        "(/etc/init.d/network reload >/dev/null 2>&1) &",
+        "exit 0",
+    ])
+    try:
+        r = subprocess.run(
+            ssh_cmd(ip, uci_commands, key=key, connect_timeout=10),
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        log(f"  LAN IP change command sent (rc={r.returncode})")
+    except subprocess.TimeoutExpired:
+        log("  LAN IP change: SSH session ended (expected — network restarting)")
+
+    time.sleep(5)
+
+    if old_client_ip:
+        remove_interface_ip(interface, old_client_ip, "24")
+
+    plat = detect_platform()
+    if plat == "darwin":
+        subprocess.run(["sudo", "arp", "-d", ip], capture_output=True, check=False)
+        subprocess.run(["sudo", "arp", "-d", new_ip], capture_output=True, check=False)
+    else:
+        subprocess.run(["ip", "neigh", "flush", "to", ip], capture_output=True, check=False)
+        subprocess.run(["ip", "neigh", "flush", "to", new_ip], capture_output=True, check=False)
+
+    configure_interface_ip(interface, new_client_ip, "24")
+
+    log(f"  Waiting for router at {new_ip} (client IP {new_client_ip})...")
+    if _wait_for_sysupgrade_reboot(new_ip, timeout=120):
+        log(f"  ✓ LAN IP changed to {new_ip}")
+        return new_ip
+    else:
+        log(f"  ⚠ LAN IP: router did not come back at {new_ip}")
+        return ""
 
 
 def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
@@ -2215,15 +1830,7 @@ def _validate_args(args: argparse.Namespace) -> Optional[str]:
 
 
 def _resolve_asu_profile(model_id: str) -> str:
-    try:
-        model = load_model(model_id)
-        profile = model.get("openwrt", {}).get("profile", "")
-        if profile:
-            return profile
-        # Model JSON "id" field uses ASU profile naming (e.g. "dlink_covr-x1860-a1")
-        return model.get("id", model_id)
-    except FileNotFoundError:
-        return model_id
+    return openwrt_asu_profile(load_model(model_id))
 
 
 def _request_custom_image(
@@ -2364,17 +1971,16 @@ def _run_state_machine(
         _print_timeline(ctx)
         cfg = _load_config()
         openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
-        _apply_wifi_config_post_flash(openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg)
-        model_caps = []
-        try:
-            model = load_model(ctx.profile.name)
-            model_caps = model.get("capabilities", [])
-        except FileNotFoundError:
-            pass
-        _apply_use_cases_post_flash(
-            openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg,
-            model_capabilities=model_caps,
+        openwrt_ip = _apply_profile_post_flash(
+            openwrt_ip,
+            ssh_key=ctx.ssh_key_path,
+            cfg=cfg,
+            model_id=ctx.profile.name,
+            interface=ctx.interface,
+            old_client_ip=ctx.profile.openwrt_client_ip or ctx.profile.client_ip,
         )
+        if openwrt_ip != (ctx.profile.openwrt_ip or ctx.profile.recovery_ip):
+            ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
             model_id=ctx.profile.name, cfg=cfg,
@@ -3350,7 +2956,256 @@ def _build_parser() -> argparse.ArgumentParser:
     nor_parser.add_argument("--no-voice", action="store_true",
         help="Disable voice guidance")
 
+    cfg_parser = subparsers.add_parser("configure",
+        help="Apply config.toml settings to a running OpenWrt router via SSH")
+    cfg_parser.add_argument("--ip", default="192.168.1.1",
+        help="Router IP address (default: 192.168.1.1)")
+    cfg_parser.add_argument("--model-id", default=None,
+        help="Model ID for capability filtering (auto-detected if omitted)")
+    cfg_parser.add_argument("--interface", default=None,
+        help="Ethernet interface (needed for LAN IP change; auto-detected if omitted)")
+    cfg_parser.add_argument("--ssh-key", default=None,
+        help="Path to SSH public key (default: [ssh].key from config.toml)")
+    cfg_parser.add_argument("--password", default=None,
+        help="Set root password (default: from config.toml)")
+    cfg_parser.add_argument("--no-password", action="store_true",
+        help="Skip password, key-only auth")
+    cfg_parser.add_argument("--wan-ssh", action="store_true",
+        help="Open SSH on WAN port")
+    cfg_parser.add_argument("--dry-run", action="store_true",
+        help="Print commands without executing")
+
+    profile_parser = subparsers.add_parser("profile",
+        help="Inspect operator profile (config.toml) plans")
+    profile_sub = profile_parser.add_subparsers(dest="profile_command")
+    plan_parser = profile_sub.add_parser("plan",
+        help="Show what would be applied (ASU + post-install)")
+    plan_parser.add_argument("--model-id", default=None,
+        help="Model ID for capability filtering")
+    profile_parser.set_defaults(profile_command="plan")
+
     return parser
+
+
+def _ssh_run(ip: str, command: str, key: str = "", timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ssh_cmd(ip, command, key=key or None, connect_timeout=10),
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+
+
+def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: str = "") -> bool:
+    """Idempotent SSH key installation. Skips if key already present.
+
+    key_path: path to public key file (for reading the key to install).
+    auth_key: private key path used for SSH authentication.
+    ssh_key: public key text (alternative to key_path).
+    """
+    pub_key = ""
+    if ssh_key and ssh_key.startswith("ssh-"):
+        pub_key = ssh_key.split("\n")[0].strip()
+        parts = pub_key.split()
+        if len(parts) >= 2:
+            pub_key = f"{parts[0]} {parts[1]}"
+    elif key_path:
+        from pathlib import Path as _P
+        raw = _P(key_path).expanduser().read_text().strip()
+        parts = raw.split()
+        if len(parts) >= 2:
+            pub_key = f"{parts[0]} {parts[1]}"
+    if not pub_key:
+        log("  ⚠ SSH key: no key provided — skipping")
+        return False
+
+    log("  SSH key: checking current state...")
+    r = _ssh_run(ip, "cat /etc/dropbear/authorized_keys 2>/dev/null || echo ''", key=auth_key)
+    current_keys = r.stdout.strip()
+    if pub_key in current_keys:
+        log("  ✓ SSH key: already installed")
+        return True
+
+    log("  SSH key: installing...")
+    needs_create = "No such file" in r.stderr or not current_keys
+    op = ">" if needs_create or not current_keys else ">>"
+    escaped = pub_key.replace("'", "'\\''")
+    install_r = _ssh_run(
+        ip,
+        f"mkdir -p /etc/dropbear && echo '{escaped}' {op} /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys",
+        key=auth_key,
+    )
+    if install_r.returncode != 0:
+        log(f"  ⚠ SSH key: install failed (rc={install_r.returncode})")
+        return False
+
+    verify_r = _ssh_run(ip, "cat /etc/dropbear/authorized_keys 2>/dev/null || echo ''", key=auth_key)
+    if pub_key in verify_r.stdout:
+        log("  ✓ SSH key: installed and verified")
+        return True
+    log("  ⚠ SSH key: verification failed")
+    return False
+
+
+def _cfg_set_password(ip: str, password: str, ssh_key: str = "") -> bool:
+    """Set root password. Always runs (idempotent — setting same password is fine)."""
+    if not password:
+        log("  Password: no password provided — skipping")
+        return False
+
+    log("  Password: setting...")
+    import base64
+    pw_b64 = base64.b64encode(password.encode()).decode()
+    r = _ssh_run(
+        ip,
+        f"printf '%s\\n%s\\n' \"$(echo '{pw_b64}' | base64 -d)\" \"$(echo '{pw_b64}' | base64 -d)\" | passwd root",
+        key=ssh_key,
+    )
+    if r.returncode != 0:
+        log(f"  ⚠ Password: failed (rc={r.returncode})")
+        return False
+    log("  ✓ Password: set")
+    return True
+
+
+def _cfg_enable_wan_ssh(ip: str, ssh_key: str = "") -> bool:
+    """Idempotent WAN SSH enable. Skips if rule already exists."""
+    log("  WAN SSH: checking current state...")
+    r = _ssh_run(ip, "uci show firewall | grep Allow-SSH-WAN | wc -l", key=ssh_key)
+    if r.stdout.strip() != "0":
+        log("  ✓ WAN SSH: rule already exists")
+        r2 = _ssh_run(ip, "uci get dropbear.@dropbear[0].PasswordAuth", key=ssh_key)
+        if r2.stdout.strip() == "off":
+            log("  ✓ WAN SSH: password auth already disabled")
+            return True
+        log("  WAN SSH: ensuring password auth is off...")
+
+    log("  WAN SSH: configuring...")
+    commands = " && ".join([
+        "idx=0; while uci -q get firewall.@rule[$idx] >/dev/null 2>&1; do name=$(uci -q get firewall.@rule[$idx].name); if [ \"$name\" = 'Allow-SSH-WAN' ]; then uci delete firewall.@rule[$idx]; else idx=$((idx+1)); fi; done",
+        "uci add firewall rule",
+        "uci set firewall.@rule[-1].name='Allow-SSH-WAN'",
+        "uci set firewall.@rule[-1].src='wan'",
+        "uci set firewall.@rule[-1].dest_port='22'",
+        "uci set firewall.@rule[-1].proto='tcp'",
+        "uci set firewall.@rule[-1].target='ACCEPT'",
+        "uci commit firewall",
+        "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+        "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+        "uci commit dropbear",
+    ])
+    r = _ssh_run(ip, commands, key=ssh_key)
+    if r.returncode != 0:
+        log(f"  ⚠ WAN SSH: failed (rc={r.returncode})")
+        return False
+
+    verify_r = _ssh_run(ip, "uci show firewall | grep Allow-SSH-WAN | wc -l", key=ssh_key)
+    if verify_r.stdout.strip() != "0":
+        log("  ✓ WAN SSH: enabled and verified")
+        return True
+    log("  ⚠ WAN SSH: verification failed")
+    return False
+
+
+def _resolve_configure_options(
+    args: argparse.Namespace, cfg: object,
+) -> tuple[str, str, str, str, bool]:
+    """Resolve effective configure options (CLI overrides config.toml).
+
+    Returns (password, ssh_private_key_path, ssh_pub_path, ssh_key_text, wan_ssh).
+    Password is empty when --no-password or when not configured.
+    """
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return "", "", "", "", False
+
+    ssh_key_path = args.ssh_key or cfg.ssh_private_key_path or ""
+    ssh_pub_path = cfg.ssh_public_key_path
+    ssh_key_text = cfg.ssh_public_key_text
+    if args.ssh_key:
+        from pathlib import Path as _P
+        p = _P(args.ssh_key).expanduser()
+        if p.is_file() and p.suffix == ".pub":
+            ssh_pub_path = str(p)
+
+    if args.no_password:
+        password = ""
+    elif args.password:
+        password = args.password
+    elif cfg.password_is_random:
+        password = _generate_random_password()
+    else:
+        password = cfg.password_literal or ""
+
+    wan_ssh = cfg.wan_ssh
+    if args.wan_ssh:
+        wan_ssh = True
+
+    return password, ssh_key_path, ssh_pub_path, ssh_key_text, wan_ssh
+
+
+def cmd_configure(args: argparse.Namespace) -> int:
+    """Apply config.toml settings to a running OpenWrt router via SSH."""
+    ip = args.ip
+    cfg = _load_config()
+
+    password, ssh_key_path, ssh_pub_path, ssh_key_text, wan_ssh = _resolve_configure_options(
+        args, cfg,
+    )
+    model_id = args.model_id
+    interface = args.interface or auto_detect_interface() or ""
+
+    log(f"Configuring router at {ip}...")
+
+    old_client_ip = ""
+    if interface and not args.dry_run:
+        from pathlib import Path as _P
+        if _P(f"/sys/class/net/{interface}").exists():
+            r = _ssh_run(ip, "uci get network.lan.ipaddr 2>/dev/null || echo ''", key=ssh_key_path)
+            current_lan = r.stdout.strip().split("/")[0]
+            old_client_ip = _client_ip_for_subnet(current_lan)
+
+    if args.dry_run:
+        log("  (dry run — no changes will be made)")
+        ip = _apply_profile_post_flash(
+            ip, ssh_key=ssh_key_path, cfg=cfg, model_id=model_id or "",
+            interface=interface, old_client_ip=old_client_ip,
+            password=password or None,
+            wan_ssh=wan_ssh,
+            ssh_key_path=ssh_pub_path or None,
+            dry_run=True,
+        )
+        if ssh_pub_path or ssh_key_text:
+            print("  # SSH key: idempotent install via authorized_keys check")
+        return 0
+
+    if ssh_pub_path or ssh_key_text:
+        _cfg_install_ssh_key(ip, key_path=ssh_pub_path, auth_key=ssh_key_path, ssh_key=ssh_key_text)
+
+    ip = _apply_profile_post_flash(
+        ip, ssh_key=ssh_key_path, cfg=cfg, model_id=model_id or "",
+        interface=interface, old_client_ip=old_client_ip,
+        password=password or None,
+        wan_ssh=wan_ssh,
+        ssh_key_path=ssh_pub_path or None,
+        dry_run=False,
+    )
+
+    log(f"Configuration complete. Router at {ip}")
+    return 0
+
+
+def cmd_profile_plan(args: argparse.Namespace) -> int:
+    """Print the profile plan from config.toml (dry-run preview)."""
+    cfg = _load_config()
+    model_caps: list[str] = []
+    if args.model_id:
+        try:
+            model = load_model(args.model_id)
+            model_caps = model.get("capabilities", [])
+        except FileNotFoundError as exc:
+            print(f"Warning: {exc}", file=sys.stderr)
+    plan = build_plan(cfg, mode="preview", model_capabilities=model_caps)
+    print_plan(plan)
+    return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -3391,13 +3246,14 @@ def cmd_list_use_cases(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"Warning: could not load model '{args.model_id}': {e}", file=sys.stderr)
 
-    print(f"{'Use Case':<25s}  {'Description':<45s}  {'Pkgs':<5s}  {'Caps':<12s}  {'Post-Flash'}")
-    print("-" * 110)
+    print(f"{'Use Case':<25s}  {'Status':<14s}  {'Description':<40s}  {'Pkgs':<5s}  {'Caps':<12s}  Post")
+    print("-" * 120)
     for name in sorted(uc_reg.keys()):
         uc = uc_reg[name]
         pkg_count = len(uc.packages)
         caps = ", ".join(uc.requires_capabilities) if uc.requires_capabilities else "-"
-        post_flash = "yes" if uc.requires_post_flash else "-"
+        post_flash = "yes" if uc.configure_via == "ssh" or uc.requires_post_flash else "-"
+        status = uc.test_status
 
         if model_caps and uc.requires_capabilities:
             missing = set(uc.requires_capabilities) - set(model_caps)
@@ -3407,7 +3263,7 @@ def cmd_list_use_cases(args: argparse.Namespace) -> int:
         else:
             status = ""
 
-        line = f"{name:<25s}  {uc.description[:45]:<45s}  {pkg_count:<5d}  {caps:<12s}  {post_flash}"
+        line = f"{name:<25s}  {status:<14s}  {uc.description[:40]:<40s}  {pkg_count:<5d}  {caps:<12s}  {post_flash}"
         if status == "INCOMPAT":
             line += f"  ** incompatible with {model_name} **"
         elif status == "ok":
@@ -4536,7 +4392,10 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] not in ("flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup", "auto", "setup-nor-recovery", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in (
+        "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
+        "auto", "setup-nor-recovery", "configure", "profile", "-h", "--help",
+    ):
         sys.argv.insert(1, "flash")
 
     parser = _build_parser()
@@ -4550,6 +4409,13 @@ def main() -> int:
         return cmd_cache(args)
     elif args.command == "setup-mgmt-wifi":
         return cmd_setup_mgmt_wifi(args)
+    elif args.command == "configure":
+        return cmd_configure(args)
+    elif args.command == "profile":
+        if getattr(args, "profile_command", None) == "plan":
+            return cmd_profile_plan(args)
+        _build_parser().print_help(sys.stderr)
+        return 1
     elif args.command == "backup":
         return cmd_backup(args)
     elif args.command == "auto":

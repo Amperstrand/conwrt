@@ -70,6 +70,8 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_android_tether,
+    build_configure=_build_android_tether,
+    test_status="experimental",
+    tested_notes="superseded by usb-tether",
     requires_capabilities=["usb"],
 ))

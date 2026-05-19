@@ -58,6 +58,8 @@ def load_use_cases() -> list[dict]:
             "description": uc.description,
             "packages": uc.packages,
             "requires_capabilities": uc.requires_capabilities,
+            "test_status": uc.test_status,
+            "tested_notes": uc.tested_notes,
         })
     return ucs
 

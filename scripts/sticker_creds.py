@@ -41,7 +41,7 @@ from model_loader import load_model  # noqa: E402
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_MODEL_ID = "dlink_covr-x1860-a1"
+_MODEL_ID = "dlink-covr-x1860-a1"
 _CONFIG2_PARTITION_LABEL = "config2"
 
 # Minimum printable ASCII range we consider valid for key=value content

@@ -1,0 +1,31 @@
+{
+  "id": "zyxel-ex5700-telenor",
+  "vendor": "Zyxel",
+  "description": "EX5700 (Telenor) \u2014 MediaTek MT7986B, WiFi 6 tri-band",
+  "openwrt": {
+    "target": "mediatek/filogic",
+    "device": "zyxel,ex5700-telenor",
+    "default_ip": "192.168.1.1",
+    "profile": "zyxel_ex5700-telenor",
+    "version": "24.10.2"
+  },
+  "hardware": {
+    "soc": "MT7986B (Filogic 830) quad-core Cortex-A53",
+    "flash": "SPI NAND ~486MB (UBI)",
+    "ram": "1GB DDR3",
+    "ethernet_ports": "5x 1Gbps (4 LAN + 1 WAN)",
+    "wifi": "Tri-band: 2.4GHz + 5GHz (MT7986B integrated) + 5GHz (MT7976)",
+    "serial": "UART, 115200 8N1"
+  },
+  "mac_oui": [],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi"
+  ]
+}

@@ -68,7 +68,9 @@ register(UseCase(
         "overhead": ParamDef(type=int, default=0,
                              description="Per-packet overhead in bytes"),
     },
-    build_defaults=_build_sqm,
+    build_configure=_build_sqm,
+    test_status="experimental",
+    tested_notes="uci from OpenWrt wiki",
     requires_capabilities=[],
     requires_post_flash=False,
 ))

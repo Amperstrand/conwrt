@@ -1,0 +1,69 @@
+"""Boot state detection."""
+from __future__ import annotations
+import subprocess
+from types import SimpleNamespace
+from typing import Optional
+from flash.context import DEFAULT_IP, log
+from flash.upload import detect_uboot_http
+from ssh_utils import ssh_cmd
+
+def check_ssh(ip: str = DEFAULT_IP) -> bool:
+    try:
+        r = subprocess.run(
+            ssh_cmd(ip, "echo ok", connect_timeout=5),
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        return r.returncode == 0 and "ok" in r.stdout
+    except Exception:
+        return False
+
+
+
+
+def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
+    """Probe the device to determine its current state.
+
+    Returns: "openwrt", "uboot", "stock-hnap", or "unknown"
+    """
+    openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
+    recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
+
+    try:
+        if check_ssh(openwrt_ip):
+            log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
+            return "openwrt"
+    except Exception as e:
+        log(f"SSH probe failed for {openwrt_ip}: {e}")
+
+    # When flash_method is dlink-hnap, check HNAP FIRST — the stock firmware
+    # also responds with HTML at the recovery IP, so detect_uboot_http would
+    # falsely classify it as "uboot" (line 492: startsWith("<!DOCTYPE")).
+    if profile and getattr(profile, 'flash_method', '') == 'dlink-hnap':
+        try:
+            hnap_url = f"http://{recovery_ip}/HNAP1/"
+            r = subprocess.run(
+                ["curl", "-s", "--max-time", "3", hnap_url],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if "HNAP" in r.stdout or "soap" in r.stdout.lower():
+                log(f"HNAP API detected at {recovery_ip} — device is running stock firmware")
+                return "stock-hnap"
+        except Exception:
+            pass
+
+    try:
+        found, detail = detect_uboot_http(recovery_ip)
+        if found:
+            log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
+            return "uboot"
+    except Exception as e:
+        log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
+
+    if profile and profile.openwrt_ip and profile.recovery_ip:
+        if profile.openwrt_ip != "192.168.1.1" or profile.recovery_ip != "192.168.0.1":
+            log("No SSH or recovery HTTP detected on profile IPs — device may be on a different subnet")
+        else:
+            log("No SSH or recovery HTTP detected — device state unknown")
+    else:
+        log("No SSH or recovery HTTP detected — device state unknown")
+    return "unknown"

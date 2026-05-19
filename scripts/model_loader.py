@@ -4,28 +4,58 @@
 Loads device model definitions from JSON files in the models/ directory.
 All conwrt scripts use this instead of hardcoding device data.
 
-Usage as module:
-    from model_loader import load_model, list_models, get_flash_method
-
-CLI usage:
-    python3 scripts/model_loader.py list
-    python3 scripts/model_loader.py show dlink-covr-x1860-a1
-    python3 scripts/model_loader.py flash-methods dlink-covr-x1860-a1
+OpenWrt naming:
+  - conwrt ``id`` (hyphenated slug) == ``models/{id}.json`` filename
+  - ``openwrt.device`` — DTS / image Makefile device name (e.g. ``dlink,covr-x1860-a1``)
+  - ``openwrt.profile`` — ImageBuilder / ASU profile (e.g. ``dlink_covr-x1860-a1``)
+  - ``openwrt.board_name`` — optional ``/tmp/sysinfo/board_name`` match
 """
+
+from __future__ import annotations
 
 import json
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
+# Legacy underscore ids → canonical hyphenated id (filename stem)
+_ID_ALIASES: dict[str, str] = {
+    "dlink_covr-x1860-a1": "dlink-covr-x1860-a1",
+    "glinet_gl-ar150": "glinet-gl-ar150",
+    "glinet_gl-ar300m-lite": "glinet-gl-ar300m-lite",
+    "glinet_gl-ar300m-nand": "glinet-gl-ar300m-nand",
+    "glinet_gl-ar300m-nor": "glinet-gl-ar300m-nor",
+    "glinet_gl-mt3000": "glinet-mt3000",
+    "linksys_whw03": "linksys-whw03-v1",
+    "linksys_whw03v2": "linksys-whw03-v2",
+    "zyxel_ex5700-telenor": "zyxel-ex5700-telenor",
+    "zyxel_gs1900-24e": "zyxel-gs1900-24e",
+    "zyxel_nr7101": "zyxel-nr7101",
+    "zyxel_wx5600-t0": "zyxel-wx5600-t0",
+}
+
+_warned_aliases: set[str] = set()
+
+
+def normalize_model_id(model_id: str) -> str:
+    """Map legacy ids to canonical hyphenated slug."""
+    canonical = _ID_ALIASES.get(model_id, model_id)
+    if canonical != model_id and model_id not in _warned_aliases:
+        _warned_aliases.add(model_id)
+        warnings.warn(
+            f"Model id '{model_id}' is deprecated; use '{canonical}'",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    return canonical
+
 
 def load_model(model_id: str) -> dict[str, Any]:
-    """Load a model definition by ID (filename without .json).
-
-    Raises FileNotFoundError if the model file doesn't exist.
-    """
+    """Load a model definition by canonical id (filename stem without .json)."""
+    model_id = normalize_model_id(model_id)
     path = MODELS_DIR / f"{model_id}.json"
     if not path.is_file():
         for candidate in sorted(MODELS_DIR.glob("*.json")):
@@ -38,7 +68,20 @@ def load_model(model_id: str) -> dict[str, Any]:
             f"Model '{model_id}' not found. Available: {', '.join(sorted(available))}"
         )
     with open(path) as f:
-        return json.load(f)
+        model = json.load(f)
+    if model.get("id") != model_id:
+        raise ValueError(
+            f"Model file {path.name} has id '{model.get('id')}' but expected '{model_id}'"
+        )
+    return model
+
+
+def openwrt_asu_profile(model: dict[str, Any]) -> str:
+    """Return ASU ImageBuilder profile name (never the conwrt slug)."""
+    profile = model.get("openwrt", {}).get("profile", "")
+    if not profile:
+        raise ValueError(f"Model '{model.get('id')}' missing openwrt.profile")
+    return profile
 
 
 def list_models() -> list[dict[str, Any]]:
@@ -51,10 +94,7 @@ def list_models() -> list[dict[str, Any]]:
 
 
 def get_flash_method(model_id: str, method: str) -> Optional[dict[str, Any]]:
-    """Get a specific flash method for a model.
-
-    Returns None if the model or method doesn't exist.
-    """
+    """Get a specific flash method for a model."""
     try:
         model = load_model(model_id)
     except FileNotFoundError:
@@ -81,6 +121,17 @@ def find_model_by_mac_oui(oui: str) -> list[dict[str, Any]]:
     return matches
 
 
+def find_model_by_board_name(board_name: str) -> Optional[dict[str, Any]]:
+    """Find model by OpenWrt board_name or device string."""
+    for model in list_models():
+        ow = model.get("openwrt", {})
+        if board_name in (ow.get("board_name"), ow.get("device")):
+            return model
+        if model.get("id", "").replace("-", "_") == board_name.replace(",", "_"):
+            return model
+    return None
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: model_loader.py <list|show|flash-methods|find-by-target> [args]")
@@ -94,8 +145,9 @@ def main() -> None:
             vendor = model.get("vendor", "?")
             desc = model.get("description", "?")
             target = model.get("openwrt", {}).get("target", "?")
+            profile = model.get("openwrt", {}).get("profile", "?")
             methods = ", ".join(model.get("flash_methods", {}).keys()) or "none"
-            print(f"  {oid:40s}  {vendor:10s}  {target:20s}  [{methods}]  {desc}")
+            print(f"  {oid:40s}  {vendor:10s}  {target:20s}  {profile:28s}  [{methods}]  {desc}")
 
     elif cmd == "show":
         if len(sys.argv) < 3:

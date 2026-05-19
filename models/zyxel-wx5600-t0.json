@@ -1,5 +1,5 @@
 {
-  "id": "zyxel_wx5600-t0",
+  "id": "zyxel-wx5600-t0",
   "vendor": "Zyxel",
   "description": "WX5600-T0 (AX6000) \u2014 Altibox/Lyse ISP build, MediaTek MT7986B",
   "openwrt": {

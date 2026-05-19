@@ -71,13 +71,19 @@ class ConwrtConfig:
     ssh_all_keys: list[str] = field(default_factory=list)
     extra_packages: list[str] = field(default_factory=list)
     password_mode: str = "random"
+    lan_ip: str = ""
     wan_ssh: bool = False
+    country_code: str = "DE"
     mgmt_wifi: bool = False
     mgmt_wifi_txpower: Optional[int] = None
     wifi_sta: Optional[WifiSTAConfig] = None
-    wifi_ap: Optional[WifiAPConfig] = None
+    wifi_aps: list[WifiAPConfig] = field(default_factory=list)
     wireguard: Optional[WireguardConfig] = None
     use_cases: list[UseCaseConfig] = field(default_factory=list)
+
+    @property
+    def wifi_ap(self) -> Optional[WifiAPConfig]:
+        return self.wifi_aps[0] if self.wifi_aps else None
 
     @property
     def password_is_random(self) -> bool:
@@ -254,9 +260,12 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
     if "sta" in network_section:
         wifi_sta = _parse_wifi_sta(network_section["sta"])
 
-    wifi_ap = None
-    if "ap" in network_section:
-        wifi_ap = _parse_wifi_ap(network_section["ap"])
+    wifi_aps: list[WifiAPConfig] = []
+    if isinstance(network_section.get("ap"), list):
+        for ap_table in network_section["ap"]:
+            wifi_aps.append(_parse_wifi_ap(ap_table))
+    elif "ap" in network_section:
+        wifi_aps.append(_parse_wifi_ap(network_section["ap"]))
 
     uc_section = raw.get("use_cases", {})
     uc_enabled = uc_section.get("enabled", [])
@@ -284,11 +293,13 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         ssh_all_keys=all_keys,
         extra_packages=extra_packages,
         password_mode=password_mode,
+        lan_ip=network_section.get("lan_ip", ""),
         wan_ssh=network_section.get("wan_ssh", False),
+        country_code=network_section.get("country_code", "DE"),
         mgmt_wifi=network_section.get("mgmt_wifi", False),
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
         wifi_sta=wifi_sta,
-        wifi_ap=wifi_ap,
+        wifi_aps=wifi_aps,
         wireguard=wg_cfg,
         use_cases=use_cases_list,
     )

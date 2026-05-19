@@ -185,7 +185,9 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_usb_tether,
+    build_configure=_build_usb_tether,
+    test_status="tested",
+    tested_notes="GL.iNet MT3000, Android RNDIS",
     requires_capabilities=["usb"],
 ))
 
@@ -197,7 +199,9 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_android,
+    build_configure=_build_android,
+    test_status="tested",
+    tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
 ))
 
@@ -209,7 +213,9 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_android_adb,
+    build_configure=_build_android_adb,
+    test_status="tested",
+    tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
 ))
 
@@ -221,6 +227,8 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_ios,
+    build_configure=_build_ios,
+    test_status="experimental",
+    tested_notes="wiki-based; needs hardware",
     requires_capabilities=["usb"],
 ))

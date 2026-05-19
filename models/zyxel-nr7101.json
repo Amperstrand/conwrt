@@ -1,5 +1,5 @@
 {
-  "id": "zyxel_nr7101",
+  "id": "zyxel-nr7101",
   "vendor": "Zyxel",
   "description": "NR7101 \u2014 5G/NR outdoor router, MediaTek MT7621",
   "openwrt": {

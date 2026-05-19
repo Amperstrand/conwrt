@@ -239,6 +239,8 @@ register(UseCase(
         "price_per_minute": ParamDef(type=int, default=1,
             description="Price in sats per minute"),
     },
-    build_defaults=_build_tollgate,
+    build_configure=_build_tollgate,
+    test_status="untested",
+    tested_notes="post-flash ipk deploy",
     requires_post_flash=True,
 ))

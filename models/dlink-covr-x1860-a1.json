@@ -1,5 +1,5 @@
 {
-  "id": "dlink_covr-x1860-a1",
+  "id": "dlink-covr-x1860-a1",
   "vendor": "D-Link",
   "description": "COVR-X1860 A1 mesh WiFi",
   "openwrt": {
@@ -21,7 +21,7 @@
   ],
   "flash_methods": {
     "recovery-http": {
-      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery. ASU produces recovery.bin with custom settings baked in — works in single step. Stock recovery.bin also works but requires sysupgrade afterward for custom config. First NAND boot after U-Boot recovery flash takes 5+ minutes (stock) or ~80s (ASU with uci-defaults).",
+      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery. ASU produces recovery.bin with custom settings baked in \u2014 works in single step. Stock recovery.bin also works but requires sysupgrade afterward for custom config. First NAND boot after U-Boot recovery flash takes 5+ minutes (stock) or ~80s (ASU with uci-defaults).",
       "recovery_ip": "192.168.0.1",
       "client_ip": "192.168.0.10",
       "client_subnet": "255.255.255.0",
@@ -114,11 +114,11 @@
     "recovery-http": {
       "tested": true,
       "date": "2026-05-18",
-      "notes": "Two paths verified on separate X1860 units. (1) Stock recovery.bin: flash stock openwrt-24.10.5-...-recovery.bin via U-Boot HTTP, then sysupgrade to ASU custom build. First NAND boot takes 5+ minutes after U-Boot flash. (2) ASU recovery.bin (single step): flash ASU custom recovery.bin (with SSH key, WAN SSH, password baked in) directly via U-Boot HTTP — boots in ~80s, fully configured on first boot. ASU produces recovery.bin, factory.bin, and sysupgrade.bin for this target. U-Boot MAC 3e:85:be:xx:xx:xx is shared across all X1860 units (hardcoded in U-Boot, not per-device). Ethernet must be connected to LAN port (labeled 'ethernet'), not WAN port (labeled 'internet') for initial setup."
+      "notes": "Two paths verified on separate X1860 units. (1) Stock recovery.bin: flash stock openwrt-24.10.5-...-recovery.bin via U-Boot HTTP, then sysupgrade to ASU custom build. First NAND boot takes 5+ minutes after U-Boot flash. (2) ASU recovery.bin (single step): flash ASU custom recovery.bin (with SSH key, WAN SSH, password baked in) directly via U-Boot HTTP \u2014 boots in ~80s, fully configured on first boot. ASU produces recovery.bin, factory.bin, and sysupgrade.bin for this target. U-Boot MAC 3e:85:be:xx:xx:xx is shared across all X1860 units (hardcoded in U-Boot, not per-device). Ethernet must be connected to LAN port (labeled 'ethernet'), not WAN port (labeled 'internet') for initial setup."
     },
     "dlink-hnap": {
       "tested": false,
-      "notes": "Auth + upload works (returns OK). GetFirmwareValidation returns IsValid=false for OpenWrt images — stock firmware validation blocks non-D-Link firmware. Recovery-http is the proven method."
+      "notes": "Auth + upload works (returns OK). GetFirmwareValidation returns IsValid=false for OpenWrt images \u2014 stock firmware validation blocks non-D-Link firmware. Recovery-http is the proven method."
     },
     "sysupgrade": {
       "tested": true,

@@ -45,7 +45,9 @@ register(UseCase(
         "bootstrap_dns": ParamDef(type=str, default="1.1.1.1,8.8.8.8",
                                   description="Upstream DNS for bootstrap"),
     },
-    build_defaults=_build_adguard,
+    build_configure=_build_adguard,
     requires_capabilities=[],
+    test_status="untested",
+    tested_notes="web setup wizard after install",
     requires_post_flash=True,
 ))

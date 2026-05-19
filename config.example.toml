@@ -30,6 +30,11 @@ mode = "random"
 extra_packages = ["luci", "luci-app-attendedsysupgrade"]
 
 [network]
+# Router LAN IP address. When set, conwrt changes the router's LAN IP after
+# flashing and reconnects on the new subnet. Must be last step — the network
+# restart drops SSH. conwrt updates its own interface alias automatically.
+# lan_ip = "192.168.1.1"
+
 # Allow SSH on the WAN interface (adds firewall rule, disables password on WAN).
 wan_ssh = false
 

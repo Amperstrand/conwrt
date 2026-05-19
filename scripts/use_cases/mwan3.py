@@ -98,5 +98,7 @@ register(UseCase(
         "track_ips": ParamDef(type=list, default=["1.0.0.1", "1.1.1.1", "8.8.8.8", "8.8.4.4"],
                               description="IPs to ping for connectivity tracking"),
     },
-    build_defaults=_build_mwan3,
+    test_status="untested",
+    tested_notes="",
+    build_configure=_build_mwan3,
 ))

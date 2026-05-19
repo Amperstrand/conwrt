@@ -75,6 +75,8 @@ register(UseCase(
         "interface": ParamDef(type=str, default="usbwan",
                               description="OpenWrt network interface name for USB WAN"),
     },
-    build_defaults=_build_iphone_tether,
+    build_configure=_build_iphone_tether,
+    test_status="experimental",
+    tested_notes="superseded by usb-tether",
     requires_capabilities=["usb"],
 ))

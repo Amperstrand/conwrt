@@ -1,5 +1,5 @@
 {
-  "id": "glinet_gl-ar300m-lite",
+  "id": "glinet-gl-ar300m-lite",
   "vendor": "GL.iNet",
   "description": "AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)",
   "openwrt": {
@@ -11,7 +11,7 @@
   },
   "hardware": {
     "soc": "QCA9533 v2 (MIPS 24Kc) @ 650MHz",
-    "flash": "NOR 16MB (Winbond W25Q128) only — no NAND",
+    "flash": "NOR 16MB (Winbond W25Q128) only \u2014 no NAND",
     "ram": "128MB DDR2",
     "ethernet_ports": "2x 10/100 (1 WAN eth1 + 1 LAN eth0)",
     "wifi": "2.4GHz 802.11b/g/n (QCA9533 integrated)",
@@ -23,17 +23,37 @@
   ],
   "stock_default_ip": "192.168.8.1",
   "switch": {
-    "description": "No physical switch on this model — always boots from NOR. This is a NOR-only device (AR300M16/AR300M-Lite) with no NAND flash."
+    "description": "No physical switch on this model \u2014 always boots from NOR. This is a NOR-only device (AR300M16/AR300M-Lite) with no NAND flash."
   },
   "flash_layout": {
     "nor": {
       "chip": "Winbond W25Q128",
       "size": "16MB",
       "partitions": [
-        {"mtd": 0, "name": "u-boot", "offset": "0x000000", "size": "256KB"},
-        {"mtd": 1, "name": "u-boot-env", "offset": "0x040000", "size": "64KB"},
-        {"mtd": 2, "name": "firmware", "offset": "0x050000", "size": "15.6MB"},
-        {"mtd": 3, "name": "art", "offset": "0xFF0000", "size": "64KB"}
+        {
+          "mtd": 0,
+          "name": "u-boot",
+          "offset": "0x000000",
+          "size": "256KB"
+        },
+        {
+          "mtd": 1,
+          "name": "u-boot-env",
+          "offset": "0x040000",
+          "size": "64KB"
+        },
+        {
+          "mtd": 2,
+          "name": "firmware",
+          "offset": "0x050000",
+          "size": "15.6MB"
+        },
+        {
+          "mtd": 3,
+          "name": "art",
+          "offset": "0xFF0000",
+          "size": "64KB"
+        }
       ]
     }
   },
@@ -46,7 +66,9 @@
       "upload_endpoint": "/",
       "upload_field": "nor__firmware",
       "firmware_extensions": {
-        "nor": [".bin"]
+        "nor": [
+          ".bin"
+        ]
       },
       "http_server": "uIP/0.9",
       "http_version": "1.0",

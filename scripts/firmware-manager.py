@@ -24,8 +24,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
-from config import load_config as _load_config, _strip_key_comment, UseCaseConfig, WifiSTAConfig, WifiAPConfig
-from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
+from config import load_config as _load_config
+from profile.builder import build_plan
+from profile.render import print_plan
+from profile.wifi import (
+    build_mgmt_wifi_script,
+    wifi_ap_firstboot_script,
+    wifi_ap_uci_lines,
+    wifi_sta_firstboot_script,
+    wifi_sta_uci_lines,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -109,236 +117,7 @@ def _read_ssh_pubkey(path: str) -> tuple[str, str]:
     return cleaned, key_path.name
 
 
-# ---------------------------------------------------------------------------
-# Defaults script builder
-# ---------------------------------------------------------------------------
-
-
-def build_mgmt_wifi_script(txpower: Optional[int] = None) -> str:
-    base = textwrap.dedent(
-        """\
-        # --- management WiFi setup ---
-        # Do NOT use 'set -eu' — radio/wifi subsystem may not be fully
-        # initialised at first-boot; we handle errors explicitly instead.
-        RADIO_2G=""
-        for radio in $(uci show wireless 2>/dev/null | grep "=wifi-device" | cut -d. -f2 | cut -d= -f1 || true); do
-            band=$(uci -q get wireless.$radio.band || true)
-            hwmode=$(uci -q get wireless.$radio.hwmode || true)
-            case "$band" in
-                2g|2.4g|2ghz|2.4ghz)
-                    RADIO_2G="$radio"
-                    break
-                    ;;
-            esac
-            case "$hwmode" in
-                11g|11ng|11axg|11bg|11b)
-                    RADIO_2G="$radio"
-                    break
-                    ;;
-            esac
-        done
-        if [ -z "$RADIO_2G" ]; then
-            printf 'conwrt-mgmt-wifi: No 2.4GHz radio found, skipping\\n' >&2
-            exit 0
-        fi
-        # --- Determine MAC for SSID (retry: br-lan may not exist at first boot) ---
-        MAC=""
-        for _ in $(seq 1 30); do
-            MAC=$(cat /sys/class/net/br-lan/address 2>/dev/null || true)
-            [ -n "$MAC" ] && break
-            sleep 1
-        done
-        if [ -z "$MAC" ]; then
-            MAC=$(jsonfilter -e '@.network.lan.macaddr' < /etc/board.json 2>/dev/null || true)
-        fi
-        if [ -z "$MAC" ]; then
-            MAC=$(uci -q get wireless.$RADIO_2G.macaddr || true)
-        fi
-        if [ -z "$MAC" ]; then
-            for iface in /sys/class/net/eth*/address /sys/class/net/*/address; do
-                case "$iface" in */lo/address) continue ;; esac
-                MAC=$(cat "$iface" 2>/dev/null || true)
-                [ -n "$MAC" ] && break
-            done
-        fi
-        if [ -z "$MAC" ]; then
-            printf 'conwrt-mgmt-wifi: Could not determine MAC address, skipping\\n' >&2
-            exit 0
-        fi
-        SSID="MGMT-$(printf '%s' "$MAC" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-
-        # --- Enable the 2.4GHz radio ---
-        uci set wireless.$RADIO_2G.disabled=0
-        uci -q delete wireless.$RADIO_2G.country || true
-"""
-    )
-    if txpower is not None:
-        base += f"        uci set wireless.$RADIO_2G.txpower='{txpower}'\n"
-
-    base += textwrap.dedent(
-        """\
-        # --- Idempotent cleanup: remove all existing wifi-ifaces and mgmt remnants ---
-        uci -q delete network.mgmt_dev
-        uci -q delete network.mgmt
-        uci -q delete dhcp.mgmt
-        idx=0
-        while uci -q get wireless.@wifi-iface[$idx] >/dev/null 2>&1; do
-            uci delete wireless.@wifi-iface[$idx]
-        done
-        for zone in $(uci show firewall 2>/dev/null | grep "=zone" | cut -d. -f2 | cut -d= -f1 || true); do
-            name=$(uci -q get firewall.$zone.name || true)
-            if [ "$name" = "mgmt" ]; then
-                uci delete firewall.$zone
-            fi
-        done
-
-        # --- Create management network bridge ---
-        uci set network.mgmt_dev=device
-        uci set network.mgmt_dev.type='bridge'
-        uci set network.mgmt_dev.name='br-mgmt'
-        uci set network.mgmt=interface
-        uci set network.mgmt.device='br-mgmt'
-        uci set network.mgmt.proto='static'
-        uci set network.mgmt.ipaddr='172.16.0.1'
-        uci set network.mgmt.netmask='255.255.255.0'
-
-        # --- Create management WiFi AP on 2.4GHz radio ---
-        uci add wireless wifi-iface
-        uci set wireless.@wifi-iface[-1].device="$RADIO_2G"
-        uci set wireless.@wifi-iface[-1].network='mgmt'
-        uci set wireless.@wifi-iface[-1].mode='ap'
-        uci set wireless.@wifi-iface[-1].ssid="$SSID"
-        uci set wireless.@wifi-iface[-1].hidden='1'
-        uci set wireless.@wifi-iface[-1].encryption='none'
-        uci set wireless.@wifi-iface[-1].disabled='0'
-
-        # --- Isolated firewall zone (no forwarding to/from other zones) ---
-        uci add firewall zone
-        uci set firewall.@zone[-1].name='mgmt'
-        uci add_list firewall.@zone[-1].network='mgmt'
-        uci set firewall.@zone[-1].input='ACCEPT'
-        uci set firewall.@zone[-1].output='ACCEPT'
-        uci set firewall.@zone[-1].forward='REJECT'
-
-        # --- DHCP on management subnet ---
-        uci set dhcp.mgmt=dhcp
-        uci set dhcp.mgmt.interface='mgmt'
-        uci set dhcp.mgmt.ignore='0'
-        uci set dhcp.mgmt.start='10'
-        uci set dhcp.mgmt.limit='21'
-        uci set dhcp.mgmt.leasetime='12h'
-
-        # --- Commit and apply ---
-        uci commit network
-        uci commit wireless
-        uci commit firewall
-        uci commit dhcp
-        /etc/init.d/network reload >/dev/null 2>&1 || true
-        wifi reload >/dev/null 2>&1 || wifi >/dev/null 2>&1 || true
-        /etc/init.d/firewall restart >/dev/null 2>&1 || true
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-        printf 'MGMT_WIFI_SSID=%s\\n' "$SSID"
-        printf 'MGMT_WIFI_RADIO=%s\\n' "$RADIO_2G"
-        """
-    )
-    return base
-
-
-# ---------------------------------------------------------------------------
-# Shared WiFi UCI command generators (used by both ASU bake-in and post-flash)
-# ---------------------------------------------------------------------------
-
-
-def _band_to_uci(band: str) -> str:
-    """Convert config band name (e.g. '5ghz') to UCI band value (e.g. '5g')."""
-    wifi_band(band)
-    return {
-        "2.4ghz": "2g", "5ghz": "5g",
-        "5ghz-low": "5g", "5ghz-high": "5g", "6ghz": "6g",
-    }[band]
-
-
-def wifi_sta_uci_lines(radio: str, ssid: str, encryption: str,
-                       key: str = "", network: str = "wan") -> list[str]:
-    """STA UCI commands. radio='radio0' for post-flash, '$_r' for ASU."""
-    radio = radio_ref(radio)
-    wifi_encryption(encryption)
-    network = interface_name(network, "network")
-    section = radio_ref(f"default_{radio}")
-    lines = [
-        f"uci set wireless.{radio}.disabled='0'",
-        f"uci set wireless.{section}=wifi-iface",
-        f"uci set wireless.{section}.device={sh_quote(radio)}",
-        f"uci set wireless.{section}.mode='sta'",
-        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
-        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
-    ]
-    if key:
-        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
-    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
-    return lines
-
-
-def wifi_ap_uci_lines(radio: str, ssid: str, encryption: str,
-                      key: str = "", channel: str = "auto",
-                      network: str = "lan") -> list[str]:
-    """AP UCI commands. radio='radio0' for post-flash, '$_r' for ASU."""
-    radio = radio_ref(radio)
-    wifi_encryption(encryption)
-    network = interface_name(network, "network")
-    section = radio_ref(f"default_{radio}")
-    lines = [
-        f"uci set wireless.{radio}.disabled='0'",
-    ]
-    if channel and channel != "auto":
-        lines.append(f"uci set wireless.{radio}.channel={sh_quote(channel)}")
-    lines += [
-        f"uci set wireless.{section}=wifi-iface",
-        f"uci set wireless.{section}.device={sh_quote(radio)}",
-        f"uci set wireless.{section}.mode='ap'",
-        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
-        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
-    ]
-    if key:
-        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
-    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
-    return lines
-
-
-def wifi_sta_firstboot_script(band: str, ssid: str, encryption: str,
-                              key: str = "", network: str = "wan") -> str:
-    band_uci = _band_to_uci(band)
-    frags = wifi_sta_uci_lines("$_r", ssid, encryption, key, network)
-    script = (
-        "for _r in radio0 radio1 radio2 radio3; do "
-        "uci -q get wireless.$_r.type >/dev/null || continue; "
-        f'_b=$(uci -q get "wireless.$_r.band"); '
-        f'if [ "$_b" = "{band_uci}" ]; then '
-    )
-    script += "; ".join(frags) + "; "
-    script += "uci commit wireless; wifi reload; exit 0; fi; done"
-    return script
-
-
-def wifi_ap_firstboot_script(band: str, ssid: str, encryption: str,
-                             key: str = "", channel: str = "auto",
-                             network: str = "lan") -> str:
-    band_uci = _band_to_uci(band)
-    frags = wifi_ap_uci_lines("$_r", ssid, encryption, key, channel, network)
-    script = (
-        "for _r in radio0 radio1 radio2 radio3; do "
-        "uci -q get wireless.$_r.type >/dev/null || continue; "
-        f'_b=$(uci -q get "wireless.$_r.band"); '
-        f'if [ "$_b" = "{band_uci}" ]; then '
-    )
-    script += "; ".join(frags) + "; "
-    script += "uci commit wireless; exit 0; fi; done"
-    return script
-
-
-# ---------------------------------------------------------------------------
-# Build defaults script for ASU first-boot
-# ---------------------------------------------------------------------------
+# WiFi helpers live in profile.wifi (re-exported above for backward compatibility).
 
 
 def _build_defaults(
@@ -348,97 +127,24 @@ def _build_defaults(
     extra_pub_keys: Optional[list[str]] = None,
     mgmt_wifi: bool = False,
     mgmt_wifi_txpower: Optional[int] = None,
-    use_cases: Optional[list[UseCaseConfig]] = None,
+    use_cases: Optional[list] = None,
     model_capabilities: Optional[list[str]] = None,
-    wifi_sta: Optional[WifiSTAConfig] = None,
-    wifi_ap: Optional[WifiAPConfig] = None,
+    wifi_sta: Optional[object] = None,
+    wifi_ap: Optional[object] = None,
+    wifi_aps: Optional[list] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
-    """Build the shell defaults script for first-boot customization.
-
-    Returns (script_text, ssh_key_cleaned_or_None, ssh_key_source_or_None).
-    """
-    lines: list[str] = []
-    ssh_key_cleaned: Optional[str] = None
-    ssh_key_source: Optional[str] = None
-
-    all_keys: list[str] = []
-    if ssh_key_path:
-        ssh_key_cleaned, ssh_key_source = _read_ssh_pubkey(ssh_key_path)
-        all_keys.append(ssh_key_cleaned)
-    if extra_pub_keys:
-        for k in extra_pub_keys:
-            stripped = _strip_key_comment(k.strip())
-            if stripped and stripped not in all_keys:
-                all_keys.append(stripped)
-
-    if all_keys:
-        lines.append("mkdir -p /etc/dropbear")
-        for i, key in enumerate(all_keys):
-            op = ">" if i == 0 else ">>"
-            lines.append(f"echo '{key}' {op} /etc/dropbear/authorized_keys")
-        lines.append("chmod 600 /etc/dropbear/authorized_keys")
-
-    if password:
-        pw_b64 = base64.b64encode(password.encode()).decode()
-        lines.append(f"printf '%s\\n%s\\n' \"$(echo '{pw_b64}' | base64 -d)\" \"$(echo '{pw_b64}' | base64 -d)\" | passwd root")
-
-    if wan_ssh:
-        lines.extend([
-            "uci add firewall rule",
-            "uci set firewall.@rule[-1].name='Allow-SSH-WAN'",
-            "uci set firewall.@rule[-1].src='wan'",
-            "uci set firewall.@rule[-1].dest_port='22'",
-            "uci set firewall.@rule[-1].proto='tcp'",
-            "uci set firewall.@rule[-1].target='ACCEPT'",
-            "uci commit firewall",
-            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
-            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
-            "uci commit dropbear",
-        ])
-
-    if mgmt_wifi:
-        lines.append(build_mgmt_wifi_script(txpower=mgmt_wifi_txpower).rstrip())
-
-    if wifi_sta:
-        lines.append("")
-        lines.append(f"# WiFi STA: {wifi_sta.ssid} ({wifi_sta.band})")
-        lines.append(wifi_sta_firstboot_script(
-            wifi_sta.band, wifi_sta.ssid, wifi_sta.encryption,
-            key=wifi_sta.key, network="wan",
-        ))
-
-    if wifi_ap:
-        lines.append("")
-        lines.append(f"# WiFi AP: {wifi_ap.ssid} ({wifi_ap.band})")
-        lines.append(wifi_ap_firstboot_script(
-            wifi_ap.band, wifi_ap.ssid, wifi_ap.encryption,
-            key=wifi_ap.key, channel=wifi_ap.channel, network="lan",
-        ))
-
-    if use_cases:
-        from use_cases import registry as _uc_registry, apply_defaults as _apply_defaults
-        uc_reg = _uc_registry()
-        for uc_cfg in use_cases:
-            uc = uc_reg.get(uc_cfg.name)
-            if uc is None:
-                logger.warning("unknown use case '%s', skipping", uc_cfg.name)
-                continue
-            if model_capabilities and uc.requires_capabilities:
-                missing = set(uc.requires_capabilities) - set(model_capabilities)
-                if missing:
-                    logger.warning(
-                        "use case '%s' requires %s but model only has %s — skipping",
-                        uc.name, sorted(missing), sorted(model_capabilities),
-                    )
-                    continue
-            resolved = _apply_defaults(uc_cfg.name, uc_cfg.params)
-            script = uc.build_defaults(resolved)
-            if script:
-                lines.append("")
-                lines.append(script.rstrip())
-                logger.info("use case '%s': added %d lines to defaults script", uc.name, len(script.splitlines()))
-
-    return "\n".join(lines), ssh_key_cleaned, ssh_key_source
+    """Backward-compatible wrapper around profile.build_plan."""
+    cfg = _load_config()
+    plan = build_plan(
+        cfg,
+        mode="asu_build",
+        model_capabilities=model_capabilities,
+        ssh_key_path=ssh_key_path,
+        password=password,
+        wan_ssh=wan_ssh,
+        extra_pub_keys=extra_pub_keys,
+    )
+    return plan.asu_defaults_script(), plan.ssh_key_cleaned or None, plan.ssh_key_source or None
 
 
 # ---------------------------------------------------------------------------
@@ -510,10 +216,9 @@ def cmd_request(args: argparse.Namespace) -> int:
     target: Optional[str] = args.target
     packages_str: Optional[str] = args.packages
     ssh_key_path: Optional[str] = args.ssh_key
-    password: Optional[str] = args.password
-    wan_ssh: bool = args.wan_ssh
-
     cfg = _load_config()
+    password: Optional[str] = args.password
+    wan_ssh: bool = args.wan_ssh or cfg.wan_ssh
 
     if not ssh_key_path:
         if cfg.ssh_public_key_path:
@@ -548,18 +253,48 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("could not resolve target for profile '%s'", profile)
         return 1
 
-    defaults_script, ssh_key_cleaned, ssh_key_source = _build_defaults(
-        ssh_key_path,
-        password,
-        wan_ssh,
-        extra_pub_keys=extra_pub_keys,
-        mgmt_wifi=cfg.mgmt_wifi,
-        mgmt_wifi_txpower=cfg.mgmt_wifi_txpower,
-        use_cases=cfg.use_cases,
+    plan = build_plan(
+        cfg,
+        mode="asu_build",
         model_capabilities=model_capabilities,
-        wifi_sta=cfg.wifi_sta,
-        wifi_ap=cfg.wifi_ap,
+        ssh_key_path=ssh_key_path,
+        password=password,
+        wan_ssh=wan_ssh,
+        extra_pub_keys=extra_pub_keys,
     )
+    defaults_script = plan.asu_defaults_script()
+    ssh_key_cleaned = plan.ssh_key_cleaned
+    ssh_key_source = plan.ssh_key_source
+
+    if getattr(args, "dry_run", False):
+        print_plan(plan)
+        print()
+        extras = list(cfg.extra_packages)
+        if packages_str:
+            extras += [p.strip() for p in packages_str.split(",") if p.strip()]
+        packages_to_send = list(dict.fromkeys(plan.all_packages() + extras))
+        remove = plan.all_packages_remove()
+        for r in remove:
+            if r in packages_to_send:
+                packages_to_send.remove(r)
+        print("ASU build request (dry run):")
+        print(json.dumps({
+            "distro": "openwrt",
+            "version": version,
+            "target": target,
+            "profile": profile,
+            "packages": packages_to_send or None,
+            "defaults_lines": len(defaults_script.splitlines()) if defaults_script else 0,
+        }, indent=2))
+        if defaults_script:
+            print()
+            print("--- defaults script ---")
+            print(defaults_script)
+        cache_key = _compute_cache_key(
+            "openwrt", version, target, profile, packages_to_send or None, defaults_script,
+        )
+        print(f"\ncache_key={cache_key}")
+        return 0
 
     if defaults_script:
         logger.info(
@@ -568,28 +303,16 @@ def cmd_request(args: argparse.Namespace) -> int:
             " (includes SSH key)" if ssh_key_cleaned else "",
         )
 
-    # Collect extra packages to ADD on top of the ImageBuilder's profile defaults.
-    # With diff_packages=false (the default), ASU includes the profile's
-    # default_packages and device_packages automatically — we only need to
-    # specify what we want ON TOP of those.
     packages_to_send: Optional[list[str]] = None
     extras = list(cfg.extra_packages)
     if packages_str:
         extras += [p.strip() for p in packages_str.split(",") if p.strip()]
-
-    if cfg.use_cases:
-        from use_cases import registry as _uc_registry
-        uc_reg = _uc_registry()
-        uc_remove: list[str] = []
-        for uc_cfg in cfg.use_cases:
-            uc = uc_reg.get(uc_cfg.name)
-            if uc is None:
-                continue
-            extras.extend(uc.packages)
-            uc_remove.extend(uc.packages_remove)
-        extras = [p for p in extras if p not in uc_remove]
-    if extras:
-        packages_to_send = list(dict.fromkeys(extras))
+    combined = list(dict.fromkeys(plan.all_packages() + extras))
+    remove = plan.all_packages_remove()
+    if remove:
+        combined = [p for p in combined if p not in remove]
+    if combined:
+        packages_to_send = combined
         logger.info("extra packages (%d): %s", len(packages_to_send), packages_to_send)
 
     cache_key = _compute_cache_key(
@@ -1032,6 +755,10 @@ def main() -> int:
     p_request.add_argument(
         "--wan-ssh", action="store_true",
         help="Open SSH on WAN (requires --ssh-key, forces key-only auth)",
+    )
+    p_request.add_argument(
+        "--dry-run", action="store_true",
+        help="Print ASU payload and defaults script without submitting a build",
     )
     p_request.set_defaults(func=cmd_request)
 

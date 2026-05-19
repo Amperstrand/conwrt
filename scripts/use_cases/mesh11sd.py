@@ -59,6 +59,8 @@ register(UseCase(
         "auto_config": ParamDef(type=str, default="0",
                                 description="0=disabled, 1=auto, 2=auto+commit"),
     },
-    build_defaults=_build_mesh11sd,
+    build_configure=_build_mesh11sd,
+    test_status="untested",
+    tested_notes="",
     requires_capabilities=["wifi"],
 ))

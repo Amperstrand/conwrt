@@ -1,0 +1,272 @@
+{
+  "id": "zyxel-gs1900-24e",
+  "vendor": "Zyxel",
+  "description": "GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M",
+  "openwrt": {
+    "target": "realtek/rtl838x",
+    "device": "zyxel,gs1900-24e",
+    "default_ip": "192.168.1.1",
+    "profile": "zyxel_gs1900-24e",
+    "version": "25.12.1"
+  },
+  "hardware": {
+    "soc": "Realtek RTL8382M MIPS 4KEc @ 500MHz",
+    "flash": "16 MiB SPI NOR (Macronix MX25L12835F)",
+    "ram": "128 MiB DDR2 SDRAM",
+    "ethernet_ports": "24x 10/100/1000 Mbps",
+    "wifi": "none (managed switch, no wireless)",
+    "serial": "UART JP2, 115200 8N1, 3.3V (Pin1=VCC, Pin2=RX, Pin3=TX, Pin4=GND)",
+    "board_revision": "A1",
+    "note": "Dual-partition OEM device. After OpenWrt 25.12.1 permanent install, layout merges to single 13952K firmware partition. OEM backup partition is overwritten. OEM web UI recovery is no longer available after permanent install."
+  },
+  "mac_oui": [
+    "5C:F4:AB"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "stock_default_creds": {
+    "username": "admin",
+    "password": "1234"
+  },
+  "flash_methods": {
+    "oem-playwright": {
+      "description": "Upload initramfs image via OEM web UI using Playwright browser automation. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. OEM web UI uses frameset-based navigation with dispatcher.cgi cmd numbers and RSA-encrypted password login.",
+      "oem_url": "http://192.168.1.1",
+      "firmware_page_cmd": 5903,
+      "upload_endpoint": "/cgi-bin/httpupload.cgi",
+      "partition_active": 0,
+      "flash_time_seconds": 90,
+      "silence_timeout": 30,
+      "two_stage": true,
+      "stage1_image": "initramfs",
+      "stage2_method": "sysupgrade"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades. Crosses partition layout boundaries (e.g. 22.03 dual to 25.12.1 merged) requires mtd-write instead.",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    },
+    "mtd-write": {
+      "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions. Writes initramfs to firmware partition (mtd5), reboots into new initramfs, then sysupgrade for permanent install.",
+      "command": "mtd -r write /tmp/firmware.bin firmware",
+      "partition": "firmware",
+      "requires_initramfs": true,
+      "flash_time_seconds": 120,
+      "silence_timeout": 30
+    },
+    "serial-tftp-openwrt": {
+      "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to JP2 header. Two-stage: boot initramfs via TFTP, then sysupgrade. U-Boot bootdelay=1 (already enabled by OEM). serverip should be set to your TFTP host via fw_setenv before relying on this.",
+      "serial_baud": 115200,
+      "serial_voltage": "3.3V",
+      "bootmenu_interrupt": "any key (bootdelay=1)",
+      "bootmenu_timeout_seconds": 1,
+      "tftp_server_ip": "192.168.1.2",
+      "tftp_router_ip": "192.168.1.1",
+      "tftp_load_address": "0x84f00000",
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect FTDI serial adapter to JP2 header (3.3V). Interrupt U-Boot within 1 second at boot. Set serverip if not already configured.",
+      "uboot_commands": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "uboot_env": {
+        "bootcmd": "cst fcTest; boota",
+        "bootdelay": 1,
+        "serverip": "192.168.1.2",
+        "ipaddr": "192.168.1.1",
+        "baudrate": 115200,
+        "note": "bootdelay=1 set by OEM (not modified by us). serverip changed from 192.168.1.X to 192.168.1.2 via fw_setenv. UNTESTED: serial TFTP recovery not actually performed, only env values verified."
+      }
+    }
+  },
+  "partition_layout": {
+    "note": "Two layouts exist depending on firmware version. Layout switches when OpenWrt 25.12.1+ sysupgrade writes a merged single-partition image.",
+    "oem_stock": {
+      "description": "Original Zyxel OEM dual-partition layout (also used by OpenWrt 22.03.x)",
+      "source": "MTD backup from OEM firmware, 2026-05-18",
+      "mtd0": {
+        "name": "u-boot",
+        "size": "256K"
+      },
+      "mtd1": {
+        "name": "u-boot-env",
+        "size": "64K"
+      },
+      "mtd2": {
+        "name": "u-boot-env2",
+        "size": "64K"
+      },
+      "mtd3": {
+        "name": "jffs",
+        "size": "1024K"
+      },
+      "mtd4": {
+        "name": "jffs2",
+        "size": "1024K"
+      },
+      "mtd5": {
+        "name": "firmware",
+        "size": "6976K",
+        "note": "Active partition (partition 0)"
+      },
+      "mtd6": {
+        "name": "runtime2",
+        "size": "6976K",
+        "note": "Backup partition with OEM firmware"
+      }
+    },
+    "openwrt_25_merged": {
+      "description": "Merged single-partition layout after OpenWrt 25.12.1 permanent install",
+      "source": "Verified on hardware 2026-05-18",
+      "mtd0": {
+        "name": "u-boot",
+        "size": "256K"
+      },
+      "mtd1": {
+        "name": "u-boot-env",
+        "size": "64K"
+      },
+      "mtd2": {
+        "name": "u-boot-env2",
+        "size": "64K"
+      },
+      "mtd3": {
+        "name": "jffs",
+        "size": "1024K",
+        "note": "OEM config, unused under OpenWrt"
+      },
+      "mtd4": {
+        "name": "jffs2",
+        "size": "1024K",
+        "note": "OEM config, unused under OpenWrt"
+      },
+      "mtd5": {
+        "name": "firmware",
+        "size": "13952K",
+        "note": "Merged from dual 6976K+6976K partitions"
+      },
+      "mtd6": {
+        "name": "kernel",
+        "size": "3712K"
+      },
+      "mtd7": {
+        "name": "rootfs",
+        "size": "10176K",
+        "note": "squashfs"
+      },
+      "mtd8": {
+        "name": "rootfs_data",
+        "size": "7504K",
+        "note": "JFFS2 overlay"
+      }
+    }
+  },
+  "uboot": {
+    "recovery": {
+      "method": "serial_console",
+      "bootdelay_seconds": 1,
+      "interrupt_key": "any key",
+      "console_baud": 115200,
+      "voltage": "3.3V",
+      "header_location": "JP2",
+      "pinout": "Pin1=VCC, Pin2=RX, Pin3=TX, Pin4=GND",
+      "fw_setenv_works": true,
+      "note": "bootdelay=1 was set by OEM firmware, not by us. fw_setenv works from OpenWrt. serverip updated to 192.168.1.2 for TFTP recovery."
+    },
+    "verified_env": {
+      "source": "fw_printenv from OpenWrt 25.12.1, 2026-05-18",
+      "baudrate": "115200",
+      "boardmodel": "ZyXEL_GS1900_24E",
+      "boardversion": "V1.00(AAHK.0)",
+      "bootcmd": "cst fcTest; boota",
+      "bootdelay": "1",
+      "ethaddr": "5C:F4:AB:XX:XX:XX",
+      "ipaddr": "192.168.1.1",
+      "netmask": "255.255.255.0",
+      "serverip": "192.168.1.2",
+      "stdin": "serial",
+      "stdout": "serial",
+      "stderr": "serial"
+    },
+    "recovery_commands": {
+      "boot_initramfs_via_tftp": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "flash_from_openwrt": [
+        "scp firmware.bin root@192.168.1.1:/tmp/",
+        "ssh root@192.168.1.1 'sysupgrade -n /tmp/firmware.bin'"
+      ],
+      "flash_from_openwrt_mtd": [
+        "scp initramfs.bin root@192.168.1.1:/tmp/",
+        "ssh root@192.168.1.1 'mtd -r write /tmp/initramfs.bin firmware'"
+      ],
+      "note": "Serial TFTP commands UNTESTED on this device. fw_setenv and bootdelay verified. mtd write and sysupgrade tested and working."
+    }
+  },
+  "signatures": {
+    "oem_login": {
+      "source": "Playwright recording 2026-05-18",
+      "url": "http://192.168.1.1/cgi-bin/dispatcher.cgi?cmd=0",
+      "auth_type": "RSA-encrypted password via JavaScript",
+      "session_cookie": "XSSID",
+      "session_check_endpoint": "/cgi-bin/dispatcher.cgi?session_chk=1"
+    },
+    "oem_firmware_page": {
+      "source": "Playwright recording 2026-05-18",
+      "menu_cmd": 28,
+      "firmware_cmd": 5903,
+      "upload_form_action": "/cgi-bin/httpupload.cgi",
+      "upload_method_http": "upmethod=1",
+      "partition_active": "partition=0",
+      "confirm_dialog": "Do you really want to reboot?",
+      "progress_poll_cmd": 5911,
+      "frameset_ui": true,
+      "content_frame": "mainFrame"
+    },
+    "openwrt_booting": {
+      "source": "observed 2026-05-18",
+      "boot_time_seconds": 120,
+      "note": "Permanent install takes ~120s from power-on to SSH. Initramfs boots in ~70s."
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 10,
+      "no_luci": true,
+      "note": "No LuCI web UI in default build (switch device, no wifi). SSH only."
+    }
+  },
+  "tested_hardware": {
+    "oem-playwright": {
+      "tested": true,
+      "date": "2026-05-18",
+      "notes": "Uploaded 22.03.7 initramfs via Playwright to OEM firmware. RSA login, frameset navigation, firmware upload all worked. Firmware page cmd=5903, upload to /cgi-bin/httpupload.cgi, progress poll cmd=5911. OEM booted into initramfs in ~90s."
+    },
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-05-18",
+      "notes": "sysupgrade from 25.12.1 initramfs to 25.12.1 squashfs permanent install. Used sysupgrade -n. Completed successfully, ~120s boot time. sysupgrade from 22.03.7 to 25.12.1 REJECTED due to partition layout change (dual to merged)."
+    },
+    "mtd-write": {
+      "tested": true,
+      "date": "2026-05-18",
+      "notes": "Used 'mtd -r write' from 22.03.7 OpenWrt to flash 25.12.1 initramfs to firmware partition. Required because sysupgrade rejected the cross-version upgrade. Device rebooted into 25.12.1 initramfs successfully. Then sysupgrade to permanent install."
+    },
+    "serial-tftp-openwrt": {
+      "tested": false,
+      "notes": "UNTESTED. U-Boot env verified (bootdelay=1, fw_setenv works, serverip set). Serial commands documented from OpenWrt source and forum posts but not actually executed on this device. FTDI adapter required."
+    },
+    "uboot_env_modification": {
+      "tested": true,
+      "date": "2026-05-18",
+      "notes": "fw_setenv serverip 192.168.1.2 executed successfully from OpenWrt 25.12.1. Verified with fw_printenv. bootdelay was already 1 (set by OEM, not modified)."
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "serial"
+  ]
+}

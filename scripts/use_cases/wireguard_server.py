@@ -98,7 +98,9 @@ register(UseCase(
         "peer1_psk": ParamDef(type=str, default="",
                               description="First peer's pre-shared key (optional)"),
     },
-    build_defaults=_build_wireguard_server,
+    build_configure=_build_wireguard_server,
     requires_capabilities=[],
+    test_status="untested",
+    tested_notes="post-install peer setup",
     requires_post_flash=True,
 ))

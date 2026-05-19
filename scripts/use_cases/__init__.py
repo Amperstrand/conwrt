@@ -1,17 +1,9 @@
 """Use case presets for conwrt.
 
-Each use case is a module in this package that defines:
-  NAME        - str, unique identifier (e.g. "android-tether")
-  DESCRIPTION - str, one-line human description
-  PACKAGES    - list[str], packages to add to the ASU image build
-  PACKAGES_REMOVE - list[str], packages to remove (e.g. conflicting wpad variants)
-  PARAMS      - dict[str, ParamDef], accepted configuration parameters
-  build_defaults(params) -> str, returns shell script lines for first-boot
-
-Usage:
-    from use_cases import registry
-    for uc in registry.values():
-        print(uc.NAME, uc.PACKAGES)
+Each use case module defines:
+  name, description, packages, packages_remove, params
+  build_configure(params) -> shell script
+  packages_via, configure_via, test_status
 """
 
 from __future__ import annotations
@@ -19,7 +11,11 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
+
+PackageDelivery = Literal["image", "opkg", "auto"]
+ConfigureDelivery = Literal["firstboot", "ssh", "both"]
+TestStatus = Literal["tested", "experimental", "untested"]
 
 
 @dataclass
@@ -42,9 +38,22 @@ class UseCase:
     packages: list[str] = field(default_factory=list)
     packages_remove: list[str] = field(default_factory=list)
     params: dict[str, ParamDef] = field(default_factory=dict)
-    build_defaults: Callable[[dict[str, Any]], str] = field(default=lambda _: "")
+    build_configure: Callable[[dict[str, Any]], str] = field(default=lambda _: "")
+    packages_via: PackageDelivery = "auto"
+    configure_via: ConfigureDelivery = "both"
+    test_status: TestStatus = "untested"
+    tested_notes: str = ""
+    post_install_notes: str = ""
     requires_capabilities: list[str] = field(default_factory=list)
-    requires_post_flash: bool = False
+    requires_post_flash: bool = False  # deprecated; sets configure_via=ssh when True
+
+    def __post_init__(self) -> None:
+        if self.requires_post_flash and self.configure_via == "both":
+            object.__setattr__(self, "configure_via", "ssh")
+
+    def build_defaults(self, params: dict[str, Any]) -> str:
+        """Deprecated alias for build_configure."""
+        return self.build_configure(params)
 
 
 _registry: dict[str, UseCase] = {}

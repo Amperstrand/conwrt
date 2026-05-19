@@ -108,7 +108,9 @@ register(UseCase(
         "allowed_ips": ParamDef(type=str, default="0.0.0.0/0, ::/0",
                                 description="IPs to route through tunnel"),
     },
-    build_defaults=_build_wireguard_client,
+    build_configure=_build_wireguard_client,
+    test_status="tested",
+    tested_notes="D-Link COVR-X1860 A1",
     requires_capabilities=[],
     requires_post_flash=False,
 ))

@@ -63,7 +63,9 @@ register(UseCase(
             description="DNS mode: redir-host or fake-ip"
         ),
     },
-    build_defaults=_build_openclash,
+    build_configure=_build_openclash,
     requires_capabilities=[],
+    test_status="untested",
+    tested_notes="subscription import via LuCI",
     requires_post_flash=True,
 ))

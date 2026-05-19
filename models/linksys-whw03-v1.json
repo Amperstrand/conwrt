@@ -1,5 +1,5 @@
 {
-  "id": "linksys_whw03",
+  "id": "linksys-whw03-v1",
   "vendor": "Linksys",
   "description": "Velop Tri-Band V1 (WHW03) \u2014 U-Boot HTTP recovery signatures needed",
   "openwrt": {

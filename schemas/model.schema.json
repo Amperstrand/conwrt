@@ -6,17 +6,34 @@
   "additionalProperties": true,
   "required": ["id", "vendor", "description", "openwrt", "flash_methods", "capabilities"],
   "properties": {
-    "id": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9_.-]+$"},
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
+      "description": "conwrt slug; must match models/{id}.json filename (hyphenated)"
+    },
     "vendor": {"type": "string", "minLength": 1},
     "description": {"type": "string", "minLength": 1},
     "openwrt": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["target", "profile", "version"],
+      "required": ["target", "device", "profile", "version"],
       "properties": {
         "target": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$"},
-        "device": {"type": "string"},
-        "profile": {"type": "string", "minLength": 1},
+        "device": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenWrt DEVICE/DTS name (e.g. dlink,covr-x1860-a1)"
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ImageBuilder / ASU profile (e.g. dlink_covr-x1860-a1)"
+        },
+        "board_name": {
+          "type": "string",
+          "description": "Optional /tmp/sysinfo/board_name for auto-detect"
+        },
         "version": {"type": "string", "minLength": 1},
         "default_ip": {"type": "string", "minLength": 1}
       }

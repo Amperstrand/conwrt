@@ -74,6 +74,37 @@ def configure_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> 
     return True
 
 
+def remove_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> bool:
+    """Remove an IP address alias from a network interface.
+
+    Uses ``ifconfig`` on macOS and ``ip addr`` on Linux/OpenWrt.
+    """
+    plat = detect_platform()
+
+    if plat == "darwin":
+        cmd = ["ifconfig", interface, "inet", f"{ip_addr}/{subnet}", "-alias"]
+        if not is_root():
+            cmd = ["sudo"] + cmd
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return result.returncode == 0
+
+    # Linux/OpenWrt: use ip addr del
+    cmd = ["ip", "addr", "del", f"{ip_addr}/{subnet}", "dev", interface]
+    if not is_root():
+        cmd = ["sudo", "-n"] + cmd
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0 and "Cannot find device" not in result.stderr:
+        if is_root():
+            return False
+        # retry without sudo
+        result2 = subprocess.run(
+            ["ip", "addr", "del", f"{ip_addr}/{subnet}", "dev", interface],
+            capture_output=True, text=True, check=False,
+        )
+        return result2.returncode == 0
+    return True
+
+
 def get_link_state(interface: str) -> bool:
     """Check if an interface has carrier (link up)."""
     # Linux/OpenWrt: /sys/class/net/ (Linux kernel sysfs)

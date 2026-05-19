@@ -21,6 +21,16 @@ def main() -> int:
     for path in sorted(MODELS_DIR.glob("*.json")):
         data = json.loads(path.read_text())
         errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+        stem = path.stem
+        if data.get("id") != stem:
+            failed = True
+            print(f"FAIL: {path.name}: id '{data.get('id')}' must match filename stem '{stem}'", file=sys.stderr)
+        ow = data.get("openwrt", {})
+        if not ow.get("device"):
+            print(f"WARN: {path.name}: missing openwrt.device", file=sys.stderr)
+        if not ow.get("profile"):
+            failed = True
+            print(f"FAIL: {path.name}: missing openwrt.profile (ASU ImageBuilder name)", file=sys.stderr)
         if errors:
             failed = True
             print(f"FAIL: {path}", file=sys.stderr)
@@ -28,6 +38,11 @@ def main() -> int:
                 location = ".".join(str(p) for p in error.path) or "<root>"
                 print(f"  {location}: {error.message}", file=sys.stderr)
         else:
+            tested = data.get("tested_hardware", {})
+            methods = set(data.get("flash_methods", {}).keys())
+            untested = methods - set(tested.keys())
+            if untested:
+                print(f"  note: {path.name}: flash methods without tested_hardware: {', '.join(sorted(untested))}")
             print(f"OK: {path.name}")
     return 1 if failed else 0
 

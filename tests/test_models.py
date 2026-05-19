@@ -24,8 +24,15 @@ def test_model_loader_loads_every_model_by_id() -> None:
         loaded = load_model(model["id"])
         assert loaded["id"] == model["id"]
         assert loaded["openwrt"]["target"]
+        assert loaded["openwrt"]["device"]
         assert loaded["openwrt"]["profile"]
         assert loaded["flash_methods"]
+
+
+def test_model_id_matches_filename() -> None:
+    for path in sorted((ROOT / "models").glob("*.json")):
+        data = json.loads(path.read_text())
+        assert data["id"] == path.stem, f"{path.name}: id must match filename"
 
 
 def test_flash_methods_have_descriptions() -> None:
