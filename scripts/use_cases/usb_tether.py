@@ -136,7 +136,7 @@ _IFACE_PARAM = {
 
 
 register(UseCase(
-    name="usb-tether",
+    name="tether",
     description="Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.",
     packages=_ANDROID_PKGS + _IOS_PKGS + _ADB_PKG,
     params=_IFACE_PARAM,
@@ -153,7 +153,7 @@ register(UseCase(
 ))
 
 register(UseCase(
-    name="android-tether",
+    name="tether-android",
     description="USB WAN from Android phone. Enable tethering manually on the phone.",
     packages=_ANDROID_PKGS,
     params=_IFACE_PARAM,
@@ -168,7 +168,7 @@ register(UseCase(
 ))
 
 register(UseCase(
-    name="android-tether-adb",
+    name="tether-android-adb",
     description="USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.",
     packages=_ANDROID_PKGS + _ADB_PKG,
     params=_IFACE_PARAM,
@@ -184,7 +184,7 @@ register(UseCase(
 ))
 
 register(UseCase(
-    name="iphone-tether",
+    name="tether-ios",
     description="USB WAN from iPhone. Enable Personal Hotspot manually on the phone.",
     packages=_IOS_PKGS,
     params=_IFACE_PARAM,

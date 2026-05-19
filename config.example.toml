@@ -73,9 +73,9 @@ wan_ssh = false
 # Use cases requiring hardware not present on your device are auto-skipped.
 #
 # [use_cases]
-# enabled = ["usb-tether"]
+# enabled = ["tether"]
 #
-# [use_cases.usb-tether]
+# [use_cases.tether]
 # interface = "usbwan"
 # enable_adb = true
 #

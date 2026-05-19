@@ -239,7 +239,7 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 
 conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for a specific use case**. Instead of flashing a stock image and then reading wiki docs to manually configure your router, you declare what you want in `config.toml` and the firmware arrives ready to go.
 
-**Status: `usb-tether` tested on hardware** (GL.iNet MT3000, Android RNDIS). All other presets are untested — the uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
+**Status: `tether` tested on hardware** (GL.iNet MT3000, Android RNDIS). All other presets are untested — the uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
 
 ### How It Works
 
@@ -252,7 +252,7 @@ Enable them in `config.toml`:
 
 ```toml
 [use_cases]
-enabled = ["android-tether", "sqm"]
+enabled = ["tether-android", "sqm"]
 
 [use_cases.sqm]
 download_kbps = 340000
@@ -271,7 +271,7 @@ These use cases are the most immediately useful because they require almost no u
 
 | Preset | What it does | User provides |
 |--------|-------------|---------------|
-| **usb-tether** | USB WAN from Android or iPhone (auto-detects) | Plug in USB cable |
+| **tether** | USB WAN from Android or iPhone (auto-detects) | Plug in USB cable |
 | **sqm** | Smart Queue Management with CAKE — eliminates bufferbloat | Download/upload speeds in Kbit/s |
 | **travelmate** | Auto-connect to hotel/airport WiFi with captive portal detection | Nothing (auto-scans) |
 
@@ -281,10 +281,10 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 
 | Preset | Description | Post-flash? |
 |--------|-------------|-------------|
-| `usb-tether` | Auto-detect Android or iPhone USB WAN. Android gets ADB auto-enable. | No |
-| `android-tether` | USB WAN from Android. Enable tethering manually on the phone. | No |
-| `android-tether-adb` | USB WAN from Android + ADB auto-enable. Confirm on phone, auto-activates. | No |
-| `iphone-tether` | USB WAN from iPhone. Enable Personal Hotspot manually on the phone. | No |
+| `tether` | Auto-detect Android or iPhone USB WAN. Android gets ADB auto-enable. | No |
+| `tether-android` | USB WAN from Android. Enable tethering manually on the phone. | No |
+| `tether-android-adb` | USB WAN from Android + ADB auto-enable. Confirm on phone, auto-activates. | No |
+| `tether-ios` | USB WAN from iPhone. Enable Personal Hotspot manually on the phone. | No |
 | `sqm` | Bufferbloat fix via CAKE/fq_codel (manual speeds) | No |
 | `auto-sqm` | Auto-measure WAN speed + configure SQM (experimental) | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |
