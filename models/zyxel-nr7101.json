@@ -1,127 +1,270 @@
 {
   "id": "zyxel-nr7101",
   "vendor": "Zyxel",
-  "description": "NR7101 \u2014 5G/NR outdoor router, MediaTek MT7621",
+  "description": "NR7101 — 5G/NR outdoor router, MediaTek MT7621",
   "openwrt": {
     "target": "ramips/mt7621",
     "device": "zyxel,nr7101",
     "profile": "zyxel_nr7101",
     "default_ip": "192.168.1.1",
-    "version": "24.10.2"
+    "version": "25.12.4"
   },
   "hardware": {
-    "soc": "MT7621A (MediaTek) dual-core MIPS @ 880MHz",
+    "soc": "MT7621A (MediaTek) dual-core MIPS 1004Kc @ 880MHz",
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
     "wifi": "none (5G/NR modem only, no WiFi radio)",
-    "modem": "Quectel RG502Q-EA (5G NR Sub-6, NSA/SA)",
+    "modem": {
+      "model": "Quectel RG502Q-EA",
+      "usb_vendor_id": "2c7c",
+      "usb_product_id": "0800",
+      "capability": "5G NR Sub-6, NSA/SA",
+      "usb_interfaces": "4 (cdc-wdm0 + ttyUSB0-3)",
+      "at_port": "/dev/ttyUSB2",
+      "qmi_device": "/dev/cdc-wdm0",
+      "note": "AT commands via /dev/ttyUSB2 at 115200 baud. uqmi via /dev/cdc-wdm0. Modem firmware queryable via AT+GMR or sysfs /sys/bus/usb/devices/2-1/product."
+    },
     "serial": "UART, 115200 8N1, internal header",
-    "note": "IP68 outdoor enclosure. PoE powered. No WiFi \u2014 5G modem only."
+    "board_revision": "A1 (verified: board_name=zyxel,nr7101)",
+    "enclosure": "IP68 outdoor, PoE powered",
+    "note": "No WiFi — 5G modem only. Single PoE ethernet port."
   },
   "mac_oui": [
+    "4C:C5:3E",
     "E8:9F:80"
   ],
+  "stock_default_ip": "192.168.1.1",
   "flash_methods": {
     "zycast": {
-      "description": "Flash via ZyXEL multicast protocol (zycast). No password required.",
+      "description": "Flash via ZyXEL multicast protocol (zycast). Flashes both Kernel and Kernel2 partitions simultaneously. Uses initramfs-recovery image with zytrx header. No password required. UNTESTED on this device.",
       "multicast_group": "225.0.0.0",
       "multicast_port": 5631,
       "image_type": "ras",
       "flash_both_partitions": true,
       "flash_time_seconds": 180,
       "silence_timeout": 30,
-      "reset_instructions": "Power cycle the device. No button press needed.",
-      "led_pattern": "no specific LED \u2014 watch console or multicast traffic",
+      "reset_instructions": "Power cycle the device into Z-Loader (press Escape during serial boot, or device enters multicast listen mode automatically on failed boot). No button press needed.",
+      "led_pattern": "no specific LED — watch console or multicast traffic",
       "firmware_type": "initramfs-recovery",
       "images": {
         "initramfs": {
           "filename": "*-ramips-mt7621-zyxel_nr7101-initramfs-recovery.bin",
           "type": "ras"
         }
-      }
+      },
+      "zycast_binary": "conwrt scripts/zycast.py (C binary with Python fallback)"
     },
     "sysupgrade": {
-      "description": "SSH sysupgrade from existing OpenWrt",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "description": "SSH sysupgrade from existing OpenWrt. SCP image to /tmp/ then run sysupgrade -n. Use scp -O (legacy protocol) as OpenWrt dropbear may lack SFTP. Boot takes ~60s after flash.",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "scp_note": "Use scp -O flag — OpenWrt dropbear lacks /usr/libexec/sftp-server",
+      "boot_time_seconds": 60
     }
   },
   "signatures": {
+    "stock_firmware": {
+      "source": "zytrx header format from zytrx.c (openwrt/firmware-utils), bmork mailing list posts",
+      "http_redirect": "NOT LuCI — stock firmware uses Zyxel proprietary web UI",
+      "kernel_magic": "0x30524448 (HDR0) at offset 0 of Kernel partition",
+      "board_id": "NR7101 (16-byte string at zytrx offset 0x48)",
+      "model_id": "0x07010001 (at zytrx offset 0x58)",
+      "version_pattern": "1.00(ABUV.X)DY format",
+      "bootloader_env": "BootingFlag, CheckBypass, Image1Stable variables exist"
+    },
+    "openwrt_running": {
+      "source": "verified on hardware 2026-05-19",
+      "http_redirect": "cgi-bin/luci/ (LuCI web UI)",
+      "ssh_no_password": true,
+      "kernel_magic": "UImage 0x27051956 at Kernel partition start",
+      "http_title": "OpenWrt - LuCI",
+      "luci_version_string": "v=25.340.26705~d88390b in CSS/JS URLs",
+      "arp_reply": "answers ARP for 192.168.1.1",
+      "no_dhcp_server": "does NOT run DHCP server by default on LAN (unlike most routers)",
+      "no_zycast_multicast": "does NOT send multicast to 225.0.0.0:5631 during normal boot"
+    },
     "zycast_listening": {
-      "source": "bmork forum post 2023-08-06",
-      "protocol": "multicast",
+      "source": "bmork forum post, zycast.c source",
+      "protocol": "multicast UDP",
       "multicast_group": "225.0.0.0",
       "multicast_port": 5631,
-      "magic": "zyx\\x00",
+      "magic": "0x7A797800 (zyx\\0 big-endian)",
+      "header_size": "30 bytes",
+      "chunk_size": 1024,
       "bootloader_banner": "Z-LOADER V1.30",
-      "console_message": "Multiboot Listening..."
+      "console_message": "Multiboot Listening...",
+      "note": "Device enters zycast listen mode when Z-Loader is active (serial interrupt or failed boot). NOT seen during normal OpenWrt boot."
     },
     "openwrt_booting": {
-      "source": "inferred from mt7621 behavior",
-      "first_packet_protocol": "icmpv6_mldv2",
-      "first_dhcp": "DHCP reply from 192.168.1.1:67"
+      "source": "verified on hardware 2026-05-19, pcap capture",
+      "first_packet_from_device": "ARP reply (192.168.1.1 is-at MAC)",
+      "ipv6": "MLDv2 reports, neighbor solicitations ( NDP)",
+      "no_dhcp_offer": "no DHCP server running on LAN by default",
+      "icmp_unreachable": "may send ICMP net unreachable for WAN traffic (e.g. ZeroTier)",
+      "boot_time_seconds": 60,
+      "first_ssh_after_boot": "~60s"
     },
     "openwrt_ready": {
       "ssh_port": 22,
+      "http_port": 80,
+      "http_redirect": "/ → /cgi-bin/luci/",
       "ssh_ready_after_boot_seconds": 60
     }
   },
   "partition_layout": {
-    "source": "forum.openwrt.org, verified by bmork",
+    "source": "verified on hardware 2026-05-19 (cat /proc/mtd)",
     "mtd0": {
       "name": "Bootloader",
-      "size": "512KB"
+      "size": "512KB",
+      "erasesize": "128KB"
     },
     "mtd1": {
       "name": "Config",
-      "size": "512KB"
+      "size": "512KB",
+      "erasesize": "128KB"
     },
     "mtd2": {
       "name": "Factory",
       "size": "256KB",
+      "erasesize": "128KB",
       "irreplaceable": true,
-      "note": "Serial, certs, calibration \u2014 MUST backup before zycast"
+      "note": "Serial, certs, calibration — MUST backup before zycast"
     },
     "mtd3": {
       "name": "Kernel",
       "size": "~31MB",
-      "note": "Primary firmware \u2014 overwritten by zycast"
+      "erasesize": "128KB",
+      "note": "Primary firmware partition"
     },
     "mtd4": {
       "name": "ubi",
-      "size": "~27MB"
+      "size": "~27MB",
+      "erasesize": "128KB",
+      "note": "Rootfs (UBI)"
     },
     "mtd5": {
       "name": "Kernel2",
       "size": "~31MB",
-      "note": "Backup firmware \u2014 ALSO overwritten by zycast"
+      "erasesize": "128KB",
+      "note": "Backup/recovery firmware partition — ALSO overwritten by zycast"
     },
     "mtd6": {
       "name": "wwan",
-      "size": "1MB"
+      "size": "1MB",
+      "erasesize": "128KB",
+      "note": "Modem configuration"
     },
     "mtd7": {
       "name": "data",
-      "size": "16MB"
+      "size": "16MB",
+      "erasesize": "128KB"
     },
     "mtd8": {
       "name": "rom-d",
-      "size": "1MB"
+      "size": "1MB",
+      "erasesize": "128KB"
     },
     "mtd9": {
       "name": "reserve",
-      "size": "512KB"
-    }
+      "size": "512KB",
+      "erasesize": "128KB"
+    },
+    "note": "Dual-partition: Kernel (primary) + Kernel2 (recovery). Bootloader BootingFlag selects partition. zycast ATNR writes both simultaneously."
   },
   "backup": {
     "method": "ssh",
     "requires_password": true,
     "password_tool": "zyxel_pwgen",
     "password_input": "device serial number (printed on unit)",
-    "critical_partitions": [
-      "Factory"
-    ],
+    "critical_partitions": ["Factory"],
     "note": "SSH as root/supervisor with generated password. Dump all MTD partitions before zycast. Factory partition is irreplaceable."
+  },
+  "modem_inventory": {
+    "method": "AT commands via /dev/ttyUSB2 + sysfs",
+    "mode": "QMI (AT+QCFG=usbnet,0). Confirmed: qmi_wwan driver on interface 1.4, class ff/ff/ff",
+    "note": "AT commands work via raw echo+cat to /dev/ttyUSB2 (no picocom/stty needed on OpenWrt). uqmi fails after sysupgrade -n because modem interface is unconfigured. AT commands always work.",
+    "usb_sysfs": {
+      "path": "/sys/bus/usb/devices/2-1/",
+      "manufacturer": { "cmd": "cat /sys/bus/usb/devices/2-1/manufacturer", "example": "Quectel" },
+      "product": { "cmd": "cat /sys/bus/usb/devices/2-1/product", "example": "RG502Q-EA" },
+      "vendor_id": { "cmd": "cat /sys/bus/usb/devices/2-1/idVendor", "example": "2c7c" },
+      "product_id": { "cmd": "cat /sys/bus/usb/devices/2-1/idProduct", "example": "0800" }
+    },
+    "at_commands": {
+      "at_port": "/dev/ttyUSB2",
+      "send_pattern": "echo -e 'AT<command>\\r' > /dev/ttyUSB2 && sleep 1 && cat /dev/ttyUSB2 (kill after 2s)",
+      "model": { "cmd": "ATI", "response_pattern": "Quectel / RG502Q-EA / Revision: <firmware>" },
+      "firmware": { "cmd": "AT+GMR", "example": "RG502QEAACR13A03M4G_ZYXEL" },
+      "imei": { "cmd": "AT+GSN", "example": "354351110824785" },
+      "sim_status": { "cmd": "AT+QSIMDET?", "response_pattern": "+QSIMDET: <auto_detect>,<present> (0,1 = auto off, SIM present)" },
+      "iccid": { "cmd": "AT+QCCID", "example": "89470000220307144371" },
+      "usb_mode": { "cmd": "AT+QCFG=\"usbnet\"", "response": "0=QMI/RmNet, 1=ECM, 2=MBIM" },
+      "signal": { "cmd": "AT+CSQ", "note": "Basic signal quality" },
+      "network": { "cmd": "AT+COPS?", "note": "Current operator" }
+    },
+    "uqmi_commands": {
+      "note": "Only works after modem WAN interface is configured (uci set network.wan.proto=qmi). Returns 'Failed to connect to service' on fresh sysupgrade -n.",
+      "device": "/dev/cdc-wdm0",
+      "imei": "uqmi -s -d /dev/cdc-wdm0 --get-imei",
+      "iccid": "uqmi -s -d /dev/cdc-wdm0 --get-iccid",
+      "sim_state": "uqmi -s -d /dev/cdc-wdm0 --uim-get-sim-state",
+      "signal": "uqmi -s -d /dev/cdc-wdm0 --get-signal-info"
+    }
+  },
+    "tested_hardware": {
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-05-19",
+      "notes": "sysupgrade -n from 24.10.5 to 25.12.4. SCP required -O flag (legacy SCP protocol) because dropbear lacks SFTP server. Boot took ~60s. SSH key auth worked immediately after boot. LuCI available on port 80."
+    },
+    "zycast": {
+      "tested": false,
+      "notes": "UNTESTED. zycast.py compiled and available (C binary with Python fallback). No zycast multicast observed during normal boot — only active in Z-Loader mode."
+    },
+    "modem_inventory": {
+      "tested": true,
+      "date": "2026-05-19",
+      "notes": "Quectel RG502Q-EA identified via sysfs (vendor=2c7c, product=0800). AT commands on /dev/ttyUSB2 work reliably for model, firmware, SIM status, ICCID. Firmware: RG502QEAACR13A03M4G_ZYXEL (Zyxel-custom). SIM present. Modem in QMI mode (qmi_wwan driver). uqmi returns 'Failed to connect to service' after sysupgrade -n (modem interface unconfigured). AT commands always work regardless of network config."
+    },
+    "cellular_data": {
+      "tested": true,
+      "date": "2026-05-19",
+      "carrier": "ice+ Norway (MCC 242, MNC 14)",
+      "apn": "ice.net",
+      "auth": "none",
+      "network": "LTE FDD Band 3 (1800 MHz)",
+      "download_speed_mbps": 56,
+      "latency_ms": 43,
+      "signal_rsrp_dbm": -74,
+      "notes": "uci set network.wan.apn=ice.net && uqmi ifup wan. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Only APN change needed. Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+    }
+  },
+  "cellular": {
+    "default_wan_config": {
+      "proto": "qmi",
+      "device": "/dev/cdc-wdm0",
+      "default_apn": "auto",
+      "note": "OpenWrt 25.12.4 ships with QMI WAN pre-configured. Only APN needs to be set per carrier."
+    },
+    "carrier_profiles": {
+      "ice_no": {
+        "carrier": "ice+ Norway",
+        "mcc": 242,
+        "mnc": 14,
+        "apn": "ice.net",
+        "auth": "none",
+        "pdp_type": "ipv4",
+        "verified": true,
+        "date": "2026-05-19"
+      }
+    },
+    "setup_commands": {
+      "set_apn": "uci set network.wan.apn='ice.net'",
+      "commit": "uci commit network",
+      "bring_up": "ifup wan",
+      "verify": "ifstatus wan && ping -c 3 8.8.8.8",
+      "note": "Wait ~15s after ifup for connection. uqmi returns 'connected' when data session is active."
+    }
   },
   "capabilities": [
     "ethernet",
