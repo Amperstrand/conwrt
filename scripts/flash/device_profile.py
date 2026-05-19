@@ -49,6 +49,7 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     is_serial_tftp = method_name.startswith("serial-tftp")
     is_zycast = method_name == "zycast"
     is_sysupgrade_only = method_name == "sysupgrade" and "recovery_ip" not in fm
+    is_mtd_write = method_name == "mtd-write"
 
     if is_serial_tftp:
         client_ip = fm.get("tftp_server_ip", "192.168.1.254")
@@ -56,7 +57,7 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     elif is_zycast:
         client_ip = "192.168.1.2"
         recovery_ip = model["openwrt"]["default_ip"]
-    elif is_sysupgrade_only:
+    elif is_sysupgrade_only or is_mtd_write:
         client_ip = ""
         recovery_ip = model["openwrt"]["default_ip"]
     else:

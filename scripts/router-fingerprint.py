@@ -149,10 +149,20 @@ def run_ssh_command(ip: str, quiet: bool = False) -> tuple[bool, str]:
             "echo '===LOGREAD_LAST==='; logread 2>/dev/null | tail -20; "
             "echo '===PARTITIONS==='; cat /proc/mtd 2>/dev/null; "
             "echo '===NETWORK==='; ip addr show 2>/dev/null | grep -E 'inet |link/ether'; "
-            "echo '===DNS==='; cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || cat /tmp/resolv.conf 2>/dev/null"
+            "echo '===DNS==='; cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || cat /tmp/resolv.conf 2>/dev/null; "
+            "echo '===MODEM==='; _modem_at() { local r; r=$(echo -e \"$1\\r\" > /dev/ttyUSB2 && sleep 2 && timeout 2 cat /dev/ttyUSB2 2>/dev/null); echo \"$r\" | head -5 | tr '\\n' '|' | tr -d '\\r'; }; "
+            "if [ -c /dev/ttyUSB2 ]; then "
+            "_modem_at 'AT' > /dev/null 2>&1; sleep 1; "
+            "echo \"ati=$(_modem_at 'ATI')\"; sleep 1; "
+            "echo \"firmware=$(_modem_at 'AT+GMR')\"; sleep 1; "
+            "echo \"imei=$(_modem_at 'AT+GSN')\"; sleep 1; "
+            "echo \"iccid=$(_modem_at 'AT+QCCID')\"; sleep 1; "
+            "echo \"signal=$(_modem_at 'AT+CSQ')\"; sleep 1; "
+            "echo \"network=$(_modem_at 'AT+COPS?')\"; "
+            "else echo 'no_modem_port'; fi"
         )
 
-        result = run_ssh(ip, commands, connect_timeout=5, timeout=20)
+        result = run_ssh(ip, commands, connect_timeout=5, timeout=40)
 
         if result.returncode != 0:
             print(f'[!] SSH command failed with code {result.returncode}', file=sys.stderr)
@@ -301,6 +311,18 @@ def parse_output_to_json(output: str) -> Dict[str, Any]:
 
         elif section_name == 'DNS':
             result['network']['dns'] = section_text.split('\n')
+
+        elif section_name == 'MODEM':
+            modem = {}
+            for line in section_text.strip().split('\n'):
+                if '=' in line:
+                    key, _, value = line.partition('=')
+                    key = key.strip().lower()
+                    value = value.strip()
+                    if value and value != "ERROR" and "no_modem_port" not in value:
+                        modem[key] = value
+            if modem:
+                result['modem'] = modem
 
     # Set derived fields
     if result['identity'].get('hostname'):

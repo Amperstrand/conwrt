@@ -148,6 +148,62 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
         return False
 
 
+def _flash_via_mtd_write(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None,
+                         mtd_command: str = "mtd -r write /tmp/firmware.bin firmware") -> bool:
+    """Upload firmware via SCP and run mtd write (for devices where sysupgrade rejects images)."""
+    firmware_name = os.path.basename(firmware_path)
+    remote_path = f"/tmp/{firmware_name}"
+
+    scp_command = scp_cmd(device_ip, firmware_path, f"root@{device_ip}:{remote_path}",
+                          key=ssh_key, connect_timeout=10)
+
+    size_mb = os.path.getsize(firmware_path) / 1024 / 1024
+    log(f"Uploading {firmware_name} ({size_mb:.1f} MB) via SCP to {device_ip}...")
+    try:
+        r = subprocess.run(scp_command, capture_output=True, text=True, timeout=120, check=False)
+        if r.returncode != 0:
+            stderr_hint = r.stderr[:300] if r.stderr else "(no stderr)"
+            if "permission denied" in stderr_hint.lower():
+                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
+                log("Hint: check SSH key authentication — ensure the key is authorized on the device")
+            else:
+                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
+            return False
+    except subprocess.TimeoutExpired:
+        log("SCP upload timed out.")
+        return False
+    except Exception as e:
+        log(f"SCP error: {e}")
+        return False
+
+    log(f"Firmware uploaded. Running {mtd_command}...")
+    ssh_command = ssh_cmd(device_ip, mtd_command, key=ssh_key, connect_timeout=10)
+
+    try:
+        r = subprocess.run(ssh_command, capture_output=True, text=True, timeout=60, check=False)
+        combined = (r.stdout or "") + (r.stderr or "")
+        # mtd -r reboots after write; connection drop is expected success
+        if (r.returncode == 0
+                or "Rebooting" in combined
+                or "Writing" in combined):
+            log("mtd write initiated successfully.")
+            return True
+        if r.returncode != 0 and not r.stdout and not r.stderr:
+            log("mtd write initiated (connection closed by remote — expected).")
+            return True
+        if "Connection refused" in r.stderr or "Connection timed out" in r.stderr:
+            log(f"SSH connection failed during mtd write: {r.stderr[:200]}")
+            return False
+        log(f"mtd write returned {r.returncode}: {r.stdout[:200]} {r.stderr[:200]}")
+        return False
+    except subprocess.TimeoutExpired:
+        log("mtd write command timed out (may have started reboot).")
+        return True
+    except Exception as e:
+        log(f"mtd write error: {e}")
+        return False
+
+
 def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 180) -> bool:
     """Wait for device to come back after sysupgrade reboot."""
     log(f"Waiting for device to reboot and SSH to come back at {device_ip}...")
@@ -1866,7 +1922,7 @@ def _request_custom_image(
         log("ERROR: ASU firmware request failed.")
         return None, {}
 
-    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast", "dlink-hnap"}
+    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast", "dlink-hnap", "mtd-write"}
     if flash_method in recovery_methods:
         preferred_types = ["recovery", "factory", "initramfs"]
     else:
@@ -2003,8 +2059,12 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     boot_state = _detect_boot_state(ctx.interface, ctx.profile)
     ctx.boot_state = boot_state
     if boot_state == "openwrt" and not ctx.force_uboot:
-        ctx._say_fn("OpenWrt detected. Using sysupgrade for faster re-flash.")
-        log("Boot state: OpenWrt — using sysupgrade path")
+        if ctx.profile.flash_method == "mtd-write":
+            ctx._say_fn("OpenWrt detected. Using mtd-write for flash.")
+            log("Boot state: OpenWrt — using mtd-write path")
+        else:
+            ctx._say_fn("OpenWrt detected. Using sysupgrade for faster re-flash.")
+            log("Boot state: OpenWrt — using sysupgrade path")
         ctx.state = State.SYSUPGRADE_UPLOADING
     elif boot_state == "stock-hnap" or ctx.profile.flash_method == "dlink-hnap":
         ctx._say_fn("D-Link router detected. Uploading via HNAP.")
@@ -2029,7 +2089,14 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
 
 def _handle_sysupgrade_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     openwrt_ip = ctx.profile.openwrt_ip
-    success = _flash_via_sysupgrade(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None)
+    if ctx.profile.flash_method == "mtd-write":
+        model = load_model(ctx.profile.name)
+        mtd_cfg = model.get("flash_methods", {}).get("mtd-write", {})
+        mtd_command = mtd_cfg.get("command", "mtd -r write /tmp/firmware.bin firmware")
+        success = _flash_via_mtd_write(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None,
+                                       mtd_command=mtd_command)
+    else:
+        success = _flash_via_sysupgrade(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None)
     if success:
         ctx.sha256_before = sha256_file(ctx.image_path)
         ctx.state = State.SYSUPGRADE_REBOOTING
@@ -2039,24 +2106,26 @@ def _handle_sysupgrade_uploading(ctx: RecoveryContext, event_queue: queue.Queue)
 
 
 def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    ctx._say_fn("Firmware flashing via sysupgrade. Do not unplug.")
-    log("sysupgrade: device is rebooting")
+    method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
+    ctx._say_fn("Firmware flashing. Do not unplug.")
+    log(f"{method}: device is rebooting")
     ctx.state = State.SYSUPGRADE_BOOTING
 
 
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     openwrt_ip = ctx.profile.openwrt_ip
+    method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     if _wait_for_sysupgrade_reboot(openwrt_ip):
         ctx.timeline.ssh_available = ts()
         ctx._say_fn("Recovery complete! Router is back online.")
-        log("SUCCESS — sysupgrade recovery complete.")
+        log(f"SUCCESS — {method} recovery complete.")
         verify_router(openwrt_ip,
                      wan_ssh_expected=ctx.wan_ssh_enabled,
                      mgmt_wifi_expected=bool(ctx.defaults_script))
         ctx.state = State.COMPLETE
     else:
-        ctx._say_fn("Device did not come back after sysupgrade.")
-        log("FAIL: SSH not available after sysupgrade reboot.")
+        ctx._say_fn("Device did not come back after flash.")
+        log(f"FAIL: SSH not available after {method} reboot.")
         ctx.state = State.FAILED
 
 
@@ -2671,6 +2740,13 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         if iface != "lo" and mac:
             log(f"  inventory: mac_{iface}={mac}")
 
+    modem_data = fp.get("modem", {})
+    if modem_data:
+        for key in ["model", "firmware", "imei", "iccid"]:
+            val = modem_data.get(key, "")
+            if val:
+                log(f"  inventory: modem_{key}={val}")
+
     tl = ctx.timeline
     start = tl.recovery_start or ts()
     timeline_durations = {}
@@ -2736,6 +2812,8 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         "fingerprint_file": str(fp_path) if fp_path else "",
         "notes": "Flashed via conwrt",
     }
+    if modem_data:
+        entry["modem"] = modem_data
 
     inventory_path = Path(__file__).resolve().parent.parent / "data" / "inventory.jsonl"
     try:
@@ -2879,7 +2957,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Serial port for serial-tftp method (e.g. /dev/cu.usbserial-A50285BI). "
                              "Auto-detected if omitted.")
     flash_parser.add_argument("--flash-method", default=None,
-                        help="Flash method to use (e.g. recovery-http, dlink-hnap, sysupgrade, zycast). "
+                        help="Flash method to use (e.g. recovery-http, dlink-hnap, sysupgrade, mtd-write, zycast). "
                              "Auto-detected if omitted: sysupgrade if OpenWrt is running, "
                              "otherwise the first recovery method in the model JSON.")
     flash_parser.add_argument("--serial-method", default=None,
@@ -3974,12 +4052,15 @@ def cmd_flash(args: argparse.Namespace) -> int:
             if args.no_password and not args.ssh_key:
                 parser.error("--wan-ssh with --no-password requires --ssh-key (no way to log in otherwise).")
 
+        effective_flash_method = profile.flash_method
+        if use_sysupgrade and effective_flash_method != "mtd-write":
+            effective_flash_method = "sysupgrade"
         image_path, request_metadata = _request_custom_image(
             model_id=args.model_id,
             ssh_key_path=args.ssh_key,
             password=password,
             wan_ssh=wan_ssh_enabled,
-            flash_method="sysupgrade" if use_sysupgrade else profile.flash_method,
+            flash_method=effective_flash_method,
             say_fn=_say_fn,
         )
         if not image_path:
