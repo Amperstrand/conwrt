@@ -19,6 +19,7 @@ class StepKind(Enum):
     USE_CASE = "use_case"
     OPKG_BATCH = "opkg_batch"
     LAN_IP = "lan_ip"
+    CELLULAR = "cellular"
 
 
 @dataclass

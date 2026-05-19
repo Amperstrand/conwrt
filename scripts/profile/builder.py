@@ -55,6 +55,23 @@ _WAN_SSH_SCRIPT = "\n".join([
     "uci commit dropbear",
 ])
 
+_CELLULAR_QMI_SCRIPT = "\n".join([
+    "uci set network.wan.device='/dev/cdc-wdm0'",
+    "uci set network.wan.proto='qmi'",
+    "uci set network.wan.apn='auto'",
+    "uci set network.wan.delay='15'",
+    "uci commit network",
+])
+
+_CELLULAR_QMI_SSH = " && ".join([
+    "uci set network.wan.device='/dev/cdc-wdm0'",
+    "uci set network.wan.proto='qmi'",
+    "uci set network.wan.apn='auto'",
+    "uci set network.wan.delay='15'",
+    "uci commit network",
+    "ifup wan",
+])
+
 
 def _uc_packages_for_mode(uc, mode: ProfileMode) -> tuple[list[str], list[str]]:
     """Return (packages, remove) for this use case and plan mode."""
@@ -156,6 +173,14 @@ def build_plan(
             label="WAN SSH (key-only)",
             firstboot_script=_WAN_SSH_SCRIPT,
             configure_script=_WAN_SSH_SCRIPT.replace("\n", " && "),
+        ))
+
+    if "cellular" in caps:
+        steps.append(ProfileStep(
+            kind=StepKind.CELLULAR,
+            label="Cellular WAN (QMI, auto APN)",
+            firstboot_script=_CELLULAR_QMI_SCRIPT,
+            configure_script=_CELLULAR_QMI_SSH,
         ))
 
     if cfg.mgmt_wifi:
