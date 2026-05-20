@@ -1,0 +1,88 @@
+{
+  "id": "extreme-networks-ws-ap3915i",
+  "vendor": "Extreme Networks",
+  "description": "WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "extreme-networks,ws-ap3915i",
+    "profile": "extreme-networks_ws-ap3915i",
+    "board_name": "extreme-networks,ws-ap3915i",
+    "version": "24.10.2",
+    "default_ip": "192.168.1.1"
+  },
+  "hardware": {
+    "soc": "Qualcomm IPQ4029 (4x Cortex-A7 @ 717 MHz)",
+    "flash": "SPI-NOR (16MB typical for IPQ40xx, confirm exact partitioning from DTS)",
+    "ram": "512MB DDR3 (confirm from live device)",
+    "ethernet_ports": "2x GbE (GE1/LAN1 PoE+ data, GE2/LAN2 passive)",
+    "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
+  },
+  "mac_oui": [],
+  "flash_methods": {
+    "extreme-rdwr-tftp-initramfs": {
+      "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
+      "stock_default_ip": "192.168.1.1",
+      "stock_default_user": "admin",
+      "stock_default_password": "new2day",
+      "stock_ssh_timeout_disable_commands": [
+        "cset sshtimeout 0",
+        "capply",
+        "csave"
+      ],
+      "rdwr_boot_cfg_binary": "rdwr_boot_cfg",
+      "initramfs_tftp_name": "vmlinux.gz.uImage.3912",
+      "optional_alt_tftp_name": "vmlinux",
+      "bootcmd_tftp": "run boot_net",
+      "bootcmd_flash": "run boot_flash",
+      "required_uboot_vars": {
+        "AP_MODE": "0",
+        "MOSTRECENTKERNEL": "0",
+        "WATCHDOG_COUNT": "0",
+        "WATCHDOG_LIMIT": "0",
+        "AP_PERSONALITY": "identifi",
+        "serverip": "<CONWRT_TFTP_SERVER_IP>",
+        "ipaddr": "<TEMP_AP_IP>",
+        "bootcmd": "run boot_net"
+      },
+      "final_uboot_vars": {
+        "MOSTRECENTKERNEL": "0",
+        "WATCHDOG_COUNT": "0",
+        "bootcmd": "run boot_flash"
+      },
+      "openwrt_client_ip": "192.168.1.2",
+      "openwrt_ip": "192.168.1.1",
+      "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
+      "sysupgrade_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",
+      "flash_time_seconds": 300,
+      "silence_timeout": 60,
+      "backup_required": true
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt on this device",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 255
+    },
+    "tftp": {
+      "description": "U-Boot TFTP recovery (requires serial console or rdwr_boot_cfg for network boot setup)",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.2",
+      "client_subnet": "255.255.255.0",
+      "flash_time_seconds": 300,
+      "notes": "No reset-button TFTP recovery. Use rdwr_boot_cfg to set bootcmd=run boot_net for TFTP boot, or use serial console to interrupt U-Boot."
+    }
+  },
+  "signatures": {},
+  "capabilities": [
+    "ethernet",
+    "tftp",
+    "ssh",
+    "serial"
+  ],
+  "warnings": [
+    "Misconfigured U-Boot environment may require serial recovery.",
+    "Stock Extreme shell may reboot periodically if no controller is present — disable SSH timeout with: cset sshtimeout 0 && capply && csave",
+    "Do not proceed without saving rdwr_boot_cfg read_all output.",
+    "Make a full MTD backup before permanent install.",
+    "Direct stock image_upgrade support is experimental unless signature/checksum status is proven."
+  ]
+}

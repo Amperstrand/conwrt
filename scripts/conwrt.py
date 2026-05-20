@@ -29,9 +29,12 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
 import urllib.request
@@ -1600,8 +1603,9 @@ def _auto_detect_serial_port() -> str:
 
 
 class TFTPServerManager:
-    def __init__(self, tftp_root: str):
+    def __init__(self, tftp_root: str, bind_ip: str = "0.0.0.0"):
         self.tftp_root = tftp_root
+        self.bind_ip = bind_ip or "0.0.0.0"
         self._proc: Optional[subprocess.Popen] = None
 
     def start(self) -> bool:
@@ -1615,13 +1619,19 @@ class TFTPServerManager:
 
         tftp_cmd = None
         if os.path.isfile(tftp_script):
-            tftp_cmd = [sys.executable, tftp_script, self.tftp_root]
+            tftp_cmd = [sys.executable, tftp_script, self.tftp_root, self.bind_ip]
         else:
             if detect_platform() != "openwrt":
                 import shutil
                 dnsmasq = shutil.which("dnsmasq")
                 if dnsmasq:
-                    tftp_cmd = [dnsmasq, f"--tftp-root={self.tftp_root}", "--no-daemon", "--port=0"]
+                    tftp_cmd = [
+                        dnsmasq,
+                        f"--tftp-root={self.tftp_root}",
+                        "--no-daemon",
+                        "--port=0",
+                        f"--listen-address={self.bind_ip}",
+                    ]
             else:
                 log("On OpenWrt: skipping dnsmasq (conflicts with existing DNS/DHCP)")
                 log("  Place tftp-server.py in scripts/ directory for TFTP support")
@@ -1643,7 +1653,7 @@ class TFTPServerManager:
                 log(f"TFTP server failed to start: {err.strip()}")
                 self._proc = None
                 return False
-            log(f"TFTP server serving {self.tftp_root} on port 69 (PID {self._proc.pid})")
+            log(f"TFTP server serving {self.tftp_root} on {self.bind_ip}:69 (PID {self._proc.pid})")
             return True
         except Exception as e:
             log(f"TFTP server error: {e}")
@@ -1843,6 +1853,7 @@ class RecoveryContext:
     cache_key: str = ""
     packages: list = field(default_factory=list)
     defaults_script: str = ""
+    assume_yes: bool = False
     _say_fn: object = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -1923,7 +1934,15 @@ def _request_custom_image(
         log("ERROR: ASU firmware request failed.")
         return None, {}
 
-    recovery_methods = {"recovery-http", "uboot-http", "uboot-tftp", "zycast", "dlink-hnap", "mtd-write"}
+    recovery_methods = {
+        "recovery-http",
+        "uboot-http",
+        "uboot-tftp",
+        "zycast",
+        "dlink-hnap",
+        "mtd-write",
+        "extreme-rdwr-tftp-initramfs",
+    }
     if flash_method in recovery_methods:
         preferred_types = ["recovery", "factory", "initramfs"]
     else:
@@ -1981,13 +2000,12 @@ def _request_custom_image(
 
     log(f"Firmware image: {image_path}")
 
-    # For edgeos-kernel-swap, also locate the initramfs image
-    if flash_method == "edgeos-kernel-swap":
+    if flash_method in {"edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs"}:
         initramfs_path = ""
         if image_path:
             image_dir = Path(image_path).parent
             for candidate in sorted(image_dir.iterdir()):
-                if candidate.is_file() and "initramfs" in candidate.name and candidate.suffix == ".bin":
+                if candidate.is_file() and "initramfs" in candidate.name:
                     initramfs_path = str(candidate)
                     log(f"Initramfs image: {initramfs_path}")
                     break
@@ -2045,12 +2063,30 @@ def _run_state_machine(
             _handle_edgeos_stage2_uploading(ctx, event_queue)
         elif ctx.state == State.EDGEOS_STAGE2_FLASHING:
             _handle_edgeos_stage2_flashing(ctx, event_queue)
+        elif ctx.state == State.EXTREME_STOCK_PREFLIGHT:
+            _handle_extreme_stock_preflight(ctx, event_queue)
+        elif ctx.state == State.EXTREME_STOCK_WRITING_UBOOT:
+            _handle_extreme_stock_writing_uboot(ctx, event_queue)
+        elif ctx.state == State.EXTREME_STOCK_REBOOTING:
+            _handle_extreme_stock_rebooting(ctx, event_queue)
+        elif ctx.state == State.EXTREME_OPENWRT_INITRAMFS_WAITING:
+            _handle_extreme_openwrt_initramfs_waiting(ctx, event_queue)
+        elif ctx.state == State.EXTREME_OPENWRT_BACKUP:
+            _handle_extreme_openwrt_backup(ctx, event_queue)
+        elif ctx.state == State.EXTREME_BOOTCMD_RESTORE:
+            _handle_extreme_bootcmd_restore(ctx, event_queue)
+        elif ctx.state == State.EXTREME_SYSUPGRADE_UPLOADING:
+            _handle_extreme_sysupgrade_uploading(ctx, event_queue)
+        elif ctx.state == State.EXTREME_SYSUPGRADE_FLASHING:
+            _handle_extreme_sysupgrade_flashing(ctx, event_queue)
         else:
             log(f"Unknown state: {ctx.state}")
             ctx.state = State.FAILED
 
     if ctx.state == State.COMPLETE:
         _print_timeline(ctx)
+        if ctx.no_upload:
+            return 0
         cfg = _load_config()
         openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         openwrt_ip = _apply_profile_post_flash(
@@ -2096,6 +2132,10 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
         ctx._say_fn("EdgeOS detected. Starting kernel swap flash.")
         log("Boot state: EdgeOS stock firmware — using edgeos-kernel-swap")
         ctx.state = State.EDGEOS_STAGE1
+    elif boot_state == "stock-extreme":
+        ctx._say_fn("Extreme stock firmware detected. Starting TFTP initramfs flash.")
+        log("Boot state: Extreme stock firmware — using extreme-rdwr-tftp-initramfs")
+        ctx.state = State.EXTREME_STOCK_PREFLIGHT
     elif boot_state == "stock-hnap" or ctx.profile.flash_method == "dlink-hnap":
         ctx._say_fn("D-Link router detected. Uploading via HNAP.")
         log("Boot state: stock firmware with HNAP API — uploading directly")
@@ -3200,6 +3240,8 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
     flash_parser.add_argument("--no-upload", action="store_true",
                         help="Stop after detecting U-Boot (dry run)")
+    flash_parser.add_argument("--yes", action="store_true",
+                        help="Skip destructive-operation confirmations")
     flash_parser.add_argument("--no-pcap", action="store_true",
                         help="Disable pcap monitoring (polling-only mode, no scapy needed)")
     flash_parser.add_argument("--force-uboot", action="store_true",
@@ -3216,9 +3258,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Serial port for serial-tftp method (e.g. /dev/cu.usbserial-A50285BI). "
                              "Auto-detected if omitted.")
     flash_parser.add_argument("--flash-method", default=None,
-                        help="Flash method to use (e.g. recovery-http, dlink-hnap, sysupgrade, mtd-write, zycast). "
+                        help="Flash method to use (e.g. recovery-http, dlink-hnap, sysupgrade, mtd-write, zycast, extreme-rdwr-tftp-initramfs). "
                              "Auto-detected if omitted: sysupgrade if OpenWrt is running, "
                              "otherwise the first recovery method in the model JSON.")
+    flash_parser.add_argument("--initramfs", default=None,
+                        help="Path to OpenWrt initramfs image (for two-stage flash methods like extreme-rdwr-tftp-initramfs)")
     flash_parser.add_argument("--serial-method", default=None,
                         help="Serial flash method variant (e.g. openwrt-flash, stock-restore). "
                              "Selects the serial-tftp-{method} flash_method from model JSON.")
@@ -4249,6 +4293,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     is_serial_tftp = getattr(profile, 'is_serial_tftp', False)
     is_zycast = getattr(profile, 'is_zycast', False)
     is_edgeos_ks = getattr(profile, 'is_edgeos_kernel_swap', False)
+    is_extreme_rdwr_tftp = getattr(profile, 'is_extreme_rdwr_tftp', False)
 
     if is_serial_tftp and not args.serial_method:
         serial_methods = [k for k in load_model(args.model_id).get("flash_methods", {}).keys()
@@ -4327,12 +4372,26 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print("ERROR: Failed to obtain firmware image.", file=sys.stderr)
             return 1
 
+    if args.initramfs:
+        request_metadata["initramfs_path"] = args.initramfs
+
     if not image_path:
         parser.error("One of --image or --request-image is required.")
 
     if not os.path.isfile(image_path):
         print(f"ERROR: image not found: {image_path}", file=sys.stderr)
         return 1
+
+    initramfs_path = request_metadata.get("initramfs_path", "")
+    if is_extreme_rdwr_tftp or is_edgeos_ks:
+        if args.initramfs:
+            initramfs_path = args.initramfs
+        if not initramfs_path:
+            print("ERROR: initramfs image required for this flash method. Use --initramfs or --request-image.", file=sys.stderr)
+            return 1
+        if not os.path.isfile(initramfs_path):
+            print(f"ERROR: initramfs image not found: {initramfs_path}", file=sys.stderr)
+            return 1
 
     interface = args.interface or auto_detect_interface()
     if not interface:
@@ -4362,6 +4421,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
     elif is_edgeos_ks and not use_sysupgrade:
         log(f"Flash path: edgeos-kernel-swap (2-stage SSH)")
+    elif is_extreme_rdwr_tftp and not use_sysupgrade:
+        log("Flash path: extreme-rdwr-tftp-initramfs (stock SSH + TFTP + initramfs sysupgrade)")
     else:
         log(f"Flash path: {'sysupgrade' if use_sysupgrade else 'U-Boot recovery'}")
     if not use_sysupgrade and not is_serial_tftp and not is_zycast:
@@ -4406,6 +4467,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
         initial_state = State.ZYCAST_WAITING_FOR_DEVICE
     elif is_edgeos_ks and not use_sysupgrade:
         initial_state = State.EDGEOS_STAGE1
+    elif is_extreme_rdwr_tftp and not use_sysupgrade:
+        initial_state = State.EXTREME_STOCK_PREFLIGHT if boot_state == "stock-extreme" else State.DETECTING
     elif use_sysupgrade:
         initial_state = State.SYSUPGRADE_UPLOADING
     elif boot_state == "uboot":
@@ -4421,7 +4484,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     ctx = RecoveryContext(
         profile=profile,
         image_path=image_path,
-        initramfs_path=request_metadata.get("initramfs_path", ""),
+        initramfs_path=initramfs_path,
         interface=interface,
         pcap_path=pcap_path,
         no_upload=args.no_upload,
@@ -4445,6 +4508,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         cache_key=request_metadata.get("cache_key", ""),
         packages=request_metadata.get("packages", []),
         defaults_script=request_metadata.get("defaults") or "",
+        assume_yes=bool(getattr(args, "yes", False)),
         _say_fn=_say_fn,
         state=initial_state,
     )
@@ -4475,6 +4539,23 @@ def cmd_flash(args: argparse.Namespace) -> int:
             rc = 1
         finally:
             _teardown_monitors(None, None, link_mon, link_thr)
+        return rc
+
+    if is_extreme_rdwr_tftp and not use_sysupgrade:
+        _say_fn(f"Starting {profile.description} extreme stock flash.")
+        _, _, link_mon, link_thr = _setup_monitors(
+            interface, event_queue, pcap_path, profile, args, pcap_enabled=False)
+        try:
+            rc = _run_state_machine(ctx, event_queue, None, link_mon)
+        except KeyboardInterrupt:
+            log("Interrupted by user.")
+            rc = 1
+        finally:
+            _cleanup_extreme_tftp_assets(ctx)
+            _teardown_monitors(None, None, link_mon, link_thr)
+            openwrt_client_ip = getattr(profile, "openwrt_client_ip", "")
+            if openwrt_client_ip and openwrt_client_ip != getattr(profile, "client_ip", ""):
+                remove_interface_ip(interface, openwrt_client_ip, "24")
         return rc
 
     if is_serial_tftp:
@@ -4589,6 +4670,620 @@ def _scp_with_password(ip: str, user: str, password: str,
         local_dst,
     ]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _parse_key_value_lines(output: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _sanitize_filename_part(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    return cleaned.strip("-._") or "unknown"
+
+
+def _extreme_tftp_server_ip(profile: SimpleNamespace) -> str:
+    return getattr(profile, "openwrt_client_ip", "") or getattr(profile, "client_ip", "") or ""
+
+
+def _ensure_extreme_backup_dir(ctx: RecoveryContext, preflight_data: Optional[dict] = None) -> Path:
+    existing = getattr(ctx, "_extreme_backup_dir", "")
+    if existing:
+        backup_dir = Path(existing)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        return backup_dir
+
+    device_id = "unknown-device"
+    if preflight_data:
+        for candidate in (
+            preflight_data.get("serial", ""),
+            preflight_data.get("hostname", ""),
+            preflight_data.get("primary_mac", ""),
+        ):
+            if candidate:
+                device_id = _sanitize_filename_part(candidate)
+                break
+    base = Path(__file__).resolve().parent.parent / "data" / "backups" / ctx.profile.name / device_id
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_dir = base / timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ctx._extreme_backup_dir = str(backup_dir)
+    ctx._extreme_device_id = device_id
+    return backup_dir
+
+
+def _extreme_confirm_or_fail(ctx: RecoveryContext, prompt: str) -> bool:
+    if ctx.no_upload:
+        return True
+    if ctx.assume_yes:
+        return True
+    print()
+    try:
+        response = input(f"{prompt} [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        log("Cancelled before destructive Extreme flash step.")
+        ctx.state = State.FAILED
+        return False
+    if response not in ("y", "yes"):
+        log("Cancelled. Re-run with --yes to allow destructive Extreme flash steps.")
+        ctx.state = State.FAILED
+        return False
+    return True
+
+
+def _extreme_openwrt_ssh(ctx: RecoveryContext, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """SSH to OpenWrt initramfs (root, no password). Uses sshpass for reliability."""
+    import shutil
+
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return subprocess.run(
+            ssh_cmd(ctx.profile.openwrt_ip, command, key=ctx.ssh_key_path or None, connect_timeout=10),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return subprocess.run(
+        [
+            sshpass,
+            "-p",
+            "",
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=10",
+            f"root@{ctx.profile.openwrt_ip}",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _extreme_openwrt_scp_from_remote(ctx: RecoveryContext, remote_src: str, local_dst: str,
+                                     timeout: int = 120) -> subprocess.CompletedProcess:
+    """SCP from OpenWrt initramfs (root, no password)."""
+    import shutil
+
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return subprocess.run(
+            scp_cmd(
+                ctx.profile.openwrt_ip,
+                f"root@{ctx.profile.openwrt_ip}:{remote_src}",
+                local_dst,
+                key=ctx.ssh_key_path or None,
+                connect_timeout=10,
+            ),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return subprocess.run(
+        [
+            sshpass,
+            "-p",
+            "",
+            "scp",
+            "-O",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=10",
+            f"root@{ctx.profile.openwrt_ip}:{remote_src}",
+            local_dst,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _extreme_openwrt_scp_to_remote(ctx: RecoveryContext, local_src: str, remote_dst: str,
+                                    timeout: int = 120) -> subprocess.CompletedProcess:
+    """SCP to OpenWrt initramfs (root, no password)."""
+    import shutil
+
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return subprocess.run(
+            scp_cmd(
+                ctx.profile.openwrt_ip,
+                local_src,
+                f"root@{ctx.profile.openwrt_ip}:{remote_dst}",
+                key=ctx.ssh_key_path or None,
+                connect_timeout=10,
+            ),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return subprocess.run(
+        [
+            sshpass,
+            "-p",
+            "",
+            "scp",
+            "-O",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=10",
+            local_src,
+            f"root@{ctx.profile.openwrt_ip}:{remote_dst}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _write_json_file(path: Path, data: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def _prepare_extreme_tftp_root(ctx: RecoveryContext) -> tuple[Optional[Path], Optional[Path]]:
+    initramfs_path = ctx.initramfs_path
+    if not initramfs_path or not os.path.isfile(initramfs_path):
+        log(f"ERROR: initramfs image not found: {initramfs_path}")
+        return None, None
+
+    temp_root = Path(tempfile.mkdtemp(prefix="conwrt-extreme-tftp-"))
+    primary_name = ctx.profile.initramfs_tftp_name
+    primary_path = temp_root / primary_name
+    try:
+        os.symlink(os.path.abspath(initramfs_path), primary_path)
+    except OSError:
+        shutil.copy2(initramfs_path, primary_path)
+
+    alt_name = getattr(ctx.profile, "optional_alt_tftp_name", "")
+    if alt_name and alt_name != primary_name:
+        alt_path = temp_root / alt_name
+        try:
+            os.symlink(os.path.abspath(initramfs_path), alt_path)
+        except OSError:
+            shutil.copy2(initramfs_path, alt_path)
+
+    return temp_root, primary_path
+
+
+def _cleanup_extreme_tftp_assets(ctx: RecoveryContext) -> None:
+    tftp_mgr = getattr(ctx, "_extreme_tftp_manager", None)
+    if tftp_mgr:
+        tftp_mgr.stop()
+        ctx._extreme_tftp_manager = None
+    tftp_root = getattr(ctx, "_extreme_tftp_root", "")
+    if tftp_root:
+        shutil.rmtree(tftp_root, ignore_errors=True)
+        ctx._extreme_tftp_root = ""
+
+
+def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    stock_ip = profile.stock_default_ip
+    stock_user = profile.stock_default_user
+    stock_password = profile.stock_default_password
+
+    if not _extreme_confirm_or_fail(ctx, "Extreme flash will modify U-Boot variables and reboot the AP. Continue?"):
+        return
+
+    import shutil as _shutil_dep
+
+    missing_deps = []
+    if not _shutil_dep.which("sshpass"):
+        missing_deps.append("sshpass (required for stock firmware SSH and initramfs access)")
+    if not ctx.initramfs_path or not os.path.isfile(ctx.initramfs_path):
+        missing_deps.append(f"initramfs image not found: {ctx.initramfs_path}")
+    if not ctx.image_path or not os.path.isfile(ctx.image_path):
+        missing_deps.append(f"sysupgrade image not found: {ctx.image_path}")
+    if missing_deps:
+        for dep in missing_deps:
+            log(f"MISSING: {dep}")
+        log("Cannot proceed without required dependencies.")
+        ctx.state = State.FAILED
+        return
+
+    which_result = _ssh_with_password(
+        stock_ip,
+        stock_user,
+        stock_password,
+        f"which {shlex.quote(profile.rdwr_boot_cfg_binary)}",
+        timeout=15,
+    )
+    if which_result.returncode != 0:
+        log(f"ERROR: {profile.rdwr_boot_cfg_binary} not found on stock firmware: {which_result.stderr[:300]}")
+        ctx.state = State.FAILED
+        return
+
+    read_all_result = _ssh_with_password(
+        stock_ip,
+        stock_user,
+        stock_password,
+        f"{shlex.quote(profile.rdwr_boot_cfg_binary)} read_all",
+        timeout=30,
+    )
+    if read_all_result.returncode != 0 or not read_all_result.stdout.strip():
+        log(f"ERROR: rdwr_boot_cfg read_all failed: {(read_all_result.stderr or read_all_result.stdout)[:400]}")
+        ctx.state = State.FAILED
+        return
+
+    info_commands = {
+        "hostname": "hostname",
+        "mac_addresses": "for f in /sys/class/net/*/address; do printf '%s=%s\\n' $(basename $(dirname \"$f\")) $(cat \"$f\" 2>/dev/null); done",
+        "serial": "cat /sys/devices/platform/qca-ssdk.0/serial_number 2>/dev/null || cat /proc/device-tree/serial-number 2>/dev/null || getserialno 2>/dev/null || echo ''",
+        "firmware_version": "cat /etc/version 2>/dev/null || cat /etc/banner 2>/dev/null || echo ''",
+        "uname": "uname -a",
+        "mount": "mount",
+        "proc_mtd": "cat /proc/mtd",
+        "dmesg_tail": "dmesg | tail -n 200",
+    }
+    collected: dict[str, str] = {}
+    for name, command in info_commands.items():
+        result = _ssh_with_password(stock_ip, stock_user, stock_password, command, timeout=30)
+        collected[name] = (result.stdout or "").strip()
+
+    mac_lines = _parse_key_value_lines(collected.get("mac_addresses", ""))
+    preflight_data = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "stock_ip": stock_ip,
+        "hostname": collected.get("hostname", "").strip(),
+        "serial": collected.get("serial", "").strip(),
+        "primary_mac": next(iter(mac_lines.values()), ""),
+        "mac_addresses": mac_lines,
+        "firmware_version": collected.get("firmware_version", "").strip(),
+        "uname": collected.get("uname", "").strip(),
+        "mount": collected.get("mount", ""),
+        "proc_mtd": collected.get("proc_mtd", ""),
+        "dmesg_tail": collected.get("dmesg_tail", ""),
+        "rdwr_boot_cfg_read_all": read_all_result.stdout,
+        "initramfs_path": ctx.initramfs_path,
+    }
+    backup_dir = _ensure_extreme_backup_dir(ctx, preflight_data)
+    _write_json_file(backup_dir / "preflight.json", preflight_data)
+    event_queue.put((Event.EXTREME_UBOOT_ENV_SAVED, ts(), str(backup_dir / "preflight.json")))
+
+    if ctx.no_upload:
+        log("DRY RUN: Extreme stock firmware reachable and preflight data saved.")
+        log(f"  Backup dir: {backup_dir}")
+        log(f"  Initramfs:  {ctx.initramfs_path}")
+        log(f"  Sysupgrade: {ctx.image_path}")
+        ctx.state = State.COMPLETE
+        return
+
+    _setup_interface_ips(ctx.interface, profile)
+    tftp_ip = _extreme_tftp_server_ip(profile)
+    if not tftp_ip:
+        log("ERROR: No local TFTP server IP configured in profile.")
+        ctx.state = State.FAILED
+        return
+    if not configure_interface_ip(ctx.interface, tftp_ip, "24"):
+        log(f"ERROR: failed to configure {tftp_ip}/24 on {ctx.interface}")
+        ctx.state = State.FAILED
+        return
+
+    for disable_cmd in getattr(profile, "stock_ssh_timeout_disable_commands", []):
+        result = _ssh_with_password(stock_ip, stock_user, stock_password, disable_cmd, timeout=20)
+        if result.returncode != 0:
+            log(f"ERROR: failed to run stock timeout-disable command '{disable_cmd}': {result.stderr[:300]}")
+            ctx.state = State.FAILED
+            return
+
+    tftp_root, _ = _prepare_extreme_tftp_root(ctx)
+    if tftp_root is None:
+        ctx.state = State.FAILED
+        return
+    tftp_mgr = TFTPServerManager(str(tftp_root), bind_ip=tftp_ip)
+    if not tftp_mgr.start():
+        shutil.rmtree(tftp_root, ignore_errors=True)
+        ctx.state = State.FAILED
+        return
+    tftp_test_file = tftp_root / profile.initramfs_tftp_name
+    if not tftp_test_file.exists():
+        log(f"ERROR: TFTP root does not contain {profile.initramfs_tftp_name}")
+        log(f"  TFTP root contents: {list(tftp_root.iterdir()) if tftp_root.exists() else '(missing)'}")
+        tftp_mgr.stop()
+        shutil.rmtree(tftp_root, ignore_errors=True)
+        ctx.state = State.FAILED
+        return
+    log(f"TFTP verified: {profile.initramfs_tftp_name} ({tftp_test_file.stat().st_size} bytes)")
+    ctx._extreme_tftp_manager = tftp_mgr
+    ctx._extreme_tftp_root = str(tftp_root)
+    event_queue.put((Event.EXTREME_TFTP_INITRAMFS_READY, ts(), tftp_ip))
+    log(f"Extreme preflight complete. TFTP serving {profile.initramfs_tftp_name} from {tftp_ip}.")
+    ctx.state = State.EXTREME_STOCK_WRITING_UBOOT
+
+
+def _handle_extreme_stock_writing_uboot(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    stock_ip = profile.stock_default_ip
+    stock_user = profile.stock_default_user
+    stock_password = profile.stock_default_password
+    tftp_ip = _extreme_tftp_server_ip(profile)
+    ap_ip = profile.stock_default_ip
+
+    if not _extreme_confirm_or_fail(ctx, "Write temporary Extreme U-Boot variables now?"):
+        return
+
+    vars_to_write: dict[str, str] = {}
+    for key, value in profile.required_uboot_vars.items():
+        resolved = value
+        if value == "<CONWRT_TFTP_SERVER_IP>":
+            resolved = tftp_ip
+        elif value == "<TEMP_AP_IP>":
+            resolved = ap_ip
+        vars_to_write[key] = resolved
+
+    log("WARNING: Stock firmware reboots every ~5 minutes without a controller.")
+    log("Writing all U-Boot variables in a single batch to minimize time window.")
+    log("If the AP reboots during this step, serial console may be required for recovery.")
+    write_commands = []
+    for key, value in vars_to_write.items():
+        write_commands.append(f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}")
+    batch_script = " && ".join(write_commands)
+    log(f"Writing {len(vars_to_write)} U-Boot variables in single batch...")
+    batch_result = _ssh_with_password(stock_ip, stock_user, stock_password, batch_script, timeout=30)
+    if batch_result.returncode != 0:
+        log(f"ERROR: batch write_var failed: {batch_result.stderr[:500]}")
+        ctx.state = State.FAILED
+        return
+
+    verify_result = _ssh_with_password(
+        stock_ip,
+        stock_user,
+        stock_password,
+        f"{shlex.quote(profile.rdwr_boot_cfg_binary)} read_all",
+        timeout=20,
+    )
+    parsed = _parse_key_value_lines((verify_result.stdout or "") + "\n" + (verify_result.stderr or ""))
+    for key, value in vars_to_write.items():
+        if parsed.get(key) != value:
+            log(f"ERROR: verification failed for {key}: expected {value!r}, got {parsed.get(key)!r}")
+            ctx.state = State.FAILED
+            return
+        log(f"Verified stock U-Boot var {key}={value}")
+
+    ctx.state = State.EXTREME_STOCK_REBOOTING
+
+
+def _handle_extreme_stock_rebooting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    log("Rebooting AP to TFTP boot OpenWrt initramfs...")
+    try:
+        _ssh_with_password(
+            profile.stock_default_ip,
+            profile.stock_default_user,
+            profile.stock_default_password,
+            "reboot",
+            timeout=10,
+        )
+    except Exception:
+        pass
+    ctx._say_fn("AP rebooting. Waiting for OpenWrt initramfs. This takes about 90 seconds.")
+    time.sleep(10)
+    ctx.state = State.EXTREME_OPENWRT_INITRAMFS_WAITING
+
+
+def _handle_extreme_openwrt_initramfs_waiting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    openwrt_ip = ctx.profile.openwrt_ip
+    timeout = ctx.profile.flash_time_seconds
+    start = ts()
+    while ts() - start < timeout:
+        if check_ssh(openwrt_ip):
+            verify = _extreme_openwrt_ssh(ctx, "test -f /etc/openwrt_release && cat /proc/mtd", timeout=20)
+            if verify.returncode == 0:
+                ctx.timeline.ssh_available = ts()
+                log(f"SSH available at {openwrt_ip} — OpenWrt initramfs booted.")
+                ctx._say_fn("OpenWrt initramfs booted. Starting backup.")
+                ctx.state = State.EXTREME_OPENWRT_BACKUP
+                return
+        time.sleep(5)
+    log(f"FAIL: OpenWrt initramfs SSH not available at {openwrt_ip} after {timeout}s.")
+    ctx.state = State.FAILED
+
+
+def _handle_extreme_openwrt_backup(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    backup_dir = _ensure_extreme_backup_dir(ctx)
+    info_result = _extreme_openwrt_ssh(ctx, "cat /proc/mtd", timeout=20)
+    if info_result.returncode != 0 or not info_result.stdout.strip():
+        log(f"ERROR: failed to read /proc/mtd from initramfs: {info_result.stderr[:300]}")
+        ctx.state = State.FAILED
+        return
+
+    mtd_parts: list[tuple[str, str]] = []
+    for line in info_result.stdout.splitlines():
+        match = re.match(r"^(mtd\d+):\s+[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+\"([^\"]+)\"", line.strip())
+        if match:
+            mtd_parts.append((match.group(1), _sanitize_filename_part(match.group(2))))
+
+    commands = [
+        "rm -rf /tmp/conwrt-backup /tmp/conwrt-backup.tar.gz",
+        "mkdir -p /tmp/conwrt-backup",
+        "cat /proc/mtd > /tmp/conwrt-backup/proc_mtd.txt",
+        "dmesg > /tmp/conwrt-backup/dmesg.txt",
+        "mount > /tmp/conwrt-backup/mount.txt",
+        "ubus call system board > /tmp/conwrt-backup/system_board.json 2>/dev/null || true",
+        "fw_printenv > /tmp/conwrt-backup/fw_printenv.txt 2>/dev/null || true",
+    ]
+    for mtd_name, label in mtd_parts:
+        commands.append(
+            f"dd if=/dev/{mtd_name} of=/tmp/conwrt-backup/{mtd_name}_{label}.bin bs=64k"
+        )
+    commands.extend([
+        "(cd /tmp/conwrt-backup && sha256sum * > SHA256SUMS.txt)",
+        "tar czf /tmp/conwrt-backup.tar.gz -C /tmp conwrt-backup",
+    ])
+    script = "set -e; " + "; ".join(commands)
+    backup_result = _extreme_openwrt_ssh(ctx, script, timeout=max(120, len(mtd_parts) * 45))
+    if backup_result.returncode != 0:
+        log(f"ERROR: failed creating Extreme backup on initramfs: {(backup_result.stderr or backup_result.stdout)[:500]}")
+        ctx.state = State.FAILED
+        return
+
+    local_tar = backup_dir / "conwrt-backup.tar.gz"
+    scp_result = _extreme_openwrt_scp_from_remote(ctx, "/tmp/conwrt-backup.tar.gz", str(local_tar), timeout=180)
+    if scp_result.returncode != 0:
+        log(f"ERROR: failed downloading Extreme backup tarball: {scp_result.stderr[:300]}")
+        ctx.state = State.FAILED
+        return
+    if not local_tar.is_file() or local_tar.stat().st_size == 0:
+        log(f"ERROR: local backup tarball missing or empty: {local_tar}")
+        ctx.state = State.FAILED
+        return
+
+    extracted_dir = backup_dir / "files"
+    extracted_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(local_tar, "r:gz") as tar:
+        tar.extractall(extracted_dir)
+
+    extracted_root = extracted_dir / "conwrt-backup"
+    hashes: dict[str, str] = {}
+    sha_file = extracted_root / "SHA256SUMS.txt"
+    if sha_file.is_file():
+        for line in sha_file.read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                hashes[parts[1].lstrip("*./")] = parts[0]
+    _write_json_file(
+        backup_dir / "backup-manifest.json",
+        {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "tarball": str(local_tar),
+            "tarball_sha256": sha256_file(str(local_tar)),
+            "hashes": hashes,
+            "mtd_partitions": [mtd for mtd, _ in mtd_parts],
+        },
+    )
+    event_queue.put((Event.EXTREME_BACKUP_COMPLETE, ts(), str(local_tar)))
+    ctx.state = State.EXTREME_BOOTCMD_RESTORE
+
+
+def _handle_extreme_bootcmd_restore(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    have_fw_setenv = _extreme_openwrt_ssh(ctx, "which fw_setenv && which fw_printenv", timeout=15)
+    have_fw_env_config = _extreme_openwrt_ssh(ctx, "test -f /etc/fw_env.config", timeout=10)
+    restored = False
+
+    if have_fw_setenv.returncode == 0 and have_fw_env_config.returncode == 0:
+        restored = True
+        for key, value in profile.final_uboot_vars.items():
+            set_result = _extreme_openwrt_ssh(ctx, f"fw_setenv {shlex.quote(key)} {shlex.quote(value)}", timeout=20)
+            if set_result.returncode != 0:
+                log(f"ERROR: fw_setenv failed for {key}: {set_result.stderr[:300]}")
+                restored = False
+                break
+            verify_result = _extreme_openwrt_ssh(ctx, f"fw_printenv {shlex.quote(key)}", timeout=15)
+            parsed = _parse_key_value_lines(verify_result.stdout or "")
+            if parsed.get(key) != value:
+                log(f"ERROR: fw_printenv verification failed for {key}: expected {value!r}, got {parsed.get(key)!r}")
+                restored = False
+                break
+            log(f"Restored final U-Boot var {key}={value}")
+
+    if restored:
+        event_queue.put((Event.EXTREME_BOOTCMD_RESTORED, ts(), "fw_setenv"))
+        _cleanup_extreme_tftp_assets(ctx)
+    else:
+        log("WARNING: could not safely restore bootcmd via fw_setenv. Extreme TFTP detour fallback will be required if the AP keeps booting from network.")
+
+    ctx.state = State.EXTREME_SYSUPGRADE_UPLOADING
+
+
+def _handle_extreme_sysupgrade_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    image_path = ctx.image_path
+    if not image_path or not os.path.isfile(image_path):
+        log(f"ERROR: sysupgrade image not found: {image_path}")
+        ctx.state = State.FAILED
+        return
+
+    remote_name = os.path.basename(image_path)
+    remote_path = f"/tmp/{remote_name}"
+    size_mb = os.path.getsize(image_path) / 1024 / 1024
+    ctx.timeline.upload_start = ts()
+    if not ctx.sha256_before:
+        ctx.sha256_before = sha256_file(image_path)
+    log(f"Uploading sysupgrade ({size_mb:.1f} MB) to initramfs at {ctx.profile.openwrt_ip}...")
+    scp_result = _extreme_openwrt_scp_to_remote(ctx, image_path, remote_path, timeout=180)
+    if scp_result.returncode != 0:
+        log(f"ERROR: SCP to initramfs failed: {scp_result.stderr[:300]}")
+        ctx.state = State.FAILED
+        return
+
+    verify_result = _extreme_openwrt_ssh(
+        ctx,
+        f"test -s {shlex.quote(remote_path)} && sha256sum {shlex.quote(remote_path)}",
+        timeout=30,
+    )
+    if verify_result.returncode != 0 or not verify_result.stdout.strip():
+        log(f"ERROR: remote sysupgrade verification failed: {(verify_result.stderr or verify_result.stdout)[:300]}")
+        ctx.state = State.FAILED
+        return
+    remote_hash = verify_result.stdout.strip().split()[0]
+    log(f"Remote SHA-256: {remote_hash}")
+    ctx.timeline.upload_complete = ts()
+    ctx.state = State.EXTREME_SYSUPGRADE_FLASHING
+
+
+def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    remote_name = os.path.basename(ctx.image_path)
+    remote_path = f"/tmp/{remote_name}"
+    ctx._say_fn("Flashing firmware. Do not unplug.")
+    log("Running sysupgrade -n from OpenWrt initramfs...")
+    try:
+        result = _extreme_openwrt_ssh(ctx, f"sysupgrade -n {shlex.quote(remote_path)}", timeout=60)
+        combined = (result.stdout or "") + (result.stderr or "")
+        if result.returncode == 0 or "Commencing upgrade" in combined or "Rebooting system" in combined:
+            log("Extreme sysupgrade initiated successfully.")
+        elif result.returncode != 0 and not result.stdout and not result.stderr:
+            log("Extreme sysupgrade initiated (connection closed by remote — expected).")
+        else:
+            log(f"Extreme sysupgrade output (exit {result.returncode}): {combined[:500]}")
+    except subprocess.TimeoutExpired:
+        log("Extreme sysupgrade command timed out (may have started reboot).")
+    ctx.timeline.flash_triggered = ts()
+    _cleanup_extreme_tftp_assets(ctx)
+    ctx.state = State.OPENWRT_BOOTING
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
