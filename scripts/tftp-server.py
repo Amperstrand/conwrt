@@ -4,6 +4,7 @@
 Usage::
 
     python3 tftp-server.py <directory>
+    python3 tftp-server.py <directory> [bind-ip]
 """
 import logging
 import os
@@ -84,22 +85,23 @@ def _handle_rrq(data, addr, server_sock, serve_dir):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <directory>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print(f"Usage: {sys.argv[0]} <directory> [bind-ip]", file=sys.stderr)
         sys.exit(1)
 
     serve_dir = os.path.abspath(sys.argv[1])
+    bind_ip = sys.argv[2] if len(sys.argv) == 3 else "0.0.0.0"
     if not os.path.isdir(serve_dir):
         print(f"Error: {serve_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.bind(("0.0.0.0", 69))
+        sock.bind((bind_ip, 69))
     except PermissionError:
         print("Error: Port 69 requires root. Run with sudo or on OpenWrt (root).", file=sys.stderr)
         sys.exit(1)
-    log.info(f"Serving {serve_dir} on UDP port 69")
+    log.info(f"Serving {serve_dir} on {bind_ip}:69")
 
     try:
         while True:

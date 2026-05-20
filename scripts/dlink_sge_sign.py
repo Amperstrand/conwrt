@@ -35,10 +35,12 @@ import hashlib
 import struct
 import sys
 from pathlib import Path
+from typing import cast
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
 
 
@@ -168,8 +170,11 @@ def _sha512(data: bytes) -> bytes:
 
 def sign_existing(input_path: str, output_path: str, device: str = "COVR-X1860") -> None:
     cfg = _DEVICE_CONFIGS[device]
-    private_key = serialization.load_pem_private_key(
-        cfg["key_pem"].encode(), password=cfg["key_password"],
+    private_key = cast(
+        rsa.RSAPrivateKey,
+        serialization.load_pem_private_key(
+            cfg["key_pem"].encode(), password=cfg["key_password"],
+        ),
     )
 
     data = bytearray(Path(input_path).read_bytes())
@@ -209,8 +214,11 @@ def encrypt_and_sign(
 ) -> None:
     cfg = _DEVICE_CONFIGS[device]
     vendor_key = _vendor_key_from_enk(cfg["enk_b64"])
-    private_key = serialization.load_pem_private_key(
-        cfg["key_pem"].encode(), password=cfg["key_password"],
+    private_key = cast(
+        rsa.RSAPrivateKey,
+        serialization.load_pem_private_key(
+            cfg["key_pem"].encode(), password=cfg["key_password"],
+        ),
     )
 
     plaintext = Path(input_path).read_bytes()
