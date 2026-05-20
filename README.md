@@ -48,6 +48,7 @@ Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or o
 | recovery-http | Reset button, uboot HTTP server | Physical access + reset pin | ~2 min |
 | dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware, network access | ❌ validation blocks flash |
 | tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
+| extreme-rdwr-tftp | SSH to stock → rdwr_boot_cfg → TFTP boot initramfs → sysupgrade | Stock Extreme firmware, SSH access | ~5 min |
 | zycast | Multicast to many devices simultaneously | Network broadcast domain | varies |
 
 ### Device Support Matrix
@@ -74,6 +75,7 @@ conwrt/
 │   ├── glinet-gl-ar300m-nand.json
 │   ├── glinet-gl-ar300m-nor.json
 │   ├── glinet-mt3000.json
+│   ├── extreme-networks-ws-ap3915i.json
 │   ├── linksys-whw03-v1.json
 │   └── linksys-whw03-v2.json
 ├── scripts/             # Automated flashing and management scripts
@@ -83,6 +85,7 @@ conwrt/
 │   ├── model_loader.py        # Shared model registry reader
 │   ├── router-probe.py        # Device boot state detection (off/uboot/openwrt)
 │   ├── inventory.py           # Inventory utilities
+│   ├── extreme_ap391x_analyze.py  # Extreme AP391x firmware image analysis
 │   └── use_cases/             # Use case presets (auto-discovered plugins)
 ├── data/                # Runtime data (gitignored)
 │   ├── inventory.jsonl         # Append-only device inventory (specimen-level)
@@ -523,6 +526,7 @@ disown %1
 | recovery-http | Tested | Tested x1860 to x1860, polling-only mode |
 | dlink-hnap | ❌ upload OK, flash fails | HNAP auth + upload works, but GetFirmwareValidation rejects OpenWrt images — no successful flash ever recorded |
 | tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
+| extreme-rdwr-tftp | Untested | SSH to stock → rdwr_boot_cfg writes U-Boot vars → TFTP boot initramfs → backup → sysupgrade |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
 | serial | Not yet | Requires USB-serial adapter |
 
