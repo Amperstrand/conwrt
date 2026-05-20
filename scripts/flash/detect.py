@@ -23,7 +23,7 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
     """Probe the device to determine its current state.
 
-    Returns: "openwrt", "uboot", "stock-hnap", "stock-edgeos", or "unknown"
+    Returns: "openwrt", "uboot", "stock-hnap", "stock-edgeos", "stock-extreme", or "unknown"
     """
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
@@ -75,6 +75,29 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                     return "stock-edgeos"
             except Exception as e:
                 log(f"EdgeOS SSH probe failed for {edgeos_ip}: {e}")
+
+    if profile and getattr(profile, 'flash_method', '') == 'extreme-rdwr-tftp-initramfs':
+        import shutil
+        extreme_ip = getattr(profile, 'stock_default_ip', '192.168.1.1')
+        extreme_user = getattr(profile, 'stock_default_user', 'admin')
+        extreme_password = getattr(profile, 'stock_default_password', '')
+        sshpass = shutil.which("sshpass")
+        if sshpass and extreme_password:
+            try:
+                r = subprocess.run(
+                    [sshpass, "-p", extreme_password,
+                     "ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=5",
+                     f"{extreme_user}@{extreme_ip}",
+                     "which rdwr_boot_cfg"],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                if r.returncode == 0:
+                    log(f"Extreme stock firmware detected at {extreme_ip} — rdwr_boot_cfg available")
+                    return "stock-extreme"
+            except Exception as e:
+                log(f"Extreme SSH probe failed for {extreme_ip}: {e}")
 
     try:
         found, detail = detect_uboot_http(recovery_ip)
