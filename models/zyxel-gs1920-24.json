@@ -1,0 +1,144 @@
+{
+  "id": "zyxel-gs1920-24",
+  "vendor": "Zyxel",
+  "description": "GS1920-24 24-port managed gigabit switch (non-PoE), Realtek RTL8392M",
+  "openwrt": {
+    "target": "realtek/rtl839x",
+    "device": "zyxel,gs1920-24hp-v1",
+    "default_ip": "192.168.1.1",
+    "profile": "zyxel_gs1920-24hp-v1",
+    "version": "snapshot",
+    "board_name": "AAOB",
+    "note": "Official OpenWrt support targets GS1920-24HPv1 (PoE model). Non-PoE GS1920-24 is untested upstream — same RTL8392M SoC, DTS includes PoE hwmon/fan/SFP that may not exist on non-PoE board."
+  },
+  "hardware": {
+    "soc": "Realtek RTL8392M MIPS 4KEc @ 500MHz",
+    "flash": "16 MiB SPI NOR (dual-slot, 8 MiB per slot)",
+    "ram": "128 MiB DDR2 SDRAM",
+    "ethernet_ports": "24x 10/100/1000 Mbps",
+    "wifi": "none (managed switch, no wireless)",
+    "serial": "RS-232 console (NOT available — no cable on hand)",
+    "board_revision": "v1",
+    "model_id": 20994,
+    "bootbase_unlock": "ATEN1,887852B1",
+    "note": "Dual-slot BootBase bootloader. ZyNOS firmware format (SIG/BootExt/RomDefa/RasCode). No cryptographic signing — validates SIG magic + internet checksum only. Dual-slot fallback tested and working."
+  },
+  "mac_oui": [
+    "4C:9E:FF"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "stock_default_creds": {
+    "username": "admin",
+    "password": "1234"
+  },
+  "stock_firmware_services": {
+    "web_ui": "http://192.168.1.1",
+    "login_endpoint": "/Forms/login_standalone_1",
+    "access_service_page": "/rpaccessservice.html",
+    "ftp_enable_endpoint": "/Forms/rpaccessservice_1",
+    "ftp_enable_field": "RpAccessSv_ChkFTP=on",
+    "firmware_upgrade_page": "/fwUpgrade.html",
+    "firmware_upload_endpoint": "/Forms/fwUpgrade_2",
+    "boot_image_config": "/rpconfig_boot_image.html",
+    "device_info": "/rpsystinfo.html"
+  },
+  "flash_methods": {
+    "oem-ftp": {
+      "description": "Upload ZyNOS-wrapped initramfs via FTP to stock firmware. Enable FTP via Access Service page (HTTP POST to /Forms/rpaccessservice_1), then upload via active-mode FTP to ras-0 (slot 1). FTP bypasses the web occupancy gate. FTP patches mmap_addr automatically. Two-stage: FTP upload boots initramfs, then sysupgrade for permanent install. Initramfs must be wrapped in ZyNOS format using scripts/gs1920-repack-firmware.py.",
+      "stock_default_ip": "192.168.1.1",
+      "stock_default_user": "admin",
+      "stock_default_password": "1234",
+      "ftp_active_mode": true,
+      "ftp_targets": {
+        "ras-0": "slot 1",
+        "ras-1": "slot 2"
+      },
+      "flash_time_seconds": 90,
+      "two_stage": true,
+      "stage1_image": "initramfs (ZyNOS-wrapped)",
+      "stage2_method": "sysupgrade",
+      "note": "FTP handler accepts properly formatted ZyNOS images (SIG + checksum), bypasses web occupancy gate, and patches mmap_addr for target slot. Proven with stock firmware upload. Dual-slot fallback to other slot if initramfs fails."
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from running OpenWrt initramfs or permanent install. Standard method for upgrades or permanent installation after initramfs boot.",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    },
+    "serial-tftp-openwrt": {
+      "description": "Flash via serial + TFTP. Requires RS-232 serial cable (not available). Two-stage: boot initramfs via TFTP, then sysupgrade. UNTESTED — no serial cable on hand.",
+      "serial_baud": 115200,
+      "tftp_load_address": "0x84f00000",
+      "tested": false,
+      "note": "TFTP load address estimated from RTL839X family (same as GS1900-24E). UNTESTED — no serial cable available."
+    }
+  },
+  "partition_layout": {
+    "note": "Dual-slot OEM layout. Each slot is 8 MiB. Slot 1 (ras-0) and slot 2 (ras-1) allow BootBase fallback.",
+    "oem_stock": {
+      "description": "Original Zyxel dual-slot layout (16 MiB SPI NOR)",
+      "source": "Reverse-engineered from stock firmware binary analysis",
+      "slot_1_ras_0": {
+        "address_range": "0xB4000000 - 0xB47FFFFF",
+        "size": "8 MiB",
+        "bootext": "0xB40B0030",
+        "memmapt": "0xB40E0000",
+        "rascode": "0xB4142400"
+      },
+      "slot_2_ras_1": {
+        "address_range": "0xB4800000 - 0xB4FFFFFF",
+        "size": "8 MiB",
+        "bootexta": "0xB48B0030",
+        "memmapta": "0xB48E0000",
+        "rascodea": "0xB4942400"
+      }
+    }
+  },
+  "uboot": {
+    "recovery": {
+      "method": "serial_console",
+      "bootloader": "BootBase (Zyxel proprietary, not U-Boot)",
+      "note": "BootBase reads configured boot slot, validates firmware (SIG + checksum), boots or falls back to other slot. Serial access requires RS-232 cable (not available). BootBase unlock string: ATEN1,887852B1."
+    }
+  },
+  "signatures": {
+    "oem_login": {
+      "source": "Playwright testing 2026-05",
+      "url": "http://192.168.1.1",
+      "login_endpoint": "/Forms/login_standalone_1",
+      "auth_type": "plaintext credentials (admin/1234)"
+    },
+    "oem_firmware_page": {
+      "source": "Playwright testing 2026-05",
+      "firmware_upgrade_page": "/fwUpgrade.html",
+      "upload_endpoint": "/Forms/fwUpgrade_2",
+      "occupancy_gate": true,
+      "note": "Web upload has undocumented occupancy gate — rejects uploads to occupied non-active slots. Use FTP (oem-ftp) to bypass."
+    },
+    "oem_ftp": {
+      "source": "Hardware testing 2026-05",
+      "enable_endpoint": "/Forms/rpaccessservice_1",
+      "enable_field": "RpAccessSv_ChkFTP=on",
+      "protocol": "FTP active mode only (PASV rejected with 500 Unknown command)",
+      "targets": {
+        "ras-0": "slot 1 (0xB4000000)",
+        "ras-1": "slot 2 (0xB4800000)"
+      },
+      "patches_mmap_addr": true,
+      "bypasses_occupancy_gate": true
+    },
+    "zynos_format": {
+      "source": "Reverse-engineered from mkzynfw.c GPL source + binary analysis of stock firmware",
+      "validation": "SIG magic + internet checksum (no cryptographic signing)",
+      "sections": [
+        "BootExt (type=0x03, envelope, covers entire file)",
+        "RomDefa (type=0x04, LZMA-compressed default config)",
+        "RasCode (type=0x04, main firmware payload)"
+      ],
+      "header_size": "48 bytes, big-endian"
+    }
+  },
+  "tested_hardware": {},
+  "capabilities": [
+    "ethernet",
+    "serial"
+  ]
+}

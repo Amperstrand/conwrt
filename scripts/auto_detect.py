@@ -851,7 +851,7 @@ def assess_readiness(router: DetectedRouter) -> dict:
 
     if router.web_ui_type == "zyxel_stock" and stock_creds:
         result["ready"] = True
-        result["flash_method"] = "oem-playwright"
+        result["flash_method"] = "oem-http"
     elif router.ssh_available:
         result["ready"] = True
         result["flash_method"] = "sysupgrade"

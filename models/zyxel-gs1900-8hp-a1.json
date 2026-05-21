@@ -39,8 +39,8 @@
     "password": "1234"
   },
   "flash_methods": {
-    "oem-playwright": {
-      "description": "Upload initramfs image via OEM web UI using Playwright browser automation. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. Same ZyXEL firmware stack as GS1900-24E.",
+    "oem-http": {
+      "description": "Upload initramfs image via OEM web UI HTTP upload endpoint using curl. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. Same ZyXEL firmware stack as GS1900-24E.",
       "oem_url": "http://192.168.1.1",
       "firmware_page_cmd": 5903,
       "upload_endpoint": "/cgi-bin/httpupload.cgi",
@@ -219,10 +219,10 @@
       "verified_with": "V2.00(AAHI.2) → V2.90(AAHI.0) via Playwright HTTP upload, cmd=5903, partition=0 (Active)",
       "notes": "Firmware upgrade via OEM web UI. 5.8MB .bix file uploaded via httpupload.cgi. Flash write + reboot took ~90s. V2.90 forces mandatory password change from default 1234. Hardware revision A1 confirmed by v2.90 dashboard. New credentials: admin/Zyxel2026!."
     },
-    "oem-playwright": {
+    "oem-http": {
       "tested": true,
       "date": "2026-05-21",
-      "verified_with": "Uploaded OpenWrt 25.12.1 initramfs via Playwright to V2.90 OEM firmware, device booted into initramfs in ~24s",
+      "verified_with": "Uploaded OpenWrt 25.12.1 initramfs via OEM HTTP to V2.90 OEM firmware, device booted into initramfs in ~24s",
       "notes": "Initramfs upload via same cmd=5903/httpupload.cgi endpoint as stock firmware update. Filename must be ≤64 chars (v2.90 limit). OpenWrt default filename (75 chars) rejected — renamed to openwrt-initramfs.bin. Login with admin/Zyxel2026! (changed from default by v2.90 mandatory password change). Initramfs booted in ~24s (very fast, RAM-only)."
     },
     "sysupgrade": {

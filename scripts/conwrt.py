@@ -1942,6 +1942,7 @@ def _request_custom_image(
         "dlink-hnap",
         "mtd-write",
         "extreme-rdwr-tftp-initramfs",
+        "oem-http",
     }
     if flash_method in recovery_methods:
         preferred_types = ["recovery", "factory", "initramfs"]
@@ -2000,7 +2001,7 @@ def _request_custom_image(
 
     log(f"Firmware image: {image_path}")
 
-    if flash_method in {"edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs"}:
+    if flash_method in {"edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http"}:
         initramfs_path = ""
         if image_path:
             image_dir = Path(image_path).parent
@@ -2079,6 +2080,12 @@ def _run_state_machine(
             _handle_extreme_sysupgrade_uploading(ctx, event_queue)
         elif ctx.state == State.EXTREME_SYSUPGRADE_FLASHING:
             _handle_extreme_sysupgrade_flashing(ctx, event_queue)
+        elif ctx.state == State.OEM_HTTP_LOGIN:
+            _handle_oem_http_login(ctx, event_queue)
+        elif ctx.state == State.OEM_HTTP_UPLOADING:
+            _handle_oem_http_uploading(ctx, event_queue)
+        elif ctx.state == State.OEM_HTTP_REBOOTING:
+            _handle_oem_http_rebooting(ctx, event_queue)
         else:
             log(f"Unknown state: {ctx.state}")
             ctx.state = State.FAILED
@@ -2136,6 +2143,10 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
         ctx._say_fn("Extreme stock firmware detected. Starting TFTP initramfs flash.")
         log("Boot state: Extreme stock firmware — using extreme-rdwr-tftp-initramfs")
         ctx.state = State.EXTREME_STOCK_PREFLIGHT
+    elif boot_state == "stock-zyxel" or ctx.profile.flash_method == "oem-http":
+        ctx._say_fn("ZyXEL stock firmware detected. Uploading via OEM HTTP.")
+        log("Boot state: ZyXEL stock firmware — using oem-http")
+        ctx.state = State.OEM_HTTP_LOGIN
     elif boot_state == "stock-hnap" or ctx.profile.flash_method == "dlink-hnap":
         ctx._say_fn("D-Link router detected. Uploading via HNAP.")
         log("Boot state: stock firmware with HNAP API — uploading directly")
@@ -2807,6 +2818,222 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
         ctx._say_fn("Multicast flash may have failed. Check the console output.")
         ctx.timeline.flash_complete = ts()
         ctx.state = State.REBOOTING
+
+
+def _oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, str]:
+    """Login to ZyXEL OEM web UI via curl. Returns (success, cookie_header_value)."""
+    login_url = f"http://{stock_ip}/cgi-bin/dispatcher.cgi?login=1&username={username}&password={password}"
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "--max-time", "10", "-c", "-", login_url],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        cookie_value = ""
+        for line in r.stdout.splitlines():
+            if "XSSID" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    cookie_value = f"XSSID={parts[-1]}"
+                    break
+        if cookie_value:
+            return True, cookie_value
+        if "AUTHING" in r.stdout or r.returncode == 0:
+            session_chk = subprocess.run(
+                ["curl", "-s", "--max-time", "5",
+                 f"http://{stock_ip}/cgi-bin/dispatcher.cgi?session_chk=1"],
+                capture_output=True, text=True, timeout=8, check=False,
+            )
+            if "NOTIMEOUT" in session_chk.stdout:
+                for line in session_chk.stdout.splitlines():
+                    if "XSSID" in line:
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            cookie_value = f"XSSID={parts[-1]}"
+                            break
+                if cookie_value:
+                    return True, cookie_value
+                return True, ""
+        return False, r.stdout[:200]
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+def _oem_http_upload(stock_ip: str, cookie: str, firmware_path: str,
+                     upload_endpoint: str, timeout: int = 300) -> tuple[bool, str]:
+    """Upload firmware to ZyXEL switch via OEM HTTP upload endpoint."""
+    endpoint = f"http://{stock_ip}{upload_endpoint}"
+    size_mb = os.path.getsize(firmware_path) / 1024 / 1024
+    log(f"Uploading {os.path.basename(firmware_path)} ({size_mb:.1f} MB) to {upload_endpoint}...")
+    try:
+        cmd = [
+            "curl", "-sk", "--show-error",
+            "-H", "Expect:",
+            "--max-time", str(timeout),
+            "-F", "upmethod=1",
+            "-F", "partition=0",
+            "-F", "cmd=5904",
+            "-F", f"http_file=@{firmware_path};type=application/octet-stream",
+        ]
+        if cookie:
+            cmd.extend(["-b", cookie])
+        cmd.append(endpoint)
+        r = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=timeout + 30, check=False,
+        )
+        if r.returncode == 0:
+            response_text = r.stdout.strip()
+            if "Writing image to FLASH" in response_text or "Prepare for firmware upgrade" in response_text:
+                log("Upload accepted — flash write in progress")
+                return True, response_text[:300]
+            if "Do you really want to reboot" in response_text:
+                log("Upload accepted — reboot dialog received")
+                return True, response_text[:300]
+            if response_text:
+                log(f"Upload response: {response_text[:200]}")
+                return True, response_text[:300]
+            return True, "empty response"
+        log(f"Upload failed (exit {r.returncode}): {r.stderr[:300]}")
+        return False, r.stderr[:300]
+    except subprocess.TimeoutExpired:
+        log("OEM HTTP upload timed out.")
+        return False, "timeout"
+    except Exception as e:
+        log(f"OEM HTTP upload error: {e}")
+        return False, str(e)
+
+
+def _oem_http_accept_reboot(stock_ip: str, cookie: str) -> bool:
+    """Accept the reboot dialog after firmware upload on ZyXEL OEM web UI."""
+    reboot_url = f"http://{stock_ip}/cgi-bin/dispatcher.cgi?cmd=5904&reboot=1"
+    try:
+        cmd = ["curl", "-s", "--max-time", "30", reboot_url]
+        if cookie:
+            cmd.extend(["-b", cookie])
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35, check=False)
+        if "Rebooting now" in r.stdout or r.returncode == 0:
+            log("Reboot accepted — device is restarting")
+            return True
+        log(f"Reboot response: {r.stdout[:200]}")
+        return True
+    except Exception as e:
+        log(f"Reboot accept error: {e}")
+        return True
+
+
+def _handle_oem_http_login(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    stock_ip = profile.stock_default_ip
+    username = profile.stock_default_user
+    password = profile.stock_default_password
+
+    if not password:
+        model_data = load_model(profile.name)
+        creds = model_data.get("stock_default_creds", {})
+        username = creds.get("username", "admin")
+        password = creds.get("password", "1234")
+
+    if not ctx.initramfs_path or not os.path.isfile(ctx.initramfs_path):
+        log(f"ERROR: initramfs image not found: {ctx.initramfs_path}")
+        ctx.state = State.FAILED
+        return
+
+    log(f"Logging into ZyXEL OEM web UI at {stock_ip} (user={username})...")
+    success, cookie = _oem_http_login(stock_ip, username, password)
+    if not success:
+        log(f"ERROR: OEM HTTP login failed: {cookie}")
+        ctx.state = State.FAILED
+        return
+
+    log("OEM HTTP login successful")
+    ctx._oem_http_cookie = cookie
+    ctx.state = State.OEM_HTTP_UPLOADING
+
+
+def _handle_oem_http_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    stock_ip = profile.stock_default_ip
+    cookie = getattr(ctx, "_oem_http_cookie", "")
+    upload_endpoint = profile.oem_http_upload_endpoint
+
+    initramfs_path = ctx.initramfs_path
+    filename = os.path.basename(initramfs_path)
+    upload_path = initramfs_path
+
+    if len(filename) > 64:
+        upload_path = os.path.join(tempfile.gettempdir(), "openwrt-initramfs.bin")
+        shutil.copy2(initramfs_path, upload_path)
+        log(f"Renamed initramfs (>{len(filename)} chars) to {os.path.basename(upload_path)} for v2.90 compatibility")
+
+    timeout = profile.flash_time_seconds + 60
+    success, response = _oem_http_upload(stock_ip, cookie, upload_path, upload_endpoint, timeout=timeout)
+    if upload_path != initramfs_path and os.path.exists(upload_path):
+        os.unlink(upload_path)
+
+    if not success:
+        log(f"ERROR: OEM HTTP upload failed: {response}")
+        ctx.state = State.FAILED
+        return
+
+    ctx.timeline.upload_start = ts()
+    ctx.timeline.upload_complete = ts()
+    log("Firmware uploaded. Accepting reboot dialog...")
+
+    _oem_http_accept_reboot(stock_ip, cookie)
+    ctx.timeline.flash_triggered = ts()
+    ctx._say_fn("Firmware uploaded. Waiting for device to reboot.")
+    ctx.state = State.OEM_HTTP_REBOOTING
+
+
+def _handle_oem_http_rebooting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    profile = ctx.profile
+    openwrt_ip = profile.openwrt_ip or "192.168.1.1"
+    flash_time = profile.flash_time_seconds
+
+    log(f"Waiting for device to reboot (~{flash_time}s)...")
+    ctx._say_fn("Device is rebooting into OpenWrt initramfs.")
+
+    deadline = ts() + flash_time
+    while ts() < deadline:
+        time.sleep(5)
+        if check_ssh(openwrt_ip):
+            log("OpenWrt initramfs booted — SSH available")
+            ctx.timeline.ssh_available = ts()
+            ctx.timeline.first_openwrt_packet = ts()
+            ctx.sha256_after = sha256_file(ctx.image_path) if ctx.image_path and os.path.isfile(ctx.image_path) else ""
+            log("Initramfs booted. Starting sysupgrade for permanent install...")
+            ctx._say_fn("Initramfs booted. Installing permanently via sysupgrade.")
+
+            sysupgrade_path = ctx.image_path
+            if not sysupgrade_path or not os.path.isfile(sysupgrade_path):
+                log("No sysupgrade image found — initramfs only, skipping permanent install")
+                ctx.state = State.COMPLETE
+                return
+
+            remote_name = os.path.basename(sysupgrade_path)
+            size_mb = os.path.getsize(sysupgrade_path) / 1024 / 1024
+            log(f"Uploading sysupgrade image ({size_mb:.1f} MB) via SCP...")
+            scp_result = subprocess.run(
+                scp_cmd(openwrt_ip, sysupgrade_path, f"/tmp/{remote_name}", key=ctx.ssh_key_path),
+                capture_output=True, text=True, timeout=120, check=False,
+            )
+            if scp_result.returncode != 0:
+                log(f"SCP failed: {scp_result.stderr[:300]}")
+                ctx.state = State.FAILED
+                return
+
+            log("Sysupgrade image uploaded. Running sysupgrade -n...")
+            ssh_result = subprocess.run(
+                ssh_cmd(openwrt_ip, f"sysupgrade -n /tmp/{remote_name}", key=ctx.ssh_key_path),
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            ctx.state = State.OPENWRT_BOOTING
+            return
+        elapsed = int(ts() - (ctx.timeline.flash_triggered or ts()))
+        log(f"Waiting for initramfs boot... ({elapsed}s elapsed)")
+
+    log(f"ERROR: Device did not boot within {flash_time}s")
+    ctx.state = State.FAILED
 
 
 def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:

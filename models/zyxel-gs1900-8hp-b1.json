@@ -39,8 +39,8 @@
     "password": "1234"
   },
   "flash_methods": {
-    "oem-playwright": {
-      "description": "Upload initramfs image via OEM web UI using Playwright browser automation. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. OEM web UI uses frameset-based navigation with dispatcher.cgi cmd numbers and RSA-encrypted password login. Same ZyXEL firmware stack as GS1900-24E.",
+    "oem-http": {
+      "description": "Upload initramfs image via OEM web UI HTTP upload endpoint using curl. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. OEM web UI uses frameset-based navigation with dispatcher.cgi cmd numbers. Same ZyXEL firmware stack as GS1900-24E.",
       "oem_url": "http://192.168.1.1",
       "firmware_page_cmd": 5903,
       "upload_endpoint": "/cgi-bin/httpupload.cgi",

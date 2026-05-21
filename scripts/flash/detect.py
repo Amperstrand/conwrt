@@ -23,7 +23,7 @@ def check_ssh(ip: str = DEFAULT_IP) -> bool:
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
     """Probe the device to determine its current state.
 
-    Returns: "openwrt", "uboot", "stock-hnap", "stock-edgeos", "stock-extreme", or "unknown"
+    Returns: "openwrt", "uboot", "stock-hnap", "stock-edgeos", "stock-extreme", "stock-zyxel", or "unknown"
     """
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
@@ -98,6 +98,20 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                     return "stock-extreme"
             except Exception as e:
                 log(f"Extreme SSH probe failed for {extreme_ip}: {e}")
+
+    if profile and getattr(profile, 'flash_method', '') == 'oem-http':
+        stock_ip = getattr(profile, 'stock_default_ip', '192.168.1.1')
+        try:
+            r = subprocess.run(
+                ["curl", "-s", "--max-time", "3",
+                 f"http://{stock_ip}/cgi-bin/dispatcher.cgi?cmd=0"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if "dispatcher" in r.stdout.lower() or "password" in r.stdout.lower():
+                log(f"ZyXEL OEM web UI detected at {stock_ip} — stock firmware with dispatcher.cgi")
+                return "stock-zyxel"
+        except Exception as e:
+            log(f"ZyXEL OEM probe failed for {stock_ip}: {e}")
 
     try:
         found, detail = detect_uboot_http(recovery_ip)

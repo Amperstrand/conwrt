@@ -16,7 +16,7 @@ USE_CASES_DIR = ROOT / "scripts" / "use_cases"
 COMMIT_URL = "https://github.com/amperstrand/conwrt/commit/"
 
 FLASH_METHODS = [
-    "oem-playwright",
+    "oem-http",
     "sysupgrade",
     "recovery-http",
     "uboot-http",
