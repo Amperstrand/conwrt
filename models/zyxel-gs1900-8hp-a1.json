@@ -1,0 +1,243 @@
+{
+  "id": "zyxel-gs1900-8hp-a1",
+  "vendor": "Zyxel",
+  "description": "GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget",
+  "openwrt": {
+    "target": "realtek/rtl838x",
+    "device": "zyxel,gs1900-8hp-a1",
+    "default_ip": "192.168.1.1",
+    "profile": "zyxel_gs1900-8hp-a1",
+    "version": "25.12.1",
+    "board_name": "zyxel,gs1900-8hp-a1"
+  },
+  "hardware": {
+    "soc": "Realtek RTL8380M MIPS 4KEc @ 500MHz",
+    "flash": "16 MiB SPI NOR (Macronix MX25L12835F)",
+    "ram": "128 MiB DDR3 SDRAM (Samsung K4B1G0846G)",
+    "ethernet_ports": "8x 10/100/1000 Mbps (RTL8218B internal PHYs)",
+    "wifi": "none (managed switch, no wireless)",
+    "poe": {
+      "controller": "Broadcom BCM59121B0KMLG (IEEE 802.3at-2009)",
+      "mcu": "STM32F100C8 ARM Cortex-M3 (PoE management)",
+      "budget_watts": 70,
+      "standard": "802.3af/at (PoE+)",
+      "ports": "all 8 ports PoE capable",
+      "package": "realtek-poe",
+      "daemon": "poe (ubus integration)"
+    },
+    "serial": "UART header, 115200 8N1, 3.3V (left side of PCB, labeled VCC/TX/RX/GND)",
+    "board_revision": "A1",
+    "note": "Dual-partition OEM device. Shares casing/platform with GS1900-10HP. PoE MCU initialized by bootloader at power-on (all ports PoE+ enabled by default). MCU state lost on reboot. CRITICAL: Serial numbers starting S21+ must run stock v2.70+ first or PoE can be irreversibly bricked."
+  },
+  "mac_oui": [
+    "BC:CF:4F",
+    "E8:37:7A"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "stock_default_creds": {
+    "username": "admin",
+    "password": "1234"
+  },
+  "flash_methods": {
+    "oem-playwright": {
+      "description": "Upload initramfs image via OEM web UI using Playwright browser automation. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. Same ZyXEL firmware stack as GS1900-24E.",
+      "oem_url": "http://192.168.1.1",
+      "firmware_page_cmd": 5903,
+      "upload_endpoint": "/cgi-bin/httpupload.cgi",
+      "partition_active": 0,
+      "flash_time_seconds": 90,
+      "silence_timeout": 30,
+      "two_stage": true,
+      "stage1_image": "initramfs",
+      "stage2_method": "sysupgrade"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades.",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    },
+    "mtd-write": {
+      "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions.",
+      "command": "mtd -r write /tmp/firmware.bin firmware",
+      "partition": "firmware",
+      "requires_initramfs": true,
+      "flash_time_seconds": 120,
+      "silence_timeout": 30
+    },
+    "serial-tftp-openwrt": {
+      "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to UART header on left side of PCB. Two-stage: boot initramfs via TFTP, then sysupgrade.",
+      "serial_baud": 115200,
+      "serial_voltage": "3.3V",
+      "bootmenu_interrupt": "space bar",
+      "bootmenu_timeout_seconds": 1,
+      "tftp_server_ip": "192.168.1.2",
+      "tftp_router_ip": "192.168.1.1",
+      "tftp_load_address": "0x84f00000",
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect FTDI serial adapter to UART header (3.3V, left side PCB). Interrupt U-Boot with space bar within 1 second at boot.",
+      "uboot_commands": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "uboot_env": {
+        "bootcmd": "cst fcTest; boota",
+        "bootdelay": "1",
+        "serverip": "192.168.1.2",
+        "ipaddr": "192.168.1.1",
+        "baudrate": "115200",
+        "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP."
+      }
+    }
+  },
+  "partition_layout": {
+    "note": "Two layouts exist depending on firmware. OEM uses dual-partition. OpenWrt 25.12.1 sysupgrade merges to single partition.",
+    "oem_stock": {
+      "description": "Original Zyxel OEM dual-partition layout",
+      "source": "OpenWrt DTS rtl8380_zyxel_gs1900_gpio.dtsi",
+      "mtd0": { "name": "u-boot", "size": "256K", "offset": "0x0" },
+      "mtd1": { "name": "u-boot-env", "size": "64K", "offset": "0x40000" },
+      "mtd2": { "name": "u-boot-env2", "size": "64K", "offset": "0x50000" },
+      "mtd3": { "name": "jffs", "size": "1024K", "offset": "0x60000" },
+      "mtd4": { "name": "jffs2", "size": "1024K", "offset": "0x160000" },
+      "mtd5": { "name": "firmware", "size": "6976K", "offset": "0x260000", "note": "Active partition (partition 0)" },
+      "mtd6": { "name": "runtime2", "size": "6976K", "offset": "0x930000", "note": "Backup partition with OEM firmware" }
+    },
+    "openwrt_25_merged": {
+      "description": "Merged single-partition layout after OpenWrt 25.12.1 sysupgrade",
+      "source": "Verified on hardware (cat /proc/mtd), 2026-05-21",
+      "mtd0": { "name": "u-boot", "size": "256K" },
+      "mtd1": { "name": "u-boot-env", "size": "64K" },
+      "mtd2": { "name": "u-boot-env2", "size": "64K" },
+      "mtd3": { "name": "jffs", "size": "1024K" },
+      "mtd4": { "name": "jffs2", "size": "1024K" },
+      "mtd5": { "name": "firmware", "size": "13824K", "note": "Merged from dual 6976K+6976K partitions" },
+      "mtd6": { "name": "kernel", "size": "3712K" },
+      "mtd7": { "name": "rootfs", "size": "10176K", "note": "squashfs" },
+      "mtd8": { "name": "rootfs_data", "size": "7504K", "note": "JFFS2 overlay" }
+    }
+  },
+  "uboot": {
+    "recovery": {
+      "method": "serial_console",
+      "bootdelay_seconds": 1,
+      "interrupt_key": "space bar",
+      "console_baud": 115200,
+      "voltage": "3.3V",
+      "header_location": "UART header (left side PCB)",
+      "pinout": "VCC(3.3V), TX, RX, GND",
+      "fw_setenv_works": true
+    },
+    "recovery_commands": {
+      "boot_initramfs_via_tftp": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "switch_to_primary_partition": ["setsys bootpartition 0", "savesys"],
+      "switch_to_backup_partition": ["setsys bootpartition 1", "savesys"],
+      "return_to_stock": ["setsys bootpartition 1", "savesys", "boot"]
+    }
+  },
+  "signatures": {
+    "oem_login": {
+      "source": "Verified on live hardware (S/N XXXXX-XXXXXXXXX, Rev A1), 2026-05-21",
+      "url": "http://192.168.1.1/cgi-bin/dispatcher.cgi?cmd=0",
+      "auth_type_v200": "plaintext GET parameter (V2.00)",
+      "auth_type_v290": "JavaScript-based login (V2.90)",
+      "session_cookie": "XSSID",
+      "mandatory_password_change": true,
+      "password_change_cmd": 30,
+      "password_change_note": "V2.80+ forces password change from default 1234 on first login"
+    },
+    "oem_firmware_page": {
+      "source": "Verified on live hardware, 2026-05-21 (both V2.00 and V2.90)",
+      "firmware_cmd": 5903,
+      "upload_form_action": "/cgi-bin/httpupload.cgi",
+      "upload_trigger_cmd": 5904,
+      "section_cmd_v200": 20,
+      "section_cmd_v290": 28,
+      "frameset_ui": true,
+      "content_frame_name_v200": "mainFrame",
+      "content_frame_name_v290": "contentFrame",
+      "partition_active": 0,
+      "partition_backup": 1,
+      "upmethod_http": 1,
+      "upmethod_tftp": 0,
+      "confirm_dialog": "Do you really want to reboot?",
+      "flash_message": "Writing image to FLASH... Do not power down...",
+      "reboot_message": "Rebooting now......"
+    },
+    "uboot_banner": {
+      "source": "Verified on live hardware (fw_printenv), 2026-05-21",
+      "boardmodel": "ZyXEL_GS1900_8HP",
+      "boardversion": "V1.00(AAHI.0)",
+      "bootdelay": 1,
+      "ethaddr": "E8:37:7A:XX:XX:XX",
+      "serverip": "192.168.1.X"
+    },
+    "openwrt_booting": {
+      "source": "Verified on live hardware, 2026-05-21",
+      "initramfs_boot_time_seconds": 24,
+      "permanent_install_boot_time_seconds": 105,
+      "note": "Initramfs boots fast (RAM-only, no flash write). Permanent install takes longer due to JFFS2 overlay init (~30s) during first boot."
+    },
+    "openwrt_ready": {
+      "source": "Verified on live hardware, 2026-05-21",
+      "ssh_port": 22,
+      "ssh_no_password": true,
+      "scp_requires_legacy_flag": true,
+      "scp_flag": "-O",
+      "no_luci": true,
+      "note": "No LuCI web UI in default build (switch device, no wifi). SSH only. SCP must use -O flag (no sftp-server in initramfs). Root login without password by default."
+    }
+  },
+  "poe": {
+    "default_config": {
+      "budget": 70,
+      "force_baudrate": "115200",
+      "force_dialect": "realtek",
+      "port_config_template": {
+        "enable": 1,
+        "priority": 2,
+        "poe_plus": 1,
+        "note": "PoE port IDs match interface numbers: lan1=1, lan2=2, ..., lan8=8"
+      }
+    },
+    "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default."
+  },
+  "safety": {
+    "serial_number_warning": "Devices with serial numbers starting S21 or higher MUST run stock firmware v2.70+ before any firmware changes. Older stock firmware can irreversibly brick PoE capabilities.",
+    "dual_partition_note": "Dual-partition device. Keep OEM on backup partition for recovery."
+  },
+  "tested_hardware": {
+    "oem-stock-upgrade": {
+      "tested": true,
+      "date": "2026-05-21",
+      "verified_with": "V2.00(AAHI.2) → V2.90(AAHI.0) via Playwright HTTP upload, cmd=5903, partition=0 (Active)",
+      "notes": "Firmware upgrade via OEM web UI. 5.8MB .bix file uploaded via httpupload.cgi. Flash write + reboot took ~90s. V2.90 forces mandatory password change from default 1234. Hardware revision A1 confirmed by v2.90 dashboard. New credentials: admin/Zyxel2026!."
+    },
+    "oem-playwright": {
+      "tested": true,
+      "date": "2026-05-21",
+      "verified_with": "Uploaded OpenWrt 25.12.1 initramfs via Playwright to V2.90 OEM firmware, device booted into initramfs in ~24s",
+      "notes": "Initramfs upload via same cmd=5903/httpupload.cgi endpoint as stock firmware update. Filename must be ≤64 chars (v2.90 limit). OpenWrt default filename (75 chars) rejected — renamed to openwrt-initramfs.bin. Login with admin/Zyxel2026! (changed from default by v2.90 mandatory password change). Initramfs booted in ~24s (very fast, RAM-only)."
+    },
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-05-21",
+      "verified_with": "sysupgrade -n from 25.12.1 initramfs to 25.12.1 squashfs permanent install, SSH access after ~105s boot",
+      "notes": "SCP requires -O flag (legacy protocol) — OpenWrt initramfs lacks sftp-server. sysupgrade completed successfully, ~105s boot time. MTD layout merged from dual 6976K+6976K partitions to single 13824K firmware partition. JFFS2 overlay init takes ~30s during first boot. All 8 PoE ports enabled by default in /etc/config/poe."
+    },
+    "serial-tftp-openwrt": {
+      "tested": false,
+      "notes": "UNTESTED. U-Boot env verified (bootdelay=1, boardmodel=ZyXEL_GS1900_8HP). serverip=192.168.1.X (should update to 192.168.1.2). Serial commands documented from OpenWrt source."
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "serial"
+  ]
+}

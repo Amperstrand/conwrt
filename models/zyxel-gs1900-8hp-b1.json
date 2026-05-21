@@ -1,0 +1,239 @@
+{
+  "id": "zyxel-gs1900-8hp-b1",
+  "vendor": "Zyxel",
+  "description": "GS1900-8HP B1 (formerly v1) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget",
+  "openwrt": {
+    "target": "realtek/rtl838x",
+    "device": "zyxel,gs1900-8hp-b1",
+    "default_ip": "192.168.1.1",
+    "profile": "zyxel_gs1900-8hp-b1",
+    "version": "25.12.1",
+    "board_name": "zyxel,gs1900-8hp-b1"
+  },
+  "hardware": {
+    "soc": "Realtek RTL8380M MIPS 4KEc @ 500MHz",
+    "flash": "16 MiB SPI NOR (Macronix MX25L12835F)",
+    "ram": "128 MiB DDR2 SDRAM (Nanya NT5TU128M8HE-AC)",
+    "ethernet_ports": "8x 10/100/1000 Mbps (RTL8218B internal PHYs)",
+    "wifi": "none (managed switch, no wireless)",
+    "poe": {
+      "controller": "Broadcom BCM59111KMLG x2 (IEEE 802.3at-2009)",
+      "mcu": "STM32F100C8 ARM Cortex-M3 (PoE management)",
+      "budget_watts": 70,
+      "standard": "802.3af/at (PoE+)",
+      "ports": "all 8 ports PoE capable",
+      "package": "realtek-poe",
+      "daemon": "poe (ubus integration)"
+    },
+    "serial": "UART header, 115200 8N1, 3.3V (left side of PCB, labeled VCC/TX/RX/GND)",
+    "board_revision": "B1",
+    "note": "Dual-partition OEM device. Shares PCB with non-PoE GS1900-8. PoE MCU initialized by bootloader at power-on (all ports PoE+ enabled by default). MCU state lost on reboot — PoE devices briefly lose power during restart. CRITICAL: Serial numbers starting S21+ must run stock v2.70+ first or PoE can be irreversibly bricked."
+  },
+  "mac_oui": [
+    "BC:CF:4F",
+    "E8:37:7A"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "stock_default_creds": {
+    "username": "admin",
+    "password": "1234"
+  },
+  "flash_methods": {
+    "oem-playwright": {
+      "description": "Upload initramfs image via OEM web UI using Playwright browser automation. Two-stage: OEM upload boots initramfs, then sysupgrade writes permanently. OEM web UI uses frameset-based navigation with dispatcher.cgi cmd numbers and RSA-encrypted password login. Same ZyXEL firmware stack as GS1900-24E.",
+      "oem_url": "http://192.168.1.1",
+      "firmware_page_cmd": 5903,
+      "upload_endpoint": "/cgi-bin/httpupload.cgi",
+      "partition_active": 0,
+      "flash_time_seconds": 90,
+      "silence_timeout": 30,
+      "two_stage": true,
+      "stage1_image": "initramfs",
+      "stage2_method": "sysupgrade"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades.",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    },
+    "mtd-write": {
+      "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions.",
+      "command": "mtd -r write /tmp/firmware.bin firmware",
+      "partition": "firmware",
+      "requires_initramfs": true,
+      "flash_time_seconds": 120,
+      "silence_timeout": 30
+    },
+    "serial-tftp-openwrt": {
+      "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to UART header on left side of PCB. Two-stage: boot initramfs via TFTP, then sysupgrade. Interrupt U-Boot with space bar within 1 second.",
+      "serial_baud": 115200,
+      "serial_voltage": "3.3V",
+      "bootmenu_interrupt": "space bar",
+      "bootmenu_timeout_seconds": 1,
+      "tftp_server_ip": "192.168.1.2",
+      "tftp_router_ip": "192.168.1.1",
+      "tftp_load_address": "0x84f00000",
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect FTDI serial adapter to UART header (3.3V, left side PCB). Interrupt U-Boot with space bar within 1 second at boot.",
+      "uboot_commands": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "uboot_env": {
+        "bootcmd": "cst fcTest; boota",
+        "bootdelay": "1",
+        "serverip": "192.168.1.2",
+        "ipaddr": "192.168.1.1",
+        "baudrate": "115200",
+        "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP to ensure flashing primary partition."
+      }
+    }
+  },
+  "partition_layout": {
+    "note": "Dual-partition layout (firmware + runtime2). Layout may change to merged single-partition after OpenWrt 25.12.1 sysupgrade (same as GS1900-24E behavior).",
+    "oem_stock": {
+      "description": "Original Zyxel OEM dual-partition layout",
+      "source": "OpenWrt DTS rtl8380_zyxel_gs1900_gpio.dtsi",
+      "mtd0": {
+        "name": "u-boot",
+        "size": "256K",
+        "offset": "0x0"
+      },
+      "mtd1": {
+        "name": "u-boot-env",
+        "size": "64K",
+        "offset": "0x40000"
+      },
+      "mtd2": {
+        "name": "u-boot-env2",
+        "size": "64K",
+        "offset": "0x50000"
+      },
+      "mtd3": {
+        "name": "jffs",
+        "size": "1024K",
+        "offset": "0x60000"
+      },
+      "mtd4": {
+        "name": "jffs2",
+        "size": "1024K",
+        "offset": "0x160000"
+      },
+      "mtd5": {
+        "name": "firmware",
+        "size": "6976K",
+        "offset": "0x260000",
+        "note": "Active partition (partition 0)"
+      },
+      "mtd6": {
+        "name": "runtime2",
+        "size": "6976K",
+        "offset": "0x930000",
+        "note": "Backup partition with OEM firmware"
+      }
+    }
+  },
+  "uboot": {
+    "recovery": {
+      "method": "serial_console",
+      "bootdelay_seconds": 1,
+      "interrupt_key": "space bar",
+      "console_baud": 115200,
+      "voltage": "3.3V",
+      "header_location": "UART header (left side PCB)",
+      "pinout": "VCC(3.3V), TX, RX, GND",
+      "fw_setenv_works": true,
+      "note": "Dual-partition device. Use 'setsys bootpartition 0' + 'savesys' to select primary partition before TFTP flash."
+    },
+    "recovery_commands": {
+      "boot_initramfs_via_tftp": [
+        "rtk network on",
+        "setenv serverip 192.168.1.2",
+        "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
+        "bootm"
+      ],
+      "switch_to_primary_partition": [
+        "setsys bootpartition 0",
+        "savesys"
+      ],
+      "switch_to_backup_partition": [
+        "setsys bootpartition 1",
+        "savesys"
+      ],
+      "flash_from_openwrt": [
+        "scp -O firmware.bin root@192.168.1.1:/tmp/",
+        "ssh root@192.168.1.1 'sysupgrade -n /tmp/firmware.bin'"
+      ],
+      "return_to_stock": [
+        "setsys bootpartition 1",
+        "savesys",
+        "boot"
+      ],
+      "note": "Return to stock: switch to backup partition (has OEM firmware). From OEM web UI, flash primary partition with stock firmware."
+    }
+  },
+  "signatures": {
+    "oem_login": {
+      "source": "Inferred from GS1900-24E (same ZyXEL firmware stack)",
+      "url": "http://192.168.1.1/cgi-bin/dispatcher.cgi?cmd=0",
+      "auth_type": "RSA-encrypted password via JavaScript",
+      "session_cookie": "XSSID",
+      "session_check_endpoint": "/cgi-bin/dispatcher.cgi?session_chk=1"
+    },
+    "oem_firmware_page": {
+      "source": "Inferred from GS1900-24E (same ZyXEL firmware stack)",
+      "menu_cmd": 28,
+      "firmware_cmd": 5903,
+      "upload_form_action": "/cgi-bin/httpupload.cgi",
+      "upload_method_http": "upmethod=1",
+      "partition_active": "partition=0",
+      "confirm_dialog": "Do you really want to reboot?",
+      "progress_poll_cmd": 5911,
+      "frameset_ui": true,
+      "content_frame": "mainFrame"
+    },
+    "uboot_banner": {
+      "source": "openwrt.org wiki bootlog",
+      "pattern": "Model: ZyXEL_GS1900_8HP",
+      "example": "U-Boot Version: 2.0.0.60266 (Jul 17 2015 - 12:29:50) CPU: 500MHz DRAM: 128 MB FLASH: 16 MB Model: ZyXEL_GS1900_8HP"
+    },
+    "openwrt_ready": {
+      "ssh_port": 22,
+      "ssh_ready_after_boot_seconds": 10,
+      "no_luci": true,
+      "note": "No LuCI web UI in default build (switch device, no wifi). SSH only."
+    }
+  },
+  "poe": {
+    "default_config": {
+      "source": "openwrt.org wiki - Power over Ethernet section",
+      "budget": 70,
+      "force_baudrate": "115200",
+      "force_dialect": "realtek",
+      "port_config_template": {
+        "enable": 1,
+        "priority": 2,
+        "poe_plus": 1,
+        "note": "PoE port IDs match interface numbers: lan1=1, lan2=2, ..., lan8=8"
+      },
+      "manage_command_enable": "ubus call poe manage '{ \"port\" : \"lan1\", \"enable\" : true }'",
+      "manage_command_disable": "ubus call poe manage '{ \"port\" : \"lan1\", \"enable\" : false }'",
+      "status_command": "ubus call poe info",
+      "daemon_restart": "/etc/init.d/poe restart",
+      "config_reload": "ubus call poe reload"
+    },
+    "note": "Bootloader initializes PoE MCU at power-on, enabling PoE+ on all ports. MCU state not preserved across reboots — PoE devices briefly lose power during switch restart. realtek-poe package included in OpenWrt images for this device. Default config only manages port 1; must add config sections for ports 2-8."
+  },
+  "safety": {
+    "serial_number_warning": "Devices with serial numbers starting S21 or higher MUST run stock firmware v2.70+ before any firmware changes. Older stock firmware can irreversibly brick PoE capabilities regardless of subsequent firmware.",
+    "dual_partition_note": "Dual-partition device. Keep OEM firmware on backup partition (partition 1) for recovery. Use 'setsys bootpartition 0' to ensure OpenWrt boots from primary.",
+    "poe_power_loss": "All PoE devices will briefly lose power during switch reboot (MCU reinitializes). Plan accordingly for sensitive equipment."
+  },
+  "tested_hardware": {},
+  "capabilities": [
+    "ethernet",
+    "serial"
+  ]
+}
