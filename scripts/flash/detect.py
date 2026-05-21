@@ -99,7 +99,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
             except Exception as e:
                 log(f"Extreme SSH probe failed for {extreme_ip}: {e}")
 
-    if profile and getattr(profile, 'flash_method', '') == 'oem-http':
+    if profile and getattr(profile, 'flash_method', '').startswith('oem-'):
         stock_ip = getattr(profile, 'stock_default_ip', '192.168.1.1')
         try:
             r = subprocess.run(
@@ -108,10 +108,19 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                 capture_output=True, text=True, timeout=5, check=False,
             )
             if "dispatcher" in r.stdout.lower() or "password" in r.stdout.lower():
-                log(f"ZyXEL OEM web UI detected at {stock_ip} — stock firmware with dispatcher.cgi")
+                log(f"ZyXEL OEM web UI detected at {stock_ip} — stock firmware (dispatcher.cgi)")
+                return "stock-zyxel"
+
+            r2 = subprocess.run(
+                ["curl", "-s", "--max-time", "3",
+                 f"http://{stock_ip}/"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if "login" in r2.stdout.lower() or "password" in r2.stdout.lower() or r2.returncode == 0:
+                log(f"OEM web UI detected at {stock_ip} — stock firmware (form login)")
                 return "stock-zyxel"
         except Exception as e:
-            log(f"ZyXEL OEM probe failed for {stock_ip}: {e}")
+            log(f"OEM probe failed for {stock_ip}: {e}")
 
     try:
         found, detail = detect_uboot_http(recovery_ip)
