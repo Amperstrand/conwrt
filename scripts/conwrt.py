@@ -2820,8 +2820,92 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
         ctx.state = State.REBOOTING
 
 
+def _zyxel_encode_password(password: str) -> str:
+    """Encode password using ZyXEL V2.80+ obfuscation (encode() from OEM JavaScript).
+
+    Embeds the password characters at fixed positions in a random alphanumeric
+    string of length 321 - len(password).
+    """
+    import random as _random
+    import string as _string
+    text = ""
+    possible = _string.ascii_letters + _string.digits
+    length = len(password)
+    remaining = length
+    for i in range(1, 322 - length + 1):
+        if i % 5 == 0 and remaining > 0:
+            remaining -= 1
+            text += password[remaining]
+        elif i == 123:
+            text += "0" if length < 10 else str(length // 10)
+        elif i == 289:
+            text += str(length % 10)
+        else:
+            text += _random.choice(possible)
+    return text
+
+
 def _oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, str]:
-    """Login to ZyXEL OEM web UI via curl. Returns (success, cookie_header_value)."""
+    """Login to ZyXEL OEM web UI via curl. Returns (success, cookie_header_value).
+
+    Tries V2.80+ encode()-based POST login first, falls back to V2.00 plaintext GET.
+    """
+    dispatcher = f"http://{stock_ip}/cgi-bin/dispatcher.cgi"
+    try:
+        # --- Try V2.80+ encode()-based login ---
+        encoded_pw = _zyxel_encode_password(password)
+        import urllib.parse as _up
+        login_body = f"username={username}&password={_up.quote_plus(encoded_pw)}&login=true;"
+        log(f"Trying V2.80+ encode()-based login for {username}...")
+        r1 = subprocess.run(
+            ["curl", "-s", "--max-time", "10", "-c", "-",
+             "-X", "POST", "-d", login_body, dispatcher],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        # V2.00 responds with "AUTHING" to POST — detect and fall back
+        if "AUTHING" in r1.stdout:
+            log("V2.00 firmware detected (AUTHING response), falling back to plaintext GET login")
+            return _oem_http_login_v200(stock_ip, username, password)
+
+        # V2.80+ returns hex authId hash
+        auth_id = r1.stdout.strip()
+        if auth_id and len(auth_id) >= 16 and all(c in "0123456789ABCDEFabcdef" for c in auth_id):
+            log(f"Got authId: {auth_id[:8]}..., checking login...")
+            r2 = subprocess.run(
+                ["curl", "-s", "--max-time", "10", "-c", "-",
+                 "-X", "POST", "-d", f"authId={auth_id}&login_chk=true", dispatcher],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if "OK" in r2.stdout:
+                cookie_value = ""
+                for line in r2.stdout.splitlines():
+                    if "XSSID" in line or "HTTP_XSSID" in line:
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            cookie_value = f"XSSID={parts[-1]}"
+                            break
+                if cookie_value:
+                    log("V2.80+ login successful")
+                    return True, cookie_value
+                # Cookie may be set even if not in output — try session check
+                log("V2.80+ login OK, extracting cookie from session...")
+                cookie_value = _extract_xssid_cookie(stock_ip)
+                if cookie_value:
+                    return True, cookie_value
+                return True, ""
+            log(f"V2.80+ login_chk returned: {r2.stdout[:100]}")
+
+        # If authId not detected, try V2.00 fallback
+        log("V2.80+ login did not get authId, trying V2.00 plaintext fallback...")
+        return _oem_http_login_v200(stock_ip, username, password)
+
+    except Exception as e:
+        log(f"V2.80+ login error: {e}, trying V2.00 fallback...")
+        return _oem_http_login_v200(stock_ip, username, password)
+
+
+def _oem_http_login_v200(stock_ip: str, username: str, password: str) -> tuple[bool, str]:
+    """Login to ZyXEL OEM V2.00 web UI via plaintext GET. Returns (success, cookie)."""
     login_url = f"http://{stock_ip}/cgi-bin/dispatcher.cgi?login=1&username={username}&password={password}"
     try:
         r = subprocess.run(
@@ -2856,6 +2940,97 @@ def _oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, 
         return False, r.stdout[:200]
     except Exception as e:
         return False, str(e)[:200]
+
+
+def _extract_xssid_cookie(stock_ip: str) -> str:
+    """Extract XSSID cookie from device via session_chk endpoint."""
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "--max-time", "5", "-c", "-",
+             f"http://{stock_ip}/cgi-bin/dispatcher.cgi?session_chk=1"],
+            capture_output=True, text=True, timeout=8, check=False,
+        )
+        for line in r.stdout.splitlines():
+            if "XSSID" in line or "HTTP_XSSID" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    return f"XSSID={parts[-1]}"
+    except Exception:
+        pass
+    return ""
+
+
+def _oem_http_change_password(stock_ip: str, username: str, old_password: str,
+                              new_password: str, cookie: str) -> tuple[bool, str]:
+    """Change password on ZyXEL OEM V2.80+ web UI (mandatory after firmware upgrade).
+
+    Returns (success, message).
+    """
+    dispatcher = f"http://{stock_ip}/cgi-bin/dispatcher.cgi"
+    import urllib.parse as _up
+
+    try:
+        # Step 1: Get cmd=30 page to extract XSSID token from the form
+        log("Fetching password change page (cmd=30)...")
+        r_page = subprocess.run(
+            ["curl", "-s", "--max-time", "10",
+             "-b", cookie,
+             f"{dispatcher}?cmd=30"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        xssid_token = ""
+        # Look for XSSID hidden input in the form
+        xssid_match = re.search(r'name=["\']XSSID["\'][^>]*value=["\']([^"\']+)["\']', r_page.stdout)
+        if not xssid_match:
+            xssid_match = re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']XSSID["\']', r_page.stdout)
+        if xssid_match:
+            xssid_token = xssid_match.group(1)
+            log(f"Found XSSID token: {xssid_token[:8]}...")
+
+        # Step 2: Encode passwords
+        encoded_old = _zyxel_encode_password(old_password)
+        encoded_new = _zyxel_encode_password(new_password)
+
+        # Step 3: POST password change (cmd=31)
+        form_fields = [
+            f"XSSID={_up.quote_plus(xssid_token)}" if xssid_token else "",
+            f"usrName={_up.quote_plus(username)}",
+            f"usrOldPass={_up.quote_plus(encoded_old)}",
+            f"usrPass={_up.quote_plus(encoded_new)}",
+            f"usrPass2={_up.quote_plus(encoded_new)}",
+            f"usrPassEncode={_up.quote_plus(encoded_new)}",
+            "cmd=31",
+            "sysSubmit=Apply",
+        ]
+        post_body = "&".join(f for f in form_fields if f)
+
+        log("Submitting password change...")
+        r_change = subprocess.run(
+            ["curl", "-s", "--max-time", "15", "-L",
+             "-b", cookie, "-c", "-",
+             "-X", "POST", "-d", post_body, dispatcher],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+
+        # Success: redirect to cmd=4 (main dashboard)
+        if "cmd=4" in r_change.stdout or "cmd=4" in getattr(r_change, "redirect_url", ""):
+            log(f"Password changed successfully to '{new_password}'")
+            return True, f"Password changed to '{new_password}'"
+
+        # Check for error alerts
+        alert_match = re.search(r'alert\(["\']([^"\']+)["\']\)', r_change.stdout)
+        if alert_match:
+            return False, f"Password change rejected: {alert_match.group(1)}"
+
+        # If we got redirected at all, likely success
+        if r_change.stdout and len(r_change.stdout) > 100:
+            log(f"Password change response ({len(r_change.stdout)} bytes), assuming success")
+            return True, f"Password changed to '{new_password}'"
+
+        return False, f"Unexpected response: {r_change.stdout[:200]}"
+
+    except Exception as e:
+        return False, f"Password change error: {e}"
 
 
 def _oem_http_upload(stock_ip: str, cookie: str, firmware_path: str,
@@ -2940,13 +3115,44 @@ def _handle_oem_http_login(ctx: RecoveryContext, event_queue: queue.Queue) -> No
 
     log(f"Logging into ZyXEL OEM web UI at {stock_ip} (user={username})...")
     success, cookie = _oem_http_login(stock_ip, username, password)
+
     if not success:
         log(f"ERROR: OEM HTTP login failed: {cookie}")
         ctx.state = State.FAILED
         return
 
+    # Check if dashboard redirects to mandatory password change (V2.80+)
+    log("Checking for mandatory password change redirect...")
+    try:
+        r_dash = subprocess.run(
+            ["curl", "-s", "--max-time", "10", "-b", cookie, "-L",
+             f"http://{stock_ip}/cgi-bin/dispatcher.cgi?cmd=4"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if "cmd=30" in r_dash.stdout or "Password" in r_dash.stdout and "Change" in r_dash.stdout:
+            new_password = "Zyxel2026!"
+            log(f"Mandatory password change detected, changing from '{password}' to '{new_password}'...")
+            pw_ok, pw_msg = _oem_http_change_password(stock_ip, username, password, new_password, cookie)
+            if pw_ok:
+                log(pw_msg)
+                # Re-login with new password
+                log("Re-logging in with new password...")
+                success, cookie = _oem_http_login(stock_ip, username, new_password)
+                if not success:
+                    log(f"ERROR: Re-login after password change failed: {cookie}")
+                    ctx.state = State.FAILED
+                    return
+                password = new_password
+                log("Re-login successful with new password")
+            else:
+                log(f"WARNING: Password change failed: {pw_msg}")
+                log("Continuing with current password...")
+    except Exception as e:
+        log(f"WARNING: Password change check failed: {e}")
+
     log("OEM HTTP login successful")
     ctx._oem_http_cookie = cookie
+    ctx._oem_http_password = password
     ctx.state = State.OEM_HTTP_UPLOADING
 
 

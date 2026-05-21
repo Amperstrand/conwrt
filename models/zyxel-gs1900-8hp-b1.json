@@ -30,6 +30,7 @@
     "note": "Dual-partition OEM device. Shares PCB with non-PoE GS1900-8. PoE MCU initialized by bootloader at power-on (all ports PoE+ enabled by default). MCU state lost on reboot — PoE devices briefly lose power during restart. CRITICAL: Serial numbers starting S21+ must run stock v2.70+ first or PoE can be irreversibly bricked."
   },
   "mac_oui": [
+    "4C:9E:FF",
     "BC:CF:4F",
     "E8:37:7A"
   ],

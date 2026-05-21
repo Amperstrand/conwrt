@@ -44,6 +44,30 @@ LLDP ZyXEL Serial: E8-37-7A-9E-F6-86 (= MAC address, NOT the real serial)
 
 The LLDP-reported "serial" is actually the MAC address, not the real serial number (XXXXX-XXXXXXXXX from dashboard). The real serial is only available from the dashboard page or device label.
 
+### Second device (S/N S150H13001490, Rev A1)
+
+**Verified on hardware, 2026-05-21:**
+
+| Field | Value |
+|-------|-------|
+| Model Name | GS1900-8HP |
+| **Hardware Revision** | **A1** (confirmed by v2.90 firmware dashboard) |
+| Serial Number | S150H13001490 (S15 → NOT S21+, firmware update not mandatory) |
+| MAC Address | 4C:9E:FF:XX:XX:XX |
+| MAC OUI | **4C:9E:FF** (ZyXEL — NEW OUI, not previously in model JSONs) |
+| Boot Module | 1.000 |
+| Original Firmware | V2.00(AAHI.0) \| 2014-06-25 |
+| **Current Firmware** | **V2.90(AAHI.0)** (updated 2026-05-21) |
+| Update Method | curl HTTP upload to httpupload.cgi (V2.00 plaintext login → flash → V2.90 encode() login → password change) |
+| New Credentials | admin/Zyxel2026! |
+
+**Key observations from this device:**
+1. **MAC OUI 4C:9E:FF** observed on a Rev A1 unit (previous device used E8:37:7A)
+2. **V2.00 firmware from 2014** (AAHI.0, not AAHI.2 like the first device) — older factory firmware
+3. **V2.90 encode() login verified** — the obfuscated POST login works with curl (no browser needed)
+4. **Password change via curl verified** — POST to dispatcher.cgi with encoded passwords works
+5. **Same .bix firmware file** works for both devices regardless of MAC OUI or initial firmware minor version
+
 ## Safety Warnings
 
 ### CRITICAL: Serial Number Check
@@ -114,6 +138,8 @@ cmd=18/19/20 (section frameset)
 
 ### Login Flow
 
+#### V2.00 (plaintext GET login)
+
 1. Navigate to `http://192.168.1.1/` → redirects to `dispatcher.cgi?cmd=0`
 2. JavaScript constructs login URL: `dispatcher.cgi?login=1&username=admin&password=1234&dummy=<timestamp>`
 3. Response: `AUTHING` (async auth)
@@ -121,7 +147,56 @@ cmd=18/19/20 (section frameset)
 5. Session check: `dispatcher.cgi?session_chk=1` → returns `NOTIMEOUT` or triggers redirect to cmd=2 (login)
 6. Session timeout: 15-second polling via `session_check()` JavaScript
 
-**Note**: The login password is sent in plaintext via GET parameter on V2.00 firmware. V2.80+ adds mandatory password change and likely uses RSA encryption (like GS1900-24E).
+#### V2.80+ (encode() obfuscated POST login)
+
+V2.80+ uses a custom JavaScript `encode()` function that obfuscates the password by embedding it at fixed positions in a random alphanumeric string. This is NOT RSA encryption — it's reversible obfuscation.
+
+1. POST to `dispatcher.cgi` with body: `username=<user>&password=<urlencoded(encode(password))>&login=true;`
+2. Response is a hex authId hash (e.g. `E8EAC5161A7C3D6D40DBE4B316611C60`)
+3. POST to `dispatcher.cgi` with body: `authId=<hash>&login_chk=true`
+4. Response: `OK` on success, `FAIL` on failure
+5. Cookie `HTTP_XSSID` is set in session
+
+**encode() algorithm** (Python implementation):
+```python
+def encode_password(password):
+    import random, string
+    text = ''
+    possible = string.ascii_letters + string.digits
+    length = len(password)
+    remaining = length
+    for i in range(1, 322 - length + 1):
+        if i % 5 == 0 and remaining > 0:
+            remaining -= 1
+            text += password[remaining]  # chars inserted backwards
+        elif i == 123:
+            text += '0' if length < 10 else str(length // 10)
+        elif i == 289:
+            text += str(length % 10)
+        else:
+            text += random.choice(possible)
+    return text
+```
+
+Verified on hardware (S/N S150H13001490, V2.90 firmware), 2026-05-21.
+
+#### V2.80+ Mandatory Password Change
+
+After V2.90 boots with default password `1234`, all pages redirect to `cmd=30` (password change form).
+
+Password change form fields:
+- `XSSID`: Hidden token from cmd=30 page HTML
+- `usrName`: admin
+- `usrOldPass`: encode(old_password)
+- `usrPass`: encode(new_password)
+- `usrPass2`: encode(new_password)
+- `usrPassEncode`: encode(new_password) (same as usrPass)
+- `cmd`: 31
+- `sysSubmit`: Apply
+
+POST to `dispatcher.cgi`. Success redirects to `cmd=4`. New password cannot be `1234` (default).
+
+Verified on hardware (S/N S150H13001490), 2026-05-21.
 
 ### Complete cmd Map (V2.00 firmware)
 
