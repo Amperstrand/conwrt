@@ -5462,6 +5462,10 @@ def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
+    if not args.model_id:
+        print("ERROR: --model-id is required.", file=sys.stderr)
+        return 1
+
     model = load_model(args.model_id)
     backup_config = model.get("backup", {})
     partition_layout = model.get("partition_layout", {})

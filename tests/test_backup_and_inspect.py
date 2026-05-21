@@ -33,15 +33,15 @@ class TestBackupModelConfig(TestCase):
 
 
 class TestCmdBackup(TestCase):
-    def test_none_model_id_raises(self):
+    def test_none_model_id_returns_1(self):
         import conwrt
         args = argparse.Namespace(
             model_id=None, ip="192.168.1.1",
             password="test", serial=None, output_dir=None,
             partitions=None, user="root",
         )
-        with self.assertRaises(FileNotFoundError):
-            conwrt.cmd_backup(args)
+        rc = conwrt.cmd_backup(args)
+        self.assertEqual(rc, 1)
 
     def test_requires_password_or_serial(self):
         import conwrt
