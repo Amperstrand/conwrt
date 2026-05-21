@@ -1,13 +1,27 @@
 """Tests for OEM flash method support (oem-http for GS1900-8HP, oem-ftp for GS1920-24)."""
+import os
 import sys
+import tempfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from flash.device_profile import build_profile_from_model, find_recovery_flash_method
 from flash.context import State
-from flash.oem_handlers import zyxel_encode_password, OEM_METHOD_CONFIG
+from flash.oem_handlers import (
+    zyxel_encode_password,
+    OEM_METHOD_CONFIG,
+    oem_http_login_v200,
+    oem_ftp_login,
+    oem_ftp_enable_service,
+    oem_ftp_upload,
+    oem_http_upload,
+    oem_http_accept_reboot,
+    install_sysupgrade,
+    install_mtd_write,
+)
 from model_loader import load_model
 
 
@@ -207,3 +221,257 @@ class TestOemMethodConfig(TestCase):
     def test_oem_ftp_uses_mtd_write_install(self):
         from flash.oem_handlers import install_mtd_write
         self.assertEqual(OEM_METHOD_CONFIG["oem-ftp"]["install_fn"], install_mtd_write)
+
+
+def _mock_run(stdout="", stderr="", returncode=0):
+    return MagicMock(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+class TestOemHttpLoginV200(TestCase):
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_successful_login_extracts_cookie(self, mock_run):
+        mock_run.return_value = _mock_run(
+            stdout="#HttpOnly_192.168.1.1\tFALSE\t/\tTRUE\t0\tXSSID\tabc123\n"
+        )
+        success, cookie = oem_http_login_v200("192.168.1.1", "admin", "1234")
+        self.assertTrue(success)
+        self.assertIn("XSSID=abc123", cookie)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_failed_login_returns_false(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="Login failed", returncode=1)
+        success, msg = oem_http_login_v200("192.168.1.1", "admin", "wrong")
+        self.assertFalse(success)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_sends_credentials_in_url(self, mock_run):
+        mock_run.return_value = _mock_run(
+            stdout="AUTHING\n#HttpOnly_192.168.1.1\tFALSE\t/\tTRUE\t0\tXSSID\tabc123\n"
+        )
+        oem_http_login_v200("192.168.1.1", "admin", "1234")
+        first_call_args = " ".join(mock_run.call_args_list[0][0][0])
+        self.assertIn("username=admin", first_call_args)
+        self.assertIn("password=1234", first_call_args)
+
+
+class TestOemFtpLogin(TestCase):
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_successful_login_returns_cookie_file(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="200")
+        success, result = oem_ftp_login("192.168.1.1", "admin", "1234")
+        self.assertTrue(success)
+        self.assertTrue(result.endswith(".cookies") or len(result) > 0)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_posts_credentials(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="200")
+        oem_ftp_login("192.168.1.1", "admin", "1234")
+        call_args = " ".join(mock_run.call_args[0][0])
+        self.assertIn("Username=admin", call_args)
+        self.assertIn("Password=1234", call_args)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_failed_login_returns_error(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="403", returncode=1)
+        success, msg = oem_ftp_login("192.168.1.1", "admin", "wrong")
+        self.assertFalse(success)
+
+
+class TestOemFtpEnableService(TestCase):
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_enable_returns_true_on_200(self, mock_run, mock_sleep):
+        mock_run.return_value = _mock_run(stdout="200")
+        success, msg = oem_ftp_enable_service("192.168.1.1", "/tmp/cookies.txt")
+        self.assertTrue(success)
+        self.assertIn("200", msg)
+
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_enable_returns_true_on_303(self, mock_run, mock_sleep):
+        mock_run.return_value = _mock_run(stdout="303")
+        success, msg = oem_ftp_enable_service("192.168.1.1", "/tmp/cookies.txt")
+        self.assertTrue(success)
+
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_enable_posts_ftp_checkbox(self, mock_run, mock_sleep):
+        mock_run.return_value = _mock_run(stdout="200")
+        oem_ftp_enable_service("192.168.1.1", "/tmp/cookies.txt")
+        call_args = " ".join(mock_run.call_args[0][0])
+        self.assertIn("RpAccessSv_ChkFTP=on", call_args)
+
+
+class TestOemFtpUpload(TestCase):
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_success_on_226(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(
+            stdout="", stderr="226 Transfer complete"
+        )
+        success, msg = oem_ftp_upload(
+            "192.168.1.1", "admin", "1234",
+            "/tmp/firmware.bin", target="ras-0"
+        )
+        self.assertTrue(success)
+
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_url_contains_target(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(stdout="", stderr="226 OK")
+        oem_ftp_upload(
+            "192.168.1.1", "admin", "1234",
+            "/tmp/firmware.bin", target="ras-0"
+        )
+        call_args = " ".join(mock_run.call_args[0][0])
+        self.assertIn("ras-0", call_args)
+        self.assertNotIn("ras-1", call_args)
+
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_uses_active_mode_with_client_ip(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(stdout="", stderr="226 OK")
+        oem_ftp_upload(
+            "192.168.1.1", "admin", "1234",
+            "/tmp/firmware.bin", target="ras-0",
+            client_ip="192.168.1.2"
+        )
+        call_args = " ".join(mock_run.call_args[0][0])
+        self.assertIn("--ftp-port", call_args)
+        self.assertIn("192.168.1.2", call_args)
+
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_failure_returns_false(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(
+            stdout="", stderr="500 Error", returncode=1
+        )
+        success, msg = oem_ftp_upload(
+            "192.168.1.1", "admin", "1234",
+            "/tmp/firmware.bin", target="ras-0"
+        )
+        self.assertFalse(success)
+
+
+class TestOemHttpUpload(TestCase):
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_success_writing_to_flash(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(stdout="Writing image to FLASH")
+        success, msg = oem_http_upload(
+            "192.168.1.1", "XSSID=abc", "/tmp/fw.bin",
+            "/cgi-bin/httpupload.cgi"
+        )
+        self.assertTrue(success)
+
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_sends_cookie(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(stdout="OK")
+        oem_http_upload(
+            "192.168.1.1", "XSSID=test123", "/tmp/fw.bin",
+            "/cgi-bin/httpupload.cgi"
+        )
+        call_args = mock_run.call_args[0][0]
+        self.assertIn("-b", call_args)
+        self.assertIn("XSSID=test123", call_args)
+
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_upload_failure_returns_false(self, mock_run, mock_size):
+        mock_run.return_value = _mock_run(
+            stdout="", stderr="Connection refused", returncode=7
+        )
+        success, msg = oem_http_upload(
+            "192.168.1.1", "XSSID=abc", "/tmp/fw.bin",
+            "/cgi-bin/httpupload.cgi"
+        )
+        self.assertFalse(success)
+
+
+class TestOemHttpAcceptReboot(TestCase):
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_reboot_returns_true_on_success(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="Rebooting now")
+        result = oem_http_accept_reboot("192.168.1.1", "XSSID=abc")
+        self.assertTrue(result)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_reboot_sends_reboot_param(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="OK")
+        oem_http_accept_reboot("192.168.1.1", "XSSID=abc")
+        call_args = " ".join(mock_run.call_args[0][0])
+        self.assertIn("reboot=1", call_args)
+
+
+class TestInstallSysupgrade(TestCase):
+    @patch("flash.oem_handlers.subprocess.run", return_value=_mock_run())
+    def test_install_scp_and_sysupgrade(self, mock_run):
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            f.write(b"\x00" * 1024)
+            tmp_path = f.name
+        try:
+            ctx = MagicMock()
+            ctx.image_path = tmp_path
+            ctx.ssh_key_path = ""
+            result = install_sysupgrade(ctx, "192.168.1.1")
+            self.assertTrue(result)
+            self.assertEqual(mock_run.call_count, 2)
+        finally:
+            os.unlink(tmp_path)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_install_fails_on_scp_error(self, mock_run):
+        mock_run.return_value = _mock_run(stderr="Permission denied", returncode=1)
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            f.write(b"\x00" * 1024)
+            tmp_path = f.name
+        try:
+            ctx = MagicMock()
+            ctx.image_path = tmp_path
+            ctx.ssh_key_path = ""
+            result = install_sysupgrade(ctx, "192.168.1.1")
+            self.assertFalse(result)
+        finally:
+            os.unlink(tmp_path)
+
+
+class TestInstallMtdWrite(TestCase):
+    @patch("flash.oem_handlers.subprocess.run", return_value=_mock_run())
+    def test_install_with_loader(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sysupgrade = os.path.join(tmpdir, "sysupgrade.bin")
+            loader = os.path.join(tmpdir, "loader.bin")
+            with open(sysupgrade, "wb") as f:
+                f.write(b"\x00" * 1024)
+            with open(loader, "wb") as f:
+                f.write(b"\x00" * 512)
+
+            ctx = MagicMock()
+            ctx.image_path = sysupgrade
+            ctx.ssh_key_path = ""
+            result = install_mtd_write(ctx, "192.168.1.1")
+            self.assertTrue(result)
+            self.assertEqual(mock_run.call_count, 3)
+
+            last_call_args = " ".join(mock_run.call_args_list[-1][0][0])
+            self.assertIn("mtd write /tmp/loader.bin loader", last_call_args)
+            self.assertIn("mtd -r write /tmp/sysupgrade.bin firmware", last_call_args)
+
+    @patch("flash.oem_handlers.subprocess.run", return_value=_mock_run())
+    def test_install_without_loader(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sysupgrade = os.path.join(tmpdir, "sysupgrade.bin")
+            with open(sysupgrade, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+            ctx = MagicMock()
+            ctx.image_path = sysupgrade
+            ctx.ssh_key_path = ""
+            result = install_mtd_write(ctx, "192.168.1.1")
+            self.assertTrue(result)
+            self.assertEqual(mock_run.call_count, 2)
+
+            last_call_args = " ".join(mock_run.call_args_list[-1][0][0])
+            self.assertNotIn("loader.bin", last_call_args)
+            self.assertIn("mtd -r write /tmp/sysupgrade.bin firmware", last_call_args)
