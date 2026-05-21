@@ -695,11 +695,35 @@ All network-based recovery options exhausted:
 7. Reboot → AP boots OpenWrt from flash
 8. **Have a serial cable on hand as fallback**
 
-## References
+## References (Verified with Source Links)
 
-- Original commit e16a0e7: https://github.com/openwrt/openwrt/commit/e16a0e7e8876df0a92ec4779fe766de1a943307a
-- OpenWrt PR #13370 (no-serial method): https://github.com/openwrt/openwrt/pull/13370
-- OpenWrt PR #17305 (BLOCKSIZE fix): https://github.com/openwrt/openwrt/pull/17305
-- Forum thread: https://forum.openwrt.org/t/adding-extreme-ap3915i-ap7632i-support/138207
-- OpenWrt device tree: `target/linux/ipq40xx/dts/qcom-ipq4029-ws-ap3915i.dts`
-- OpenWrt image config: `target/linux/ipq40xx/image/generic.mk` (Device/extreme-networks_ws-ap3915i)
+### Primary Sources
+
+| Source | URL | What It Confirms |
+|--------|-----|------------------|
+| David Bauer's commit (full hash) | https://github.com/openwrt/openwrt/commit/e16a0e7e8876df0a92ec4779fe766de1a943307a | Hardware specs, `boot_openwrt` command, `saveenv`, serial credentials `admin`/`new2day`, "1x Gigabit LAN", "Macronix MX25L25635E SPI-NOR (32M)" |
+| PR #13370 (apdev-2023) | https://github.com/openwrt/openwrt/pull/13370 | No-serial method, `rdwr_boot_cfg` usage, `bootcmd="run boot_flash"` after stock TFTP detour, `WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0`, 5-min stock reboot warning |
+| PR #17305 (maurerle) | https://github.com/openwrt/openwrt/pull/17305 | BLOCKSIZE fix — "The blocksize is too high, resulting in forgetting the config on sysupgrade", merged Dec 23 2024, BLOCKSIZE removed entirely |
+| OpenWrt DTS | `target/linux/ipq40xx/dts/qcom-ipq4029-ws-ap3915i.dts` in openwrt/openwrt | Firmware partition at `0x280000`, CFG1 at `0xe0000`, CFG2 at `0x1fe0000`, ART at `0x170000`, single switch port |
+| OpenWrt platform.sh | `target/linux/ipq40xx/base-files/lib/upgrade/platform.sh` | AP3915i uses `default_do_upgrade` — standard NOR sysupgrade |
+| OpenWrt image config | `target/linux/ipq40xx/image/generic.mk` | `Device/FitImage`, `IMAGE_SIZE := 30080k`, `SOC := qcom-ipq4029` |
+
+### Secondary Sources
+
+| Source | URL |
+|--------|-----|
+| OpenWrt wiki — AP391x series | https://openwrt.org/toh/extreme_networks_ws_ap391x |
+| OpenWrt wiki — AP3915i techdata | https://openwrt.org/toh/hwdata/extreme_networks/extreme_networks_ws-ap3915i |
+| Forum thread | https://forum.openwrt.org/t/adding-extreme-ap3915i-ap7632i-support/138207 |
+| Extreme Networks install guide | https://documentation.extremenetworks.com/wireless/AP_Guides/AP3915i/ |
+
+### Note on `run boot_flash` vs `run boot_openwrt`
+
+PR #13370's no-serial method uses `bootcmd="run boot_flash"` and confirms it works — but ONLY
+after also setting `WATCHDOG_COUNT=0` and `WATCHDOG_LIMIT=0`. The stock `boot_kernel` script
+checks these variables to decide whether to enable the hardware watchdog. When both are 0, the
+watchdog is likely skipped, allowing the OpenWrt FIT to boot without timeout.
+
+Our boot loop may have been caused by incorrect watchdog variables, not by `run boot_flash` being
+incompatible. However, David Bauer's `run boot_openwrt` remains the simpler approach (no stock
+script, no watchdog, no failover). See `SESSION-WRITEUP.md` for full analysis.

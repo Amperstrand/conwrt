@@ -606,11 +606,63 @@ echo ERROR: Cannot boot either kernel image, dropping to interactive shell (watc
 
 ---
 
-## References
+## References (Verified with Source Links)
 
-- David Bauer's original commit (correct boot commands): https://github.com/openwrt/openwrt/commit/e16a0e7
-- PR #13370 (no-serial method, source of wrong `boot_flash` value): https://github.com/openwrt/openwrt/pull/13370
-- PR #17305 (BLOCKSIZE fix — already in 24.10.2): https://github.com/openwrt/openwrt/pull/17305
-- Forum thread: https://forum.openwrt.org/t/adding-extreme-ap3915i-ap7632i-support/138207
-- OpenWrt image config (`target/linux/ipq40xx/image/generic.mk`): standard `Device/FitImage`, no quirks
-- Full technical notes: `recipes/extreme-networks/ws-ap3915i/no-serial-openwrt.md`
+### Primary Sources
+
+| Source | URL | What It Confirms |
+|--------|-----|------------------|
+| David Bauer's commit (full hash) | https://github.com/openwrt/openwrt/commit/e16a0e7e8876df0a92ec4779fe766de1a943307a | Hardware specs, `boot_openwrt` command, `saveenv`, serial credentials `admin`/`new2day`, "1x Gigabit LAN", "Macronix MX25L25635E SPI-NOR (32M)" |
+| PR #13370 (apdev-2023) | https://github.com/openwrt/openwrt/pull/13370 | No-serial method, `rdwr_boot_cfg` usage, `bootcmd="run boot_flash"` after stock TFTP detour, `WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0` required, 5-min stock reboot warning |
+| PR #17305 (maurerle) | https://github.com/openwrt/openwrt/pull/17305 | BLOCKSIZE fix — "The blocksize is too high, resulting in forgetting the config on sysupgrade", merged Dec 23 2024, BLOCKSIZE removed entirely |
+| OpenWrt DTS (current) | `target/linux/ipq40xx/dts/qcom-ipq4029-ws-ap3915i.dts` | Firmware partition at `0x280000` (size `0x1d60000`), CFG1 at `0xe0000`, CFG2 at `0x1fe0000`, ART at `0x170000`, single switch port (`swport5`) |
+| OpenWrt platform.sh | `target/linux/ipq40xx/base-files/lib/upgrade/platform.sh` | AP3915i falls to `*) default_do_upgrade "$1" ;;` (standard NOR sysupgrade), no special handling needed |
+| OpenWrt image config | `target/linux/ipq40xx/image/generic.mk` | `Device/FitImage`, `IMAGE_SIZE := 30080k`, `SOC := qcom-ipq4029`, standard build |
+
+### Secondary Sources
+
+| Source | URL | What It Confirms |
+|--------|-----|------------------|
+| OpenWrt wiki — AP391x series | https://openwrt.org/toh/extreme_networks_ws_ap391x | Installation instructions, supported models (AP3912/15/16/17, AP7662) |
+| OpenWrt wiki — AP3915i techdata | https://openwrt.org/toh/hwdata/extreme_networks/extreme_networks_ws-ap3915i | Hardware specs, supported since commit, status |
+| Forum thread | https://forum.openwrt.org/t/adding-extreme-ap3915i-ap7632i-support/138207 | Boot reports, "sysupgrade went ok but doesn't automatically boot", PR #17305 discussion |
+| Extreme Networks install guide | https://documentation.extremenetworks.com/wireless/AP_Guides/AP3915i/ | "One RJ45, 10/100/1000 Ethernet Port (LAN1) with PoE", PoE 802.3af, physical specs |
+
+### Important Correction: `run boot_flash` vs `run boot_openwrt`
+
+After re-reading PR #13370's no-serial instructions in detail, we need to correct our analysis:
+
+**`run boot_flash` CAN work with OpenWrt** — PR #13370 step 11 explicitly uses it:
+```
+rdwr_boot_cfg write_var bootcmd="run boot_flash"
+```
+And step 12 confirms: "This time it should be into OpenWRT."
+
+The PR author also sets `WATCHDOG_COUNT=0` and `WATCHDOG_LIMIT=0`. The stock `boot_kernel` script
+uses these variables to decide whether to set up the hardware watchdog. When both are 0, the
+watchdog setup is likely skipped, and the FIT image can boot without the watchdog firing.
+
+**Our boot loop was likely caused by missing or incorrect watchdog variables** in our config blocks,
+not by `run boot_flash` being fundamentally incompatible with OpenWrt. We wrote `bootcmd=run boot_flash`
+but may not have properly set `WATCHDOG_COUNT=0` and `WATCHDOG_LIMIT=0`.
+
+That said, David Bauer's `run boot_openwrt` is still the simpler and more reliable approach — it
+bypasses the entire stock boot script (no watchdog, no dual-image failover, no `nboot`). The
+`run boot_flash` approach depends on the stock script's watchdog handling being correct.
+
+**Recommendation**: Use `run boot_openwrt` (David Bauer's command) for reliability. If that fails
+for any reason, `run boot_flash` with `WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0` is a valid fallback
+that PR #13370's author confirmed working.
+
+### fw_setenv Limitation (Verified from Source)
+
+No `/etc/fw_env.config` exists in the ipq40xx base-files directory in the OpenWrt source tree.
+The `platform.sh` file includes `RAMFS_COPY_DATA='/etc/fw_env.config'` at the top, but this
+only applies if the config exists at build time. Without it, `fw_setenv` and `fw_printenv`
+cannot locate the U-Boot environment on flash.
+
+Verified by checking: `target/linux/ipq40xx/base-files/etc/fw_env.config` does not exist in
+the openwrt/openwrt repository.
+
+### Full technical notes
+- `recipes/extreme-networks/ws-ap3915i/no-serial-openwrt.md`
