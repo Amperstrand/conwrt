@@ -12,9 +12,9 @@
   },
   "hardware": {
     "soc": "Qualcomm IPQ4029 (4x Cortex-A7 @ 717 MHz)",
-    "flash": "SPI-NOR (16MB typical for IPQ40xx, confirm exact partitioning from DTS)",
-    "ram": "512MB DDR3 (confirm from live device)",
-    "ethernet_ports": "2x GbE (GE1/LAN1 PoE+ data, GE2/LAN2 passive)",
+    "flash": "SPI-NOR 32MB (Macronix MX25L25635E, verified from DTS and hardware)",
+    "ram": "512MB DDR3",
+    "ethernet_ports": "1x GbE (GE1 only, PoE+ data — single cable carries power and data)",
     "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
   },
   "mac_oui": [],
@@ -33,7 +33,9 @@
       "initramfs_tftp_name": "vmlinux.gz.uImage.3912",
       "optional_alt_tftp_name": "vmlinux",
       "bootcmd_tftp": "run boot_net",
-      "bootcmd_flash": "run boot_flash",
+      "bootcmd_flash": "run boot_openwrt",
+      "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
+      "note": "run boot_flash is the STOCK boot command (source boot_kernel) — it does NOT work with OpenWrt FIT images. Use boot_openwrt instead.",
       "required_uboot_vars": {
         "AP_MODE": "0",
         "MOSTRECENTKERNEL": "0",
@@ -47,15 +49,18 @@
       "final_uboot_vars": {
         "MOSTRECENTKERNEL": "0",
         "WATCHDOG_COUNT": "0",
-        "bootcmd": "run boot_flash"
+        "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
+        "bootcmd": "run boot_openwrt"
       },
+      "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt', NOT 'run boot_flash'. boot_flash runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. See commit e16a0e7 and SESSION-WRITEUP.md.",
       "openwrt_client_ip": "192.168.1.2",
       "openwrt_ip": "192.168.1.1",
       "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
       "sysupgrade_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",
       "flash_time_seconds": 300,
       "silence_timeout": 60,
-      "backup_required": true
+      "backup_required": true,
+      "fw_env_warning": "fw_setenv does NOT work on this device — no /etc/fw_env.config in ipq40xx base-files. Use raw MTD write (kmod-mtd-rw + flashcp) or U-Boot serial console (saveenv) to change boot variables."
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt on this device",

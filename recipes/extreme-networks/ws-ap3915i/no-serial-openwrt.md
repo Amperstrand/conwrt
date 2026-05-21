@@ -44,7 +44,11 @@ variables from Linux. The procedure is:
 3. Set `serverip` to your laptop's IP
 4. Reboot → U-Boot TFTP boots OpenWrt initramfs
 5. From initramfs, run `sysupgrade` to install permanently
-6. Restore `bootcmd=run boot_flash` via `fw_setenv`
+6. Restore `bootcmd=run boot_openwrt` via raw MTD write or U-Boot serial console
+
+> **WARNING**: `fw_setenv` does NOT work on this device — there is no `/etc/fw_env.config`
+> in the ipq40xx base-files. Use raw MTD write (`kmod-mtd-rw` + `flashcp`) or U-Boot
+> serial console (`setenv` + `saveenv`) instead.
 
 ### Problem: `rdwr_boot_cfg` Broken on Our Firmware
 
@@ -357,25 +361,29 @@ ssh root@192.168.1.1 "sysupgrade -n /tmp/sysupgrade.bin"
 After sysupgrade, U-Boot still has `bootcmd=run boot_net`. The AP will TFTP boot again
 if your server is running. You need to restore `bootcmd` so it boots from flash.
 
-**Option A: `fw_setenv` from OpenWrt** (if `/etc/fw_env.config` exists)
+**Option A: U-Boot serial console** (recommended — requires serial cable)
 ```bash
-ssh root@192.168.1.1
-fw_setenv bootcmd "run boot_flash"
-fw_setenv MOSTRECENTKERNEL 0
-fw_setenv WATCHDOG_COUNT 0
+# At U-Boot prompt (press 's' during boot, login admin/new2day):
+setenv boot_openwrt "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000"
+setenv bootcmd "run boot_openwrt || run boot_net"
+setenv serverip 192.168.1.2
+saveenv
+boot
 ```
 
-**Option B: Raw MTD write from OpenWrt** (if `fw_setenv` doesn't work)
+**Option B: Raw MTD write from OpenWrt** (no serial needed, requires OpenWrt shell)
 ```python
-# Same script as Step 1, but set bootcmd=run boot_flash and serverip back to original
-# Then: flashcp from OpenWrt to /dev/mtd0 (CFG1 is mtd0 in OpenWrt's layout)
+# Same script as Step 1, but set boot_openwrt and bootcmd=run boot_openwrt
+# Then: insmod mtd-rw i_want_a_brick=1 && flashcp from OpenWrt to /dev/mtd0 (CFG1)
 ```
 
-**Option C: Extreme TFTP detour** (from PR #13370)
+**Option C: Extreme TFTP detour** (from PR #13370, requires working rdwr_boot_cfg)
 - Serve the original Extreme firmware vmlinux via TFTP
 - U-Boot TFTP boots into Extreme stock firmware
 - Use `rdwr_boot_cfg write_var bootcmd "run boot_flash"` from the stock shell
-- Reboot → OpenWrt boots from flash
+- **NOTE**: `run boot_flash` works in this case because the PR author goes BACK to stock
+  firmware first, and the stock boot_kernel script can boot OpenWrt FIT from flash.
+  This does NOT work when setting `run boot_flash` directly from OpenWrt.
 
 ## Recovery: Is the AP Safe in TFTP Boot Mode?
 
@@ -389,13 +397,13 @@ fw_setenv WATCHDOG_COUNT 0
   U-Boot will always try to TFTP boot before giving up
 
 **Recommendation**: Leave `bootcmd=run boot_net` until OpenWrt is fully verified working
-from flash. Only then restore `bootcmd=run boot_flash`. This gives you a permanent
+from flash. Only then change `bootcmd` to `run boot_openwrt`. This gives you a permanent
 recovery path — just start a TFTP server and power cycle.
 
 ## What We Still Need To Do
 
-1. **Restore `bootcmd=run boot_flash`** so the AP boots from flash without TFTP
-2. **Verify OpenWrt boots from flash** (not initramfs) after restoring bootcmd
+1. **Set `bootcmd=run boot_openwrt`** so the AP boots from flash without TFTP
+2. **Verify OpenWrt boots from flash** (not initramfs) after setting boot_openwrt
 3. **Test WiFi radios** work correctly
 4. **Verify the ART partition** (radio calibration data) survived
 
@@ -675,13 +683,14 @@ All network-based recovery options exhausted:
 3. Backup ALL MTD partitions
 4. Install `kmod-mtd-rw i_want_a_brick=1`
 5. Build config block with:
-   ```
-   boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000
-   bootcmd=run boot_openwrt
-   WATCHDOG_COUNT=0
-   WATCHDOG_LIMIT=0
-   MOSTRECENTKERNEL=0
-   ```
+    ```
+    boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000
+    bootcmd=run boot_openwrt || run boot_net
+    serverip=<your_laptop_ip>
+    WATCHDOG_COUNT=0
+    WATCHDOG_LIMIT=0
+    MOSTRECENTKERNEL=0
+    ```
 6. Write to both CFG1 and CFG2
 7. Reboot → AP boots OpenWrt from flash
 8. **Have a serial cable on hand as fallback**
