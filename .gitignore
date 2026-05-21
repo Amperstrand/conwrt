@@ -36,6 +36,12 @@ device-identification-notes.md
 linksys-velop-*.png
 captures/
 
+# --- Firmware images at repo root (use images/ or data/) ---
+/*.bin
+/*.img
+/*.trx
+/*.fit
+
 # --- Python ---
 __pycache__/
 *.pyc
