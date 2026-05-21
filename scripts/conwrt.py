@@ -2076,13 +2076,13 @@ def _run_state_machine(
             _handle_extreme_sysupgrade_uploading(ctx, event_queue)
         elif ctx.state == State.EXTREME_SYSUPGRADE_FLASHING:
             _handle_extreme_sysupgrade_flashing(ctx, event_queue)
-        elif ctx.state == State.OEM_LOGIN or ctx.state == State.OEM_HTTP_LOGIN:
+        elif ctx.state == State.OEM_LOGIN:
             _handle_oem_login(ctx, event_queue)
         elif ctx.state == State.OEM_PREPARE:
             _handle_oem_prepare(ctx, event_queue)
-        elif ctx.state == State.OEM_UPLOADING or ctx.state == State.OEM_HTTP_UPLOADING:
+        elif ctx.state == State.OEM_UPLOADING:
             _handle_oem_uploading(ctx, event_queue)
-        elif ctx.state == State.OEM_REBOOTING or ctx.state == State.OEM_HTTP_REBOOTING:
+        elif ctx.state == State.OEM_REBOOTING:
             _handle_oem_rebooting(ctx, event_queue)
         else:
             log(f"Unknown state: {ctx.state}")

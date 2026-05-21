@@ -48,6 +48,7 @@
       "stock_default_ip": "192.168.1.1",
       "stock_default_user": "admin",
       "stock_default_password": "1234",
+      "ftp_target": "ras-0",
       "ftp_active_mode": true,
       "ftp_targets": {
         "ras-0": "slot 1",

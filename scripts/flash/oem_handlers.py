@@ -67,7 +67,7 @@ def extract_xssid_cookie(stock_ip: str) -> str:
 def oem_reboot_wait_and_install(ctx, openwrt_ip: str, install_fn) -> Optional[State]:
     """Shared reboot→poll SSH→SCP sysupgrade image→install→transition.
 
-    Called by both OEM_HTTP_REBOOTING and OEM_FTP_REBOOTING handlers.
+    Called by OEM_REBOOTING handler for both oem-http and oem-ftp methods.
 
     Args:
         ctx: RecoveryContext with profile, image_path, timeline, etc.

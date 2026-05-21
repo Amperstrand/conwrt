@@ -56,8 +56,6 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     is_mtd_write = method_name == "mtd-write"
     is_edgeos_kernel_swap = method_name == "edgeos-kernel-swap"
     is_extreme_rdwr_tftp = method_name == "extreme-rdwr-tftp-initramfs"
-    is_oem_http = method_name == "oem-http"
-    is_oem_ftp = method_name == "oem-ftp"
     is_oem = method_name.startswith("oem-")
 
     if is_serial_tftp:
@@ -75,10 +73,7 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     elif is_extreme_rdwr_tftp:
         client_ip = fm.get("openwrt_client_ip", "192.168.1.2")
         recovery_ip = fm.get("stock_default_ip", "192.168.1.1")
-    elif is_oem_http:
-        client_ip = fm.get("client_ip", "")
-        recovery_ip = fm.get("stock_default_ip", model["openwrt"]["default_ip"])
-    elif is_oem_ftp:
+    elif is_oem:
         client_ip = fm.get("client_ip", "")
         recovery_ip = fm.get("stock_default_ip", model["openwrt"]["default_ip"])
     else:
@@ -106,8 +101,6 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
         is_zycast=is_zycast,
         is_edgeos_kernel_swap=is_edgeos_kernel_swap,
         is_extreme_rdwr_tftp=is_extreme_rdwr_tftp,
-        is_oem_http=is_oem_http,
-        is_oem_ftp=is_oem_ftp,
         is_oem=is_oem,
         edgeos_ip=fm.get("edgeos_ip", "192.168.1.1"),
         edgeos_user=fm.get("edgeos_user", "ubnt"),
@@ -145,6 +138,6 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
         final_uboot_vars=fm.get("final_uboot_vars", {}),
         backup_required=fm.get("backup_required", True),
         oem_http_upload_endpoint=fm.get("upload_endpoint", "/cgi-bin/httpupload.cgi"),
-        oem_ftp_target=fm.get("ftp_targets", {}).get("ras-0", "ras-0"),
+        oem_ftp_target=fm.get("ftp_target", "ras-0"),
         oem_ftp_active_mode=fm.get("ftp_active_mode", True),
     )
