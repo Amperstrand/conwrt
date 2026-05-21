@@ -99,15 +99,18 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
         configure_interface_ip(interface, openwrt_client, "24")
 
 
-def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
-    """Upload firmware via SCP and run sysupgrade -n."""
+def _scp_upload(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> tuple[bool, str]:
+    """Upload a file to a device via SCP. Returns (success, remote_path).
+
+    Shared by _flash_via_sysupgrade, _flash_via_mtd_write, and others.
+    """
     firmware_name = os.path.basename(firmware_path)
     remote_path = f"/tmp/{firmware_name}"
+    size_mb = os.path.getsize(firmware_path) / 1024 / 1024
 
     scp_command = scp_cmd(device_ip, firmware_path, f"root@{device_ip}:{remote_path}",
                           key=ssh_key, connect_timeout=10)
 
-    size_mb = os.path.getsize(firmware_path) / 1024 / 1024
     log(f"Uploading {firmware_name} ({size_mb:.1f} MB) via SCP to {device_ip}...")
     try:
         r = subprocess.run(scp_command, capture_output=True, text=True, timeout=120, check=False)
@@ -118,12 +121,20 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
                 log("Hint: check SSH key authentication — ensure the key is authorized on the device")
             else:
                 log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
-            return False
+            return False, remote_path
     except subprocess.TimeoutExpired:
         log("SCP upload timed out.")
-        return False
+        return False, remote_path
     except Exception as e:
         log(f"SCP error: {e}")
+        return False, remote_path
+    return True, remote_path
+
+
+def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
+    """Upload firmware via SCP and run sysupgrade -n."""
+    ok, remote_path = _scp_upload(device_ip, firmware_path, ssh_key)
+    if not ok:
         return False
 
     log(f"Firmware uploaded. Running sysupgrade -n {remote_path}...")
@@ -159,29 +170,8 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
 def _flash_via_mtd_write(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None,
                          mtd_command: str = "mtd -r write /tmp/firmware.bin firmware") -> bool:
     """Upload firmware via SCP and run mtd write (for devices where sysupgrade rejects images)."""
-    firmware_name = os.path.basename(firmware_path)
-    remote_path = f"/tmp/{firmware_name}"
-
-    scp_command = scp_cmd(device_ip, firmware_path, f"root@{device_ip}:{remote_path}",
-                          key=ssh_key, connect_timeout=10)
-
-    size_mb = os.path.getsize(firmware_path) / 1024 / 1024
-    log(f"Uploading {firmware_name} ({size_mb:.1f} MB) via SCP to {device_ip}...")
-    try:
-        r = subprocess.run(scp_command, capture_output=True, text=True, timeout=120, check=False)
-        if r.returncode != 0:
-            stderr_hint = r.stderr[:300] if r.stderr else "(no stderr)"
-            if "permission denied" in stderr_hint.lower():
-                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
-                log("Hint: check SSH key authentication — ensure the key is authorized on the device")
-            else:
-                log(f"SCP failed (exit {r.returncode}): {stderr_hint}")
-            return False
-    except subprocess.TimeoutExpired:
-        log("SCP upload timed out.")
-        return False
-    except Exception as e:
-        log(f"SCP error: {e}")
+    ok, _ = _scp_upload(device_ip, firmware_path, ssh_key)
+    if not ok:
         return False
 
     log(f"Firmware uploaded. Running {mtd_command}...")
