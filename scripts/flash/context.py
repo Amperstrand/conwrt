@@ -6,13 +6,20 @@ import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, TypedDict
 
 from platform_utils import get_link_state as platform_get_link_state
 
 DEFAULT_IP = "192.168.1.1"
 REBOOT_TIMEOUT = 360
 SILENCE_TIMEOUT_DEFAULT = 30
+
+
+class OemState(TypedDict, total=False):
+    cookie: str
+    cookie_file: str
+    password: str
+
 
 class Event(Enum):
     LINK_DOWN = auto()

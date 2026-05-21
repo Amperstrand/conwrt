@@ -56,6 +56,7 @@ from flash.device_profile import find_recovery_flash_method as _find_recovery_fl
 from flash.context import (
     DEFAULT_IP,
     Event,
+    OemState,
     PcapMonitorConfig,
     REBOOT_TIMEOUT,
     SILENCE_TIMEOUT_DEFAULT,
@@ -1850,7 +1851,7 @@ class RecoveryContext:
     defaults_script: str = ""
     assume_yes: bool = False
     _say_fn: object = field(default=None, repr=False)
-    oem_state: dict = field(default_factory=dict)
+    oem_state: dict | OemState = field(default_factory=dict)
 
     def __post_init__(self):
         if self._say_fn is None:
