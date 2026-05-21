@@ -40,3 +40,24 @@ def test_flash_methods_have_descriptions() -> None:
         for name, method in model["flash_methods"].items():
             assert name
             assert method.get("description")
+
+
+def test_oem_ftp_methods_have_ftp_target() -> None:
+    for model in list_models():
+        for name, method in model["flash_methods"].items():
+            if name == "oem-ftp":
+                assert "ftp_target" in method, (
+                    f"{model['id']}: oem-ftp method missing 'ftp_target' field"
+                )
+                assert method["ftp_target"].startswith("ras-"), (
+                    f"{model['id']}: ftp_target should be ras-0 or ras-1, got {method['ftp_target']}"
+                )
+
+
+def test_oem_http_methods_have_upload_endpoint() -> None:
+    for model in list_models():
+        for name, method in model["flash_methods"].items():
+            if name == "oem-http":
+                assert "upload_endpoint" in method, (
+                    f"{model['id']}: oem-http method missing 'upload_endpoint' field"
+                )

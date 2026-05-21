@@ -57,7 +57,13 @@
           "upload_endpoint": {"type": "string"},
           "command": {"type": "string"},
           "flash_time_seconds": {"type": "integer", "minimum": 0},
-          "silence_timeout": {"type": "integer", "minimum": 0}
+          "silence_timeout": {"type": "integer", "minimum": 0},
+          "ftp_target": {"type": "string", "description": "FTP upload target file (e.g. ras-0, ras-1)"},
+          "ftp_active_mode": {"type": "boolean", "description": "Use FTP active mode (PASV unsupported on some ZyNOS devices)"},
+          "stock_default_ip": {"type": "string", "description": "Default IP of stock firmware for OEM access"},
+          "stock_default_user": {"type": "string"},
+          "stock_default_password": {"type": "string"},
+          "tested_hardware": {"type": "object"}
         }
       }
     },
