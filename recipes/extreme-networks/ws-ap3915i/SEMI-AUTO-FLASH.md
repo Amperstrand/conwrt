@@ -171,24 +171,34 @@ The AP will flash and reboot. Wait ~2 minutes.
 
 ### Phase 5: Restore bootcmd to Flash Boot
 
-After the AP reboots into permanent OpenWrt, restore the bootcmd so it boots from flash instead of TFTP:
+After the AP reboots into permanent OpenWrt, restore the bootcmd so it boots from flash instead of TFTP.
 
+> **NOTE**: `fw_setenv` does NOT work on this device — there is no `/etc/fw_env.config` in the
+> ipq40xx base-files. Use one of the methods below instead.
+
+**Option A: U-Boot serial console** (recommended, requires serial cable)
+```
+# At U-Boot prompt (press 's' during boot, login admin/new2day):
+setenv boot_openwrt "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000"
+setenv bootcmd "run boot_openwrt || run boot_net"
+setenv serverip 192.168.1.2
+saveenv
+boot
+```
+
+**Option B: Raw MTD write from OpenWrt** (no serial needed, requires kmod-mtd-rw)
 ```bash
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@192.168.1.1
 
-# Restore boot command
-fw_setenv bootcmd "run boot_flash"
-fw_setenv MOSTRECENTKERNEL 0
-fw_setenv WATCHDOG_COUNT 0
+# Install MTD read-write bypass
+opkg update && opkg install kmod-mtd-rw
+insmod mtd-rw i_want_a_brick=1
 
-# Verify
-fw_printenv bootcmd
-# Should show: bootcmd=run boot_flash
-```
-
-**Note**: We intentionally keep `WATCHDOG_LIMIT=0` to prevent the 5-minute auto-reboot behavior. If you want the watchdog back for production use, also run:
-```bash
-fw_setenv WATCHDOG_LIMIT 3
+# Build and write correct config block (see no-serial-openwrt.md for config block builder)
+# Must include: boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000
+#               bootcmd=run boot_openwrt || run boot_net
+#               WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0, MOSTRECENTKERNEL=0
+# Write to: /dev/mtd0 (CFG1) and /dev/mtd8 (CFG2)
 ```
 
 ### Phase 6: Verify
@@ -206,9 +216,9 @@ wifi status
 ## Rollback (if something goes wrong)
 
 If the AP won't boot after Phase 4 and you have serial console access:
-1. Interrupt U-Boot at boot
-2. Set `bootcmd=run boot_flash` to boot from the old partition
-3. Or TFTP boot a recovery image
+1. Interrupt U-Boot at boot (press `s`)
+2. Set `setenv bootcmd "run boot_net"; saveenv; boot` to TFTP boot
+3. Or set `setenv boot_openwrt "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000"; setenv bootcmd "run boot_openwrt"; saveenv; boot`
 
 If you don't have serial and the AP is bricked:
 - You need a serial cable. The AP3915i has a serial header inside the case.

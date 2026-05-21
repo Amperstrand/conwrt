@@ -725,5 +725,17 @@ checks these variables to decide whether to enable the hardware watchdog. When b
 watchdog is likely skipped, allowing the OpenWrt FIT to boot without timeout.
 
 Our boot loop may have been caused by incorrect watchdog variables, not by `run boot_flash` being
-incompatible. However, David Bauer's `run boot_openwrt` remains the simpler approach (no stock
-script, no watchdog, no failover). See `SESSION-WRITEUP.md` for full analysis.
+incompatible. However, David Bauer's `run boot_openwrt` remains the better choice because:
+
+- **No dual-image failover exists with OpenWrt.** The DTS merged the stock PriImg and SecImg into
+  a single `firmware` partition. The stock script's dual-image failover tries SecImg, finds
+  garbage (it's now OpenWrt rootfs data), and fails. There is no second image to fall back to.
+  The failover is dead code. (Source: `platform.sh` — AP3915i falls to `default_do_upgrade`.)
+
+- **Fewer dependencies.** `boot_openwrt` is 3 commands. `boot_flash` depends on boot_kernel
+  script in BootPRI + watchdog vars + MOSTRECENTKERNEL being correct.
+
+- **Purpose-built for OpenWrt** by the commit author.
+
+See `SESSION-WRITEUP.md` for full analysis including why `run boot_flash`'s dual-image failover
+is physically impossible with OpenWrt's partition layout.

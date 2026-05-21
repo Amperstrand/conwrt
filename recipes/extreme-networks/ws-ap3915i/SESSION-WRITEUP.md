@@ -517,6 +517,40 @@ this specific unit. If WiFi doesn't work:
 - Verify ART partition: `hexdump -C /dev/mtd3 | head` (should show data, not all 0xFF)
 - Restore ART from backup if needed
 
+### No Dual-Image Support with OpenWrt Sysupgrade
+
+OpenWrt on the AP3915i is **single-image only**. There is no A/B partition failover.
+
+**Why**: The stock firmware had two kernel partitions (PriImg at 0x280000, SecImg at 0x1130000)
+and the stock `boot_kernel` script implemented dual-image failover between them. But OpenWrt's
+DTS merged both into a single `firmware` partition:
+
+```
+partition@280000 {
+    label = "firmware";
+    reg = <0x280000 0x1d60000>;   // 30MB — covers both old PriImg and SecImg
+};
+```
+
+The `platform_do_upgrade()` function in ipq40xx's `platform.sh` dispatches by board name.
+The AP3915i falls to the catch-all `*) default_do_upgrade "$1" ;;` — it writes directly to
+the single `firmware` MTD partition. There is no secondary partition to write a backup to.
+
+**What this means**: The stock `boot_kernel` script's dual-image failover (`run boot_flash`)
+is physically impossible with OpenWrt's partition layout. The space that was SecImg is now
+part of the single firmware partition and contains OpenWrt rootfs data, not a bootable image.
+The failover tries SecImg, finds garbage, fails, and the watchdog reboots.
+
+**Where dual-image does exist in OpenWrt**: Device-specific implementations for OpenMesh/
+PlasmaCloud (ipq40xx), Linksys (ramips, ipq806x), ZyXEL (ipq806x), and x86 EFI. All require
+two firmware partitions in the DTS, a custom `platform_do_upgrade_*()` function, and U-Boot
+support for partition selection. Adding this for the AP3915i would require splitting the DTS
+firmware partition, writing a custom upgrade function, and upstreaming it — non-trivial for
+a discontinued access point.
+
+**Source**: `target/linux/ipq40xx/base-files/lib/upgrade/platform.sh` in openwrt/openwrt —
+AP3915i is not listed in any case branch and falls to `default_do_upgrade`.
+
 ### Config Block Builder
 
 ```python
@@ -646,13 +680,22 @@ watchdog setup is likely skipped, and the FIT image can boot without the watchdo
 not by `run boot_flash` being fundamentally incompatible with OpenWrt. We wrote `bootcmd=run boot_flash`
 but may not have properly set `WATCHDOG_COUNT=0` and `WATCHDOG_LIMIT=0`.
 
-That said, David Bauer's `run boot_openwrt` is still the simpler and more reliable approach — it
-bypasses the entire stock boot script (no watchdog, no dual-image failover, no `nboot`). The
-`run boot_flash` approach depends on the stock script's watchdog handling being correct.
+That said, David Bauer's `run boot_openwrt` is still the better choice for this device:
 
-**Recommendation**: Use `run boot_openwrt` (David Bauer's command) for reliability. If that fails
-for any reason, `run boot_flash` with `WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0` is a valid fallback
-that PR #13370's author confirmed working.
+1. **No dual-image failover exists.** OpenWrt's DTS merged PriImg and SecImg into a single
+   `firmware` partition. The stock `boot_kernel` script's failover tries SecImg, finds garbage,
+   and fails. There is no second image to fall back to — the failover is dead code.
+
+2. **No external dependencies.** `boot_openwrt` is three fixed commands (probe, read, boot).
+   `boot_flash` depends on the boot_kernel script surviving in BootPRI, plus watchdog vars
+   being correct, plus MOSTRECENTKERNEL being set. More moving parts = more failure modes.
+
+3. **Purpose-built.** David Bauer wrote `boot_openwrt` specifically for this device running
+   OpenWrt. `boot_flash` works as a side effect when vars are right, not by design.
+
+**Recommendation**: Use `run boot_openwrt` with `|| run boot_net` TFTP fallback. If that
+fails, `run boot_flash` with `WATCHDOG_COUNT=0, WATCHDOG_LIMIT=0` is a valid fallback per
+PR #13370.
 
 ### fw_setenv Limitation (Verified from Source)
 
