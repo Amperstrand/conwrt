@@ -25,6 +25,16 @@ from flash.oem_handlers import (
 from model_loader import load_model
 
 
+def _import_conwrt_handlers():
+    import importlib
+    mod = importlib.import_module("conwrt")
+    return (
+        mod._handle_oem_login,
+        mod._handle_oem_prepare,
+        mod._handle_oem_uploading,
+    )
+
+
 class TestOemMethodSelection(TestCase):
     """Test that oem-http and oem-ftp are selected correctly."""
 
@@ -475,3 +485,149 @@ class TestInstallMtdWrite(TestCase):
             last_call_args = " ".join(mock_run.call_args_list[-1][0][0])
             self.assertNotIn("loader.bin", last_call_args)
             self.assertIn("mtd -r write /tmp/sysupgrade.bin firmware", last_call_args)
+
+
+class TestOemHttpStateTransitions(TestCase):
+    def setUp(self):
+        self._handle_oem_login, self._handle_oem_prepare, self._handle_oem_uploading = _import_conwrt_handlers()
+
+    @patch("flash.oem_handlers.subprocess.run")
+    @patch("conwrt.load_model")
+    def test_login_success_transitions_to_uploading(self, mock_load_model, mock_run):
+        mock_load_model.return_value = {
+            "stock_default_creds": {"username": "admin", "password": "1234"}
+        }
+        mock_run.return_value = _mock_run(
+            stdout="AABBCCDD11223344\n#HttpOnly_192.168.1.1\tFALSE\t/\tTRUE\t0\tXSSID\tabc\nOK\nXSSID\tabc\n"
+        )
+
+        profile = build_profile_from_model("zyxel-gs1900-8hp-a1", flash_method="oem-http")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_LOGIN
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+        ctx.oem_state = {}
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_login(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.OEM_UPLOADING)
+        self.assertIn("cookie", ctx.oem_state)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    @patch("conwrt.load_model")
+    def test_login_failure_transitions_to_failed(self, mock_load_model, mock_run):
+        mock_load_model.return_value = {
+            "stock_default_creds": {"username": "admin", "password": "1234"}
+        }
+        mock_run.return_value = _mock_run(stdout="Login failed", returncode=1)
+
+        profile = build_profile_from_model("zyxel-gs1900-8hp-a1", flash_method="oem-http")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_LOGIN
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+        ctx.oem_state = {}
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_login(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.FAILED)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    def test_uploading_success_transitions_to_rebooting(self, mock_size, mock_run):
+        mock_run.return_value = _mock_run(stdout="Writing image to FLASH")
+        profile = build_profile_from_model("zyxel-gs1900-8hp-a1", flash_method="oem-http")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_UPLOADING
+        ctx.oem_state = {"cookie": "XSSID=abc"}
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_uploading(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.OEM_REBOOTING)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    def test_uploading_failure_transitions_to_failed(self, mock_size, mock_run):
+        mock_run.return_value = _mock_run(stderr="Connection refused", returncode=7)
+        profile = build_profile_from_model("zyxel-gs1900-8hp-a1", flash_method="oem-http")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_UPLOADING
+        ctx.oem_state = {"cookie": "XSSID=abc"}
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_uploading(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.FAILED)
+
+
+class TestOemFtpStateTransitions(TestCase):
+    def setUp(self):
+        self._handle_oem_login, self._handle_oem_prepare, self._handle_oem_uploading = _import_conwrt_handlers()
+
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_success_transitions_to_prepare(self, mock_run):
+        mock_run.return_value = _mock_run(stdout="200")
+
+        profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_LOGIN
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+        ctx.oem_state = {}
+
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_login(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.OEM_PREPARE)
+        self.assertIn("cookie_file", ctx.oem_state)
+
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_prepare_success_transitions_to_uploading(self, mock_run, mock_sleep):
+        mock_run.return_value = _mock_run(stdout="200")
+
+        profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_PREPARE
+        ctx.oem_state = {"cookie_file": "/tmp/cookies.txt"}
+
+        self._handle_oem_prepare(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.OEM_UPLOADING)
+
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_prepare_failure_transitions_to_failed(self, mock_run, mock_sleep):
+        mock_run.return_value = _mock_run(stdout="500", returncode=1)
+
+        profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_PREPARE
+        ctx.oem_state = {"cookie_file": "/tmp/cookies.txt"}
+
+        self._handle_oem_prepare(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.FAILED)
+
+    @patch("flash.oem_handlers.subprocess.run")
+    @patch("flash.oem_handlers.os.path.getsize", return_value=5*1024*1024)
+    def test_uploading_success_transitions_to_rebooting(self, mock_size, mock_run):
+        mock_run.return_value = _mock_run(stdout="", stderr="226 Transfer complete")
+        profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
+        ctx = MagicMock()
+        ctx.profile = profile
+        ctx.state = State.OEM_UPLOADING
+        ctx.oem_state = {"password": "1234"}
+        ctx.initramfs_path = "/tmp/initramfs.bin"
+
+        with patch("os.path.isfile", return_value=True):
+            self._handle_oem_uploading(ctx, MagicMock())
+
+        self.assertEqual(ctx.state, State.OEM_REBOOTING)
