@@ -1,0 +1,17 @@
+gpiochip0: GPIOs 0-19, parent: platform/1070000000800.gpio-controller, octeon-gpio:
+ gpio-0   (                    |sysfs               ) in  lo 
+ gpio-1   (                    |sysfs               ) in  lo 
+ gpio-2   (                    |sysfs               ) out lo 
+ gpio-3   (                    |sysfs               ) in  lo 
+ gpio-4   (                    |sysfs               ) out hi 
+ gpio-5   (                    |sysfs               ) in  lo 
+ gpio-6   (                    |sysfs               ) out lo 
+ gpio-7   (                    |sysfs               ) in  lo 
+ gpio-8   (                    |sysfs               ) in  hi 
+ gpio-9   (                    |sysfs               ) in  lo 
+ gpio-10  (                    |sysfs               ) out lo 
+ gpio-11  (                    |reset               ) in  hi ACTIVE LOW
+ gpio-12  (                    |mod-def0            ) in  hi ACTIVE LOW
+ gpio-15  (                    |white:power         ) out lo 
+ gpio-16  (                    |sysfs               ) out lo 
+ gpio-17  (                    |blue:power          ) out hi 

@@ -1,0 +1,3 @@
+gpio_button_hotplug    16384  0 
+gpio_reg               12288  0 
+leds_gpio              12288  0 

@@ -1,0 +1,16 @@
+Pin  0: value=0 direction=in active_low=0
+Pin  1: value=0 direction=in active_low=0
+Pin  2: value=0 direction=out active_low=0
+Pin  3: value=0 direction=in active_low=0
+Pin  4: value=1 direction=out active_low=0
+Pin  5: value=0 direction=in active_low=0
+Pin  6: value=0 direction=out active_low=0
+Pin  7: value=0 direction=in active_low=0
+Pin  8: value=1 direction=in active_low=0
+Pin  9: value=0 direction=in active_low=0
+Pin 10: value=0 direction=out active_low=0
+Pin 13: value=1 direction=in
+Pin 14: value=1 direction=in
+Pin 16: value=0 direction=out active_low=0
+Pin 18: value=1 direction=in
+Pin 19: value=0 direction=in

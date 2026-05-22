@@ -26,6 +26,9 @@ node_modules/
 wireguard/
 *.wg*.conf
 
+# --- IDE ---
+.cursor/
+
 # --- OpenCode / tooling workspaces ---
 .opencode/
 .playwright-mcp/

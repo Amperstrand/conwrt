@@ -1,0 +1,18 @@
+ISL28022 @ 0x3F - W0-2 Zero Load Test
+I2C Bus: 1
+Device: ISL28022 1 (First Channel)
+Date: 2026-05-20
+
+Readings collected via i2cget (word read, bytes swapped due to big-endian MIPS)
+
+| Register | Address | Raw Value | Expected | Notes |
+|----------|---------|-----------|----------|-------|
+| Config | 0x00 | 0x1f79 | 0x1F79 | Correct, indicates continuous conversion mode |
+| Shunt Voltage | 0x01 | 0x5701 | ~0 | LSB = 0.5µA, should be near zero with no load |
+| Bus Voltage | 0x02 | 0x765f | 0x725F-0x765F (29-30V) | Correct, within expected range [0x7000, 0x7800] |
+| Power | 0x03 | 0x0000 | >0 | Power calc disabled (ADC bit 3 = 0) |
+| Current | 0x04 | 0x0000 | ~0 | Current LSB = 1mA, confirms zero load |
+| Calibration | 0x05 | 0x1000 | 0x1000 | Expected gain calibration value |
+| Mask/Enable | 0x07 | 0x00ff | N/A | All interrupts masked (FF = 11111111) |
+
+Device responds correctly on I2C bus 1.

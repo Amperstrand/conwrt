@@ -1,0 +1,1 @@
+ root=/dev/mmcblk0p2 rootdelay=10 rw rootsqimg=squashfs.img rootsqwdir=w mtdparts=spi32766.0:3072k(boot0),1024k(dummy),64k(eeprom) root=/dev/mmcblk0p2 rootfstype=squashfs,ext4 rootwait console=ttyS0,115200

@@ -1,0 +1,266 @@
+/sys/class/net/lan0/:
+drwxr-xr-x    4 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+-rw-r--r--    1 root     root          4096 May 20 10:09 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:05
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+
+/sys/class/net/lan1/:
+drwxr-xr-x    5 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+drwxr-xr-x    2 root     root             0 May 20 10:09 brport
+-rw-r--r--    1 root     root          4096 May 20 08:01 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+lrwxrwxrwx    1 root     root             0 May 20 10:09 master -> ../../../../../virtual/net/br-lan
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:06
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 08:01 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+lrwxrwxrwx    1 root     root             0 May 20 10:09 upper_br-lan -> ../../../../../virtual/net/br-lan
+
+/sys/class/net/lan2/:
+drwxr-xr-x    5 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+drwxr-xr-x    2 root     root             0 May 20 10:09 brport
+-rw-r--r--    1 root     root          4096 May 20 08:01 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+lrwxrwxrwx    1 root     root             0 May 20 10:09 master -> ../../../../../virtual/net/br-lan
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:07
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 08:01 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+lrwxrwxrwx    1 root     root             0 May 20 10:09 upper_br-lan -> ../../../../../virtual/net/br-lan
+
+/sys/class/net/lan3/:
+drwxr-xr-x    5 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+drwxr-xr-x    2 root     root             0 May 20 10:09 brport
+-rw-r--r--    1 root     root          4096 May 20 10:09 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+lrwxrwxrwx    1 root     root             0 May 20 10:09 master -> ../../../../../virtual/net/br-lan
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:08
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+lrwxrwxrwx    1 root     root             0 May 20 10:09 upper_br-lan -> ../../../../../virtual/net/br-lan
+
+/sys/class/net/lan4/:
+drwxr-xr-x    5 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+drwxr-xr-x    2 root     root             0 May 20 10:09 brport
+-rw-r--r--    1 root     root          4096 May 20 10:09 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+lrwxrwxrwx    1 root     root             0 May 20 10:09 master -> ../../../../../virtual/net/br-lan
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:09
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+lrwxrwxrwx    1 root     root             0 May 20 10:09 upper_br-lan -> ../../../../../virtual/net/br-lan
+
+/sys/class/net/lan5/:
+drwxr-xr-x    5 root     root             0 Jan  1  1970 .
+drwxr-xr-x   12 root     root             0 Jan  1  1970 ..
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_assign_type
+-r--r--r--    1 root     root          4096 May 20 10:09 addr_len
+-r--r--r--    1 root     root          4096 May 20 10:09 address
+-r--r--r--    1 root     root          4096 May 20 10:09 broadcast
+drwxr-xr-x    2 root     root             0 May 20 10:09 brport
+-rw-r--r--    1 root     root          4096 May 20 10:09 carrier
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_changes
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_down_count
+-r--r--r--    1 root     root          4096 May 20 10:09 carrier_up_count
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_id
+-r--r--r--    1 root     root          4096 May 20 10:09 dev_port
+lrwxrwxrwx    1 root     root             0 May 20 07:41 device -> ../../../11800a0000000.pip
+-r--r--r--    1 root     root          4096 May 20 10:09 dormant
+-r--r--r--    1 root     root          4096 May 20 10:09 duplex
+-rw-r--r--    1 root     root          4096 May 20 10:09 flags
+-rw-r--r--    1 root     root          4096 May 20 10:09 gro_flush_timeout
+-rw-r--r--    1 root     root          4096 May 20 10:09 ifalias
+-r--r--r--    1 root     root          4096 May 20 10:09 ifindex
+-r--r--r--    1 root     root          4096 May 20 07:41 iflink
+-r--r--r--    1 root     root          4096 May 20 10:09 link_mode
+lrwxrwxrwx    1 root     root             0 May 20 10:09 master -> ../../../../../virtual/net/br-lan
+-rw-r--r--    1 root     root          4096 May 20 10:09 mtu
+-r--r--r--    1 root     root          4096 May 20 10:09 name_assign_type
+-rw-r--r--    1 root     root          4096 May 20 10:09 napi_defer_hard_irqs
+-rw-r--r--    1 root     root          4096 May 20 10:09 netdev_group
+-r--r--r--    1 root     root          4096 May 20 10:09 operstate
+lrwxrwxrwx    1 root     root             0 May 20 10:09 phydev -> ../../../1180000001800.mdio/mdio_bus/8001180000001800/8001180000001800:04
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_id
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_port_name
+-r--r--r--    1 root     root          4096 May 20 10:09 phys_switch_id
+-rw-r--r--    1 root     root          4096 May 20 10:09 proto_down
+drwxr-xr-x    4 root     root             0 May 20 07:41 queues
+-r--r--r--    1 root     root          4096 May 20 10:09 speed
+drwxr-xr-x    2 root     root             0 May 20 10:09 statistics
+lrwxrwxrwx    1 root     root             0 May 20 10:09 subsystem -> ../../../../../../class/net
+-r--r--r--    1 root     root          4096 May 20 10:09 testing
+-rw-r--r--    1 root     root          4096 May 20 10:09 threaded
+-rw-r--r--    1 root     root          4096 May 20 10:09 tx_queue_len
+-r--r--r--    1 root     root          4096 May 20 10:09 type
+-rw-r--r--    1 root     root          4096 May 20 10:09 uevent
+lrwxrwxrwx    1 root     root             0 May 20 10:09 upper_br-lan -> ../../../../../virtual/net/br-lan

@@ -1,0 +1,240 @@
+=== GPIO 0 ===
+GPIO 0 BIT_CFG: 0x0000000000000001
+  tx_oe      = 1 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x100
+
+=== GPIO 1 ===
+GPIO 1 BIT_CFG: 0x0000000000000001
+  tx_oe      = 1 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x108
+
+=== GPIO 2 ===
+GPIO 2 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x110
+
+=== GPIO 3 ===
+GPIO 3 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x118
+
+=== GPIO 4 ===
+GPIO 4 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x120
+
+=== GPIO 5 ===
+GPIO 5 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x128
+
+=== GPIO 6 ===
+GPIO 6 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x130
+
+=== GPIO 7 ===
+GPIO 7 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x138
+
+=== GPIO 8 ===
+GPIO 8 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x140
+
+=== GPIO 9 ===
+GPIO 9 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x148
+
+=== GPIO 10 ===
+GPIO 10 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x150
+
+=== GPIO 11 ===
+GPIO 11 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x158
+
+=== GPIO 12 ===
+GPIO 12 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x160
+
+=== GPIO 13 ===
+GPIO 13 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x168
+
+=== GPIO 14 ===
+GPIO 14 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x170
+
+=== GPIO 15 ===
+GPIO 15 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x178
+
+=== GPIO 16 ===
+GPIO 16 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x180
+
+=== GPIO 17 ===
+GPIO 17 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x188
+
+=== GPIO 18 ===
+GPIO 18 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x190
+
+=== GPIO 19 ===
+GPIO 19 BIT_CFG: 0x0000000000000000
+  tx_oe      = 0 (output enable)
+  pin_xor    = 0
+  int_en     = 0
+  int_type   = 0 (0=edge, 1=level)
+  int_edge   = 0 (0=rising, 1=falling)
+  int_xor    = 0
+  output_sel = 0 (0=GPIO, 1-3=alt)
+  fil_sel    = 0
+  offset     = 0x198
+

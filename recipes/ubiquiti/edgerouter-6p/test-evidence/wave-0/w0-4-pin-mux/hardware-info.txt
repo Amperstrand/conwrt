@@ -1,0 +1,19 @@
+/PROC/IOMEM:
+1070000000800-10700000008ff : 1070000000800.gpio-controller gpio-controller@1070000000800
+
+DEVICE TREE GPIO NODE:
+  compatible: cavium,octeon-3860-gpio
+  gpio-controller: (present)
+  reg: addr=0x1070000000800 size=0x100 (256 bytes)
+
+KERNEL:
+Linux version 6.12.87 (mips64-openwrt-linux-musl-gcc 14.3.0) #0 SMP Wed May 13 22:42:09 2026
+Machine: UBNT_E300 (CN7030p1.2-1000-AAP) - Cavium Octeon III
+
+/dev/mem: DISABLED (kernel compiled without CONFIG_DEVMEM)
+/proc/kcore: NOT PRESENT
+/proc/kallsyms: RESTRICTED (no readable symbols)
+
+GPIO CHIP:
+gpiochip0 [octeon-gpio] (20 lines)
+driver: gpio-octeon (built-in)

@@ -1,0 +1,75 @@
+=== FULL INTEGRATION TEST EVIDENCE ===
+Date: Wed May 20 15:29:04 GMT 2026
+Kernel: 6.12.87
+Module: 
+
+--- insmod + sysfs + debugfs ---
+insmod exit: 0
+[27701.837848] er6p-poe: port=4 role=1 gpio=9 OFF
+[27701.842414] er6p-poe: unloading driver
+[27720.570239] er6p-poe: loading driver (ports: 3 allowed)
+[27720.575489] er6p-poe: GPIO base mapped at 00000000b9894c2d (phys 0x1070000000800)
+[27720.583048] er6p-poe: port=1 role=0 gpio=4 OFF
+[27720.587505] er6p-poe: port=1 role=1 gpio=3 OFF
+[27720.591952] er6p-poe: port=3 role=0 gpio=10 OFF
+[27720.596492] er6p-poe: port=3 role=1 gpio=7 OFF
+[27720.600938] er6p-poe: port=4 role=0 gpio=16 OFF
+[27720.605472] er6p-poe: port=4 role=1 gpio=9 OFF
+[27720.609955] er6p-poe: created sysfs entries for eth1
+[27720.614932] er6p-poe: created sysfs entries for eth3
+[27720.619915] er6p-poe: created sysfs entries for eth4
+[27720.624910] er6p-poe: debugfs entries created
+[27720.629276] er6p-poe: driver loaded successfully
+
+eth1
+eth3
+eth4
+
+0
+off
+0
+off
+0
+off
+
+GPIO registers:
+  RX_DAT:   0x0000000000021800
+  TX_SET:   0x0000000000020000
+  TX_CLEAR: 0x0000000000020000
+
+Per-port state:
+  port 1 (eth1): enabled=0 mode=off
+  port 3 (eth3): enabled=0 mode=off
+  port 4 (eth4): enabled=0 mode=off
+
+--- enable eth1 ---
+0x3F shunt baseline: 0xe100
+0x40 shunt baseline: 0xde00
+enable: 1
+mode: 24v
+0x3F shunt active: 0x1701
+0x40 shunt active: 0x2501
+[27720.629276] er6p-poe: driver loaded successfully
+[27720.671585] er6p-poe: port=1 role=1 gpio=3 OFF
+[27720.676056] er6p-poe: port=1 role=0 gpio=4 OFF
+[27720.680589] er6p-poe: port=1 role=0 gpio=4 ON
+[27720.684954] er6p-poe: eth1 PoE enabled via sysfs
+
+--- disable eth1 ---
+enable: 0
+mode: off
+0x3F shunt off: 0xe000
+0x40 shunt off: 0xe400
+
+--- rmmod ---
+rmmod exit: 0
+[27723.710880] er6p-poe: port=1 role=0 gpio=4 OFF
+[27723.715351] er6p-poe: port=1 role=1 gpio=3 OFF
+[27723.719831] er6p-poe: eth1 PoE disabled via sysfs
+[27725.769224] er6p-poe: port=1 role=0 gpio=4 OFF
+[27725.773699] er6p-poe: port=1 role=1 gpio=3 OFF
+[27725.778189] er6p-poe: port=3 role=0 gpio=10 OFF
+[27725.782725] er6p-poe: port=3 role=1 gpio=7 OFF
+[27725.787182] er6p-poe: port=4 role=0 gpio=16 OFF
+[27725.791717] er6p-poe: port=4 role=1 gpio=9 OFF
+[27725.796233] er6p-poe: unloading driver

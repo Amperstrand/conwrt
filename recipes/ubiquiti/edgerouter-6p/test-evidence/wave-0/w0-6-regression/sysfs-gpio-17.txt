@@ -1,0 +1,1 @@
+ gpio-17  (                    |blue:power          ) out hi 

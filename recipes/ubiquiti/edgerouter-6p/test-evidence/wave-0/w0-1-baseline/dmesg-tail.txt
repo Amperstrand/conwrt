@@ -1,0 +1,200 @@
+[    0.426579] clocksource: OCTEON_CVMCOUNT: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.437677] Calibrating delay loop (skipped) preset value.. 2000.00 BogoMIPS (lpj=10000000)
+[    0.445924] pid_max: default: 32768 minimum: 301
+[    0.453674] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.460925] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.473465] rcu: Hierarchical SRCU implementation.
+[    0.478099] rcu: 	Max phase no-delay instances is 1000.
+[    0.483922] smp: Bringing up secondary CPUs ...
+[    0.488708] SMP: Booting CPU01 (CoreId  1)...
+[    0.493201] CPU1 revision is: 000d9602 (Cavium Octeon III)
+[    0.493214] FPU revision is: 00739600
+[    0.493792] SMP: Booting CPU02 (CoreId  2)...
+[    0.507406] CPU2 revision is: 000d9602 (Cavium Octeon III)
+[    0.507419] FPU revision is: 00739600
+[    0.507974] SMP: Booting CPU03 (CoreId  3)...
+[    0.521573] CPU3 revision is: 000d9602 (Cavium Octeon III)
+[    0.521585] FPU revision is: 00739600
+[    0.521700] smp: Brought up 1 node, 4 CPUs
+[    0.535391] Memory: 968828K/1004696K available (9322K kernel code, 842K rwdata, 1592K rodata, 1348K init, 346K bss, 32040K reserved, 0K cma-reserved)
+[    0.552773] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+[    0.562484] futex hash table entries: 1024 (order: 5, 131072 bytes, linear)
+[    0.573010] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.579271] thermal_sys: Registered thermal governor 'step_wise'
+[    0.583335] PCIe: Initializing port 0
+[    0.596174] PCIe: BIST2 FAILED for port 0 (0x0000000000000003)
+[    2.601854] PCIe: Link timeout on port 0, probably the slot is empty
+[    2.608207] PCIe: Initializing port 1
+[    2.615188] PCIe: BIST FAILED for port 1 (0xffffffffffffffff)
+[    4.628026] PCIe: Link timeout on port 1, probably the slot is empty
+[    4.654843] SCSI subsystem initialized
+[    4.658612] libata version 3.00 loaded.
+[    4.658835] usbcore: registered new interface driver usbfs
+[    4.664186] usbcore: registered new interface driver hub
+[    4.669525] usbcore: registered new device driver usb
+[    4.674528] EDAC MC: Ver: 3.0.0
+[    4.679080] PCI host bridge to bus 0000:00
+[    4.683048] pci_bus 0000:00: root bus resource [mem 0x1000000000000]
+[    4.689349] pci_bus 0000:00: root bus resource [io  0x0000]
+[    4.694915] pci_bus 0000:00: No busn resource found for root bus, will use [bus 00-ff]
+[    4.703861] pci_bus 0000:00: busn_res: [bus 00-ff] end is updated to 00
+[    4.710741] clocksource: Switched to clocksource OCTEON_CVMCOUNT
+[    4.720166] NET: Registered PF_INET protocol family
+[    4.725088] IP idents hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    4.734928] tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes, linear)
+[    4.743157] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    4.750863] TCP established hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    4.758652] TCP bind hash table entries: 8192 (order: 6, 262144 bytes, linear)
+[    4.765980] TCP: Hash tables configured (established 8192 bind 8192)
+[    4.772528] MPTCP token hash table entries: 1024 (order: 3, 24576 bytes, linear)
+[    4.779930] UDP hash table entries: 512 (order: 2, 16384 bytes, linear)
+[    4.786427] UDP-Lite hash table entries: 512 (order: 2, 16384 bytes, linear)
+[    4.793977] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    4.799516] PCI: CLS 0 bytes, default 128
+[    4.804966] workingset: timestamp_bits=46 max_order=18 bucket_order=0
+[    4.821573] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    4.828147] jffs2: version 2.2 (NAND) (SUMMARY) (LZMA) (RTIME) (CMODE_PRIORITY) (c) 2001-2006 Red Hat, Inc.
+[    4.842550] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    4.850547] gpio gpiochip0: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    4.859481] octeon_gpio 1070000000800.gpio-controller: OCTEON GPIO driver probed.
+[    4.867296] Serial: 8250/16550 driver, 16 ports, IRQ sharing enabled
+[    4.876391] printk: legacy console [ttyS0] disabled
+[    4.881464] 1180000000800.serial: ttyS0 at MMIO 0x1180000000800 (irq = 34, base_baud = 25000000) is a OCTEON
+[    4.891195] printk: legacy console [ttyS0] enabled
+[    4.900691] printk: legacy bootconsole [early0] disabled
+[    4.911864] octeon_rng octeon_rng: Octeon Random Number Generator
+[    4.911912] random: crng init done
+[    4.926937] loop: module loaded
+[    4.930343] Driver 'pata_octeon_cf' needs updating - please use bus_type methods
+[    4.938995] 3 fixed-partitions partitions found on MTD device spi0.0
+[    4.945399] Creating 3 MTD partitions on "spi0.0":
+[    4.950195] 0x000000000000-0x000000300000 : "boot0"
+[    4.955738] 0x000000300000-0x000000400000 : "dummy"
+[    4.961027] 0x000000400000-0x000000410000 : "eeprom"
+[    4.967491] spi-octeon 1070000001000.spi: OCTEON SPI bus driver
+[    4.979145] mdio_octeon 1180000001800.mdio: Probed
+[    4.984741] usbcore: registered new interface driver usb-storage
+[    4.991369] at24 0-0050: supply vcc not found, using dummy regulator
+[    5.024064] at24 0-0051: supply vcc not found, using dummy regulator
+[    5.053940] i2c-octeon 1180000001000.i2c: probed
+[    5.058860] i2c-octeon 1180000001200.i2c: probed
+[    5.063677] octeon_wdt: Initial granularity 5 Sec
+[    5.069358] EDAC DEVICE0: Giving out device to module octeon-cpu controller cache: DEV octeon_pc_edac (INTERRUPT)
+[    5.079839] EDAC DEVICE1: Giving out device to module octeon-l2c controller octeon_l2c_err: DEV octeon_l2c_edac (POLLED)
+[    5.090886] octeon_lmc_edac octeon_lmc_edac.0: Disabled (ECC not enabled)
+[    5.099845] Interface 0 has 4 ports (SGMII)
+[    5.104122] Interface 1 has 4 ports (SGMII)
+[    5.109145] Interface 3 has 4 ports (LOOP)
+[    5.119748] NET: Registered PF_INET6 protocol family
+[    5.126850] Segment Routing with IPv6
+[    5.130584] In-situ OAM (IOAM) with IPv6
+[    5.134640] NET: Registered PF_PACKET protocol family
+[    5.139740] bridge: filtering via arp/ip/ip6tables is no longer available by default. Update your scripts to load br_netfilter if you need this.
+[    5.152979] 8021q: 802.1Q VLAN Support v1.8
+[    5.174405] OF: fdt: not creating '/sys/firmware/fdt': CRC check failed
+[    5.181330] Waiting 10 sec before mounting root device...
+[   14.519147] mmc0: new DDR MMC card at address 0001
+[   14.524523] mmcblk0: mmc0:0001 MMC4GB 3.64 GiB
+[   14.530164]  mmcblk0: p1 p2
+[   14.533375] mmcblk0boot0: mmc0:0001 MMC4GB 2.00 MiB
+[   14.538739] mmcblk0boot1: mmc0:0001 MMC4GB 2.00 MiB
+[   14.544125] mmcblk0rpmb: mmc0:0001 MMC4GB 512 KiB, chardev (250:0)
+[   15.715793] VFS: Mounted root (squashfs filesystem) readonly on device 179:2.
+[   15.723546] Freeing unused kernel image (initmem) memory: 1348K
+[   15.729488] This architecture does not have kernel memory protection.
+[   15.735974] Run /sbin/init as init process
+[   15.740073]   with arguments:
+[   15.740078]     /sbin/init
+[   15.740083]   with environment:
+[   15.740087]     HOME=/
+[   15.740092]     TERM=linux
+[   15.740097]     rootsqimg=squashfs.img
+[   15.740102]     rootsqwdir=w
+[   15.986923] init: Console is alive
+[   15.990543] init: - watchdog -
+[   16.248229] kmodloader: loading kernel modules from /etc/modules-boot.d/*
+[   16.282719] gpio_button_hotplug: loading out-of-tree module taints kernel.
+[   16.297962] xhci-hcd xhci-hcd.0.auto: xHCI Host Controller
+[   16.303541] xhci-hcd xhci-hcd.0.auto: new USB bus registered, assigned bus number 1
+[   16.311334] xhci-hcd xhci-hcd.0.auto: hcc params 0x0220f06d hci version 0x100 quirks 0x0000808002000010
+[   16.320783] xhci-hcd xhci-hcd.0.auto: irq 28, io mem 0x1680000000000
+[   16.327295] xhci-hcd xhci-hcd.0.auto: xHCI Host Controller
+[   16.332812] xhci-hcd xhci-hcd.0.auto: new USB bus registered, assigned bus number 2
+[   16.340478] xhci-hcd xhci-hcd.0.auto: Host supports USB 3.0 SuperSpeed
+[   16.347675] hub 1-0:1.0: USB hub found
+[   16.351512] hub 1-0:1.0: 1 port detected
+[   16.355931] usb usb2: We don't know the algorithms for LPM for this host, disabling LPM.
+[   16.364804] hub 2-0:1.0: USB hub found
+[   16.368674] hub 2-0:1.0: 1 port detected
+[   16.374724] usbcore: registered new interface driver uas
+[   16.380373] kmodloader: done loading kernel modules from /etc/modules-boot.d/*
+[   16.396877] init: - preinit -
+[   21.291267] loop0: detected capacity change from 0 to 7129088
+[   21.350758] loop0: detected capacity change from 7129088 to 7122048
+[   21.541668] F2FS-fs (loop0): Mounted with checkpoint version = 4b857e22
+[   21.549994] mount_root: switching to f2fs overlay
+[   21.556080] overlayfs: null uuid detected in lower fs '/', falling back to xino=off,index=off,nfs_export=off.
+[   21.614294] FAT-fs (mmcblk0p1): Volume was not properly unmounted. Some data may be corrupt. Please run fsck.
+[   21.631116] urandom-seed: Seeding with /etc/urandom.seed
+[   21.692724] procd: - early -
+[   21.695757] procd: - watchdog -
+[   22.252876] procd: - watchdog -
+[   22.256790] procd: - ubus -
+[   22.412164] procd: - init -
+[   22.875019] kmodloader: loading kernel modules from /etc/modules.d/*
+[   22.907384] i2c_dev: i2c /dev entries driver
+[   22.929618] sfp sfp: Host maximum power 1.0W
+[   22.933980] sfp sfp: No tx_disable pin: SFP modules will always be emitting.
+[   22.967374] PPP generic driver version 2.4.2
+[   22.973046] NET: Registered PF_PPPOX protocol family
+[   22.981759] kmodloader: done loading kernel modules from /etc/modules.d/*
+[   23.229739] urngd: v1.0.2 started.
+[   27.093502] br-lan: port 1(lan1) entered blocking state
+[   27.098758] br-lan: port 1(lan1) entered disabled state
+[   27.104109] octeon_ethernet 11800a0000000.pip lan1: entered allmulticast mode
+[   27.111591] octeon_ethernet 11800a0000000.pip lan1: entered promiscuous mode
+[   27.130116] br-lan: port 2(lan2) entered blocking state
+[   27.135456] br-lan: port 2(lan2) entered disabled state
+[   27.140785] octeon_ethernet 11800a0000000.pip lan2: entered allmulticast mode
+[   27.148234] octeon_ethernet 11800a0000000.pip lan2: entered promiscuous mode
+[   27.155571] br-lan: port 2(lan2) entered blocking state
+[   27.160856] br-lan: port 2(lan2) entered forwarding state
+[   27.172471] br-lan: port 3(lan3) entered blocking state
+[   27.177730] br-lan: port 3(lan3) entered disabled state
+[   27.183057] octeon_ethernet 11800a0000000.pip lan3: entered allmulticast mode
+[   27.190484] octeon_ethernet 11800a0000000.pip lan3: entered promiscuous mode
+[   27.197839] br-lan: port 3(lan3) entered blocking state
+[   27.203141] br-lan: port 3(lan3) entered forwarding state
+[   27.213984] br-lan: port 4(lan4) entered blocking state
+[   27.219245] br-lan: port 4(lan4) entered disabled state
+[   27.224611] octeon_ethernet 11800a0000000.pip lan4: entered allmulticast mode
+[   27.232138] octeon_ethernet 11800a0000000.pip lan4: entered promiscuous mode
+[   27.239397] br-lan: port 4(lan4) entered blocking state
+[   27.244690] br-lan: port 4(lan4) entered forwarding state
+[   27.255485] br-lan: port 5(lan5) entered blocking state
+[   27.260771] br-lan: port 5(lan5) entered disabled state
+[   27.266038] octeon_ethernet 11800a0000000.pip lan5: entered allmulticast mode
+[   27.273527] octeon_ethernet 11800a0000000.pip lan5: entered promiscuous mode
+[   27.280799] br-lan: port 5(lan5) entered blocking state
+[   27.286055] br-lan: port 5(lan5) entered forwarding state
+[   27.333084] lan0: 1000 Mbps Full duplex, port 1, queue 1
+[   28.111205] br-lan: port 2(lan2) entered disabled state
+[   28.117112] br-lan: port 3(lan3) entered disabled state
+[   28.123363] br-lan: port 4(lan4) entered disabled state
+[   28.129257] br-lan: port 5(lan5) entered disabled state
+[  418.061806] gpio-reg: mapped GPIO at 0x1070000000800 -> 00000000b9894c2d
+[  755.146740] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  755.152114] br-lan: port 1(lan1) entered blocking state
+[  755.157356] br-lan: port 1(lan1) entered forwarding state
+[  766.667491] lan1: Link down
+[  766.670486] br-lan: port 1(lan1) entered disabled state
+[  768.827620] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  768.832994] br-lan: port 1(lan1) entered blocking state
+[  768.838239] br-lan: port 1(lan1) entered forwarding state
+[  776.188123] lan1: Link down
+[  776.191116] br-lan: port 1(lan1) entered disabled state
+[  793.949072] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  793.954446] br-lan: port 1(lan1) entered blocking state
+[  793.959688] br-lan: port 1(lan1) entered forwarding state
+[ 8813.721669] gpio-reg: unloaded
+[ 8813.770271] gpio-reg: v2 - mapped GPIO at 0x1070000000800 -> 00000000b9894c2d, BIT_CFG GPIOs 0-19 exposed

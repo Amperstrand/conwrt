@@ -1,0 +1,35 @@
+#!/bin/sh
+# 30-poe-er6p — Generate default PoE config for EdgeRouter 6P
+# Runs on first boot only (uci-defaults pattern)
+# Creates /etc/config/poe with realtek-poe standard format
+
+[ -f /etc/config/poe ] && exit 0
+
+# Only run on EdgeRouter 6P hardware
+board_name=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+case "$board_name" in
+*er*6p*|*edgerouter*6p*) ;;
+*) echo "30-poe-er6p: not an EdgeRouter 6P, skipping" >&2; exit 0 ;;
+esac
+
+echo "30-poe-er6p: generating default PoE config"
+
+uci -q batch <<EOF
+set poe.@global[0]=global
+set poe.@global[0].budget='50'
+add poe port
+set poe.@port[0].name='eth1'
+set poe.@port[0].enable='0'
+set poe.@port[0].priority='0'
+add poe port
+set poe.@port[1].name='eth3'
+set poe.@port[1].enable='0'
+set poe.@port[1].priority='0'
+add poe port
+set poe.@port[2].name='eth4'
+set poe.@port[2].enable='0'
+set poe.@port[2].priority='0'
+commit poe
+EOF
+
+exit 0

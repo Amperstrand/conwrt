@@ -1,0 +1,2 @@
+obj-m := er6p-poe.o
+er6p-poe-y := src/er6p-poe.o src/er6p-poe-gpio.o src/er6p-poe-i2c.o src/er6p-poe-engine.o src/er6p-poe-sysfs.o src/er6p-poe-debugfs.o

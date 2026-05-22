@@ -1,0 +1,21 @@
+gpiochip0 - 20 lines:
+	line   0:	unnamed         	input consumer=sysfs
+	line   1:	unnamed         	input consumer=sysfs
+	line   2:	unnamed         	output consumer=sysfs
+	line   3:	unnamed         	input consumer=sysfs
+	line   4:	unnamed         	output consumer=sysfs
+	line   5:	unnamed         	input consumer=sysfs
+	line   6:	unnamed         	output consumer=sysfs
+	line   7:	unnamed         	input consumer=sysfs
+	line   8:	unnamed         	input consumer=sysfs
+	line   9:	unnamed         	input consumer=sysfs
+	line  10:	unnamed         	output consumer=sysfs
+	line  11:	unnamed         	input active-low consumer=reset
+	line  12:	unnamed         	input active-low consumer=mod-def0
+	line  13:	unnamed         	input
+	line  14:	unnamed         	input
+	line  15:	unnamed         	output consumer=white:power
+	line  16:	unnamed         	output consumer=sysfs
+	line  17:	unnamed         	output consumer=blue:power
+	line  18:	unnamed         	input
+	line  19:	unnamed         	input

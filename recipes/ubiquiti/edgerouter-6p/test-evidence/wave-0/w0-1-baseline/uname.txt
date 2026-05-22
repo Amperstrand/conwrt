@@ -1,0 +1,1 @@
+Linux OpenWrt 6.12.87 #0 SMP Wed May 13 22:42:09 2026 mips64 GNU/Linux

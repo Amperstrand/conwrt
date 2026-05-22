@@ -1,0 +1,303 @@
+#!/bin/sh /etc/rc.common
+# poe.init — procd init script for ER-6P PoE control
+# Manages er6p-poe kernel module and applies UCI PoE config
+# UCI format: realtek-poe standard (config global, config port with option name)
+# Deploy to: /etc/init.d/poe
+
+START=95
+STOP=10
+USE_PROCD=1
+
+MODULE_NAME="er6p_poe"
+MODULE_PATH="/root/er6p-poe.ko"
+ISL28022_MODULE="/root/isl28022.ko"
+SYSFS_BASE="/sys/kernel/er6p_poe"
+ALLOWLIST="eth1 eth3 eth4"
+PROG="/usr/sbin/poe"
+
+# Board-level PSE enable: GPIO0 must be driven LOW to enable PoE power path
+# After cold boot, GPIO0 defaults to HIGH (PSE disabled). This init step
+# restores the state that EdgeOS firmware maintained.
+# Evidence: .sisyphus/evidence/openwrt-er6p-poe/gpio0-breakthrough.md
+init_board_pse() {
+	if [ ! -d /sys/class/gpio/gpio0 ]; then
+		echo 0 > /sys/class/gpio/export 2>/dev/null
+	fi
+	echo out > /sys/class/gpio/gpio0/direction 2>/dev/null
+	echo 0 > /sys/class/gpio/gpio0/value 2>/dev/null
+	echo "poe.init: GPIO0 board-level PSE enable (output LOW)"
+}
+
+# Check if interface is in the allowlist
+is_allowed() {
+	local iface="$1"
+	for a in $ALLOWLIST; do
+		[ "$a" = "$iface" ] && return 0
+	done
+	return 1
+}
+
+# Validate a single port section (callback for config_foreach)
+validate_port_cb() {
+	local section="$1"
+	local name enable
+
+	config_get name "$section" name ""
+	config_get enable "$section" enable "0"
+
+	# Must have a name
+	if [ -z "$name" ]; then
+		echo "poe.init: ERROR: port section missing option name" >&2
+		return 1
+	fi
+
+	# Name must be in allowlist
+	if ! is_allowed "$name"; then
+		echo "poe.init: ERROR: port name '$name' not in allowlist ($ALLOWLIST)" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+# Load kernel module if not already loaded
+load_module() {
+	if grep -q "$MODULE_NAME" /proc/modules 2>/dev/null; then
+		echo "poe.init: module $MODULE_NAME already loaded"
+		return 0
+	fi
+
+	if [ ! -f "$MODULE_PATH" ]; then
+		echo "poe.init: ERROR: module not found at $MODULE_PATH" >&2
+		return 1
+	fi
+
+	insmod "$MODULE_PATH"
+	if [ $? -ne 0 ]; then
+		echo "poe.init: ERROR: failed to load $MODULE_PATH" >&2
+		return 1
+	fi
+
+	echo "poe.init: loaded $MODULE_PATH"
+
+	# Wait briefly for sysfs entries to appear
+	local retries=0
+	while [ ! -d "$SYSFS_BASE" ] && [ $retries -lt 10 ]; do
+		usleep 100000 2>/dev/null || sleep 1
+		retries=$((retries + 1))
+	done
+
+	if [ ! -d "$SYSFS_BASE" ]; then
+		echo "poe.init: ERROR: sysfs directory $SYSFS_BASE not found after loading module" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+# Load ISL28022 hwmon module and register device
+load_isl28022() {
+	if grep -q "isl28022" /proc/modules 2>/dev/null; then
+		echo "poe.init: module isl28022 already loaded"
+		return 0
+	fi
+
+	if [ ! -f "$ISL28022_MODULE" ]; then
+		echo "poe.init: WARNING: ISL28022 module not found at $ISL28022_MODULE" >&2
+		return 0
+	fi
+
+	# Load the module
+	insmod "$ISL28022_MODULE"
+	if [ $? -ne 0 ]; then
+		echo "poe.init: ERROR: failed to load $ISL28022_MODULE" >&2
+		return 1
+	fi
+
+	echo "poe.init: loaded $ISL28022_MODULE"
+
+	# Wait briefly for I2C device to appear
+	local retries=0
+	while [ ! -d "/sys/bus/i2c/devices/1-0040" ] && [ $retries -lt 10 ]; do
+		usleep 100000 2>/dev/null || sleep 1
+		retries=$((retries + 1))
+	done
+
+	# Register the device at address 0x40 (skip if already registered)
+	if [ -d "/sys/bus/i2c/devices/1-0040/driver" ]; then
+		echo "poe.init: ISL28022 already registered at 0x40"
+	elif [ -d "/sys/bus/i2c/devices/i2c-1" ]; then
+		echo "isl28022 0x40" > /sys/bus/i2c/devices/i2c-1/new_device 2>/dev/null
+		if [ $? -eq 0 ]; then
+			echo "poe.init: registered ISL28022 at address 0x40"
+		else
+			echo "poe.init: WARNING: failed to register ISL28022 device" >&2
+		fi
+	else
+		echo "poe.init: ERROR: I2C bus 1 not found" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+# Unload ISL28022 module and delete device
+unload_isl28022() {
+	if ! grep -q "isl28022" /proc/modules 2>/dev/null; then
+		return 0
+	fi
+
+	# Delete the I2C device first (unbinds driver)
+	if [ -d "/sys/bus/i2c/devices/1-0040" ]; then
+		echo 0x40 > /sys/bus/i2c/devices/i2c-1/delete_device 2>/dev/null
+	fi
+
+	# Unload the module
+	rmmod isl28022 2>/dev/null
+	echo "poe.init: unloaded isl28022 module"
+}
+
+# Unload kernel module
+unload_module() {
+	if grep -q "$MODULE_NAME" /proc/modules 2>/dev/null; then
+		rmmod "$MODULE_NAME"
+		echo "poe.init: unloaded $MODULE_NAME"
+	fi
+}
+
+# Apply state to a single port (enable/disable via sysfs)
+apply_port() {
+	local iface="$1"
+	local enabled="$2"
+
+	if [ ! -f "$SYSFS_BASE/$iface/enable" ]; then
+		echo "poe.init: WARNING: sysfs entry for $iface not found, skipping" >&2
+		return 1
+	fi
+
+	local current
+	current=$(cat "$SYSFS_BASE/$iface/enable" 2>/dev/null)
+
+	# Only write if state changed (delta apply)
+	if [ "$current" = "$enabled" ]; then
+		return 0
+	fi
+
+	echo "$enabled" > "$SYSFS_BASE/$iface/enable" 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "poe.init: ERROR: failed to set $iface enable=$enabled" >&2
+		return 1
+	fi
+
+	if [ "$enabled" = "1" ]; then
+		echo "poe.init: enabled PoE on $iface"
+	else
+		echo "poe.init: disabled PoE on $iface"
+	fi
+
+	return 0
+}
+
+# Apply a single port section (callback for config_foreach)
+apply_port_cb() {
+	local section="$1"
+	local name enable
+
+	config_get name "$section" name ""
+	config_get enable "$section" enable "0"
+
+	# Skip sections without a name
+	[ -z "$name" ] && return 0
+
+	# Only apply to allowlisted ports
+	is_allowed "$name" || return 0
+
+	apply_port "$name" "$enable"
+}
+
+# Apply all UCI config — called from start_service and reload_service
+apply_config() {
+	config_foreach apply_port_cb port
+}
+
+# Disable all allowlisted ports
+disable_all() {
+	local iface
+	for iface in $ALLOWLIST; do
+		apply_port "$iface" "0"
+	done
+}
+
+start_service() {
+	echo "poe.init: starting PoE service"
+
+	# Board-level PSE enable (GPIO0 must be LOW to enable PoE)
+	init_board_pse
+
+	# Load er6p-poe module
+	load_module || return 1
+
+	# Wait for sysfs entries to be writable
+	local _retries=0
+	while [ ! -f "$SYSFS_BASE/eth1/enable" ] && [ $_retries -lt 20 ]; do
+		usleep 100000 2>/dev/null || sleep 1
+		_retries=$(( _retries + 1 ))
+	done
+
+	# Load ISL28022 hwmon module and register device
+	load_isl28022 || true
+
+	# Mount debugfs (for diagnostics)
+	mount -t debugfs none /sys/kernel/debug 2>/dev/null
+
+	# Read UCI config
+	config_load poe
+
+	# Validate all port sections
+	config_foreach validate_port_cb port
+
+	# Apply config
+	apply_config
+
+	# Register with procd (keeps service active)
+	procd_open_instance "poe"
+	procd_set_param command "/bin/true"
+	procd_set_param respawn 0 0 0
+	procd_close_instance
+}
+
+stop_service() {
+	echo "poe.init: stopping PoE service"
+
+	# Disable all ports first
+	disable_all
+
+	# Reset GPIO0 to input (disable board-level PSE)
+	if [ -d /sys/class/gpio/gpio0 ]; then
+		echo in > /sys/class/gpio/gpio0/direction 2>/dev/null
+		echo 0 > /sys/class/gpio/unexport 2>/dev/null
+	fi
+
+	# Unload ISL28022 module
+	unload_isl28022
+
+	# Unload er6p-poe module
+	unload_module
+}
+
+reload_service() {
+	echo "poe.init: reloading PoE config"
+
+	# Re-read UCI config
+	config_load poe
+
+	# Validate
+	config_foreach validate_port_cb port
+
+	# Apply delta (only changes)
+	apply_config
+}
+
+service_triggers() {
+	procd_add_reload_trigger "poe"
+}

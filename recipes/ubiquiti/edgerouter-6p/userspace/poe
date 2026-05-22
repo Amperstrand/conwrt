@@ -1,0 +1,311 @@
+#!/bin/sh
+# poe — CLI tool for ER-6P PoE control
+# POSIX shell compatible (busybox ash)
+# Manages 24V passive PoE on eth1, eth3, eth4 via sysfs
+# UCI format: realtek-poe standard (config port with option name)
+
+SYSFS_BASE="/sys/kernel/er6p_poe"
+DEBUGFS_REG="/sys/kernel/debug/er6p_poe/registers"
+
+# Hard allowlist — eth0 (WAN) and eth2 (mgmt) are NEVER allowed
+ALLOWLIST="eth1 eth3 eth4"
+
+# Map ethN to OpenWrt DSA lanN name for carrier check
+eth_to_lan() {
+	case "$1" in
+	eth1) echo "lan1" ;;
+	eth3) echo "lan3" ;;
+	eth4) echo "lan4" ;;
+	*) echo "" ;;
+	esac
+}
+
+# Check if interface is in the allowlist
+is_allowed() {
+	local iface="$1"
+	for a in $ALLOWLIST; do
+		if [ "$a" = "$iface" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Find the UCI section index for a port by name
+# Prints the index (e.g. 0, 1, 2) or nothing if not found
+find_port_idx() {
+	local target="$1"
+	local idx=0
+	local name
+	while name=$(uci -q get "poe.@port[$idx].name" 2>/dev/null); do
+		if [ "$name" = "$target" ]; then
+			echo "$idx"
+			return 0
+		fi
+		idx=$((idx + 1))
+	done
+	return 1
+}
+
+# Read voltage from ISL28022 via i2cget (bus 1, addr 0x3F, register 0x02)
+read_bus_voltage_mv() {
+	local raw
+	raw=$(i2cget -y 1 0x3F 0x02 w 2>/dev/null)
+	if [ $? -ne 0 ] || [ -z "$raw" ]; then
+		echo "N/A"
+		return
+	fi
+	# i2cget returns hex like 0xabcd — parse as decimal
+	local val
+	val=$(printf "%d" "$raw" 2>/dev/null)
+	if [ -z "$val" ]; then
+		echo "N/A"
+		return
+	fi
+	# ISL28022 bus voltage: LSB = 4mV (±60V range, 16-bit)
+	local mv
+	mv=$((val * 4))
+	echo "$mv"
+}
+
+# Read shunt voltage from ISL28022 (register 0x01) and compute current
+read_current_ma() {
+	local raw
+	raw=$(i2cget -y 1 0x3F 0x01 w 2>/dev/null)
+	if [ $? -ne 0 ] || [ -z "$raw" ]; then
+		echo "N/A"
+		return
+	fi
+	local val
+	val=$(printf "%d" "$raw" 2>/dev/null)
+	if [ -z "$val" ]; then
+		echo "N/A"
+		return
+	fi
+	# Handle two's complement for negative values
+	if [ "$val" -gt 32767 ]; then
+		val=$((val - 65536))
+	fi
+	# ISL28022 shunt voltage LSB = 10uV (default PGA gain=1, ±80mV)
+	# Current = shunt_voltage / R_shunt
+	# R_shunt on ER-6P is 0.05 ohm (50 mOhm) — common for PoE current sensing
+	# current_mA = (val * 10) / 50 = val * 0.2
+	# Using integer math: (val * 10) / 50 = val / 5
+	# But handle negative: use absolute value, track sign
+	local sign=""
+	local abs_val="$val"
+	if [ "$val" -lt 0 ]; then
+		sign="-"
+		abs_val=$((-val))
+	fi
+	local ma
+	ma=$((abs_val / 5))
+	echo "${sign}${ma}"
+}
+
+cmd_list() {
+	local iface enabled mode
+	printf "%-8s %-10s %-10s\n" "Port" "Status" "Mode"
+	printf "%-8s %-10s %-10s\n" "----" "------" "----"
+	for iface in $ALLOWLIST; do
+		if [ -f "$SYSFS_BASE/$iface/enable" ]; then
+			enabled=$(cat "$SYSFS_BASE/$iface/enable" 2>/dev/null)
+			mode=$(cat "$SYSFS_BASE/$iface/mode" 2>/dev/null)
+		else
+			enabled="?"
+			mode="?"
+		fi
+		if [ "$enabled" = "1" ]; then
+			enabled="enabled"
+		elif [ "$enabled" = "0" ]; then
+			enabled="disabled"
+		fi
+		printf "%-8s %-10s %-10s\n" "$iface" "$enabled" "$mode"
+	done
+}
+
+cmd_status() {
+	local iface="$1"
+	if [ -z "$iface" ]; then
+		echo "Usage: poe status <iface>" >&2
+		return 1
+	fi
+	if ! is_allowed "$iface"; then
+		echo "Error: $iface is not a PoE-capable port (not in allowlist)" >&2
+		return 1
+	fi
+	if [ ! -d "$SYSFS_BASE/$iface" ]; then
+		echo "Error: sysfs entry for $iface not found (module loaded?)" >&2
+		return 1
+	fi
+
+	local enabled mode voltage_mv current_ma
+	enabled=$(cat "$SYSFS_BASE/$iface/enable" 2>/dev/null)
+	mode=$(cat "$SYSFS_BASE/$iface/mode" 2>/dev/null)
+
+	if [ "$enabled" = "1" ]; then
+		voltage_mv=$(read_bus_voltage_mv)
+		current_ma=$(read_current_ma)
+	else
+		voltage_mv="N/A"
+		current_ma="N/A"
+	fi
+
+	echo "Port:       $iface"
+	if [ "$enabled" = "1" ]; then
+		echo "Status:     enabled"
+	else
+		echo "Status:     disabled"
+	fi
+	echo "Mode:       $mode"
+	echo "Voltage:    ${voltage_mv} mV (bus-wide)"
+	echo "Current:    ${current_ma} mA (bus-wide total)"
+
+	# Show carrier state if possible
+	local lan
+	lan=$(eth_to_lan "$iface")
+	if [ -n "$lan" ] && [ -f "/sys/class/net/$lan/carrier" ]; then
+		local carrier
+		carrier=$(cat "/sys/class/net/$lan/carrier" 2>/dev/null)
+		if [ "$carrier" = "1" ]; then
+			echo "Link:       up"
+		elif [ "$carrier" = "0" ]; then
+			echo "Link:       down"
+		else
+			echo "Link:       unknown"
+		fi
+	fi
+}
+
+cmd_enable() {
+	local iface="$1"
+	local mode="$2"
+
+	if [ -z "$iface" ]; then
+		echo "Usage: poe enable <iface> [mode]" >&2
+		echo "  mode: 24v-2pair (default), 24v-4pair" >&2
+		return 1
+	fi
+
+	# Default mode for ER-6P (only 24V passive supported)
+	[ -z "$mode" ] && mode="24v-2pair"
+
+	if ! is_allowed "$iface"; then
+		echo "Error: $iface is not a PoE-capable port (not in allowlist)" >&2
+		return 1
+	fi
+
+	if [ ! -d "$SYSFS_BASE/$iface" ]; then
+		echo "Error: sysfs entry for $iface not found (module loaded?)" >&2
+		return 1
+	fi
+
+	# ER-6P only does 24V 2-pair — warn if 4-pair requested
+	if [ "$mode" = "24v-4pair" ]; then
+		echo "Warning: 24v-4pair mode requested — ER-6P uses 24v-2pair" >&2
+	fi
+
+	# Write to sysfs
+	echo 1 > "$SYSFS_BASE/$iface/enable" 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "Error: failed to enable PoE on $iface" >&2
+		return 1
+	fi
+
+	# Update UCI config
+	local idx
+	idx=$(find_port_idx "$iface")
+	if [ -n "$idx" ]; then
+		uci set "poe.@port[$idx].enable='1'"
+		uci commit poe
+	fi
+
+	echo "PoE enabled on $iface (mode=$mode)"
+	return 0
+}
+
+cmd_disable() {
+	local iface="$1"
+
+	if [ -z "$iface" ]; then
+		echo "Usage: poe disable <iface>" >&2
+		return 1
+	fi
+
+	if ! is_allowed "$iface"; then
+		echo "Error: $iface is not a PoE-capable port (not in allowlist)" >&2
+		return 1
+	fi
+
+	if [ ! -d "$SYSFS_BASE/$iface" ]; then
+		echo "Error: sysfs entry for $iface not found (module loaded?)" >&2
+		return 1
+	fi
+
+	# Write to sysfs
+	echo 0 > "$SYSFS_BASE/$iface/enable" 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "Error: failed to disable PoE on $iface" >&2
+		return 1
+	fi
+
+	# Update UCI config
+	local idx
+	idx=$(find_port_idx "$iface")
+	if [ -n "$idx" ]; then
+		uci set "poe.@port[$idx].enable='0'"
+		uci commit poe
+	fi
+
+	echo "PoE disabled on $iface"
+	return 0
+}
+
+cmd_debug() {
+	if [ ! -f "$DEBUGFS_REG" ]; then
+		# Try mounting debugfs
+		mount -t debugfs none /sys/kernel/debug 2>/dev/null
+	fi
+	if [ -f "$DEBUGFS_REG" ]; then
+		cat "$DEBUGFS_REG"
+	else
+		echo "debugfs registers not available" >&2
+		return 1
+	fi
+}
+
+usage() {
+	echo "Usage: poe <command> [args]"
+	echo ""
+	echo "Commands:"
+	echo "  list                    List PoE-capable ports and status"
+	echo "  status <iface>          Show detailed status for a port"
+	echo "  enable <iface> [mode]   Enable PoE (mode: 24v-2pair default)"
+	echo "  disable <iface>         Disable PoE"
+	echo "  debug                   Show debugfs register dump"
+	echo ""
+	echo "Allowed ports: eth1, eth3, eth4"
+}
+
+# Main dispatch
+case "${1:-}" in
+list)
+	cmd_list
+	;;
+status)
+	cmd_status "$2"
+	;;
+enable)
+	cmd_enable "$2" "$3"
+	;;
+disable)
+	cmd_disable "$2"
+	;;
+debug)
+	cmd_debug
+	;;
+*)
+	usage
+	exit 1
+	;;
+esac

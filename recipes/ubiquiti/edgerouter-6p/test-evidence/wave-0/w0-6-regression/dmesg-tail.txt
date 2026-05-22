@@ -1,0 +1,50 @@
+[   27.104109] octeon_ethernet 11800a0000000.pip lan1: entered allmulticast mode
+[   27.111591] octeon_ethernet 11800a0000000.pip lan1: entered promiscuous mode
+[   27.130116] br-lan: port 2(lan2) entered blocking state
+[   27.135456] br-lan: port 2(lan2) entered disabled state
+[   27.140785] octeon_ethernet 11800a0000000.pip lan2: entered allmulticast mode
+[   27.148234] octeon_ethernet 11800a0000000.pip lan2: entered promiscuous mode
+[   27.155571] br-lan: port 2(lan2) entered blocking state
+[   27.160856] br-lan: port 2(lan2) entered forwarding state
+[   27.172471] br-lan: port 3(lan3) entered blocking state
+[   27.177730] br-lan: port 3(lan3) entered disabled state
+[   27.183057] octeon_ethernet 11800a0000000.pip lan3: entered allmulticast mode
+[   27.190484] octeon_ethernet 11800a0000000.pip lan3: entered promiscuous mode
+[   27.197839] br-lan: port 3(lan3) entered blocking state
+[   27.203141] br-lan: port 3(lan3) entered forwarding state
+[   27.213984] br-lan: port 4(lan4) entered blocking state
+[   27.219245] br-lan: port 4(lan4) entered disabled state
+[   27.224611] octeon_ethernet 11800a0000000.pip lan4: entered allmulticast mode
+[   27.232138] octeon_ethernet 11800a0000000.pip lan4: entered promiscuous mode
+[   27.239397] br-lan: port 4(lan4) entered blocking state
+[   27.244690] br-lan: port 4(lan4) entered forwarding state
+[   27.255485] br-lan: port 5(lan5) entered blocking state
+[   27.260771] br-lan: port 5(lan5) entered disabled state
+[   27.266038] octeon_ethernet 11800a0000000.pip lan5: entered allmulticast mode
+[   27.273527] octeon_ethernet 11800a0000000.pip lan5: entered promiscuous mode
+[   27.280799] br-lan: port 5(lan5) entered blocking state
+[   27.286055] br-lan: port 5(lan5) entered forwarding state
+[   27.333084] lan0: 1000 Mbps Full duplex, port 1, queue 1
+[   28.111205] br-lan: port 2(lan2) entered disabled state
+[   28.117112] br-lan: port 3(lan3) entered disabled state
+[   28.123363] br-lan: port 4(lan4) entered disabled state
+[   28.129257] br-lan: port 5(lan5) entered disabled state
+[  418.061806] gpio-reg: mapped GPIO at 0x1070000000800 -> 00000000b9894c2d
+[  755.146740] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  755.152114] br-lan: port 1(lan1) entered blocking state
+[  755.157356] br-lan: port 1(lan1) entered forwarding state
+[  766.667491] lan1: Link down
+[  766.670486] br-lan: port 1(lan1) entered disabled state
+[  768.827620] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  768.832994] br-lan: port 1(lan1) entered blocking state
+[  768.838239] br-lan: port 1(lan1) entered forwarding state
+[  776.188123] lan1: Link down
+[  776.191116] br-lan: port 1(lan1) entered disabled state
+[  793.949072] lan1: 1000 Mbps Full duplex, port 2, queue 2
+[  793.954446] br-lan: port 1(lan1) entered blocking state
+[  793.959688] br-lan: port 1(lan1) entered forwarding state
+[ 8813.721669] gpio-reg: unloaded
+[ 8813.770271] gpio-reg: v2 - mapped GPIO at 0x1070000000800 -> 00000000b9894c2d, BIT_CFG GPIOs 0-19 exposed
+[14777.154975] gpio-reg: WRITE offset=0x188 value=0x0
+[14822.278685] gpio-reg: WRITE offset=0x88 value=0x0
+[14880.433645] gpio-reg: WRITE offset=0x90 value=0x1

@@ -1,0 +1,330 @@
+#!/bin/sh
+# poe-ubus — ubus provider for ER-6P PoE control
+# Based on realtek-poe ubus interface pattern
+# POSIX shell compatible (busybox ash)
+# Deploy to: /usr/sbin/poe-ubus
+#
+# Usage:
+#   poe-ubus info              — JSON status of all ports
+#   poe-ubus manage '{"port":"eth1","enable":true}'
+#   poe-ubus reload            — re-read UCI, apply delta via sysfs
+#
+# The init script (poe.init) wraps this as a ubus object so that
+# `ubus call poe info` works. Alternatively, call directly.
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions.sh
+
+SYSFS_BASE="/sys/kernel/er6p_poe"
+ALLOWLIST="eth1 eth3 eth4"
+STATIC_W_PER_PORT=12
+
+# Find hwmon path for ISL28022 (dynamic discovery)
+find_hwmon() {
+	local hwmon_path="/sys/bus/i2c/devices/1-0040/hwmon"
+	if [ ! -d "$hwmon_path" ]; then
+		return 1
+	fi
+	# List hwmon directories and return the first one
+	HWMON_PATH=$(ls "$hwmon_path" 2>/dev/null | head -n 1)
+	if [ -z "$HWMON_PATH" ]; then
+		return 1
+	fi
+	HWMON_PATH="$hwmon_path/$HWMON_PATH"
+	return 0
+}
+
+# Read voltage from hwmon (mV)
+read_voltage_mv() {
+	[ -z "$HWMON_PATH" ] && return 1
+	local val
+	val=$(cat "$HWMON_PATH/in0_input" 2>/dev/null) || return 1
+	echo "$val"
+}
+
+# Read current from hwmon (mA)
+read_current_ma() {
+	[ -z "$HWMON_PATH" ] && return 1
+	local val
+	val=$(cat "$HWMON_PATH/curr1_input" 2>/dev/null) || return 1
+	echo "$val"
+}
+
+# Read power from hwmon (µW)
+read_power_uw() {
+	[ -z "$HWMON_PATH" ] && return 1
+	local val
+	val=$(cat "$HWMON_PATH/power1_input" 2>/dev/null) || return 1
+	echo "$val"
+}
+
+# Check if interface is in the allowlist
+is_allowed() {
+	local iface="$1"
+	local a
+	for a in $ALLOWLIST; do
+		[ "$a" = "$iface" ] && return 0
+	done
+	return 1
+}
+
+# Find the UCI section index for a port by name
+# Prints the index (e.g. 0, 1, 2) or nothing if not found
+find_port_idx() {
+	local target="$1"
+	local idx=0
+	local name
+	while name=$(uci -q get "poe.@port[$idx].name" 2>/dev/null); do
+		if [ "$name" = "$target" ]; then
+			echo "$idx"
+			return 0
+		fi
+		idx=$((idx + 1))
+	done
+	return 1
+}
+
+# Read a sysfs attribute for a port (1 on success, 0 on failure)
+read_sysfs() {
+	local iface="$1"
+	local attr="$2"
+	local val
+	val=$(cat "$SYSFS_BASE/$iface/$attr" 2>/dev/null) || return 1
+	echo "$val"
+}
+
+# Write a sysfs attribute for a port
+write_sysfs() {
+	local iface="$1"
+	local attr="$2"
+	local val="$3"
+	echo "$val" > "$SYSFS_BASE/$iface/$attr" 2>/dev/null
+}
+
+# Build JSON status for a single port and add to current JSON object
+add_port_status() {
+	local iface="$1"
+	local enabled mode priority consumption
+
+	enabled=$(read_sysfs "$iface" "enable") || enabled="0"
+	mode=$(read_sysfs "$iface" "mode") || mode="off"
+
+	# Read priority from UCI
+	priority=0
+	local idx=0 found_name
+	while found_name=$(uci -q get "poe.@port[$idx].name" 2>/dev/null); do
+		if [ "$found_name" = "$iface" ]; then
+			priority=$(uci -q get "poe.@port[$idx].priority" 2>/dev/null) || priority=0
+			break
+		fi
+		idx=$((idx + 1))
+	done
+
+	# Real consumption from hwmon (if available)
+	if find_hwmon; then
+		local total_power_uw total_power_w
+		total_power_uw=$(read_power_uw)
+		if [ -n "$total_power_uw" ] && [ "$total_power_uw" != "N/A" ]; then
+			total_power_w=$(printf "%.2f" "$((total_power_uw / 1000000))")
+			# Count enabled ports to estimate per-port consumption
+			local enabled_count=0
+			local en
+			for en in $ALLOWLIST; do
+				[ "$en" = "$iface" ] && break
+				[ "$(read_sysfs "$en" "enable" 2>/dev/null)" = "1" ] && enabled_count=$((enabled_count + 1))
+			done
+			if [ "$enabled_count" -gt 0 ]; then
+				consumption=$(printf "%.2f" "$((total_power_w * 1000 / enabled_count))")
+			else
+				consumption=0
+			fi
+		else
+			# Fall back to static estimate if hwmon unavailable
+			[ "$enabled" = "1" ] && consumption=$STATIC_W_PER_PORT || consumption=0
+		fi
+	else
+		# Static consumption estimate (hwmon unavailable)
+		[ "$enabled" = "1" ] && consumption=$STATIC_W_PER_PORT || consumption=0
+	fi
+
+	json_add_object "$iface"
+	json_add_boolean enable "$enabled"
+	json_add_string mode "$mode"
+	json_add_int priority "$priority"
+	json_add_int consumption "$consumption"
+	json_close_object
+}
+
+# Return error JSON to stdout
+json_error() {
+	local msg="$1"
+	json_init
+	json_add_string error "$msg"
+	json_dump
+}
+
+# Return ok JSON to stdout
+json_ok() {
+	json_init
+	json_add_string status "ok"
+	json_dump
+}
+
+# ── Method: info ──────────────────────────────────────────────────────
+handle_info() {
+	local budget consumption enabled_count=0
+
+	budget=$(uci -q get "poe.@global[0].budget" 2>/dev/null) || budget=50
+
+	# Count enabled ports for consumption estimate
+	local iface en
+	for iface in $ALLOWLIST; do
+		en=$(read_sysfs "$iface" "enable") || en="0"
+		[ "$en" = "1" ] && enabled_count=$((enabled_count + 1))
+	done
+	consumption=$((enabled_count * STATIC_W_PER_PORT))
+
+	# Read real power from hwmon if available
+	local total_power_w voltage_mv current_ma
+	if find_hwmon; then
+		total_power_w=$(printf "%.2f" "$(( $(read_power_uw) / 1000000 ))")
+		voltage_mv=$(read_voltage_mv)
+		current_ma=$(read_current_ma)
+	fi
+
+	json_init
+	json_add_int budget "$budget"
+	json_add_int consumption "$consumption"
+	json_add_string power_w "$total_power_w"
+	json_add_int voltage_mv "$voltage_mv"
+	json_add_int current_ma "$current_ma"
+	json_add_object ports
+	for iface in $ALLOWLIST; do
+		add_port_status "$iface"
+	done
+	json_close_object
+	json_dump
+}
+
+# ── Method: manage ───────────────────────────────────────────────────
+# Expects JSON argument: {"port":"eth1","enable":true}
+handle_manage() {
+	local json_input="$1"
+
+	if [ -z "$json_input" ]; then
+		json_error "missing JSON argument"
+		return 1
+	fi
+
+	# Parse JSON using jsonfilter (standard on OpenWrt)
+	local port enable_val
+	port=$(echo "$json_input" | jsonfilter -e '@.port' 2>/dev/null)
+	enable_val=$(echo "$json_input" | jsonfilter -e '@.enable' 2>/dev/null)
+
+	if [ -z "$port" ]; then
+		json_error "missing required field: port"
+		return 1
+	fi
+
+	if [ -z "$enable_val" ]; then
+		json_error "missing required field: enable"
+		return 1
+	fi
+
+	# Validate port allowlist
+	if ! is_allowed "$port"; then
+		json_error "port '$port' not in allowlist ($ALLOWLIST)"
+		return 1
+	fi
+
+	# Validate sysfs exists
+	if [ ! -d "$SYSFS_BASE/$port" ]; then
+		json_error "sysfs entry for '$port' not found (module loaded?)"
+		return 1
+	fi
+
+	# Normalize enable to 0/1 (accept true/false/1/0)
+	local sysfs_val
+	case "$enable_val" in
+		true|1) sysfs_val="1" ;;
+		false|0) sysfs_val="0" ;;
+		*)
+			json_error "invalid enable value: '$enable_val' (expected true/false)"
+			return 1
+			;;
+	esac
+
+	# Check current state — skip if no change needed
+	local current
+	current=$(read_sysfs "$port" "enable") || current=""
+	if [ "$current" = "$sysfs_val" ]; then
+		json_ok
+		return 0
+	fi
+
+	# Write to sysfs
+	if ! write_sysfs "$port" "enable" "$sysfs_val"; then
+		json_error "failed to write sysfs for '$port'"
+		return 1
+	fi
+
+	# Update UCI config
+	local idx
+	idx=$(find_port_idx "$port")
+	if [ -n "$idx" ]; then
+		uci set "poe.@port[$idx].enable='$sysfs_val'"
+		uci commit poe
+	fi
+
+	json_ok
+}
+
+# ── Method: reload ───────────────────────────────────────────────────
+# Re-reads UCI config and applies delta via sysfs
+handle_reload() {
+	config_load poe
+
+	local idx=0 name enable current
+	while name=$(uci -q get "poe.@port[$idx].name" 2>/dev/null); do
+		enable=$(uci -q get "poe.@port[$idx].enable" 2>/dev/null) || enable="0"
+
+		# Only apply to allowlisted ports
+		if ! is_allowed "$name"; then
+			idx=$((idx + 1))
+			continue
+		fi
+
+		# Skip if sysfs not available
+		if [ ! -f "$SYSFS_BASE/$name/enable" ]; then
+			idx=$((idx + 1))
+			continue
+		fi
+
+		# Delta apply — only write if state changed
+		current=$(read_sysfs "$name" "enable") || current=""
+		if [ "$current" != "$enable" ]; then
+			write_sysfs "$name" "enable" "$enable"
+		fi
+
+		idx=$((idx + 1))
+	done
+
+	json_ok
+}
+
+# ── Main dispatch ────────────────────────────────────────────────────
+case "${1:-}" in
+info)
+	handle_info
+	;;
+manage)
+	handle_manage "$2"
+	;;
+reload)
+	handle_reload
+	;;
+*)
+	echo "Usage: $0 {info|manage <json>|reload}" >&2
+	exit 1
+	;;
+esac

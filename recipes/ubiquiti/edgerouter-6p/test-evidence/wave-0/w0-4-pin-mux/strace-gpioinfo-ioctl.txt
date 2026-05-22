@@ -1,0 +1,21 @@
+ioctl(3, GPIO_GET_CHIPINFO_IOCTL, {name="gpiochip0", label="octeon-gpio", lines=20}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=0} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=1} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=2} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=3} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=4} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=5} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=6} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=7} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=8} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=9} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=10} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=11} => {name="", consumer="reset", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_ACTIVE_LOW|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=12} => {name="", consumer="mod-def0", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_ACTIVE_LOW|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=13} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=14} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=15} => {name="", consumer="white:power", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=16} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=17} => {name="", consumer="blue:power", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_OUTPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=18} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0
+ioctl(3, GPIO_V2_GET_LINEINFO_IOCTL, {offset=19} => {name="", consumer="sysfs", flags=GPIO_V2_LINE_FLAG_USED|GPIO_V2_LINE_FLAG_INPUT, num_attrs=0}) = 0

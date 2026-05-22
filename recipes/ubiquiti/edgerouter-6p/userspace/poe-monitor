@@ -1,0 +1,69 @@
+#!/bin/sh
+# poe-monitor — hwmon-style PoE monitoring export for ER-6P
+# POSIX shell compatible (busybox ash)
+# Writes voltage/current to /run/poe/ for monitoring by collectd etc.
+
+SYSFS_BASE="/sys/kernel/er6p_poe"
+ALLOWLIST="eth1 eth3 eth4"
+RUNDIR="/run/poe"
+POLL_INTERVAL=5
+
+# Find hwmon path for ISL28022 (dynamic discovery)
+find_hwmon() {
+	local hwmon_path="/sys/bus/i2c/devices/1-0040/hwmon"
+	if [ ! -d "$hwmon_path" ]; then
+		return 1
+	fi
+	# List hwmon directories and return the first one
+	HWMON_PATH=$(ls "$hwmon_path" 2>/dev/null | head -n 1)
+	if [ -z "$HWMON_PATH" ]; then
+		return 1
+	fi
+	HWMON_PATH="$hwmon_path/$HWMON_PATH"
+	return 0
+}
+
+# Read voltage from hwmon (mV)
+read_voltage_mv() {
+	[ -z "$HWMON_PATH" ] && echo "N/A" && return
+	val=$(cat "$HWMON_PATH/in0_input" 2>/dev/null) || { echo "N/A" && return; }
+	echo "$val"
+}
+
+# Read current from hwmon (mA)
+read_current_ma() {
+	[ -z "$HWMON_PATH" ] && echo "N/A" && return
+	val=$(cat "$HWMON_PATH/curr1_input" 2>/dev/null) || { echo "N/A" && return; }
+	echo "$val"
+}
+
+main_loop() {
+	for iface in $ALLOWLIST; do
+		mkdir -p "$RUNDIR/$iface"
+	done
+
+	while true; do
+		for iface in $ALLOWLIST; do
+			[ -f "$SYSFS_BASE/$iface/enable" ] || continue
+
+			local enabled
+			enabled=$(cat "$SYSFS_BASE/$iface/enable" 2>/dev/null)
+
+			if [ "$enabled" = "1" ]; then
+				local voltage_mv current_ma
+				voltage_mv=$(read_bus_voltage_mv)
+				current_ma=$(read_current_ma)
+
+				echo "$voltage_mv" > "$RUNDIR/$iface/voltage_mv"
+				echo "$current_ma" > "$RUNDIR/$iface/current_ma"
+			else
+				echo "0" > "$RUNDIR/$iface/voltage_mv"
+				echo "0" > "$RUNDIR/$iface/current_ma"
+			fi
+		done
+
+		sleep "$POLL_INTERVAL"
+	done
+}
+
+main_loop

@@ -1,0 +1,8 @@
+=== ISL28022 @ 0x40 ===
+Reg 0x00: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x01: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x02: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x03: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x04: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x05: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X
+Reg 0x07: zsh:1: no such file or directory: ssh -i ~/.ssh/REDACTED_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@192.168.X.X

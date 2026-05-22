@@ -1,0 +1,82 @@
+#!/bin/sh
+# poe-watchdog — overcurrent protection for ER-6P PoE
+# POSIX shell compatible (busybox ash)
+# Polls ISL28022 shunt current and auto-disables ports on overcurrent
+# Note: ISL28022 reads bus-wide current, not per-port. Overcurrent
+# will disable all enabled ports since the bus current is the sum of all.
+
+SYSFS_BASE="/sys/kernel/er6p_poe"
+ALLOWLIST="eth1 eth3 eth4"
+DEFAULT_THRESHOLD_MA=350
+POLL_INTERVAL=2
+
+# Find hwmon path for ISL28022 (dynamic discovery)
+find_hwmon() {
+	local hwmon_path="/sys/bus/i2c/devices/1-0040/hwmon"
+	if [ ! -d "$hwmon_path" ]; then
+		return 1
+	fi
+	# List hwmon directories and return the first one
+	HWMON_PATH=$(ls "$hwmon_path" 2>/dev/null | head -n 1)
+	if [ -z "$HWMON_PATH" ]; then
+		return 1
+	fi
+	HWMON_PATH="$hwmon_path/$HWMON_PATH"
+	return 0
+}
+
+# Read current from hwmon (mA)
+read_current_ma() {
+	[ -z "$HWMON_PATH" ] && echo "N/A" && return
+	val=$(cat "$HWMON_PATH/curr1_input" 2>/dev/null) || { echo "N/A" && return; }
+	echo "$val"
+}
+
+log_msg() {
+	logger -t poe-watchdog "$@"
+}
+
+get_threshold() {
+	local threshold
+	if [ -f /etc/config/poe ]; then
+		threshold=$(uci -q get poe.global.watchdog_overcurrent_ma 2>/dev/null)
+	fi
+	echo "${threshold:-$DEFAULT_THRESHOLD_MA}"
+}
+
+main_loop() {
+	log_msg "started (threshold=${DEFAULT_THRESHOLD_MA}mA, interval=${POLL_INTERVAL}s)"
+
+	while true; do
+		threshold=$(get_threshold)
+
+		for iface in $ALLOWLIST; do
+			[ -f "$SYSFS_BASE/$iface/enable" ] || continue
+
+			local enabled
+			enabled=$(cat "$SYSFS_BASE/$iface/enable" 2>/dev/null)
+			[ "$enabled" = "1" ] || continue
+
+			local current_ma
+			current_ma=$(read_current_ma)
+
+			if [ "$current_ma" = "N/A" ]; then
+				continue
+			fi
+
+			if [ "$current_ma" -gt "$threshold" ] 2>/dev/null; then
+				log_msg "OVERCURRENT: $iface drawing ${current_ma}mA (threshold=${threshold}mA), disabling port"
+				echo 0 > "$SYSFS_BASE/$iface/enable" 2>/dev/null
+				if [ $? -eq 0 ]; then
+					log_msg "disabled $iface due to overcurrent"
+				else
+					log_msg "FAILED to disable $iface on overcurrent!"
+				fi
+			fi
+		done
+
+		sleep "$POLL_INTERVAL"
+	done
+}
+
+main_loop
