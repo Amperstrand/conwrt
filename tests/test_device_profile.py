@@ -103,7 +103,7 @@ class TestProfileForExtreme(TestCase):
 
     def test_final_uboot_vars(self):
         self.assertEqual(
-            self.profile.final_uboot_vars["bootcmd"], "run boot_openwrt"
+            self.profile.final_uboot_vars["bootcmd"], "run boot_openwrt; run boot_net"
         )
 
 

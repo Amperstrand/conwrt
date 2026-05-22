@@ -4806,7 +4806,7 @@ def _generate_zyxel_password(serial: str) -> Optional[str]:
 
 
 def _ssh_with_password(ip: str, user: str, password: str, command: str,
-                        timeout: int = 30) -> subprocess.CompletedProcess:
+                        timeout: int = 30, *, extra_ssh_options: list[str] | None = None) -> subprocess.CompletedProcess:
     import shutil
     sshpass = shutil.which("sshpass")
     if not sshpass:
@@ -4819,6 +4819,7 @@ def _ssh_with_password(ip: str, user: str, password: str, command: str,
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", f"ConnectTimeout=10",
+        *(extra_ssh_options or []),
         f"{user}@{ip}",
         command,
     ]
@@ -4827,7 +4828,7 @@ def _ssh_with_password(ip: str, user: str, password: str, command: str,
 
 def _scp_with_password(ip: str, user: str, password: str,
                        remote_src: str, local_dst: str,
-                       timeout: int = 120) -> subprocess.CompletedProcess:
+                       timeout: int = 120, *, extra_ssh_options: list[str] | None = None) -> subprocess.CompletedProcess:
     import shutil
     sshpass = shutil.which("sshpass")
     if not sshpass:
@@ -4841,6 +4842,7 @@ def _scp_with_password(ip: str, user: str, password: str,
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=10",
+        *(extra_ssh_options or []),
         f"{user}@{ip}:{remote_src}",
         local_dst,
     ]
@@ -4865,6 +4867,16 @@ def _sanitize_filename_part(value: str) -> str:
 
 def _extreme_tftp_server_ip(profile: SimpleNamespace) -> str:
     return getattr(profile, "openwrt_client_ip", "") or getattr(profile, "client_ip", "") or ""
+
+
+def _extreme_stock_ssh_options(profile: SimpleNamespace) -> list[str]:
+    return list(getattr(profile, "stock_legacy_ssh_options", []) or [])
+
+
+def _resolve_extreme_uboot_value(profile: SimpleNamespace, value: str) -> str:
+    if value == "<CONWRT_TFTP_SERVER_IP>":
+        return _extreme_tftp_server_ip(profile)
+    return value
 
 
 def _ensure_extreme_backup_dir(ctx: RecoveryContext, preflight_data: Optional[dict] = None) -> Path:
@@ -5080,6 +5092,7 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
     stock_ip = profile.stock_default_ip
     stock_user = profile.stock_default_user
     stock_password = profile.stock_default_password
+    stock_ssh_options = _extreme_stock_ssh_options(profile)
 
     if not _extreme_confirm_or_fail(ctx, "Extreme flash will modify U-Boot variables and reboot the AP. Continue?"):
         return
@@ -5106,6 +5119,7 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
         stock_password,
         f"which {shlex.quote(profile.rdwr_boot_cfg_binary)}",
         timeout=15,
+        extra_ssh_options=stock_ssh_options,
     )
     if which_result.returncode != 0:
         log(f"ERROR: {profile.rdwr_boot_cfg_binary} not found on stock firmware: {which_result.stderr[:300]}")
@@ -5118,11 +5132,16 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
         stock_password,
         f"{shlex.quote(profile.rdwr_boot_cfg_binary)} read_all",
         timeout=30,
+        extra_ssh_options=stock_ssh_options,
     )
     if read_all_result.returncode != 0 or not read_all_result.stdout.strip():
-        log(f"ERROR: rdwr_boot_cfg read_all failed: {(read_all_result.stderr or read_all_result.stdout)[:400]}")
-        ctx.state = State.FAILED
-        return
+        log(f"WARNING: rdwr_boot_cfg read_all failed (exit {read_all_result.returncode}): {(read_all_result.stderr or read_all_result.stdout)[:400]}")
+        log("Will attempt raw MTD config block write as fallback.")
+        ctx._extreme_rdwr_broken = True
+        read_all_output = ""
+    else:
+        ctx._extreme_rdwr_broken = False
+        read_all_output = read_all_result.stdout
 
     info_commands = {
         "hostname": "hostname",
@@ -5136,7 +5155,10 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
     }
     collected: dict[str, str] = {}
     for name, command in info_commands.items():
-        result = _ssh_with_password(stock_ip, stock_user, stock_password, command, timeout=30)
+        result = _ssh_with_password(
+            stock_ip, stock_user, stock_password, command, timeout=30,
+            extra_ssh_options=stock_ssh_options,
+        )
         collected[name] = (result.stdout or "").strip()
 
     mac_lines = _parse_key_value_lines(collected.get("mac_addresses", ""))
@@ -5152,7 +5174,7 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
         "mount": collected.get("mount", ""),
         "proc_mtd": collected.get("proc_mtd", ""),
         "dmesg_tail": collected.get("dmesg_tail", ""),
-        "rdwr_boot_cfg_read_all": read_all_result.stdout,
+        "rdwr_boot_cfg_read_all": read_all_output,
         "initramfs_path": ctx.initramfs_path,
     }
     backup_dir = _ensure_extreme_backup_dir(ctx, preflight_data)
@@ -5179,7 +5201,10 @@ def _handle_extreme_stock_preflight(ctx: RecoveryContext, event_queue: queue.Que
         return
 
     for disable_cmd in getattr(profile, "stock_ssh_timeout_disable_commands", []):
-        result = _ssh_with_password(stock_ip, stock_user, stock_password, disable_cmd, timeout=20)
+        result = _ssh_with_password(
+            stock_ip, stock_user, stock_password, disable_cmd, timeout=20,
+            extra_ssh_options=stock_ssh_options,
+        )
         if result.returncode != 0:
             log(f"ERROR: failed to run stock timeout-disable command '{disable_cmd}': {result.stderr[:300]}")
             ctx.state = State.FAILED
@@ -5217,32 +5242,65 @@ def _handle_extreme_stock_writing_uboot(ctx: RecoveryContext, event_queue: queue
     stock_password = profile.stock_default_password
     tftp_ip = _extreme_tftp_server_ip(profile)
     ap_ip = profile.stock_default_ip
+    stock_ssh_options = _extreme_stock_ssh_options(profile)
 
     if not _extreme_confirm_or_fail(ctx, "Write temporary Extreme U-Boot variables now?"):
         return
 
     vars_to_write: dict[str, str] = {}
     for key, value in profile.required_uboot_vars.items():
-        resolved = value
-        if value == "<CONWRT_TFTP_SERVER_IP>":
-            resolved = tftp_ip
-        elif value == "<TEMP_AP_IP>":
+        resolved = _resolve_extreme_uboot_value(profile, value)
+        if value == "<TEMP_AP_IP>":
             resolved = ap_ip
         vars_to_write[key] = resolved
 
-    log("WARNING: Stock firmware reboots every ~5 minutes without a controller.")
-    log("Writing all U-Boot variables in a single batch to minimize time window.")
-    log("If the AP reboots during this step, serial console may be required for recovery.")
-    write_commands = []
-    for key, value in vars_to_write.items():
-        write_commands.append(f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}")
-    batch_script = " && ".join(write_commands)
-    log(f"Writing {len(vars_to_write)} U-Boot variables in single batch...")
-    batch_result = _ssh_with_password(stock_ip, stock_user, stock_password, batch_script, timeout=30)
-    if batch_result.returncode != 0:
-        log(f"ERROR: batch write_var failed: {batch_result.stderr[:500]}")
-        ctx.state = State.FAILED
-        return
+    rdwr_broken = getattr(ctx, "_extreme_rdwr_broken", False)
+
+    if not rdwr_broken:
+        log("WARNING: Stock firmware reboots every ~5 minutes without a controller.")
+        log("Writing all U-Boot variables in a single batch to minimize time window.")
+        log("If the AP reboots during this step, serial console may be required for recovery.")
+        write_commands = []
+        for key, value in vars_to_write.items():
+            write_commands.append(f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}")
+        batch_script = " && ".join(write_commands)
+        log(f"Writing {len(vars_to_write)} U-Boot variables in single batch...")
+        batch_result = _ssh_with_password(
+            stock_ip, stock_user, stock_password, batch_script, timeout=30,
+            extra_ssh_options=stock_ssh_options,
+        )
+        if batch_result.returncode != 0:
+            log(f"WARNING: rdwr_boot_cfg write_var batch failed: {batch_result.stderr[:500]}")
+            rdwr_broken = True
+
+    if rdwr_broken:
+        log("Attempting individual write_var calls as fallback...")
+        individual_ok = True
+        for key, value in vars_to_write.items():
+            result = _ssh_with_password(
+                stock_ip,
+                stock_user,
+                stock_password,
+                f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}",
+                timeout=15,
+                extra_ssh_options=stock_ssh_options,
+            )
+            if result.returncode != 0:
+                log(f"WARNING: write_var failed for {key}={value}: {result.stderr[:200]}")
+                individual_ok = False
+            else:
+                log(f"Wrote {key}={value} via write_var")
+        if not individual_ok:
+            log("ERROR: rdwr_boot_cfg is broken on this firmware. Cannot write U-Boot variables.")
+            log("RECOVERY OPTIONS:")
+            log("  1. Connect serial console and set U-Boot variables manually:")
+            for key, value in vars_to_write.items():
+                log(f"     setenv {key} {value}")
+            log("     saveenv")
+            log("  2. Try a different firmware version where rdwr_boot_cfg works")
+            ctx.state = State.FAILED
+            return
+    ctx._extreme_rdwr_broken = rdwr_broken
 
     verify_result = _ssh_with_password(
         stock_ip,
@@ -5250,20 +5308,62 @@ def _handle_extreme_stock_writing_uboot(ctx: RecoveryContext, event_queue: queue
         stock_password,
         f"{shlex.quote(profile.rdwr_boot_cfg_binary)} read_all",
         timeout=20,
+        extra_ssh_options=stock_ssh_options,
     )
-    parsed = _parse_key_value_lines((verify_result.stdout or "") + "\n" + (verify_result.stderr or ""))
-    for key, value in vars_to_write.items():
-        if parsed.get(key) != value:
-            log(f"ERROR: verification failed for {key}: expected {value!r}, got {parsed.get(key)!r}")
-            ctx.state = State.FAILED
-            return
-        log(f"Verified stock U-Boot var {key}={value}")
+    if verify_result.returncode != 0 or not verify_result.stdout.strip():
+        log("WARNING: Cannot verify written variables (rdwr_boot_cfg read_all broken).")
+        log("Proceeding anyway — variables were written without error.")
+    else:
+        parsed = _parse_key_value_lines((verify_result.stdout or "") + "\n" + (verify_result.stderr or ""))
+        for key, value in vars_to_write.items():
+            if parsed.get(key) != value:
+                log(f"ERROR: verification failed for {key}: expected {value!r}, got {parsed.get(key)!r}")
+                ctx.state = State.FAILED
+                return
+            log(f"Verified stock U-Boot var {key}={value}")
+
+    final_vars_to_write: dict[str, str] = {}
+    for key, value in profile.final_uboot_vars.items():
+        resolved = _resolve_extreme_uboot_value(profile, value)
+        final_vars_to_write[key] = resolved
+
+    if not rdwr_broken:
+        final_write_commands = []
+        for key, value in final_vars_to_write.items():
+            final_write_commands.append(f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}")
+        if final_write_commands:
+            final_batch_script = " && ".join(final_write_commands)
+            log(f"Writing {len(final_vars_to_write)} final U-Boot variables for permanent OpenWrt boot...")
+            final_result = _ssh_with_password(
+                stock_ip, stock_user, stock_password, final_batch_script, timeout=30,
+                extra_ssh_options=stock_ssh_options,
+            )
+            if final_result.returncode == 0:
+                ctx._extreme_final_vars_written = True
+                log("Final U-Boot vars written successfully.")
+            else:
+                log(f"WARNING: Failed to write final U-Boot vars: {final_result.stderr[:400]}")
+                log("AP will use TFTP boot as fallback. Permanent boot must be set manually later.")
+    else:
+        final_ok = True
+        for key, value in final_vars_to_write.items():
+            result = _ssh_with_password(
+                stock_ip, stock_user, stock_password,
+                f"{shlex.quote(profile.rdwr_boot_cfg_binary)} write_var {shlex.quote(f'{key}={value}')}",
+                timeout=15,
+                extra_ssh_options=stock_ssh_options,
+            )
+            if result.returncode != 0:
+                final_ok = False
+        if final_ok:
+            ctx._extreme_final_vars_written = True
 
     ctx.state = State.EXTREME_STOCK_REBOOTING
 
 
 def _handle_extreme_stock_rebooting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     profile = ctx.profile
+    stock_ssh_options = _extreme_stock_ssh_options(profile)
     log("Rebooting AP to TFTP boot OpenWrt initramfs...")
     try:
         _ssh_with_password(
@@ -5272,6 +5372,7 @@ def _handle_extreme_stock_rebooting(ctx: RecoveryContext, event_queue: queue.Que
             profile.stock_default_password,
             "reboot",
             timeout=10,
+            extra_ssh_options=stock_ssh_options,
         )
     except Exception:
         pass
@@ -5375,33 +5476,19 @@ def _handle_extreme_openwrt_backup(ctx: RecoveryContext, event_queue: queue.Queu
 
 
 def _handle_extreme_bootcmd_restore(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    profile = ctx.profile
-    have_fw_setenv = _extreme_openwrt_ssh(ctx, "which fw_setenv && which fw_printenv", timeout=15)
-    have_fw_env_config = _extreme_openwrt_ssh(ctx, "test -f /etc/fw_env.config", timeout=10)
-    restored = False
-
-    if have_fw_setenv.returncode == 0 and have_fw_env_config.returncode == 0:
-        restored = True
-        for key, value in profile.final_uboot_vars.items():
-            set_result = _extreme_openwrt_ssh(ctx, f"fw_setenv {shlex.quote(key)} {shlex.quote(value)}", timeout=20)
-            if set_result.returncode != 0:
-                log(f"ERROR: fw_setenv failed for {key}: {set_result.stderr[:300]}")
-                restored = False
-                break
-            verify_result = _extreme_openwrt_ssh(ctx, f"fw_printenv {shlex.quote(key)}", timeout=15)
-            parsed = _parse_key_value_lines(verify_result.stdout or "")
-            if parsed.get(key) != value:
-                log(f"ERROR: fw_printenv verification failed for {key}: expected {value!r}, got {parsed.get(key)!r}")
-                restored = False
-                break
-            log(f"Restored final U-Boot var {key}={value}")
-
-    if restored:
-        event_queue.put((Event.EXTREME_BOOTCMD_RESTORED, ts(), "fw_setenv"))
-        _cleanup_extreme_tftp_assets(ctx)
+    final_vars_written = getattr(ctx, "_extreme_final_vars_written", False)
+    if final_vars_written:
+        log("Final U-Boot vars already written from stock firmware.")
+        event_queue.put((Event.EXTREME_BOOTCMD_RESTORED, ts(), "stock_rdwr"))
     else:
-        log("WARNING: could not safely restore bootcmd via fw_setenv. Extreme TFTP detour fallback will be required if the AP keeps booting from network.")
+        log("WARNING: Final U-Boot vars were NOT written during stock phase.")
+        log("The AP will boot from TFTP (run boot_net) on every reboot.")
+        log("To set permanent boot from flash, SSH to stock firmware and run:")
+        for key, value in ctx.profile.final_uboot_vars.items():
+            resolved = _resolve_extreme_uboot_value(ctx.profile, value)
+            log(f"  rdwr_boot_cfg write_var {key}={resolved}")
 
+    _cleanup_extreme_tftp_assets(ctx)
     ctx.state = State.EXTREME_SYSUPGRADE_UPLOADING
 
 

@@ -24,6 +24,10 @@
       "stock_default_ip": "192.168.1.1",
       "stock_default_user": "admin",
       "stock_default_password": "new2day",
+      "stock_legacy_ssh_options": [
+        "-o", "HostKeyAlgorithms=+ssh-rsa",
+        "-o", "KexAlgorithms=+diffie-hellman-group1-sha1"
+      ],
       "stock_ssh_timeout_disable_commands": [
         "cset sshtimeout 0",
         "capply",
@@ -42,6 +46,7 @@
         "WATCHDOG_COUNT": "0",
         "WATCHDOG_LIMIT": "0",
         "AP_PERSONALITY": "identifi",
+        "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
         "serverip": "<CONWRT_TFTP_SERVER_IP>",
         "ipaddr": "<TEMP_AP_IP>",
         "bootcmd": "run boot_net"

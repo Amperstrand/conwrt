@@ -1,7 +1,10 @@
 """Tests for Extreme Networks AP391x flash method support."""
 import json
+import queue
 import struct
 import sys
+import shutil
+import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -14,6 +17,7 @@ from jsonschema import Draft7Validator
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from model_loader import load_model
+import conwrt
 from flash.context import Event, State
 from flash.detect import detect_boot_state
 from flash.device_profile import build_profile_from_model, find_recovery_flash_method
@@ -133,6 +137,13 @@ class TestExtremeRdwrTftpProfile(unittest.TestCase):
         self.assertEqual(self.profile.stock_default_user, "admin")
         self.assertEqual(self.profile.stock_default_password, "new2day")
         self.assertEqual(
+            self.profile.stock_legacy_ssh_options,
+            [
+                "-o", "HostKeyAlgorithms=+ssh-rsa",
+                "-o", "KexAlgorithms=+diffie-hellman-group1-sha1",
+            ],
+        )
+        self.assertEqual(
             self.profile.stock_ssh_timeout_disable_commands,
             ["cset sshtimeout 0", "capply", "csave"],
         )
@@ -143,8 +154,9 @@ class TestExtremeRdwrTftpProfile(unittest.TestCase):
         self.assertEqual(self.profile.bootcmd_flash, "run boot_openwrt")
         self.assertEqual(self.profile.required_uboot_vars["AP_MODE"], "0")
         self.assertEqual(self.profile.required_uboot_vars["AP_PERSONALITY"], "identifi")
+        self.assertEqual(self.profile.required_uboot_vars["boot_openwrt"], self.profile.boot_openwrt)
         self.assertEqual(self.profile.required_uboot_vars["bootcmd"], "run boot_net")
-        self.assertEqual(self.profile.final_uboot_vars["bootcmd"], "run boot_openwrt")
+        self.assertEqual(self.profile.final_uboot_vars["bootcmd"], "run boot_openwrt; run boot_net")
         self.assertIn("initramfs-uImage", self.profile.initramfs_file)
         self.assertIn("sysupgrade.bin", self.profile.sysupgrade_file)
         self.assertEqual(self.profile.flash_time_seconds, 300)
@@ -208,6 +220,8 @@ class TestExtremeDetection(unittest.TestCase):
             result = detect_boot_state("", profile)
         self.assertEqual(result, "stock-extreme")
         self.assertEqual(mock_run.call_args.args[0][-1], "which rdwr_boot_cfg")
+        self.assertIn("HostKeyAlgorithms=+ssh-rsa", mock_run.call_args.args[0])
+        self.assertIn("KexAlgorithms=+diffie-hellman-group1-sha1", mock_run.call_args.args[0])
 
     @patch("flash.detect.check_ssh", return_value=True)
     @patch("flash.detect.subprocess.run")
@@ -301,6 +315,165 @@ class TestExtremeClassification(unittest.TestCase):
     def test_classifies_inconclusive_evidence(self):
         verdict = classify_extreme_image_evidence("header fields found but no auth markers present")
         self.assertEqual(verdict, "inconclusive")
+
+
+class TestExtremeHandlers(unittest.TestCase):
+    def _profile(self) -> SimpleNamespace:
+        return build_profile_from_model(MODEL_ID, flash_method="extreme-rdwr-tftp-initramfs")
+
+    def _ctx(self, profile: SimpleNamespace | None = None) -> conwrt.RecoveryContext:
+        if profile is None:
+            profile = self._profile()
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        initramfs_path = Path(tmpdir.name) / "initramfs.bin"
+        image_path = Path(tmpdir.name) / "sysupgrade.bin"
+        initramfs_path.write_bytes(b"initramfs")
+        image_path.write_bytes(b"sysupgrade")
+        return conwrt.RecoveryContext(
+            profile=profile,
+            image_path=str(image_path),
+            initramfs_path=str(initramfs_path),
+            interface="eth0",
+            pcap_path=str(Path(tmpdir.name) / "test.pcap"),
+            no_upload=False,
+            assume_yes=True,
+            _say_fn=lambda _msg: None,
+        )
+
+    @patch("conwrt.TFTPServerManager")
+    @patch("conwrt.configure_interface_ip", return_value=True)
+    @patch("conwrt._write_json_file")
+    @patch("conwrt._ensure_extreme_backup_dir")
+    @patch("conwrt._setup_interface_ips")
+    @patch("conwrt._ssh_with_password")
+    def test_preflight_marks_rdwr_broken_but_continues(
+        self,
+        mock_ssh,
+        _mock_setup_ips,
+        mock_backup_dir,
+        _mock_write_json,
+        _mock_configure_ip,
+        mock_tftp_manager,
+    ):
+        ctx = self._ctx()
+        event_queue = queue.Queue()
+        backup_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, backup_dir, True)
+        mock_backup_dir.return_value = backup_dir
+        mock_tftp_manager.return_value.start.return_value = True
+
+        def ssh_side_effect(_ip, _user, _password, command, timeout=30, *, extra_ssh_options=None):
+            self.assertEqual(extra_ssh_options, ctx.profile.stock_legacy_ssh_options)
+            if command.startswith("which "):
+                return MagicMock(returncode=0, stdout="/usr/bin/rdwr_boot_cfg\n", stderr="")
+            if command.endswith("read_all"):
+                return MagicMock(returncode=255, stdout="", stderr="broken")
+            return MagicMock(returncode=0, stdout="ok\n", stderr="")
+
+        mock_ssh.side_effect = ssh_side_effect
+        conwrt._handle_extreme_stock_preflight(ctx, event_queue)
+
+        self.assertTrue(ctx._extreme_rdwr_broken)
+        self.assertEqual(ctx.state, State.EXTREME_STOCK_WRITING_UBOOT)
+
+    @patch("conwrt._ssh_with_password")
+    def test_stock_writing_uboot_falls_back_to_individual_writes_when_batch_fails(self, mock_ssh):
+        ctx = self._ctx()
+        ctx._extreme_rdwr_broken = False
+        event_queue = queue.Queue()
+
+        def ssh_side_effect(_ip, _user, _password, command, timeout=30, *, extra_ssh_options=None):
+            self.assertEqual(extra_ssh_options, ctx.profile.stock_legacy_ssh_options)
+            if "&&" in command:
+                return MagicMock(returncode=1, stdout="", stderr="batch failed")
+            if command.endswith("read_all"):
+                return MagicMock(returncode=255, stdout="", stderr="still broken")
+            if "write_var" in command:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"Unexpected command: {command}")
+
+        mock_ssh.side_effect = ssh_side_effect
+        conwrt._handle_extreme_stock_writing_uboot(ctx, event_queue)
+
+        self.assertTrue(ctx._extreme_rdwr_broken)
+        self.assertTrue(ctx._extreme_final_vars_written)
+        self.assertEqual(ctx.state, State.EXTREME_STOCK_REBOOTING)
+
+    @patch("conwrt._ssh_with_password")
+    def test_stock_writing_uboot_writes_final_vars_during_stock_phase(self, mock_ssh):
+        ctx = self._ctx()
+        event_queue = queue.Queue()
+        required_lines = []
+        for key, value in ctx.profile.required_uboot_vars.items():
+            resolved = conwrt._resolve_extreme_uboot_value(ctx.profile, value)
+            if value == "<TEMP_AP_IP>":
+                resolved = ctx.profile.stock_default_ip
+            required_lines.append(f"{key}={resolved}")
+        required_output = "\n".join(required_lines) + "\n"
+
+        def ssh_side_effect(_ip, _user, _password, command, timeout=30, *, extra_ssh_options=None):
+            self.assertEqual(extra_ssh_options, ctx.profile.stock_legacy_ssh_options)
+            if command.endswith("read_all"):
+                return MagicMock(
+                    returncode=0,
+                    stdout=required_output,
+                    stderr="",
+                )
+            if "&&" in command:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"Unexpected command: {command}")
+
+        mock_ssh.side_effect = ssh_side_effect
+        conwrt._handle_extreme_stock_writing_uboot(ctx, event_queue)
+
+        commands = [call.args[3] for call in mock_ssh.call_args_list]
+        self.assertTrue(any("bootcmd=run boot_openwrt; run boot_net" in command for command in commands))
+        self.assertTrue(ctx._extreme_final_vars_written)
+        self.assertEqual(ctx.state, State.EXTREME_STOCK_REBOOTING)
+
+    @patch("conwrt._cleanup_extreme_tftp_assets")
+    @patch("conwrt.log")
+    def test_bootcmd_restore_skips_when_final_vars_already_written(self, mock_log, mock_cleanup):
+        ctx = self._ctx()
+        ctx._extreme_final_vars_written = True
+        event_queue = queue.Queue()
+
+        conwrt._handle_extreme_bootcmd_restore(ctx, event_queue)
+
+        mock_cleanup.assert_called_once_with(ctx)
+        self.assertEqual(ctx.state, State.EXTREME_SYSUPGRADE_UPLOADING)
+        event = event_queue.get_nowait()
+        self.assertEqual(event[0], Event.EXTREME_BOOTCMD_RESTORED)
+        self.assertEqual(event[2], "stock_rdwr")
+        self.assertIn(
+            unittest.mock.call("Final U-Boot vars already written from stock firmware."),
+            mock_log.call_args_list,
+        )
+
+    @patch("conwrt._cleanup_extreme_tftp_assets")
+    @patch("conwrt.log")
+    def test_bootcmd_restore_warns_when_final_vars_not_written(self, mock_log, mock_cleanup):
+        ctx = self._ctx()
+        event_queue = queue.Queue()
+
+        conwrt._handle_extreme_bootcmd_restore(ctx, event_queue)
+
+        mock_cleanup.assert_called_once_with(ctx)
+        self.assertEqual(ctx.state, State.EXTREME_SYSUPGRADE_UPLOADING)
+        self.assertTrue(event_queue.empty())
+        log_messages = [call.args[0] for call in mock_log.call_args_list]
+        self.assertIn("WARNING: Final U-Boot vars were NOT written during stock phase.", log_messages)
+        self.assertIn("The AP will boot from TFTP (run boot_net) on every reboot.", log_messages)
+        self.assertIn("To set permanent boot from flash, SSH to stock firmware and run:", log_messages)
+        self.assertIn("  rdwr_boot_cfg write_var bootcmd=run boot_openwrt; run boot_net", log_messages)
+
+    def test_resolve_extreme_uboot_value_uses_openwrt_client_ip(self):
+        profile = self._profile()
+        self.assertEqual(
+            conwrt._resolve_extreme_uboot_value(profile, "<CONWRT_TFTP_SERVER_IP>"),
+            profile.openwrt_client_ip,
+        )
 
 
 if __name__ == "__main__":
