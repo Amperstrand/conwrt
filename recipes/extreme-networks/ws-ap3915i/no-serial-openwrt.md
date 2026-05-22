@@ -1,7 +1,8 @@
 # Extreme Networks WS-AP3915i — No-Serial OpenWrt Flash
 
-> **Session status: PAUSED.** Device is offline. AP in boot loop (wrong `bootcmd`).
-> See `SESSION-WRITEUP.md` for a clean summary of what happened and how to recover.
+> **Session status: COMPLETE.** Unit 2 successfully flashed with OpenWrt 24.10.2 (2026-05-22).
+> Unit 1 remains in boot loop (needs serial cable for recovery).
+> See `SESSION-WRITEUP.md` for Unit 1 analysis, `UNIT2-AP3915i-ROW.md` for Unit 2 flash results.
 
 ## Supported Models
 

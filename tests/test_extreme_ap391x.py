@@ -129,11 +129,11 @@ class TestExtremeRdwrTftpProfile(unittest.TestCase):
         self.assertTrue(self.profile.is_extreme_rdwr_tftp)
 
     def test_profile_attributes(self):
-        self.assertEqual(self.profile.recovery_ip, "192.168.1.1")
-        self.assertEqual(self.profile.client_ip, "192.168.1.2")
+        self.assertEqual(self.profile.recovery_ip, "192.168.1.X")
+        self.assertEqual(self.profile.client_ip, "192.168.1.X")
         self.assertEqual(self.profile.openwrt_ip, "192.168.1.1")
-        self.assertEqual(self.profile.openwrt_client_ip, "192.168.1.2")
-        self.assertEqual(self.profile.stock_default_ip, "192.168.1.1")
+        self.assertEqual(self.profile.openwrt_client_ip, "192.168.1.X")
+        self.assertEqual(self.profile.stock_default_ip, "192.168.1.X")
         self.assertEqual(self.profile.stock_default_user, "admin")
         self.assertEqual(self.profile.stock_default_password, "new2day")
         self.assertEqual(

@@ -21,7 +21,7 @@
   "flash_methods": {
     "extreme-rdwr-tftp-initramfs": {
       "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
-      "stock_default_ip": "192.168.1.1",
+      "stock_default_ip": "192.168.1.X",
       "stock_default_user": "admin",
       "stock_default_password": "new2day",
       "stock_legacy_ssh_options": [
@@ -60,7 +60,7 @@
         "serverip": "<CONWRT_TFTP_SERVER_IP>"
       },
       "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon, NOT ||), NOT 'run boot_flash' or 'bootx'. boot_flash/bootx runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. Semicolon provides TFTP fallback: if bootm succeeds it doesn't return (kernel boots), if bootm fails it returns and run boot_net catches via TFTP. See commit e16a0e7 and SESSION-WRITEUP.md. NOTE: All final_uboot_vars should be written from STOCK firmware (not initramfs) because the OpenWrt DTS marks CFG partitions as read-only and kmod-mtd-rw is unavailable in 24.10.2.",
-      "openwrt_client_ip": "192.168.1.2",
+      "openwrt_client_ip": "192.168.1.X",
       "openwrt_ip": "192.168.1.1",
       "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
       "sysupgrade_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",

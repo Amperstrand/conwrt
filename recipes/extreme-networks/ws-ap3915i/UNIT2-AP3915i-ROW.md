@@ -5,7 +5,7 @@ Serial: 1918Y-1083600000
 MAC: DC:B8:08:XX:XX:XX
 IP: 192.168.1.X (stock firmware, static)
 Date: 2026-05-22
-Status: Stock firmware, preparing for OpenWrt flash
+Status: **OpenWrt 24.10.2 running from SPI-NOR flash** (flashed 2026-05-22)
 
 ## Hardware Identity
 
@@ -175,9 +175,10 @@ order — NAND partitions (mtd0, mtd11) interleave with NOR partitions.
 
 **IMPLICATION**: ALL partitions except `firmware` are marked `read-only` in the DTS.
 Writing to CFG1/CFG2 from OpenWrt initramfs requires bypassing the read-only flag.
-kmod-mtd-rw was available in OpenWrt 23.05.x but is NOT available in 24.10.2 (not rebuilt
-for kernel 6.6). Therefore, ALL config block writes must be done from STOCK FIRMWARE
-where partitions are writable.
+kmod-mtd-rw IS available in 24.10.2 (contrary to earlier notes): package
+`kmod-mtd-rw_6.6.93.2021.02.28~e8776739-r1_arm_cortex-a7_neon-vfpv4.ipk` from the official
+OpenWrt repo. Requires `insmod mtd-rw i_want_a_brick=1` to activate. This was used
+successfully to write CFG1 on Unit 2.
 
 **fw_setenv**: The AP3915i is NOT in the uboot-envtools board list
 (`package/boot/uboot-envtools/files/ipq40xx`). fw_env.config is NOT auto-generated.
@@ -201,3 +202,139 @@ No initramfs MTD writes needed. The semicolon fallback is safer than `||` becaus
 
 **One block at a time**: Use flashcp (not rdwr_boot_cfg) to write CFG1 only.
 Leave CFG2 untouched as known-good fallback.
+
+---
+
+## Flash Session Log (2026-05-22)
+
+### What We Did
+
+1. **Stock firmware TFTP boot setup**: Used `rdwr_boot_cfg write_var bootcmd=run boot_net`
+   from stock firmware to set TFTP boot. Configured Mac as DHCP+TFTP server on en5 (USB ethernet).
+   Watchdog reboot triggered TFTP boot of OpenWrt initramfs.
+
+2. **Initramfs verification**: OpenWrt 24.10.2 initramfs booted at 192.168.1.1. Verified kernel,
+   RAM, MTD layout, SSH. All 10 MTD partitions backed up to
+   `data/extreme-ap3915i/unit2-stock-backups/`.
+
+3. **Env write approach**: `fw_setenv` failed with "environment overflow" due to 0xFF padding
+   in stock env (fw_setenv scans past env data into padding). Pivoted to raw binary env block
+   built with Python: CRC32 + flag byte + env data + padding. Verified CRC matches U-Boot's
+   algorithm exactly.
+
+4. **kmod-mtd-rw installation**: Installed `kmod-mtd-rw` from official OpenWrt 24.10.2 repo
+   (contrary to our earlier notes, it IS available). `insmod mtd-rw i_want_a_brick=1` sets
+   MTD_WRITEABLE flag on all partitions. Verified CFG1 flags changed from 0x800 to 0xC00.
+
+5. **Env write to CFG1**: Built env block with Python containing:
+   - `boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000`
+   - `bootcmd=run boot_openwrt; run boot_net` (flash first, TFTP fallback)
+   - All 65 original env variables preserved unchanged
+   - CRC32 calculated with `zlib.crc32()` (verified matching U-Boot)
+   - 0xFF padding (matching stock format)
+   - Flag=0x02 (higher than CFG2's 0x01, making CFG1 active)
+   - Written via `mtd write /tmp/cfg1_new.bin CFG1`
+   - **CFG2 left untouched** as safety net (bootcmd=run boot_net)
+
+6. **Sysupgrade**: `sysupgrade -n /tmp/sysupgrade.bin` wrote 9.1 MB OpenWrt squashfs to
+   firmware partition (mtd7). AP rebooted automatically.
+
+7. **Verification**: OpenWrt 24.10.2 booted from SPI-NOR flash. Kernel 6.6.93, squashfs rootfs,
+   jffs2 overlay on rootfs_data (mtd10). SSH working. Reboot test passed — permanent flash boot.
+
+### What Worked
+
+- **kmod-mtd-rw + mtd write**: The mechanism for writing env from initramfs. Flawless.
+- **Raw Python env block builder**: CRC32 correct, flag semantics correct, all vars preserved.
+- **David Bauer's boot_openwrt command**: `sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000`
+  — worked perfectly on first try.
+- **One-block strategy**: Only writing CFG1, leaving CFG2 as fallback. Didn't need the fallback
+  but the safety net was critical for confidence.
+- **Semicolon fallback**: `boot_openwrt; boot_net` — if flash boot fails, TFTP catches it.
+
+### What Didn't Work
+
+- **fw_setenv**: "environment overflow" on every attempt. Root cause: stock env uses 0xFF
+  padding, fw_setenv scans past the env data into the padding and thinks the env is full.
+  Raw binary write was the workaround.
+- **rdwr_boot_cfg** (from stock firmware): `read_all` returned empty. Not reliable on this firmware.
+
+### Lessons for Future Flashes
+
+1. **kmod-mtd-rw IS available in OpenWrt 24.10.2** despite our earlier notes saying it wasn't.
+   The package is in the official repo for kernel 6.6.93.
+2. **fw_setenv is unreliable with stock env format** (0xFF padding). Always use raw binary
+   env blocks for reliability.
+3. **Build env blocks with Python**: `struct.pack('<I', zlib.crc32(env_data)) + flag_byte + env_data`
+   — simple, verifiable, repeatable.
+4. **Test `mtd write` with round-trip** before committing: dump partition, write same data back,
+   verify hash matches.
+5. **Keep TFTP server running** throughout the process as safety net.
+6. **Never write both config blocks** — Unit 1 bricked because the same wrong value went to both.
+7. **Do env write + sysupgrade in one SSH session** — if AP reboots with new bootcmd but old
+   firmware, boot_openwrt succeeds with stock FIT → stock firmware → watchdog loop.
+8. **The stock bootargs `ubi.mtd=0` causes harmless error** — kernel tries to attach CFG1 as
+  UBI, fails, continues. Not a problem but can be cleaned up.
+
+### Current State
+
+```
+Device: Extreme Networks WS-AP3915i (AP3915i-ROW)
+Serial: 1918Y-1083600000
+MAC: DC:B8:08:XX:XX:XX
+IP: 192.168.1.1 (br-lan, static default)
+SSH: root@192.168.1.1 (no password, key auth)
+Firmware: OpenWrt 24.10.2 r28739-d9340319c6
+Kernel: 6.6.93 armv7l (ipq40xx/generic)
+Boot: SPI-NOR flash (boot_openwrt → sf read → bootm)
+Rootfs: squashfs on mtd9 (read-only) + jffs2 overlay on mtd10 (read-write)
+RAM: 506 MB
+Storage: 4.3 MB squashfs + 20.8 MB overlay
+WiFi: QCA4019 detected (phy0) — not yet configured
+LEDs: green:system=ON (solid), green:wlan24/wlan5=phy0tpt/phy1tpt (blink on traffic)
+```
+
+### MTD Layout (OpenWrt view)
+
+```
+mtd0:  00010000 "CFG1"       — U-Boot env block 1 (flag=0x02, active, has boot_openwrt)
+mtd1:  00070000 "BootBAK"    — Backup U-Boot (read-only)
+mtd2:  00010000 "WINGCFG1"   — WiNG config 1 (read-only)
+mtd3:  00010000 "ART"        — Atheros radio calibration (read-only)
+mtd4:  00070000 "BootPRI"    — Primary U-Boot + boot_kernel script (read-only)
+mtd5:  00010000 "WINGCFG2"   — WiNG config 2 (read-only)
+mtd6:  00080000 "FS"         — JFFS2 filesystem (read-only)
+mtd7:  01d60000 "firmware"   — OpenWrt squashfs-sysupgrade (writable)
+mtd8:  00490000 "kernel"     — FIT kernel (auto-split from firmware)
+mtd9:  018df440 "rootfs"     — squashfs rootfs (auto-split from firmware)
+mtd10: 014d0000 "rootfs_data" — jffs2 overlay (auto-split, writable)
+mtd11: 00010000 "CFG2"       — U-Boot env block 2 (flag=0x01, backup, bootcmd=run boot_net)
+```
+
+### Env Variables (Critical)
+
+```
+bootcmd=run boot_openwrt; run boot_net
+boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000
+boot_net=tftpboot 0x83600000 vmlinux.gz.uImage.3912; bootm 0x83600000
+bootdelay=2
+serverip=192.168.1.X
+ipaddr=192.168.1.1
+```
+
+### Known Issues
+
+- **Harmless dmesg error**: `ubi0 error: failed to attach mtd0, error -22` — caused by
+  stock bootargs `ubi.mtd=0`. Kernel ignores unknown params. Can be fixed by updating
+  bootargs env variable.
+- **WiFi not configured**: OpenWrt default doesn't enable WiFi radios. Need `uci set wireless.radio0.disabled=0` etc.
+- **No pcap monitoring during flash**: We did not capture the boot sequence with tcpdump.
+  Would be valuable for documentation but the flash succeeded without it.
+
+### Todo
+
+- [ ] Enable and configure WiFi radios
+- [ ] Clean up bootargs (remove `ubi.mtd=0` and stock params)
+- [ ] Set root password for production use
+- [ ] Configure firewall rules
+- [ ] Re-enable Mac PF firewall properly

@@ -162,7 +162,7 @@ ABORT if filename contains "ws-ap391x" instead of "ws-ap3915i".
 7. **IP discovery** — Don't assume OpenWrt comes up at 192.168.1.X
 8. **/proc/mtd gate** — Verify partition layout from initramfs before sysupgrade
 
-### Topology
+### Topology (REQUIRED — through switch)
 ```
 [Mac 192.168.1.X] ---en5--- [OpenWrt Zyxel GS1900-8HP 192.168.1.2]
                                     |
@@ -172,6 +172,15 @@ ABORT if filename contains "ws-ap391x" instead of "ws-ap3915i".
 ```
 
 All 8 switch ports on bridge VLAN1 — no filtering, all traffic visible on Mac's en5.
+
+**IMPORTANT**: The AP must be connected through the switch, NOT direct to Mac. The AP's stock firmware requires DHCP to bring up SSH. The switch's dnsmasq DHCP server provides the lease (192.168.1.X). Direct-connect via PoE injector does NOT work — the AP ignores DHCP offers from both Python DHCP servers and macOS bootpd, falls back to auto-IP 192.168.1.20, but never starts SSH. Factory reset does not help — the AP still needs DHCP.
+
+**Model JSON updated for this topology**:
+- `stock_default_ip`: 192.168.1.X (AP's DHCP-assigned IP from switch)
+- `openwrt_client_ip`: 192.168.1.X (Mac's en5 IP — TFTP server)
+- `openwrt_ip`: 192.168.1.1 (OpenWrt initramfs default IP after TFTP boot)
+
+**Before starting**: Run `sudo arp -d -a` to clear stale ARP entries.
 
 ### Phase 0: Verify rdwr_boot_cfg (CRITICAL — must do first)
 ```bash
