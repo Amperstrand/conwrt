@@ -421,7 +421,8 @@ firmware partition, bootm will fail and the semicolon fallback catches it.
 ssh root@OPENWRT_IP
 # Verify:
 iw phy                     # WiFi radios present
-hexdump -C /dev/mtd3 | head  # ART partition integrity (mtd3 in OpenWrt layout)
+ART_DEV=$(cat /proc/mtd | grep '"ART"' | awk -F: '{print "/dev/"$1}')
+hexdump -C $ART_DEV | head  # ART partition integrity (name-based, avoids MTD index confusion)
 cat /etc/board.json          # Correct device identification
 cat /proc/mtd                # Partition layout matches DTS
 
@@ -495,10 +496,13 @@ See Appendix A for the full external review. Key changes:
 
 ## Open Questions for Reviewer (updated)
 
-1. ~~**Address conflict**: `sf read 0x88000000` vs `fdt_high=0x87000000`~~
+1. ~~**Address conflict**: `sf read 0x88000000` vs `fdt_high`~~
    **RESOLVED**: This is David Bauer's proven command from commit e16a0e7. `bootm`
    extracts the FDT from the FIT blob and places it below `fdt_high`. The FIT blob
-   at 0x88000000 stays intact. Low risk.
+   at 0x88000000 stays intact. Note: `fdt_high=0x80100000` in the config block (verified
+   from Unit 1 backup). The BootPRI's boot_kernel script overrides this to `0x87000000`,
+   but our `boot_openwrt` doesn't run boot_kernel so the config block value applies.
+   Either value is safe — FDT at 0x80100000 is well below FIT at 0x88000000.
 
 2. ~~**NAND interference**~~
    **RESOLVED**: OpenWrt DTS for AP3915i defines only SPI-NOR partitions. NAND is

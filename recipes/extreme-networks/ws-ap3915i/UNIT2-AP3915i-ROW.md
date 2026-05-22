@@ -103,7 +103,7 @@ mechanism that bricked Unit 1 when we set `bootcmd=run boot_flash`.
 
 The BootPRI also contains:
 - `bootipq` — another custom command, "boot from flash device"
-- `set fdt_high 0x87000000` — FDT gets placed below this address
+- `set fdt_high 0x87000000` — boot_kernel overrides config block value (0x80100000) to 0x87000000
 - The full boot_kernel script with watchdog, dual-image failover, nboot logic
 
 ## boot_kernel Script (extracted from BootPRI)
@@ -122,7 +122,7 @@ The script implements:
 |---------|---------|-------|
 | TFTP load (boot_net) | 0x83600000 | Same as Unit 1 |
 | SPI-NOR read (boot_openwrt) | 0x88000000 | From David Bauer commit e16a0e7 |
-| FDT high limit | 0x87000000 | Set by bootipq, FDT placed below this |
+| FDT high limit | 0x80100000 (config block) / 0x87000000 (boot_kernel override) | FDT placed below this; safe at either value |
 | PriImg flash offset | 0x280000 | Same as Unit 1 |
 | SecImg flash offset | 0x1130000 | Same as Unit 1 |
 | Firmware size | 0xc00000 (12MB) | From David Bauer commit |

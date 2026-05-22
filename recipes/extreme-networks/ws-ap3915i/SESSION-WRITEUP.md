@@ -724,7 +724,7 @@ On 2026-05-22 we acquired a second AP3915i unit. Key findings:
 - **boot_net**: `tftpboot 0x83600000 vmlinux.gz.uImage.3912; bootm 0x83600000` (same as Unit 1)
 - **rdwr_boot_cfg**: EXISTS and is executable (4824 bytes). `read_all` returned empty — needs further testing with `read_var`. This is the key difference from Unit 1 where `rdwr_boot_cfg` was completely broken.
 - **TFTP load address**: 0x83600000 (same as Unit 1)
-- **fdt_high**: 0x87000000 (set by bootipq command in BootPRI)
+- **fdt_high**: 0x80100000 (in config block; boot_kernel overrides to 0x87000000, but our boot_openwrt doesn't run boot_kernel)
 
 Full details: `recipes/extreme-networks/ws-ap3915i/UNIT2-AP3915i-ROW.md`
 
