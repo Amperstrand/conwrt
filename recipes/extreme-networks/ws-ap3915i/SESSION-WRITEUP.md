@@ -709,3 +709,29 @@ the openwrt/openwrt repository.
 
 ### Full technical notes
 - `recipes/extreme-networks/ws-ap3915i/no-serial-openwrt.md`
+
+---
+
+## Cross-Reference: Second AP3915i Unit (AP3915i-ROW)
+
+On 2026-05-22 we acquired a second AP3915i unit. Key findings:
+
+- **Model**: AP3915i-ROW (Rest of World variant), Serial 1918Y-1083600000
+- **Hardware differences**: Has both SPI-NOR AND 512MB NAND (UBIFS rootfs). Unit 1 had SPI-NOR only.
+- **SPI-NOR partition layout**: IDENTICAL to Unit 1 (same offsets, same names, PriImg=0x280000)
+- **U-Boot version**: OLDER (2012.07.19-r00020.1 vs Unit 1's 2012.07.22)
+- **Default bootcmd**: `bootx` (NOT `run boot_flash`) — but `bootx` IS equivalent to `run boot_flash` (confirmed from BootPRI strings: "bootx - equivalent to the command: run boot_flash")
+- **boot_net**: `tftpboot 0x83600000 vmlinux.gz.uImage.3912; bootm 0x83600000` (same as Unit 1)
+- **rdwr_boot_cfg**: EXISTS and is executable (4824 bytes). `read_all` returned empty — needs further testing with `read_var`. This is the key difference from Unit 1 where `rdwr_boot_cfg` was completely broken.
+- **TFTP load address**: 0x83600000 (same as Unit 1)
+- **fdt_high**: 0x87000000 (set by bootipq command in BootPRI)
+
+Full details: `recipes/extreme-networks/ws-ap3915i/UNIT2-AP3915i-ROW.md`
+
+### Implications for Flash Plan
+
+1. Same OpenWrt image works (SPI-NOR layout is identical)
+2. `rdwr_boot_cfg write_var` may work for setting U-Boot variables (safer than raw MTD)
+3. `boot_openwrt` must use address 0x88000000 for `sf read` (David Bauer commit)
+4. NAND is irrelevant for OpenWrt — only SPI-NOR is used
+5. `bootcmd=run boot_openwrt || run boot_net` provides permanent TFTP fallback
