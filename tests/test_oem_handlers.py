@@ -13,6 +13,7 @@ from flash.context import State
 from flash.oem_handlers import (
     zyxel_encode_password,
     OEM_METHOD_CONFIG,
+    oem_http_login,
     oem_http_login_v200,
     oem_ftp_login,
     oem_ftp_enable_service,
@@ -21,6 +22,7 @@ from flash.oem_handlers import (
     oem_http_accept_reboot,
     install_sysupgrade,
     install_mtd_write,
+    _read_xssid_cookie,
 )
 from model_loader import load_model
 
@@ -262,6 +264,138 @@ class TestOemHttpLoginV200(TestCase):
         first_call_args = " ".join(mock_run.call_args_list[0][0][0])
         self.assertIn("username=admin", first_call_args)
         self.assertIn("password=1234", first_call_args)
+
+
+class TestReadXssidCookie(TestCase):
+    def test_reads_http_xssid_from_cookie_jar(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".cookies", delete=False) as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            f.write("#HttpOnly_192.168.1.1\tFALSE\t/cgi-bin/\tFALSE\t0\tHTTP_XSSID\tABCDEF1234567890\n")
+            f.flush()
+            cookie_path = f.name
+        try:
+            result = _read_xssid_cookie(cookie_path)
+            self.assertEqual(result, "HTTP_XSSID=ABCDEF1234567890")
+        finally:
+            os.unlink(cookie_path)
+
+    def test_returns_empty_for_no_xssid(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".cookies", delete=False) as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            f.flush()
+            cookie_path = f.name
+        try:
+            result = _read_xssid_cookie(cookie_path)
+            self.assertEqual(result, "")
+        finally:
+            os.unlink(cookie_path)
+
+    def test_returns_empty_for_missing_file(self):
+        result = _read_xssid_cookie("/nonexistent/path/cookies.txt")
+        self.assertEqual(result, "")
+
+
+class TestOemHttpLoginV280(TestCase):
+    """Tests for oem_http_login V2.80+ encode()-based auth flow."""
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers._read_xssid_cookie", return_value="HTTP_XSSID=AABBCCDD11223344")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_successful_login_returns_http_xssid_cookie(self, mock_run, mock_mktemp, mock_sleep, mock_read_cookie, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="FAE885CD12345678ABCDEF0123456789"),
+            _mock_run(stdout="OK"),
+        ]
+        success, cookie = oem_http_login("192.168.1.1", "admin", "Zyxel2026!")
+        self.assertTrue(success)
+        self.assertEqual(cookie, "HTTP_XSSID=AABBCCDD11223344")
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers._read_xssid_cookie", return_value="HTTP_XSSID=AA")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_sends_encoded_password(self, mock_run, mock_mktemp, mock_sleep, mock_read_cookie, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="AABBCCDD12345678ABCDEF0123456789"),
+            _mock_run(stdout="OK"),
+        ]
+        oem_http_login("192.168.1.1", "admin", "test_pw")
+        login_call_args = " ".join(mock_run.call_args_list[0][0][0])
+        self.assertIn("username=admin", login_call_args)
+        self.assertIn("login=true", login_call_args)
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers._read_xssid_cookie", return_value="HTTP_XSSID=AA")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_waits_500ms_before_login_chk(self, mock_run, mock_mktemp, mock_sleep, mock_read_cookie, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="AABBCCDD12345678ABCDEF0123456789"),
+            _mock_run(stdout="OK"),
+        ]
+        oem_http_login("192.168.1.1", "admin", "test_pw")
+        mock_sleep.assert_called_once_with(0.5)
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers._read_xssid_cookie", return_value="HTTP_XSSID=AA")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_login_chk_sends_auth_id_and_cookie_jar(self, mock_run, mock_mktemp, mock_sleep, mock_read_cookie, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="DEADBEEF12345678"),
+            _mock_run(stdout="OK"),
+        ]
+        oem_http_login("192.168.1.1", "admin", "pw")
+        chk_args = " ".join(mock_run.call_args_list[1][0][0])
+        self.assertIn("authId=DEADBEEF12345678", chk_args)
+        self.assertIn("login_chk=true", chk_args)
+        self.assertIn("-c", chk_args)
+        self.assertIn("/tmp/test.cookies", chk_args)
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_fail_response_tries_v200_fallback(self, mock_run, mock_mktemp, mock_sleep, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="DEADBEEF12345678"),
+            _mock_run(stdout="FAIL"),
+            _mock_run(stdout="#HttpOnly_\tFALSE\t/\tTRUE\t0\tXSSID\tfallback\n"),
+        ]
+        success, cookie = oem_http_login("192.168.1.1", "admin", "wrong")
+        self.assertTrue(success)
+        self.assertIn("XSSID=fallback", cookie)
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_no_auth_id_tries_v200_fallback(self, mock_run, mock_mktemp, mock_sleep, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="not_a_hash"),
+            _mock_run(stdout="#HttpOnly_\tFALSE\t/\tTRUE\t0\tXSSID\tfallback\n"),
+        ]
+        success, cookie = oem_http_login("192.168.1.1", "admin", "pw")
+        self.assertTrue(success)
+        self.assertIn("XSSID=fallback", cookie)
+
+    @patch("flash.oem_handlers.log")
+    @patch("flash.oem_handlers.time.sleep")
+    @patch("flash.oem_handlers.tempfile.mktemp", return_value="/tmp/test.cookies")
+    @patch("flash.oem_handlers.subprocess.run")
+    def test_authing_response_tries_v200_fallback(self, mock_run, mock_mktemp, mock_sleep, mock_log):
+        mock_run.side_effect = [
+            _mock_run(stdout="AUTHING"),
+            _mock_run(stdout="#HttpOnly_\tFALSE\t/\tTRUE\t0\tXSSID\tv200\n"),
+        ]
+        success, cookie = oem_http_login("192.168.1.1", "admin", "pw")
+        self.assertTrue(success)
+        self.assertIn("XSSID=v200", cookie)
 
 
 class TestOemFtpLogin(TestCase):

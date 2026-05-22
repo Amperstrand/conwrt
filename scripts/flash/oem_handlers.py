@@ -43,6 +43,20 @@ def zyxel_encode_password(password: str) -> str:
     return text
 
 
+def _read_xssid_cookie(cookie_file: str) -> str:
+    """Read HTTP_XSSID value from a curl cookie jar file."""
+    try:
+        with open(cookie_file) as f:
+            for line in f:
+                if "HTTP_XSSID" in line:
+                    parts = line.split()
+                    if len(parts) >= 7:
+                        return f"HTTP_XSSID={parts[-1]}"
+    except Exception:
+        pass
+    return ""
+
+
 def extract_xssid_cookie(stock_ip: str) -> str:
     """Extract XSSID cookie from ZyXEL device via session_chk endpoint."""
     try:
@@ -116,57 +130,57 @@ def oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, s
     Tries V2.80+ encode()-based POST login first, falls back to V2.00 plaintext GET.
     """
     dispatcher = f"http://{stock_ip}/cgi-bin/dispatcher.cgi"
+    cookie_file = tempfile.mktemp(suffix=".cookies")
     try:
-        # --- Try V2.80+ encode()-based login ---
         encoded_pw = zyxel_encode_password(password)
         import urllib.parse as _up
         login_body = f"username={username}&password={_up.quote_plus(encoded_pw)}&login=true;"
         log(f"Trying V2.80+ encode()-based login for {username}...")
         r1 = subprocess.run(
-            ["curl", "-s", "--max-time", "10", "-c", "-",
+            ["curl", "-s", "--max-time", "10",
              "-X", "POST", "-d", login_body, dispatcher],
             capture_output=True, text=True, timeout=15, check=False,
         )
-        # V2.00 responds with "AUTHING" to POST — detect and fall back
         if "AUTHING" in r1.stdout:
             log("V2.00 firmware detected (AUTHING response), falling back to plaintext GET login")
             return oem_http_login_v200(stock_ip, username, password)
 
-        # V2.80+ returns hex authId hash
-        auth_id = r1.stdout.strip()
+        auth_id = r1.stdout.strip().split("\n")[0].strip()
         if auth_id and len(auth_id) >= 16 and all(c in "0123456789ABCDEFabcdef" for c in auth_id):
-            log(f"Got authId: {auth_id[:8]}..., checking login...")
+            log(f"Got authId: {auth_id[:8]}..., waiting 500ms before login_chk...")
+            # Firmware JS uses setTimeout("login_chk();", 500) — delay required
+            time.sleep(0.5)
+            # login_chk sets HTTP_XSSID cookie — capture to temp file
             r2 = subprocess.run(
-                ["curl", "-s", "--max-time", "10", "-c", "-",
+                ["curl", "-s", "--max-time", "10", "-c", cookie_file,
                  "-X", "POST", "-d", f"authId={auth_id}&login_chk=true", dispatcher],
                 capture_output=True, text=True, timeout=15, check=False,
             )
-            if "OK" in r2.stdout:
-                cookie_value = ""
-                for line in r2.stdout.splitlines():
-                    if "XSSID" in line or "HTTP_XSSID" in line:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            cookie_value = f"XSSID={parts[-1]}"
-                            break
+            chk_result = r2.stdout.strip().split("\n")[0].strip()
+            if chk_result == "OK":
+                cookie_value = _read_xssid_cookie(cookie_file)
                 if cookie_value:
                     log("V2.80+ login successful")
                     return True, cookie_value
-                # Cookie may be set even if not in output — try session check
-                log("V2.80+ login OK, extracting cookie from session...")
+                log("V2.80+ login OK but no XSSID cookie — trying session_chk")
                 cookie_value = extract_xssid_cookie(stock_ip)
                 if cookie_value:
                     return True, cookie_value
                 return True, ""
-            log(f"V2.80+ login_chk returned: {r2.stdout[:100]}")
+            if chk_result == "FAIL":
+                log("V2.80+ login_chk: FAIL (wrong password?)")
+            else:
+                log(f"V2.80+ login_chk unexpected: {chk_result[:100]}")
 
-        # If authId not detected, try V2.00 fallback
         log("V2.80+ login did not get authId, trying V2.00 plaintext fallback...")
         return oem_http_login_v200(stock_ip, username, password)
 
     except Exception as e:
         log(f"V2.80+ login error: {e}, trying V2.00 fallback...")
         return oem_http_login_v200(stock_ip, username, password)
+    finally:
+        if os.path.exists(cookie_file):
+            os.unlink(cookie_file)
 
 
 def oem_http_login_v200(stock_ip: str, username: str, password: str) -> tuple[bool, str]:
