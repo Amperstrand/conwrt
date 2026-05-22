@@ -29,7 +29,7 @@ Serial recovery is a 2-minute fix.**
 
 2. **Reverse-engineered the config block CRC format**
    - U-Boot env stored in two 64KB config blocks: CFG1 (mtd1 in stock, mtd0 in OpenWrt) and
-     CFG2 (mtd10 in stock, mtd11 in OpenWrt)
+     CFG2 (mtd10 in stock, mtd8 in OpenWrt) — same physical blocks, different kernel numbering
    - **First attempt**: CRC over `block[4:]` — wrong, AP rejected it, auto-recovered after ~5 min
    - **Second attempt**: Still wrong CRC range — AP rejected again, auto-recovered
    - **Third attempt**: Finally cracked it — CRC32 covers `block[5:]` (skips 4-byte CRC + 1-byte flag)
@@ -100,7 +100,7 @@ Serial recovery is a 2-minute fix.**
     - We found and installed the `kmod-mtd-rw` package: `insmod mtd-rw i_want_a_brick=1`
     - This bypasses DTS read-only protection — it worked perfectly
     - We built config blocks with correct CRC, correct flag bytes
-    - Wrote to both CFG1 (mtd0) and CFG2 (mtd11) via `flashcp`
+    - Wrote to both CFG1 (mtd0) and CFG2 (mtd8) via `flashcp`
     - Verified the write with MD5 — **the mechanism was flawless, the value was wrong**
 
 11. **Rebooted → boot loop**
@@ -295,7 +295,7 @@ insmod mtd-rw i_want_a_brick=1
 # Upload correct_boot_cfg_dual.bin from laptop
 scp /tmp/correct_boot_cfg_dual.bin root@192.168.1.1:/tmp/
 flashcp /tmp/correct_boot_cfg_dual.bin /dev/mtd0    # CFG1
-flashcp /tmp/correct_boot_cfg_dual.bin /dev/mtd11   # CFG2
+flashcp /tmp/correct_boot_cfg_dual.bin /dev/mtd8    # CFG2
 ```
 
 ---
@@ -734,4 +734,30 @@ Full details: `recipes/extreme-networks/ws-ap3915i/UNIT2-AP3915i-ROW.md`
 2. `rdwr_boot_cfg write_var` may work for setting U-Boot variables (safer than raw MTD)
 3. `boot_openwrt` must use address 0x88000000 for `sf read` (David Bauer commit)
 4. NAND is irrelevant for OpenWrt — only SPI-NOR is used
-5. `bootcmd=run boot_openwrt || run boot_net` provides permanent TFTP fallback
+5. `bootcmd=run boot_openwrt; run boot_net` provides permanent TFTP fallback (semicolon, not ||)
+
+### External Review Corrections (2026-05-22)
+
+After having an external LLM review the plan, several critical corrections were made:
+
+1. **MTD numbering corrected**: OpenWrt CFG2 is mtd8 (not mtd11). The DTS has 9 partitions.
+   Stock mtd1=CFG1 and OpenWrt mtd0=CFG1 are the same physical block at offset 0xe0000.
+
+2. **DTS read-only partitions**: ALL partitions except `firmware` are marked `read-only` in the
+   OpenWrt DTS. kmod-mtd-rw was removed from OpenWrt 24.10.2 (not rebuilt for kernel 6.6).
+   Therefore, ALL config block writes must be done from STOCK FIRMWARE.
+
+3. **Semicolon fallback**: Changed from `||` to `;` — functionally identical but doesn't depend
+   on U-Boot `||` operator support. If `bootm` succeeds, it doesn't return.
+
+4. **No initramfs MTD writes**: The v2 plan sets the FINAL bootcmd from stock firmware.
+   Before sysupgrade, `boot_openwrt` fails (no firmware) and falls through to `boot_net` (TFTP).
+   After sysupgrade, `boot_openwrt` succeeds and boots from flash. No second MTD write needed.
+
+5. **One block at a time**: Use flashcp to write CFG1 only (leave CFG2 as fallback).
+   rdwr_boot_cfg writes both blocks (risky — repeats Unit 1 failure mode).
+
+6. **fw_setenv unavailable**: AP3915i is NOT in the uboot-envtools board list.
+   No /etc/fw_env.config is generated.
+
+See `REVIEW-UNIT2-FLASH-PLAN.md` for the full revised plan.

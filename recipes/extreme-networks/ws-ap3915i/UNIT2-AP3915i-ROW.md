@@ -150,3 +150,54 @@ The script implements:
 - `cset`/`capply`/`csave` produce "Error in obtaining the tty" warnings — these are harmless
 - Device was previously in production (REDACTED_SSID_1, REDACTED_SSID_2, REDACTED_SSID_4, REDACTED_SSID_3 VAPs configured)
 - WEB GUI at http://192.168.1.X (not tested)
+
+## DTS Partition Layout (from OpenWrt qcom-ipq4029-ws-ap3915i.dts)
+
+The OpenWrt DTS defines a DIFFERENT partition table than the stock firmware. Key differences:
+
+```
+OpenWrt DTS (qcom-ipq4029-ws-ap3915i.dts):
+  CFG1      @ 0x0e0000  (64KB)   read-only   — same physical block as stock mtd1
+  BootBAK   @ 0x0f0000  (448KB)  read-only
+  WINGCFG1  @ 0x160000  (64KB)   read-only
+  ART       @ 0x170000  (64KB)   read-only
+  BootPRI   @ 0x180000  (448KB)  read-only
+  WINGCFG2  @ 0x1f0000  (64KB)   read-only
+  FS        @ 0x200000  (512KB)  read-only
+  firmware  @ 0x280000  (30,080KB)  writable  — merged PriImg + SecImg
+  CFG2      @ 0x1fe0000 (64KB)   read-only   — same physical block as stock mtd10
+```
+
+**CRITICAL**: Stock mtd1 (CFG1) and OpenWrt mtd0 (CFG1) are the SAME physical block at
+offset 0xe0000. Evidence: On Unit 1, writes to stock mtd1 persisted when read from OpenWrt
+mtd0 after boot. The stock kernel's /proc/mtd does NOT list partitions in physical offset
+order — NAND partitions (mtd0, mtd11) interleave with NOR partitions.
+
+**IMPLICATION**: ALL partitions except `firmware` are marked `read-only` in the DTS.
+Writing to CFG1/CFG2 from OpenWrt initramfs requires bypassing the read-only flag.
+kmod-mtd-rw was available in OpenWrt 23.05.x but is NOT available in 24.10.2 (not rebuilt
+for kernel 6.6). Therefore, ALL config block writes must be done from STOCK FIRMWARE
+where partitions are writable.
+
+**fw_setenv**: The AP3915i is NOT in the uboot-envtools board list
+(`package/boot/uboot-envtools/files/ipq40xx`). fw_env.config is NOT auto-generated.
+Even if manually configured, fw_setenv cannot write to read-only MTD partitions.
+
+## Flash Strategy (v2 — revised after external review)
+
+**Key insight**: Set the FINAL bootcmd from stock firmware (not initramfs).
+
+```
+bootcmd=run boot_openwrt; run boot_net
+boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000
+```
+
+Before sysupgrade: boot_openwrt fails (no firmware at 0x280000) → falls through to boot_net → TFTP
+After sysupgrade: boot_openwrt succeeds (firmware exists) → boots from flash → done
+
+No initramfs MTD writes needed. The semicolon fallback is safer than `||` because:
+- If bootm succeeds → kernel boots, never returns → boot_net never runs
+- If bootm fails → returns → boot_net runs (TFTP catch)
+
+**One block at a time**: Use flashcp (not rdwr_boot_cfg) to write CFG1 only.
+Leave CFG2 untouched as known-good fallback.

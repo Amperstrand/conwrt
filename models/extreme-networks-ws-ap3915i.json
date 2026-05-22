@@ -51,10 +51,10 @@
         "WATCHDOG_COUNT": "0",
         "WATCHDOG_LIMIT": "0",
         "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
-        "bootcmd": "run boot_openwrt || run boot_net",
+        "bootcmd": "run boot_openwrt; run boot_net",
         "serverip": "<CONWRT_TFTP_SERVER_IP>"
       },
-      "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt || run boot_net', NOT 'run boot_flash' or 'bootx'. boot_flash/bootx runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. The || run boot_net fallback provides permanent TFTP recovery. See commit e16a0e7 and SESSION-WRITEUP.md.",
+      "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon, NOT ||), NOT 'run boot_flash' or 'bootx'. boot_flash/bootx runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. Semicolon provides TFTP fallback: if bootm succeeds it doesn't return (kernel boots), if bootm fails it returns and run boot_net catches via TFTP. See commit e16a0e7 and SESSION-WRITEUP.md. NOTE: All final_uboot_vars should be written from STOCK firmware (not initramfs) because the OpenWrt DTS marks CFG partitions as read-only and kmod-mtd-rw is unavailable in 24.10.2.",
       "openwrt_client_ip": "192.168.1.2",
       "openwrt_ip": "192.168.1.1",
       "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
@@ -62,7 +62,23 @@
       "flash_time_seconds": 300,
       "silence_timeout": 60,
       "backup_required": true,
-      "fw_env_warning": "fw_setenv does NOT work on this device — no /etc/fw_env.config in ipq40xx base-files. Use raw MTD write (kmod-mtd-rw + flashcp) or U-Boot serial console (saveenv) to change boot variables."
+      "fw_env_warning": "fw_setenv does NOT work on this device — no /etc/fw_env.config for AP3915i in ipq40xx base-files. The AP3915i is missing from the uboot-envtools board list. Use rdwr_boot_cfg (from stock firmware), flashcp (from stock firmware), or raw MTD write to write U-Boot variables. Do NOT attempt MTD writes from OpenWrt initramfs (DTS read-only + no kmod-mtd-rw).",
+      "dts_partition_layout": {
+        "note": "OpenWrt DTS partition table (qcom-ipq4029-ws-ap3915i.dts). ALL partitions except 'firmware' are marked read-only. Stock firmware MTD indices differ from OpenWrt MTD indices.",
+        "partitions": [
+          {"name": "CFG1", "offset": "0xe0000", "size": "0x10000", "label": "U-Boot env block 1", "read_only": true, "stock_mtd": "mtd1", "openwrt_mtd": "mtd0"},
+          {"name": "BootBAK", "offset": "0xf0000", "size": "0x70000", "label": "Backup U-Boot", "read_only": true},
+          {"name": "WINGCFG1", "offset": "0x160000", "size": "0x10000", "label": "WiNG config 1", "read_only": true},
+          {"name": "ART", "offset": "0x170000", "size": "0x10000", "label": "Radio calibration (IRREPLACEABLE)", "read_only": true},
+          {"name": "BootPRI", "offset": "0x180000", "size": "0x70000", "label": "Primary U-Boot + boot scripts", "read_only": true},
+          {"name": "WINGCFG2", "offset": "0x1f0000", "size": "0x10000", "label": "WiNG config 2", "read_only": true},
+          {"name": "FS", "offset": "0x200000", "size": "0x80000", "label": "JFFS2 filesystem", "read_only": true},
+          {"name": "firmware", "offset": "0x280000", "size": "0x1d60000", "label": "OpenWrt firmware (merged PriImg+SecImg)", "read_only": false},
+          {"name": "CFG2", "offset": "0x1fe0000", "size": "0x10000", "label": "U-Boot env block 2", "read_only": true, "stock_mtd": "mtd10", "openwrt_mtd": "mtd8"}
+        ],
+        "firmware_size_kb": 30080,
+        "ap391x_warning": "AP391x uses SPLIT firmware layout (firmware + firmware2, ~15MB each, IMAGE_SIZE=15040k). AP3915i uses MERGED layout (single firmware ~30MB, IMAGE_SIZE=30080k). Verify /proc/mtd firmware size from initramfs before sysupgrade."
+      }
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt on this device",
@@ -109,8 +125,10 @@
     "Do not proceed without saving rdwr_boot_cfg read_all output.",
     "Make a full MTD backup before permanent install.",
     "Direct stock image_upgrade support is experimental unless signature/checksum status is proven.",
-    "CRITICAL: bootcmd must be 'run boot_openwrt || run boot_net' — NOT 'run boot_flash', NOT 'bootx'. boot_flash/bootx runs the stock boot_kernel script which is incompatible with OpenWrt FIT images. This mistake bricked Unit 1.",
-    "CRITICAL: Always include '|| run boot_net' fallback in bootcmd. If flash boot fails, AP falls back to TFTP — permanent safety net.",
+    "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon) — NOT 'run boot_flash', NOT 'bootx', NOT '||'. boot_flash/bootx runs the stock boot_kernel script which is incompatible with OpenWrt FIT images. This mistake bricked Unit 1. Semicolon is safer than || because it doesn't depend on U-Boot operator support.",
+    "CRITICAL: Always include '; run boot_net' fallback in bootcmd. If flash boot fails, AP falls back to TFTP — permanent safety net.",
+    "CRITICAL: Write ALL U-Boot env changes from STOCK firmware, NOT from OpenWrt initramfs. The OpenWrt DTS marks CFG1/CFG2 as read-only, and kmod-mtd-rw is NOT available in 24.10.2 (removed since 23.05.x). Stock firmware's /dev/mtd1 (CFG1) is writable via flashcp.",
+    "CRITICAL: Write CFG1 only (leave CFG2 untouched as fallback). rdwr_boot_cfg writes BOTH blocks — use flashcp instead if single-block write is needed. See REVIEW-UNIT2-FLASH-PLAN.md v2.",
     "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only."
   ]
 }
