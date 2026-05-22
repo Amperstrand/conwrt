@@ -177,23 +177,26 @@
   },
   "signatures": {
     "oem_login": {
-      "source": "Inferred from GS1900-24E (same ZyXEL firmware stack)",
+      "source": "Inferred from GS1900-8HP A1 (same RTL8380M platform, same ZyXEL firmware stack)",
       "url": "http://192.168.1.1/cgi-bin/dispatcher.cgi?cmd=0",
-      "auth_type": "RSA-encrypted password via JavaScript",
-      "session_cookie": "XSSID",
-      "session_check_endpoint": "/cgi-bin/dispatcher.cgi?session_chk=1"
+      "auth_type_v200": "plaintext GET parameter (V2.00)",
+      "auth_type_v280": "JavaScript encode()-based obfuscation (V2.80+), NOT RSA",
+      "session_cookie": "HTTP_XSSID (set by login_chk, not by login POST)",
+      "session_check_endpoint": "/cgi-bin/dispatcher.cgi?session_chk=1",
+      "login_delay_ms": 500,
+      "login_delay_note": "Firmware JS uses setTimeout('login_chk();', 500) — delay required between login POST and login_chk POST",
+      "mandatory_password_change": true,
+      "password_change_note": "V2.80+ forces password change from default 1234 on first login"
     },
     "oem_firmware_page": {
-      "source": "Inferred from GS1900-24E (same ZyXEL firmware stack)",
-      "menu_cmd": 28,
+      "source": "Inferred from GS1900-8HP A1 (same firmware stack)",
       "firmware_cmd": 5903,
       "upload_form_action": "/cgi-bin/httpupload.cgi",
+      "upload_trigger_cmd": 5904,
       "upload_method_http": "upmethod=1",
       "partition_active": "partition=0",
       "confirm_dialog": "Do you really want to reboot?",
-      "progress_poll_cmd": 5911,
-      "frameset_ui": true,
-      "content_frame": "mainFrame"
+      "frameset_ui": true
     },
     "uboot_banner": {
       "source": "openwrt.org wiki bootlog",

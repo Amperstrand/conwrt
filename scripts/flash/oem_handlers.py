@@ -57,24 +57,6 @@ def _read_xssid_cookie(cookie_file: str) -> str:
     return ""
 
 
-def extract_xssid_cookie(stock_ip: str) -> str:
-    """Extract XSSID cookie from ZyXEL device via session_chk endpoint."""
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "--max-time", "5", "-c", "-",
-             f"http://{stock_ip}/cgi-bin/dispatcher.cgi?session_chk=1"],
-            capture_output=True, text=True, timeout=8, check=False,
-        )
-        for line in r.stdout.splitlines():
-            if "XSSID" in line or "HTTP_XSSID" in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    return f"XSSID={parts[-1]}"
-    except Exception:
-        pass
-    return ""
-
-
 # ─── Shared OEM post-upload: poll SSH, SCP, install, verify ────
 
 
@@ -162,10 +144,7 @@ def oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, s
                 if cookie_value:
                     log("V2.80+ login successful")
                     return True, cookie_value
-                log("V2.80+ login OK but no XSSID cookie — trying session_chk")
-                cookie_value = extract_xssid_cookie(stock_ip)
-                if cookie_value:
-                    return True, cookie_value
+                log("V2.80+ login_chk OK but no HTTP_XSSID cookie in jar")
                 return True, ""
             if chk_result == "FAIL":
                 log("V2.80+ login_chk: FAIL (wrong password?)")
@@ -184,7 +163,13 @@ def oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, s
 
 
 def oem_http_login_v200(stock_ip: str, username: str, password: str) -> tuple[bool, str]:
-    """Login to ZyXEL OEM V2.00 web UI via plaintext GET. Returns (success, cookie)."""
+    """Login to ZyXEL OEM V2.00 web UI via plaintext GET. Returns (success, cookie).
+
+    TODO(V2.00): Returns 'XSSID=' but V2.80+ uses 'HTTP_XSSID='. Verify on
+    V2.00 hardware which cookie name the firmware actually sets, then update
+    if needed. If V2.00 also uses HTTP_XSSID, change all f"XSSID=" below to
+    f"HTTP_XSSID=" and update the cookie jar line check accordingly.
+    """
     login_url = f"http://{stock_ip}/cgi-bin/dispatcher.cgi?login=1&username={username}&password={password}"
     try:
         r = subprocess.run(
