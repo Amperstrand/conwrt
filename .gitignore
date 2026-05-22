@@ -53,3 +53,10 @@ __pycache__/
 
 # --- Firmware image cache ---
 images/
+
+# --- Proprietary stock firmware binaries (re-extract with firmware/extract.sh) ---
+firmware/stock_v290/*.ko
+firmware/stock_v290/*.so*
+firmware/stock_v290/cli
+firmware/stock_v290/*.bin
+firmware/stock_v290/*.bix
