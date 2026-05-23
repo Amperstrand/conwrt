@@ -228,18 +228,37 @@ entirely the stock boot script's watchdog.
 
 ## Current State
 
+**Updated 2026-05-23**: The boot loop was recovered WITHOUT a serial cable, using a
+switch-initiated TFTP boot and raw MTD writes from OpenWrt initramfs.
+
 | Component | Status |
 |-----------|--------|
-| **U-Boot bootloader** | Working — boots on power-on, runs `bootcmd` |
+| **U-Boot bootloader** | Working — `bootcmd=run boot_openwrt; run boot_net` |
 | **SPI-NOR flash** | OpenWrt 24.10.2 correctly written at offset 0x280000 |
-| **U-Boot env (CFG1)** | `bootcmd=run boot_flash` — **WRONG** |
-| **U-Boot env (CFG2)** | `bootcmd=run boot_flash` — **WRONG** (same wrong value) |
-| **ART partition** | Backed up pre-sysupgrade; post-sysupgrade integrity unverified |
-| **Network** | Dead — zero packets during boot loop |
-| **Physical state** | Boot loop — LED: orange → green flash (~1 sec) → repeat |
-| **Firmware image** | **Correct** — standard FIT, no known bugs, includes PR #17305 fix |
+| **U-Boot env (CFG1)** | `boot_openwrt=sf probe; sf read...; bootm` + `bootcmd=run boot_openwrt; run boot_net` |
+| **U-Boot env (CFG2)** | Same corrected values as CFG1 |
+| **ART partition** | Backed up pre-sysupgrade (64KB) |
+| **Network** | Working — AP at 192.168.13.253, SSH from Ubuntu and switch |
+| **Overlay** | jffs2 + overlayfs working, persisted through reboot |
+| **Root password** | Set (`Conwrt2026!`), persisted through reboot |
+| **Firmware image** | **Correct** — standard FIT, OpenWrt 24.10.2, boots from flash |
 
-The AP is **not bricked**. U-Boot works, flash is valid, firmware is correct. One env variable.
+### How the boot loop was recovered (no serial cable)
+
+1. AP was connected to GS1900-8HP switch port lan5 via PoE
+2. Switch had secondary IP `192.168.1.2/24` on the same L2 segment as AP
+3. Modified CFG blocks with `bootcmd=run boot_net` to force TFTP boot
+4. Switch ran dnsmasq TFTP server serving OpenWrt initramfs
+5. AP TFTP-booted initramfs, gave us full OpenWrt shell
+6. Ran `sysupgrade -n` to install OpenWrt permanently to flash
+7. TFTP-booted initramfs AGAIN (bootcmd still said TFTP)
+8. Loaded `kmod-mtd-rw` to bypass DTS read-only on CFG partitions
+9. Used cross-compiled `mtd_raw_write` ARM binary to write corrected CFG blocks
+   with `boot_openwrt` command and removed `ubi.mtd=0` from bootargs
+10. Rebooted — AP booted OpenWrt from flash successfully
+
+The entire process was orchestrated from the GS1900-8HP switch. No laptop was needed
+during the actual flash. See `SWITCH-FLASH-PLAN.md` for the full milestone plan.
 
 ---
 
