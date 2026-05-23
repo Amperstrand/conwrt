@@ -576,3 +576,126 @@ For debugging or manual U-Boot interaction:
 - netifd, ubus, uci
 - NO LuCI by default
 - NO WiFi packages (no WiFi hardware)
+
+## Upstreaming Path: Getting ER-6P PoE into OpenWrt / Linux
+
+Our PoE implementation is currently standalone: out-of-tree kernel module + userspace scripts. Here's the path to getting it into OpenWrt and potentially the Linux kernel.
+
+### What We Have
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| `er6p-poe` kernel module | `recipes/.../er6p-poe/src/` | v0.5.0, tested on hardware |
+| ISL28022 hwmon driver | Mainline Linux (`drivers/hwmon/isl28022.c`) | Already upstream, not enabled for octeon |
+| `poe.init` procd init script | `recipes/.../userspace/poe.init` | Tested, module loading + ISL28022 registration |
+| `poe-ubus` CLI | `recipes/.../userspace/poe-ubus` | Tested, ubus interface |
+| `poe` CLI tool | `recipes/.../userspace/poe` | Tested |
+| `er6p_poe.lua` Prometheus collector | `recipes/.../userspace/prometheus-collectors/` | Tested, follows official pattern |
+| UCI config | `recipes/.../userspace/poe.config` | realtek-poe standard format |
+
+### Step 1: Enable ISL28022 in OpenWrt Octeon Kernel Config
+
+The ISL28022 driver is already in mainline Linux. OpenWrt's octeon target just doesn't enable it.
+
+**Action**: Add `CONFIG_SENSORS_ISL28022=m` to `target/linux/octeon/config-*` in openwrt/openwrt.
+
+Current octeon config already has the prerequisites:
+- `CONFIG_I2C=y`, `CONFIG_I2C_OCTEON=y` (I2C bus driver)
+- `CONFIG_REGMAP=y`, `CONFIG_REGMAP_I2C=y` (regmap framework)
+- `CONFIG_HWMON` not explicitly set but likely available
+
+**Blocker**: The ER-6P device tree has no ISL28022 node. Currently we register the device manually via `echo isl28022 0x40 > /sys/bus/i2c/devices/i2c-1/new_device`. A proper DT node would make this automatic.
+
+### Step 2: Device Tree Patch for ER-6P
+
+Add ISL28022 node to the ER-6P DTS in OpenWrt:
+
+```dts
+/* In twsi1 (I2C bus 1) node */
+isl28022@40 {
+    compatible = "renesas,isl28022";
+    reg = <0x40>;
+    shunt-resistor-micro-ohms = <10000>;  /* 10mΩ default, needs hardware verification */
+};
+```
+
+**Location**: `target/linux/octeon/files/arch/mips/boot/dts/cavium-octeon/ubnt_edgerouter-6p.dts` (or wherever OpenWrt keeps the ER-6P DTS overlay).
+
+### Step 3: Kernel Module — Three Options (Ascending Effort)
+
+#### Option A: Target Patch (Easiest, OpenWrt-only)
+
+Add `er6p-poe` as a patch/module to OpenWrt's octeon target:
+- `target/linux/octeon/modules.mk` — add package definition
+- `target/linux/patches-*/` or `target/linux/octeon/files/` — module source
+- `target/linux/octeon/config-*` — enable `CONFIG_ER6P_POE=m`
+
+**Pros**: Quick, no upstream kernel process needed. OpenWrt targets commonly have board-specific modules.
+**Cons**: Only available for OpenWrt's octeon builds, not mainline Linux.
+
+**Precedent**: Other OpenWrt targets ship board-specific GPIO/platform drivers (e.g., `target/linux/ath79/` has many board-specific hacks).
+
+#### Option B: Extend gpio-octeon Driver (Medium)
+
+The existing `gpio-octeon` driver (`drivers/gpio/gpio-octeon.c`) is already in mainline Linux and enabled in OpenWrt (`CONFIG_GPIO_OCTEON=y`). Our module does direct register writes to the same GPIO controller.
+
+We could add a platform driver that:
+1. Gets GPIO descriptors from DT (`gpios = <&gpio 4 0>, <&gpio 10 0>, <&gpio 16 0>`)
+2. Exposes PoE control via regulator framework or sysfs
+3. No more `ioremap` of raw GPIO registers — use the kernel GPIO API
+
+**Pros**: Clean kernel API usage, DT-driven, no hardcoded register addresses.
+**Cons**: Need to verify `gpio-octeon` supports all the BIT_CFG manipulation we need.
+
+#### Option C: PSE Subsystem Integration (Hardest, Most Correct)
+
+Linux has a PSE (Power Sourcing Equipment) subsystem at `drivers/net/pse-pd/`:
+- Exposes PoE control via `ethtool` (`ethtool --show-pse eth1`)
+- DT bindings at `Documentation/devicetree/bindings/net/pse-pd/`
+- `pse_controller_ops` structure for driver callbacks
+
+Write a `gpio-pse` driver that:
+1. Takes GPIO descriptors from DT
+2. Registers as a PSE controller
+3. Maps each PSE port to a netdev (eth1, eth3, eth4)
+4. Control via `ethtool --set-pse eth1 --pse 1`
+
+**Concern**: The PSE subsystem is designed for 802.3af/at (active PoE with negotiation). Passive 24V GPIO toggle might not fit the abstraction well. No existing "gpio-pse" driver exists in mainline — we'd be defining a new pattern.
+
+### Step 4: Userspace Package (OpenWrt packages feed)
+
+Create an OpenWrt package for the ER-6P PoE userspace tools, following the realtek-poe pattern:
+
+**Option A — Separate package** (`openwrt/packages` PR):
+- `net/er6p-poe/Makefile` — package definition
+- `net/er6p-poe/files/etc/init.d/poe` — init script
+- `net/er6p-poe/files/etc/config/poe` — UCI config
+- `net/er6p-poe/files/usr/sbin/poe-ubus` — ubus provider
+- `net/er6p-poe/files/usr/sbin/poe` — CLI tool
+
+**Option B — Target base-files** (simpler):
+- Add scripts directly to `target/linux/octeon/base-files/` for ER-6P only
+- Simpler but less discoverable
+
+### Step 5: Prometheus Collector (openwrt/packages PR)
+
+The easiest upstream contribution — one Lua file, follows an established pattern:
+- PR to `openwrt/packages` adding `prometheus-node-exporter-lua-er6p-poe` sub-package
+- Pattern: identical to existing `prometheus-node-exporter-lua-realtek-poe`
+- Depends on `prometheus-node-exporter-lua` + `er6p-poe`
+- No special Lua dependencies (uses `io.popen` not `nixio.fs`)
+
+### Recommended Path (Phased)
+
+1. **ISL28022 enablement** — one-line kernel config change + small DT patch. Low risk, high value.
+2. **Prometheus collector PR** — easiest contribution, follows existing pattern exactly.
+3. **Kernel module as target patch** (Option A) — gets PoE working for all OpenWrt octeon users.
+4. **Userspace package** — once kernel module is in the target.
+5. **PSE subsystem integration** (Option C) — long-term, only if we want mainline Linux acceptance.
+
+### Blockers & Open Questions
+
+- **Shunt resistor value**: Driver defaults to 10mΩ. Actual value unknown without board inspection or multimeter verification. DT property `shunt-resistor-micro-ohms` allows override, but we need the correct value.
+- **Port testing**: Only eth1 tested with live PoE load. eth3/eth4 verified at GPIO level but not with real devices. Upstream may require all ports tested.
+- **Port restrictions**: Our module has an allowlist (eth1/eth3/eth4 only). Upstream would need to support all 5 ports or explain the restriction via DT.
+- **No upstream ER-6P PoE precedent**: Nobody has done passive PoE via GPIO on Octeon in OpenWrt before. We'd be defining the pattern.

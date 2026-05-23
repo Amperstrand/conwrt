@@ -842,3 +842,51 @@ Tested on OpenWrt 25.12.1 with a PoE device connected to port 8.
 - SCP requires `-O` flag on OpenWrt initramfs
 - serverip in U-Boot defaults to 192.168.1.X (should be updated for TFTP recovery)
 - Stock firmware uses JavaScript-based login — session management is server-side, no visible cookies via curl
+
+## PoE Research: Stock Firmware RE & Improvement Opportunities
+
+We reverse-engineered the stock ZyXEL V2.90 firmware (`board_poe.ko` + `libsal.so`) by MIPS objdump on the unstripped kernel module. Full analysis in `firmware/stock_v290/RE_ANALYSIS.md` and parity comparison in `docs/POE_PARITY.md`.
+
+### Architecture Comparison
+
+| Aspect | Stock V2.90 | OpenWrt (realtek-poe) |
+|--------|-------------|----------------------|
+| Layers | 3-tier: CLI → SAL (libsal.so) → Kernel (board_poe.ko) | 2-tier: ubus → userspace daemon |
+| Chip support | BCM59111, BCM59121, RTL8238B/BCM59011 | BCM59111 (realtek dialect exists but unused) |
+| Transport | UART + SMI | UART only |
+| Threading | 2 kernel threads (port status + threshold monitoring) | Single-threaded uloop, 2s poll |
+
+### Parity Score
+
+53% wire command parity (35/66 items). Excluding intentionally skipped items (global enable, deprecated commands, safety-critical resets): **21 actionable gaps**.
+
+### Potential Contributions to realtek-poe
+
+These are improvements we identified that could be PR'd upstream:
+
+**P0 — Under-decoding fixes (quick wins, no new commands needed):**
+1. **Decode 0x21 fault_type** — The detailed port status reply has 9 fields (fault_type, power_mode, chan_pwr, pd_alt), we only parse 3. Stock extracts structured fault reasons: OVLO, MPS absent, Short, Overload, Denied, Thermal, Startup, UVLO.
+2. **Decode 0x28 upper nibble** — The 4-port status reply's upper nibble contains class info + fault_type + PD flag. We discard it.
+3. **Set 0x22 reset=1 on counter reads** — Stock clears counters every read cycle to prevent single-byte MCU counter overflow. We send reset=0, causing silent wraps.
+
+**P1 — Missing SET commands:**
+1. Port reset (0x03) — Clear fault states without full port disable/enable cycle
+2. Device power management (0x0b) — Pre-allocated vs actual power accounting
+3. Global high power limit (0x07) — Max per-port power envelope for class-based limits
+
+**P2 — Extended features:**
+- LED control (0x41-0x49) — MCU-driven PoE status LEDs
+- Port power pair (0x19) — A-pair/B-pair for 4-pair PoE
+- Per-port PSE output mapping (0x1d)
+
+### Stock Firmware Extraction Tooling
+
+- `firmware/extract.sh` — Extracts board_poe.ko and libsal.so from V2.90 firmware image
+- `firmware/gs1900fw.py` — Python firmware image parser (602 lines)
+
+### Files
+
+- `docs/POE_PARITY.md` — Full parity comparison with scorecard
+- `firmware/stock_v290/RE_ANALYSIS.md` — Raw RE data: command tables, SAL API, chip support matrix
+- `firmware/extract.sh` — Firmware extraction script
+- `firmware/gs1900fw.py` — Firmware image parser
