@@ -43,7 +43,7 @@ the stock ZyXEL V2.90 firmware, reverse-engineered from `board_poe.ko` and
 |------|--------------|-------------------|------------|-------|
 | `0x00` | Set port admin state | `sal_poe_portAdminEnable_set` | ✅ `PORT_ENABLE` | Parity |
 | `0x02` | Set port map enable | (chip_init) | ✅ `MCU_ENABLE_PORT_MAPPING` | Parity |
-| `0x03` | Port reset | (disconnect/reconnect) | ❌ | **P1-1**: Clear fault states. |
+| `0x03` | Port reset | (disconnect/reconnect) | ✅ `PORT_RESET` | Parity. Also works on disabled ports (upstream #58). |
 | `0x05` | Clear counters | `sal_poe_portStatsClear_set` | ✅ `MCU_CLEAR_COUNTERS` | Parity (though stock clears via 0x22 reset=1) |
 | `0x06` | Set global port enable | (bulk enable/disable) | ❌ | **Skip**: OpenWrt manages ports individually via UCI. Bulk enable/disable doesn't fit the per-port config model. |
 | `0x07` | Set global port power limit | (high power config) | ❌ | **P1-3**: Max per-port power envelope for class-based limits. |
@@ -100,9 +100,9 @@ the stock ZyXEL V2.90 firmware, reverse-engineered from `board_poe.ko` and
 | Counter clear on read | ✅ 0x22 reset=1 | ❌ reset=0 | — | **P0-3** |
 | **Structured fault type** | ✅ OVLO/Short/Overload/Denied/Thermal/UVLO | ❌ "Fault" string only | — | **P0-1** |
 | 0x28 class + PD flag extraction | ✅ upper nibble decoded | ❌ discarded | — | **P0-2** |
-| Port reset (0x03) | ✅ | ❌ | — | **P1-1** |
-| Pre-allocated vs actual power (0x0b) | ✅ | ❌ | — | **P1-2** |
-| Global high power limit (0x07) | ✅ | ❌ | — | **P1-3** |
+| Port reset (0x03) | ✅ | ✅ | Related: #10 | Done |
+| Pre-allocated vs actual power (0x0b) | ✅ | ✅ | — | Done |
+| Global high power limit (0x07) | ✅ | ✅ | — | Done |
 | Port power pair (0x19) | ✅ | ❌ | — | P2 |
 | LED control (0x41-0x49) | ✅ | ❌ | — | P2 |
 | LLDP-MED PoE negotiation | ✅ `board_lldp_poe_register` | ❌ | — | P3 (multi-week) |
@@ -163,6 +163,7 @@ the exact fault reason in the `poe.port_status` event's `fault_reason` field.
 | P0-3 | Set 0x22 reset=1 on counter reads | `15ab0f4` | `bcm59111_portStats_get` sends reset=1 every cycle | — |
 | P1-fault | Authoritative fault_type in events | `15ab0f4` | `text_poe_portStatusDescStr` enumeration | — |
 | P1-reset | Port reset (0x03) via ubus manage | `15ab0f4` | `bcm59111_cmd_set` enum 3 = 0x03 | Related: #10 (boot stuck unknown) |
+| P1-reset-fix | Fix manage callback return values + reset disabled ports | `11c5294` | — | #49 (upstream partial fix), #58 (reset disabled ports) |
 | P1-devpm | Device power management (0x0b) in init | `15ab0f4` | `poe_bcm59111_chip_init` sends pre_alloc/powerup_mode | — |
 | P1-highpw | High power limit (0x07) in init | `15ab0f4` | `bcm59111_cmd_set` enum 7 | — |
 | threshold | Power threshold monitoring (ubus event) | `5b06845` | `_poe_threshold_thread` | — |
@@ -180,7 +181,7 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | #64 | Transfer repo to organization | Governance, not technical | — |
 | #62 | PoE via i2c: best way forward? | I2C transport for GS1920 series | We're UART only, different hardware |
 | #59 | New realtek dialect not autodetected | Dialect auto-detection broken for GS1900-24HPv2 | Our fork is BCM59111-specific |
-| #58 | Manage ports disabled in config | Allow managing ports with enable=0 | Our port reset has same issue (checks port->enable). Should fix. |
+| #58 | Manage ports disabled in config | Allow managing ports with enable=0 | ✅ Fixed in `11c5294` — removed `!port->enable` from reset path |
 | #54 | Reversed order of ports | Port numbering vs labels on D-Link | UCI config issue, not our code |
 | #53 | Build for mips-24kec targets | Missing build target | Build system issue |
 | **#50** | **Reduce CPU utilization** | **1.0-1.3% CPU, wakes per-byte** | **Our 2s poll cycle + reset-on-read helps. VMIN/VTIME tuning would help further.** |
@@ -201,7 +202,7 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | P2-1 | LED control (0x41-0x49) | Needs hardware-specific LED map for GS1900-8HP A1 | #66 (LED remapping config) |
 | P2-2 | Port power pair (0x19) | A-pair/B-pair for 4-pair PoE | #32 (802.3bt paired port support) |
 | P2-3 | Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies | — |
-| P2-4 | Allow managing disabled ports | Remove `port->enable` check from manage/reset path | #58 (manage disabled ports) |
+| P2-4 | Allow managing disabled ports | ✅ Done in `11c5294` | #58 (manage disabled ports) |
 | P2-5 | CPU utilization: VMIN/VTIME tuning | Reduce per-byte wakeups in UART read loop | #50 (reduce CPU utilization) |
 
 #### P3: Large/multi-week features
@@ -212,15 +213,95 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | P3-2 | MCU firmware upgrade (0xe0/0xaf) | Safety-critical, needs bootloader detect + image validation |
 | P3-3 | Extended parameters (BCM59121) | Different chip family, 802.3bt features |
 
-## Scorecard (after P0+P1 batch)
+## Scorecard (after manage callback fix)
 
 | Category | Items | ✅ Parity | ❌ Gap | ⚠️ Partial |
 |----------|-------|----------|--------|------------|
-| GET commands | 14 | 11 | 0 | 3 → all fixed |
-| SET commands | 19 | 11 → 14 | 8 → 5 | 0 |
+| GET commands | 14 | 14 | 0 | 0 |
+| SET commands | 19 | 17 | 2 | 0 |
 | LED commands | 6 | 0 | 6 | 0 |
 | MCU management | 2 | 0 | 2 | 0 |
-| Features | 25 | 13 → 18 | 8 → 3 | 4 → 0 |
-| **Totals** | **66** | **43 (65%)** | **16 (24%)** | **0** |
+| Features | 25 | 20 | 2 | 0 |
+| **Totals** | **66** | **51 (77%)** | **10 (15%)** | **0** |
 
-Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d): 43/60 = 72% parity on actionable items.
+Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d): 51/60 = **85%** parity on actionable items.
+
+## Bugs Found: Manage Callback Return Values
+
+**Commit**: `11c5294` on `ai/power-limit-config`
+
+### Root Cause
+
+`mcu_queue_cmd()` → `mcu_queue_buf()` → `mcu_cmd_send()` → `ustream_write()` returns
+the number of bytes written (always 12, the CMD_SIZE). Any ubus callback that returns
+this value directly leaks a byte count to ubus, which interprets it as an error code.
+
+Symptom: `ubus call poe manage '{"port":"lan2","action":"reset"}'` returns
+"Command failed: Parsing message data failed" (ubus interprets return value 12 as error).
+
+### What Upstream Fixed (PR #49, merged Nov 2025)
+
+Only the **fallthrough** return at the end of `ubus_poe_manage_cb()` — changed from
+`UBUS_STATUS_INVALID_ARGUMENT` to `UBUS_STATUS_OK`. This fixed the common case where
+`action="enable"/"disable"` succeeds but the function returns the wrong status.
+
+### What Upstream Did NOT Fix
+
+The early-return paths from `clear_counters`, `port_enable`, and (in our code) `port_reset`
+still return raw `mcu_queue_cmd()` values. These all leak the byte count (12) to ubus.
+
+In upstream `main.c` (as of Nov 2025), `clear_counters` returns `poe_cmd_clear_counters()`
+directly, and the enable path returns `poe_cmd_port_enable()` directly. Both leak byte count.
+
+### Our Complete Fix
+
+All three action paths now translate return values:
+```c
+ret = poe_cmd_port_reset(mcu, i);
+return (ret < 0) ? UBUS_STATUS_SYSTEM_ERROR : UBUS_STATUS_OK;
+```
+
+This mirrors the existing pattern in `ubus_poe_sendframe_cb()` which already handled this
+correctly.
+
+### Additional Fix: Reset on Disabled Ports (Issue #58)
+
+The manage callback's reset branch checked `!port->enable` and skipped disabled ports.
+Removed this check — a disabled port may still need fault recovery via MCU 0x03.
+The enable/disable path retains the `!port->enable` check (correct behavior).
+
+## Next Steps
+
+### Priority 1: Stock Firmware UART Validation
+
+Validate our RE analysis against live stock behavior by capturing MCU UART traffic
+from the stock ZyXEL device (192.168.13.3).
+
+**Approach**: Get shell access on the stock device. Options:
+1. **Web UI password recovery** — factory reset to default `1234`, then use V2.90 encode() login
+2. **Serial console** — UART at 115200 8N1 on PCB header (requires USB-serial adapter)
+3. **Web UI exploitation** — check if cmd= parameters allow command injection (unlikely but worth checking)
+
+**Once we have shell**:
+- Check if `/tmp/poe.log` already contains MCU traffic debug (stock has `poe_dbg_message_set`)
+- Use `strace -e read,write -p <pid>` on the PoE daemon to capture UART I/O
+- Cross-reference captured traffic with our RE_ANALYSIS.md command table
+
+### Priority 2: Upstream-Relevant Improvements
+
+These address real upstream issues and would benefit all realtek-poe users:
+
+| Task | Upstream Issue | Effort | Impact |
+|------|---------------|--------|--------|
+| VMIN/VTIME UART tuning | #50 (CPU utilization) | Small | Reduces CPU from 1.0-1.3% to near-zero |
+| LED control | #66 (LED remapping) | Medium | Visual PoE status on front panel |
+| Port power pair (0x19) | #32 (802.3bt) | Small | Prerequisite for 4-pair PoE |
+
+### Priority 3: Remaining Parity
+
+| Task | Notes | Effort |
+|------|-------|--------|
+| Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies | Medium |
+| LLDP-MED PoE negotiation | Requires lldpd integration | Multi-week |
+| MCU firmware upgrade (0xe0) | Safety-critical | High |
+| Extended params (BCM59121) | Different chip family | Medium |
