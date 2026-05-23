@@ -267,7 +267,16 @@ flashcp /tmp/cfg1.bin /dev/mtd0
 
 ### kmod-mtd-rw bypasses DTS read-only protection
 
-OpenWrt's device tree marks CFG partitions as read-only. The `kmod-mtd-rw` kernel module bypasses this: `insmod mtd-rw.ko i_want_a_brick=1`. Available from OpenWrt package repos for most targets. Must be loaded before any MTD writes to read-only partitions.
+OpenWrt's device tree marks CFG partitions as read-only. The `kmod-mtd-rw` kernel module bypasses this: `insmod mtd-rw.ko i_want_a_brick=1`. Available from OpenWrt package repos for most targets (official package in `openwrt/packages/kernel/mtd-rw`).
+
+In OpenWrt 24.10.x, kernel modules moved to a separate kmods feed. On official images, the kmods feed is auto-configured. If `opkg install kmod-mtd-rw` fails, check `/etc/opkg/distfeeds.conf` for the kmods line. Install command:
+
+```bash
+opkg update && opkg install kmod-mtd-rw
+insmod mtd-rw i_want_a_brick=1
+```
+
+Must be loaded before any MTD writes to read-only partitions. Reverts on reboot (module unload).
 
 ## Switch-Initiated Flashing (Router-to-Router)
 
