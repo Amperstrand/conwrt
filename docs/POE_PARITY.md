@@ -154,31 +154,57 @@ the exact fault reason in the `poe.port_status` event's `fault_reason` field.
 
 ## Implementation Plan
 
-### P0: Under-decoding fixes (existing wire replies, no new commands)
+### Done (shipped on ai/power-limit-config)
 
-| ID | What | Files | Stock Reference | Upstream Issue |
-|----|------|-------|-----------------|----------------|
-| P0-1 | Decode 0x21 fault_type/power_mode/chan_pwr/pd_alt | main.c, tek-poe.h | `poe_bcm59111_portStatus_get` extracts all 9 fields | TBD |
-| P0-2 | Decode 0x28 upper nibble (class, fault_type, PD flag) | main.c | `poe_bcm59111_allPortStatus_get` extracts packed bits | TBD |
-| P0-3 | Set 0x22 reset=1 on counter reads | main.c | `bcm59111_portStats_get` sends reset=1 every cycle | TBD |
+| ID | What | Commit | Stock Reference | Upstream Issue |
+|----|------|--------|-----------------|----------------|
+| P0-1 | Decode 0x21 fault_type/power_mode/chan_pwr/pd_alt | `15ab0f4` | `poe_bcm59111_portStatus_get` extracts all 9 fields | — |
+| P0-2 | Decode 0x28 upper nibble (class, fault_type, PD flag) | `15ab0f4` | `poe_bcm59111_allPortStatus_get` extracts packed bits | — |
+| P0-3 | Set 0x22 reset=1 on counter reads | `15ab0f4` | `bcm59111_portStats_get` sends reset=1 every cycle | — |
+| P1-fault | Authoritative fault_type in events | `15ab0f4` | `text_poe_portStatusDescStr` enumeration | — |
+| P1-reset | Port reset (0x03) via ubus manage | `15ab0f4` | `bcm59111_cmd_set` enum 3 = 0x03 | Related: #10 (boot stuck unknown) |
+| P1-devpm | Device power management (0x0b) in init | `15ab0f4` | `poe_bcm59111_chip_init` sends pre_alloc/powerup_mode | — |
+| P1-highpw | High power limit (0x07) in init | `15ab0f4` | `bcm59111_cmd_set` enum 7 | — |
+| threshold | Power threshold monitoring (ubus event) | `5b06845` | `_poe_threshold_thread` | — |
+| events | Async port status events (ubus event) | `ffaf70a` | `sal_poe_portStatusStateEvent_set` | — |
+| fault-flag | Fault flag + fault_reason on events | `166d60e` | `text_poe_portStatusDescStr` | — |
 
-### P1: Missing SET commands
+### Upstream Issues Mapping
 
-| ID | What | Files | Stock Reference | Upstream Issue |
-|----|------|-------|-----------------|----------------|
-| P1-1 | Port reset (0x03) | tek-poe.h, dialect_bcm.c, main.c | `bcm59111_cmd_set` enum 3 = 0x03 | TBD |
-| P1-2 | Device power management (0x0b) | tek-poe.h, dialect_bcm.c, main.c | `poe_bcm59111_chip_init` sends pre_alloc/powerup_mode/disconnect_order | TBD |
-| P1-3 | Global high power limit (0x07) | tek-poe.h, dialect_bcm.c, main.c | `bcm59111_cmd_set` enum 7 | TBD |
+Open issues on Hurricos/realtek-poe that relate to our work:
 
-### P2: Extended features
+| Issue | Title | Relevance | Our Status |
+|-------|-------|-----------|------------|
+| #68 | PSE ID quirk for GS1900-48HP A1 | pse_id_set_budget_mask needs 0x80 for 48HP | Not our hardware, N/A |
+| #66 | Map LEDs to match remapped ports | LED remapping config option | Related to our P2 LED work |
+| #64 | Transfer repo to organization | Governance, not technical | — |
+| #62 | PoE via i2c: best way forward? | I2C transport for GS1920 series | We're UART only, different hardware |
+| #59 | New realtek dialect not autodetected | Dialect auto-detection broken for GS1900-24HPv2 | Our fork is BCM59111-specific |
+| #58 | Manage ports disabled in config | Allow managing ports with enable=0 | Our port reset has same issue (checks port->enable). Should fix. |
+| #54 | Reversed order of ports | Port numbering vs labels on D-Link | UCI config issue, not our code |
+| #53 | Build for mips-24kec targets | Missing build target | Build system issue |
+| **#50** | **Reduce CPU utilization** | **1.0-1.3% CPU, wakes per-byte** | **Our 2s poll cycle + reset-on-read helps. VMIN/VTIME tuning would help further.** |
+| #47 | Don't log to stdio by default | Logging noise | We use ulog which already goes to syslog |
+| **#32** | **802.3bt and paired port support** | **4-pair PoE for GS110TUP** | **Our 0x19 power pair command is prerequisite. We have the dialect entry.** |
+| #29 | Clean-up schema when no middleman MCU | BCM59103 direct support | Different hardware class |
+| #28 | Config template model-inspecific | Default budget/port values | Board-specific, not our code |
+| #27 | TI TPS23861 support | Different PSE chip entirely | N/A |
+| **#10** | **Status stuck on 'unknown' after reboot** | **Race condition at boot** | **Our init sends 0x0b+0x07 which may help. Port reset (0x03) could also recover.** |
+| #7 | Reboot interrupts PoE delivery | MCU reset on device reboot | Hardware behavior, can't fix in software |
 
-| ID | What | Notes |
-|----|------|-------|
-| P2-1 | LED control (0x41-0x49) | Needs hardware-specific LED map for GS1900-8HP A1 |
-| P2-2 | Port power pair (0x19) | A-pair/B-pair for 4-pair PoE |
-| P2-3 | Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies |
+### Remaining Work
 
-### P3: Large/multi-week features
+#### P2: Extended features
+
+| ID | What | Notes | Upstream Issue |
+|----|------|-------|----------------|
+| P2-1 | LED control (0x41-0x49) | Needs hardware-specific LED map for GS1900-8HP A1 | #66 (LED remapping config) |
+| P2-2 | Port power pair (0x19) | A-pair/B-pair for 4-pair PoE | #32 (802.3bt paired port support) |
+| P2-3 | Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies | — |
+| P2-4 | Allow managing disabled ports | Remove `port->enable` check from manage/reset path | #58 (manage disabled ports) |
+| P2-5 | CPU utilization: VMIN/VTIME tuning | Reduce per-byte wakeups in UART read loop | #50 (reduce CPU utilization) |
+
+#### P3: Large/multi-week features
 
 | ID | What | Notes |
 |----|------|-------|
@@ -186,16 +212,15 @@ the exact fault reason in the `poe.port_status` event's `fault_reason` field.
 | P3-2 | MCU firmware upgrade (0xe0/0xaf) | Safety-critical, needs bootloader detect + image validation |
 | P3-3 | Extended parameters (BCM59121) | Different chip family, 802.3bt features |
 
-## Scorecard
+## Scorecard (after P0+P1 batch)
 
 | Category | Items | ✅ Parity | ❌ Gap | ⚠️ Partial |
 |----------|-------|----------|--------|------------|
-| GET commands | 14 | 11 | 0 | 3 |
-| SET commands | 19 | 11 | 8 | 0 |
+| GET commands | 14 | 11 | 0 | 3 → all fixed |
+| SET commands | 19 | 11 → 14 | 8 → 5 | 0 |
 | LED commands | 6 | 0 | 6 | 0 |
 | MCU management | 2 | 0 | 2 | 0 |
-| Features | 25 | 13 | 8 | 4 |
-| **Totals** | **66** | **35 (53%)** | **27 (41%)** | **4 (6%)** |
+| Features | 25 | 13 → 18 | 8 → 3 | 4 → 0 |
+| **Totals** | **66** | **43 (65%)** | **16 (24%)** | **0** |
 
-Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d): actionable gap is 21 items.
-P0 fixes (3 items) would bring us to 41/63 = 65% parity on core PoE functionality.
+Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d): 43/60 = 72% parity on actionable items.
