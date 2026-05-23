@@ -121,11 +121,30 @@ def main() -> int:
 
     check(ras.offset == EXPECTED_RASCODE_OFFSET, "RasCode section remains at stock offset")
     check(ras.type == 4, "RasCode type is 4")
-    check(ras.flags == 0x40, "RasCode is uncompressed rt-loader initramfs payload")
+    compressed = bool(ras.flags & 0x80)
+    check(ras.flags in (0x40, 0xE0), f"RasCode flags valid (0x{ras.flags:02x}: {'compressed' if compressed else 'uncompressed'})")
     payload_offset = ras.offset + ROMBIN_HDR_SIZE
-    payload = data[payload_offset : payload_offset + ras.osize]
-    check(len(payload) == ras.osize, "RasCode payload length matches osize")
-    check(internet_checksum(payload) == ras.ocsum, "RasCode ocsum validates")
+
+    if compressed:
+        # LZMA-compressed RasCode: validate ccsum against compressed data,
+        # then decompress to validate ocsum and uImage structure
+        compressed_payload = data[payload_offset : payload_offset + ras.csize]
+        check(len(compressed_payload) == ras.csize, "RasCode compressed payload length matches csize")
+        check(internet_checksum(compressed_payload) == ras.ccsum, "RasCode ccsum (compressed) validates")
+
+        import lzma
+        try:
+            payload = lzma.decompress(compressed_payload)
+        except Exception as e:
+            fail(f"RasCode LZMA decompression failed: {e}")
+        check(len(payload) == ras.osize, f"RasCode decompressed size matches osize ({len(payload)} vs {ras.osize})")
+        check(internet_checksum(payload) == ras.ocsum, "RasCode ocsum (decompressed) validates")
+        print(f"OK: RasCode LZMA decompressed {ras.csize} -> {ras.osize} bytes ({ras.csize/ras.osize*100:.1f}% ratio)")
+    else:
+        # Uncompressed RasCode: validate ocsum directly
+        payload = data[payload_offset : payload_offset + ras.osize]
+        check(len(payload) == ras.osize, "RasCode payload length matches osize")
+        check(internet_checksum(payload) == ras.ocsum, "RasCode ocsum validates")
 
     magic_offset = payload.find(bytes.fromhex("27051956"))
     check(magic_offset == 0x3E60, "uImage header appears at expected rt-loader offset 0x3e60")

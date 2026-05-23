@@ -658,16 +658,207 @@ This would replace FTP as the automation method. Worth testing.
 
 ---
 
+## Rebuild #5: Custom Source Build with Safety Fixes (2026-05-23)
+
+### Why We Rebuilt From Source
+
+The official OpenWrt snapshot initramfs (5,428,257 bytes) was too large to fit in a single ZyNOS firmware slot (3,677,044 bytes max after LZMA). We built a minimal custom image from source to:
+1. Shrink the initramfs to fit the slot budget
+2. Add safety features (telnetd, static IP fallback, LED indicators)
+3. Fix the auto-sysupgrade timing bug (was running before network was up)
+
+### Source Build Configuration
+
+Built from OpenWrt snapshot (commit `f8dba88312`) at `/home/ubuntu/src/conwrt/openwrt-minimal/`.
+
+**Target**: `realtek/rtl839x`, device `zyxel_gs1920-24hp-v1`
+
+**Key config changes from default**:
+- Disabled all default packages (luci, firewall, opkg, etc.)
+- Enabled `BUSYBOX_DEFAULT_TELNETD` — remote shell for debug
+- Removed `kmod-hwmon-lm85` — ADT7468 probe on non-PoE hardware (fails gracefully but unnecessary)
+- Removed `kmod-gpio-button-hotplug` — reset button not needed for this stage
+- Disabled `CONFIG_KERNEL_PROFILING`, `CONFIG_KERNEL_DEBUG_INFO`, etc.
+- Kept: busybox, fwtool, usign, mtd, uboot-envtools, gpio-button-hotplug (in-kernel)
+
+**Build result**:
+- Initramfs: 2,904,425 bytes (vs official 5,428,257 — 46% smaller)
+- ZyNOS-wrapped (LZMA compressed): 3,665,779 bytes (11,265 bytes under 3,677,044 budget)
+
+### Safety Fixes Applied
+
+**BUG FIX 1 — Auto-sysupgrade timing deadlock**:
+- Problem: `99-auto-sysupgrade` in uci-defaults runs during S10boot, BEFORE S20network starts. Network not up → 120s timeout → auto-flash never triggers.
+- Fix: Moved to `/etc/init.d/auto-sysupgrade` as S99 (runs AFTER network).
+- The S99 script waits up to 60s for DHCP, falls back to static IP 192.168.1.225.
+
+**BUG FIX 2 — No remote access for troubleshooting**:
+- Problem: No dropbear, no telnetd. If anything goes wrong, no way to debug without serial.
+- Fix: Enabled busybox telnetd on port 23 (no auth, direct `/bin/sh`).
+
+**BUG FIX 3 — Boot loop risk**:
+- Problem: BootBase fallback is header-level only (SIG+checksum). If kernel starts then hangs, no automatic fallback → boot loop.
+- Partial fix: Cannot solve in software (BootBase controls fallback). Mitigated with two-phase upload plan.
+- Recovery: Physical reset button (GPIO1 pin 32, KEY_RESTART) may trigger BootBase factory reset.
+
+### Init Scripts Created
+
+| Script | Priority | Purpose |
+|--------|----------|---------|
+| `96-led-boot-indicator` | uci-defaults | Slow blink (500ms) = booting in progress |
+| `97-start-telnetd` | uci-defaults | Starts `telnetd -l /bin/sh -p 23` (no auth) |
+| `98-setup-network` | uci-defaults | DHCP client with hostname `openwrt-stage1` |
+| `/etc/init.d/auto-sysupgrade` | S99 | After network: 60s DHCP wait → static IP fallback → nc download → size validation → sysupgrade |
+
+### Auto-sysupgrade (S99) Design
+
+The auto-flash script runs as an init.d service (S99) after network is fully up:
+
+1. Wait up to 60s for DHCP lease
+2. If DHCP fails, configure static IP 192.168.1.225/24
+3. Try 15 times (1s intervals) to download sysupgrade image from `192.168.1.2:9999` via `nc`
+4. Validate downloaded image size (1-10MB range)
+5. LED patterns: fast-blink during download → solid during flash → slow-blink on error
+6. Run `sysupgrade -n` with the downloaded image
+
+### ZyNOS Repacking (LZMA Compressed)
+
+Unlike the previous build (uncompressed RasCode, flags=0x40), rebuild #5 uses LZMA compression:
+
+```
+RasCode flags: 0xE0 (COMP + OCSUM + CCSUM)
+LZMA ratio: 2,904,425 → 2,935,619 bytes (101.1%)
+BootExt ocsum: 0xf840 (was 0xd342 on stock)
+RasCode ocsum: 0x6a91
+RasCode ccsum: 0x32e6
+```
+
+The LZMA ratio is >100% because the initramfs is already compressed (cpio.gz). LZMA can't further compress it, adding ~31KB overhead. But the total image still fits the budget (3,665,779 < 3,677,044).
+
+### Updated Validation (20 checks)
+
+The validator was updated to handle LZMA-compressed RasCode. It now verifies:
+1. Compressed payload length matches `csize`
+2. Compressed checksum (`ccsum`) validates against compressed data
+3. LZMA decompression succeeds
+4. Decompressed size matches `osize`
+5. Uncompressed checksum (`ocsum`) validates against decompressed data
+6. uImage structure within decompressed payload
+
+Full output:
+```
+Image: minimal-v2-telnetd-initramfs-zynos-lzma.bin
+Size: 3,665,779 bytes (sha256=4bdaf45facf29d71a1035bb57f8bfc3d34bc37ed1fe413aa12c2341291e99a75)
+OK: image fits one 8MiB GS1920 firmware slot with 4722829 bytes headroom
+OK: exactly three ZyNOS sections found
+OK: BOOTEXT section starts at offset 0
+OK: BOOTEXT type is 3
+OK: BOOTEXT load address is GS1920 RTL839x code start
+OK: BOOTEXT mmap_addr is stock slot-1 address for FTP patching
+OK: BOOTEXT uses uncompressed checksum flag
+OK: BOOTEXT osize covers full image after header
+OK: BOOTEXT ocsum validates
+OK: RomDefa section remains at stock offset
+OK: RomDefa type is 4
+OK: RomDefa compressed checksum validates
+OK: RasCode section remains at stock offset
+OK: RasCode type is 4
+OK: RasCode flags valid (0xe0: compressed)
+OK: RasCode compressed payload length matches csize
+OK: RasCode ccsum (compressed) validates
+OK: RasCode decompressed size matches osize (2904425 vs 2904425)
+OK: RasCode ocsum (decompressed) validates
+OK: RasCode LZMA decompressed 2935619 -> 2904425 bytes (101.1% ratio)
+OK: uImage header appears at expected rt-loader offset 0x3e60
+OK: uImage magic is valid
+OK: uImage load address is 0x80100000
+OK: uImage entry address is 0x80100000
+OK: uImage is Linux/MIPS/kernel/lzma
+OK: uImage name identifies MIPS OpenWrt
+OK: uImage payload ends exactly at RasCode end
+PASS: GS1920 ZyNOS-wrapped OpenWrt image passed safety validation
+```
+
+### Boot Sequence Analysis
+
+Understanding why auto-sysupgrade failed in earlier builds:
+
+```
+S10boot:  kmodloader → DSA probe (ports isolated) → config_generate → uci-defaults
+          (auto-sysupgrade ran HERE in earlier builds — network NOT up yet!)
+
+S20network: eth0 open → hw_reset → br-lan created → bridge_join → DHCP
+
+S99auto-sysupgrade: (FIXED) runs AFTER network, waits for IP, then downloads
+```
+
+Key insight: DSA driver isolates all ports during probe (S10boot). Ports only regain forwarding when they join br-lan via `bridge_join` callback (S20network). This means no network connectivity until S20network completes.
+
+### Protection Matrix
+
+| Scenario | Protected? | How |
+|----------|-----------|-----|
+| ZyNOS rejects image at header level | YES | Dual-slot fallback |
+| Upload corrupts Firmware 1 | YES | Phase 1 doesn't boot from it |
+| OpenWrt kernel panics during probe | PARTIAL | Boot loop. Recovery: physical reset button |
+| OpenWrt boots but network fails | YES | Static IP fallback at 192.168.1.225 |
+| OpenWrt boots but auto-flash fails | YES | Telnetd on port 23 for manual intervention |
+| DHCP fails | YES | Static IP fallback at 192.168.1.225 |
+
+---
+
+## Two-Phase Upload Plan (Maximum Safety)
+
+### Phase 1: Upload Without Booting
+
+1. Set **Config Boot Image = Firmware 2** via Playwright (device currently boots from slot 2)
+2. Upload OpenWrt image to **Firmware 1** (slot 1, ras-0) via FTP
+3. Device reboots → boots stock from slot 2 (Config Boot = 2)
+4. Verify upload via web UI `show version` — Firmware 1 should show changed size/version
+5. **Checkpoint**: If upload succeeded, both slots have valid firmware. No risk yet.
+
+### Phase 2: Switch Boot Target (User-Approved)
+
+1. User explicitly confirms readiness
+2. Set **Config Boot Image = Firmware 1** via Playwright
+3. Trigger reboot via web UI
+4. OpenWrt boots from slot 1
+5. If it works: telnetd available at port 23, DHCP or static 192.168.1.225
+6. If it fails: BootBase falls back to slot 2 (header-level only) — boot loop risk if kernel starts then hangs
+7. Boot loop recovery: hold physical reset button during power-on
+
+### Why Two Phases?
+
+- Phase 1 is completely safe — we never boot from the uploaded image
+- If upload corrupts, we detect it in Phase 1 verification and stop
+- Phase 2 is the only risky step — user can defer until confident
+- If user cannot physically power-cycle the switch, they should defer Phase 2 until they can
+
+---
+
 ## Relevant Files
 
 | File | Purpose | SHA-256 (prefix) |
 |------|---------|-------------------|
-| `data/gs1920-openwrt-snapshot/gs1920-24hp-v1-initramfs-zynos-wrapped.bin` | ZyNOS-wrapped OpenWrt initramfs (6,158,417 bytes) | `764c81d5...` |
-| `data/gs1920-openwrt-snapshot/initramfs.bin` | Official OpenWrt initramfs (5,428,257 bytes) | `3d2ffea0...` |
+| `images/minimal-v2-telnetd-initramfs-zynos-lzma.bin` | **PRIMARY IMAGE** — ZyNOS-wrapped minimal OpenWrt (3,665,779 bytes, rebuild #5) | `4bdaf45f...` |
+| `images/minimal-rawcpio-initramfs-zynos-lzma-fixed.bin` | Previous image (rebuild #4, 3,666,472 bytes, 17/17 pass) — superseded | — |
+| `data/gs1920-openwrt-snapshot/initramfs.bin` | Official OpenWrt initramfs (5,428,257 bytes) — too large for slot | `3d2ffea0...` |
 | `data/gs1920-openwrt-snapshot/loader.bin` | rt-loader standalone (16,027 bytes) | `ecc9a31e...` |
-| `data/gs1920-openwrt-snapshot/sysupgrade.bin` | squashfs sysupgrade (5,767,486 bytes) | `2a6b8a0d...` |
+| `data/gs1920-openwrt-snapshot/sysupgrade.bin` | squashfs sysupgrade (5,767,486 bytes) — for nc server in Stage 2 | `2a6b8a0d...` |
 | `stock-v450.bin` | Stock V4.50(AAOB.3) reference (3,677,044 bytes) | `975946c6...` |
-| `scripts/gs1920-validate-zynos-openwrt.py` | Image safety validator (25 invariants) | — |
-| `scripts/gs1920-repack-firmware.py` | ZyNOS firmware repacking tool | — |
+| `scripts/gs1920-validate-zynos-openwrt.py` | Image safety validator (20 checks, supports compressed RasCode) | — |
+| `scripts/gs1920-repack-firmware.py` | ZyNOS firmware repacking tool (supports --compress for LZMA) | — |
 | `recipes/zyxel/gs1920-24/gs1920-ftp-slot2-flash.sh` | FTP upload script (active mode) | — |
 | `patch-board.patch` | mkzynfw RTL839X board definitions | — |
+
+### Build Directory (not in git)
+
+Located at `/home/ubuntu/src/conwrt/openwrt-minimal/`:
+
+| Path | Purpose |
+|------|---------|
+| `.config` | Build config (telnetd enabled, hwmon-lm85 removed) |
+| `files/etc/uci-defaults/96-led-boot-indicator` | LED slow-blink during boot |
+| `files/etc/uci-defaults/97-start-telnetd` | Telnetd on port 23 |
+| `files/etc/uci-defaults/98-setup-network` | DHCP setup |
+| `files/etc/init.d/auto-sysupgrade` | S99 auto-flash (fixed timing) |
