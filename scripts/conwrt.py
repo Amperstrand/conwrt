@@ -48,7 +48,7 @@ from typing import Optional
 
 # model_loader is in the same directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ssh_utils import ssh_cmd, scp_cmd
+from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models, openwrt_asu_profile, find_model_by_board_name
 from flash.device_profile import build_profile_from_model as _build_profile_from_model
@@ -995,8 +995,8 @@ def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
                     "echo hostname=$(cat /proc/sys/kernel/hostname); "
                     "echo board=$(cat /etc/board.json | jsonfilter -e '@.model.id' 2>/dev/null || echo unknown); "
                     "echo kernel=$(uname -r); "
-                    "echo sshkey_count=$(wc -l < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
-                    "echo sshkey_size=$(wc -c < /etc/dropbear/authorized_keys 2>/dev/null || echo 0); "
+                    f"echo sshkey_count=$(wc -l < {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo 0); "
+                    f"echo sshkey_size=$(wc -c < {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo 0); "
                     "echo wan_ssh=$(uci show firewall 2>/dev/null | grep Allow-SSH-WAN | wc -l); "
                     "echo uci_defaults=$(ls /etc/uci-defaults/ 2>/dev/null | wc -l); "
                     "echo mac_brlan=$(cat /sys/class/net/br-lan/address 2>/dev/null || echo ''); "
@@ -3556,6 +3556,10 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
     key_path: path to public key file (for reading the key to install).
     auth_key: private key path used for SSH authentication.
     ssh_key: public key text (alternative to key_path).
+
+    IMPORTANT: This MUST be called BEFORE _cfg_set_password. OpenWrt allows
+    passwordless root login by default — once a password is set, passwordless
+    login stops. If SSH keys aren't installed first, you lose remote access.
     """
     pub_key = ""
     if ssh_key and ssh_key.startswith("ssh-"):
@@ -3574,7 +3578,7 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
         return False
 
     log("  SSH key: checking current state...")
-    r = _ssh_run(ip, "cat /etc/dropbear/authorized_keys 2>/dev/null || echo ''", key=auth_key)
+    r = _ssh_run(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
     current_keys = r.stdout.strip()
     if pub_key in current_keys:
         log("  ✓ SSH key: already installed")
@@ -3584,16 +3588,17 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
     needs_create = "No such file" in r.stderr or not current_keys
     op = ">" if needs_create or not current_keys else ">>"
     escaped = pub_key.replace("'", "'\\''")
+    auth_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]
     install_r = _ssh_run(
         ip,
-        f"mkdir -p /etc/dropbear && echo '{escaped}' {op} /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys",
+        f"mkdir -p {auth_dir} && echo '{escaped}' {op} {DROPBEAR_AUTH_KEYS_PATH} && chmod 600 {DROPBEAR_AUTH_KEYS_PATH}",
         key=auth_key,
     )
     if install_r.returncode != 0:
         log(f"  ⚠ SSH key: install failed (rc={install_r.returncode})")
         return False
 
-    verify_r = _ssh_run(ip, "cat /etc/dropbear/authorized_keys 2>/dev/null || echo ''", key=auth_key)
+    verify_r = _ssh_run(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
     if pub_key in verify_r.stdout:
         log("  ✓ SSH key: installed and verified")
         return True
@@ -3734,6 +3739,7 @@ def cmd_configure(args: argparse.Namespace) -> int:
         return 0
 
     if ssh_pub_path or ssh_key_text:
+        # SSH key MUST be installed BEFORE password — see _cfg_install_ssh_key docstring
         _cfg_install_ssh_key(ip, key_path=ssh_pub_path, auth_key=ssh_key_path, ssh_key=ssh_key_text)
 
     ip = _apply_profile_post_flash(

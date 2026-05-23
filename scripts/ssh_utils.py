@@ -1,7 +1,35 @@
 from __future__ import annotations
 
+import socket
 import subprocess
 from collections.abc import Sequence
+
+# OpenWrt Dropbear reads authorized_keys from this path, NOT ~/.ssh/authorized_keys.
+# conwrt must use this path for all post-flash SSH key installation on OpenWrt.
+DROPBEAR_AUTH_KEYS_PATH = "/etc/dropbear/authorized_keys"
+
+# SSH options needed when connecting from openssh-client to a Dropbear server
+# that may lack modern host key algorithms (Dropbear 2025.89 on some targets).
+# See: docs/gotchas.md "OpenWrt Dropbear SSH Quirks — Algorithm Negotiation"
+DROPBEAR_SSH_OPTIONS: list[str] = [
+    "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
+    "-o", "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
+    "-o", "Ciphers=+aes128-ctr,aes256-ctr",
+]
+
+
+def detect_ssh_server(ip: str, port: int = 22, timeout: float = 5.0) -> str | None:
+    """Detect SSH server type by banner grab. Returns 'dropbear', 'openssh', or None."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            banner = sock.recv(256).decode("ascii", errors="replace").strip().lower()
+            if "dropbear" in banner:
+                return "dropbear"
+            if "openssh" in banner:
+                return "openssh"
+            return None
+    except (OSError, socket.timeout):
+        return None
 
 
 def ssh_cmd(
@@ -9,6 +37,7 @@ def ssh_cmd(
     command: str | Sequence[str],
     key: str | None = None,
     connect_timeout: int = 10,
+    dropbear_target: bool = False,
 ) -> list[str]:
     cmd: list[str] = [
         "ssh",
@@ -18,6 +47,8 @@ def ssh_cmd(
         "-o", f"ConnectTimeout={connect_timeout}",
         "-o", "PasswordAuthentication=no",
     ]
+    if dropbear_target:
+        cmd.extend(DROPBEAR_SSH_OPTIONS)
     if key:
         cmd += ["-i", key]
     cmd.append(f"root@{ip}")
@@ -34,6 +65,7 @@ def scp_cmd(
     dst: str,
     key: str | None = None,
     connect_timeout: int = 10,
+    dropbear_target: bool = False,
 ) -> list[str]:
     cmd: list[str] = [
         "scp",
@@ -43,6 +75,8 @@ def scp_cmd(
         "-o", "BatchMode=yes",
         "-o", f"ConnectTimeout={connect_timeout}",
     ]
+    if dropbear_target:
+        cmd.extend(DROPBEAR_SSH_OPTIONS)
     if key:
         cmd += ["-i", key]
     cmd += [src, dst]
@@ -52,7 +86,9 @@ def scp_cmd(
 def run_ssh(ip, command, key=None, connect_timeout=10, timeout=30, **kwargs):
     """Run SSH command and return subprocess.CompletedProcess."""
     ssh_options = kwargs.pop("ssh_options", None)
-    cmd = ssh_cmd(ip, command, key=key, connect_timeout=connect_timeout)
+    dropbear_target = kwargs.pop("dropbear_target", False)
+    cmd = ssh_cmd(ip, command, key=key, connect_timeout=connect_timeout,
+                  dropbear_target=dropbear_target)
     if ssh_options:
         cmd[1:1] = list(ssh_options)
     return subprocess.run(

@@ -12,6 +12,7 @@ from profile.wifi import (
     wifi_ap_firstboot_script,
     wifi_sta_firstboot_script,
 )
+from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
 
 
 def _read_ssh_pubkey(path: str) -> tuple[str, str]:
@@ -26,11 +27,11 @@ def _read_ssh_pubkey(path: str) -> tuple[str, str]:
 
 
 def _ssh_key_firstboot(keys: list[str]) -> str:
-    lines = ["mkdir -p /etc/dropbear"]
+    lines = [f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}"]
     for i, key in enumerate(keys):
         op = ">" if i == 0 else ">>"
-        lines.append(f"echo '{key}' {op} /etc/dropbear/authorized_keys")
-    lines.append("chmod 600 /etc/dropbear/authorized_keys")
+        lines.append(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}")
+    lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
     return "\n".join(lines)
 
 
