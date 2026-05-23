@@ -124,6 +124,80 @@
     "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000 — Direct SPI-NOR read of OpenWrt FIT. The CORRECT final boot command.",
     "bootipq": "Custom QCA command — boot from flash device with device tree handling."
   },
+  "post_flash": {
+    "ssh": {
+      "description": "OpenWrt 24.10.2 on this device runs Dropbear 2025.89 SSH server. Several gotchas when configuring SSH from an OpenWrt host switch.",
+      "authorized_keys_path": "/etc/dropbear/authorized_keys",
+      "authorized_keys_note": "NOT ~/.ssh/authorized_keys. OpenWrt Dropbear reads from /etc/dropbear/ only. conwrt already handles this correctly in scripts/conwrt.py (line 3589) and scripts/profile/builder.py (line 32).",
+      "key_format": {
+        "openssh_private_key_incompatible": true,
+        "problem": "OpenWrt Dropbear dbclient cannot use OpenSSH-format private keys (error in libcrypto: unsupported). Use Dropbear-format keys or install openssh-client on the host.",
+        "workaround": "opkg install openssh-client on the host OpenWrt device, or use dropbearkey to generate Dropbear-format keys."
+      },
+      "password_env_var": {
+        "variable": "DROPBEAR_PASSWORD",
+        "description": "dbclient accepts the password via DROPBEAR_PASSWORD env var for non-interactive auth. Example: DROPBEAR_PASSWORD=mypass dbclient root@192.168.1.1"
+      },
+      "algorithm_negotiation": {
+        "problem": "Dropbear 2025.89 on AP3915i may lack ssh-rsa hostkey. openssh-client from an OpenWrt host needs explicit algorithm enablement.",
+        "required_options": [
+          "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
+          "-o", "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
+          "-o", "Ciphers=+aes128-ctr,aes256-ctr"
+        ]
+      },
+      "ordering": {
+        "rule": "Set SSH authorized_keys BEFORE setting root password.",
+        "reason": "OpenWrt default allows passwordless root login. Once you set a password, passwordless login stops. If SSH keys aren't in place yet, you lose remote access."
+      }
+    }
+  },
+  "cfg_block_format": {
+    "description": "U-Boot environment block format for AP391x devices (CFG1/CFG2 partitions, 64KB each).",
+    "structure": {
+      "bytes_0_3": "CRC32 (little-endian) checksum",
+      "byte_4": "Active flag (0x01 = active)",
+      "bytes_5_end": "Null-separated KEY=VALUE pairs (U-Boot env format)",
+      "padding": "Remaining space filled with 0xFF"
+    },
+    "crc_scope": "CRC32 covers bytes[5:] to end of data (NOT including the CRC itself or the active flag byte). This differs from some U-Boot implementations where CRC covers byte[4:].",
+    "write_method": {
+      "stock_firmware": "flashcp /tmp/cfg_block.bin /dev/mtd1 (stock firmware has writable MTD)",
+      "openwrt_initramfs": "Requires kmod-mtd-rw (insmod mtd-rw.ko i_want_a_brick=1) to override DTS read-only flags, then flashcp or custom mtd_raw_write tool.",
+      "note": "Always use flashcp for NOR flash, never dd. flashcp handles erase+write cycles correctly."
+    },
+    "strategy": "Write CFG1 only first, verify boot, then mirror to CFG2. Leaving CFG2 untouched provides a fallback if CFG1 is corrupted."
+  },
+  "switch_initiated_flashing": {
+    "description": "Flash procedure orchestrated by an OpenWrt PoE switch (e.g. GS1900-8HP) — no laptop required.",
+    "poe_control": {
+      "package": "realtek-poe",
+      "disable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":false}'",
+      "enable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":true}'",
+      "re_enable_quirk": "After disabling and re-enabling PoE, the port may not power up immediately. Wait 5-10 seconds or toggle again. The BCM59121 PoE controller needs time to renegotiate."
+    },
+    "network": {
+      "secondary_ip": "ip addr add 192.168.1.2/24 dev br-lan — add a secondary IP on the same interface for the flash subnet",
+      "tftp_server": "dnsmasq --port=0 --no-daemon --tftp-root=/tmp/tftpboot --user=root --listen-address=192.168.1.2",
+      "note": "dnsmasq doubles as TFTP server on OpenWrt (already installed for DNS/DHCP). No extra package needed."
+    },
+    "workflow": [
+      "1. PoE disable target port (power off AP)",
+      "2. Stage firmware + TFTP config",
+      "3. PoE enable target port (AP boots)",
+      "4. AP U-Boot TFTP-boots initramfs",
+      "5. SSH to AP, backup partitions",
+      "6. SSH to AP, sysupgrade with permanent image",
+      "7. Post-flash: set SSH keys, then set password, then change IP"
+    ]
+  },
+  "tested_hardware": {
+    "extreme-rdwr-tftp-initramfs": {
+      "tested": true,
+      "date": "2026-05-23",
+      "notes": "Switch-initiated flash via GS1900-8HP (OpenWrt 25.12.1). No laptop needed during flash. AP on switch port lan5 via PoE. rdwr_boot_cfg broken — used raw MTD write via kmod-mtd-rw + mtd_raw_write from initramfs. CFG blocks corrected with boot_openwrt command. Flash boot verified, overlay persisted through reboot. IP changed to 192.168.13.253 post-flash."
+    }
+  },
   "warnings": [
     "Misconfigured U-Boot environment may require serial recovery.",
     "Stock Extreme shell may reboot periodically if no controller is present — disable SSH timeout with: cset sshtimeout 0 && capply && csave",
@@ -134,6 +208,12 @@
     "CRITICAL: Always include '; run boot_net' fallback in bootcmd. If flash boot fails, AP falls back to TFTP — permanent safety net.",
     "CRITICAL: Write ALL U-Boot env changes from STOCK firmware, NOT from OpenWrt initramfs. The OpenWrt DTS marks CFG1/CFG2 as read-only, and kmod-mtd-rw is NOT available in 24.10.2 (removed since 23.05.x). Stock firmware's /dev/mtd1 (CFG1) is writable via flashcp.",
     "CRITICAL: Write CFG1 only (leave CFG2 untouched as fallback). rdwr_boot_cfg writes BOTH blocks — use flashcp instead if single-block write is needed. See REVIEW-UNIT2-FLASH-PLAN.md v2.",
-    "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only."
+    "CRITICAL: Remove 'ubi.mtd=0' from bootargs if present — it causes kernel UBI attach failure on OpenWrt. The CFG block should not contain this parameter.",
+    "CRITICAL: Set SSH authorized_keys BEFORE setting root password. OpenWrt default allows passwordless root — once password is set, passwordless login stops.",
+    "CRITICAL: Do NOT change bootcmd from a working state. If the AP is booting correctly, do not rewrite the CFG blocks. Only write if bootcmd is wrong or AP is in a boot loop.",
+    "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only.",
+    "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
+    "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
+    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot."
   ]
 }
