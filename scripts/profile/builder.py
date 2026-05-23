@@ -118,6 +118,12 @@ def _firstboot_for_mode(uc, resolved: dict, mode: ProfileMode) -> str:
     return ""
 
 
+_DHCP_DISABLE_SCRIPT = "\n".join([
+    "uci set dhcp.lan.ignore='1'",
+    "uci commit dhcp",
+])
+
+
 def build_plan(
     cfg: ConwrtConfig,
     mode: ProfileMode = "preview",
@@ -126,11 +132,20 @@ def build_plan(
     password: Optional[str] = None,
     wan_ssh: bool = False,
     extra_pub_keys: Optional[list[str]] = None,
+    disable_dhcp: bool = False,
 ) -> ProfilePlan:
     """Build an ordered profile plan from operator config."""
     caps = list(model_capabilities or [])
     plan = ProfilePlan(mode=mode, model_capabilities=caps)
     steps: list[ProfileStep] = []
+
+    if disable_dhcp:
+        steps.append(ProfileStep(
+            kind=StepKind.DHCP_DISABLE,
+            label="Disable DHCP server on LAN",
+            firstboot_script=_DHCP_DISABLE_SCRIPT,
+            configure_script=_DHCP_DISABLE_SCRIPT.replace("\n", " && "),
+        ))
 
     all_keys: list[str] = []
     if ssh_key_path:

@@ -475,9 +475,36 @@ def install_sysupgrade(ctx, openwrt_ip: str) -> bool:
         log(f"SCP failed: {scp_result.stderr[:300]}")
         return False
 
-    log("Sysupgrade image uploaded. Running sysupgrade -n...")
+    cmd = f"sysupgrade -n /tmp/{remote_name}"
+
+    from platform_utils import detect_platform
+    if detect_platform() == "openwrt":
+        try:
+            from profile.overlay import build_overlay_tarball
+            overlay_path = build_overlay_tarball(disable_dhcp=True)
+            overlay_name = os.path.basename(overlay_path)
+            overlay_remote = f"/tmp/{overlay_name}"
+            overlay_scp = subprocess.run(
+                scp_cmd(openwrt_ip, overlay_path, f"root@{openwrt_ip}:{overlay_remote}",
+                        key=ctx.ssh_key_path),
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if overlay_scp.returncode == 0:
+                log("Post-flash overlay uploaded. Running sysupgrade -n -f ...")
+                cmd = f"sysupgrade -n -f {overlay_remote} /tmp/{remote_name}"
+            else:
+                log("Overlay upload failed, falling back to sysupgrade -n.")
+        except Exception as exc:
+            log(f"Overlay generation failed ({exc}), falling back to sysupgrade -n.")
+        finally:
+            try:
+                os.unlink(overlay_path)
+            except (OSError, NameError):
+                pass
+
+    log(f"Running {cmd}...")
     subprocess.run(
-        ssh_cmd(openwrt_ip, f"sysupgrade -n /tmp/{remote_name}", key=ctx.ssh_key_path),
+        ssh_cmd(openwrt_ip, cmd, key=ctx.ssh_key_path),
         capture_output=True, text=True, timeout=30, check=False,
     )
     return True

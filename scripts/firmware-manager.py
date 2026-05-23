@@ -132,6 +132,7 @@ def _build_defaults(
     wifi_sta: Optional[object] = None,
     wifi_ap: Optional[object] = None,
     wifi_aps: Optional[list] = None,
+    disable_dhcp: bool = False,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Backward-compatible wrapper around profile.build_plan."""
     cfg = _load_config()
@@ -143,6 +144,7 @@ def _build_defaults(
         password=password,
         wan_ssh=wan_ssh,
         extra_pub_keys=extra_pub_keys,
+        disable_dhcp=disable_dhcp,
     )
     return plan.asu_defaults_script(), plan.ssh_key_cleaned or None, plan.ssh_key_source or None
 

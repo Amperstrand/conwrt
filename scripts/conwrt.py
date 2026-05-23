@@ -133,14 +133,44 @@ def _scp_upload(device_ip: str, firmware_path: str, ssh_key: Optional[str] = Non
 
 
 def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
-    """Upload firmware via SCP and run sysupgrade -n."""
+    """Upload firmware via SCP and run sysupgrade -n with optional post-flash overlay."""
     ok, remote_path = _scp_upload(device_ip, firmware_path, ssh_key)
     if not ok:
         return False
 
-    log(f"Firmware uploaded. Running sysupgrade -n {remote_path}...")
-    ssh_command = ssh_cmd(device_ip, f"sysupgrade -n {remote_path}",
-                          key=ssh_key, connect_timeout=10)
+    from platform_utils import detect_platform
+    on_openwrt = detect_platform() == "openwrt"
+    overlay_path = None
+    if on_openwrt:
+        from profile.overlay import build_overlay_tarball
+        overlay_path = build_overlay_tarball(disable_dhcp=True)
+        try:
+            overlay_name = os.path.basename(overlay_path)
+            overlay_remote = f"/tmp/{overlay_name}"
+            scp_result = subprocess.run(
+                scp_cmd(device_ip, overlay_path, f"root@{device_ip}:{overlay_remote}",
+                        key=ssh_key, connect_timeout=10),
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if scp_result.returncode == 0:
+                log(f"Firmware uploaded. Running sysupgrade -n -f {overlay_remote} {remote_path}...")
+                cmd = f"sysupgrade -n -f {overlay_remote} {remote_path}"
+            else:
+                log("Overlay upload failed, falling back to sysupgrade -n without overlay.")
+                cmd = f"sysupgrade -n {remote_path}"
+        except Exception:
+            log("Overlay generation failed, falling back to sysupgrade -n without overlay.")
+            cmd = f"sysupgrade -n {remote_path}"
+        finally:
+            if overlay_path:
+                try:
+                    os.unlink(overlay_path)
+                except OSError:
+                    pass
+    else:
+        log(f"Firmware uploaded. Running sysupgrade -n {remote_path}...")
+        cmd = f"sysupgrade -n {remote_path}"
+    ssh_command = ssh_cmd(device_ip, cmd, key=ssh_key, connect_timeout=10)
 
     try:
         r = subprocess.run(ssh_command, capture_output=True, text=True, timeout=30, check=False)
@@ -5537,9 +5567,39 @@ def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue
     remote_name = os.path.basename(ctx.image_path)
     remote_path = f"/tmp/{remote_name}"
     ctx._say_fn("Flashing firmware. Do not unplug.")
-    log("Running sysupgrade -n from OpenWrt initramfs...")
+
+    from platform_utils import detect_platform
+    on_openwrt = detect_platform() == "openwrt"
+    overlay_path = None
+
+    if on_openwrt:
+        from profile.overlay import build_overlay_tarball
+        overlay_path = build_overlay_tarball(disable_dhcp=True)
+        try:
+            overlay_name = os.path.basename(overlay_path)
+            overlay_remote = f"/tmp/{overlay_name}"
+            scp_result = _extreme_openwrt_scp_to_remote(ctx, overlay_path, overlay_remote, timeout=30)
+            if scp_result.returncode == 0:
+                log("Post-flash overlay uploaded. Running sysupgrade -n -f ...")
+                cmd = f"sysupgrade -n -f {shlex.quote(overlay_remote)} {shlex.quote(remote_path)}"
+            else:
+                log("Overlay upload failed, falling back to sysupgrade -n without overlay.")
+                cmd = f"sysupgrade -n {shlex.quote(remote_path)}"
+        except Exception:
+            log("Overlay generation failed, falling back to sysupgrade -n without overlay.")
+            cmd = f"sysupgrade -n {shlex.quote(remote_path)}"
+        finally:
+            if overlay_path:
+                try:
+                    os.unlink(overlay_path)
+                except OSError:
+                    pass
+    else:
+        log("Running sysupgrade -n from OpenWrt initramfs...")
+        cmd = f"sysupgrade -n {shlex.quote(remote_path)}"
+
     try:
-        result = _extreme_openwrt_ssh(ctx, f"sysupgrade -n {shlex.quote(remote_path)}", timeout=60)
+        result = _extreme_openwrt_ssh(ctx, cmd, timeout=60)
         combined = (result.stdout or "") + (result.stderr or "")
         if result.returncode == 0 or "Commencing upgrade" in combined or "Rebooting system" in combined:
             log("Extreme sysupgrade initiated successfully.")

@@ -10,6 +10,7 @@ ProfileMode = Literal["asu_build", "post_install", "preview"]
 
 
 class StepKind(Enum):
+    DHCP_DISABLE = "dhcp_disable"
     SSH_KEY = "ssh_key"
     PASSWORD = "password"
     WAN_SSH = "wan_ssh"
