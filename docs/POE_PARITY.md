@@ -203,6 +203,31 @@ overhead (epoll, ubus, timer), not UART command processing.
 for responsiveness tuning. This does NOT reduce CPU (already near-optimal) but allows
 operators to adjust status update frequency for their needs.
 
+### Boot Status Race Condition (Issue #10)
+
+**Problem**: After daemon restart, `ubus call poe info` shows "unknown" for all ports
+for ~1.5 seconds because `poe_initial_setup()` sends system-level commands but NOT
+port status queries (0x21). The first status query happens in `state_timeout_cb` at
++1 second, and MCU replies take another ~0.5 seconds.
+
+**Root cause**: `ubus_poe_info_cb` returns "unknown" when `state->ports[i].status` is NULL
+(no MCU reply yet). This is misleading — the port isn't in an unknown state, the daemon
+simply hasn't queried the MCU yet.
+
+**Fix** (data-driven, commit `78f37c4`):
+- `ubus_poe_info_cb` checks if ANY port has received status from the MCU
+- If none have (init in progress), NULL status → "initializing" (informative)
+- Once any port has status, remaining NULL ports → "unknown" (genuine unknown)
+
+**Before fix** (hardware-verified on GS1900-8HP A1):
+- 11 iterations (~1.5s) of "unknown" after daemon restart
+- Misleading: clients can't distinguish "init not done" from "MCU error"
+
+**After fix** (hardware-verified):
+- "initializing" until first MCU status reply arrives (~1s)
+- Zero "unknown" during init — direct transition to correct status
+- No flags or timing assumptions — purely data-driven
+
 ## Implementation Plan
 
 ### Done (shipped on ai/power-limit-config)
@@ -220,6 +245,7 @@ operators to adjust status update frequency for their needs.
 | threshold | Power threshold monitoring (ubus event) | `5b06845` | `_poe_threshold_thread` | — |
 | events | Async port status events (ubus event) | `ffaf70a` | `sal_poe_portStatusStateEvent_set` | — |
 | fault-flag | Fault flag + fault_reason on events | `166d60e` | `text_poe_portStatusDescStr` | — |
+| init-status | "initializing" instead of "unknown" during startup | `78f37c4` | — | #10 (status stuck unknown on boot) |
 
 ### Upstream Issues Mapping
 
@@ -235,13 +261,13 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | #58 | Manage ports disabled in config | Allow managing ports with enable=0 | ✅ Fixed in `11c5294` — removed `!port->enable` from reset path |
 | #54 | Reversed order of ports | Port numbering vs labels on D-Link | UCI config issue, not our code |
 | #53 | Build for mips-24kec targets | Missing build target | Build system issue |
-| **#50** | **Reduce CPU utilization** | **1.0-1.3% CPU, wakes per-byte** | **Our 2s poll cycle + reset-on-read helps. VMIN/VTIME tuning would help further.** |
-| #47 | Don't log to stdio by default | Logging noise | We use ulog which already goes to syslog |
+| **#50** | **Reduce CPU utilization** | **1.0-1.3% CPU, wakes per-byte** | **Investigated — 0.3% on 8-port. Cost is event loop overhead, not poll frequency. Configurable poll interval shipped.** |
+| #47 | Don't log to stdio by default | Logging noise | Upstream design choice — Hurricos wants ULOG_STDIO kept for debugging (PR #20). No change needed in our fork. |
 | **#32** | **802.3bt and paired port support** | **4-pair PoE for GS110TUP** | **Our 0x19 power pair command is prerequisite. We have the dialect entry.** |
 | #29 | Clean-up schema when no middleman MCU | BCM59103 direct support | Different hardware class |
 | #28 | Config template model-inspecific | Default budget/port values | Board-specific, not our code |
 | #27 | TI TPS23861 support | Different PSE chip entirely | N/A |
-| **#10** | **Status stuck on 'unknown' after reboot** | **Race condition at boot** | **Our init sends 0x0b+0x07 which may help. Port reset (0x03) could also recover.** |
+| **#10** | **Status stuck on 'unknown' after reboot** | **Race condition at boot** | **✅ Fixed in `78f37c4`** — data-driven "initializing" status during startup. |
 | #7 | Reboot interrupts PoE delivery | MCU reset on device reboot | Hardware behavior, can't fix in software |
 
 ### Remaining Work
