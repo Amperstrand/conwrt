@@ -33,6 +33,7 @@ wireguard/
 .opencode/
 .playwright-mcp/
 .sisyphus/
+.omo/
 
 # --- Stray files ---
 device-identification-notes.md
