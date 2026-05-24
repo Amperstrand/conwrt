@@ -45,6 +45,7 @@ Options:
   --stock-password PASS  Stock firmware SSH password (default: new2day)
   --disable-dhcp     Generate overlay tarball to disable DHCP on first boot
   --overlay-keys PATH    SSH public key to embed in overlay tarball
+  --cfg1-tftp PATH        Pre-built CFG1 binary for TFTP boot (Phase 0, flashcp fallback)
   --cfg1-permanent PATH   Pre-built permanent CFG1 binary for flash boot (Phase 3)
   --kmod-mtd-rw PATH      kmod-mtd-rw .ipk for writing CFG partitions from OpenWrt
   --ip IP            Device IP address
@@ -158,6 +159,7 @@ _conwrt_cmd_flash() {
     _stock_ip=$(_conwrt_get_opt stock-ip "$@") || _stock_ip=""
     _stock_password=$(_conwrt_get_opt stock-password "$@") || _stock_password="new2day"
     _overlay_keys=$(_conwrt_get_opt overlay-keys "$@") || _overlay_keys=""
+    _cfg1_tftp=$(_conwrt_get_opt cfg1-tftp "$@") || _cfg1_tftp=""
     _cfg1_permanent=$(_conwrt_get_opt cfg1-permanent "$@") || _cfg1_permanent=""
     _kmod_mtd_rw=$(_conwrt_get_opt kmod-mtd-rw "$@") || _kmod_mtd_rw=""
     _no_backup=""
@@ -183,7 +185,7 @@ _conwrt_cmd_flash() {
         conwrt_stock_wait_ssh "$_stock_ip" || { echo "stock ssh not available on $_stock_ip" >&2; return 1; }
         conwrt_stock_disable_timeout "$_stock_ip" || return 1
         conwrt_stock_read_uboot_env "$_stock_ip" /tmp/conwrt-uboot-env-backup.txt || return 1
-        conwrt_stock_configure_tftp_boot "$_stock_ip" "$_tftp_ip" "$_target_ip" || return 1
+        conwrt_stock_configure_tftp_boot "$_stock_ip" "$_tftp_ip" "$_target_ip" "$_cfg1_tftp" || return 1
         conwrt_stock_reboot "$_stock_ip"
     elif [ -n "$_initramfs" ]; then
         [ -f "$_initramfs" ] || { echo "initramfs not found: $_initramfs" >&2; return 1; }
