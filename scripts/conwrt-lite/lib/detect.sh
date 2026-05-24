@@ -1,7 +1,7 @@
 #!/bin/sh
 # conwrt-lite detect library — link-up and passive fingerprinting
 # Guard against double-source
-[ -n "$_CONWRT_DETECT_LOADED" ] && return 0
+[ -n "${_CONWRT_DETECT_LOADED:-}" ] && return 0
 _CONWRT_DETECT_LOADED=1
 
 conwrt_detect_wait_link() {

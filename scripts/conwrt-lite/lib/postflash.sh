@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite postflash library — SSH key, password, IP config
-[ -n "$_CONWRT_POSTFLASH_LOADED" ] && return 0
+[ -n "${_CONWRT_POSTFLASH_LOADED:-}" ] && return 0
 _CONWRT_POSTFLASH_LOADED=1
 
 _CONWRT_PF_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"

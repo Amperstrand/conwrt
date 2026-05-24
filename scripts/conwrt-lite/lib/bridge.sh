@@ -5,7 +5,7 @@
 # disabled causes broadcast reflection. This corrupts the neighbor's MAC table.
 # These functions isolate a port (remove from bridge, assign IP) and restore it
 # after flashing is complete.
-[ -n "$_CONWRT_BRIDGE_LOADED" ] && return 0
+[ -n "${_CONWRT_BRIDGE_LOADED:-}" ] && return 0
 _CONWRT_BRIDGE_LOADED=1
 
 # Isolate a port from the DSA bridge for TFTP access

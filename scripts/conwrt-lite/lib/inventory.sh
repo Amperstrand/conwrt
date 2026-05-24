@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite inventory library — inventory.jsonl append
-[ -n "$_CONWRT_INVENTORY_LOADED" ] && return 0
+[ -n "${_CONWRT_INVENTORY_LOADED:-}" ] && return 0
 _CONWRT_INVENTORY_LOADED=1
 
 _CONWRT_INVENTORY_DIR="/tmp/conwrt-lite"

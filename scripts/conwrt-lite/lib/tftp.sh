@@ -1,7 +1,7 @@
 #!/bin/sh
 # conwrt-lite tftp library — TFTP server management
 # Supports dnsmasq (OpenWrt default) and static binaries (tftp-now, utftp, etc.)
-[ -n "$_CONWRT_TFTP_LOADED" ] && return 0
+[ -n "${_CONWRT_TFTP_LOADED:-}" ] && return 0
 _CONWRT_TFTP_LOADED=1
 
 _CONWRT_TFTP_PID_FILE="/tmp/conwrt-lite-tftp.pid"

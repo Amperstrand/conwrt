@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite stock_ssh library — stock firmware SSH preflight for Extreme AP3915i
-[ -n "$_CONWRT_STOCK_SSH_LOADED" ] && return 0
+[ -n "${_CONWRT_STOCK_SSH_LOADED:-}" ] && return 0
 _CONWRT_STOCK_SSH_LOADED=1
 
 _CONWRT_STOCK_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group1-sha1"

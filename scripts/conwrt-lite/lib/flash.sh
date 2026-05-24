@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite flash library — TFTP and sysupgrade orchestration
-[ -n "$_CONWRT_FLASH_LOADED" ] && return 0
+[ -n "${_CONWRT_FLASH_LOADED:-}" ] && return 0
 _CONWRT_FLASH_LOADED=1
 
 _CONWRT_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite overlay library — generate sysupgrade overlay tarballs
-[ -n "$_CONWRT_OVERLAY_LOADED" ] && return 0
+[ -n "${_CONWRT_OVERLAY_LOADED:-}" ] && return 0
 _CONWRT_OVERLAY_LOADED=1
 
 conwrt_overlay_dhcp_config() {

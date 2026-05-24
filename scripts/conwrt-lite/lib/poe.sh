@@ -1,6 +1,6 @@
 #!/bin/sh
 # conwrt-lite poe library — PoE port control
-[ -n "$_CONWRT_POE_LOADED" ] && return 0
+[ -n "${_CONWRT_POE_LOADED:-}" ] && return 0
 _CONWRT_POE_LOADED=1
 
 conwrt_poe_disable() {
