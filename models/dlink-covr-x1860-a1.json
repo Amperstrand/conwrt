@@ -113,8 +113,8 @@
   "tested_hardware": {
     "recovery-http": {
       "tested": true,
-      "date": "2026-05-18",
-      "notes": "Two paths verified on separate X1860 units. (1) Stock recovery.bin: flash stock openwrt-24.10.5-...-recovery.bin via U-Boot HTTP, then sysupgrade to ASU custom build. First NAND boot takes 5+ minutes after U-Boot flash. (2) ASU recovery.bin (single step): flash ASU custom recovery.bin (with SSH key, WAN SSH, password baked in) directly via U-Boot HTTP \u2014 boots in ~80s, fully configured on first boot. ASU produces recovery.bin, factory.bin, and sysupgrade.bin for this target. U-Boot MAC 3e:85:be:xx:xx:xx is shared across all X1860 units (hardcoded in U-Boot, not per-device). Ethernet must be connected to LAN port (labeled 'ethernet'), not WAN port (labeled 'internet') for initial setup."
+      "date": "2026-05-24",
+      "notes": "Stock recovery.bin from downloads.openwrt.org works reliably. ASU custom recovery.bin with USB use cases (tether-android-adb) causes boot failure — device has no USB port. Device falls back to U-Boot recovery after failed flash (not bricked). Post-flash SSH configuration is the recommended path: flash stock, then configure via SSH. Stock recovery.bin boots in ~90s. Port labeled 'ethernet' = LAN, 'internet' = WAN. Use LAN port for initial setup."
     },
     "dlink-hnap": {
       "tested": false,

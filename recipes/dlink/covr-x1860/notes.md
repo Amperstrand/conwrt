@@ -16,7 +16,7 @@
 - Arch: mipsel_24kc
 - Default OpenWrt IP: 192.168.1.1
 
-## Known Good State (validated 2026-05-16)
+## Known Good State (validated 2026-05-16, updated 2026-05-24)
 
 ### Image format is critical
 - **U-Boot recovery mode** → MUST use `squashfs-recovery.bin` (NOT factory.bin)
@@ -26,14 +26,34 @@
 - Source: official OpenWrt git commit `0a18259e` and tested on hardware 2026-05-16
 - conwrt.py correctly prefers `recovery.bin` for U-Boot mode (`preferred_types = ["recovery", "factory", "initramfs"]`)
 
-### Working flash procedure (validated 2026-05-16, 3 successful devices)
-1. Power off router, connect ethernet to **any port** (WAN or LAN both work for recovery)
+### Flash Paths (validated 2026-05-24)
+
+#### Path 1: Stock recovery.bin → post-flash SSH config (RECOMMENDED, validated 2026-05-24)
+1. Flash stock `recovery.bin` from downloads.openwrt.org via U-Boot HTTP
+2. Device boots in ~90s (NAND already formatted)
+3. Configure SSH key, password, WAN SSH, WiFi via SSH post-flash
+4. **Most reliable path** — no custom uci-defaults that could cause boot failure
+5. Stock recovery.bin is ~13.2MB; ASU custom build is ~14.4MB (extra packages)
+
+#### Path 2: ASU custom recovery.bin (single step, KNOWN ISSUE)
+1. Flash ASU custom `recovery.bin` with baked-in config via U-Boot HTTP
+2. **WARNING**: ASU builds with USB-dependent use cases (tether-android-adb) cause boot failure on X1860
+3. The X1860 has NO USB port — USB tethering packages and uci-defaults must NOT be included
+4. Device falls back to U-Boot recovery mode after failed ASU boot (not bricked)
+5. Use conwrt `--request-image` only with use cases that match device capabilities
+
+#### Path 3: sysupgrade from running OpenWrt (validated 2026-05-18)
+1. Works via conwrt `--request-image --wan-ssh` from existing OpenWrt
+2. ~2m15s total
+
+### Working flash procedure — stock recovery.bin (validated 2026-05-24)
+1. Power off router, connect ethernet to **LAN port** (labeled "ethernet")
 2. Hold reset pin under device, plug in power, hold ~10-12s until LED blinks red
 3. Recovery HTTP at http://192.168.0.1/
-4. Upload `recovery.bin`: `curl -F "firmware=@recovery.bin;type=application/octet-stream" http://192.168.0.1/upload`
+4. Upload stock `recovery.bin`: `curl -F "firmware=@recovery.bin;type=application/octet-stream" http://192.168.0.1/upload`
 5. Wait ~90 seconds for flash + reboot
-6. Move cable to a **LAN port** for SSH access at 192.168.1.1
-7. SSH key auth works (key baked in via ASU defaults)
+6. Configure via SSH at 192.168.1.1 (default: root, no password on stock)
+7. Apply config: SSH key, password, WAN SSH firewall rule, WiFi APs
 
 ### Gotchas
 - Do NOT use factory.bin for U-Boot recovery — it uploads successfully ("Upgrade successfully!") but causes boot failure (solid red LED)
@@ -129,6 +149,8 @@
 
 ## Gotchas
 - **Use recovery.bin (NOT factory.bin) for U-Boot recovery mode** — factory.bin uploads OK but causes red LED boot failure. recovery.bin is the correct format per official OpenWrt commit.
+- **ASU builds with USB use cases cause boot failure on X1860** — the device has no USB port. If `tether-android-adb` or similar USB-dependent use cases are enabled in config.toml, the ASU uci-defaults script includes a 45-second USB device detection loop and hotplug script that prevents boot. The device falls back to U-Boot recovery (not bricked). **Solution**: flash stock recovery.bin first, then configure via SSH. Or ensure config.toml only enables use cases matching device capabilities (`["ethernet", "wifi"]`).
+- **Device falls back to U-Boot recovery after failed flash** — if OpenWrt fails to boot after a flash, the device returns to U-Boot recovery mode at 192.168.0.1. Not bricked. Can re-flash immediately.
 - **Recovery mode works on both WAN and LAN ports** — validated on both 2026-05-12. Recovery IP is 192.168.0.1 regardless of which port is used.
 - Recovery mode is at 192.168.0.1, OpenWrt boots at 192.168.1.1 — different subnets!
 - Client needs IPs on both subnets (192.168.0.10 + 192.168.1.254) if flashing from the same interface

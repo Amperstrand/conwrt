@@ -229,7 +229,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     extra_pub_keys = cfg.ssh_all_keys[1:] if len(cfg.ssh_all_keys) > 1 else None
 
     model_data = None
-    model_capabilities: Optional[list[str]] = None
+    model_capabilities: Optional[list[str]] = getattr(args, "model_capabilities", None)
 
     if not target:
         model_id = profile.replace("_", "-")

@@ -1952,6 +1952,7 @@ def _request_custom_image(
         ssh_key=ssh_key_path,
         password=password,
         wan_ssh=wan_ssh,
+        model_capabilities=model.get("capabilities", []),
     )
 
     request_buf = io.StringIO()

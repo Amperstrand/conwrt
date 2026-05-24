@@ -69,12 +69,36 @@ the stock ZyXEL V2.90 firmware, reverse-engineered from `board_poe.ko` and
 
 | Wire | Protocol Name | Stock Function | Our Status | Notes |
 |------|--------------|----------------|------------|-------|
-| `0x41` | Set port LED config | `board_poe_portLed_set` | ❌ | **P2**: MCU-driven PoE status LEDs. Needs hardware-specific LED map. |
-| `0x42` | Get port LED config | `board_poe_portLed_set` | ❌ | |
-| `0x43` | Set system LED config | `board_poe_led_set` | ❌ | |
-| `0x44` | Get system LED config | `board_poe_led_set` | ❌ | |
-| `0x48` | Set port LED map | `board_poe_portLedCtrl_set` | ❌ | |
-| `0x49` | Get port LED map | `board_poe_portLedCtrl_set` | ❌ | |
+| `0x41` | Set port LED config | `board_poe_portLed_set` | ⚠️ Tested, N/A | MCU acknowledges SET but doesn't persist. See LED findings below. |
+| `0x42` | Get port LED config | `board_poe_portLed_set` | ✅ `LED_GET_PORT_CONFIG` | Returns 0xFF on BCM59111 v17.1 (firmware doesn't implement LED). |
+| `0x43` | Set system LED config | `board_poe_led_set` | ⚠️ Tested, N/A | Same as 0x41 — MCU acks but GET returns 0xFF. |
+| `0x44` | Get system LED config | `board_poe_led_set` | ✅ `LED_GET_SYSTEM_CONFIG` | Returns 0xFF on BCM59111 v17.1. |
+| `0x48` | Set port LED map | `board_poe_portLedCtrl_set` | ⚠️ Tested, N/A | Same as 0x41. |
+| `0x49` | Get port LED map | `board_poe_portLedCtrl_set` | ✅ `LED_GET_PORT_MAP` | Returns 0xFF on BCM59111 v17.1. |
+
+### LED Findings (BCM59111 v17.1, GS1900-8HP A1)
+
+**Tested on hardware** (`f748291`): All six LED commands (0x41-0x49) were tested via the
+`rawframe` ubus method. Results:
+
+- **GET replies**: All return `0xFF` for data bytes (enable, interface, shift_order, etc.)
+- **SET replies**: MCU echoes the `enable` byte in reply[2], indicating acceptance
+- **Post-SET GET**: Still returns `0xFF` — config is NOT persisted by the MCU
+
+**Conclusion**: BCM59111 firmware v17.1 does not implement LED config. The MCU accepts
+LED command frames (to avoid communication errors) but ignores them. GS1900-8HP PoE
+status LEDs are likely driven by the SoC's GPIO/SPI controller directly, not by the MCU.
+
+**Evidence**:
+- Stock `board_poe.ko` function `board_poe_led_init` (0x37e0) builds in-memory LED
+  bitmask maps from device tree data — it does NOT send MCU commands directly
+- Stock `board_poe_portLed_set` (0x39e8) manipulates SoC GPIO registers, not MCU UART
+- Protocol source: svanheule.net/switches/software/broadcom_poe_control_protocol
+- Hardware: BCM59111 v17.1, MCU type ST32F100, device_id 0xe111
+
+**Impact on parity score**: LED commands are implemented (GET queries in `poe_initial_setup`,
+`rawframe` for SET testing) but functionally N/A for this hardware. Score unchanged —
+these are hardware-limitation items, not software gaps.
 
 ### MCU management
 
@@ -199,7 +223,7 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 
 | ID | What | Notes | Upstream Issue |
 |----|------|-------|----------------|
-| P2-1 | LED control (0x41-0x49) | Needs hardware-specific LED map for GS1900-8HP A1 | #66 (LED remapping config) |
+| P2-1 | ~~LED control (0x41-0x49)~~ | **HW-limited**: BCM59111 v17.1 doesn't implement MCU LED. PoE LEDs are SoC-driven. GET queries implemented, SET tested and confirmed N/A. | #66 (LED remapping config) |
 | P2-2 | Port power pair (0x19) | A-pair/B-pair for 4-pair PoE | #32 (802.3bt paired port support) |
 | P2-3 | Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies | — |
 | P2-4 | Allow managing disabled ports | ✅ Done in `11c5294` | #58 (manage disabled ports) |
@@ -213,18 +237,18 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | P3-2 | MCU firmware upgrade (0xe0/0xaf) | Safety-critical, needs bootloader detect + image validation |
 | P3-3 | Extended parameters (BCM59121) | Different chip family, 802.3bt features |
 
-## Scorecard (after manage callback fix)
+## Scorecard (after LED hardware validation)
 
-| Category | Items | ✅ Parity | ❌ Gap | ⚠️ Partial |
+| Category | Items | ✅ Parity | ❌ Gap | ⚠️ Partial/HW-limited |
 |----------|-------|----------|--------|------------|
 | GET commands | 14 | 14 | 0 | 0 |
 | SET commands | 19 | 17 | 2 | 0 |
-| LED commands | 6 | 0 | 6 | 0 |
+| LED commands | 6 | 0 | 0 | 6 (HW doesn't support MCU-driven LEDs) |
 | MCU management | 2 | 0 | 2 | 0 |
 | Features | 25 | 20 | 2 | 0 |
-| **Totals** | **66** | **51 (77%)** | **10 (15%)** | **0** |
+| **Totals** | **66** | **51 (77%)** | **4 (6%)** | **6 (9%)** |
 
-Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d): 51/60 = **85%** parity on actionable items.
+Excluding skipped items (0x06, 0x08, 0x09, 0x2a, 0x2c, 0x2d) and HW-limited LED items: 51/54 = **94%** parity on actionable items.
 
 ## Bugs Found: Manage Callback Return Values
 
@@ -294,7 +318,7 @@ These address real upstream issues and would benefit all realtek-poe users:
 | Task | Upstream Issue | Effort | Impact |
 |------|---------------|--------|--------|
 | VMIN/VTIME UART tuning | #50 (CPU utilization) | Small | Reduces CPU from 1.0-1.3% to near-zero |
-| LED control | #66 (LED remapping) | Medium | Visual PoE status on front panel |
+| ~~LED control~~ | #66 (LED remapping) | ~~Medium~~ Done/HW-limited | MCU doesn't support LED on BCM59111 v17.1 |
 | Port power pair (0x19) | #32 (802.3bt) | Small | Prerequisite for 4-pair PoE |
 
 ### Priority 3: Remaining Parity
