@@ -94,6 +94,7 @@ fingerprint_router = _router_fingerprint.fingerprint_router
 save_fingerprint = _router_fingerprint.save_fingerprint
 
 from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state, configure_interface_ip, remove_interface_ip
+from flash.preflight import run_preflight_checks
 from profile import apply_plan, build_plan, print_plan
 from profile.wifi import build_mgmt_wifi_script
 
@@ -4647,6 +4648,28 @@ def cmd_flash(args: argparse.Namespace) -> int:
     interface = args.interface or auto_detect_interface()
     if not interface:
         print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
+        return 1
+
+    # Pre-flight checks
+    log("Running pre-flight checks...")
+    preflight_results = run_preflight_checks(
+        interface, profile, image_path,
+        ssh_key_path=ssh_key_path,
+        boot_state=boot_state,
+        use_sysupgrade=use_sysupgrade,
+        request_image=bool(args.request_image),
+    )
+    preflight_failed = False
+    for r in preflight_results:
+        if r.status == "pass":
+            log(f"  \u2713 {r.name}: {r.message}")
+        elif r.status == "warn":
+            log(f"  \u26a0 {r.name}: {r.message}")
+        else:
+            log(f"  \u2717 {r.name}: {r.message}")
+            preflight_failed = True
+    if preflight_failed:
+        print("Preflight checks failed. Fix the issues above and retry.", file=sys.stderr)
         return 1
 
     if args.capture:
