@@ -731,6 +731,82 @@ the openwrt/openwrt repository.
 
 ---
 
+## AP3915i #3 Flash Attempt (2026-05-24)
+
+Third AP3915i unit (MAC B4:2D:56:25:4D:7E). The goal was to flash it using the switch-initiated TFTP method proven on AP#1. The flash itself worked. The aftermath did not.
+
+### Stock Switch Unlock
+
+The stock V2.90 GS1900-8HP was blocking access to AP#3. Every web page redirected to cmd=30, a password change form that appeared broken. Submitting the form did nothing.
+
+Root cause: the stock firmware's mandatory password change requires cmd=31 (the actual submit action), not cmd=30 (the form page). The web UI shows the form at cmd=30 but submits to cmd=31. Also, the `usrPassEncode` field must contain the encode() of the new password (not plaintext, not the old password's encode).
+
+The working POST body:
+
+```
+cmd=31&XSSID=<token>&usrName=admin&usrOldPass=<encode(old)>&usrPass=<encode(new)>&usrPass2=<encode(new)>&usrPassEncode=<encode(new)>&sysSubmit=Apply
+```
+
+**Note**: Web and SSH passwords are stored separately on this firmware. Changing one does not affect the other.
+
+### Stock Switch SSH CLI
+
+SSH access requires legacy algorithm flags:
+
+```bash
+ssh -oHostKeyAlgorithms=+ssh-rsa -oKexAlgorithms=+diffie-hellman-group1-sha1 admin@<switch-ip>
+```
+
+The CLI (`/bin/cli`) is a read-only Cisco-like interface. Useful commands for diagnostics:
+
+- `show info` — firmware version, serial, uptime
+- `show interfaces` — port status, speed, PoE
+- `show mac address-table` — learned MAC addresses per port
+- `show cable-diag interfaces` — cable length and pair status
+- `show power inline consumption` — PoE wattage per port
+
+No code execution via SSH. The shell is locked to the CLI binary. This is a diagnostic tool, nothing more.
+
+### AP#3 PoE Verification
+
+AP#3 connected to stock switch port 8 via PoE. Cable diagnostics confirmed all 4 pairs normal at 21m cable length. PoE status: 802.3at, class 3, ~3.5W actual draw.
+
+PoE was cycled via the stock switch web API (cmd=773 for status, cmd=774 to select port, cmd=775 to apply power state) multiple times during the session. Each cycle confirmed AP#3 drew power and established a 1Gbps link.
+
+### Switch-Initiated TFTP Flash
+
+Used conwrt-lite from the OpenWrt GS1900-8HP to flash AP#3. Stock switch STP was already disabled, so no port blocking issues.
+
+The CFG1 block was modified with `bootcmd=run boot_net` to force TFTP boot on power-up. dnsmasq on the OpenWrt switch served the initramfs.
+
+AP#3 TFTP-booted the OpenWrt initramfs successfully. From the initramfs shell, ran `sysupgrade -n` with the OpenWrt 24.10.2 sysupgrade image. It completed without errors and wrote to mtd7 (SPI offset 0x280000, squashfs+overlay).
+
+### Boot Failure Diagnosis
+
+After sysupgrade, AP#3 does not boot OpenWrt from flash. It draws 3.5W over PoE (U-Boot is active) and establishes a 1Gbps link, but sends zero Ethernet frames. No ARP, no DHCP, no TFTP requests. The MAC address table on the stock switch has zero entries for port 8.
+
+Troubleshooting performed:
+- PoE cycled multiple times via stock switch API — same result each time
+- Stock switch fully rebooted — same result
+- Left powered for extended periods — no late packets
+
+Most likely cause: `sysupgrade -n` overwrote or corrupted CFG1 (the U-Boot environment partition). The sysupgrade process writes the firmware image to the `firmware` MTD partition starting at offset 0x280000. CFG1 is at offset 0x0E0000, well outside the firmware partition, so a direct overwrite is unlikely. But sysupgrade may have modified U-Boot env vars (like `bootcmd`) or corrupted the CRC in the process of updating its own environment block.
+
+If CFG1's CRC is invalid, U-Boot detects bad config blocks and falls back to hardcoded defaults. The hardcoded default `bootcmd` is `bootx` (= `run boot_flash`), which runs the stock boot script. The stock boot script uses `nboot` (NAND boot), sets up a watchdog timer, and tries dual-image failover. None of this works with an OpenWrt FIT image format, so the AP hangs at the U-Boot prompt with no network activity.
+
+**Alternative recovery (no serial)**: Move AP#3 to the OpenWrt switch directly. Start TFTP server on the OpenWrt switch. PoE cycle. AP#3 TFTP-boots initramfs (CFG1 still says `boot_net`). From initramfs, write permanent CFG1 with `bootcmd=run boot_openwrt; run boot_net` via kmod-mtd-rw.
+
+### Current State
+
+| Component | Status |
+|-----------|--------|
+| **AP#3** | Powered via PoE, 1Gbps link, zero network activity. Boot failure. Recoverable via TFTP or serial. |
+| **Stock switch** | Fully accessible. Web + SSH. V2.90 firmware. |
+| **OpenWrt switch** | Running conwrt-lite. dnsmasq TFTP ready. |
+| **AP#2** | OpenWrt 24.10.2, fully operational. |
+
+---
+
 ## Cross-Reference: Second AP3915i Unit (AP3915i-ROW)
 
 On 2026-05-22 we acquired a second AP3915i unit. Key findings:

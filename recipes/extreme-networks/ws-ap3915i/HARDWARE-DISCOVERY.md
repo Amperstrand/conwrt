@@ -20,7 +20,7 @@ lanN = phys_port_name p(7+N)
 | lan5 | p12 | AP3915i #1 | 192.168.13.253 | OpenWrt 24.10.2 |
 | lan6 | p13 | (empty) | | |
 | lan7 | p14 | (empty) | | |
-| lan8 | p15 | Stock switch | 192.168.13.3 | Blocked (unknown password) |
+| lan8 | p15 | Stock V2.90 GS1900-8HP | | Web + SSH access unlocked (see GS1900 notes) |
 
 Verification command: `cat /sys/class/net/lanN/phys_port_name`
 
@@ -68,34 +68,128 @@ This was the second unit to be flashed successfully. Full flash log in
 
 ---
 
-## AP3915i #3 -- lan8 (Behind stock switch, UNREACHABLE)
+## AP3915i #3 -- Stock switch port 8 (Boot failure after flash)
 
 - MAC: B4:2D:56:25:4D:7E
-- Connected via stock V2.90 GS1900-8HP on lan8
-- Cannot reach from the OpenWrt switch (different L2 domain behind stock switch)
-- Cannot control PoE remotely
-- Cannot flash without either stock switch access or direct physical connection
+- Connected to stock V2.90 GS1900-8HP on the stock switch's port 8
+- Flashed with OpenWrt 24.10.2 via switch-initiated TFTP + sysupgrade
+- sysupgrade completed (mtd7 written, SPI offset 0x280000, 12MB) but AP#3 is NOT
+  booting. Sends zero Ethernet frames after PoE power-up.
+- PoE confirmed: 802.3at, class 3, 16.2W max, ~3.5W consumed on stock switch port 8
+- U-Boot appears active (drawing power) but produces no network output
 
-To reach this AP, we would need to:
+Boot failure diagnosis: sysupgrade likely overwrote or corrupted CFG1, so U-Boot
+cannot find a valid boot command. The AP is in a recovery state with no network
+reachability. Recovery requires either a serial console connection or physical
+re-flash via SPI programmer.
 
-1. Factory reset the stock switch (physical button hold) to regain access
-2. Or unplug AP3915i #3 from the stock switch and connect it directly to an
-   OpenWrt switch port
+### AP#3 Recovery Plan
+
+**Prerequisite**: USB-TTL serial adapter (3.3V, 115200 8N1). The AP3915i has an
+internal serial header — see SESSION-WRITEUP.md for pinout details.
+
+**Step 1: Serial connection**
+
+Connect USB-TTL adapter to AP#3's serial header (VCC/TX/RX/GND). Open terminal:
+```
+screen /dev/ttyUSB0 115200
+```
+
+**Step 2: Interrupt U-Boot**
+
+Power cycle AP#3 via stock switch PoE (cmd=775 state=0, wait 5s, cmd=775 state=1).
+Press `s` within 2 seconds of U-Boot starting. Login: `admin` / `new2day`.
+
+**Step 3: Diagnose**
+
+At the U-Boot prompt, check what happened:
+```
+printenv bootcmd
+printenv boot_openwrt
+printenv WATCHDOG_COUNT
+```
+
+Expected findings: `bootcmd` is either missing, set to `bootx` (hardcoded default),
+or has an invalid CRC causing U-Boot to fall back to defaults.
+
+**Step 4: Fix boot command**
+
+Set the correct OpenWrt boot command (from David Bauer commit e16a0e7):
+```
+setenv boot_openwrt "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000"
+setenv bootcmd "run boot_openwrt; run boot_net"
+setenv serverip <tftp-server-ip>
+setenv WATCHDOG_COUNT 0
+setenv WATCHDOG_LIMIT 0
+saveenv
+```
+
+The `; run boot_net` fallback ensures TFTP recovery if flash boot fails.
+
+**Step 5: Test boot**
+
+```
+run boot_openwrt
+```
+
+If OpenWrt boots successfully from flash, the recovery is confirmed. Reboot to
+verify `bootcmd` works automatically:
+
+```
+reset
+```
+
+**Step 6: Post-recovery configuration**
+
+Once AP#3 boots OpenWrt from flash reliably:
+1. Set root password
+2. Set static IP and disable DHCP via uci
+3. Verify SSH access
+
+**Step 7: Permanent CFG fix (optional)**
+
+Install kmod-mtd-rw to write corrected CFG1/CFG2 to flash (so `saveenv` targets
+the actual flash blocks, not just RAM):
+```
+opkg update && opkg install kmod-mtd-rw
+insmod mtd-rw i_want_a_brick=1
+# Write corrected config blocks (prepared on switch or laptop)
+flashcp /tmp/correct_cfg1.bin /dev/mtd0
+flashcp /tmp/correct_cfg2.bin /dev/mtd8
+```
+
+**Fallback: If flash boot fails**
+
+If `run boot_openwrt` fails (firmware image corrupt or wrong offset), fall back
+to TFTP boot:
+```
+setenv bootcmd "run boot_net"
+saveenv
+```
+
+The switch's dnsmasq will serve the initramfs. From initramfs, re-run sysupgrade.
 
 ---
 
-## Stock Switch -- 192.168.13.3 (BLOCKED)
+## Stock Switch -- 192.168.1.1 (UNLOCKED)
 
 - MAC: 4C:9E:FF:F5:AC:D2
 - Zyxel GS1900-8HP A1 running V2.90 firmware
-- Password unknown -- likely set by the buggy `zyxel_encode_password` function
-  (see `scripts/conwrt.py` oem_handlers.py fix)
-- Requires physical factory reset (hold reset button 10+ seconds) to regain access
-- Blocks all access to AP3915i #3
+- Web UI FULLY UNLOCKED. Mandatory password change resolved.
+- Web credentials: admin/Conwrt2026!
+- SSH credentials: admin/1234 (separate from web, read-only CLI)
+- URL: http://192.168.1.1/cgi-bin/dispatcher.cgi
+- Password change: POST cmd=31 (not 30), requires XSSID from form and
+  usrPassEncode field
+- SSH CLI: read-only, `show` commands only, legacy kex required:
+  `-oHostKeyAlgorithms=+ssh-rsa -oKexAlgorithms=+diffie-hellman-group1-sha1`
+- PoE control via web API: GET cmd=773 (status) → POST cmd=774 port=8&sysSubmit=Edit
+  → POST cmd=775 state=0/1&portlist=8
+- Cable diagnostics: cmd=8448
+- STP: DISABLED (confirmed)
 
 This is the same model GS1900-8HP as our OpenWrt switch but running stock firmware.
-The stock ZyXEL web UI requires HTTP, not HTTPS. Default credentials would be
-admin/password but this unit has been reconfigured.
+AP3915i #3 is connected on port 8 with PoE active.
 
 ---
 
@@ -106,19 +200,24 @@ Server (Ubuntu)
   enp5s0: 192.168.1.2 (wired to OpenWrt switch lan1)
   wlp4s0: 192.168.13.218 (WiFi management link)
   |
-  +-- OpenWrt GS1900-8HP (192.168.13.2)
+  +-- OpenWrt GS1900-8HP (192.168.1.2 / 192.168.13.2)
        |
        +-- lan1 (p8) -- Server enp5s0
-        +-- lan2 (p9) -- AP3915i #2 (192.168.13.254, OpenWrt 24.10.2) [FLASHED]
+       +-- lan2 (p9) -- AP3915i #2 (192.168.13.254, OpenWrt 24.10.2)
        +-- lan5 (p12) -- AP3915i #1 (192.168.13.253, OpenWrt 24.10.2)
-       +-- lan8 (p15) -- Stock switch (192.168.13.3, password unknown)
+       +-- lan8 (p15) -- Stock switch (192.168.1.1, V2.90, unlocked)
                             |
-                            +-- AP3915i #3 (unreachable, stock firmware)
+                            +-- port 8 -- AP3915i #3 (boot failure, PoE active)
 ```
 
 The OpenWrt switch's br-lan bridges all ports on the same L2 segment. The server
 has two paths: wired (192.168.1.2) and WiFi (192.168.13.218). The WiFi path is
 on the 192.168.13.0/24 subnet alongside the switch and all switch-connected devices.
+
+AP3915i #3 sits behind the stock switch on port 8 with PoE active, but is not
+booting after a failed sysupgrade. If it were functional, its IP would be
+192.168.13.252 (matching the lan8 management subnet assignment). The stock switch
+itself is reachable at 192.168.1.1 with full web UI and SSH access.
 
 ---
 

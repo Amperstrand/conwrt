@@ -977,11 +977,9 @@ These are improvements we identified that could be PR'd upstream:
 ### Network Topology (confirmed)
 
 ```
-Server (Linux)                WiFi Network (192.168.13.x)
-├── enp5s0: 192.168.1.2/24       ├── .1  = Zyxel EX5501-B0 (broadband gateway)
-├── wlp4s0: 192.168.13.218/24    ├── .2  = OpenWrt GS1900-8HP A1 (E8:37:7A:9E:F6:86)
-│   secondary: 192.168.2.10/24   ├── .3  = Stock V2.90 GS1900-8HP (4C:9E:FF:F5:AC:D2)
-│                                 └── .253 = AP3915i (B4:2D:56:25:47:A2) on lan5 of .2
+Server → OpenWrt GS1900-8HP (lan1) → lan8 → Stock V2.90 GS1900-8HP → port 8 → AP#3 (PoE)
+                                   → lan5 → AP#1
+                                   → lan2 → AP#2
 ```
 
 ### zyxel_encode_password Bug Fix
@@ -992,11 +990,43 @@ Server (Linux)                WiFi Network (192.168.13.x)
 
 **Fix**: Replaced `for` loop with `while` loop that dynamically re-evaluates `321 - remaining`. Output is now always 321 chars. Fix applied to `scripts/flash/oem_handlers.py`.
 
-### Stock Switch Password Issue
+### Stock Switch Password Issue — RESOLVED
 
-The stock V2.90 switch at 192.168.13.3 (MAC 4C:9E:FF:F5:AC:D2) **rejects both admin/Zyxel2026! and admin/1234**. Even the browser's native JavaScript encode() + login flow returns FAIL. The password has changed since the 2026-05-21 session. Needs factory reset (hold reset button ~10s) to restore default credentials.
+The stock V2.90 switch initially rejected all login attempts. The browser's native JavaScript encode() + login flow returned FAIL. Root cause identified and resolved.
 
-**Impact**: Test 1 (initramfs boot from stock) blocked until password is resolved. Tests 2-3 completed using the OpenWrt switch instead.
+**Root cause**: The mandatory first-login password change uses `cmd=31` (action submit), not `cmd=30` (form page). The password change POST requires a `usrPassEncode` field containing the `encode()`d new password. Without this field, the form submission silently fails.
+
+**Password change POST body format**:
+```
+cmd=31&XSSID=<form_xssid>&usrName=admin&usrOldPass=<encode(old)>&usrPass=<encode(new)>&usrPass2=<encode(new)>&usrPassEncode=<encode(new)>&sysSubmit=Apply
+```
+
+**Note**: Web and SSH passwords are stored separately on this firmware. Changing one does not affect the other.
+
+The `zyxel_encode_password()` bug fix (see above) was also required for this to work programmatically.
+
+### Stock Switch SSH CLI Discovery
+
+SSH access confirmed on the stock V2.90 switch. Requires legacy key exchange algorithms.
+
+```
+ssh -oHostKeyAlgorithms=+ssh-rsa -oKexAlgorithms=+diffie-hellman-group1-sha1 admin@<switch-ip>
+```
+
+- Restricted Cisco-like CLI, read-only
+- Useful commands: `show info`, `show version`, `show interfaces all`, `show vlan`, `show mac address-table`, `show lldp neighbor`, `show cable-diag interfaces`, `show power inline consumption`
+- No shell escape, no code execution possible
+- Legacy kex algorithms required (diffie-hellman-group1-sha1)
+
+### Stock Switch PoE Control via Web API
+
+PoE can be controlled through the stock switch web UI API without SSH.
+
+- PoE status: GET `dispatcher.cgi?cmd=773`
+- PoE edit (enter port config): POST `dispatcher.cgi` with `cmd=774&port=8&sysSubmit=Edit`
+- PoE apply (commit change): POST `dispatcher.cgi` with `cmd=775&state=0` (disable) or `cmd=775&state=1` (enable) + `portlist=8`
+
+**Confirmed working**: AP#3 PoE cycled multiple times via web API. AP#3 PoE status: 802.3at, class 3, ~3.5W consuming.
 
 ### Test 2: TFTP Serving — PASSED
 
@@ -1061,6 +1091,6 @@ ubus call poe manage '{"port":"lan5","action":"enable"}'
 | 15 | lan7 | Stock switch (4C:9E:FF) |
 | 28 | CPU | Switch's own MAC (static) |
 
-### Test 1 (Initramfs Boot) — BLOCKED
+### Test 1 (Initramfs Boot) — UNBLOCKED
 
-Blocked by stock switch password issue. Requires factory reset of stock switch at 192.168.13.3, then re-login and initramfs upload via OEM web UI.
+Previously blocked by the stock switch password issue, now resolved (see above).
