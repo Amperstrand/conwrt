@@ -72,6 +72,7 @@ class State(Enum):
     EXTREME_BOOTCMD_RESTORE = auto()
     EXTREME_SYSUPGRADE_UPLOADING = auto()
     EXTREME_SYSUPGRADE_FLASHING = auto()
+    PORT_ISOLATION = auto()
     OEM_LOGIN = auto()
     OEM_PREPARE = auto()
     OEM_UPLOADING = auto()

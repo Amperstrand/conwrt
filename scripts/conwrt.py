@@ -1888,6 +1888,8 @@ class RecoveryContext:
     assume_yes: bool = False
     _say_fn: object = field(default=None, repr=False)
     oem_state: dict | OemState = field(default_factory=dict)
+    isolate_port: str = ""
+    port_isolator: object | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self._say_fn is None:
@@ -2114,6 +2116,8 @@ def _run_state_machine(
             _handle_extreme_sysupgrade_uploading(ctx, event_queue)
         elif ctx.state == State.EXTREME_SYSUPGRADE_FLASHING:
             _handle_extreme_sysupgrade_flashing(ctx, event_queue)
+        elif ctx.state == State.PORT_ISOLATION:
+            _handle_port_isolation(ctx, event_queue)
         elif ctx.state == State.OEM_LOGIN:
             _handle_oem_login(ctx, event_queue)
         elif ctx.state == State.OEM_PREPARE:
@@ -2150,10 +2154,12 @@ def _run_state_machine(
             openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg,
         )
         ctx.wireguard_pubkey = wg_pubkey
+        _restore_port_isolation(ctx)
         _record_inventory(ctx)
         return 0
 
     _print_timeline(ctx)
+    _restore_port_isolation(ctx)
     if ctx.image_path and ctx.sha256_before:
         log("Recording partial inventory (flash may still succeed).")
         _record_inventory(ctx)
@@ -3482,6 +3488,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Serial baud rate (default: 115200)")
     flash_parser.add_argument("--tftp-root", default=None,
                         help="TFTP server root directory. Defaults to image directory.")
+    flash_parser.add_argument("--isolate-port", default="",
+                        help="Switch port to isolate into VLAN before flashing (e.g. lan5). "
+                             "Requires running on OpenWrt with port_isolation in model JSON.")
 
     subparsers.add_parser("list", help="List available device models")
 
@@ -4723,6 +4732,9 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         initial_state = State.WAITING_FOR_POWER_OFF
 
+    if args.isolate_port:
+        initial_state = State.PORT_ISOLATION
+
     ctx = RecoveryContext(
         profile=profile,
         image_path=image_path,
@@ -4751,6 +4763,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         packages=request_metadata.get("packages", []),
         defaults_script=request_metadata.get("defaults") or "",
         assume_yes=bool(getattr(args, "yes", False)),
+        isolate_port=args.isolate_port or "",
         _say_fn=_say_fn,
         state=initial_state,
     )
@@ -5643,6 +5656,84 @@ def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue
     ctx.timeline.flash_triggered = ts()
     _cleanup_extreme_tftp_assets(ctx)
     ctx.state = State.OPENWRT_BOOTING
+
+
+def _handle_port_isolation(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
+    """Isolate target port into VLAN before flashing (switch-initiated flow only)."""
+    if not ctx.isolate_port:
+        log("No port isolation requested — skipping")
+        _advance_past_port_isolation(ctx)
+        return
+
+    from platform_utils import detect_platform
+    if detect_platform() != "openwrt":
+        log("Port isolation requires running on OpenWrt — skipping")
+        _advance_past_port_isolation(ctx)
+        return
+
+    # Check if model has port_isolation config
+    model_data = {}
+    profile = ctx.profile
+    if hasattr(profile, "_raw_model"):
+        model_data = profile._raw_model
+    port_isolation_config = model_data.get("port_isolation") if isinstance(model_data, dict) else None
+    if not port_isolation_config:
+        log("Model does not define port_isolation — skipping")
+        _advance_past_port_isolation(ctx)
+        return
+
+    from flash.port_isolator import PortIsolator
+    vlan_id = port_isolation_config.get("isolation_vlan_id", 999)
+    isolator = PortIsolator("127.0.0.1", ssh_key=ctx.ssh_key_path or None, vlan_id=vlan_id)
+    ctx.port_isolator = isolator
+
+    log(f"Isolating port {ctx.isolate_port} into VLAN {vlan_id}...")
+    success = isolator.isolate(ctx.isolate_port)
+    if success:
+        log(f"Port {ctx.isolate_port} isolated successfully")
+    else:
+        log(f"WARNING: Port isolation failed for {ctx.isolate_port} — continuing anyway")
+
+    _advance_past_port_isolation(ctx)
+
+
+def _advance_past_port_isolation(ctx: RecoveryContext) -> None:
+    """Advance state past PORT_ISOLATION to the appropriate next state."""
+    flash_method = getattr(ctx.profile, "flash_method", "")
+    is_extreme = flash_method == "extreme-rdwr-tftp"
+    is_serial = flash_method == "serial-tftp-openwrt"
+    is_zycast = flash_method == "zycast"
+    is_edgeos = flash_method == "edgeos-kernel-swap"
+    use_sysupgrade = getattr(ctx.profile, "use_sysupgrade", False)
+
+    if is_extreme and not use_sysupgrade:
+        boot_state = ctx.boot_state
+        ctx.state = State.EXTREME_STOCK_PREFLIGHT if boot_state == "stock-extreme" else State.DETECTING
+    elif is_serial:
+        ctx.state = State.SERIAL_WAITING_FOR_BOOTMENU
+    elif is_zycast and not use_sysupgrade:
+        ctx.state = State.ZYCAST_WAITING_FOR_DEVICE
+    elif is_edgeos and not use_sysupgrade:
+        ctx.state = State.EDGEOS_STAGE1
+    elif use_sysupgrade:
+        ctx.state = State.SYSUPGRADE_UPLOADING
+    else:
+        ctx.state = State.WAITING_FOR_POWER_OFF
+
+
+def _restore_port_isolation(ctx: RecoveryContext) -> None:
+    """Restore port isolation after flash completes."""
+    if not ctx.isolate_port or not ctx.port_isolator:
+        return
+    from flash.port_isolator import PortIsolator
+    isolator = ctx.port_isolator
+    if not isinstance(isolator, PortIsolator):
+        return
+    log(f"Restoring port {ctx.isolate_port} from isolation...")
+    try:
+        isolator.restore(ctx.isolate_port)
+    except Exception as e:
+        log(f"WARNING: Port restoration failed: {e}")
 
 
 def cmd_backup(args: argparse.Namespace) -> int:

@@ -61,3 +61,6 @@ firmware/stock_v290/*.so*
 firmware/stock_v290/cli
 firmware/stock_v290/*.bin
 firmware/stock_v290/*.bix
+
+# --- PII redaction tools (local-only, not for repo) ---
+scripts/redact-pii.sh
