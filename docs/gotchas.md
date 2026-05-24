@@ -317,6 +317,22 @@ The `--port=0` disables DNS. Bind to specific interface/IP to avoid interfering 
 
 ## Backup before flashing
 
+### Newly flashed devices hijack DHCP (rogue DHCP)
+
+Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by default. If you're flashing from an OpenWrt switch on a network with an existing DHCP server, the new device competes for DHCP clients — potentially hijacking the default gateway.
+
+**Incident (2026-05-23):** Flashed an AP3915i via GS1900-8HP switch. After boot, the AP's DHCP server handed the Mac a lease with itself as gateway, breaking internet access. The Mac's real gateway (192.168.13.1) was replaced by the AP (192.168.1.1).
+
+**Prevention approaches (in order of effectiveness):**
+
+1. **VLAN port isolation** (best): Isolate the target port into a separate VLAN before powering on the device. DHCP offers cannot escape the isolated VLAN. See `port_isolation` in `models/zyxel-gs1900-8hp-a1.json`.
+
+2. **Sysupgrade overlay** (good): Inject a sysupgrade `-f` overlay that sets `dhcp.lan.ignore=1` before first boot. Works for sysupgrade and tftp+initramfs paths. See `scripts/profile/overlay.py`. Only active when conwrt runs on an OpenWrt device.
+
+3. **Post-flash SSH disable** (too late): SSH in and `uci set dhcp.lan.ignore=1`. Race window between boot and SSH — other devices may already have rogue leases.
+
+**Fix when hit:** Release and renew DHCP on affected machines. On macOS: `sudo ipconfig set en0 DHCP`.
+
 ### Always pull a full backup before writing anything
 
 **Incident (2026-05-19):** Pulled EdgeOS backup (squashfs.img, kernel, config overlay) BEFORE the kernel swap. This proved critical during recovery — we knew exactly what the original state looked like.

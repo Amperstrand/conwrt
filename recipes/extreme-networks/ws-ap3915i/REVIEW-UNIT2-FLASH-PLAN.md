@@ -460,7 +460,7 @@ After verified successful flash boot, optionally write CFG2 to match CFG1:
 | Write CFG1 only, leave CFG2 untouched | CFG2 has original bootcmd as fallback | 3 |
 | Read-back verify after every config write | Catch write errors before reboot | 3 |
 | Set `boot_openwrt` before `bootcmd` | Other vars in place before boot path changes | 3 |
-| No initramfs MTD writes | DTS marks partitions read-only; kmod-mtd-rw unavailable in 24.10.2 | 3 |
+| Initramfs MTD writes possible but risky | kmod-mtd-rw IS available in 24.10.2 (used successfully on Unit 2), but stock firmware writes preferred | 3 |
 | Name-based `/proc/mtd` lookup | MTD indices differ between stock and OpenWrt kernels | 6 |
 | Pin firmware SHA256 hashes | Prevent AP3915i vs AP391x confusion | 7 |
 | Check `/proc/mtd` firmware size | AP3915i has ~30MB firmware; AP391x has ~15MB | 5 |
@@ -474,9 +474,11 @@ After verified successful flash boot, optionally write CFG2 to match CFG1:
 
 See Appendix A for the full external review. Key changes:
 
-1. **Removed Phase 8 MTD writes from initramfs** — The DTS marks CFG partitions as
-   read-only, and kmod-mtd-rw is not available in OpenWrt 24.10.2 (was in 23.05.x).
-   The entire "write bootcmd from initramfs" approach was impossible.
+1. **Removed Phase 8 MTD writes from initramfs (later reversed)** — The DTS marks CFG partitions as
+   read-only. Initial assumption was kmod-mtd-rw unavailable in 24.10.2, but it IS available
+   (verified on Unit 2). However, writing from stock firmware is still preferred — no kernel
+   module needed, fewer failure modes. The actual flash used kmod-mtd-rw from initramfs
+   as a fallback when stock firmware's rdwr_boot_cfg was broken.
 
 2. **Semicolon fallback instead of `||`** — While the hush shell likely supports `||`,
    the semicolon approach (`run boot_openwrt; run boot_net`) is functionally equivalent

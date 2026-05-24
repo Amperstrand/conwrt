@@ -3,9 +3,9 @@
 Device: WS-AP3915i-ROW (Rest of World variant)
 Serial: 1918Y-1083600000
 MAC: DC:B8:08:XX:XX:XX
-IP: 192.168.1.X (stock firmware, static)
+IP: 192.168.1.1 (OpenWrt, DHCP disabled via overlay)
 Date: 2026-05-22
-Status: **OpenWrt 24.10.2 running from SPI-NOR flash** (flashed 2026-05-22)
+Status: **OpenWrt 24.10.2 running from SPI-NOR flash** (flashed 2026-05-22, DHCP disabled 2026-05-23)
 
 ## Hardware Identity
 
@@ -273,8 +273,9 @@ Leave CFG2 untouched as known-good fallback.
 6. **Never write both config blocks** — Unit 1 bricked because the same wrong value went to both.
 7. **Do env write + sysupgrade in one SSH session** — if AP reboots with new bootcmd but old
    firmware, boot_openwrt succeeds with stock FIT → stock firmware → watchdog loop.
-8. **The stock bootargs `ubi.mtd=0` causes harmless error** — kernel tries to attach CFG1 as
-  UBI, fails, continues. Not a problem but can be cleaned up.
+8. **The stock bootargs `ubi.mtd=0` causes kernel error on boot** — kernel tries to attach CFG1 as
+   UBI, fails with `ubi0 error: failed to attach mtd0, error -22`. Functional but should be cleaned
+   up by updating bootargs env variable (see todo below).
 
 ### Current State
 

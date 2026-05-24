@@ -70,14 +70,22 @@ Tested devices are tracked in each model's `tested_hardware` field. To mark a de
 conwrt/
 ├── models/              # Device model definitions (species-level, static, in git)
 │   ├── dlink-covr-x1860-a1.json
+│   ├── extreme-networks-ws-ap3915i.json
 │   ├── glinet-gl-ar150.json
 │   ├── glinet-gl-ar300m-lite.json
 │   ├── glinet-gl-ar300m-nand.json
 │   ├── glinet-gl-ar300m-nor.json
 │   ├── glinet-mt3000.json
-│   ├── extreme-networks-ws-ap3915i.json
 │   ├── linksys-whw03-v1.json
-│   └── linksys-whw03-v2.json
+│   ├── linksys-whw03-v2.json
+│   ├── ubnt-edgerouter-6p.json
+│   ├── zyxel-ex5700-telenor.json
+│   ├── zyxel-gs1900-8hp-a1.json
+│   ├── zyxel-gs1900-8hp-b1.json
+│   ├── zyxel-gs1900-24e.json
+│   ├── zyxel-gs1920-24.json
+│   ├── zyxel-nr7101.json
+│   └── zyxel-wx5600-t0.json
 ├── scripts/             # Automated flashing and management scripts
 │   ├── conwrt.py               # Main flasher (auto-detect, sysupgrade, U-Boot recovery)
 │   ├── router-fingerprint.py  # SSH-based device fingerprinting and inventory
