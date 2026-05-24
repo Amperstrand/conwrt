@@ -267,16 +267,24 @@ flashcp /tmp/cfg1.bin /dev/mtd0
 
 ### kmod-mtd-rw bypasses DTS read-only protection
 
-OpenWrt's device tree marks CFG partitions as read-only. The `kmod-mtd-rw` kernel module bypasses this: `insmod mtd-rw.ko i_want_a_brick=1`. Available from OpenWrt package repos for most targets (official package in `openwrt/packages/kernel/mtd-rw`).
+OpenWrt's device tree marks some partitions (CFG, bootloader, calibration) as read-only. The `kmod-mtd-rw` kernel module removes the `MTD_WRITEABLE` flag from all MTD partitions: `insmod mtd-rw.ko i_want_a_brick=1`.
 
-In OpenWrt 24.10.x, kernel modules moved to a separate kmods feed. On official images, the kmods feed is auto-configured. If `opkg install kmod-mtd-rw` fails, check `/etc/opkg/distfeeds.conf` for the kmods line. Install command:
+**How it's built:** Out-of-tree kernel module in the `packages` feed at `kernel/mtd-rw/`. Source is a single C file (`mtd-rw.c`, ~100 lines) from [github.com/jclehner/mtd-rw](https://github.com/jclehner/mtd-rw). OpenWrt's build system cross-compiles it against each target's kernel headers. It's excluded only for targets without MTD support (x86, bcm27xx, octeontx). For ipq40xx, realtek, mediatek, etc. it's always available.
+
+**Verifying availability for a target:** Check the OpenWrt downloads server for the target's kmods directory, or just try `opkg install kmod-mtd-rw` — if the target has MTD support, it's there.
 
 ```bash
 opkg update && opkg install kmod-mtd-rw
 insmod mtd-rw i_want_a_brick=1
 ```
 
-Must be loaded before any MTD writes to read-only partitions. Reverts on reboot (module unload).
+**Key behaviors:**
+- The `i_want_a_brick=1` parameter is **required** — the module refuses to load without it (safety measure).
+- Reverts on reboot (module is not loaded again unless re-installed or added to `/etc/modules.d/`).
+- Must be loaded BEFORE any MTD writes to read-only partitions.
+- In OpenWrt 24.10.x, kernel modules are in a separate kmods feed. On official images, the kmods feed is auto-configured in `/etc/opkg/distfeeds.conf`.
+
+**Common misconception:** "kmod-mtd-rw was removed in OpenWrt 24.10.x." This is false — it was never in the main OpenWrt tree. It's always been in the `packages` feed (`openwrt/packages/kernel/mtd-rw/`). As long as the target has MTD support and the kmods feed is configured, it installs fine. Verified on ipq40xx (kernel 6.6.93) and realtek (kernel 6.6.x).
 
 ## Switch-Initiated Flashing (Router-to-Router)
 
@@ -319,7 +327,11 @@ The `--port=0` disables DNS. Bind to specific interface/IP to avoid interfering 
 
 ### Newly flashed devices hijack DHCP (rogue DHCP)
 
-Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by default. If you're flashing from an OpenWrt switch on a network with an existing DHCP server, the new device competes for DHCP clients — potentially hijacking the default gateway.
+Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by default. If conwrt is running on an OpenWrt **switch or router** with other devices on the same network, the freshly flashed device competes for DHCP clients — potentially hijacking the default gateway.
+
+**When this happens:** Switch-to-device flashing (e.g. GS1900-8HP → AP3915i via PoE). The switch and other devices share br-lan. The newly booted device's dnsmasq answers DHCP requests faster than the real DHCP server.
+
+**When this does NOT happen:** Direct macOS → device flashing (USB ethernet or direct connect). The Mac is the only device on the link — there's no other DHCP client to hijack.
 
 **Incident (2026-05-23):** Flashed an AP3915i via GS1900-8HP switch. After boot, the AP's DHCP server handed the Mac a lease with itself as gateway, breaking internet access. The Mac's real gateway (192.168.13.1) was replaced by the AP (192.168.1.1).
 

@@ -474,11 +474,16 @@ After verified successful flash boot, optionally write CFG2 to match CFG1:
 
 See Appendix A for the full external review. Key changes:
 
-1. **Removed Phase 8 MTD writes from initramfs (later reversed)** — The DTS marks CFG partitions as
-   read-only. Initial assumption was kmod-mtd-rw unavailable in 24.10.2, but it IS available
-   (verified on Unit 2). However, writing from stock firmware is still preferred — no kernel
-   module needed, fewer failure modes. The actual flash used kmod-mtd-rw from initramfs
-   as a fallback when stock firmware's rdwr_boot_cfg was broken.
+1. **Removed Phase 8 MTD writes from initramfs** — The DTS marks CFG partitions as
+   read-only. Original assumption: kmod-mtd-rw was not rebuilt for kernel 6.6 and unavailable
+   in 24.10.2, so the entire "write bootcmd from initramfs" approach was impossible.
+   **UPDATE (2026-05-24)**: This assumption was wrong. kmod-mtd-rw is an out-of-tree kernel
+   module in the `packages` feed (`kernel/mtd-rw/`), built by OpenWrt's build system for every
+   target with MTD support (excluded only: x86, bcm27xx, octeontx). On ipq40xx with kernel
+   6.6.93 it installs and loads fine: `opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1`.
+   The actual Unit 2 flash used this approach as a fallback when stock firmware's rdwr_boot_cfg
+   was broken. Writing from stock firmware is still preferred (fewer failure modes) but the
+   initramfs path is viable.
 
 2. **Semicolon fallback instead of `||`** — While the hush shell likely supports `||`,
    the semicolon approach (`run boot_openwrt; run boot_net`) is functionally equivalent

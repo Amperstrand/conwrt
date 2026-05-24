@@ -763,9 +763,15 @@ After having an external LLM review the plan, several critical corrections were 
    Stock mtd1=CFG1 and OpenWrt mtd0=CFG1 are the same physical block at offset 0xe0000.
 
 2. **DTS read-only partitions**: ALL partitions except `firmware` are marked `read-only` in the
-   OpenWrt DTS. kmod-mtd-rw IS available in OpenWrt 24.10.2 (contrary to earlier assumption)
-   and was used successfully to write CFG1 from initramfs on Unit 2. However, writing from
-   stock firmware is still preferred when possible (no kernel module needed).
+   OpenWrt DTS. Originally assumed kmod-mtd-rw was unavailable in 24.10.2 (not rebuilt for
+   kernel 6.6), so the plan required ALL config block writes from stock firmware.
+   **UPDATE (2026-05-24)**: This assumption was wrong. kmod-mtd-rw IS available in OpenWrt 24.10.2
+   (package `kmod-mtd-rw` in the official `packages` feed at `kernel/mtd-rw/`). It's an out-of-tree
+   kernel module built against the running kernel — OpenWrt's build system compiles it for every
+   target that has MTD support (excluded only for x86, bcm27xx, octeontx). On ipq40xx it works
+   fine: `opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1`. Was used
+   successfully to write CFG1 from initramfs on Unit 2. Writing from stock firmware is still
+   preferred (fewer failure modes) but initramfs writes are a viable fallback.
 
 3. **Semicolon fallback**: Changed from `||` to `;` — functionally identical but doesn't depend
    on U-Boot `||` operator support. If `bootm` succeeds, it doesn't return.
