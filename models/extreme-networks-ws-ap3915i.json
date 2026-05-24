@@ -189,7 +189,27 @@
       "5. SSH to AP, backup partitions",
       "6. SSH to AP, sysupgrade with permanent image",
       "7. Post-flash: set SSH keys, then set password, then change IP"
-    ]
+    ],
+    "port_isolation": {
+      "description": "When flashing from a DSA-capable OpenWrt switch (e.g. GS1900-8HP), the switch port can be isolated into a dedicated VLAN before powering on the AP. This prevents the AP's post-boot DHCP server from reaching other devices on the network.",
+      "switch_model": "zyxel-gs1900-8hp-a1",
+      "switch_port_isolation_docs": "See port_isolation section in models/zyxel-gs1900-8hp-a1.json for DSA topology, UCI commands, and gotchas.",
+      "vlan_id": 999,
+      "recommended_port": "lan5",
+      "workflow_with_isolation": [
+        "0. Switch isolates target port (lan5) into VLAN 999",
+        "0a. Switch adds IP 192.168.1.2/24 on br-lan.999",
+        "1. PoE disable target port (power off AP)",
+        "2. Stage firmware + TFTP config (serve from 192.168.1.2 on br-lan.999)",
+        "3. PoE enable target port — AP boots in ISOLATED VLAN (DHCP offers contained)",
+        "4. AP U-Boot TFTP-boots initramfs (switch serves TFTP via br-lan.999)",
+        "5. SSH to AP (via br-lan.999), backup partitions",
+        "6. SSH to AP, sysupgrade with permanent image",
+        "7. Post-flash: set SSH keys, then set password, then change IP",
+        "8. Switch restores port to default VLAN — AP joins production network"
+      ],
+      "note": "Port isolation makes the overlay DHCP-disable approach (scripts/profile/overlay.py) unnecessary when flashing from a DSA switch. The overlay remains useful as a fallback when flashing from macOS or non-DSA-capable hosts."
+    }
   },
   "tested_hardware": {
     "extreme-rdwr-tftp-initramfs": {

@@ -240,5 +240,75 @@
   "capabilities": [
     "ethernet",
     "serial"
-  ]
+  ],
+  "port_isolation": {
+    "description": "DSA-based VLAN port isolation for rogue DHCP prevention during firmware flashing. When flashing a device connected to a switch port, isolating that port into its own VLAN prevents the freshly flashed device's DHCP server from reaching other network devices.",
+    "dsa_topology": {
+      "port_names": "lan1 through lan8 (physical ports 1-8, DSA switch port numbers 8-15)",
+      "cpu_port": "port@28 (internal, fixed-link 1Gbps, handles CPU-bound traffic)",
+      "default_bridge": "br-lan — all lan1-lan8 members, untagged, no explicit bridge-vlan sections by default",
+      "source": "OpenWrt DTS rtl8380_zyxel_gs1900.dtsi — SWITCH_PORT(8, 1, internal) through SWITCH_PORT(15, 8, internal)"
+    },
+    "isolation_vlan_id": 999,
+    "isolate_commands": {
+      "description": "Move a port into isolated VLAN 999. CPU port remains member so the switch can SSH to the device on the isolated port.",
+      "check_current_vlan_membership": "bridge vlan show",
+      "steps": [
+        "uci add network bridge-vlan",
+        "uci set network.@bridge-vlan[-1].device='br-lan'",
+        "uci set network.@bridge-vlan[-1].vlan='999'",
+        "uci add_list network.@bridge-vlan[-1].ports='lan5:u*'",
+        "uci set network.@bridge-vlan[-1].local='1'",
+        "uci commit network",
+        "/etc/init.d/network restart"
+      ],
+      "assign_ip_on_isolated_vlan": "ip addr add 192.168.1.2/24 dev br-lan.999",
+      "port_suffix_meaning": {
+        "u": "untagged egress — packets sent to the wire without VLAN tag",
+        "u*": "untagged + primary VLAN (PVID) — untagged egress AND untagged ingress tagged as this VLAN",
+        "t": "tagged egress — packets carry VLAN tag on the wire"
+      },
+      "local_flag": {
+        "1": "CPU port is member of this VLAN → creates br-lan.999 sub-interface → switch can route to isolated device",
+        "0": "CPU port NOT a member → isolated port cannot talk to switch CPU → NO SSH access to target device",
+        "required": "MUST be 1 for conwrt flashing — the switch needs SSH/TFTP access to the target"
+      }
+    },
+    "restore_commands": {
+      "description": "Remove VLAN 999 and return the port to default br-lan membership.",
+      "find_vlan_section_index": "uci show network | grep 'bridge-vlan.*vlan=999' | cut -d. -f2 | cut -d[ -f2 | cut -d] -f1",
+      "steps": [
+        "uci delete network.@bridge-vlan[INDEX]",
+        "uci commit network",
+        "/etc/init.d/network restart"
+      ],
+      "cleanup_ip": "ip addr del 192.168.1.2/24 dev br-lan.999",
+      "note": "After deleting the isolation VLAN, the port returns to the default untagged bridge membership. Network restart takes ~10 seconds on this device. All ports experience brief connectivity loss during restart."
+    },
+    "gotchas": [
+      "A port can only be untagged member of ONE bridge VLAN. If an explicit bridge-vlan for VLAN 1 already exists, the target port must be removed from it before adding to VLAN 999.",
+      "DEVICE_CLAIM_FAILED error if a port is assigned to multiple bridges — each port can belong to only one bridge device.",
+      "Network restart causes ~10 second connectivity loss on ALL ports — plan accordingly if other devices depend on this switch.",
+      "After network restart, the switch's br-lan.999 interface gets an IP only if the isolated device provides DHCP — otherwise assign a static IP manually (ip addr add 192.168.1.2/24 dev br-lan.999).",
+      "DSA VLAN filtering is enabled by default for Realtek RTL838x in OpenWrt 24.10+/25.x — no extra packages or kernel modules needed.",
+      "The known DSA FDB bug (openwrt/openwrt#11650) affects VLAN-tagged + WiFi roaming — irrelevant for pure Ethernet port isolation on a switch with no WiFi."
+    ],
+    "integration_with_conwrt": {
+      "flow": [
+        "1. Isolate target port into VLAN 999 (before PoE power-on)",
+        "2. Add secondary IP on br-lan.999 for flash subnet (e.g. 192.168.1.2/24)",
+        "3. Enable PoE on target port — device boots in isolated VLAN",
+        "4. Flash device via SSH/TFTP within isolated VLAN (DHCP offers cannot escape)",
+        "5. Post-flash: configure SSH keys, disable DHCP, set IP",
+        "6. Restore port to default VLAN — device joins production network"
+      ],
+      "benefits_over_overlay": [
+        "Works with ALL flash methods (sysupgrade, recovery-http, TFTP, OEM-HTTP, extreme-rdwr-tftp)",
+        "No race condition — port is isolated BEFORE device powers on",
+        "Device's DHCP offers never leave the isolated VLAN — broadcast domain is contained",
+        "Transparent to the target device — no config changes needed on it",
+        "No overlay tarball generation needed — simpler code path"
+      ]
+    }
+  }
 }
