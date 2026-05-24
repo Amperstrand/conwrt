@@ -11,6 +11,7 @@ _CONWRT_LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
 . "$_CONWRT_LIB_DIR/inventory.sh"
 . "$_CONWRT_LIB_DIR/stock_ssh.sh"
 . "$_CONWRT_LIB_DIR/overlay.sh"
+. "$_CONWRT_LIB_DIR/bridge.sh"
 
 _conwrt_usage() {
     cat <<'EOF'

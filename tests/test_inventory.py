@@ -138,6 +138,7 @@ class TestFindDevice(TestInventory):
         append_to_inventory({"device_serial": "SN001", "note": "first"}, self._inv_path)
         append_to_inventory({"device_serial": "SN001", "note": "second"}, self._inv_path)
         result = find_device("SN001", self._inv_path)
+        assert result is not None
         assert result["note"] == "first"
 
     def test_works_with_empty_inventory(self):
@@ -147,6 +148,7 @@ class TestFindDevice(TestInventory):
         append_to_inventory({"device_serial": "SN001"}, self._inv_path)
         append_to_inventory({"device_serial": "SN002"}, self._inv_path)
         result = find_device("SN002", self._inv_path)
+        assert result is not None
         assert result["device_serial"] == "SN002"
 
 
@@ -202,7 +204,9 @@ class TestEdgeCases(TestInventory):
     def test_serial_with_special_characters(self):
         serial = "SN/001:RX-2024#v2"
         append_to_inventory({"device_serial": serial}, self._inv_path)
-        assert find_device(serial, self._inv_path)["device_serial"] == serial
+        found = find_device(serial, self._inv_path)
+        assert found is not None
+        assert found["device_serial"] == serial
 
     def test_entry_with_boolean_and_none_values(self):
         entry = {"device_serial": "SN001", "password_set": False, "notes": None}
