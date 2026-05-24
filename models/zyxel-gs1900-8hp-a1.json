@@ -237,6 +237,117 @@
       "notes": "UNTESTED. U-Boot env verified (bootdelay=1, boardmodel=ZyXEL_GS1900_8HP). serverip=192.168.1.X (should update to 192.168.1.2). Serial commands documented from OpenWrt source."
     }
   },
+  "stock_firmware": {
+    "ssh": {
+      "description": "Restricted Cisco-like CLI via /bin/cli binary (426KB, symlinked to /bin/login). NOT a Linux shell.",
+      "available_commands": [
+        "show info", "show version", "show interfaces all",
+        "show vlan", "show mac address-table",
+        "show lldp neighbor", "show cable-diag interfaces",
+        "show power inline consumption",
+        "ping", "traceroute", "ping6",
+        "boot", "reload", "logout",
+        "clear (mac-flush, igmp-flush)"
+      ],
+      "not_available": [
+        "No busybox applets",
+        "No filesystem access (ls, cd, cat, cp)",
+        "No SCP/SFTP file upload",
+        "No binary execution",
+        "No shell escape"
+      ],
+      "verdict": "No code execution possible via SSH"
+    },
+    "diagnostic_cli": {
+      "trigger": "CTRL-ALT-t during SSH session",
+      "password": "1900one",
+      "password_recovery": "gs1900@zyxel.com.tw",
+      "source": "Jasper Lievisse Adriaanse, https://jasper.la/posts/exploring-zyxel-gs1900-firmware-with-ghidra/",
+      "cve": "CVE-2019-15803 (hidden functionality), CVE-2019-15801 (hardcoded passwords), CVE-2019-15802 (hardcoded AES key)",
+      "published_date": "2019-11-14",
+      "zyxel_advisory": "https://www.zyxel.com/global/en/support/security-advisories/zyxel-security-advisory-for-gs1900-switch-vulnerabilities",
+      "commands": [
+        "register (read/write hardware registers)",
+        "port (PHY port configuration)",
+        "chip (chip configure)",
+        "vlan", "stg", "l2-table", "acl", "mirror",
+        "led", "mib", "qos", "bandwidth", "storm-control",
+        "eee", "flowctrl", "nic", "sflow", "rspan",
+        "debug", "trunk", "dot1x", "svlan", "system"
+      ],
+      "verdict": "Register-level hardware access only. No process execution, no filesystem access, no shell.",
+      "note": "PoE control on stock firmware requires web UI or HTTP API. The diagnostic 'port' command is for PHY registers, not PoE management."
+    },
+    "http_api": {
+      "firmware_upload": {
+        "endpoint": "/cgi-bin/httpupload.cgi",
+        "accepts": "multipart/form-data with .bix or .bin files",
+        "filename_limit_64_chars": true,
+        "partition_selection": "0=Active, 1=Backup",
+        "verified": true
+      },
+      "poe_control": {
+        "description": "PoE port enable/disable via HTTP form POST to dispatcher.cgi",
+        "config_page_cmd": 771,
+        "monitor_page_cmd": 775,
+        "note": "Third-party tools like zyxel-poe-manager automate this. conwrt has oem_http_login and zyxel_encode_password in scripts/flash/oem_handlers.py."
+      },
+      "system_cmd_injection": {
+        "cve": "CVE-2019-15800",
+        "description": "system() call in libclicmd.so with insufficient input sanitization",
+        "status": "Unexplored. Could theoretically grant shell access but high risk and may crash management daemon."
+      }
+    },
+    "arbitrary_code_execution": {
+      "ssh": "Not possible - restricted CLI only",
+      "diagnostic_cli": "Not possible - register R/W only",
+      "http_api": "Not possible via normal API. CVE-2019-15800 is theoretical vector.",
+      "serial_uboot": "Possible - can set init=/bin/sh bootargs, but requires serial adapter",
+      "firmware_upload_to_initramfs": "Possible - upload OpenWrt initramfs via httpupload.cgi, device boots full Linux from RAM"
+    }
+  },
+  "switch_initiated_flashing": {
+    "from_openwrt": {
+      "description": "Switch running OpenWrt permanently can serve as flash host for target devices",
+      "requires": ["conwrt-lite or conwrt.py + Python deps", "firmware image in /tmp", "target device on same L2"],
+      "poe_control": "ubus call poe manage or uci set poe.@port[N].enable",
+      "tftp_server": "busybox tftp or Python tftp-server.py",
+      "status": "conwrt-lite framework created (#10), integration pending (#9)"
+    },
+    "from_stock_via_initramfs": {
+      "description": "Boot OpenWrt initramfs from RAM on stock V2.90 switch, then use it as self-contained flash host. Stock flash is never modified.",
+      "steps": [
+        "1. Upload OpenWrt initramfs image via stock V2.90 web UI (cmd=5903, httpupload.cgi)",
+        "2. Switch reboots into OpenWrt running entirely from RAM (~24s boot)",
+        "3. Upload conwrt-lite + firmware image via SCP to /tmp",
+        "4. Run conwrt-lite: PoE control, TFTP serve, SSH verify — all from the switch",
+        "5. Reboot switch → returns to stock V2.90, untouched"
+      ],
+      "advantages": [
+        "Self-contained — no external host needed during flash",
+        "Non-destructive — stock firmware on flash is preserved",
+        "Full Linux environment — busybox, dropbear, realtek-poe, tftp",
+        "128MB RAM is plenty for initramfs + tools + firmware image"
+      ],
+      "requirements": [
+        "OpenWrt initramfs image for zyxel,gs1900-8hp-a1",
+        "conwrt-lite scripts (POSIX shell, no Python needed)",
+        "Target device firmware image",
+        "Initial web UI access to upload initramfs (one-time per session)"
+      ],
+      "limitations": [
+        "PoE power lost during switch reboot (MCU reinit) — target device power-cycles with the switch",
+        "Must re-upload initramfs via web UI after each power cycle of the switch",
+        "No persistent changes to switch — all RAM-only"
+      ],
+      "target_architecture": {
+        "soc": "Realtek RTL8380M MIPS 4KEc @ 500MHz",
+        "go_cross_compile": "GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0",
+        "go_version_note": "Use Go 1.22 — Go 1.23+ has MIPS async preemption hang bug (golang/go#71591)",
+        "nan2008_patch": "May need to patch ELF e_flags at offset 36 for NaN2008 kernel compatibility"
+      }
+    }
+  },
   "capabilities": [
     "ethernet",
     "serial"

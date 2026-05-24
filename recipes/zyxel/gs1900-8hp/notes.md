@@ -157,15 +157,16 @@ V2.80+ uses a custom JavaScript `encode()` function that obfuscates the password
 4. Response: `OK` on success, `FAIL` on failure
 5. Cookie `HTTP_XSSID` is set in session
 
-**encode() algorithm** (Python implementation):
+**encode() algorithm** (Python implementation — **FIXED 2026-05-24**):
 ```python
 def encode_password(password):
     import random, string
     text = ''
     possible = string.ascii_letters + string.digits
-    length = len(password)
-    remaining = length
-    for i in range(1, 322 - length + 1):
+    remaining = len(password)  # mutable tracker (like JS 'len')
+    length = len(password)     # constant for length digits (like JS 'lenn')
+    i = 1
+    while i <= (321 - remaining):  # DYNAMIC bound — JS re-evaluates (321-len) each iteration
         if i % 5 == 0 and remaining > 0:
             remaining -= 1
             text += password[remaining]  # chars inserted backwards
@@ -175,10 +176,13 @@ def encode_password(password):
             text += str(length % 10)
         else:
             text += random.choice(possible)
+        i += 1
     return text
 ```
 
-Verified on hardware (S/N S150H13001490, V2.90 firmware), 2026-05-21.
+**CRITICAL BUG FIX (2026-05-24)**: The original Python implementation used `range(1, 322 - length + 1)` which generates `322 - length` characters. This is WRONG. The JavaScript loop bound `i <= (321-len)` is re-evaluated each iteration because `len` decrements inside the body (`--len`). As `len` decreases from N to 0, the upper bound grows from `(321-N)` to 321. **Total output is always 321 characters regardless of password length.** The old code produced 312 chars for a 10-char password (9 chars short), causing login_chk to return FAIL.
+
+Verified on hardware (S/N S150H13001490, V2.90 firmware), 2026-05-21. Bug discovered and fixed 2026-05-24.
 
 #### V2.80+ Mandatory Password Change
 
@@ -843,6 +847,83 @@ Tested on OpenWrt 25.12.1 with a PoE device connected to port 8.
 - serverip in U-Boot defaults to 192.168.1.X (should be updated for TFTP recovery)
 - Stock firmware uses JavaScript-based login — session management is server-side, no visible cookies via curl
 
+## Stock Firmware Interface Analysis
+
+### SSH Admin Shell (V2.90)
+
+The SSH admin shell is a **restricted Cisco-like CLI** implemented by `/bin/cli` (426KB binary, symlinked to `/bin/login`). It is NOT a Linux shell.
+
+**Available commands:**
+- `show info`, `show version`, `show interfaces all`
+- `show vlan`, `show mac address-table`
+- `show lldp neighbor`, `show cable-diag interfaces`
+- `show power inline consumption` (PoE status, read-only)
+- `ping`, `traceroute`, `ping6`
+- `boot`, `reload`, `logout`
+- `clear` (mac-flush, igmp-flush)
+
+**NOT available:**
+- No busybox applets, no filesystem access
+- No SCP/SFTP file upload
+- No binary execution, no shell escape
+
+**Verdict: No code execution possible via SSH.**
+
+### Hidden Diagnostic CLI (CVE-2019-15803)
+
+**Access**: Press CTRL-ALT-t during SSH session → password prompt
+**Password**: `1900one`
+**Password recovery**: `gs1900@zyxel.com.tw`
+
+**Documentation status**: This is **NOT a novel finding**. Publicly documented by Jasper Lievisse Adriaanse on November 14, 2019.
+
+| Source | What it documents |
+|--------|-------------------|
+| [jasper.la blog post](https://jasper.la/posts/exploring-zyxel-gs1900-firmware-with-ghidra/) | Password `1900one`, CTRL-ALT-t trigger, full command list, encryption mechanism |
+| CVE-2019-15803 | Hidden functionality via CTRL-ALT-t, access control bypass (remote check returns TRUE) |
+| CVE-2019-15801 | Hardcoded encrypted passwords in firmware |
+| CVE-2019-15802 | Hardcoded AES-256-CBC key for password decryption |
+| [Zyxel security advisory](https://www.zyxel.com/global/en/support/security-advisories/zyxel-security-advisory-for-gs1900-switch-vulnerabilities) | Acknowledges vulnerability, credits Jasper Lievisse Adriaanse |
+| [jasperla/CVE-2019-15802](https://github.com/jasperla/CVE-2019-15802) | Decryption tool for the hardcoded credentials |
+
+**Diagnostic CLI commands**: register, port, chip, vlan, stg, l2-table, acl, mirror, led, mib, qos, bandwidth, storm-control, eee, flowctrl, nic, sflow, rspan, debug, trunk, dot1x, svlan, system
+
+**Verdict**: Register-level hardware access only. No process execution, no filesystem access, no shell. The `port` command is for PHY registers, not PoE management.
+
+### Stock Firmware Arbitrary Code Execution Assessment
+
+| Interface | Code execution? | Why |
+|-----------|----------------|-----|
+| SSH CLI | No | `/bin/cli` restricted parser, not a shell |
+| Diagnostic CLI | No | Register R/W only, no process execution |
+| HTTP API | No | CGI endpoints accept specific inputs, not commands |
+| HTTP API (CVE-2019-15800) | Theoretical | `system()` injection in libclicmd.so, untested, risky |
+| Serial/U-Boot | Yes | Can set `init=/bin/sh` bootargs, but requires serial adapter |
+| **Firmware upload → initramfs** | **Yes** | **Clean, safe, runs OpenWrt from RAM. Stock flash untouched.** |
+
+### PoE Control on Stock Firmware
+
+PoE port enable/disable is available via the web UI only:
+- Config page: cmd=771 (Configuration → Port → PoE)
+- Monitor page: cmd=775 (Monitoring → Port → PoE)
+- Third-party automation: [zyxel-poe-manager](https://github.com/jonbulica99/zyxel-poe-manager) uses HTTP scraping
+- conwrt has `oem_http_login` and `zyxel_encode_password` in `scripts/flash/oem_handlers.py` for HTTP API access
+
+The SSH CLI provides read-only PoE status via `show power inline consumption`.
+
+### Initramfs Boot from Stock V2.90
+
+The most promising approach for self-contained switch-initiated flashing:
+
+1. Upload OpenWrt initramfs image via stock V2.90 web UI (cmd=5903, httpupload.cgi)
+2. Switch reboots into OpenWrt running **entirely from RAM** (~24s boot)
+3. Upload conwrt-lite + firmware image via SCP to `/tmp`
+4. Switch now has full Linux: busybox, dropbear SSH, realtek-poe, tftp
+5. Run conwrt-lite: PoE control, TFTP serve, SSH verify — all from the switch itself
+6. **Reboot switch → returns to stock V2.90, flash untouched**
+
+**Limitation**: PoE power is lost during the switch reboot into initramfs (MCU reinit), so the target device power-cycles too. This means the target device will reboot alongside the switch — acceptable for flashing, since the target needs to be in recovery/U-Boot mode anyway.
+
 ## PoE Research: Stock Firmware RE & Improvement Opportunities
 
 We reverse-engineered the stock ZyXEL V2.90 firmware (`board_poe.ko` + `libsal.so`) by MIPS objdump on the unstripped kernel module. Full analysis in `firmware/stock_v290/RE_ANALYSIS.md` and parity comparison in `docs/POE_PARITY.md`.
@@ -890,3 +971,96 @@ These are improvements we identified that could be PR'd upstream:
 - `firmware/stock_v290/RE_ANALYSIS.md` — Raw RE data: command tables, SAL API, chip support matrix
 - `firmware/extract.sh` — Firmware extraction script
 - `firmware/gs1900fw.py` — Firmware image parser
+
+## Hardware Test Results (2026-05-24)
+
+### Network Topology (confirmed)
+
+```
+Server (Linux)                WiFi Network (192.168.13.x)
+├── enp5s0: 192.168.1.2/24       ├── .1  = Zyxel EX5501-B0 (broadband gateway)
+├── wlp4s0: 192.168.13.218/24    ├── .2  = OpenWrt GS1900-8HP A1 (E8:37:7A:9E:F6:86)
+│   secondary: 192.168.2.10/24   ├── .3  = Stock V2.90 GS1900-8HP (4C:9E:FF:F5:AC:D2)
+│                                 └── .253 = AP3915i (B4:2D:56:25:47:A2) on lan5 of .2
+```
+
+### zyxel_encode_password Bug Fix
+
+**Discovered**: The `zyxel_encode_password()` function in `oem_handlers.py` produced wrong-length output (312 chars for 10-char password instead of 321).
+
+**Root cause**: JavaScript `encode()` uses `for(var i=1; i <= (321-len); i++)` where `len` is decremented inside the loop body via `--len`. The upper bound `(321-len)` is re-evaluated each iteration, growing as `len` shrinks. The Python implementation used a fixed `range()` which computed the bound once.
+
+**Fix**: Replaced `for` loop with `while` loop that dynamically re-evaluates `321 - remaining`. Output is now always 321 chars. Fix applied to `scripts/flash/oem_handlers.py`.
+
+### Stock Switch Password Issue
+
+The stock V2.90 switch at 192.168.13.3 (MAC 4C:9E:FF:F5:AC:D2) **rejects both admin/Zyxel2026! and admin/1234**. Even the browser's native JavaScript encode() + login flow returns FAIL. The password has changed since the 2026-05-21 session. Needs factory reset (hold reset button ~10s) to restore default credentials.
+
+**Impact**: Test 1 (initramfs boot from stock) blocked until password is resolved. Tests 2-3 completed using the OpenWrt switch instead.
+
+### Test 2: TFTP Serving — PASSED
+
+**Platform**: OpenWrt GS1900-8HP at 192.168.13.2
+**Method**: dnsmasq TFTP server (already installed in OpenWrt 25.12.1)
+
+**Setup**:
+1. Created `/tmp/tftpboot/` on switch with test files
+2. Configured dnsmasq with `enable_tftp=1`, `tftp_root=/tmp/tftpboot`
+3. Started dnsmasq with explicit interface binding:
+   ```
+   dnsmasq --no-daemon --enable-tftp --tftp-root=/tmp/tftpboot \
+       --bind-interfaces --listen-address=0.0.0.0
+   ```
+
+**Gotcha**: dnsmasq TFTP initially bound to localhost only (127.0.0.1:69). Required `--bind-interfaces` and `--listen-address=0.0.0.0` to bind to external interface. The `local-service` and `bind-dynamic` options in the default UCI config restrict TFTP to localhost.
+
+**Results**:
+| Test | Result | Details |
+|------|--------|---------|
+| Text file (39 bytes) | ✅ Pass | `curl tftp://192.168.13.2/test.txt` returned correct content |
+| Binary file (1MB) | ✅ Pass | Downloaded 1,048,576 bytes, exact size match |
+
+**Conclusion**: No need for external tftp-now binary — dnsmasq's built-in TFTP works perfectly on OpenWrt for the switch-initiated flash workflow.
+
+### Test 3: PoE Cycle — PASSED
+
+**Platform**: OpenWrt GS1900-8HP at 192.168.13.2
+**Target**: AP3915i (B4:2D:56:25:47:A2) at 192.168.13.253
+**Port**: lan5 (hardware L2 port 12, 4.9W consumption)
+
+**PoE management commands** (verified working):
+```bash
+# Disable PoE on a port
+ubus call poe manage '{"port":"lan5","action":"disable"}'
+# → status changes to "Disabled", device loses power
+
+# Enable PoE on a port
+ubus call poe manage '{"port":"lan5","action":"enable"}'
+# → status changes to "Delivering power", device boots
+```
+
+**Gotchas**:
+1. **Dual realtek-poe instances**: After repeated restarts, two daemon instances ran simultaneously, causing MCU communication errors ("received unsolicited reply", "No response from PoE controller"). Fix: `killall -9 realtek-poe` then `/etc/init.d/poe start`.
+2. **UCI + restart didn't work**: `uci set poe.@port[4].enable=0; uci commit; /etc/init.d/poe restart` did NOT cut power. The `ubus call poe manage` method is the correct way for runtime control.
+3. **Action names**: `"disable"` and `"enable"` (not "off"/"on" or enable:false).
+
+**PoE cycle timeline**:
+| Time | Event |
+|------|-------|
+| T+0s | `ubus call poe manage '{"port":"lan5","action":"disable"}'` |
+| T+2s | lan5 status: "Disabled", AP3915i unreachable |
+| T+10s | `ubus call poe manage '{"port":"lan5","action":"enable"}'` |
+| T+12s | lan5 status: "Delivering power", 3.4W (device booting) |
+| T+90s | AP3915i responds to ping, 4.9W (fully booted) |
+
+**L2 table port mapping** (verified via `/sys/kernel/debug/rtl838x/l2_table`):
+| Hardware Port | DSA Interface | Usage |
+|---------------|---------------|-------|
+| 8 | uplink (WiFi router) | Most external MACs |
+| 12 | lan5 | AP3915i (B4:2D:56:25:47:A2) |
+| 15 | lan7 | Stock switch (4C:9E:FF) |
+| 28 | CPU | Switch's own MAC (static) |
+
+### Test 1 (Initramfs Boot) — BLOCKED
+
+Blocked by stock switch password issue. Requires factory reset of stock switch at 192.168.13.3, then re-login and initramfs upload via OEM web UI.
