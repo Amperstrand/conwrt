@@ -862,3 +862,93 @@ Located at `/home/ubuntu/src/conwrt/openwrt-minimal/`:
 | `files/etc/uci-defaults/97-start-telnetd` | Telnetd on port 23 |
 | `files/etc/uci-defaults/98-setup-network` | DHCP setup |
 | `files/etc/init.d/auto-sysupgrade` | S99 auto-flash (fixed timing) |
+
+---
+
+## Upload Attempts: FTP and Web Both Reject Custom Firmware (2026-05-24)
+
+### What Happened
+
+We attempted to upload our custom OpenWrt image to the switch using both FTP and web UI. All attempts failed — the firmware handlers (both FTP and web CGI) silently reject our image without writing to flash.
+
+**Upload attempts (all failed):**
+
+| # | Method | Target | Image | Result |
+|---|--------|--------|-------|--------|
+| 1 | FTP PUT | ras-0 (slot 1) | Unpadded 3,665,779B | Timeout, no 226 |
+| 2 | FTP PUT | ras-0 (slot 1) | Unpadded 3,665,779B | Timeout, no 226 |
+| 3 | FTP PUT | ras-0 (slot 1) | Padded 3,677,044B | Timeout, no 226 |
+| 4 | FTP PUT | ras-1 (slot 2) | Padded 3,677,044B | Timeout, no 226 |
+| 5 | Web POST | Firmware 1 (inactive) | Padded 3,677,044B | ERR_EMPTY_RESPONSE |
+| 6 | Web POST | Firmware 2 (active) | Padded 3,677,044B | ERR_EMPTY_RESPONSE |
+
+In all FTP cases: the STOR command was accepted (150 response), all data was uploaded at ~740KB/s, then the control connection timed out after 60s with no 226 response. The switch stayed running stock firmware afterward.
+
+### Key Observations
+
+1. **FTP data transfers complete successfully** — all 3.5MB uploaded at ~740KB/s every time. The network is fine.
+2. **FTP handler never sends 226** — it receives all data but never confirms the write. No error response either.
+3. **Web upload to Firmware 2 (active slot) also fails** — this rules out the occupancy gate as the sole issue. The active slot should accept uploads.
+4. **Previous successful FTP upload was STOCK firmware** — stock V4.50 (3,677,044B, RasCode osize=22,965,836) uploaded to ras-1 with `226 File received OK`.
+5. **Padded vs unpadded makes no difference** — same timeout behavior regardless.
+6. **Slot 1 vs Slot 2 makes no difference** — same timeout on both ras-0 and ras-1.
+
+### Hypotheses
+
+**H1: RasCode decompressed size validation (MOST LIKELY)**
+- The FTP handler decompresses LZMA RasCode and checks `osize` against expected bounds
+- Stock RasCode osize: 22,965,836 bytes (22.9MB)
+- Our RasCode osize: 2,904,425 bytes (2.9MB) — 7.9x smaller
+- The handler may have a minimum osize check (e.g., `osize > 10MB`)
+- Test: rebuild with padded initramfs to inflate RasCode osize above the threshold
+
+**H2: RasCode content hash validation**
+- The handler computes a hash of the decompressed RasCode and compares against known-good hashes
+- Our OpenWrt kernel would not match any stock ZyNOS hash
+- Test: upload stock firmware via FTP to confirm the handler still works. If stock also fails, handler is broken.
+
+**H3: Web server POST body size limit**
+- Allegro RomPager may have a configured maximum POST body size
+- Previous successful web uploads were to EMPTY slots (no occupancy gate)
+- The ERR_EMPTY_RESPONSE might be a server timeout, not a validation rejection
+- Test: try uploading a very small firmware image via web to rule out size limits
+
+**H4: FTP handler crash on non-stock firmware**
+- The handler decompresses RasCode and tries to parse the stock ZyNOS binary format
+- Our OpenWrt uImage doesn't have the expected ZyNOS structures
+- The parser crashes, preventing both the write and the 226 response
+- Test: examine Zyxel GPL source for the FTP handler's validation logic
+
+**H5: All upload paths validate against stock firmware whitelist**
+- The switch has a whitelist of known-good firmware hashes (stored in flash or hardcoded)
+- Both FTP and web handlers check against this whitelist before writing
+- Only stock Zyxel firmware passes validation
+- This would be a de facto firmware signing scheme, despite no cryptographic signing
+- Test: research if other GS1920 users have successfully flashed custom firmware
+
+### Config Boot Image Change (Successful)
+
+Before attempting uploads, we successfully changed Config Boot Image from Firmware 1 to Firmware 2 via Playwright:
+- Set Config Boot Image = Firmware 2 via web UI
+- Clicked Apply → switch rebooted → change took effect
+- Verified: Current Boot Image = Firmware 2, Config Boot Image = Firmware 2
+- Switch came back up running stock V4.50 from slot 2
+
+### Current Switch State (2026-05-24)
+
+- **Slot 1 (ras-0)**: V4.50(AAOB.3) — untouched (FTP writes to inactive slot were rejected)
+- **Slot 2 (ras-1)**: V4.50(AAOB.3) — likely still stock (FTP/web writes were rejected)
+- **Current Boot Image**: Firmware 2
+- **Config Boot Image**: Firmware 2
+- **Running**: V4.50(AAOB.3)
+- **IP**: 192.168.1.225
+- **Services**: HTTP (80), FTP (21), Telnet (23) — all stock ZyNOS
+
+### Next Steps
+
+1. **Verify FTP handler works with stock firmware** — download stock V4.50 from Zyxel, upload via FTP. If this works, confirms our image is being rejected (H1 or H2).
+2. **Research ZyNOS FTP handler source** — check Zyxel GPL code for firmware validation logic.
+3. **Try TFTP upload path** — check if the GS1920-24 firmware page supports TFTP (`upmethod` form field). TFTP might use different validation.
+4. **Check Playwright for TFTP option** — inspect the firmware upload form HTML for hidden fields or alternative upload methods.
+5. **Research other users' experiences** — search OpenWrt forum and GitHub for GS1920 custom firmware flashing experiences.
+6. **Consider building a larger image** — if H1 is correct, padding the initramfs to inflate RasCode osize above the minimum threshold might work.
