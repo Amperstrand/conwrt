@@ -176,6 +176,33 @@ This is the authoritative fault reason from the MCU. Our current counter-delta
 heuristic is a workaround for not decoding this byte. Once decoded, we can surface
 the exact fault reason in the `poe.port_status` event's `fault_reason` field.
 
+### CPU Utilization Investigation (Issue #50)
+
+**Finding**: Our GS1900-8HP (8 ports, BCM59111) runs at **0.3% CPU** — well below
+the 1.0-1.3% reported in upstream issue #50. The higher CPU on other devices is likely
+from larger port counts (24/48), not UART inefficiency.
+
+**Root cause analysis** (verified by reading ustream-fd.c source):
+- `ustream_fd` uses **edge-triggered epoll** (`ULOOP_EDGE_TRIGGER`)
+- `ustream_fd_read_pending()` loops `read()` until `EAGAIN` — batches all available bytes
+- VMIN/VTIME settings do NOT affect epoll behavior (only blocking `read()` semantics)
+- The original issue #50 hypothesis ("per-byte wakeups") is incorrect for this architecture
+
+**A/B test results** (hardware-verified on GS1900-8HP A1):
+
+| Poll interval | 30s CPU ticks | CPU % |
+|--------------|---------------|-------|
+| 2s (default) | 9 | 0.30% |
+| 5s | 9 | 0.30% |
+| 10s | 9 | 0.30% |
+
+CPU is constant regardless of poll frequency — the cost is baseline event loop
+overhead (epoll, ubus, timer), not UART command processing.
+
+**Resolution**: Added configurable `poll_interval` UCI option (500ms-30000ms, default 2000ms)
+for responsiveness tuning. This does NOT reduce CPU (already near-optimal) but allows
+operators to adjust status update frequency for their needs.
+
 ## Implementation Plan
 
 ### Done (shipped on ai/power-limit-config)
@@ -227,7 +254,7 @@ Open issues on Hurricos/realtek-poe that relate to our work:
 | P2-2 | Port power pair (0x19) | A-pair/B-pair for 4-pair PoE | #32 (802.3bt paired port support) |
 | P2-3 | Per-port PSE output mapping (0x1d) | Non-trivial hardware topologies | — |
 | P2-4 | Allow managing disabled ports | ✅ Done in `11c5294` | #58 (manage disabled ports) |
-| P2-5 | CPU utilization: VMIN/VTIME tuning | Reduce per-byte wakeups in UART read loop | #50 (reduce CPU utilization) |
+| P2-5 | CPU utilization: configurable poll interval | ✅ Done in `pending` — poll_interval UCI option, tested A/B. **CPU is 0.3% regardless of interval** — cost is event loop overhead, not poll frequency. | #50 (reduce CPU utilization) |
 
 #### P3: Large/multi-week features
 
@@ -317,7 +344,8 @@ These address real upstream issues and would benefit all realtek-poe users:
 
 | Task | Upstream Issue | Effort | Impact |
 |------|---------------|--------|--------|
-| VMIN/VTIME UART tuning | #50 (CPU utilization) | Small | Reduces CPU from 1.0-1.3% to near-zero |
+| VMIN/VTIME UART tuning | #50 (CPU utilization) | Small | No effect — ustream uses edge-triggered epoll + read-until-EAGAIN (already batches). CPU cost is event loop overhead, not per-byte. |
+| Configurable poll interval | #50 (CPU utilization) | Done | Allows tuning responsiveness (500ms-30s). CPU stays ~0.3% regardless. |
 | ~~LED control~~ | #66 (LED remapping) | ~~Medium~~ Done/HW-limited | MCU doesn't support LED on BCM59111 v17.1 |
 | Port power pair (0x19) | #32 (802.3bt) | Small | Prerequisite for 4-pair PoE |
 
