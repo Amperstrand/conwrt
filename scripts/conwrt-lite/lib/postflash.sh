@@ -38,11 +38,8 @@ conwrt_postflash_set_ip() {
     _new_ip="$2"
 
     ssh $_CONWRT_PF_SSH_OPTS "root@${_ip}" \
-        "uci set network.lan.ipaddr='$_new_ip' && uci commit network && /etc/init.d/network restart" || {
-        echo "failed to set ip on $_ip" >&2
-        return 1
-    }
-    echo "ip changed from $_ip to $_new_ip"
+        "uci set network.lan.ipaddr='$_new_ip' && uci commit network && /etc/init.d/network restart" >/dev/null 2>&1 || true
+    echo "ip change initiated from $_ip to $_new_ip (connection will drop)"
     return 0
 }
 
