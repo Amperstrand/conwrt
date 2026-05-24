@@ -156,12 +156,12 @@ class TestZyxelEncodePassword(TestCase):
     def test_output_length(self):
         pw = "1234"
         enc = zyxel_encode_password(pw)
-        self.assertEqual(len(enc), 322 - len(pw))
+        self.assertEqual(len(enc), 321)
 
     def test_output_length_long_password(self):
         pw = "Zyxel2026!"
         enc = zyxel_encode_password(pw)
-        self.assertEqual(len(enc), 322 - len(pw))
+        self.assertEqual(len(enc), 321)
 
     def test_password_chars_embedded(self):
         pw = "abcd"

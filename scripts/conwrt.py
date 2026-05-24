@@ -71,6 +71,12 @@ from flash.context import (
 )
 from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
 from flash.detect import check_ssh, detect_boot_state as _detect_boot_state
+from flash.device_detect import (
+    active_fingerprint as _active_fingerprint,
+    match_models as _match_models,
+    FingerprintResult as _FingerprintResult,
+    DeviceCandidate as _DeviceCandidate,
+)
 from flash.oem_handlers import (
     oem_http_accept_reboot, oem_http_change_password, oem_http_login,
     oem_http_upload, oem_ftp_enable_service, oem_ftp_login, oem_ftp_upload,
@@ -3519,6 +3525,14 @@ def _build_parser() -> argparse.ArgumentParser:
     backup_parser.add_argument("--user", default="root",
         help="SSH username (default: root)")
 
+    fp_parser = subparsers.add_parser("fingerprint",
+        help="Fingerprint a device to identify its model")
+    fp_parser.add_argument("ip", help="IP address of the device to fingerprint")
+    fp_parser.add_argument("--timeout", type=float, default=10.0,
+        help="Timeout for probes in seconds (default: 10)")
+    fp_parser.add_argument("--json", action="store_true", dest="json_output",
+        help="Output results as JSON")
+
     auto_parser = subparsers.add_parser("auto",
         help="Auto-detect connected router and offer to flash it")
     auto_parser.add_argument("--interface", default=None,
@@ -4491,8 +4505,24 @@ def cmd_flash(args: argparse.Namespace) -> int:
                         args.model_id = detected_id
                         log(f"Auto-detected model: {detected_id} (board={board})")
                         break
+
         if not args.model_id:
-            parser.error("--model-id is required when device is not reachable via SSH.")
+            for probe_ip in ["192.168.1.1", "192.168.0.1"]:
+                log(f"Active fingerprinting {probe_ip}...")
+                fp_result = _active_fingerprint(probe_ip, timeout=5.0)
+                if fp_result.candidates:
+                    matches = _match_models(fp_result)
+                    if matches:
+                        best = matches[0]
+                        args.model_id = best.model_id
+                        log(f"Auto-detected model: {best.model_id} "
+                            f"(confidence={best.confidence}, "
+                            f"evidence={', '.join(best.evidence)})")
+                        break
+
+        if not args.model_id:
+            parser.error("--model-id is required when device is not reachable via SSH "
+                         "and active fingerprinting did not identify the model.")
 
     try:
         profile = _build_profile_from_model(args.model_id,
@@ -5747,6 +5777,73 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_fingerprint(args: argparse.Namespace) -> int:
+    """Fingerprint a device to identify its model."""
+    ip = args.ip
+    log(f"Fingerprinting device at {ip}...")
+
+    result = _active_fingerprint(ip, timeout=args.timeout)
+
+    if not result.candidates:
+        print(f"No device detected at {ip}.", file=sys.stderr)
+        return 1
+
+    matched = _match_models(result)
+
+    if getattr(args, 'json_output', False):
+        import json as _json
+        output = {
+            "ip": ip,
+            "candidates": [
+                {
+                    "vendor": c.vendor,
+                    "model_id": c.model_id,
+                    "confidence": c.confidence,
+                    "evidence": c.evidence,
+                    "mac_oui": c.mac_oui,
+                    "hostname": c.hostname,
+                    "ssh_banner": c.ssh_banner,
+                    "open_ports": c.open_ports,
+                }
+                for c in result.candidates
+            ],
+            "model_matches": [
+                {
+                    "model_id": c.model_id,
+                    "vendor": c.vendor,
+                    "confidence": c.confidence,
+                    "evidence": c.evidence,
+                }
+                for c in matched
+            ],
+        }
+        print(_json.dumps(output, indent=2))
+    else:
+        print()
+        for c in result.candidates:
+            print(f"  Vendor: {c.vendor}")
+            if c.model_id:
+                print(f"  Model:  {c.model_id}")
+            print(f"  Confidence: {c.confidence}")
+            print(f"  Evidence: {', '.join(c.evidence)}")
+            if c.ssh_banner:
+                print(f"  SSH Banner: {c.ssh_banner}")
+            if c.open_ports:
+                print(f"  Open Ports: {c.open_ports}")
+
+        if matched:
+            print()
+            print("Model matches:")
+            for m in matched:
+                print(f"  {m.model_id} ({m.vendor}) — {m.confidence} confidence")
+                print(f"    Evidence: {', '.join(m.evidence)}")
+        else:
+            print()
+            print("No model matches found in models/ directory.")
+
+    return 0
+
+
 def cmd_auto(args: argparse.Namespace) -> int:
     from auto_detect import auto_detect, interactive_menu
 
@@ -5781,7 +5878,7 @@ def cmd_auto(args: argparse.Namespace) -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
-        "auto", "setup-nor-recovery", "configure", "profile", "-h", "--help",
+        "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "-h", "--help",
     ):
         sys.argv.insert(1, "flash")
 
@@ -5807,6 +5904,8 @@ def main() -> int:
         return cmd_backup(args)
     elif args.command == "auto":
         return cmd_auto(args)
+    elif args.command == "fingerprint":
+        return cmd_fingerprint(args)
     elif args.command == "setup-nor-recovery":
         return cmd_setup_nor_recovery(args)
     else:
