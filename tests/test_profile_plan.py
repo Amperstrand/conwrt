@@ -59,3 +59,41 @@ def test_print_plan_does_not_raise(capsys) -> None:
     print_plan(plan)
     out = capsys.readouterr().out
     assert "Profile plan" in out
+
+
+def test_usb_use_case_skipped_on_non_usb_device() -> None:
+    """USB tethering use cases must be filtered out for devices without USB."""
+    cfg = ConwrtConfig(
+        use_cases=[UseCaseConfig(name="tether-android-adb")],
+    )
+    plan = build_plan(cfg, mode="asu_build", model_capabilities=["ethernet", "wifi"])
+    usb_pkgs = {"kmod-usb2", "kmod-usb-net", "kmod-usb-net-rndis", "kmod-usb-net-cdc-ether", "usbutils", "adb"}
+    assert usb_pkgs.isdisjoint(set(plan.all_packages())), (
+        f"USB packages should not be included for non-USB device, found: {usb_pkgs & set(plan.all_packages())}"
+    )
+    script = plan.asu_defaults_script()
+    assert "usb-tether" not in script, "USB tether uci-defaults should not appear for non-USB device"
+
+
+def test_usb_use_case_included_on_usb_device() -> None:
+    """USB tethering use cases must be included for devices with USB."""
+    cfg = ConwrtConfig(
+        use_cases=[UseCaseConfig(name="tether-android-adb")],
+    )
+    plan = build_plan(cfg, mode="asu_build", model_capabilities=["ethernet", "wifi", "usb"])
+    all_pkgs = set(plan.all_packages())
+    assert "kmod-usb2" in all_pkgs, "USB packages should be included for USB-capable device"
+    script = plan.asu_defaults_script()
+    assert "usb-tether" in script, "USB tether uci-defaults should appear for USB-capable device"
+
+
+def test_no_capabilities_disables_filtering() -> None:
+    """When model_capabilities is None or empty, all use cases pass through."""
+    cfg = ConwrtConfig(
+        use_cases=[UseCaseConfig(name="tether-android-adb")],
+    )
+    plan_no_caps = build_plan(cfg, mode="asu_build", model_capabilities=None)
+    plan_empty_caps = build_plan(cfg, mode="asu_build", model_capabilities=[])
+    # No capabilities = no filtering, USB use cases pass through
+    assert "kmod-usb2" in plan_no_caps.all_packages()
+    assert "kmod-usb2" in plan_empty_caps.all_packages()
