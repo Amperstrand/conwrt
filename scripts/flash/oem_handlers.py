@@ -24,13 +24,17 @@ def zyxel_encode_password(password: str) -> str:
 
     NOT RSA — custom encoding: password chars at every 5th position (backwards),
     length digits at positions 123 and 289, rest random alphanumeric.
-    Total output length: 322 - len(password) characters.
+
+    JS loop bound (321-len) is dynamic — len decrements inside the loop body,
+    so the upper bound grows as characters are extracted. Total output is always
+    321 characters regardless of password length.
     """
     text = ""
     possible = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    length = len(password)
-    remaining = length
-    for i in range(1, 322 - length + 1):
+    remaining = len(password)  # mutable tracker (like JS 'len')
+    length = len(password)     # constant for length digits (like JS 'lenn')
+    i = 1
+    while i <= (321 - remaining):
         if i % 5 == 0 and remaining > 0:
             remaining -= 1
             text += password[remaining]
@@ -40,6 +44,7 @@ def zyxel_encode_password(password: str) -> str:
             text += str(length % 10)
         else:
             text += random.choice(possible)
+        i += 1
     return text
 
 
