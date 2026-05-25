@@ -944,11 +944,65 @@ Before attempting uploads, we successfully changed Config Boot Image from Firmwa
 - **IP**: 192.168.1.225
 - **Services**: HTTP (80), FTP (21), Telnet (23) — all stock ZyNOS
 
+### Hypothesis Resolution (2026-05-25)
+
+Research across OpenWrt forums (thread #155683), GitHub PR #20439, and Zyxel community confirmed:
+
+- **FTP and web upload are dead ends for OpenWrt on GS1920** — the ZyNOS firmware handler performs additional validation beyond SIG+checksum (model ID whitelist, version string format, possibly decompressed size bounds). This validation rejects OpenWrt images even when properly ZyNOS-wrapped.
+- **BootBase accepts the image, but the web/FTP handler does not** — quote from forum: "The image is considered valid by BootBase, but not by the web interface."
+- **No successful FTP or web uploads of OpenWrt to any GS1920 device have been reported** — unlike GS1900 (which uses U-Boot and allows web/TFTP flashing), GS1920 uses ZyNOS BootBase which only accepts XMODEM via serial for initial install.
+- **The only working method is serial console + XMODEM** (see XMODEM procedure below).
+
+### Current Switch State (2026-05-25)
+
+- Switch responds to ARP at 192.168.1.1 (MAC `4c:9e:ff:77:5c:91`) but has zero TCP services (no HTTP, FTP, or telnet)
+- Likely in a state where services were disabled or the switch needs a factory reset
+- **Factory reset procedure**: hold physical reset button (GPIO1 pin 32) during power-on for ~10 seconds
+- After factory reset: IP should return to 192.168.1.1, HTTP on port 80, credentials admin/1234
+
 ### Next Steps
 
-1. **Verify FTP handler works with stock firmware** — download stock V4.50 from Zyxel, upload via FTP. If this works, confirms our image is being rejected (H1 or H2).
-2. **Research ZyNOS FTP handler source** — check Zyxel GPL code for firmware validation logic.
-3. **Try TFTP upload path** — check if the GS1920-24 firmware page supports TFTP (`upmethod` form field). TFTP might use different validation.
-4. **Check Playwright for TFTP option** — inspect the firmware upload form HTML for hidden fields or alternative upload methods.
-5. **Research other users' experiences** — search OpenWrt forum and GitHub for GS1920 custom firmware flashing experiences.
-6. **Consider building a larger image** — if H1 is correct, padding the initramfs to inflate RasCode osize above the minimum threshold might work.
+1. **Factory reset the switch** — hold reset button during power-on to restore stock defaults
+2. **Obtain a USB-RS232 serial adapter** — required for XMODEM upload (pinout: Tx=pin 2, Rx=pin 3, GND=pin 5, ±5.6V levels)
+3. **Follow XMODEM procedure** — see procedure below
+4. ~~FTP upload~~ — confirmed dead end
+5. ~~Web upload~~ — confirmed dead end
+6. ~~TFTP upload~~ — no evidence this path exists on GS1920
+
+---
+
+## XMODEM Installation Procedure (Serial Required)
+
+**Source**: OpenWrt forum thread #155683, GitHub PR #20439 (merged Jan 2026)
+
+### Prerequisites
+- USB-RS232 serial adapter
+- Serial connection: 9600 baud initially, then 115200 (8N1)
+- Pinout: Tx=pin 2, Rx=pin 3, GND=pin 5 (±5.6V RS-232 levels)
+- BootBase unlock code derived from MAC address
+
+### Procedure
+
+```
+1. Set switch to boot from first image (critical — prevents bricking)
+2. Connect serial at 9600 baud
+3. Interrupt boot to enter BootBase debug/recovery mode
+4. Unlock bootloader: ATEN1,<unlock_code>
+5. Change baud rate: ATBA5 (reconnect terminal at 115200)
+6. Upload initramfs via XMODEM: ATUP80100000,<file_length>
+7. Boot initramfs: ATGO80100000
+8. SCP loader.bin and sysupgrade.bin to /tmp (scp -O for legacy protocol)
+9. Flash permanently:
+   mtd write /tmp/loader.bin loader
+   mtd write /tmp/sysupgrade.bin firmware
+10. Reboot
+```
+
+### Recovery
+
+If bricked: spam "u" key during RAM test for XMODEM upload at 115200 baud.
+
+### Notes
+- The GS1920-24 (non-PoE) is not explicitly supported upstream — only GS1920-24HPv1 has official OpenWrt support
+- Same RTL8392M SoC, DTS may need adjustment for missing PoE/fan/SFP hardware
+- BootBase dual-slot fallback still works — if initramfs fails, falls back to stock slot
