@@ -363,13 +363,13 @@ class UBootImage(object):
         """Attempt to figure out the filename of a given image part"""
         filename = None
 
-        fileobj = io.StringIO(self.parts[partnum])
+        fileobj = io.BytesIO(self.parts[partnum])
         gzobj = gzip.GzipFile(fileobj=fileobj, mode="rb")
         gzf = gzobj.fileobj
 
         gzf.seek(0)
         magic = gzf.read(2)
-        if magic != '\037\213':
+        if magic != b'\037\213':
             err("Part %d is not gzipped" % partnum, False)
             return filename
 
@@ -381,17 +381,17 @@ class UBootImage(object):
 
         if flag & gzip.FEXTRA:
             # Read & discard the extra field, if present
-            gzf.read(struct.unpack("<H", gzf.read(2)))
+            gzf.read(struct.unpack("<H", gzf.read(2))[0])
 
         # Read a null-terminated string containing the filename
         fname = []
         while True:
             fnamebytes = gzf.read(1)
-            if not fnamebytes or fnamebytes == '\000':
+            if not fnamebytes or fnamebytes == b'\000':
                 break
             fname.append(fnamebytes)
 
-        filename = ''.join(fname)
+        filename = b''.join(fname).decode('latin-1')
         return filename
 
     def split_fw(self, filepath):
