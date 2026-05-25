@@ -1,0 +1,35 @@
+{
+  "id": "ubnt-edgerouter-x",
+  "vendor": "Ubiquiti",
+  "description": "EdgeRouter X (ER-X) — MediaTek MT7621A, 5x GbE, no WiFi",
+  "openwrt": {
+    "target": "ramips/mt7621",
+    "device": "ubnt,edgerouter-x",
+    "profile": "ubnt_edgerouter-x",
+    "board_name": "ubnt,edgerouter-x",
+    "version": "24.10.2",
+    "default_ip": "192.168.1.1"
+  },
+  "hardware": {
+    "soc": "MediaTek MT7621A (MIPS)",
+    "flash": "256MB SPI NAND",
+    "ram": "256MB DDR3",
+    "ethernet_ports": "5x GbE (MT7530 switch, port-based VLAN)",
+    "wifi": "none",
+    "notes": "5-port MT7530 switch. OpenWrt default config: physical eth0=wan, eth1-eth4=lan. Port mapping: switch port 0=WAN, ports 1-4=LAN under OpenWrt."
+  },
+  "mac_oui": [],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 255
+    }
+  },
+  "signatures": {},
+  "capabilities": [
+    "ethernet",
+    "serial",
+    "ssh"
+  ]
+}
