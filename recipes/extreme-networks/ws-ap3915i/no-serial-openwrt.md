@@ -420,7 +420,7 @@ orchestrated the entire flash process. Key post-flash steps:
    - Removed `ubi.mtd=0` from bootargs (was causing kernel UBI attach failure)
 6. **Verified flash boot** — AP boots OpenWrt from SPI-NOR with overlayfs working
 7. **Set root password** — `Conwrt2026!` (persistent via overlayfs)
-8. **Changed AP IP** to `192.168.13.253/24` (same subnet as switch, eliminates IP conflict)
+8. **Changed AP IP** to `(AP management IP)/24` (same subnet as switch, eliminates IP conflict)
 9. **Removed switch secondary IP** `192.168.1.2/24` (no longer needed)
 10. **Verified reboot persistence** — AP comes back from flash independently after power cycle
 
@@ -432,9 +432,9 @@ orchestrated the entire flash process. Key post-flash steps:
 | **SPI-NOR flash** | OpenWrt 24.10.2 at offset 0x280000 (FIT image, 8.8MB) |
 | **Overlay** | jffs2 on rootfs_data (20.8MB, 684KB used) — persisted through reboot |
 | **CFG1 + CFG2** | Corrected with `boot_openwrt` command |
-| **Network** | AP at `192.168.13.253/24` on `br-lan`, switch at `192.168.13.2/24` |
+| **Network** | AP at `(AP management IP)/24` on `br-lan`, switch at `(switch IP)/24` |
 | **SSH from Ubuntu** | `sshpass -p 'Conwrt2026!' ssh ap3915i` (SSH config alias configured) |
-| **SSH from switch** | `sshpass -p 'Conwrt2026!' ssh -o HostKeyAlgorithms=+ssh-rsa root@192.168.13.253` |
+| **SSH from switch** | `sshpass -p 'Conwrt2026!' ssh -o HostKeyAlgorithms=+ssh-rsa root@(AP management IP)` |
 | **Root password** | Set (`Conwrt2026!`), hash in overlay, survived reboot |
 | **PoE** | Switch port lan5 delivering 3.6W to AP |
 

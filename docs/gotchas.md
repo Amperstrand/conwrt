@@ -305,7 +305,7 @@ Disabling and re-enabling PoE via software sometimes fails (port stays "unknown"
 
 ### Secondary IP for cross-subnet access
 
-When the target device is on a different subnet (e.g., AP at 192.168.1.1, switch at 192.168.13.2), add a secondary IP to the switch:
+When the target device is on a different subnet (e.g., AP at 192.168.1.1, switch at (switch management IP)), add a secondary IP to the switch:
 
 ```bash
 ip addr add 192.168.1.2/24 dev switch.1
@@ -333,7 +333,7 @@ Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by defau
 
 **When this does NOT happen:** Direct macOS → device flashing (USB ethernet or direct connect). The Mac is the only device on the link — there's no other DHCP client to hijack.
 
-**Incident (2026-05-23):** Flashed an AP3915i via GS1900-8HP switch. After boot, the AP's DHCP server handed the Mac a lease with itself as gateway, breaking internet access. The Mac's real gateway (192.168.13.1) was replaced by the AP (192.168.1.1).
+**Incident (2026-05-23):** Flashed an AP3915i via GS1900-8HP switch. After boot, the AP's DHCP server handed the Mac a lease with itself as gateway, breaking internet access. The Mac's real gateway was replaced by the AP (192.168.1.1).
 
 **Prevention approaches (in order of effectiveness):**
 

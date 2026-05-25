@@ -14,10 +14,10 @@ lanN = phys_port_name p(7+N)
 | Interface | Phys Port | Connected To | IP | Status |
 |-----------|-----------|--------------|----|--------|
 | lan1 | p8 | Server enp5s0 | 192.168.1.2 | Uplink |
-| lan2 | p9 | AP3915i #2 | 192.168.13.254 | OpenWrt 24.10.2 (flashed) |
+| lan2 | p9 | AP3915i #2 | (AP management IP) | OpenWrt 24.10.2 (flashed) |
 | lan3 | p10 | (empty) | | |
 | lan4 | p11 | (empty) | | |
-| lan5 | p12 | AP3915i #1 | 192.168.13.253 | OpenWrt 24.10.2 |
+| lan5 | p12 | AP3915i #1 | (AP management IP) | OpenWrt 24.10.2 |
 | lan6 | p13 | (empty) | | |
 | lan7 | p14 | (empty) | | |
 | lan8 | p15 | Stock V2.90 GS1900-8HP | | Web + SSH access unlocked (see GS1900 notes) |
@@ -28,8 +28,8 @@ Verification command: `cat /sys/class/net/lanN/phys_port_name`
 
 ## AP3915i #1 -- lan5 (Already OpenWrt)
 
-- MAC: B4:2D:56:25:47:A2
-- IP: 192.168.13.253 (or 192.168.1.1 if on flash subnet)
+- MAC: (AP#2 MAC)
+- IP: (AP management IP) (or 192.168.1.1 if on flash subnet)
 - Status: OpenWrt 24.10.2, SSH key auth (rejects our key)
 - PoE: ~4.9W on lan5
 - Flashed via switch-initiated workflow (see tested_hardware in model JSON)
@@ -41,8 +41,8 @@ This was the second unit to be flashed successfully. Full flash log in
 
 ## AP3915i #2 -- lan2 (OpenWrt 24.10.2, FLASH COMPLETE)
 
-- MAC: B4:2D:56:25:86:BD
-- IP: 192.168.13.254 (management subnet)
+- MAC: (AP#1 MAC)
+- IP: (AP management IP) (management subnet)
 - Status: OpenWrt 24.10.2 (r28739-d9340319c6), running from flash
 - PoE: ~5.4W on lan2
 - SSH: password "conwrt", server ed25519 key installed
@@ -56,11 +56,11 @@ This was the second unit to be flashed successfully. Full flash log in
 4. `sysupgrade -n -f` with DHCP-disabled overlay
 5. Installed kmod-mtd-rw → wrote permanent CFG1 with `bootcmd=run boot_openwrt; run boot_net`
 6. Verified flash boot (no TFTP request on reboot)
-7. Post-flash: SSH key → password → IP change to 192.168.13.254
+7. Post-flash: SSH key → password → IP change to (AP management IP)
 
 ### Stock firmware notes (pre-flash)
 
-- Stock IP was 192.168.13.161 (DHCP from switch)
+- Stock IP was (AP stock IP) (DHCP from switch)
 - Stock credentials: admin/new2day
 - `rdwr_boot_cfg` EXISTS but BROKEN — `read_all` works but writes fail due to
   flag byte 0x05 (expects 0x01). Used flashcp fallback instead.
@@ -70,7 +70,7 @@ This was the second unit to be flashed successfully. Full flash log in
 
 ## AP3915i #3 -- Stock switch port 8 (Boot failure after flash)
 
-- MAC: B4:2D:56:25:4D:7E
+- MAC: (AP#3 MAC)
 - Connected to stock V2.90 GS1900-8HP on the stock switch's port 8
 - Flashed with OpenWrt 24.10.2 via switch-initiated TFTP + sysupgrade
 - sysupgrade completed (mtd7 written, SPI offset 0x280000, 12MB) but AP#3 is NOT
@@ -173,7 +173,7 @@ The switch's dnsmasq will serve the initramfs. From initramfs, re-run sysupgrade
 
 ## Stock Switch -- 192.168.1.1 (UNLOCKED)
 
-- MAC: 4C:9E:FF:F5:AC:D2
+- MAC: (stock switch MAC)
 - Zyxel GS1900-8HP A1 running V2.90 firmware
 - Web UI FULLY UNLOCKED. Mandatory password change resolved.
 - Web credentials: admin/Conwrt2026!
@@ -198,25 +198,25 @@ AP3915i #3 is connected on port 8 with PoE active.
 ```
 Server (Ubuntu)
   enp5s0: 192.168.1.2 (wired to OpenWrt switch lan1)
-  wlp4s0: 192.168.13.218 (WiFi management link)
+  wlp4s0: (observer IP) (WiFi management link)
   |
-  +-- OpenWrt GS1900-8HP (192.168.1.2 / 192.168.13.2)
+  +-- OpenWrt GS1900-8HP (192.168.1.2 / (switch IP))
        |
        +-- lan1 (p8) -- Server enp5s0
-       +-- lan2 (p9) -- AP3915i #2 (192.168.13.254, OpenWrt 24.10.2)
-       +-- lan5 (p12) -- AP3915i #1 (192.168.13.253, OpenWrt 24.10.2)
+       +-- lan2 (p9) -- AP3915i #2 ((AP management IP), OpenWrt 24.10.2)
+       +-- lan5 (p12) -- AP3915i #1 ((AP management IP), OpenWrt 24.10.2)
        +-- lan8 (p15) -- Stock switch (192.168.1.1, V2.90, unlocked)
                             |
                             +-- port 8 -- AP3915i #3 (boot failure, PoE active)
 ```
 
 The OpenWrt switch's br-lan bridges all ports on the same L2 segment. The server
-has two paths: wired (192.168.1.2) and WiFi (192.168.13.218). The WiFi path is
-on the 192.168.13.0/24 subnet alongside the switch and all switch-connected devices.
+has two paths: wired (192.168.1.2) and WiFi ((observer IP)). The WiFi path is
+on the (switch management subnet) subnet alongside the switch and all switch-connected devices.
 
 AP3915i #3 sits behind the stock switch on port 8 with PoE active, but is not
 booting after a failed sysupgrade. If it were functional, its IP would be
-192.168.13.252 (matching the lan8 management subnet assignment). The stock switch
+(AP management IP) (matching the lan8 management subnet assignment). The stock switch
 itself is reachable at 192.168.1.1 with full web UI and SSH access.
 
 ---
@@ -345,7 +345,7 @@ needs to address for a fully automated end-to-end flash:
 
 4. **Multi-subnet TFTP**: The TFTP server must serve on the correct subnet.
    Currently the OpenWrt switch has br-lan on 192.168.1.0/24 (wired) and a WiFi
-   interface on 192.168.13.0/24. The TFTP server must listen on the subnet the
+   interface on (switch management subnet). The TFTP server must listen on the subnet the
    AP will be on after U-Boot sets its ipaddr.
 
 5. **rdwr_boot_cfg integration**: When `rdwr_boot_cfg` is available (as it is on

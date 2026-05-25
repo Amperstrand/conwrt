@@ -4,7 +4,7 @@
 our flash plan before execution. We bricked the first AP3915i and want to avoid repeating
 that mistake. Please be critical — look for gaps, wrong assumptions, and hidden risks.
 
-**Device**: Extreme Networks WS-AP3915i-ROW (second unit, S/N 1918Y-1083600000)
+**Device**: Extreme Networks WS-AP3915i-ROW (second unit, S/N AP3915i-ROW-S/N)
 **Goal**: Flash OpenWrt 24.10.2 without serial cable, via network only
 
 **v2 Changes**: Incorporates feedback from external LLM review (see Appendix A).
@@ -43,7 +43,7 @@ that requires serial cable to fix.
 ### Confirmed Identity
 ```
 MODEL=AP3915i-ROW (from config block)
-SERIAL#=1918Y-1083600000
+SERIAL#=AP3915i-ROW-S/N
 DTS compatible: qcom,ipq40xx-apdk04.1
 SoC: Qualcomm IPQ4019 (4x Cortex-A7, same as IPQ4029 — different feature enables only)
 RAM: 512MB

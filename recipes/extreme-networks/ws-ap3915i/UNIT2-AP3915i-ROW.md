@@ -1,7 +1,7 @@
 # AP3915i-ROW — Second Unit Hardware Notes
 
 Device: WS-AP3915i-ROW (Rest of World variant)
-Serial: 1918Y-1083600000
+Serial: AP3915i-ROW-S/N
 MAC: DC:B8:08:XX:XX:XX
 IP: 192.168.1.1 (OpenWrt, DHCP disabled via overlay)
 Date: 2026-05-22
@@ -11,7 +11,7 @@ Status: **OpenWrt 24.10.2 running from SPI-NOR flash** (flashed 2026-05-22, DHCP
 
 ```
 MODEL=AP3915i-ROW
-SERIAL#=1918Y-1083600000
+SERIAL#=AP3915i-ROW-S/N
 DTS compatible: qcom,ipq40xx-apdk04.1, qcom,ipq40xx
 SoC: Qualcomm IPQ4019 (4x Cortex-A7 rev 5)
 RAM: 495800 kB (~512MB DDR3)
@@ -66,7 +66,7 @@ Key variables extracted from CFG1:
 | Variable | Value | Notes |
 |----------|-------|-------|
 | MODEL | AP3915i-ROW | Confirms model |
-| SERIAL# | 1918Y-1083600000 | |
+| SERIAL# | AP3915i-ROW-S/N | |
 | AP_MODE | 0 | Normal mode |
 | AP_PERSONALITY | identifi | Controller-managed |
 | BOOT_BOOTROM | "U-Boot 2012.07.19-r00020.1 (Jul 17 2017)" | |
@@ -281,7 +281,7 @@ Leave CFG2 untouched as known-good fallback.
 
 ```
 Device: Extreme Networks WS-AP3915i (AP3915i-ROW)
-Serial: 1918Y-1083600000
+Serial: AP3915i-ROW-S/N
 MAC: DC:B8:08:XX:XX:XX
 IP: 192.168.1.1 (br-lan, static default)
 SSH: root@192.168.1.1 (no password, key auth)

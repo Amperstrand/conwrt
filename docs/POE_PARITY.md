@@ -352,7 +352,7 @@ The enable/disable path retains the `!port->enable` check (correct behavior).
 ### Priority 1: Stock Firmware UART Validation
 
 Validate our RE analysis against live stock behavior by capturing MCU UART traffic
-from the stock ZyXEL device (192.168.13.3).
+from the stock ZyXEL device ((stock switch IP)).
 
 **Approach**: Get shell access on the stock device. Options:
 1. **Web UI password recovery** — factory reset to default `1234`, then use V2.90 encode() login

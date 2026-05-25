@@ -39,12 +39,12 @@ OpenWrt renamed v1/v2 to B1/A1 in September 2025 (commit d205878) to match ZyXEL
 LLDP System Desc:  GS1900-8HP
 LLDP ZyXEL Model:  GS1900-8HP
 LLDP ZyXEL FW:     V2.00(AAHI.2) (pre-update; will report V2.90 after next LLDP cycle)
-LLDP ZyXEL Serial: E8-37-7A-9E-F6-86 (= MAC address, NOT the real serial)
+LLDP ZyXEL Serial: (OpenWrt GS1900-8HP MAC) (= MAC address, NOT the real serial)
 ```
 
 The LLDP-reported "serial" is actually the MAC address, not the real serial number (XXXXX-XXXXXXXXX from dashboard). The real serial is only available from the dashboard page or device label.
 
-### Second device (S/N S150H13001490, Rev A1)
+### Second device (S/N XXXXX-XXXXXXXXX, Rev A1)
 
 **Verified on hardware, 2026-05-21:**
 
@@ -52,7 +52,7 @@ The LLDP-reported "serial" is actually the MAC address, not the real serial numb
 |-------|-------|
 | Model Name | GS1900-8HP |
 | **Hardware Revision** | **A1** (confirmed by v2.90 firmware dashboard) |
-| Serial Number | S150H13001490 (S15 → NOT S21+, firmware update not mandatory) |
+| Serial Number | XXXXX-XXXXXXXXX (S15 → NOT S21+, firmware update not mandatory) |
 | MAC Address | 4C:9E:FF:XX:XX:XX |
 | MAC OUI | **4C:9E:FF** (ZyXEL — NEW OUI, not previously in model JSONs) |
 | Boot Module | 1.000 |
@@ -182,7 +182,7 @@ def encode_password(password):
 
 **CRITICAL BUG FIX (2026-05-24)**: The original Python implementation used `range(1, 322 - length + 1)` which generates `322 - length` characters. This is WRONG. The JavaScript loop bound `i <= (321-len)` is re-evaluated each iteration because `len` decrements inside the body (`--len`). As `len` decreases from N to 0, the upper bound grows from `(321-N)` to 321. **Total output is always 321 characters regardless of password length.** The old code produced 312 chars for a 10-char password (9 chars short), causing login_chk to return FAIL.
 
-Verified on hardware (S/N S150H13001490, V2.90 firmware), 2026-05-21. Bug discovered and fixed 2026-05-24.
+Verified on hardware (S/N XXXXX-XXXXXXXXX, V2.90 firmware), 2026-05-21. Bug discovered and fixed 2026-05-24.
 
 #### V2.80+ Mandatory Password Change
 
@@ -200,7 +200,7 @@ Password change form fields:
 
 POST to `dispatcher.cgi`. Success redirects to `cmd=4`. New password cannot be `1234` (default).
 
-Verified on hardware (S/N S150H13001490), 2026-05-21.
+Verified on hardware (S/N XXXXX-XXXXXXXXX), 2026-05-21.
 
 ### Complete cmd Map (V2.00 firmware)
 
@@ -1030,7 +1030,7 @@ PoE can be controlled through the stock switch web UI API without SSH.
 
 ### Test 2: TFTP Serving — PASSED
 
-**Platform**: OpenWrt GS1900-8HP at 192.168.13.2
+**Platform**: OpenWrt GS1900-8HP at (switch management IP)
 **Method**: dnsmasq TFTP server (already installed in OpenWrt 25.12.1)
 
 **Setup**:
@@ -1047,15 +1047,15 @@ PoE can be controlled through the stock switch web UI API without SSH.
 **Results**:
 | Test | Result | Details |
 |------|--------|---------|
-| Text file (39 bytes) | ✅ Pass | `curl tftp://192.168.13.2/test.txt` returned correct content |
+| Text file (39 bytes) | ✅ Pass | `curl tftp://(switch management IP)/test.txt` returned correct content |
 | Binary file (1MB) | ✅ Pass | Downloaded 1,048,576 bytes, exact size match |
 
 **Conclusion**: No need for external tftp-now binary — dnsmasq's built-in TFTP works perfectly on OpenWrt for the switch-initiated flash workflow.
 
 ### Test 3: PoE Cycle — PASSED
 
-**Platform**: OpenWrt GS1900-8HP at 192.168.13.2
-**Target**: AP3915i (B4:2D:56:25:47:A2) at 192.168.13.253
+**Platform**: OpenWrt GS1900-8HP at (switch management IP)
+**Target**: AP3915i ((AP3915i MAC)) at (AP management IP)
 **Port**: lan5 (hardware L2 port 12, 4.9W consumption)
 
 **PoE management commands** (verified working):
@@ -1087,7 +1087,7 @@ ubus call poe manage '{"port":"lan5","action":"enable"}'
 | Hardware Port | DSA Interface | Usage |
 |---------------|---------------|-------|
 | 8 | uplink (WiFi router) | Most external MACs |
-| 12 | lan5 | AP3915i (B4:2D:56:25:47:A2) |
+| 12 | lan5 | AP3915i ((AP3915i MAC)) |
 | 15 | lan7 | Stock switch (4C:9E:FF) |
 | 28 | CPU | Switch's own MAC (static) |
 

@@ -4,13 +4,14 @@
 _CONWRT_STOCK_SSH_LOADED=1
 
 _CONWRT_STOCK_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group1-sha1"
+_CONWRT_STOCK_PASSWORD="${_CONWRT_STOCK_PASSWORD:-new2day}"
 
 conwrt_stock_wait_ssh() {
     _ip="$1"
     _timeout="${2:-120}"
     _elapsed=0
     while [ "$_elapsed" -lt "$_timeout" ]; do
-        if sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" "true" 2>/dev/null; then
+        if sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" "true" 2>/dev/null; then
             echo "stock ssh available on $_ip after ${_elapsed}s"
             return 0
         fi
@@ -24,7 +25,7 @@ conwrt_stock_wait_ssh() {
 conwrt_stock_disable_timeout() {
     _ip="$1"
 
-    sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
         "cset sshtimeout 0 && capply && csave" 2>/dev/null || {
         echo "failed to disable ssh timeout on $_ip" >&2
         return 1
@@ -37,7 +38,7 @@ conwrt_stock_read_uboot_env() {
     _ip="$1"
     _output_file="$2"
 
-    sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
         "rdwr_boot_cfg read_all" > "$_output_file" 2>/dev/null || {
         echo "failed to read uboot env from $_ip" >&2
         return 1
@@ -51,7 +52,7 @@ conwrt_stock_write_uboot_env() {
     _name="$2"
     _value="$3"
 
-    sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
         "rdwr_boot_cfg write_var ${_name}=${_value}" 2>/dev/null || {
         echo "failed to write uboot env ${_name}=${_value} on $_ip" >&2
         return 1
@@ -93,7 +94,7 @@ conwrt_stock_configure_tftp_boot() {
 conwrt_stock_reboot() {
     _ip="$1"
 
-    sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
         "reboot" 2>/dev/null || true
     echo "reboot initiated on $_ip"
     return 0
@@ -108,11 +109,11 @@ conwrt_stock_flashcp_cfg1() {
     [ -f "$_cfg1_bin" ] || { echo "cfg1 binary not found: $_cfg1_bin" >&2; return 1; }
     _bin_name=$(basename "$_cfg1_bin")
     echo "uploading $_bin_name to stock firmware on $_ip..."
-    sshpass -p new2day scp $_CONWRT_STOCK_SSH_OPTS -O "$_cfg1_bin" "admin@${_ip}:/tmp/$_bin_name" || {
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" scp $_CONWRT_STOCK_SSH_OPTS -O "$_cfg1_bin" "admin@${_ip}:/tmp/$_bin_name" || {
         echo "scp cfg1 binary failed" >&2; return 1;
     }
     echo "writing CFG1 via flashcp on $_ip..."
-    sshpass -p new2day ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
+    sshpass -p "$_CONWRT_STOCK_PASSWORD" ssh $_CONWRT_STOCK_SSH_OPTS "admin@${_ip}" \
         "flashcp /tmp/$_bin_name /dev/mtd1" || {
         echo "flashcp write failed" >&2; return 1;
     }

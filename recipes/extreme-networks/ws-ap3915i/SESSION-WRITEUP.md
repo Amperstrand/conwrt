@@ -238,7 +238,7 @@ switch-initiated TFTP boot and raw MTD writes from OpenWrt initramfs.
 | **U-Boot env (CFG1)** | `boot_openwrt=sf probe; sf read...; bootm` + `bootcmd=run boot_openwrt; run boot_net` |
 | **U-Boot env (CFG2)** | Same corrected values as CFG1 |
 | **ART partition** | Backed up pre-sysupgrade (64KB) |
-| **Network** | Working — AP at 192.168.13.253, SSH from Ubuntu and switch |
+| **Network** | Working — AP at (AP management IP), SSH from Ubuntu and switch |
 | **Overlay** | jffs2 + overlayfs working, persisted through reboot |
 | **Root password** | Set (`Conwrt2026!`), persisted through reboot |
 | **Firmware image** | **Correct** — standard FIT, OpenWrt 24.10.2, boots from flash |
@@ -733,7 +733,7 @@ the openwrt/openwrt repository.
 
 ## AP3915i #3 Flash Attempt (2026-05-24)
 
-Third AP3915i unit (MAC B4:2D:56:25:4D:7E). The goal was to flash it using the switch-initiated TFTP method proven on AP#1. The flash itself worked. The aftermath did not.
+Third AP3915i unit (MAC (AP#3 MAC)). The goal was to flash it using the switch-initiated TFTP method proven on AP#1. The flash itself worked. The aftermath did not.
 
 ### Stock Switch Unlock
 
@@ -811,7 +811,7 @@ If CFG1's CRC is invalid, U-Boot detects bad config blocks and falls back to har
 
 On 2026-05-22 we acquired a second AP3915i unit. Key findings:
 
-- **Model**: AP3915i-ROW (Rest of World variant), Serial 1918Y-1083600000
+- **Model**: AP3915i-ROW (Rest of World variant), Serial AP3915i-ROW-S/N
 - **Hardware differences**: Has both SPI-NOR AND 512MB NAND (UBIFS rootfs). Unit 1 had SPI-NOR only.
 - **SPI-NOR partition layout**: IDENTICAL to Unit 1 (same offsets, same names, PriImg=0x280000)
 - **U-Boot version**: OLDER (2012.07.19-r00020.1 vs Unit 1's 2012.07.22)

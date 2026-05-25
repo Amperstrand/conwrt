@@ -1,7 +1,7 @@
 # Switch-Initiated AP3915i Flash Plan — Milestones
 
 > **STATUS: ALL MILESTONES COMPLETE (2026-05-23).** AP3915i boots OpenWrt 24.10.2 from
-> SPI-NOR flash. Overlay persisted through reboot. IP changed to 192.168.13.253.
+> SPI-NOR flash. Overlay persisted through reboot. IP changed to (AP IP).
 > See post-flash status in `no-serial-openwrt.md`.
 
 **Goal**: Flash OpenWrt onto the AP3915i, orchestrated entirely from the GS1900-8HP
@@ -9,7 +9,7 @@ switch running OpenWrt 25.12.1. No laptop required during the flash.
 
 **Device topology** (post-flash):
 ```
-[Ubuntu 192.168.13.218]---WiFi---[GS1900-8HP 192.168.13.2]---lan5(PoE)---[AP3915i 192.168.13.253]
+[Ubuntu (observer IP)]---WiFi---[GS1900-8HP (switch IP)]---lan5(PoE)---[AP3915i (AP IP)]
          (observer)                   (orchestrator)                        (target)
 [Ubuntu 192.168.1.2]---enp5s0---[ZyXEL stock switch 192.168.1.1]
          (separate network, unrelated to flash)
@@ -66,16 +66,16 @@ ssh root@192.168.1.2 "ubus call poe info"
 sshpass -p 'new2day' ssh -o StrictHostKeyChecking=no \
   -o HostKeyAlgorithms='+ssh-rsa' \
   -o KexAlgorithms='+diffie-hellman-group1-sha1' \
-  admin@192.168.13.2 'hostname; uname -a; cat /proc/mtd' 2>&1
+  admin@(AP IP) 'hostname; uname -a; cat /proc/mtd' 2>&1
 
 # Try alternate password
-sshpass -p 'admin123' ssh ... admin@192.168.13.2 'hostname'
+sshpass -p 'admin123' ssh ... admin@(AP IP) 'hostname'
 
 # Try OpenWrt (maybe already flashed?)
-ssh root@192.168.13.2 'cat /etc/openwrt_release' 2>&1
+ssh root@(AP IP) 'cat /etc/openwrt_release' 2>&1
 
 # Try HTTP (stock ZyXEL? stock Extreme?)
-curl -s --max-time 5 http://192.168.13.2/ | head -20
+curl -s --max-time 5 http://(AP IP)/ | head -20
 
 # ARP scan from Mac to verify device exists
 arp -a | grep 192.168.13
@@ -99,13 +99,13 @@ ssh root@192.168.1.2 "dbclient -h 2>&1"
 ssh root@192.168.1.2 "sshpass -p 'new2day' ssh -o StrictHostKeyChecking=no \
   -o HostKeyAlgorithms='+ssh-rsa' \
   -o KexAlgorithms='+diffie-hellman-group1-sha1' \
-  admin@192.168.13.2 'hostname'" 2>&1
+  admin@(AP IP) 'hostname'" 2>&1
 ```
 
 If this fails, check if it's a connectivity issue vs algorithm issue:
 ```bash
 # Can switch reach AP at all?
-ssh root@192.168.1.2 "ping -c 3 192.168.13.2"
+ssh root@192.168.1.2 "ping -c 3 (AP IP)"
 
 # Is it a routing issue? (192.168.13.x vs 192.168.1.x)
 ssh root@192.168.1.2 "ip addr show br-lan"
@@ -175,7 +175,7 @@ ssh root@192.168.1.2 "sshpass -p 'new2day' ssh \
   -o StrictHostKeyChecking=no \
   -o HostKeyAlgorithms='+ssh-rsa' \
   -o KexAlgorithms='+diffie-hellman-group1-sha1' \
-  admin@192.168.13.2 'hostname; which rdwr_boot_cfg'"
+  admin@(AP IP) 'hostname; which rdwr_boot_cfg'"
 ```
 
 **Safety gate**: SSH from switch to AP stock firmware works. If it doesn't,
@@ -195,7 +195,7 @@ STOP and debug before proceeding.
 
 ```bash
 # Is the AP already reachable from the switch?
-ssh root@192.168.1.2 "ping -c 3 192.168.13.2"
+ssh root@192.168.1.2 "ping -c 3 (AP IP)"
 
 # If yes: the switch already has a route (br-lan is a bridge, all ports see all traffic)
 # If no: we need to add an IP alias
@@ -221,10 +221,10 @@ ssh root@192.168.1.2 "echo 'management access preserved'"
 
 ```bash
 # Mac → Switch → AP
-ssh root@192.168.1.2 "ping -c 3 192.168.13.2"
+ssh root@192.168.1.2 "ping -c 3 (AP IP)"
 
 # From switch, SSH to AP:
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 'hostname'"
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) 'hostname'"
 ```
 
 ### 2d: Test PoE control (power cycle the AP)
@@ -237,21 +237,21 @@ ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 'hostnam
 ssh root@192.168.1.2 "ubus call poe manage '{\"port\":\"lan5\",\"enable\":false}'"
 # Wait 10 seconds
 # Verify AP is off: ping should fail
-ping -c 3 192.168.13.2  # From Mac — should fail
+ping -c 3 (AP IP)  # From Mac — should fail
 
 # Turn PoE back on:
 ssh root@192.168.1.2 "ubus call poe manage '{\"port\":\"lan5\",\"enable\":true}'"
 # Wait 60-90 seconds for AP boot
 # Verify AP comes back: ping should succeed
-ping -c 3 192.168.13.2
+ping -c 3 (AP IP)
 
 # Confirm AP still has stock firmware:
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 'hostname'"
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) 'hostname'"
 ```
 
 **Safety gate**:
 - [ ] Mac can reach switch at 192.168.1.2
-- [ ] Switch can reach AP at 192.168.13.2
+- [ ] Switch can reach AP at (AP IP)
 - [ ] PoE control works (verified power cycle)
 - [ ] SSH from switch to AP stock firmware works
 
@@ -348,7 +348,7 @@ test rdwr_boot_cfg, and create full backups.
 ```bash
 # All commands run FROM the switch TO the AP via SSH
 # Define a helper alias for the SSH command:
-SSH_AP="sshpass -p 'new2day' ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms='+ssh-rsa' -o KexAlgorithms='+diffie-hellman-group1-sha1' admin@192.168.13.2"
+SSH_AP="sshpass -p 'new2day' ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms='+ssh-rsa' -o KexAlgorithms='+diffie-hellman-group1-sha1' admin@(AP IP)"
 
 # Collect device info:
 ssh root@192.168.1.2 "$SSH_AP 'hostname'"
@@ -399,18 +399,18 @@ replaceable from OpenWrt downloads. Only two partitions matter:
 mkdir -p data/extreme-ap3915i/unit3-stock-backups/
 
 # ART — the one irreplaceable partition
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 \
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) \
   'dd if=/dev/mtd4 bs=65536 count=1 2>/dev/null | base64'" \
   | base64 -d > data/extreme-ap3915i/unit3-stock-backups/ART.bin
 ls -la data/extreme-ap3915i/unit3-stock-backups/ART.bin  # Must be 65536 bytes
 
 # CFG1 — for reference, shows current U-Boot env
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 \
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) \
   'dd if=/dev/mtd1 bs=65536 count=1 2>/dev/null | base64'" \
   | base64 -d > data/extreme-ap3915i/unit3-stock-backups/CFG1.bin
 
 # Also save /proc/mtd and device info for documentation:
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 \
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) \
   'cat /proc/mtd; echo ---; hostname; echo ---; uname -a'" \
   > data/extreme-ap3915i/unit3-stock-backups/device-info.txt
 ```
@@ -463,7 +463,7 @@ print(f'\\nWould set:')
 print(f'  boot_openwrt=sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000')
 print(f'  bootcmd=run boot_openwrt; run boot_net')
 print(f'  serverip=192.168.13.1')
-print(f'  ipaddr=192.168.13.2')
+print(f'  ipaddr=(AP IP)')
 print(f'  WATCHDOG_COUNT=0')
 print(f'  WATCHDOG_LIMIT=0')
 "
@@ -478,12 +478,12 @@ ssh root@192.168.1.2 "$SSH_AP 'dd if=/dev/mtd1 bs=65536 count=1 | md5sum'"
 # Test: can we upload a file to AP's /tmp?
 echo "test" > /tmp/test-upload.txt
 scp -O /tmp/test-upload.txt root@192.168.1.2:/tmp/
-ssh root@192.168.1.2 "scp -O /tmp/test-upload.txt $SSH_AP_USER@192.168.13.2:/tmp/test.txt"
+ssh root@192.168.1.2 "scp -O /tmp/test-upload.txt $SSH_AP_USER@(AP IP):/tmp/test.txt"
 # Actually this won't work easily with sshpass. Test the upload path:
 ssh root@192.168.1.2 "sshpass -p 'new2day' scp -o StrictHostKeyChecking=no \
   -o HostKeyAlgorithms='+ssh-rsa' \
   -o KexAlgorithms='+diffie-hellman-group1-sha1' \
-  /tmp/test-upload.txt admin@192.168.13.2:/tmp/test.txt"
+  /tmp/test-upload.txt admin@(AP IP):/tmp/test.txt"
 
 # Verify on AP:
 ssh root@192.168.1.2 "$SSH_AP 'cat /tmp/test.txt'"
@@ -539,7 +539,7 @@ This becomes the flash script.
 
 ```bash
 # Terminal 1 (Mac): capture all traffic
-sudo tcpdump -i en5 -w /tmp/ap3915i-unit3-flash.pcap host 192.168.13.2 or port 69
+sudo tcpdump -i en5 -w /tmp/ap3915i-unit3-flash.pcap host (AP IP) or port 69
 
 # Terminal 2 (Mac): watch ARP/DHCP
 sudo tcpdump -i en5 -n arp or port 67 or port 68
@@ -551,12 +551,12 @@ sudo tcpdump -i en5 -n arp or port 67 or port 68
 ```bash
 # Set the FINAL bootcmd from stock firmware
 # Key insight from Unit 2: set boot_openwrt FIRST, then bootcmd
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 '
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) '
   rdwr_boot_cfg write_var WATCHDOG_COUNT=0 &&
   rdwr_boot_cfg write_var WATCHDOG_LIMIT=0 &&
   rdwr_boot_cfg write_var boot_openwrt=\"sf probe\; sf read 0x88000000 0x280000 0xc00000\; bootm 0x88000000\" &&
   rdwr_boot_cfg write_var serverip=192.168.13.1 &&
-  rdwr_boot_cfg write_var ipaddr=192.168.13.2 &&
+  rdwr_boot_cfg write_var ipaddr=(AP IP) &&
   rdwr_boot_cfg write_var bootcmd=\"run boot_openwrt\; run boot_net\"
 '"
 ```
@@ -567,7 +567,7 @@ ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 '
 
 ```bash
 # Reboot from switch SSH:
-ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 'reboot'"
+ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@(AP IP) 'reboot'"
 
 # Watch tcpdump on Mac for:
 # 1. AP goes offline (ARP stops)
@@ -583,11 +583,11 @@ ssh root@192.168.1.2 "sshpass -p 'new2day' ssh [...] admin@192.168.13.2 'reboot'
 
 ```bash
 # Initramfs default IP is 192.168.1.1 (OpenWrt default)
-# But AP was configured with ipaddr=192.168.13.2 — U-Boot may use this
+# But AP was configured with ipaddr=(AP IP) — U-Boot may use this
 # Try both:
 
 # From switch:
-ssh root@192.168.1.2 "ssh -o StrictHostKeyChecking=no root@192.168.13.2 'uname -a'"
+ssh root@192.168.1.2 "ssh -o StrictHostKeyChecking=no root@(AP IP) 'uname -a'"
 ssh root@192.168.1.2 "ssh -o StrictHostKeyChecking=no root@192.168.1.1 'uname -a'"
 
 # If neither works, check ARP:
