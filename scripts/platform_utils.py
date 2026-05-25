@@ -34,13 +34,22 @@ def configure_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> 
             ["ifconfig", interface],
             capture_output=True, text=True, check=False,
         )
+        if r.returncode != 0:
+            return False
         if ip_addr in r.stdout:
             return True
         cmd = ["ifconfig", interface, "inet", f"{ip_addr}/{subnet}", "alias"]
         if not is_root():
-            cmd = ["sudo"] + cmd
+            cmd = ["sudo", "-n"] + cmd
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
+            if ("permission denied" in result.stderr.lower()
+                    or "sorry" in result.stderr.lower()
+                    or not result.stderr.strip()):
+                import sys
+                print(f"ERROR: sudo required to configure {interface}. "
+                      f"Run 'sudo -v' in your terminal to cache credentials, then retry.",
+                      file=sys.stderr)
             return False
         return True
 
@@ -84,7 +93,7 @@ def remove_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> boo
     if plat == "darwin":
         cmd = ["ifconfig", interface, "inet", f"{ip_addr}/{subnet}", "-alias"]
         if not is_root():
-            cmd = ["sudo"] + cmd
+            cmd = ["sudo", "-n"] + cmd
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return result.returncode == 0
 
