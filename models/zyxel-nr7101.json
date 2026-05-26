@@ -37,7 +37,7 @@
   "stock_default_ip": "192.168.1.1",
   "flash_methods": {
     "zycast": {
-      "description": "Flash via ZyXEL multicast protocol (zycast). Flashes both Kernel and Kernel2 partitions simultaneously. Uses initramfs-recovery image with zytrx header. No password required. UNTESTED on this device.",
+      "description": "Flash via ZyXEL multicast protocol (zycast). Flashes both Kernel and Kernel2 partitions simultaneously. Uses initramfs-recovery image with zytrx header. No password required. TESTED on hardware (2026-05-26, Go binary on MIPS OpenWrt switch, NR7101 Telenor).",
       "multicast_group": "225.0.0.0",
       "multicast_port": 5631,
       "image_type": "ras",
@@ -220,8 +220,10 @@
       "notes": "sysupgrade -n from 24.10.5 to 25.12.4. SCP required -O flag (legacy SCP protocol) because dropbear lacks SFTP server. Boot took ~60s. SSH key auth worked immediately after boot. LuCI available on port 80."
     },
     "zycast": {
-      "tested": false,
-      "notes": "UNTESTED. zycast.py compiled and available (C binary with Python fallback). No zycast multicast observed during normal boot — only active in Z-Loader mode."
+      "tested": true,
+      "date": "2026-05-26",
+      "verified_with": "Go zycast binary on MIPS OpenWrt switch, NR7101 Telenor (MAC 78:c5:7d:13:91:9c), PoE power cycle, initramfs-recovery image",
+      "notes": "Flashed via Go zycast binary cross-compiled for MIPS. Sent on switch.1002 (VLAN 1002, lan2 untagged) to multicast 225.0.0.0:5631. PoE power cycle with 7-10s off delay. Device boots OpenWrt at 192.168.1.1 after ~20s. Header format verified byte-for-byte against C zycast.c reference. Overwrites BOTH Kernel and Kernel2 partitions — stock firmware gone. IMPORTANT: monitor BOTH the old stock IP (192.168.2.1) and the OpenWrt IP (192.168.1.1) after flashing — the IP changes and if 192.168.1.0/24 conflicts with your local network, you must SSH through the switch."
     },
     "modem_inventory": {
       "tested": true,

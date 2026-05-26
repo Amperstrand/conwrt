@@ -178,11 +178,65 @@ mtd9: reserve      (512K)   — Reserved
 **Important**: mtd2 (Factory) is irreplaceable — contains device serial, certificates, and calibration data. Backup before any low-level flashing.
 
 ## Zycast (multicast flash)
-- Zycast writes both Kernel and Kernel2 partitions simultaneously
-- Uses initramfs-recovery image with zytrx header
-- Multicast group: 225.0.0.0:5631
-- Device enters zycast listen mode from Z-Loader (not during normal boot)
-- **UNTESTED** on this device — prepared but not executed
+
+**TESTED and confirmed working** on 2026-05-26. Flashed NR7101 Telenor unit (MAC `78:c5:7d:13:91:9c`) from stock firmware to OpenWrt SNAPSHOT r34578-d51fa9b28e using a Go zycast binary running on a Zyxel GS1900-8HP switch.
+
+### Flash procedure
+
+1. Cross-compile the Go zycast binary for MIPS:
+   ```sh
+   GOOS=linux GOARCH=mips GOMIPS=softfloat go build -ldflags="-s -w" ./cmd/zycast/
+   ```
+2. Upload the binary and the OpenWrt initramfs image to the switch `/tmp/` (RAM, ~58MB available on GS1900-8HP).
+3. Set up the VLAN interface for the target port:
+   ```sh
+   ip link add link switch name switch.1002 type vlan id 1002
+   ip addr add 192.168.2.2/24 dev switch.1002
+   ip addr add 192.168.1.2/24 dev switch.1002
+   ip link set switch.1002 up
+   ```
+   The secondary IP (`192.168.1.2/24`) is critical for post-flash access since OpenWrt changes the device IP.
+4. Run the flash:
+   ```sh
+   ./zycast flash -i switch.1002 --poe-port lan2 --loops 3 --boot-ip 192.168.1.1 /tmp/openwrt-...-initramfs-kernel.bin
+   ```
+   The binary handles everything: PoE power cycle (7-10s off), multicast send (repeated for the requested number of loops), and ping-based boot detection at the specified IP.
+
+### Key observations
+
+- Device boots OpenWrt at **192.168.1.1** (OpenWrt default), NOT the old stock IP. The first ping response comes ~20s after power-on, with SSH available shortly after.
+- The protocol is unidirectional. The bootloader never ACKs receipt. You just send the multicast packets and check later whether the device boots.
+- Each complete transfer loop takes ~75s (7,445 chunks at 10ms interval).
+- zycast overwrites **both** Kernel (mtd3) and Kernel2 (mtd5) partitions. The stock firmware is gone after flashing with no way to recover it from the device itself.
+- Kill zycast as soon as the device boots. The bootloader listens for multicast on every boot, so a still-running zycast will reflash the device again on the next power cycle.
+- mtd2 (Factory) is NOT touched. MAC address, serial number, and calibration data are preserved.
+
+### Warnings
+
+- Monitor BOTH the old stock IP and `192.168.1.1` after flashing. The device will appear dead on the old IP because it changed.
+- If `192.168.1.0/24` conflicts with your local network, you cannot SSH directly to the flashed device. SSH through the switch instead (the switch holds the secondary `192.168.1.2/24` address on the VLAN interface).
+- The PoE daemon on the switch (`realtek-poe`) can crash during long operations. Recovery: `killall -9 realtek-poe; sleep 1; /etc/init.d/poe start`. This also resets all PoE ports.
+
+## Zycast Compilation
+
+Three implementations exist. All produce identical packets on the wire (verified via tcpdump for the Go binary).
+
+### Go (tested, recommended)
+
+Single static binary with no runtime dependencies. Cross-compiles for MIPS, ARM, and x86. Includes PoE control and boot detection built in, so no C compiler or extra tools are needed on the switch. Stripped binary is ~3.1 MB.
+
+Subcommands:
+- `flash` — full workflow: PoE power cycle, multicast send, boot detection
+- `send` — multicast send only (you handle the power cycle manually)
+- `poe` — PoE port control: `status`, `on`, `off`, `cycle`
+
+### C (reference, untested on our hardware)
+
+Part of `openwrt/firmware-utils`, licensed GPL-2.0. This is the protocol source of truth, originally written by Bjorn Mork. Requires a C compiler on the host to build. Smaller binary than Go. Our `scripts/zycast.py` can download and compile it automatically.
+
+### Python (pure fallback, untested on hardware)
+
+Implements the protocol using only the Python stdlib `socket` module. No compilation needed. Runs anywhere Python runs. Available in `scripts/zycast.py` in this repo. Useful as a reference or last resort when Go and C are not options.
 
 ## Boot Timing
 - OpenWrt boot to SSH: ~60s
@@ -265,3 +319,5 @@ Modem firmware is flashed via the Zyxel stock firmware WebGUI (Network Setting �
 8. **scp -O is required** — dropbear lacks SFTP server
 9. **Dual-partition layout** — Kernel + Kernel2, zycast writes both
 10. **Factory partition is irreplaceable** — backup before any low-level flash operations
+11. **Zycast changes the device IP to 192.168.1.1** — set up a secondary IP on the switch VLAN interface before flashing, or you lose access
+12. **Kill zycast after a successful flash** — the bootloader listens on every boot and will reflash if zycast is still running
