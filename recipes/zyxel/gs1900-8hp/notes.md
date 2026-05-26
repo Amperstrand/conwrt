@@ -1094,3 +1094,146 @@ ubus call poe manage '{"port":"lan5","action":"enable"}'
 ### Test 1 (Initramfs Boot) — UNBLOCKED
 
 Previously blocked by the stock switch password issue, now resolved (see above).
+
+## PoE LED Investigation (2026-05-25)
+
+### Physical LED State
+
+| Device | PoE LEDs | Notes |
+|--------|----------|-------|
+| OpenWrt (192.168.13.2) | ALL OFF | Even when 4 ports are delivering power |
+| Stock V2.90 (192.168.13.3) | Working | PoE LED lights up on port 8 as soon as a device is plugged in |
+
+### Stock Firmware RE (board_poe.ko)
+
+Disassembled with Python capstone. Key findings:
+
+**Two LED control paths** in stock firmware:
+1. **LED entity (type=2)**: `board_led_portSwCtrl_set` → RTL8231 LED scan matrix controller (`realtek,rtl8231-leds`)
+2. **GPIO direct (type=1)**: `gpio_data_set` → individual GPIO pins on RTL8231 expander
+
+Path selection is **per-port from `board_conf` module** (dependency of board_poe.ko), not hardcoded.
+
+| Function | Address | Purpose |
+|----------|---------|---------|
+| `board_poe_led_init` | 0x37e0 | Read board_conf → build bitmask → gpio_init |
+| `board_poe_led_set` | 0x3920 | Dispatch to GPIO or LED entity |
+| `board_poe_portLed_set` | 0x39e8 | Per-port LED update on status change |
+| `board_poe_portLedCtrl_set` | 0x3cc4 | Set led_ctrl_type, call 0x3490 |
+| `board_poe_portLedEnable_set` | 0x3d6c | Enable port LED |
+| Function 0x3490 | 0x3490 | ~0x834 bytes: dual-path (entity+GPIO) + MCU "Set Port LED" command |
+
+**Kernel thread**: `_poe_portStatusState_thread` monitors port status and calls `board_poe_portLed_set` on changes.
+
+### MCU LED Commands — Rejected by BCM59111 v17.1
+
+Tested on hardware (commit f748291, ai/led-init branch):
+- GET commands (0x42, 0x44, 0x49): Return `0xFF` for all data — not implemented
+- SET commands (0x41, 0x43, 0x48): MCU acknowledges but does NOT persist — config discarded
+- Post-SET GET still returns `0xFF`
+
+**Conclusion**: BCM59111 firmware v17.1 on GS1900-8HP A1 does NOT implement MCU-driven LED control. The MCU accepts LED commands for protocol compatibility but ignores them.
+
+### DTS Configuration
+
+From OpenWrt source (`rtl8380_zyxel_gs1900_gpio.dtsi`):
+```devicetree
+led-controller {
+    compatible = "realtek,rtl8231-leds";
+    status = "disabled";    // ← LED scan matrix is DISABLED
+    // No child LED nodes defined
+};
+```
+
+RTL8231 GPIO expander: 37 pins (536-572), only 2 used:
+- gpio-539 (pin 3): reset button, input, active-low
+- gpio-549 (pin 13): poe_enable, output-high
+- **35 free pins** — potential PoE LED GPIOs
+
+### RTL8231 LED Scan Matrix Driver
+
+OpenWrt kernel patch `804-leds-Add-support-for-RTL8231-LED-scan-matrix.patch`:
+- Compatible: `realtek,rtl8231-leds`
+- Two modes: `single-color` (88 LEDs) or `bi-color` (72 LEDs)
+- 3 LED banks (LED0, LED1, LED2), 5 LEDs per register, 3 bits per LED
+- Modes: off (0), on (7), blink at 6 rates (40ms-1280ms)
+- Each LED addressed by `reg = <port_index, led_index>`
+
+### Path Forward
+
+Since MCU LED commands don't work, the options are:
+1. **Enable RTL8231 LED scan matrix**: Modify DTS to `status="okay"`, add child nodes, load `leds-rtl8231` driver. Requires knowing which port_index/led_index maps to which physical PoE LED.
+2. **Direct GPIO toggle**: Export free RTL8231 GPIO pins via sysfs, toggle from userspace. Simpler but no hardware-accelerated blink.
+3. **Brute-force pin discovery**: Toggle free GPIO pins one at a time, ask operator to check which PoE LED lights up.
+
+**Next step**: GPIO brute-force test to identify which RTL8231 pins control the PoE LEDs.
+
+## CI Build & Deployment (2026-05-25)
+
+### Package Format: .apk (NOT .ipk)
+
+OpenWrt 25.12.1 switched from opkg/ipk to apk format. The CI produces `.apk` files, not `.ipk`. The device has `apk-tools 3.0.5` and installs packages with `apk add --allow-untrusted /tmp/package.apk`.
+
+### ABI Mismatch: SDK Version Must Match Firmware
+
+**Problem**: A binary built with the snapshot SDK (`openwrt/sdk:realtek-rtl838x-snapshot`) links against `libubox.so.20260523`. The device firmware (OpenWrt 25.12.1) only has `libubox.so.20260213`. Result: hard crash at startup ("Error loading shared library: No such file or directory").
+
+**Fix**: Use the matching SDK Docker image: `openwrt/sdk:realtek-rtl838x-25.12.1`. This produces binaries linked against the same library versions as the device firmware.
+
+**Lesson**: Always match the SDK version to the device firmware version. The snapshot SDK produces incompatible binaries for release firmware.
+
+### CI Workflow (ai-experiments branch)
+
+| Setting | Value |
+|---------|-------|
+| Docker image | `openwrt/sdk:realtek-rtl838x-25.12.1` |
+| Package format | .apk |
+| Artifact name | `realtek-poe-<branch>-<full-sha>` |
+| Triggers | Push to `ai-experiments` or `ai/**`, workflow_dispatch |
+| Node.js | 24 (forced via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`) |
+| Retention | 30 days |
+
+### Deploy to Device
+
+```bash
+# Download artifact from GitHub Actions
+gh run download <run-id> --repo Amperstrand/realtek-poe --dir /tmp/realtek-poe
+
+# Upload and install (pipe + apk)
+cat /tmp/realtek-poe/<artifact-dir>/realtek-poe-*.apk | \
+  ssh root@192.168.13.2 "cat > /tmp/realtek-poe.apk && apk add --allow-untrusted /tmp/realtek-poe.apk"
+
+# Restart daemon
+ssh root@192.168.13.2 "/etc/init.d/poe restart"
+```
+
+### Alternative: Manual Cross-Compile
+
+When CI isn't available or produces wrong SDK version:
+
+```bash
+rsync -avz src/ ubuntu@192.168.13.218:/tmp/realtek-poe-build/src/
+ssh ubuntu@192.168.13.218 'export SDK=/tmp/openwrt-sdk-25.12.1-realtek-rtl838x_gcc-14.3.0_musl.Linux-x86_64
+  export TC=$SDK/staging_dir/toolchain-mips_24kc_gcc-14.3.0_musl
+  export ST=$SDK/staging_dir/target-mips_24kc_musl
+  export STAGING_DIR=$TC
+  cd /tmp/realtek-poe-build
+  $TC/bin/mips-openwrt-linux-musl-gcc -Os -ggdb -Wall -Wextra -Wno-unused-parameter --std=gnu99 \
+    -I$TC/usr/include -I$ST/usr/include -L$ST/usr/lib -Wl,-rpath-link=$ST/usr/lib \
+    -lubox -lubus -luci -o realtek-poe src/main.c src/dialect_bcm.c src/dialect_rtl.c'
+
+# Deploy via pipe
+ssh ubuntu@192.168.13.218 "cat /tmp/realtek-poe-build/realtek-poe" | \
+  ssh root@192.168.13.2 "cat > /usr/bin/realtek-poe && chmod +x /usr/bin/realtek-poe"
+```
+
+The CI `.apk` is preferred — it's stripped (~65KB vs ~130KB manual build) and properly packaged.
+
+### Branch Layout (realtek-poe)
+
+| Branch | Purpose | CI |
+|--------|---------|-----|
+| `main` | Pristine upstream mirror | Never modified |
+| `ai-experiments` | Default branch, all AI work | ✅ SDK 25.12.1, .apk, artifact naming |
+| `ai/power-limit-config` | Feature branch (merged into ai-experiments) | ❌ Wrong SDK (snapshot), .ipk only |
+| `ai/led-init` | LED SET command attempt (abandoned — MCU rejects) | ✅ SDK 25.12.1 |
