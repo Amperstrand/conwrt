@@ -799,9 +799,9 @@ informational, no enforcement action.
 
 | # | Hypothesis | Risk | How to investigate |
 |---|-----------|------|--------------------|
-| U1 | **Thermal derating**: BCM59121 may reduce budget at elevated temperatures (40°C+). All ports currently report 38-40°C. In a sealed enclosure this could climb. | Medium | Sustained full-load test at 70W, monitor temperature + consumption over hours. Check if MCU firmware exposes derating curve. |
+| U1 | **Thermal protection**: BCM59121 MCU autonomously detects overheating and reports `fault_type=5 (thermal)`, shutting down the affected port. realtek-poe correctly logs this fault and updates the LED (SLOW_BLINK). **Feature parity exists at the hardware level** — the MCU firmware handles thermal detection and shutdown regardless of host daemon. The stock firmware string "Port was shut down because of temperature is too high" maps directly to our `fault_type=5`. No proactive temperature monitoring exists in either stock or realtek-poe — both react to MCU-reported faults. Current port temps: 36-39°C (well within safe range). | ~~Medium~~ **RESOLVED** | Parity confirmed. BCM59121 datasheet: operating range -40°C to +85°C. GS1900-8HP datasheet: operating 0°C to 45°C. No proactive thermal policy needed — MCU handles shutdown autonomously. |
 | U2 | **STM32F100 flash endurance**: MCU config storage in STM32 flash rated ~10,000 write/erase cycles. Frequent budget/priority changes via UCI could accumulate. | Low | Count write frequency in daemon. If only at startup, negligible (~365/year). |
-| U3 | **PD classification mismatch**: Class 0 PDs reserve 15.4W but may draw far less, wasting budget. No LLDP-MED negotiation means class is the only allocation signal. | Low | `ubus call poe info` shows class per port. Currently all delivering ports show class 0 → 15.4W reserved but only 1-5W drawn. |
+| U3 | **PD classification mismatch / LLDP PoE**: Class 0 PDs reserve 15.4W but may draw far less. No LLDP-MED PoE negotiation in realtek-poe means class is the only allocation signal. Stock firmware integrates LLDP via `board_lldp_poe_register` (allows PDs to request specific wattage and PSE to dynamically adjust per-port allocation). | Low | **Not a gap for lab use.** LLDP PoE is a software-layer feature, not a BCM59121 silicon capability. Our `pre_alloc=1` (consumption mode) tracks actual draw, so budget is not wasted. LLDP PoE only matters for: (a) PDs that request more than class default via LLDP, or (b) enterprise deployments with unknown mixed PDs needing dynamic budget optimisation. For our known-device lab, class-based + consumption mode is sufficient. If needed, `lldpd` on OpenWrt supports LLDP-MED PoE TLVs (`configure med power`) but has no realtek-poe integration. |
 | U4 | **MCU UART protocol reliability**: No CRC or checksum on MCU replies (despite Issue #33 "request-bad-checksum" being closed). Corrupted status reads could cause wrong LED state. | Low | Monitor `logread` for "received unsolicited reply" or checksum errors during sustained operation. |
 | U5 | **Cable voltage drop**: Our lab uses short cables (<5m). If deploying at distance, CAT5e at 100m + 15W = ~2.5V drop. At 53.8V source this is fine (51.3V at PD > 50V minimum for PoE+). But with multiple loads, PSU voltage may sag below 53V. | Low | Measure voltage at PD end with multimeter. Verify PSU output under full load. |
 | U6 | **PSU capacity vs budget**: `budget=70W` is configured, but the actual PSU in GS1900-8HP may be rated higher (the JG928A 48-port variant ships a 370W PSU). The 8-port PSU rating is unknown — setting budget above PSU capacity would cause brownouts. | ~~High~~ **RESOLVED** | Zyxel datasheet: GS1900-8HP PoE budget = **70W**, max consumption = 84.8W (70W PoE + 14.8W switch overhead). Internal PSU 100-240V AC. Our config matches rated capacity exactly — **no margin**. The 77W figure in some specs is for GS1900-**10HP** variant. Consider reducing budget to 60-65W for thermal headroom. |
@@ -819,3 +819,39 @@ informational, no enforcement action.
    memory growth (Issue #55 mitigation).
 5. **Document connected devices**: Maintain a port map (which device on which port, expected
    draw) for budget planning.
+
+## Zyxel V2.90 Stock Firmware Comparison
+
+### PoE Feature Parity Matrix
+
+| Feature | Zyxel Stock V2.90 | OpenWrt / realtek-poe | Parity |
+|---------|-------------------|----------------------|--------|
+| **PoE mode** | Consumption mode (V2.90 Patch 1 default) | `pre_alloc=1` (actual usage) | ✅ Equivalent |
+| **Budget** | 70W, guard band 10% | 70W configured, 63W effective (70 - 7W guard) | ✅ Matches |
+| **Priority levels** | Critical / High / Low (3 tiers) | 0-3 (4 tiers, 0=highest) | ✅ Compatible |
+| **Budget exhaustion** | Sheds lowest-priority ports first; status: "Power was denied because of insufficient power" | MCU handles identically (same BCM59121 firmware) | ✅ Same |
+| **Thermal shutdown** | MCU-enforced; "Port was shut down because of temperature is too high" (fault_type=5) | MCU-enforced; `fault_type=5 (thermal)` → SLOW_BLINK LED | ✅ Same |
+| **Fault clearing** | `poe_cmd_port_reset` (0x03) in kernel thread | `ubus call poe manage '{"port":"lan1","action":"reset"}'` | ✅ Same mechanism |
+| **LED control** | SoC LED engine via board_poe kernel module | SoC LED engine via debugfs writes from userspace | ✅ Same hardware path |
+| **Config persistence** | Bug: resets to classification mode after power cut unless explicitly saved (Apply + Save) | UCI config always persists | ✅ Better |
+| **LLDP PoE negotiation** | Supported via `board_lldp_poe_register` — dynamic per-port power adjustment | Not supported — no lldpd/realtek-poe integration | ⚠️ Gap (irrelevant for lab) |
+| **MCU firmware upgrade** | Supported via `sal_poe_firmware_upgrade` (0xe0) | Not implemented | ⚠️ Gap (low priority) |
+| **802.3bt / 4-pair PoE** | Not applicable (BCM59121 = af/at only) | Same limitation | ✅ N/A |
+| **Power scheduling** | Web UI supports scheduled PoE on/off | Not implemented (trivial via cron + ubus) | ⚠️ Gap (easy to add) |
+| **Per-port power limit** | Web UI: user-defined mW limits per port | `power_limit_type` + `power_limit` via UCI/ubus | ✅ Equivalent |
+
+### Key Differences (not bugs, design choices)
+
+1. **LLDP PoE**: Stock firmware integrates LLDP-MED power negotiation with the PoE daemon,
+   allowing PDs to dynamically request/adjust power allocation via LLDP TLVs. This is purely
+   software — the BCM59121 silicon has no LLDP capability. For our lab (known devices,
+   consumption mode tracking actual draw), this is irrelevant. If needed in future, `lldpd`
+   on OpenWrt supports LLDP-MED PoE TLVs but would need a bridge script to call
+   `ubus call poe set_port_config` based on LLDP power values.
+
+2. **Power scheduling**: Stock firmware offers time-based PoE scheduling in the web UI.
+   Equivalent functionality on OpenWrt: `crontab -e` with `ubus call poe manage` commands.
+
+3. **MCU firmware upgrade**: Stock firmware can update the STM32F100 MCU firmware (command
+   0xe0). realtek-poe doesn't implement this. Low priority — MCU firmware is stable and
+   upgrading it carries bricking risk.
