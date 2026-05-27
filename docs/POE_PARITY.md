@@ -388,7 +388,7 @@ Key observations:
 | `Delivering power` | ON | 5 | Matches every vendor. Most important state, most visible LED pattern. |
 | `Fault` | SLOW_BLINK (~0.5 Hz) | 7 | Single-color LED can't do amber, so slow-blink = fault. Distinguishable from fast-blink (searching) at a glance. |
 | `Other fault` | SLOW_BLINK | 7 | Same as Fault — operator must check `ubus call poe info` for the specific `fault_type` (ovlo, short, overload, denied, thermal, etc.). |
-| `Requesting power` | (currently OFF — **GAP**) | 0 | **TODO**: should probably show solid-on or fast-blink. Currently falls through to the "unknown" branch. See "Known Gaps" below. |
+| `Requesting power` | FAST_BLINK (~2 Hz) | 4 | Register-verified, not visually tested on hardware. Transient state — sub-second during classification. Maps same as Searching (both = "trying to bring port up"). |
 | (unknown) | OFF | 0 | Safe default. |
 
 #### Why We Diverge From Stock for `Searching`
@@ -423,11 +423,15 @@ fault. The current pattern-based API is single-color-friendly only.
 
 #### Known Gaps
 
-1. **`Requesting power` not handled**: Falls through to OFF. On a healthy port this is
-   a sub-second blip and you'd never see it. On an unhealthy port it can stick, and
-   the LED gives no indication. Recommended fix: map `Requesting power` to `FAST_BLINK`
-   (same as Searching — both mean "trying to bring port up"). One-line change in
-   `poe_status_to_led_pattern()`.
+1. **`Requesting power` mapped to FAST_BLINK** (commit `f541ccf`): Register-verified — the
+   debugfs write path produces pattern 4 (FAST_BLINK) for this state. **Not yet
+   visually confirmed on hardware**: the state is transient (sub-second during PD
+   classification → power-up) and no connected PD has been observed lingering in it.
+   To trigger organically, connect a class 3–4 PD to an empty Searching port and watch
+   for the blink-rate continuity (both Searching and Requesting power use FAST_BLINK).
+   A stuck `Requesting power` (e.g. RTL8238B bug, Issue #50) would be visually
+   indistinguishable from a stuck `Searching` — but both are now surfaced, whereas
+   previously `Requesting power` was silently OFF.
 2. **No distinction between fault subtypes**: All faults blink slowly. The operator
    has to query ubus to learn which of {ovlo, mps_absent, short, overload, denied,
    thermal, startup_failure, uvlo} occurred. A bi-color LED could split this
@@ -751,3 +755,67 @@ These address real upstream issues and would benefit all realtek-poe users:
 | LLDP-MED PoE negotiation | Requires lldpd integration | Multi-week |
 | MCU firmware upgrade (0xe0) | Safety-critical | High |
 | Extended params (BCM59121) | Different chip family | Medium |
+
+## PoE Safety & Known Unknowns
+
+### Current Configuration (as of 2026-05-27)
+
+All 8 ports PoE-enabled (`enable='1'`), budget=70W, guard band=7W (default 10%).
+3 ports actively delivering (~4.5W total). Per-port power_limit_type=1 (class-based),
+per-port budget=15.4W. All ports priority=0.
+
+Theoretical maximum draw: 8 × 15.4W = **123.2W vs 70W budget** — the MCU handles
+overcommitment via power management mode 2 (static with priority). When budget is
+exceeded, ports shut down in priority order (all equal = highest port number first).
+
+### Budget Enforcement
+
+The BCM59121 MCU enforces the budget at the silicon level. The daemon configures it
+via `poe_cmd_global_power_budget()` and `poe_cmd_device_power_mgmt(pre_alloc=1,
+powerup_mode=0, disconnect_order=0)`. The MCU independently decides which ports to
+shut down when budget is exceeded — the daemon has no runtime involvement in
+load-shedding decisions.
+
+The daemon's `poe_check_power_threshold()` merely emits ubus events when consumption
+crosses configurable thresholds (`threshold_high`/`threshold_low`) — purely
+informational, no enforcement action.
+
+### Known Unknowns
+
+| # | Issue | Severity | Status | Detail |
+|---|-------|----------|--------|--------|
+| K1 | **Cold-boot "unknown" state** | High | Open (Issue #10) | Randomly on reboot, all ports show "unknown" status. Race condition between daemon startup and MCU readiness. Our init-path fix (`947ba03`) partially mitigates for LEDs but doesn't address root cause. |
+| K2 | **Memory leak on 48-port switches** | Medium | Closed (Issue #55) | 6-month deployment showed RAM growth + reboots. Workaround: hourly cron restart. May affect 8-port at longer intervals — not observed yet (our daemon uptime ~hours, not months). |
+| K3 | **CPU utilisation ~1%** | Low | Open (Issue #50) | Suspected UART byte-at-a-time wake. Not harmful at 8 ports but worth investigating if deploying 48-port. Related to RTL8238B stuck-port bug we're surfacing via LED. |
+| K4 | **No power-up sequencing** | Medium | Inherent | `powerup_mode=0` = simultaneous. All enabled ports attempt to power PDs concurrently. Inrush current spike risk with high-capacitance PDs. Mitigated by low current port count (3 active). |
+| K5 | **Daemon restart interrupts power** | High | Partially fixed (Issue #5) | `/etc/init.d/poe restart` causes brief power loss to all PDs. Also observed: restart leaves two daemon instances fighting over UART. Fix: always `stop` + `killall -9` + `start`. |
+| K6 | **Port mapping reversal** | Low | Open (Issue #54) | Some boards (D-Link DGS-1210-10P F1) have reversed port order. Our GS1900-8HP mapping verified correct. |
+| K7 | **Stale ubus status** | Medium | Closed (Issue #21) | After PD swaps, status may not refresh. Suspected MCU reply caching. Not reproduced on our hardware. |
+| K8 | **No 802.3bt / paired-port support** | Low | Open (Issue #32) | BCM59121 only does 802.3af/at. Our switch is 8× PoE+ (30W max per port) — not affected. |
+| K9 | **Priority all-zero** | Medium | Config | All ports priority=0 means load-shedding order is undefined (likely highest port number shed first). Should configure critical ports (management, camera) with lower priority numbers. |
+| K10 | **Guard band default** | Low | Config | budget_guard defaults to budget/10 = 7W. This is the hysteresis for budget accounting — reasonable for 70W budget. |
+
+### Unknown Unknowns (warrants investigation)
+
+| # | Hypothesis | Risk | How to investigate |
+|---|-----------|------|--------------------|
+| U1 | **Thermal derating**: BCM59121 may reduce budget at elevated temperatures (40°C+). All ports currently report 38-40°C. In a sealed enclosure this could climb. | Medium | Sustained full-load test at 70W, monitor temperature + consumption over hours. Check if MCU firmware exposes derating curve. |
+| U2 | **STM32F100 flash endurance**: MCU config storage in STM32 flash rated ~10,000 write/erase cycles. Frequent budget/priority changes via UCI could accumulate. | Low | Count write frequency in daemon. If only at startup, negligible (~365/year). |
+| U3 | **PD classification mismatch**: Class 0 PDs reserve 15.4W but may draw far less, wasting budget. No LLDP-MED negotiation means class is the only allocation signal. | Low | `ubus call poe info` shows class per port. Currently all delivering ports show class 0 → 15.4W reserved but only 1-5W drawn. |
+| U4 | **MCU UART protocol reliability**: No CRC or checksum on MCU replies (despite Issue #33 "request-bad-checksum" being closed). Corrupted status reads could cause wrong LED state. | Low | Monitor `logread` for "received unsolicited reply" or checksum errors during sustained operation. |
+| U5 | **Cable voltage drop**: Our lab uses short cables (<5m). If deploying at distance, CAT5e at 100m + 15W = ~2.5V drop. At 53.8V source this is fine (51.3V at PD > 50V minimum for PoE+). But with multiple loads, PSU voltage may sag below 53V. | Low | Measure voltage at PD end with multimeter. Verify PSU output under full load. |
+| U6 | **PSU capacity vs budget**: `budget=70W` is configured, but the actual PSU in GS1900-8HP may be rated higher (the JG928A 48-port variant ships a 370W PSU). The 8-port PSU rating is unknown — setting budget above PSU capacity would cause brownouts. | High | Check GS1900-8HP power supply label/wattage. Compare with configured budget. |
+| U7 | **Fault retry behaviour**: After a fault (overload, short), does the MCU auto-retry or stay off? The daemon has no explicit fault-clearing logic. The BCM59111 stock firmware used command 0x03 to clear faults. | Medium | Induce a fault (plug non-PoE device), observe if port recovers or stays Disabled. Check `cnt_overload`/`cnt_short` counters in `ubus call poe info`. |
+| U8 | **Budget accounting mode**: `pre_alloc=1` (actual usage) means the MCU tracks real-time power, not reserved class-based budget. This is good — means budget isn't wasted on class 0 reservations. Verify this is truly what's happening. | Low | Connect a class 0 device drawing 5W and observe if 15.4W or 5W is deducted from budget. |
+
+### Recommendations
+
+1. **Set priorities**: Camera on lan7 → priority 1 (critical, keep alive). Other delivering
+   ports → priority 2. Empty ports → priority 3.
+2. **Verify PSU rating**: Check physical label on GS1900-8HP power supply. If <70W, reduce
+   budget setting.
+3. **Avoid daemon restarts under load**: Use `killall -9` + fresh start, not `/etc/init.d/poe restart`.
+4. **Monitor long-running stability**: Leave switch running for weeks, check `ps` for realtek-poe
+   memory growth (Issue #55 mitigation).
+5. **Document connected devices**: Maintain a port map (which device on which port, expected
+   draw) for budget planning.
