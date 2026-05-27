@@ -311,6 +311,163 @@ creates proper `/sys/class/leds/` entries, combined with a `pse` trigger (the di
 OpenWrt PR #22245 is heading). But this requires kernel driver development and is not
 something a userspace PoE daemon should do.
 
+### LED Semantic Conventions
+
+This section answers: *given a PoE port state, what should the LED show, and why?* The
+mapping in `src/led.c` is not arbitrary — it's the result of cross-referencing IEEE
+802.3af/at standards, RFC 3621 (Power Ethernet MIB), and what real vendors actually
+ship. We deliberately match Zyxel for the two states stock firmware exposes, then
+extend the vocabulary for states stock collapses into "off".
+
+#### The Canonical PoE Port States
+
+The authoritative source is **RFC 3621 (Power Ethernet MIB)**, `pethPsePortDetectionStatus`:
+
+| Value | RFC 3621 name | What it means | Comes from |
+|-------|---------------|---------------|------------|
+| 1 | `disabled` | Admin-down, or PoE turned off in config | UCI / operator |
+| 2 | `searching` | PSE looking for a valid PD signature (25kΩ detection) | IEEE 802.3 detection FSM |
+| 3 | `deliveringPower` | Detected + classified + power applied, MPS heartbeat OK | IEEE 802.3 power-on FSM |
+| 4 | `fault` | Generic fault (rarely used alone) | PSE controller |
+| 5 | `test` | Diagnostic mode (almost never seen in the field) | PSE controller |
+| 6 | `otherFault` | Specific fault: overload, short, MPS lost, thermal, denied | PSE controller fault register |
+
+Linux `ethtool --show-pse` exposes a superset via `pse_admin_state` and
+`c33_pse_pw_d_status` (the "c33" prefix = clause 33 of 802.3, i.e. PoE). The PR #22245
+LED trigger discussion has accepted these as the canonical events a `pse` LED trigger
+would fire on.
+
+#### What the BCM59111 MCU Actually Reports
+
+The Broadcom 0x21/0x28 reply byte encodes a nibble that maps to states 0, 1, 2, 4, 5, 6:
+
+```c
+/* From port_short_status_to_str() in main.c:745 */
+[0] = "Disabled"          /* maps to RFC disabled */
+[1] = "Searching"         /* maps to RFC searching */
+[2] = "Delivering power"  /* maps to RFC deliveringPower */
+[4] = "Fault"             /* maps to RFC fault */
+[5] = "Other fault"       /* maps to RFC otherFault */
+[6] = "Requesting power"  /* transient: classification → power-up, NO RFC equivalent */
+```
+
+`Requesting power` is a **transient** state Broadcom exposes that RFC 3621 lacks: it's
+the brief window between successful detection/classification and the PSE actually
+turning on the FET. On a healthy port it should last under a second. On an unhealthy
+port it can get stuck (see "RTL8238B Issue #50" elsewhere in this doc).
+
+There is no `test` state in the BCM reply nibble. RFC value 3 is shifted to BCM value
+2; RFC 4/5/6 align directly.
+
+#### Industry LED Convention Survey
+
+| Vendor | Off | Solid green | Slow blink | Fast blink | Solid amber | Blink amber | Source |
+|--------|-----|-------------|------------|------------|-------------|-------------|--------|
+| **Zyxel V2.90 (stock)** | disabled / no PD | delivering | — | — | — | — | RE'd from firmware: only `led_state` 0 and 7 |
+| **Cisco Catalyst** | port admin-down | delivering | — | — | denied (insufficient budget) | fault | Catalyst 9300/3850 hardware guide |
+| **HPE Aruba** | no PoE | delivering | — | — | — | fault / over-budget | Aruba CX series PoE guide |
+| **Juniper EX** | disabled | delivering | — | (varies) | — | fault | EX2300/EX3400 hardware doc |
+| **Ubiquiti UniFi** | port off | delivering (24V passive or 802.3af/at) | — | — | — | fault / over-budget | UniFi switch user guides |
+| **Netgear ProSAFE** | disabled | delivering | — | — | — | fault | GS108/GS308 datasheets |
+| **conwrt (this work)** | disabled / unknown | delivering | (reserved) | searching | — | fault / other_fault | This document |
+
+Key observations:
+1. **Every vendor agrees**: off = no power, solid green = delivering. Universal.
+2. **Most vendors have only one or two LEDs per port** (PoE + LINK). They reuse "blink" or amber for everything else, with the specific meaning documented in the user guide.
+3. **No vendor we surveyed uses "slow blink" for searching.** Most vendors collapse searching → off because the searching state is brief on a healthy port and visually noisy when it lasts.
+4. **Blink-amber for fault is common**; we use blink-amber-equivalent (slow blink on a green-only LED) because RTL838x PoE LEDs are single-color green.
+
+#### Our Mapping and Why
+
+`src/led.c:144` — `poe_status_to_led_pattern()`:
+
+| PoE status | LED pattern | Hex value | Rationale |
+|------------|-------------|-----------|-----------|
+| `Disabled` | OFF | 0 | Matches every vendor. PoE off = LED off. |
+| `Searching` | FAST_BLINK (~2 Hz) | 4 | **Diverges from Zyxel** (which shows off). Useful diagnostic: "cable plugged in, PSE alive, no PD detected" vs "cable unplugged" (also off). Operator can tell the two apart. |
+| `Delivering power` | ON | 5 | Matches every vendor. Most important state, most visible LED pattern. |
+| `Fault` | SLOW_BLINK (~0.5 Hz) | 7 | Single-color LED can't do amber, so slow-blink = fault. Distinguishable from fast-blink (searching) at a glance. |
+| `Other fault` | SLOW_BLINK | 7 | Same as Fault — operator must check `ubus call poe info` for the specific `fault_type` (ovlo, short, overload, denied, thermal, etc.). |
+| `Requesting power` | (currently OFF — **GAP**) | 0 | **TODO**: should probably show solid-on or fast-blink. Currently falls through to the "unknown" branch. See "Known Gaps" below. |
+| (unknown) | OFF | 0 | Safe default. |
+
+#### Why We Diverge From Stock for `Searching`
+
+Stock Zyxel shows the PoE LED as OFF for both "port disabled" and "port searching for
+PD". This is operator-hostile: when you plug a non-PoE device into a PoE port, the LED
+stays off and you can't tell whether the port is broken, disabled in config, or just
+not finding a PD.
+
+Our fast-blink-when-searching tells the operator: *the PSE is alive and looking, but
+your device didn't present a valid 25kΩ signature*. This is the most common
+troubleshooting question for end users ("my PoE camera isn't powering on"), so making
+it visible saves a round trip to the CLI.
+
+This is consistent with what enterprise switches (Cisco, HPE) expose via syslog
+("port X: invalid PD signature") — we just route the same information to the LED.
+
+#### Why Single-Color LEDs Force "Blink for Fault"
+
+Bi-color LED switches (most enterprise gear) reserve **amber** for fault states:
+delivering = green, fault = amber, off = no PoE. The operator instantly distinguishes
+"working" from "broken" by color, not by motion.
+
+GS1900-8HP and most RTL838x boards have **single-color (green-only) PoE LEDs**. We
+have only three visual states available: off, on, blink. Since on=delivering is
+non-negotiable, fault has to be a blink pattern. We chose slow-blink for fault to
+distinguish it from fast-blink (searching) — slow=problem, fast=looking.
+
+If you port this code to a board with bi-color PoE LEDs (rare on RTL838x), the
+abstraction in `led.c` should grow a per-board "led_color_set()" so amber-on can mean
+fault. The current pattern-based API is single-color-friendly only.
+
+#### Known Gaps
+
+1. **`Requesting power` not handled**: Falls through to OFF. On a healthy port this is
+   a sub-second blip and you'd never see it. On an unhealthy port it can stick, and
+   the LED gives no indication. Recommended fix: map `Requesting power` to `FAST_BLINK`
+   (same as Searching — both mean "trying to bring port up"). One-line change in
+   `poe_status_to_led_pattern()`.
+2. **No distinction between fault subtypes**: All faults blink slowly. The operator
+   has to query ubus to learn which of {ovlo, mps_absent, short, overload, denied,
+   thermal, startup_failure, uvlo} occurred. A bi-color LED could split this
+   (amber-solid = power fault, amber-blink = config fault), but with single-color we
+   chose simplicity.
+3. **Hardware LINK-ACT can't combine with software PoE state**: The RTL838x LED engine
+   lets us drive 3 LED groups per port, and group 1 (LINK-ACT) stays in hardware mode
+   while group 0 (PoE) is software-driven. So link state is independent of PoE state —
+   good (no interaction bugs) but also no way to express "delivering power AND link
+   is up" differently from "delivering power AND no link" on the PoE LED.
+
+#### Why Not Use OpenWrt's `netdev` Trigger?
+
+`netdev` is for *link* state, not *PoE* state. They're orthogonal. A PoE port can be
+delivering power to a device whose link is down (PD booting), or have link up while
+PoE is disabled (PD self-powered). Conflating the two would hide real states.
+
+The correct LED trigger for our case would be `pse` — which doesn't exist yet in
+mainline. PR #22245 (`leds: trigger: add pse trigger for power sourcing equipment`)
+proposes exactly this, with hook points in the `pse_pd` framework so any PSE driver
+(C33, BT, or vendor-specific like ours) can fire LED events. As of this writing the
+PR is open and under discussion. When merged, the migration path would be:
+
+1. Convert `realtek-poe` to register ports as PSE devices in the `pse_pd` framework
+2. Define LED entries in device tree with `linux,default-trigger = "pse"`
+3. Remove our debugfs writes — kernel handles LED state transitions
+4. Keep our debugfs path as a fallback for boards without the PR merged
+
+This is a multi-quarter project and depends on upstream acceptance. Until then, our
+userspace approach is the only working solution.
+
+#### Standards References
+
+- **IEEE 802.3-2022 clause 33**: PoE PD detection and PSE state machine (the "C33" in
+  ethtool naming)
+- **IEEE 802.3bt-2018**: 4-pair PoE (Type 3/4, up to 90W), state machine extensions
+- **RFC 3621**: Power Ethernet MIB, defines `pethPsePortDetectionStatus` enum
+- **Linux `Documentation/networking/pse-pd/`**: Kernel PSE framework, ethtool integration
+- **OpenWrt PR #22245**: <https://github.com/openwrt/openwrt/pull/22245> — pse LED trigger proposal
+
 ### MCU management
 
 | Wire | Protocol Name | Stock Function | Our Status | Notes |
