@@ -760,9 +760,17 @@ These address real upstream issues and would benefit all realtek-poe users:
 
 ### Current Configuration (as of 2026-05-27)
 
-All 8 ports PoE-enabled (`enable='1'`), budget=70W, guard band=7W (default 10%).
-3 ports actively delivering (~4.5W total). Per-port power_limit_type=1 (class-based),
-per-port budget=15.4W. All ports priority=0.
+All 8 ports PoE-enabled (`enable='1'`), budget=65W (reduced from 70W for safety margin),
+guard band=6.5W (default 10%). MCU effective budget: 58.5W. Threshold alerts at 85%/75%
+consumption via ubus event `poe.power_threshold`.
+3 ports actively delivering (~3.9W total). Per-port power_limit_type=1 (class-based),
+per-port budget=15.4W. Priorities: lan7 (camera)=1, lan4/lan5 (delivering)=2, rest=3.
+
+Memory leak monitoring: cron job logs realtek-poe RSS to syslog every 6 hours via
+`/usr/sbin/poe-memcheck` (Issue #55 mitigation). No persistent storage writes.
+
+Stock firmware switch (192.168.13.3) is unreachable as of 2026-05-27 — needs physical
+investigation (powered off, wrong VLAN, or disconnected).
 
 Theoretical maximum draw: 8 × 15.4W = **123.2W vs 70W budget** — the MCU handles
 overcommitment via power management mode 2 (static with priority). When budget is
@@ -827,7 +835,7 @@ informational, no enforcement action.
 | Feature | Zyxel Stock V2.90 | OpenWrt / realtek-poe | Parity |
 |---------|-------------------|----------------------|--------|
 | **PoE mode** | Consumption mode (V2.90 Patch 1 default) | `pre_alloc=1` (actual usage) | ✅ Equivalent |
-| **Budget** | 70W, guard band 10% | 70W configured, 63W effective (70 - 7W guard) | ✅ Matches |
+| **Budget** | 70W, guard band 10% | 65W configured, 58.5W effective (65 - 6.5 guard) | ✅ Matches (with explicit headroom) |
 | **Priority levels** | Critical / High / Low (3 tiers) | 0-3 (4 tiers, 0=highest) | ✅ Compatible |
 | **Budget exhaustion** | Sheds lowest-priority ports first; status: "Power was denied because of insufficient power" | MCU handles identically (same BCM59121 firmware) | ✅ Same |
 | **Thermal shutdown** | MCU-enforced; "Port was shut down because of temperature is too high" (fault_type=5) | MCU-enforced; `fault_type=5 (thermal)` → SLOW_BLINK LED | ✅ Same |
