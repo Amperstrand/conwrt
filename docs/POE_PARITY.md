@@ -86,19 +86,230 @@ the stock ZyXEL V2.90 firmware, reverse-engineered from `board_poe.ko` and
 - **Post-SET GET**: Still returns `0xFF` — config is NOT persisted by the MCU
 
 **Conclusion**: BCM59111 firmware v17.1 does not implement LED config. The MCU accepts
-LED command frames (to avoid communication errors) but ignores them. GS1900-8HP PoE
-status LEDs are likely driven by the SoC's GPIO/SPI controller directly, not by the MCU.
+LED command frames (to avoid communication errors) but ignores them.
 
-**Evidence**:
-- Stock `board_poe.ko` function `board_poe_led_init` (0x37e0) builds in-memory LED
-  bitmask maps from device tree data — it does NOT send MCU commands directly
-- Stock `board_poe_portLed_set` (0x39e8) manipulates SoC GPIO registers, not MCU UART
-- Protocol source: svanheule.net/switches/software/broadcom_poe_control_protocol
-- Hardware: BCM59111 v17.1, MCU type ST32F100, device_id 0xe111
+### PoE LED Control — Solved via SoC LED Engine (commit `1463998`)
 
-**Impact on parity score**: LED commands are implemented (GET queries in `poe_initial_setup`,
-`rawframe` for SET testing) but functionally N/A for this hardware. Score unchanged —
-these are hardware-limitation items, not software gaps.
+The GS1900-8HP PoE status LEDs are driven by the **RTL838x SoC LED engine**, not by the
+BCM59111 MCU, RTL8231 GPIO, or SPI shift register. The stock Zyxel firmware uses
+`board_poe_portLed_set()` → `board_led_portSwCtrl_set()` in `ski.ko` to write directly to
+SoC memory-mapped LED registers at physical base `0xBB000000`.
+
+Our implementation (`src/led.c`) does the same from userspace via the writable debugfs
+interface at `/sys/kernel/debug/rtl838x/led/`.
+
+#### Register Map
+
+| Register | Address | Purpose |
+|----------|---------|---------|
+| `led_sw_ctrl` | `0xA00C` | Global software control enable (set `1`) |
+| `led0_sw_p_en_ctrl` | `0xA010` | Per-port enable for LED group 0 (PoE row) |
+| `led1_sw_p_en_ctrl` | `0xA014` | Per-port enable for LED group 1 (LINK-ACT row) |
+| `led2_sw_p_en_ctrl` | `0xA018` | Per-port enable for LED group 2 |
+| `led_sw_p_ctrl.PORT` | `0xA01C + (port << 2)` | Per-port pattern (9 bits, 3 per group) |
+
+LED group 0, bits [2:0] control the PoE LED for each port. Group 1 controls LINK-ACT.
+Group 2 is unused on this hardware.
+
+#### Pattern Values (group 0 bits [2:0])
+
+Statistically validated with 10-snapshot camera sequences per value:
+
+| Value | Binary | Behavior | Variance (10 snaps) |
+|-------|--------|----------|---------------------|
+| 0 | 000 | Solid OFF | std=9, 0 transitions |
+| 5 | 101 | Solid ON (most stable) | std=2, 0 transitions |
+| 4 | 100 | Fast blink (~2 Hz) | std=200, 5 transitions |
+| 7 | 111 | Slow blink (~0.5 Hz) | std=192, 3 transitions |
+| 3 | 011 | Irregular blink (~1 Hz) | std=108, 2 transitions |
+| 1 | 001 | Unstable ON | std=38, 0 transitions |
+| 2 | 010 | Unstable ON | std=52, 0 transitions |
+| 6 | 110 | Solid OFF | std=11, 0 transitions |
+
+#### Zyxel Firmware Reverse Engineering
+
+The stock firmware's `board_poe_portLed_set()` at `0x39e8` in `board_poe.ko` uses only
+two led_state values:
+- `led_state=0` → pattern 0 (OFF) when port not delivering
+- `led_state=7` → pattern 5 (ON) when port delivering
+
+The mapping goes through three jump tables in `ski.ko`'s `board_led_portSwCtrl_set()`:
+1. led_state → s7 value (0→0, 1→1, 2→2, 3→3, 4→6, 5→4, 6→7, 7→5)
+2. s6 (group selector) → which EN_CTRL register (0xa010/0xa014/0xa018)
+3. s8 → which 3-bit field in led_sw_p_ctrl to modify (bits [2:0], [5:3], or [8:6])
+
+For PoE: s6=1 → LED0 group, bits [2:0]. All four call sites in `board_poe.ko` use the
+same binary logic: `led_state = (poe_active ? 7 : 0)`.
+
+#### Port Mapping (GS1900-8HP)
+
+lan1–lan8 (PoE port IDs 1–8) → SoC LED ports 8–15. Port 28 = CPU (unused for PoE).
+
+#### Implementation Details
+
+- `poe_led_init()` called once at daemon startup: enables global SW control + sets
+  per-port enable bits for all 8 PoE ports
+- `poe_led_update()` called from `poe_check_port_status_changes()` on every status
+  transition and during initial status snapshot
+- `poe_led_shutdown()` releases SW control back to hardware on daemon exit
+- Read-modify-write on led_sw_p_ctrl preserves group 1/2 bits (LINK-ACT)
+
+Our enhancement over stock: **searching** ports get fast blink (pattern 4) and **fault**
+ports get slow blink (pattern 7). Stock firmware only used solid ON/OFF.
+
+#### Deployment Verification
+
+Deployed to GS1900-8HP A1 running OpenWrt 25.12.1. Camera-based automated testing
+with per-LED brightness sampling at calibrated coordinates confirmed:
+
+| Port | PoE Status | Pattern | Camera Verified |
+|------|-----------|---------|-----------------|
+| lan1 | Searching | 4 (blink) | Blinking ✓ |
+| lan2 | Delivering | 5 (ON) | Solid ON (515) ✓ |
+| lan3 | Delivering | 5 (ON) | Solid ON (753) ✓ |
+| lan4 | Searching | 4 (blink) | Blinking ✓ |
+| lan5 | Searching | 4 (blink) | Blinking ✓ |
+| lan6 | Delivering | 5 (ON) | Solid ON (595) ✓ |
+| lan7 | Delivering | 5 (ON) | Solid ON (553) ✓ |
+| lan8 | Searching | 4 (blink) | Blinking ✓ |
+
+All 8 ports also individually tested with walk-across (light each LED for 2s, left to right)
+and 4-state cycle (OFF → ON → fast blink → slow blink → restore).
+
+### LED Architecture Analysis
+
+#### How Zyxel V2.90 Does It (Confirmed by RE)
+
+The stock Zyxel firmware uses **pure software-driven LED updates**. There is no hardware
+auto-detection linking PoE status to LEDs. The complete call chain:
+
+```
+_poe_portStatusState_thread (kernel thread, polls MCU for port status)
+  → on status change: board_poe_portLed_set(port, poe_active)
+    → maps poe_active to led_state: active=7, inactive=0
+    → board_led_portSwCtrl_set(port, led_state=7, s6=1, s8=0)
+      → jump table 1: led_state 7 → s7=5 (pattern value)
+      → jump table 2: s6=1 → led0_sw_p_en_ctrl (LED group 0)
+      → jump table 3: s8=0 → bits [2:0] in led_sw_p_ctrl
+      → writes to RTL838x SoC LED engine registers at 0xBB000000+A01C+(port<<2)
+```
+
+This is identical to our approach: poll PoE status → map to LED pattern → write SoC
+registers. The only difference is Zyxel uses only two states (ON/OFF) while we add
+searching=fast-blink and fault=slow-blink.
+
+#### Why Software-Driven Is the Only Option
+
+The RTL838x SoC LED engine has two classes of registers:
+
+**Hardware-driven registers** (auto-synced by the SoC):
+| Register | Address | Purpose |
+|----------|---------|---------|
+| `led_glb_ctrl` | `0xA000` | Global LED control (scan rate, active-low) |
+| `led_mode_sel` | `0x1004` | Selects LED mode per port group |
+| `led_mode_ctrl` | `0xA004` | Controls what each LED set displays |
+| `led_p_en_ctrl` | `0xA008` | Per-port enable for hardware-driven mode |
+
+In hardware mode, the SoC LED engine auto-drives LEDs based on **network events**:
+link status, activity (rx/tx), speed (10/100/1000), duplex, collision. These are
+layer-1/2 concepts the SoC MAC/PHY knows about natively.
+
+**Software-driven registers** (our approach):
+| Register | Address | Purpose |
+|----------|---------|---------|
+| `led_sw_ctrl` | `0xA00C` | Enable software override |
+| `led0/1/2_sw_p_en_ctrl` | `0xA010/14/18` | Per-port, per-group software enable |
+| `led_sw_p_ctrl.PORT` | `0xA01C+(port<<2)` | Per-port pattern (9 bits, 3 per group) |
+
+PoE status is **not a network concept** — it's a power delivery concept managed by an
+external MCU (BCM59111) over UART. The SoC LED engine has zero visibility into PoE state.
+Therefore:
+
+1. **No hardware auto-trigger exists** for PoE status in the RTL838x LED engine
+2. **The BCM59111 MCU** does not implement LED control (firmware v17.1 ignores LED commands)
+3. **Software must bridge** PoE status → LED registers, exactly as both Zyxel and we do
+
+#### OpenWrt LED Subsystem: No PoE Trigger Exists
+
+OpenWrt follows the Linux LED class model:
+
+```
+Device Tree (gpio-leds / led-controller)
+  → Linux LED class driver (devm_led_classdev_register)
+    → /sys/class/leds/<color>:<function>/
+      → OpenWrt boot scripts (diag.sh, leds.sh, S96led)
+        → UCI /etc/config/system → triggers (heartbeat, netdev, timer, etc.)
+```
+
+**Available triggers in Linux** (`drivers/leds/trigger/Kconfig`):
+timer, oneshot, disk-activity, mtd, nand-disk, heartbeat, backlight, gpio,
+cpu, activity, netdev, pattern, transient, audio-mute, audio-micmute, rgb-blink.
+
+**There is no `poe` or `pse` trigger.** This is confirmed by:
+- No `ledtrig-poe` or `LEDS_TRIGGER_POE` in the Linux kernel source
+- No PoE trigger in OpenWrt packages
+- An active OpenWrt PR (#22245, 2026) is adding `pse-pd` LED trigger support — proving
+  it doesn't exist yet
+- The Linux LED function tags (`include/dt-bindings/leds/common.h`) have `LED_FUNCTION_POWER`
+  but no `LED_FUNCTION_POE`
+
+#### How Other OpenWrt Switches Handle PoE LEDs
+
+| Device | PoE Controller | PoE LED Handling | OpenWrt LED Integration |
+|--------|---------------|------------------|------------------------|
+| **Zyxel GS1900-8HP** (ours) | BCM59111 (UART) | SoC LED engine, software-driven | None — our `src/led.c` via debugfs |
+| **Zyxel GS1900-48HP** | BCM59111 (UART) | Unknown, likely same SoC LED engine | None in OpenWrt |
+| **Netgear GS310TP** | BCM59111 | Separate from board LEDs | DTS defines power LED only, no PoE status LEDs |
+| **TP-Link SG2008P/SG2210P** | TI TPS23861 | "Not yet enabled" per OpenWrt PR | DTS has power LED, PoE LEDs explicitly disabled |
+| **Ubiquiti USW-Flex** | PD69104B1 (I2C) | `poemgr` daemon, separate from LEDs | DTS defines status LEDs, no PoE LED trigger |
+| **Edgecore EAP102** | Qualcomm PSE | `green:wanpoe` LED with **netdev** trigger | Uses netdev trigger (link activity, not PoE status) |
+
+Key pattern: **No OpenWrt switch currently has PoE status LEDs working through the
+standard LED subsystem.** All devices either:
+- Don't enable PoE LEDs at all (TP-Link, Netgear)
+- Use software control outside the LED class (Zyxel, Ubiquiti)
+- Repurpose the netdev trigger for "PoE port" LEDs (Edgecore — shows link, not PoE status)
+
+#### RTL8231 LED Controller vs RTL838x LED Engine
+
+The GS1900-8HP has two separate LED subsystems:
+
+1. **RTL8231 LED scan matrix** (`realtek,rtl8231-leds`):
+   - Has a proper kernel driver (`leds-rtl8231`) that creates `/sys/class/leds/` entries
+   - Uses `devm_led_classdev_register_ext()` — standard Linux LED class
+   - Maps via `reg = <port_index led_index>` in device tree
+   - **Disabled in GS1900-8HP DTS**: `status = "disabled";`
+   - Even if enabled, this controls LINK/ACT LEDs (the top row), NOT PoE LEDs
+
+2. **RTL838x SoC LED engine** (what we use):
+   - Exposed via debugfs only: `/sys/kernel/debug/rtl838x/led/`
+   - No LED class driver exists in the kernel
+   - Controls ALL LED groups including PoE (the bottom row)
+   - This is what both Zyxel stock and our code write to
+
+The PoE LEDs are physically connected to the SoC LED engine outputs, not to the RTL8231
+scan matrix. Even if the RTL8231 driver were enabled, it wouldn't help with PoE LEDs.
+
+#### Why Our Debugfs Approach Is Correct
+
+| Approach | Feasible? | Reason |
+|----------|-----------|--------|
+| MCU LED commands (0x41-0x49) | No | BCM59111 v17.1 ignores them |
+| Hardware auto-trigger | No | SoC LED engine has no PoE awareness |
+| RTL8231 LED class driver | No | Controls different LEDs (LINK/ACT), disabled in DTS |
+| `netdev` LED trigger | No | Shows link status, not PoE status |
+| Custom `poe` LED trigger | Partial | Requires new kernel driver — PR #22245 is doing this |
+| **Debugfs register writes** | **Yes** | What Zyxel does, what we do, proven correct |
+| New kernel LED class driver | Ideal | Creates `/sys/class/leds/poe:lan1` etc., but requires kernel work |
+
+**Our debugfs approach matches Zyxel's stock firmware exactly**: software polls PoE status,
+maps to LED pattern, writes SoC registers. The only difference is Zyxel writes from
+kernel space (kernel module) and we write from userspace (daemon via debugfs).
+
+The "ideal" solution would be a kernel LED class driver for the RTL838x LED engine that
+creates proper `/sys/class/leds/` entries, combined with a `pse` trigger (the direction
+OpenWrt PR #22245 is heading). But this requires kernel driver development and is not
+something a userspace PoE daemon should do.
 
 ### MCU management
 
