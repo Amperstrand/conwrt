@@ -793,6 +793,15 @@ def _apply_profile_post_flash(
         log("Applying profile via SSH...")
     ip = apply_plan(plan, ip, ssh_key=ssh_key, dry_run=dry_run, log=log)
 
+    if not dry_run:
+        from profile.plan import StepKind as _SK
+        has_hostname_step = any(s.kind == _SK.HOSTNAME and s.include_in_post_install for s in plan.steps)
+        if has_hostname_step:
+            r_host = _ssh_run(ip, "cat /proc/sys/kernel/hostname", key=ssh_key, timeout=10)
+            if r_host.returncode == 0 and r_host.stdout.strip():
+                resolved_hostname = r_host.stdout.strip()
+                log(f"  Hostname resolved: {resolved_hostname}")
+
     if not dry_run and cfg.lan_ip and interface:
         new_ip = _apply_lan_ip_post_flash(
             ip, ssh_key=ssh_key, cfg=cfg,
