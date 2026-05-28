@@ -802,6 +802,7 @@ def _apply_profile_post_flash(
             ip = new_ip
 
     from profile.plan import StepKind
+    from mac_hash import mac_to_lan_ip
     for step in plan.steps:
         if step.kind != StepKind.LAN_IP_MAC_HASH:
             continue
@@ -814,30 +815,46 @@ def _apply_profile_post_flash(
         script = (step.configure_script or "").replace(" && ", "; ")
         if not script:
             continue
-        log(f"  {step.label}...")
+        subnet = (step.wifi_params or {}).get("lan_subnet", "")
+        if not subnet:
+            log(f"  ⚠ {step.label}: no subnet configured — skipping")
+            continue
+
+        # Read eth0 MAC BEFORE changing IP so we can compute the new IP in Python
+        r_mac = _ssh_run(ip, "cat /sys/class/net/eth0/address 2>/dev/null", key=ssh_key)
+        if r_mac.returncode != 0 or not r_mac.stdout.strip():
+            log(f"  ⚠ {step.label}: could not read eth0 MAC — skipping")
+            continue
+        eth0_mac = r_mac.stdout.strip()
+        expected_ip = mac_to_lan_ip(eth0_mac, subnet)
+        log(f"  {step.label}... (eth0={eth0_mac}, expected={expected_ip})")
+
         r = _ssh_run(ip, script, key=ssh_key)
         if r.returncode == 0:
-            log(f"  ✓ {step.label} — IP changed, reconnecting...")
+            log(f"  ✓ {step.label} — IP set to {expected_ip}, rebooting...")
             _ssh_run(ip, "sync; sync; reboot", key=ssh_key, timeout=5)
-            import time
             time.sleep(30)
-            mac_ip_script = " && ".join([
-                "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
-                "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
-                "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
-                "_host=$((_host % 200 + 2))",
-                "echo $_host",
-            ])
-            subnet = (step.wifi_params or {}).get("lan_subnet", "")
-            for _ in range(10):
-                r2 = _ssh_run(ip, mac_ip_script, key=ssh_key, timeout=15)
-                if r2.returncode == 0:
-                    host_byte = r2.stdout.strip().split("\n")[-1]
-                    new_ip = f"{subnet}.{host_byte}"
-                    log(f"  Reconnected at {new_ip}")
-                    ip = new_ip
+
+            # Set up local interface on new subnet before reconnecting
+            if interface:
+                new_client_ip = _client_ip_for_subnet(expected_ip)
+                if old_client_ip:
+                    remove_interface_ip(interface, old_client_ip, "24")
+                configure_interface_ip(interface, new_client_ip, "24")
+                log(f"  Local interface {interface} configured with {new_client_ip}/24")
+
+            # Wait for SSH on the new (known) IP
+            for attempt in range(12):
+                if check_ssh(expected_ip):
+                    log(f"  ✓ Reconnected at {expected_ip}")
+                    ip = expected_ip
                     break
+                if attempt == 0:
+                    log(f"  Waiting for device at {expected_ip}...")
                 time.sleep(5)
+            else:
+                log(f"  ⚠ Device did not come back at {expected_ip} within 60s")
+                log(f"  The IP was changed. Try: sudo ifconfig {interface} inet {_client_ip_for_subnet(expected_ip)}/24 alias")
         else:
             log(f"  ⚠ {step.label}: failed to set MAC-hash IP")
 
