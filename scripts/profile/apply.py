@@ -131,6 +131,8 @@ def apply_plan(
             continue
         if step.kind == StepKind.LAN_IP:
             continue  # caller handles LAN IP last
+        if step.kind == StepKind.LAN_IP_MAC_HASH:
+            continue  # caller handles MAC-hash IP last (drops SSH)
 
         if step.kind == StepKind.SSH_KEY:
             continue  # caller installs keys idempotently before apply_plan (configure)

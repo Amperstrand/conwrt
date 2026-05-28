@@ -759,6 +759,8 @@ def _apply_profile_post_flash(
     dry_run: bool = False,
     hostname: str = "",
     wifi_disable: bool = False,
+    lan_ip_mode: str = "",
+    hostname_pattern: str = "",
 ) -> str:
     """Apply config.toml profile via unified plan (WiFi, use cases, LAN IP)."""
     from config import ConwrtConfig
@@ -783,6 +785,9 @@ def _apply_profile_post_flash(
         wan_ssh=effective_wan_ssh,
         hostname=hostname,
         wifi_disable=wifi_disable,
+        lan_ip_mode=lan_ip_mode,
+        hostname_pattern=hostname_pattern,
+        model_id=model_id,
     )
     if not dry_run:
         log("Applying profile via SSH...")
@@ -795,6 +800,47 @@ def _apply_profile_post_flash(
         )
         if new_ip:
             ip = new_ip
+
+    from profile.plan import StepKind
+    for step in plan.steps:
+        if step.kind != StepKind.LAN_IP_MAC_HASH:
+            continue
+        if not step.include_in_post_install:
+            continue
+        if dry_run:
+            log(f"  {step.label} (dry run)")
+            continue
+
+        script = (step.configure_script or "").replace(" && ", "; ")
+        if not script:
+            continue
+        log(f"  {step.label}...")
+        r = _ssh_run(ip, script, key=ssh_key)
+        if r.returncode == 0:
+            log(f"  ✓ {step.label} — IP changed, reconnecting...")
+            _ssh_run(ip, "sync; sync; reboot", key=ssh_key, timeout=5)
+            import time
+            time.sleep(30)
+            mac_ip_script = " && ".join([
+                "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
+                "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
+                "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
+                "_host=$((_host % 200 + 2))",
+                "echo $_host",
+            ])
+            subnet = (step.wifi_params or {}).get("lan_subnet", "")
+            for _ in range(10):
+                r2 = _ssh_run(ip, mac_ip_script, key=ssh_key, timeout=15)
+                if r2.returncode == 0:
+                    host_byte = r2.stdout.strip().split("\n")[-1]
+                    new_ip = f"{subnet}.{host_byte}"
+                    log(f"  Reconnected at {new_ip}")
+                    ip = new_ip
+                    break
+                time.sleep(5)
+        else:
+            log(f"  ⚠ {step.label}: failed to set MAC-hash IP")
+
     return ip
 
 
@@ -3623,6 +3669,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable all WiFi radios")
     cfg_parser.add_argument("--verify", action="store_true",
         help="After applying config, reboot and verify persistence")
+    cfg_parser.add_argument("--lan-ip-mode", default=None,
+        choices=["static", "mac-hash"],
+        help="LAN IP mode: 'static' (use [network] lan_ip) or 'mac-hash' (derive from MAC)")
+    cfg_parser.add_argument("--hostname-pattern", default=None,
+        choices=["static", "model_mac", "model_seq"],
+        help="Hostname pattern: 'static', 'model_mac' (e.g. lyra_aabbcc), 'model_seq'")
     cfg_parser.add_argument("--dry-run", action="store_true",
         help="Print commands without executing")
 
@@ -3825,6 +3877,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
     interface = args.interface or auto_detect_interface() or ""
     effective_hostname = args.hostname or cfg.hostname
     effective_wifi_disable = args.wifi_disable or cfg.wifi_disable
+    effective_lan_ip_mode = args.lan_ip_mode or cfg.lan_ip_mode
+    effective_hostname_pattern = args.hostname_pattern or cfg.hostname_pattern
 
     log(f"Configuring router at {ip}...")
 
@@ -3847,6 +3901,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
             dry_run=True,
             hostname=effective_hostname,
             wifi_disable=effective_wifi_disable,
+            lan_ip_mode=effective_lan_ip_mode,
+            hostname_pattern=effective_hostname_pattern,
         )
         if ssh_pub_path or ssh_key_text:
             print("  # SSH key: idempotent install via authorized_keys check")
@@ -3865,6 +3921,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
         dry_run=False,
         hostname=effective_hostname,
         wifi_disable=effective_wifi_disable,
+        lan_ip_mode=effective_lan_ip_mode,
+        hostname_pattern=effective_hostname_pattern,
     )
 
     if args.verify and not args.dry_run:

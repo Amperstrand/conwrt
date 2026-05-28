@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import ConwrtConfig, _strip_key_comment
+from model_loader import load_model
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
     build_mgmt_wifi_script,
@@ -138,11 +139,37 @@ def build_plan(
     disable_dhcp: bool = False,
     hostname: str = "",
     wifi_disable: bool = False,
+    lan_ip_mode: str = "",
+    hostname_pattern: str = "",
+    model_id: str = "",
 ) -> ProfilePlan:
     """Build an ordered profile plan from operator config."""
     caps = list(model_capabilities or [])
     plan = ProfilePlan(mode=mode, model_capabilities=caps)
     steps: list[ProfileStep] = []
+
+    effective_lan_ip_mode = lan_ip_mode or cfg.lan_ip_mode
+    effective_hostname_pattern = hostname_pattern or cfg.hostname_pattern
+
+    model_data: dict = {}
+    if model_id:
+        try:
+            model_data = load_model(model_id)
+        except FileNotFoundError:
+            pass
+    model_lan_subnet = model_data.get("lan_subnet", "")
+    if model_lan_subnet and "/" in model_lan_subnet:
+        model_lan_subnet = model_lan_subnet.split("/")[0]
+        parts = model_lan_subnet.split(".")
+        if len(parts) == 4:
+            model_lan_subnet = ".".join(parts[:3])
+    model_hostname_prefix = model_data.get("hostname_prefix", "")
+    if not model_hostname_prefix and model_id:
+        segments = model_id.split("-")
+        for seg in segments[1:]:
+            if not seg.isdigit() and len(seg) > 2:
+                model_hostname_prefix = seg
+                break
 
     if disable_dhcp:
         steps.append(ProfileStep(
@@ -153,7 +180,26 @@ def build_plan(
         ))
 
     effective_hostname = hostname or cfg.hostname
-    if effective_hostname:
+    if effective_hostname_pattern == "model_mac" and model_hostname_prefix:
+        _mac_hostname_fb = "\n".join([
+            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
+            "_suffix=$(echo \"$_mac\" | tr -d ':' | tail -c6)",
+            f"uci set system.@system[0].hostname='{model_hostname_prefix}_$_suffix'",
+            "uci commit system",
+        ])
+        _mac_hostname_ssh = " && ".join([
+            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
+            "_suffix=$(echo \"$_mac\" | tr -d ':' | tail -c6)",
+            f"uci set system.@system[0].hostname='{model_hostname_prefix}_$_suffix'",
+            "uci commit system",
+        ])
+        steps.append(ProfileStep(
+            kind=StepKind.HOSTNAME,
+            label=f"Hostname: {model_hostname_prefix}_<mac>",
+            firstboot_script=_mac_hostname_fb,
+            configure_script=_mac_hostname_ssh,
+        ))
+    elif effective_hostname:
         if _VALID_HOSTNAME_RE.match(effective_hostname):
             steps.append(ProfileStep(
                 kind=StepKind.HOSTNAME,
@@ -343,7 +389,32 @@ def build_plan(
             include_in_post_install=bool(cfg_script or pkgs),
         ))
 
-    if cfg.lan_ip and mode in ("post_install", "preview"):
+    if effective_lan_ip_mode == "mac-hash" and model_lan_subnet:
+        _mac_ip_fb = "\n".join([
+            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
+            "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
+            "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
+            "_host=$((_host % 200 + 2))",
+            f"uci set network.lan.ipaddr='{model_lan_subnet}.$_host'",
+            "uci commit network",
+        ])
+        _mac_ip_ssh = " && ".join([
+            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
+            "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
+            "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
+            "_host=$((_host % 200 + 2))",
+            f"uci set network.lan.ipaddr='{model_lan_subnet}.$_host'",
+            "uci commit network",
+        ])
+        steps.append(ProfileStep(
+            kind=StepKind.LAN_IP_MAC_HASH,
+            label=f"LAN IP → {model_lan_subnet}.<mac-hash>",
+            firstboot_script=_mac_ip_fb,
+            configure_script=_mac_ip_ssh,
+            include_in_post_install=True,
+            wifi_params={"lan_subnet": model_lan_subnet},
+        ))
+    elif cfg.lan_ip and mode in ("post_install", "preview"):
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
             label=f"LAN IP → {cfg.lan_ip}",

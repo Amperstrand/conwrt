@@ -21,6 +21,7 @@ class StepKind(Enum):
     WIFI_DISABLE = "wifi_disable"
     USE_CASE = "use_case"
     OPKG_BATCH = "opkg_batch"
+    LAN_IP_MAC_HASH = "lan_ip_mac_hash"
     LAN_IP = "lan_ip"
     CELLULAR = "cellular"
 

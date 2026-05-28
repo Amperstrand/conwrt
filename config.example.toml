@@ -22,6 +22,8 @@ keys = [
 # [device]
 # hostname = "my-router"     # Router hostname (alphanumeric + hyphens, max 63 chars)
 # wifi_disable = false       # Disable all WiFi radios (for wired-only devices)
+# lan_ip_mode = "mac-hash"   # "static" (use [network] lan_ip) or "mac-hash" (derive from MAC)
+# hostname_pattern = "model_mac"  # "static", "model_mac" (e.g. lyra_aabbcc), "model_seq"
 
 [password]
 # Controls root password on the flashed router.

@@ -10,6 +10,8 @@
     "board_name": "asus,map-ac2200",
     "version": "24.10.4"
   },
+  "lan_subnet": "10.231.9.0/24",
+  "hostname_prefix": "lyra",
   "hardware": {
     "soc": "Qualcomm IPQ4019 (quad-core Cortex-A7) @ 717MHz",
     "flash": "NAND 128MB (Macronix)",
