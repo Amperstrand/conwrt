@@ -3675,6 +3675,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg_parser.add_argument("--hostname-pattern", default=None,
         choices=["static", "model_mac", "model_seq"],
         help="Hostname pattern: 'static', 'model_mac' (e.g. lyra_aabbcc), 'model_seq'")
+    cfg_parser.add_argument("--serial", default=None,
+        help="Device serial number (e.g. from sticker) for hostname and inventory")
     cfg_parser.add_argument("--dry-run", action="store_true",
         help="Print commands without executing")
 
@@ -3828,6 +3830,77 @@ def _cfg_enable_wan_ssh(ip: str, ssh_key: str = "") -> bool:
     return False
 
 
+def _record_configure_inventory(
+    ip: str,
+    password: str = "",
+    serial: str = "",
+    model_id: str = "",
+    ssh_key_path: str = "",
+    wan_ssh: bool = False,
+) -> None:
+    """Fingerprint router and append configuration results to inventory.jsonl.
+
+    Called from cmd_configure after successful configuration. Records the
+    generated password, serial (if provided), MAC addresses, and device
+    identity so we have a permanent record of what was configured.
+    """
+    fp = fingerprint_router(ip)
+    if not fp:
+        log("  ⚠ inventory: could not fingerprint router — skipping inventory write")
+        return
+
+    ident = fp.get("identity", {})
+    fw = fp.get("firmware", {})
+    net = fp.get("network", {})
+    sec = fp.get("security", {})
+    macs = net.get("macs", {})
+
+    board = ident.get("board", "")
+    fp_path = save_fingerprint(fp, board_id=board)
+
+    openwrt_target = ""
+    if model_id:
+        try:
+            model = load_model(model_id)
+            openwrt_target = model.get("openwrt", {}).get("target", "")
+        except FileNotFoundError:
+            pass
+
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "source": "configure",
+        "device_serial": serial or ident.get("serial", ""),
+        "model": ident.get("model", ""),
+        "model_id": model_id,
+        "vendor": fw.get("DISTRIB_ID", "").strip("'\"") or ident.get("vendor", ""),
+        "firmware_version": fw.get("version", "").strip("'\""),
+        "openwrt_target": openwrt_target,
+        "hostname": ident.get("hostname", ""),
+        "board": board,
+        "kernel": fw.get("kernel", ""),
+        "mac_addresses": {k: v for k, v in macs.items() if v and k != "lo"},
+        "ssh_key_fingerprint": sec.get("ssh_fingerprint", ""),
+        "ssh_key_count": sec.get("ssh_key_count", 0),
+        "wan_ssh_rules": sec.get("wan_ssh_rules", 0),
+        "password_set": bool(password),
+        "wan_ssh_enabled": wan_ssh,
+        "flashed_by": os.environ.get("USER", ""),
+        "fingerprint_file": str(fp_path) if fp_path else "",
+        "notes": "Configured via conwrt configure",
+    }
+
+    inventory_path = Path(__file__).resolve().parent.parent / "data" / "inventory.jsonl"
+    try:
+        inventory_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(inventory_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        log(f"  ✓ inventory: entry appended to {inventory_path}")
+        if password:
+            log(f"  ✓ inventory: password recorded for serial={serial or '(unknown)'}")
+    except Exception as e:
+        log(f"  ⚠ inventory: failed to write — {e}")
+
+
 def _resolve_configure_options(
     args: argparse.Namespace, cfg: object,
 ) -> tuple[str, str, str, str, bool]:
@@ -3930,6 +4003,16 @@ def cmd_configure(args: argparse.Namespace) -> int:
             ip, ssh_key=ssh_key_path,
             expected_hostname=effective_hostname,
             log=log,
+        )
+
+    if not args.dry_run:
+        _record_configure_inventory(
+            ip,
+            password=password,
+            serial=args.serial or "",
+            model_id=model_id or "",
+            ssh_key_path=ssh_key_path,
+            wan_ssh=wan_ssh,
         )
 
     log(f"Configuration complete. Router at {ip}")

@@ -35,6 +35,29 @@ Instead:
 
 When in doubt, trust sysupgrade's hardware validation. It is the last line of defense against bricking.
 
+## Test Before You Commit (Post-Flash Configuration Safety)
+
+**New features MUST be manually verified on a live device before being automated.**
+
+Any shell script that modifies device state (uci set, network config, IP changes) must be tested end-to-end via SSH **before** being committed to automated flows (conwrt configure, ASU first-boot scripts, builder.py).
+
+**Mandatory verification sequence for new configuration steps:**
+
+1. **SSH manually first**: Run the exact shell commands on the device and verify the result
+2. **Read back the value**: After `uci set`, run `uci get` to confirm the value was set correctly — not the literal variable name
+3. **Test persistence**: Reboot and verify the change survives
+4. **Verify recovery**: Confirm you know how to undo the change (firstboot, uci revert, failsafe)
+5. **Then automate**: Only after steps 1-4 pass, commit the commands to the automation
+
+**Why this matters**: A single-quote bug in `uci set network.lan.ipaddr='$_host'` wrote a literal string as the IP address, making the device unreachable. If this had been an ASU first-boot script baked into firmware, there would be NO recovery without serial. Always ensure changes are reversible before automating them.
+
+**Specific rules:**
+- Never `uci commit` a network IP change without verifying `uci get` returns the expected value first
+- Shell variables in uci commands MUST use double quotes (not single quotes) for expansion
+- On-device shell scripts use BusyBox tools only (`md5sum`, not `sha256sum`; no `chpasswd`, no `hostname`)
+- Python-side hash algorithms MUST match what BusyBox provides (md5, not sha256)
+- For UBIFS overlay devices: `uci commit` is permanent after reboot — there is no "undo" after reboot
+
 ## Related Projects
 
 - **realtek-poe fork**: [Amperstrand/realtek-poe](https://github.com/Amperstrand/realtek-poe) — AI experimentation workspace for PoE research on OpenWrt switches. All AI work happens on the `ai-experiments` branch. `main` is a pristine upstream mirror. **Never interact with the upstream `Hurricos/realtek-poe` repo** — only humans may create issues or submit PRs there.

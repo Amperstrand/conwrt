@@ -97,3 +97,118 @@ def test_no_capabilities_disables_filtering() -> None:
     # No capabilities = no filtering, USB use cases pass through
     assert "kmod-usb2" in plan_no_caps.all_packages()
     assert "kmod-usb2" in plan_empty_caps.all_packages()
+
+
+def test_mac_hash_ip_step_generated() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="mac-hash")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
+    assert len(mac_steps) == 1
+    step = mac_steps[0]
+    assert "10.231.9" in step.configure_script
+    assert "md5sum" in step.configure_script
+    assert step.include_in_post_install is True
+
+
+def test_mac_hash_ip_firstboot_script() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="mac-hash")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
+    assert len(mac_steps) == 1
+    fb = mac_steps[0].firstboot_script
+    assert "eth0/address" in fb
+    assert "uci set network.lan.ipaddr" in fb
+    assert "uci commit network" in fb
+
+
+def test_mac_hash_ip_skipped_without_model() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="mac-hash")
+    plan = build_plan(cfg, mode="post_install", model_id="")
+    mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
+    assert len(mac_steps) == 0
+
+
+def test_mac_hash_ip_skipped_with_static_mode() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="static")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
+    assert len(mac_steps) == 0
+
+
+def test_hostname_model_mac_pattern() -> None:
+    cfg = ConwrtConfig(hostname_pattern="model_mac")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    assert len(host_steps) == 1
+    step = host_steps[0]
+    assert "lyra_" in step.configure_script
+    assert "_suffix" in step.configure_script
+    assert "uci set system" in step.configure_script
+
+
+def test_hostname_model_mac_firstboot_script() -> None:
+    cfg = ConwrtConfig(hostname_pattern="model_mac")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    fb = host_steps[0].firstboot_script
+    assert "eth0/address" in fb
+    assert "tail -c6" in fb
+    assert "lyra_" in fb
+
+
+def test_hostname_model_mac_skipped_without_model() -> None:
+    cfg = ConwrtConfig(hostname_pattern="model_mac")
+    plan = build_plan(cfg, mode="post_install", model_id="")
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    assert len(host_steps) == 0
+
+
+def test_hostname_pattern_takes_priority_over_static_hostname() -> None:
+    cfg = ConwrtConfig(hostname_pattern="model_mac", hostname="my-router")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    assert len(host_steps) == 1
+    assert "lyra_" in host_steps[0].configure_script
+
+
+def test_hostname_uses_static_when_no_pattern() -> None:
+    cfg = ConwrtConfig(hostname="my-router")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+    )
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    assert len(host_steps) == 1
+    assert "my-router" in host_steps[0].configure_script
+
+
+def test_cli_lan_ip_mode_overrides_config() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="static")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+        lan_ip_mode="mac-hash",
+    )
+    mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
+    assert len(mac_steps) == 1
+
+
+def test_cli_hostname_pattern_overrides_config() -> None:
+    cfg = ConwrtConfig(hostname_pattern="static")
+    plan = build_plan(
+        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
+        hostname_pattern="model_mac",
+    )
+    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
+    assert len(host_steps) == 1
+    assert "lyra_" in host_steps[0].configure_script

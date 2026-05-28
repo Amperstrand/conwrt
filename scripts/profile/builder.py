@@ -182,15 +182,15 @@ def build_plan(
     effective_hostname = hostname or cfg.hostname
     if effective_hostname_pattern == "model_mac" and model_hostname_prefix:
         _mac_hostname_fb = "\n".join([
-            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
-            "_suffix=$(echo \"$_mac\" | tr -d ':' | tail -c6)",
-            f"uci set system.@system[0].hostname='{model_hostname_prefix}_$_suffix'",
+            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+            "_suffix=$(echo \"$_mac\" | tr -d ':\\n' | tail -c6)",
+            f"uci set system.@system[0].hostname=\"{model_hostname_prefix}_$_suffix\"",
             "uci commit system",
         ])
         _mac_hostname_ssh = " && ".join([
-            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
-            "_suffix=$(echo \"$_mac\" | tr -d ':' | tail -c6)",
-            f"uci set system.@system[0].hostname='{model_hostname_prefix}_$_suffix'",
+            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+            "_suffix=$(echo \"$_mac\" | tr -d ':\\n' | tail -c6)",
+            f"uci set system.@system[0].hostname=\"{model_hostname_prefix}_$_suffix\"",
             "uci commit system",
         ])
         steps.append(ProfileStep(
@@ -391,19 +391,19 @@ def build_plan(
 
     if effective_lan_ip_mode == "mac-hash" and model_lan_subnet:
         _mac_ip_fb = "\n".join([
-            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
-            "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
+            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+            "_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')",
             "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
-            f"uci set network.lan.ipaddr='{model_lan_subnet}.$_host'",
+            f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
             "uci commit network",
         ])
         _mac_ip_ssh = " && ".join([
-            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)",
-            "_mac_clean=$(echo \"$_mac\" | tr -d ':')",
+            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+            "_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')",
             "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
-            f"uci set network.lan.ipaddr='{model_lan_subnet}.$_host'",
+            f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
             "uci commit network",
         ])
         steps.append(ProfileStep(

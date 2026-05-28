@@ -356,6 +356,80 @@ OpenWrt devices with UBIFS overlays (NAND flash, common on ipq40xx, mediatek, et
 
 ## Backup before flashing
 
+### Shell variable expansion in uci commands (CRITICAL)
+
+**Incident (2026-05-29, ASUS Lyra MAP-AC2200):** `builder.py` generated shell scripts with single quotes around uci values containing shell variables:
+
+```bash
+uci set network.lan.ipaddr='10.231.9.$_host'   # BUG: $_host never expands
+uci set system.@system[0].hostname='lyra_$_suffix'  # BUG: $_suffix never expands
+```
+
+Single quotes prevent ALL variable expansion in shell. The device literally stored `10.231.9.$_host` as its IP address and `lyra_$_suffix` as its hostname. After reboot, netifd couldn't parse the invalid IP → device became unreachable on all protocols (IPv4, IPv6, ARP).
+
+**Recovery**: Physical failsafe mode (hold reset during power cycle → boots at 192.168.1.1 ignoring overlay) → `firstboot -y && reboot` → re-run `conwrt configure`.
+
+**Fix**: Always use double quotes when shell variables must expand:
+```bash
+uci set network.lan.ipaddr="10.231.9.$_host"   # Correct: $_host expands
+uci set system.@system[0].hostname="lyra_$_suffix"  # Correct: $_suffix expands
+```
+
+**Lesson**: Any shell script that constructs uci values from variables MUST use double quotes. Single quotes are only safe for literal strings with no variable interpolation. This applies to both post-flash SSH scripts and ASU first-boot scripts.
+
+### Python and shell must use the same hash algorithm
+
+**Incident (2026-05-29):** `mac_hash.py` used `sha256` to derive the MAC-hash host byte, but the on-device shell script used `md5sum` (because sha256sum isn't guaranteed on all BusyBox builds). Python predicted IP `10.231.9.199`, device actually computed `10.231.9.48`.
+
+**Fix**: Both must use the same algorithm. Since BusyBox always has `md5sum` but may not have `sha256sum`, Python should use md5:
+```python
+# Python (matches BusyBox md5sum)
+h = hashlib.md5(mac_clean.encode()).hexdigest()
+val = int(h[:8], 16)
+```
+
+**Lesson**: Any hash/digest computed on-device MUST match what Python computes off-device. Prefer md5 for BusyBox compatibility — it's not a security context.
+
+### Use eth0 MAC, not br-lan MAC, for stable device identity
+
+**Incident (2026-05-29):** MAC-hash IP and hostname scripts read from `/sys/class/net/br-lan/address`. After `firstboot`, br-lan gets a **random MAC** (different each time). The MAC-hash IP would change after every factory reset.
+
+**Fix**: Read from `eth0` instead — this always has the **factory MAC** from the hardware (stable across reboots and resets):
+```bash
+_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
+```
+
+**Lesson**: For any identifier derived from MAC (hostname, IP, inventory), use the factory/base MAC (eth0), never the bridge MAC (br-lan). br-lan MAC is randomized after `firstboot`.
+
+### echo adds newline — tail -c6 includes it
+
+**Incident (2026-05-29):** Hostname suffix script:
+```bash
+_suffix=$(echo "$_mac" | tr -d ':' | tail -c6)
+```
+
+`echo` appends a newline. `tail -c6` includes that newline as one of the 6 characters, producing only 5 hex digits visible in the hostname (`lyra_2f319` instead of `lyra_12f319`).
+
+**Fix**: Strip newlines in the `tr` command:
+```bash
+_suffix=$(echo "$_mac" | tr -d ':\n' | tail -c6)
+```
+
+**Lesson**: When piping through `tail -cN`, account for trailing newlines from `echo`. Use `tr -d ':\n'` or `printf '%s'` instead of `echo`.
+
+### Test shell commands manually before automating
+
+This incident could have been avoided by following the new AGENTS.md "Test Before You Commit" rule. The exact sequence that would have caught all four bugs:
+
+1. SSH to device, run the MAC-hash IP script manually → verify `uci get network.lan.ipaddr` returns a valid IP (not `$_host` literal)
+2. Run the hostname script manually → verify `uci get system.@system[0].hostname` returns `lyra_12f319` (not `$_suffix`)
+3. Verify the IP matches what Python predicts → would have caught sha256 vs md5 mismatch
+4. Reboot, verify persistence, verify reachable on the new IP
+
+Step 1 alone would have caught the single-quote bug before it was committed to the overlay.
+
+## Backup before flashing
+
 ### Newly flashed devices hijack DHCP (rogue DHCP)
 
 Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by default. If conwrt is running on an OpenWrt **switch or router** with other devices on the same network, the freshly flashed device competes for DHCP clients — potentially hijacking the default gateway.

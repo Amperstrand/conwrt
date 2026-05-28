@@ -1279,6 +1279,18 @@ sync; sync; reboot
 - This creates a "zombie state" where UCI says PasswordAuth=on but no valid password exists
 - Recovery: hold reset again, connect at 192.168.1.1 on LAN port, reconfigure from scratch
 
+#### Power cycle persistence confirmed (2026-05-28)
+
+After deploying lyra2 with the safe configuration pattern (sync; sync; reboot), the device survived a full power cycle (unplugged and replugged ~30 minutes later):
+- Hostname: `lyra2` persisted ✅
+- SSH key auth: persisted ✅
+- Password auth disabled: persisted ✅
+- LAN IP: 10.231.9.198 persisted ✅
+- WiFi disabled: persisted ✅
+- WAN SSH rule: persisted ✅
+
+Note: WAN DHCP lease changed (.210 → .119) after power cycle — expected behavior, WAN IP is dynamic. DNS hostname `lyra2.lan` still resolves correctly via mDNS/avahi.
+
 ### What We Will Do Different Next Time
 
 1. **Use the proven LAN method for factory-default devices**: Plug ethernet into the correct stock LAN port (far port for Batch 2, middle port for Batch 1), complete the wizard, enable SSH via web UI, then flash via mtd-write. This has been tested on 4 units with 100% success rate.

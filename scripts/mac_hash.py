@@ -12,12 +12,13 @@ import hashlib
 def mac_to_host_byte(mac: str) -> int:
     """Derive a deterministic host byte (2-201) from a MAC address.
 
-    Uses sha256 hash of the cleaned MAC string, takes first 4 bytes as
-    uint32, modulo 200 + 2 to avoid .0, .1, and .255.
+    Uses md5 hash of the cleaned MAC string (matching the BusyBox md5sum
+    used in the on-device shell script), takes first 8 hex chars as uint32,
+    modulo 200 + 2 to avoid .0, .1, and .255.
     """
     mac_clean = mac.lower().replace(':', '').replace('-', '').replace('.', '')
-    h = hashlib.sha256(mac_clean.encode()).digest()
-    val = int.from_bytes(h[:4], 'big')
+    h = hashlib.md5(mac_clean.encode()).hexdigest()
+    val = int(h[:8], 16)
     return (val % 200) + 2
 
 
