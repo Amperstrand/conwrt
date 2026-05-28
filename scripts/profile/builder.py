@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,8 @@ from profile.wifi import (
     wifi_sta_firstboot_script,
 )
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
+
+_VALID_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
 
 
 def _read_ssh_pubkey(path: str) -> tuple[str, str]:
@@ -133,6 +136,8 @@ def build_plan(
     wan_ssh: bool = False,
     extra_pub_keys: Optional[list[str]] = None,
     disable_dhcp: bool = False,
+    hostname: str = "",
+    wifi_disable: bool = False,
 ) -> ProfilePlan:
     """Build an ordered profile plan from operator config."""
     caps = list(model_capabilities or [])
@@ -146,6 +151,30 @@ def build_plan(
             firstboot_script=_DHCP_DISABLE_SCRIPT,
             configure_script=_DHCP_DISABLE_SCRIPT.replace("\n", " && "),
         ))
+
+    effective_hostname = hostname or cfg.hostname
+    if effective_hostname:
+        if _VALID_HOSTNAME_RE.match(effective_hostname):
+            steps.append(ProfileStep(
+                kind=StepKind.HOSTNAME,
+                label=f"Hostname: {effective_hostname}",
+                firstboot_script="\n".join([
+                    f"uci set system.@system[0].hostname='{effective_hostname}'",
+                    "uci commit system",
+                ]),
+                configure_script=" && ".join([
+                    f"uci set system.@system[0].hostname='{effective_hostname}'",
+                    "uci commit system",
+                ]),
+            ))
+        else:
+            steps.append(ProfileStep(
+                kind=StepKind.HOSTNAME,
+                label=f"Hostname: {effective_hostname}",
+                skipped_reason=f"invalid hostname (must be alphanumeric + hyphens, max 63 chars)",
+                include_in_asu=False,
+                include_in_post_install=False,
+            ))
 
     all_keys: list[str] = []
     if ssh_key_path:
@@ -248,6 +277,22 @@ def build_plan(
                 "index": i,
                 "country_code": cfg.country_code,
             },
+        ))
+
+    if wifi_disable or cfg.wifi_disable:
+        steps.append(ProfileStep(
+            kind=StepKind.WIFI_DISABLE,
+            label="Disable all WiFi radios",
+            firstboot_script="\n".join([
+                "for radio in $(uci show wireless | grep -o 'radio[0-9]*' | sort -u); do",
+                "  uci set wireless.$radio.disabled='1'",
+                "done",
+                "uci commit wireless",
+            ]),
+            configure_script=" && ".join([
+                "for radio in $(uci show wireless | grep -o 'radio[0-9]*' | sort -u); do uci set wireless.$radio.disabled='1'; done",
+                "uci commit wireless",
+            ]),
         ))
 
     from use_cases import apply_defaults as _apply_defaults

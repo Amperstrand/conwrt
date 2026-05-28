@@ -323,6 +323,37 @@ dnsmasq --port=0 --no-daemon --tftp-root=/tmp/tftpboot --user=root --listen-addr
 
 The `--port=0` disables DNS. Bind to specific interface/IP to avoid interfering with existing DHCP.
 
+## UBIFS Overlay Persistence
+
+### File writes lost on `network restart` or unclean power loss
+
+OpenWrt devices with UBIFS overlays (NAND flash, common on ipq40xx, mediatek, etc.) have a write-back cache that is NOT flushed by `sync` alone. `uci commit` persists because it does an explicit `fsync()`, but regular file writes (`echo >`, `cp`, `passwd`) sit in UBIFS buffers and are lost if the device restarts without a clean shutdown.
+
+**What persists:**
+- `uci commit` — always persists (explicit fsync)
+- Regular file writes — only persist after `sync; sync; reboot` (clean shutdown flushes UBIFS)
+
+**What does NOT persist:**
+- File writes after `network restart` — UBIFS buffers not flushed
+- File writes after unclean power loss (unplugging) — no shutdown, no flush
+
+**Incident (2026-05-28, ASUS Lyra MAP-AC2200):** Configured lyra2 with SSH key, password, hostname. Used `network restart` to change IP. SSH key and password were lost (UBIFS write-back not committed). UCI changes (IP, hostname) survived because `uci commit` does its own fsync. Device became unreachable — key auth failed and password was gone.
+
+**Safe pattern:**
+1. Write all files (authorized_keys, passwd)
+2. `sync; sync`
+3. `reboot` (clean shutdown — NOT `network restart`)
+4. Wait for device to come back
+5. Verify persistence (check authorized_keys exists, key auth works)
+6. **Only then** disable password auth
+
+**NEVER:**
+- Use `network restart` to apply file-level changes on UBIFS overlays
+- Disable password auth before verifying SSH key survives reboot
+- Unplug a device after writing config without `sync; sync` first
+
+**Detection:** Check `mount | grep ubifs` — if the overlay is UBIFS, this gotcha applies. JFFS2 overlays may behave differently but the safe pattern (sync + reboot) works for both.
+
 ## Backup before flashing
 
 ### Newly flashed devices hijack DHCP (rogue DHCP)

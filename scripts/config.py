@@ -80,6 +80,8 @@ class ConwrtConfig:
     wifi_aps: list[WifiAPConfig] = field(default_factory=list)
     wireguard: Optional[WireguardConfig] = None
     use_cases: list[UseCaseConfig] = field(default_factory=list)
+    hostname: str = ""
+    wifi_disable: bool = False
 
     @property
     def wifi_ap(self) -> Optional[WifiAPConfig]:
@@ -302,4 +304,6 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         wifi_aps=wifi_aps,
         wireguard=wg_cfg,
         use_cases=use_cases_list,
+        hostname=raw.get("device", {}).get("hostname", ""),
+        wifi_disable=raw.get("device", {}).get("wifi_disable", False),
     )

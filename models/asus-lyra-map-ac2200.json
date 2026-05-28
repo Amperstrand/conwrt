@@ -1,0 +1,143 @@
+{
+  "id": "asus-lyra-map-ac2200",
+  "vendor": "ASUS",
+  "description": "Lyra MAP-AC2200 tri-band WiFi mesh node (IPQ4019 + QCA9886)",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "asus,map-ac2200",
+    "default_ip": "192.168.1.1",
+    "profile": "asus_map-ac2200",
+    "board_name": "asus,map-ac2200",
+    "version": "24.10.4"
+  },
+  "hardware": {
+    "soc": "Qualcomm IPQ4019 (quad-core Cortex-A7) @ 717MHz",
+    "flash": "NAND 128MB (Macronix)",
+    "ram": "256MB DDR3 (Nanya NT5CC128M16IP-DI)",
+    "ethernet_ports": "2x 10/100/1000 (1 LAN + 1 WAN, QCA8072 switch)",
+    "wifi": "Tri-band: IPQ4019 2.4GHz b/g/n 2x2 (ch1-11) + IPQ4019 5GHz a/n/ac 2x2 (ch36-64) + QCA9886 5GHz a/n/ac (ch100-165)",
+    "bluetooth": "Atheros AR3012",
+    "led": "RGB LED via TI LP5523 (9-channel controller)",
+    "serial": "Header J35, 2mm spacing, 115200 8N1, pinout: 3.3v-RX-TX-GND (square=VCC)",
+    "buttons": "WPS, Reset",
+    "power": "12 VDC, 2.0A via barrel connector"
+  },
+  "mac_oui": ["10:7b:44", "2c:fd:a1"],
+  "signatures": {
+    "stock_http_server": "httpd/2.0",
+    "stock_http_title": "ASUS Wireless Router Lyra",
+    "stock_ssh_user": "admin",
+    "stock_ssh_default_password": "admin",
+    "stock_qis_redirect": "/QIS_wizard.htm",
+    "stock_aimesh_port": 9999,
+    "stock_dhcp_client": "Device sends DHCP Discover from WAN port - if you see this, you're on the wrong port",
+    "rescue_mode_tftp": "192.168.1.1, TFTP server, solid purple LED"
+  },
+  "stock_default_ip": "192.168.1.1",
+  "flash_methods": {
+    "stock-ssh-mtd": {
+      "description": "Two-stage flash via stock firmware SSH: (1) SCP initramfs.itb to /tmp/, mtd-unlock + mtd-write to linux partition, reboot into OpenWrt initramfs; (2) SCP sysupgrade.bin to /tmp/, sysupgrade -n. Stock firmware SSH uses same credentials as web UI. Port next to power connector = LAN, other = WAN.",
+      "stock_default_ip": "192.168.1.1",
+      "stock_ssh_port": 22,
+      "initramfs_filename_pattern": "*asus_map-ac2200*initramfs*uImage.itb",
+      "sysupgrade_filename_pattern": "*asus_map-ac2200*squashfs*sysupgrade.bin",
+      "mtd_partition": "linux",
+      "flash_time_seconds": 180,
+      "silence_timeout": 60,
+      "led_pattern_boot": "LED breathes multiple colors, then blinks blue, then steady blue when ready",
+      "reset_instructions": "Factory reset: hold reset button 5 seconds until orange flashing, then release. Do NOT hold 10+ seconds (enters rescue mode). On factory default (white LED), SSH is enabled automatically via CVE chain (CVE-2021-32030 null-byte auth bypass + CVE-2018-5999 apply.cgi). No wizard needed. Works from macOS or OpenWrt (router-to-router). WiFi flash: use --wifi flag from OpenWrt host to auto-scan for ASUS_* SSID and flash wirelessly (no ethernet cable needed). PORT WARNING: Stock LAN port varies by hardware batch — try both ports if device not found. After initramfs flash, cable MUST be on middle port (LAN in OpenWrt)."
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    },
+    "wifi-sta-flash": {
+      "description": "WiFi STA flash from OpenWrt host: scan for ASUS_* SSID (open/no encryption on 2.4GHz), connect STA interface, CVE chain SSH enable over WiFi, SCP initramfs, mtd-write. No ethernet cable needed. Requires OpenWrt host with 2.4GHz STA-capable radio.",
+      "stock_wifi_ssid_pattern": "ASUS_*",
+      "stock_wifi_encryption": "none",
+      "stock_wifi_band": "2.4GHz",
+      "stock_wifi_channel": "auto",
+      "host_sta_radio": "radio1",
+      "host_sta_band": "2g",
+      "flash_time_seconds": 180
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "serial"
+  ],
+  "wifi_radios": {
+    "radio0": {
+      "phy": "phy0",
+      "hardware": "IPQ4019",
+      "band": "5g",
+      "htmode": "VHT80",
+      "channels": "36-64",
+      "spatial_streams": 2,
+      "max_stations": 32
+    },
+    "radio1": {
+      "phy": "phy1",
+      "hardware": "IPQ4019",
+      "band": "2g",
+      "htmode": "VHT40",
+      "channels": "1-11",
+      "spatial_streams": 2,
+      "max_stations": 32
+    },
+    "radio2": {
+      "phy": "phy2",
+      "hardware": "QCA9886",
+      "band": "5g",
+      "htmode": "VHT80",
+      "channels": "100-165",
+      "spatial_streams": 2,
+      "max_stations": 32
+    }
+  },
+   "tested_hardware": {
+    "stock-ssh-mtd-batch1": {
+      "tested": true,
+      "date": "2026-05-26",
+      "count": 2,
+      "hw_rev": "B1",
+      "mac_oui": "10:7b:44",
+      "bootloader_ver": "MAP-AC2200-01-00-00-03",
+      "stock_firmware": "3.0.0.4.384_46054",
+      "erase_size": "0x20000",
+      "stock_lan_port": "middle (near power)",
+      "notes": "Batch 1. 2 units tested. OEM wizard via Playwright (unit 1) and curl-based SSH enable (unit 2). SCP requires -O flag. Port next to power = LAN in stock firmware."
+    },
+    "stock-ssh-mtd-batch2": {
+      "tested": true,
+      "date": "2026-05-27",
+      "count": 2,
+      "hw_rev": "B1",
+      "mac_oui": "2c:fd:a1",
+      "bootloader_ver": "MAP-AC2200-01-00-00-05",
+      "stock_firmware": "3.0.0.4.384_46630",
+      "erase_size": "0x1f000",
+      "stock_lan_port": "far from power",
+      "notes": "Batch 2. 2 units tested. REVERSED port assignments: stock LAN on far port, stock WAN on middle port. OpenWrt LAN still middle port. Curl-based SSH enable. SCP with long filenames fails silently — use short names."
+    }
+  },
+  "port_variability": {
+    "note": "Stock firmware port assignments vary by hardware batch. OpenWrt always uses middle port (closest to power) as LAN.",
+    "batches": [
+      {
+        "mac_oui": "10:7b:44",
+        "stock_lan_port": "middle (closest to power)",
+        "stock_wan_port": "far from power"
+      },
+      {
+        "mac_oui": "2c:fd:a1",
+        "stock_lan_port": "far from power",
+        "stock_wan_port": "middle (closest to power)"
+      }
+    ],
+    "openwrt_lan_port": "middle (closest to power)",
+    "discovery_method": "Try both ports. Listen for STP/SSDP broadcasts with tcpdump. The port that sends traffic is the stock LAN port."
+  }
+}

@@ -96,6 +96,7 @@ save_fingerprint = _router_fingerprint.save_fingerprint
 from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, get_link_state as platform_get_link_state, configure_interface_ip, remove_interface_ip
 from flash.preflight import run_preflight_checks
 from profile import apply_plan, build_plan, print_plan
+from profile.apply import verify_persistence as _verify_persistence
 from profile.wifi import build_mgmt_wifi_script
 
 
@@ -756,6 +757,8 @@ def _apply_profile_post_flash(
     wan_ssh: Optional[bool] = None,
     ssh_key_path: Optional[str] = None,
     dry_run: bool = False,
+    hostname: str = "",
+    wifi_disable: bool = False,
 ) -> str:
     """Apply config.toml profile via unified plan (WiFi, use cases, LAN IP)."""
     from config import ConwrtConfig
@@ -778,6 +781,8 @@ def _apply_profile_post_flash(
         ssh_key_path=ssh_key_path,
         password=password,
         wan_ssh=effective_wan_ssh,
+        hostname=hostname,
+        wifi_disable=wifi_disable,
     )
     if not dry_run:
         log("Applying profile via SSH...")
@@ -3612,6 +3617,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip password, key-only auth")
     cfg_parser.add_argument("--wan-ssh", action="store_true",
         help="Open SSH on WAN port")
+    cfg_parser.add_argument("--hostname", default=None,
+        help="Set router hostname (overrides config.toml [device].hostname)")
+    cfg_parser.add_argument("--wifi-disable", action="store_true",
+        help="Disable all WiFi radios")
+    cfg_parser.add_argument("--verify", action="store_true",
+        help="After applying config, reboot and verify persistence")
     cfg_parser.add_argument("--dry-run", action="store_true",
         help="Print commands without executing")
 
@@ -3812,6 +3823,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
     )
     model_id = args.model_id
     interface = args.interface or auto_detect_interface() or ""
+    effective_hostname = args.hostname or cfg.hostname
+    effective_wifi_disable = args.wifi_disable or cfg.wifi_disable
 
     log(f"Configuring router at {ip}...")
 
@@ -3832,6 +3845,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
             wan_ssh=wan_ssh,
             ssh_key_path=ssh_pub_path or None,
             dry_run=True,
+            hostname=effective_hostname,
+            wifi_disable=effective_wifi_disable,
         )
         if ssh_pub_path or ssh_key_text:
             print("  # SSH key: idempotent install via authorized_keys check")
@@ -3848,7 +3863,16 @@ def cmd_configure(args: argparse.Namespace) -> int:
         wan_ssh=wan_ssh,
         ssh_key_path=ssh_pub_path or None,
         dry_run=False,
+        hostname=effective_hostname,
+        wifi_disable=effective_wifi_disable,
     )
+
+    if args.verify and not args.dry_run:
+        _verify_persistence(
+            ip, ssh_key=ssh_key_path,
+            expected_hostname=effective_hostname,
+            log=log,
+        )
 
     log(f"Configuration complete. Router at {ip}")
     return 0

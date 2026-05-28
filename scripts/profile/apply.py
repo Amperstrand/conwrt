@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from typing import Callable, Optional
 
 from profile.plan import ProfilePlan, ProfileStep, StepKind
@@ -159,3 +160,90 @@ def apply_plan(
                     _log(f"  ✓ {step.label}")
 
     return ip
+
+
+def verify_persistence(
+    ip: str,
+    ssh_key: str = "",
+    expected_hostname: str = "",
+    timeout: int = 180,
+    log: Optional[LogFn] = None,
+) -> bool:
+    """Flush UBIFS cache, reboot, wait for SSH, and verify key settings survived.
+
+    UBIFS overlay persistence: file writes sit in write-back cache and are lost
+    on unclean power loss. ``uci commit`` persists because it does explicit
+    fsync.  Regular file writes (authorized_keys, /etc/shadow) need ``sync;
+    sync; reboot`` to flush.  NEVER use ``network restart`` to apply changes.
+
+    Returns True if all checks pass, False otherwise.
+    """
+    _log = log or (lambda _m: None)
+    _log("  Persistence: flushing UBIFS cache and rebooting...")
+
+    _run_ssh(ip, "sync; sync; reboot", ssh_key, _log, timeout=15)
+
+    _log("  Persistence: waiting for device to reboot...")
+    start = time.time()
+    back = False
+    while time.time() - start < timeout:
+        if time.time() - start < 15:
+            time.sleep(5)
+            continue
+        try:
+            r = subprocess.run(
+                ssh_cmd(ip, "echo SSH_OK", key=ssh_key or None, connect_timeout=5),
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if "SSH_OK" in r.stdout:
+                back = True
+                break
+        except Exception:
+            pass
+        time.sleep(5)
+
+    if not back:
+        _log(f"  ⚠ Persistence: device did not come back within {timeout}s")
+        return False
+
+    _log("  Persistence: device is back, verifying...")
+
+    checks_cmd = (
+        "echo hostname=$(uci get system.@system[0].hostname 2>/dev/null || echo ''); "
+        "echo sshkey_lines=$(wc -l < /etc/dropbear/authorized_keys 2>/dev/null || echo 0)"
+    )
+    r = subprocess.run(
+        ssh_cmd(ip, checks_cmd, key=ssh_key or None, connect_timeout=10),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+
+    if r.returncode != 0:
+        _log(f"  ⚠ Persistence: verification SSH failed (rc={r.returncode})")
+        return False
+
+    result: dict[str, str] = {}
+    for line in r.stdout.strip().split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            result[k] = v
+
+    ok = True
+
+    if expected_hostname:
+        actual_hostname = result.get("hostname", "")
+        if actual_hostname == expected_hostname:
+            _log(f"  ✓ Persistence: hostname={actual_hostname}")
+        else:
+            _log(f"  ⚠ Persistence: hostname mismatch: expected={expected_hostname}, got={actual_hostname}")
+            ok = False
+
+    sshkey_lines = int(result.get("sshkey_lines", "0"))
+    if sshkey_lines > 0:
+        _log(f"  ✓ Persistence: SSH keys present ({sshkey_lines} line(s))")
+    else:
+        _log("  ⚠ Persistence: SSH keys missing after reboot")
+        ok = False
+
+    if ok:
+        _log("  ✓ Persistence: all checks passed")
+    return ok

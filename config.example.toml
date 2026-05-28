@@ -18,6 +18,11 @@ keys = [
     # "ssh-rsa AAAA...your-second-key... user@host",
 ]
 
+# --- Device identity ---
+# [device]
+# hostname = "my-router"     # Router hostname (alphanumeric + hyphens, max 63 chars)
+# wifi_disable = false       # Disable all WiFi radios (for wired-only devices)
+
 [password]
 # Controls root password on the flashed router.
 #   "random"   = generate a random password, print it once (default)
