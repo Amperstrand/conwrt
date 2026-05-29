@@ -191,3 +191,27 @@ wan_ssh = false
 # proxy_type = "ss"           # Default proxy protocol: ss, vmess, trojan, vless
 # core_type = "Meta"          # Clash core: Meta (Mihomo), Dev, Tun
 # dns_mode = "redir-host"     # DNS mode: redir-host or fake-ip
+
+# --- FIPS mesh over Bluetooth ---
+# FIPS (Friend Identity Protocol Suite) mesh networking over RFCOMM Bluetooth.
+# Devices with bluetooth capability auto-qualify for this use case.
+# Requires the FIPS binary (standalone musl static binary for arm/mips).
+#
+# Enable in [use_cases]:
+#   enabled = ["fips-bluetooth-rfcomm"]
+#
+# [use_cases.fips-bluetooth-rfcomm]
+# role = "server"              # "server" (accepts connections) or "client" (initiates)
+# channel = 1                  # RFCOMM channel (1-30)
+# binary_path = "/tmp/fips_packages/fips"        # Local path to FIPS binary (host-side)
+# binaryctl_path = "/tmp/fips_packages/fipsctl"  # Local path to fipsctl binary
+# bt_pin = "0000"              # Bluetooth pairing PIN
+# tun_enabled = true           # Enable TUN for IP-over-mesh
+# tun_dns = true               # DNS over TUN
+# tun_gateway = true           # Gateway over TUN
+# # Peers — list of known FIPS mesh nodes
+# # Each peer needs npub (public key) and bt_mac (Bluetooth MAC address)
+# # Server mode: list all clients. Client mode: list the server.
+# # peers = [
+# #   { npub = "npub1...", bt_mac = "AA:BB:CC:DD:EE:FF" },
+# # ]

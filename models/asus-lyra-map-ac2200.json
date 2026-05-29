@@ -68,6 +68,7 @@
   "capabilities": [
     "ethernet",
     "wifi",
+    "bluetooth",
     "serial"
   ],
   "wifi_radios": {

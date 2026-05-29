@@ -40,7 +40,7 @@
     },
     "capabilities": {
       "type": "array",
-      "items": {"type": "string", "enum": ["ethernet", "wifi", "usb", "lte", "cellular", "serial", "ssh", "tftp"]},
+      "items": {"type": "string", "enum": ["ethernet", "wifi", "bluetooth", "usb", "lte", "cellular", "serial", "ssh", "tftp"]},
       "uniqueItems": true
     },
     "flash_methods": {
