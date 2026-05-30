@@ -1,0 +1,50 @@
+{
+  "id": "linksys-mx4200-v1",
+  "vendor": "Linksys",
+  "description": "Velop AX4200 WiFi 6 System V1 — CVE-2019-16340 auth bypass for initial flash",
+  "openwrt": {
+    "target": "qualcommax/ipq807x",
+    "device": "linksys,mx4200v1",
+    "profile": "linksys_mx4200v1",
+    "version": "24.10.0",
+    "default_ip": "192.168.1.1"
+  },
+  "hardware": {
+    "soc": "IPQ8174 (quad-core Cortex-A53) @ 1.0GHz",
+    "flash": "NAND 256MB",
+    "ram": "512MB DDR3",
+    "ethernet_ports": "1x 10/100/1000",
+    "wifi": "2.4GHz + 5GHz dual-band WiFi 6 (IPQ8174 integrated)"
+  },
+  "mac_oui": [
+    "E8:9F:80"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    },
+    "linksys-jnap-cve": {
+      "description": "CVE-2019-16340 auth bypass: use JNAP SetAdminPassword with recovery pin to set admin password on factory-reset Velop, then upload factory image via port 52000 /jcgi/ endpoint. Dual partitions — must flash both.",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.2",
+      "stock_default_user": "admin",
+      "stock_default_password": "admin",
+      "upload_endpoint": "http://192.168.1.1:52000/jcgi/",
+      "flash_time_seconds": 120,
+      "silence_timeout": 300,
+      "tested_hardware": {
+        "tested": true,
+        "date": "2026-05-30",
+        "notes": "Flashed both partitions successfully. Partition 1 via port 52000 /jcgi/ upload, partition 2 via SSH mtd write to alt_kernel."
+      }
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "ssh"
+  ]
+}
