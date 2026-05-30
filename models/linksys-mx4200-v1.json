@@ -27,18 +27,18 @@
       "exit_code": 246
     },
     "linksys-jnap-cve": {
-      "description": "CVE-2019-16340 auth bypass: use JNAP SetAdminPassword with recovery pin to set admin password on factory-reset Velop, then upload factory image via port 52000 /jcgi/ endpoint. Dual partitions — must flash both.",
+      "description": "CVE-2019-16340 auth bypass: use JNAP SetAdminPassword with 5-digit recovery pin from sticker to set admin password, then upload factory image via /jcgi/ endpoint (port 80 or 52000). Recovery pin is required — empty/missing resetCode returns ErrorInvalidResetCode. Dual partitions — must flash both.",
       "recovery_ip": "192.168.1.1",
       "client_ip": "192.168.1.2",
       "stock_default_user": "admin",
       "stock_default_password": "admin",
-      "upload_endpoint": "http://192.168.1.1:52000/jcgi/",
+      "upload_endpoint": "http://192.168.1.1/jcgi/",
       "flash_time_seconds": 120,
       "silence_timeout": 300,
       "tested_hardware": {
         "tested": true,
         "date": "2026-05-30",
-        "notes": "Flashed both partitions successfully. Partition 1 via port 52000 /jcgi/ upload, partition 2 via SSH mtd write to alt_kernel."
+        "notes": "Flashed 2 units. Partition 1 via port 80 or 52000 /jcgi/ upload, partition 2 via SSH mtd write to alt_kernel. Recovery pin required on both."
       }
     }
   },

@@ -184,8 +184,46 @@ scp -O root@192.168.1.1:/tmp/mtd-backup/*.bin ./mx4200-mtd-backup/
 9. Back up `0:art`, `appsblenv`, and `devinfo` partitions before anything else.
 10. Configure WiFi radios (disabled by default) and network settings.
 
+## Bluetooth (Silicon Labs EFR32MG21)
+
+The stock firmware advertises a JNAP Bluetooth service, and the device tree has `blsp1_uart3` enabled. However, **the Bluetooth chip is a Silicon Labs EFR32MG21 IoT MCU** (Bluetooth 5 + Zigbee + Thread multiprotocol), NOT a Qualcomm WCNSS integrated chip.
+
+**Status: NOT WORKING under OpenWrt. This is not an opkg-install situation.**
+
+What works:
+- Bluetooth kernel stack is loaded (bluetooth.ko, hci_uart, rfcomm, L2CAP, btusb all present)
+- UART device exists (`/dev/ttyMSM0`, `/dev/ttyMSM1`)
+
+What's missing:
+- No `bluetooth {}` child node in the device tree — Linux doesn't bind HCI to the UART
+- No Linux driver for EFR32MG21 (uses proprietary Silicon Labs QAPI protocol, not standard HCI H4)
+- No firmware files — proprietary, not in `linux-firmware` or any OpenWrt package
+- No GPIO configuration for power/enable/reset pins
+
+The `wcnss@4b000000` reserved memory (97MB) is for the WiFi DSP (ath11k), NOT for Bluetooth.
+
+**Practical workaround**: Use a USB Bluetooth dongle. The xHCI controller and btusb driver are already loaded:
+```bash
+opkg update
+opkg install kmod-btusb bluez-libs bluez-utils bluez-daemon
+/etc/init.d/bluetooth start
+hciconfig -a
+```
+
+This gives full Bluetooth Classic + BLE + L2CAP support via an external dongle.
+
+## Lessons Learned (Device 2 Session)
+
+- **Recovery pin IS required** — the CVE bypass returned `ErrorInvalidResetCode` with empty or missing resetCode. The 5-digit pin from the device sticker is mandatory.
+- **Port 52000 may not be available** — on device 2, port 52000 never came up. Port 80 `/jcgi/` worked instead for the firmware upload. Try port 80 first.
+- **Firmware upload works on port 80** — `curl -u admin:admin http://192.168.1.1/jcgi/` (not just port 52000)
+- **Device 2 was not factory-reset** — it appeared on 192.168.1.1 with JNAP responding immediately, but admin:admin was rejected until the CVE bypass was applied
+- **Both devices identical hardware** — same firmware version (1.0.11.208553), same SoC, same partition layout, same MAC OUI (E8:9F:80)
+
 ## References
 
 - OpenWrt Wiki: https://openwrt.org/toh/linksys/mx4200_v1
 - CVE-2019-16340: https://nvd.nist.gov/vuln/detail/CVE-2019-16340
 - 5GHz BDF issue: https://github.com/openwrt/openwrt/issues/14523
+- EFR32MG21 datasheet: https://www.silabs.com/wireless/zigbee/efr32mg21-series-2-soCs
+- MX4200 OpenWrt support PR: https://github.com/openwrt/openwrt/pull/13432
