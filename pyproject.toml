@@ -28,7 +28,14 @@ target-version = "py310"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82"]
+# E9/F63/F7/F82: syntax errors and undefined names (catch broken code).
+# F811: redefinition of an unused name (catches accidental shadowing, e.g. an
+#       import shadowed by a later local def).
+# B:    flake8-bugbear — likely-bug patterns (unused loop vars, raise-without-from).
+# Broader style/import-sort/pyupgrade rules (I, UP, full F) are intentionally not
+# enabled yet: turning them on repo-wide would churn ~40 files and risk breaking
+# intentional re-exports. Tighten incrementally in a dedicated pass.
+select = ["E9", "F63", "F7", "F82", "F811", "B"]
 
 [tool.pyright]
 pythonVersion = "3.10"
@@ -36,6 +43,13 @@ include = ["scripts", "tests"]
 exclude = ["**/__pycache__"]
 extraPaths = ["scripts"]
 typeCheckingMode = "basic"
+# The relaxations below are intentional for this codebase and should stay off:
+#   reportMissingImports / reportMissingModuleSource: optional runtime deps
+#     (scapy, sshpass, etc.) and hyphenated modules loaded via importlib are not
+#     statically resolvable; enabling these produces false positives.
+#   reportOptional*/reportAttributeAccessIssue/reportArgumentType: the flash
+#     state machine carries dynamic SimpleNamespace profiles; strict checks here
+#     would be mostly noise. Revisit if profiles become typed dataclasses.
 reportMissingTypeArgument = false
 reportUnusedCallResult = false
 reportImplicitStringConcatenation = false

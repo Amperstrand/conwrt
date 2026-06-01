@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # bats file_tags=conwrt
 
-REPO_ROOT="/home/ubuntu/src/conwrt"
+# Derive repo root from this test file's location so the suite is portable
+# across machines (tests/ lives directly under the repo root).
+REPO_ROOT="$(cd "$(dirname "$BATS_TEST_DIRNAME")" && pwd)"
 RUNS_DIR="${REPO_ROOT}/runs"
 _TEST_RUN_DIR=""
 

@@ -67,5 +67,5 @@ register(UseCase(
     requires_capabilities=[],
     test_status="untested",
     tested_notes="subscription import via LuCI",
-    requires_post_flash=True,
+    configure_via="ssh",
 ))

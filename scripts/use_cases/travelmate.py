@@ -54,5 +54,4 @@ register(UseCase(
     test_status="experimental",
     tested_notes="wiki-based",
     requires_capabilities=["wifi"],
-    requires_post_flash=False,
 ))

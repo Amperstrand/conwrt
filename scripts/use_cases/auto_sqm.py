@@ -243,5 +243,4 @@ register(UseCase(
     test_status="experimental",
     tested_notes="not validated on hardware",
     requires_capabilities=[],
-    requires_post_flash=False,
 ))

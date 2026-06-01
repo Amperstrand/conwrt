@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import base64
 import re
-from pathlib import Path
 from typing import Optional
 
-from config import ConwrtConfig, _strip_key_comment
+from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
@@ -17,17 +16,6 @@ from profile.wifi import (
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
 
 _VALID_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
-
-
-def _read_ssh_pubkey(path: str) -> tuple[str, str]:
-    key_path = Path(path).expanduser()
-    raw = key_path.read_text().strip()
-    parts = raw.split()
-    if len(parts) >= 2:
-        cleaned = f"{parts[0]} {parts[1]}"
-    else:
-        cleaned = raw
-    return cleaned, key_path.name
 
 
 def _ssh_key_firstboot(keys: list[str]) -> str:
@@ -224,21 +212,21 @@ def build_plan(
 
     all_keys: list[str] = []
     if ssh_key_path:
-        cleaned, source = _read_ssh_pubkey(ssh_key_path)
+        cleaned, source = read_ssh_pubkey(ssh_key_path)
         all_keys.append(cleaned)
         plan.ssh_key_cleaned = cleaned
         plan.ssh_key_source = source
     elif cfg.ssh_public_key_text:
-        all_keys.append(_strip_key_comment(cfg.ssh_public_key_text))
+        all_keys.append(strip_key_comment(cfg.ssh_public_key_text))
         plan.ssh_key_cleaned = all_keys[0]
     if extra_pub_keys:
         for k in extra_pub_keys:
-            stripped = _strip_key_comment(k.strip())
+            stripped = strip_key_comment(k.strip())
             if stripped and stripped not in all_keys:
                 all_keys.append(stripped)
     elif len(cfg.ssh_all_keys) > 1:
         for k in cfg.ssh_all_keys[1:]:
-            stripped = _strip_key_comment(k)
+            stripped = strip_key_comment(k)
             if stripped and stripped not in all_keys:
                 all_keys.append(stripped)
 

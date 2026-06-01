@@ -57,7 +57,7 @@ def load_use_cases() -> list[dict]:
     sys.path.insert(0, str(USE_CASES_DIR.parent))
     from use_cases import registry
     ucs = []
-    for idx, (name, uc) in enumerate(sorted(registry().items())):
+    for idx, (_name, uc) in enumerate(sorted(registry().items())):
         cmd_id = f"cmd-{idx}"
         commands_html = ""
         raw_script = ""

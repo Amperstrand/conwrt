@@ -49,5 +49,5 @@ register(UseCase(
     requires_capabilities=[],
     test_status="untested",
     tested_notes="web setup wizard after install",
-    requires_post_flash=True,
+    configure_via="ssh",
 ))

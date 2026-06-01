@@ -45,11 +45,6 @@ class UseCase:
     tested_notes: str = ""
     post_install_notes: str = ""
     requires_capabilities: list[str] = field(default_factory=list)
-    requires_post_flash: bool = False  # deprecated; sets configure_via=ssh when True
-
-    def __post_init__(self) -> None:
-        if self.requires_post_flash and self.configure_via == "both":
-            object.__setattr__(self, "configure_via", "ssh")
 
     def build_defaults(self, params: dict[str, Any]) -> str:
         """Deprecated alias for build_configure."""

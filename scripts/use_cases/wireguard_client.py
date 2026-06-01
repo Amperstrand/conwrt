@@ -112,5 +112,4 @@ register(UseCase(
     test_status="tested",
     tested_notes="D-Link COVR-X1860 A1",
     requires_capabilities=[],
-    requires_post_flash=False,
 ))

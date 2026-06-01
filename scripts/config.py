@@ -104,11 +104,27 @@ class ConwrtConfig:
         return self.password_mode
 
 
-def _strip_key_comment(key_text: str) -> str:
+def strip_key_comment(key_text: str) -> str:
+    """Reduce an SSH public key to "<type> <blob>", dropping the user@host comment.
+
+    Canonical implementation shared by profile.builder and firmware-manager so no
+    personal data leaks into metadata or first-boot defaults scripts.
+    """
     parts = key_text.strip().split()
     if len(parts) >= 2:
         return f"{parts[0]} {parts[1]}"
     return key_text.strip()
+
+
+# Backward-compatible private alias (still imported by some call sites).
+_strip_key_comment = strip_key_comment
+
+
+def read_ssh_pubkey(path: str) -> tuple[str, str]:
+    """Read a public-key file and return (comment-stripped key, source filename)."""
+    key_path = Path(path).expanduser()
+    raw = key_path.read_text().strip()
+    return strip_key_comment(raw), key_path.name
 
 
 def _is_inline_key(value: str) -> bool:

@@ -72,5 +72,4 @@ register(UseCase(
     test_status="experimental",
     tested_notes="uci from OpenWrt wiki",
     requires_capabilities=[],
-    requires_post_flash=False,
 ))

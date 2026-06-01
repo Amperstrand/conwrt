@@ -1011,7 +1011,7 @@ def identify_router(probe_data: dict, passive_data: dict, lldp_data: Optional[di
         if not router.vendor:
             router.vendor = matched_model.get("vendor", "")
 
-        for method_name, method_cfg in matched_model.get("flash_methods", {}).items():
+        for _method_name, method_cfg in matched_model.get("flash_methods", {}).items():
             if "default_password" in method_cfg:
                 router.default_password = method_cfg["default_password"]
                 break
@@ -1235,7 +1235,7 @@ def auto_detect(interface: str, passive_timeout: int = 10) -> list[DetectedRoute
     print("[Phase 1b] LLDP probe...")
     lldp_results = lldp_probe(interface, timeout=8)
     if lldp_results:
-        for ip_key, info in lldp_results.items():
+        for _ip_key, info in lldp_results.items():
             if info.management_ip:
                 discovered_ips.setdefault(info.management_ip, info.chassis_mac)
             print(f"  LLDP: {info.chassis_name or info.chassis_mac} at {info.management_ip or 'unknown IP'}")

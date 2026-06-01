@@ -242,5 +242,5 @@ register(UseCase(
     build_configure=_build_tollgate,
     test_status="untested",
     tested_notes="post-flash ipk deploy",
-    requires_post_flash=True,
+    configure_via="ssh",
 ))

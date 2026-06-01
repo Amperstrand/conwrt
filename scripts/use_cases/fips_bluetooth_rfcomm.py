@@ -211,5 +211,4 @@ register(UseCase(
     test_status="experimental",
     tested_notes="ASUS Lyra MAP-AC2200, star topology, RFCOMM transport",
     requires_capabilities=["bluetooth"],
-    requires_post_flash=True,
 ))

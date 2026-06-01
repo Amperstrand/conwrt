@@ -102,5 +102,5 @@ register(UseCase(
     requires_capabilities=[],
     test_status="untested",
     tested_notes="post-install peer setup",
-    requires_post_flash=True,
+    configure_via="ssh",
 ))

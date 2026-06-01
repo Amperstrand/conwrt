@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 from model_loader import load_model
 from config import load_config as _load_config
+from flash.context import sha256_file as _sha256_file_impl
 from profile.builder import build_plan
 from profile.render import print_plan
 from profile.wifi import (
@@ -88,11 +89,9 @@ def _http_post_json(url: str, data: dict[str, Any], timeout: int = 30) -> dict[s
 
 
 def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    # Thin wrapper over the canonical flash.context.sha256_file (single hashing
+    # implementation). Kept as a named local so existing call sites/patches work.
+    return _sha256_file_impl(str(path))
 
 
 # ---------------------------------------------------------------------------
@@ -100,53 +99,8 @@ def _sha256_file(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_ssh_pubkey(path: str) -> tuple[str, str]:
-    """Read a public SSH key file and return (stripped_key, source_filename).
-
-    Strips the comment (user@host) from the key so no personal data leaks
-    into metadata or the defaults script.
-    """
-    key_path = Path(path).expanduser()
-    raw = key_path.read_text().strip()
-    # Keep only key type + base64 blob (strip comment after second space)
-    parts = raw.split()
-    if len(parts) >= 2:
-        cleaned = f"{parts[0]} {parts[1]}"
-    else:
-        cleaned = raw
-    return cleaned, key_path.name
-
-
-# WiFi helpers live in profile.wifi (re-exported above for backward compatibility).
-
-
-def _build_defaults(
-    ssh_key_path: Optional[str],
-    password: Optional[str],
-    wan_ssh: bool,
-    extra_pub_keys: Optional[list[str]] = None,
-    mgmt_wifi: bool = False,
-    mgmt_wifi_txpower: Optional[int] = None,
-    use_cases: Optional[list] = None,
-    model_capabilities: Optional[list[str]] = None,
-    wifi_sta: Optional[object] = None,
-    wifi_ap: Optional[object] = None,
-    wifi_aps: Optional[list] = None,
-    disable_dhcp: bool = False,
-) -> tuple[str, Optional[str], Optional[str]]:
-    """Backward-compatible wrapper around profile.build_plan."""
-    cfg = _load_config()
-    plan = build_plan(
-        cfg,
-        mode="asu_build",
-        model_capabilities=model_capabilities,
-        ssh_key_path=ssh_key_path,
-        password=password,
-        wan_ssh=wan_ssh,
-        extra_pub_keys=extra_pub_keys,
-        disable_dhcp=disable_dhcp,
-    )
-    return plan.asu_defaults_script(), plan.ssh_key_cleaned or None, plan.ssh_key_source or None
+# SSH public-key parsing lives in config.read_ssh_pubkey; WiFi helpers live in
+# profile.wifi (re-exported above for backward compatibility).
 
 
 # ---------------------------------------------------------------------------

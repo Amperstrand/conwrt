@@ -50,5 +50,4 @@ register(UseCase(
     test_status="untested",
     tested_notes="",
     requires_capabilities=[],
-    requires_post_flash=False,
 ))

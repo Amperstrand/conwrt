@@ -63,10 +63,25 @@ __pycache__/
 *.egg-info/
 .venv/
 
-# --- Firmware image cache ---
+# --- Firmware binaries (never commit) ---
+# ASU/download cache and custom builds live under images/ (operator-local).
 images/
 
-# --- Proprietary stock firmware binaries (re-extract with firmware/extract.sh) ---
+# Vendor stock archives and downloaded OpenWrt images under firmware/.
+# Tracked in-repo: firmware/*.py, firmware/*.sh, firmware/**/RE_ANALYSIS.md (tools + notes).
+# Re-extract ZyXEL stock blobs with firmware/extract.sh after placing the vendor .zip locally.
+# Do not commit proprietary vendor firmware or generic upstream OpenWrt sysupgrade/initramfs
+# files. Only use `git add -f` for a custom-built image when it is an documented, unavoidable
+# workaround — and prefer hosting it outside the repo (images/ cache) instead.
+firmware/*.zip
+firmware/*.bin
+firmware/*.itb
+firmware/*.trx
+firmware/*.img
+firmware/*.fit
+firmware/openwrt-*
+
+# Extracted stock V2.90 artifacts (from GS1900-8HP zip via firmware/extract.sh)
 firmware/stock_v290/*.ko
 firmware/stock_v290/*.so*
 firmware/stock_v290/cli
