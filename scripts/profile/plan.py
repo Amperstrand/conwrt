@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Union
+
+from profile.ops import Op
 
 
 ProfileMode = Literal["asu_build", "post_install", "preview"]
@@ -46,6 +48,8 @@ class ProfileStep:
     skipped_reason: str = ""
     include_in_asu: bool = True
     include_in_post_install: bool = True
+    # Structured operations (transport-agnostic representation)
+    ops: list[Op] = field(default_factory=list)
 
 
 @dataclass
