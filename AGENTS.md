@@ -63,6 +63,35 @@ Any shell script that modifies device state (uci set, network config, IP changes
 - **realtek-poe fork**: [Amperstrand/realtek-poe](https://github.com/Amperstrand/realtek-poe) — AI experimentation workspace for PoE research on OpenWrt switches. All AI work happens on the `ai-experiments` branch. `main` is a pristine upstream mirror. **Never interact with the upstream `Hurricos/realtek-poe` repo** — only humans may create issues or submit PRs there.
 - **Test hardware**: Two GS1900-8HP A1 devices — one running OpenWrt (SSH), one running ZyXEL stock V2.90 (HTTP). Both accessible via USB ethernet.
 
+## Offline Device Package Installation
+
+When a router has no internet access (no WAN uplink yet), `opkg install` fails because it can't reach the package repository. Use `scp -O` (legacy SCP protocol — OpenWrt's dropbear lacks SFTP) to transfer `.ipk` files from the host machine:
+
+```bash
+# 1. Download packages on the host (with dependencies)
+#    Use the router's OpenWrt release + arch to find the right repo
+#    e.g. OpenWrt 24.10.2, aarch64_cortex-a53, mediatek/filogic
+REPO_BASE="https://downloads.openwrt.org/releases/24.10.2/targets/mediatek/filogic"
+PACKAGES_BASE="https://downloads.openwrt.org/releases/24.10.2/packages/aarch64_cortex-a53"
+
+# 2. Download the .ipk files (host has internet)
+curl -O "${PACKAGES_BASE}/packages/kmod-usb-net-rndis_*.ipk"
+# ... repeat for each package + its dependencies
+
+# 3. Transfer to router (note: -O flag required — dropbear has no sftp-server)
+scp -O -i ~/.ssh/id_ed25519 *.ipk root@<router-ip>:/tmp/
+
+# 4. Install on router (order matters: dependencies first)
+ssh root@<router-ip> "opkg install /tmp/*.ipk"
+```
+
+**Key points:**
+- Always use `scp -O` — OpenWrt dropbear lacks `/usr/libexec/sftp-server`, so default `scp` (which tries SFTP) fails with "Connection closed"
+- Download packages matching the exact OpenWrt version, target, and architecture from the device
+- Install dependencies before the packages that need them, or use `opkg install /tmp/*.ipk` which handles ordering
+- Kernel modules (`kmod-*`) must match the exact kernel version on the device (`uname -r`)
+- If the device already has the packages installed (e.g. from a previous firmware), skip this step — check with `opkg list-installed | grep <package>`
+
 ## External Repository Etiquette
 
 **Never contribute to, comment on, or file issues against repositories outside the Amperstrand organization.** This includes starring, fork-sync PRs, issue comments, and discussion posts. We reference external repos for research only — we don't want to spam maintainers.

@@ -249,7 +249,7 @@ If/when implemented:
 
 1. **Add `scripts/ubus_utils.py`** — `UbusClient` class with `login()`, `call()`, `uci_get()`, `uci_set()`, `uci_commit()`, `get_clients()`, `get_leases()`, `get_hosthints()`
 2. **Add structured UCI operations** — `UciSet`, `UciCommit`, `ServiceReload`, `ShellCommand` dataclasses in a new `scripts/profile/ops.py`
-3. **Refactor use cases to emit ops** — `build_configure(params)` returns `list[UciOp]` instead of raw shell strings. Keep `build_defaults()` (deprecated alias) for backward compat.
+3. **Refactor use cases to emit ops** — `build_configure_ops(params)` returns `list[Op]` alongside the legacy `build_configure(params)` shell path.
 4. **Add SSH renderer** — `render_ssh(ops) -> str` reproduces current shell script output
 5. **Add ubus renderer** — `render_ubus(ops) -> list[RpcCall]` produces ubus RPC calls
 6. **Add `--transport ssh|ubus` CLI flag** — defaults to `ssh`, ubus is opt-in
