@@ -166,3 +166,80 @@ def render_shell(ops: list[Op]) -> str:
             lines.append(op.command)
 
     return "\n".join(lines)
+
+
+# -- ubus RPC call representation ------------------------------------------------
+
+@dataclass
+class RpcCall:
+    object_name: str
+    method: str
+    params: dict
+
+
+# -- ubus renderer ---------------------------------------------------------------
+
+def render_ubus(ops: list[Op]) -> list[RpcCall]:
+    """Render a list of structured operations to ubus RPC calls.
+
+    Each typed op maps to a ubus uci.* or rc.* call.
+    ShellCommand ops map to a sys.exec call (requires rpcd exec plugin)
+    and are tagged with ``fallback=True`` so the transport layer can
+    decide whether to skip or execute them.
+    """
+    calls: list[RpcCall] = []
+    for op in ops:
+        if isinstance(op, UciSet):
+            calls.append(RpcCall(
+                object_name="uci",
+                method="set",
+                params={"config": op.config, "section": op.section, "values": dict(op.values)},
+            ))
+
+        elif isinstance(op, UciAdd):
+            params: dict = {"config": op.config, "type": op.type}
+            if op.name:
+                params["name"] = op.name
+            if op.values:
+                params["values"] = dict(op.values)
+            calls.append(RpcCall(object_name="uci", method="add", params=params))
+
+        elif isinstance(op, UciDelete):
+            params = {"config": op.config, "section": op.section}
+            if op.option:
+                params["option"] = op.option
+            calls.append(RpcCall(object_name="uci", method="delete", params=params))
+
+        elif isinstance(op, UciAddList):
+            calls.append(RpcCall(
+                object_name="uci",
+                method="set",
+                params={
+                    "config": op.config,
+                    "section": op.section,
+                    "values": {op.option: [op.value]},
+                },
+            ))
+
+        elif isinstance(op, UciCommit):
+            calls.append(RpcCall(
+                object_name="uci",
+                method="commit",
+                params={"config": op.config},
+            ))
+
+        elif isinstance(op, ServiceAction):
+            calls.append(RpcCall(
+                object_name="rc",
+                method=op.action,
+                params={"name": op.name},
+            ))
+
+        elif isinstance(op, ShellCommand):
+            calls.append(RpcCall(
+                object_name="exec",
+                method="command",
+                params={"command": op.command, "fallback": True},
+            ))
+
+    return calls
