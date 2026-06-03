@@ -7,6 +7,7 @@ from typing import Optional
 
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
+from profile.ops import Op, ShellCommand, UciAdd, UciCommit, UciSet
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
     build_mgmt_wifi_script,
@@ -27,12 +28,25 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _ssh_key_ops(keys: list[str]) -> list[Op]:
+    ops: list[Op] = [ShellCommand(f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}")]
+    for i, key in enumerate(keys):
+        op = ">" if i == 0 else ">>"
+        ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
+    ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
+    return ops
+
+
 def _password_firstboot(password: str) -> str:
     pw_b64 = base64.b64encode(password.encode()).decode()
     return (
         f"printf '%s\\n%s\\n' \"$(echo '{pw_b64}' | base64 -d)\" "
         f"\"$(echo '{pw_b64}' | base64 -d)\" | passwd root"
     )
+
+
+def _password_ops(password: str) -> list[Op]:
+    return [ShellCommand(_password_firstboot(password))]
 
 
 _WAN_SSH_SCRIPT = "\n".join([
@@ -48,6 +62,22 @@ _WAN_SSH_SCRIPT = "\n".join([
     "uci commit dropbear",
 ])
 
+_WAN_SSH_OPS: list[Op] = [
+    UciAdd(config="firewall", type="rule", values={
+        "name": "Allow-SSH-WAN",
+        "src": "wan",
+        "dest_port": "22",
+        "proto": "tcp",
+        "target": "ACCEPT",
+    }),
+    UciCommit(config="firewall"),
+    UciSet(config="dropbear", section="@dropbear[0]", values={
+        "PasswordAuth": "off",
+        "RootPasswordAuth": "off",
+    }),
+    UciCommit(config="dropbear"),
+]
+
 _CELLULAR_QMI_SCRIPT = "\n".join([
     "uci set network.wan.device='/dev/cdc-wdm0'",
     "uci set network.wan.proto='qmi'",
@@ -55,6 +85,16 @@ _CELLULAR_QMI_SCRIPT = "\n".join([
     "uci set network.wan.delay='15'",
     "uci commit network",
 ])
+
+_CELLULAR_QMI_OPS: list[Op] = [
+    UciSet(config="network", section="wan", values={
+        "device": "/dev/cdc-wdm0",
+        "proto": "qmi",
+        "apn": "auto",
+        "delay": "15",
+    }),
+    UciCommit(config="network"),
+]
 
 _CELLULAR_QMI_SSH = " && ".join([
     "uci set network.wan.device='/dev/cdc-wdm0'",
@@ -115,6 +155,11 @@ _DHCP_DISABLE_SCRIPT = "\n".join([
     "uci commit dhcp",
 ])
 
+_DHCP_DISABLE_OPS: list[Op] = [
+    UciSet(config="dhcp", section="lan", values={"ignore": "1"}),
+    UciCommit(config="dhcp"),
+]
+
 
 def build_plan(
     cfg: ConwrtConfig,
@@ -165,6 +210,7 @@ def build_plan(
             label="Disable DHCP server on LAN",
             firstboot_script=_DHCP_DISABLE_SCRIPT,
             configure_script=_DHCP_DISABLE_SCRIPT.replace("\n", " && "),
+            ops=_DHCP_DISABLE_OPS,
         ))
 
     effective_hostname = hostname or cfg.hostname
@@ -186,6 +232,12 @@ def build_plan(
             label=f"Hostname: {model_hostname_prefix}_<mac>",
             firstboot_script=_mac_hostname_fb,
             configure_script=_mac_hostname_ssh,
+            ops=[
+                ShellCommand("_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)"),
+                ShellCommand("_suffix=$(echo \"$_mac\" | tr -d ':\\n' | tail -c6)"),
+                ShellCommand(f"uci set system.@system[0].hostname=\"{model_hostname_prefix}_$_suffix\""),
+                ShellCommand("uci commit system"),
+            ],
         ))
     elif effective_hostname:
         if _VALID_HOSTNAME_RE.match(effective_hostname):
@@ -200,6 +252,12 @@ def build_plan(
                     f"uci set system.@system[0].hostname='{effective_hostname}'",
                     "uci commit system",
                 ]),
+                ops=[
+                    UciSet(config="system", section="@system[0]", values={
+                        "hostname": effective_hostname,
+                    }),
+                    UciCommit(config="system"),
+                ],
             ))
         else:
             steps.append(ProfileStep(
@@ -236,6 +294,7 @@ def build_plan(
             label="SSH public key",
             firstboot_script=_ssh_key_firstboot(all_keys),
             include_in_post_install=False,
+            ops=_ssh_key_ops(all_keys),
         ))
 
     if password:
@@ -244,6 +303,7 @@ def build_plan(
             label="Root password",
             firstboot_script=_password_firstboot(password),
             configure_script=_password_firstboot(password),
+            ops=_password_ops(password),
         ))
 
     if wan_ssh:
@@ -252,6 +312,7 @@ def build_plan(
             label="WAN SSH (key-only)",
             firstboot_script=_WAN_SSH_SCRIPT,
             configure_script=_WAN_SSH_SCRIPT.replace("\n", " && "),
+            ops=_WAN_SSH_OPS,
         ))
 
     if "cellular" in caps:
@@ -260,6 +321,7 @@ def build_plan(
             label="Cellular WAN (QMI, auto APN)",
             firstboot_script=_CELLULAR_QMI_SCRIPT,
             configure_script=_CELLULAR_QMI_SSH,
+            ops=_CELLULAR_QMI_OPS,
         ))
 
     if cfg.mgmt_wifi:
@@ -365,12 +427,17 @@ def build_plan(
         fb = _firstboot_for_mode(uc, resolved, mode)
         cfg_script = _configure_script_for_mode(uc, resolved, mode)
 
+        uc_ops: list[Op] = []
+        if uc.build_configure_ops is not None:
+            uc_ops = uc.build_configure_ops(resolved)
+
         steps.append(ProfileStep(
             kind=StepKind.USE_CASE,
             label=f"use case: {uc.name}",
             use_case_name=uc.name,
             firstboot_script=fb,
             configure_script=cfg_script,
+            ops=uc_ops,
             opkg_packages=pkgs,
             opkg_remove=remove,
             include_in_asu=bool(fb or pkgs),
@@ -401,6 +468,14 @@ def build_plan(
             configure_script=_mac_ip_ssh,
             include_in_post_install=True,
             wifi_params={"lan_subnet": model_lan_subnet},
+            ops=[
+                ShellCommand("_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)"),
+                ShellCommand("_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')"),
+                ShellCommand("_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))"),
+                ShellCommand("_host=$((_host % 200 + 2))"),
+                ShellCommand(f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\""),
+                ShellCommand("uci commit network"),
+            ],
         ))
     elif cfg.lan_ip and mode in ("post_install", "preview"):
         steps.append(ProfileStep(
@@ -408,6 +483,9 @@ def build_plan(
             label=f"LAN IP → {cfg.lan_ip}",
             configure_script=f"uci set network.lan.ipaddr='{cfg.lan_ip}'",
             include_in_asu=False,
+            ops=[
+                UciSet(config="network", section="lan", values={"ipaddr": cfg.lan_ip}),
+            ],
         ))
 
     plan.steps = steps
