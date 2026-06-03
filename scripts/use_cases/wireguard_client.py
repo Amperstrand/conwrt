@@ -4,19 +4,36 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
+from profile.ops import Op, ShellCommand, UciAddList, UciCommit, UciSet
+
 from . import ParamDef, UseCase, register
 
 
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "private_key": params.get("private_key", "generate"),
+        "peer_public_key": params.get("peer_public_key", ""),
+        "endpoint_host": params.get("endpoint_host", ""),
+        "endpoint_port": params.get("endpoint_port", 51820),
+        "peer_psk": params.get("peer_psk", ""),
+        "address": params.get("address", "10.67.0.2/32"),
+        "dns": params.get("dns", ""),
+        "kill_switch": params.get("kill_switch", True),
+        "allowed_ips": params.get("allowed_ips", "0.0.0.0/0, ::/0"),
+    }
+
+
 def _build_wireguard_client(params: dict[str, Any]) -> str:
-    private_key = params.get("private_key", "generate")
-    peer_public_key = params.get("peer_public_key", "")
-    endpoint_host = params.get("endpoint_host", "")
-    endpoint_port = params.get("endpoint_port", 51820)
-    peer_psk = params.get("peer_psk", "")
-    address = params.get("address", "10.67.0.2/32")
-    dns = params.get("dns", "")
-    kill_switch = params.get("kill_switch", True)
-    allowed_ips = params.get("allowed_ips", "0.0.0.0/0, ::/0")
+    r = _resolve_params(params)
+    private_key = r["private_key"]
+    peer_public_key = r["peer_public_key"]
+    endpoint_host = r["endpoint_host"]
+    endpoint_port = r["endpoint_port"]
+    peer_psk = r["peer_psk"]
+    address = r["address"]
+    dns = r["dns"]
+    kill_switch = r["kill_switch"]
+    allowed_ips = r["allowed_ips"]
 
     lines = [
         "# --- WireGuard VPN client ---",
@@ -80,6 +97,68 @@ def _build_wireguard_client(params: dict[str, Any]) -> str:
     return textwrap.dedent("\n".join(lines))
 
 
+def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
+    r = _resolve_params(params)
+
+    ops = []
+
+    ops.append(ShellCommand(command="uci set network.wg0=interface"))
+    ops.append(UciSet(config="network", section="wg0", values={
+        "proto": "wireguard",
+        "private_key": r["private_key"],
+        "addresses": r["address"],
+    }))
+
+    if r["dns"]:
+        ops.append(UciAddList(config="network", section="wg0", option="dns", value=r["dns"]))
+
+    ops.append(ShellCommand(command="uci set network.wg0_peer=wireguard_wg0"))
+    peer_values = {
+        "public_key": r["peer_public_key"],
+        "endpoint_host": r["endpoint_host"],
+        "endpoint_port": str(r["endpoint_port"]),
+        "allowed_ips": r["allowed_ips"],
+        "route_allowed_ips": "1",
+        "persistent_keepalive": "25",
+    }
+    if r["peer_psk"]:
+        peer_values["preshared_key"] = r["peer_psk"]
+    ops.append(UciSet(config="network", section="wg0_peer", values=peer_values))
+
+    ops.append(ShellCommand(command="uci add firewall zone"))
+    ops.append(UciSet(config="firewall", section="@zone[-1]", values={
+        "name": "vpn",
+        "input": "REJECT",
+        "output": "ACCEPT",
+        "forward": "REJECT",
+        "masq": "1",
+        "mtu_fix": "1",
+        "network": "wg0",
+    }))
+
+    ops.append(ShellCommand(command="uci add firewall forwarding"))
+    ops.append(UciSet(config="firewall", section="@forwarding[-1]", values={
+        "src": "lan",
+        "dest": "vpn",
+    }))
+
+    if r["kill_switch"]:
+        ops.append(ShellCommand(command="uci add firewall rule"))
+        ops.append(UciSet(config="firewall", section="@rule[-1]", values={
+            "name": "KillSwitch-Reject-NonVPN",
+            "src": "lan",
+            "dest": "wan",
+            "proto": "all",
+            "target": "REJECT",
+        }))
+
+    ops.append(UciCommit(config="network"))
+    ops.append(UciCommit(config="firewall"))
+    ops.append(ShellCommand(command="/etc/init.d/network restart 2>/dev/null || true"))
+
+    return ops
+
+
 register(UseCase(
     name="wireguard-client",
     description="WireGuard VPN client — route traffic through a VPN tunnel",
@@ -109,6 +188,7 @@ register(UseCase(
                                 description="IPs to route through tunnel"),
     },
     build_configure=_build_wireguard_client,
+    build_configure_ops=_build_wireguard_client_ops,
     test_status="tested",
     tested_notes="D-Link COVR-X1860 A1",
     requires_capabilities=[],

@@ -4,6 +4,8 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
+from profile.ops import Op, ShellCommand, UciCommit
+
 from . import ParamDef, UseCase, register
 
 _ANDROID_PKGS = [
@@ -135,6 +137,61 @@ _IFACE_PARAM = {
 }
 
 
+def _shell_lines_to_ops(text: str) -> list[Op]:
+    lines = text.strip().splitlines()
+    ops: list[Op] = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("# ---"):
+            continue
+        if s.startswith("echo ") and ">>" not in s and ">" not in s and ">&" not in s:
+            continue
+        ops.append(ShellCommand(command=s))
+    return ops
+
+
+def _build_tether_ops(params: dict[str, Any]) -> list[Op]:
+    iface = params.get("interface", "usbwan")
+    script = (
+        _start_usbmuxd()
+        + _detect_usb_net_device(match_android=True, match_ios=True) + "\n"
+        + _setup_interface(iface) + "\n"
+        + _adb_hotplug_script()
+    )
+    return _shell_lines_to_ops(script)
+
+
+def _build_tether_android_ops(params: dict[str, Any]) -> list[Op]:
+    iface = params.get("interface", "usbwan")
+    script = (
+        _detect_usb_net_device(match_android=True, match_ios=False) + "\n"
+        + _setup_interface(iface) + "\n"
+    )
+    return _shell_lines_to_ops(script)
+
+
+def _build_tether_android_adb_ops(params: dict[str, Any]) -> list[Op]:
+    iface = params.get("interface", "usbwan")
+    script = (
+        _detect_usb_net_device(match_android=True, match_ios=False) + "\n"
+        + _setup_interface(iface) + "\n"
+        + _adb_hotplug_script()
+    )
+    return _shell_lines_to_ops(script)
+
+
+def _build_tether_ios_ops(params: dict[str, Any]) -> list[Op]:
+    iface = params.get("interface", "usbwan")
+    script = (
+        _start_usbmuxd()
+        + _detect_usb_net_device(match_android=False, match_ios=True) + "\n"
+        + _setup_interface(iface) + "\n"
+    )
+    return _shell_lines_to_ops(script)
+
+
 register(UseCase(
     name="tether",
     description="Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.",
@@ -147,6 +204,7 @@ register(UseCase(
         + _setup_interface(p.get("interface", "usbwan")) + "\n"
         + _adb_hotplug_script()
     ),
+    build_configure_ops=_build_tether_ops,
     test_status="tested",
     tested_notes="GL.iNet MT3000, Android RNDIS",
     requires_capabilities=["usb"],
@@ -162,6 +220,7 @@ register(UseCase(
         + _detect_usb_net_device(match_android=True, match_ios=False) + "\n"
         + _setup_interface(p.get("interface", "usbwan")) + "\n"
     ),
+    build_configure_ops=_build_tether_android_ops,
     test_status="tested",
     tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
@@ -178,6 +237,7 @@ register(UseCase(
         + _setup_interface(p.get("interface", "usbwan")) + "\n"
         + _adb_hotplug_script()
     ),
+    build_configure_ops=_build_tether_android_adb_ops,
     test_status="tested",
     tested_notes="GL.iNet MT3000",
     requires_capabilities=["usb"],
@@ -194,6 +254,7 @@ register(UseCase(
         + _detect_usb_net_device(match_android=False, match_ios=True) + "\n"
         + _setup_interface(p.get("interface", "usbwan")) + "\n"
     ),
+    build_configure_ops=_build_tether_ios_ops,
     test_status="experimental",
     tested_notes="wiki-based; needs hardware validation",
     requires_capabilities=["usb"],

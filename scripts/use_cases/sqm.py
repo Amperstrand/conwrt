@@ -4,12 +4,13 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
+from profile.ops import Op, ServiceAction, ShellCommand, UciCommit, UciSet
 from shell_safe import int_range, interface_name, sh_quote, uci_name
 
 from . import ParamDef, UseCase, register
 
 
-def _build_sqm(params: dict[str, Any]) -> str:
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     download_kbps = params.get("download_kbps", 10000)
     upload_kbps = params.get("upload_kbps", 5000)
     interface = uci_name(interface_name(params.get("interface", "wan"), "SQM interface"), "SQM interface")
@@ -19,28 +20,67 @@ def _build_sqm(params: dict[str, Any]) -> str:
     overhead = int_range(params.get("overhead", 0), "overhead", 0, 512)
     download_kbps = int_range(download_kbps, "download_kbps", 1)
     upload_kbps = int_range(upload_kbps, "upload_kbps", 1)
+    return {
+        "download_kbps": download_kbps,
+        "upload_kbps": upload_kbps,
+        "interface": interface,
+        "qdisc": qdisc,
+        "script": script,
+        "link_layer": link_layer,
+        "overhead": overhead,
+    }
+
+
+def _build_sqm_ops(params: dict[str, Any]) -> list[Op]:
+    r = _resolve_params(params)
+    iface = r["interface"]
+    return [
+        ShellCommand(command=f"uci -q delete sqm >/dev/null 2>&1 || true"),
+        ShellCommand(command=f"uci set sqm.{iface}=queue"),
+        UciSet(config="sqm", section=iface, values={
+            "interface": iface,
+            "enabled": "1",
+            "script": r["script"],
+            "qdisc": r["qdisc"],
+            "linklayer": r["link_layer"],
+            "overhead": str(r["overhead"]),
+            "download": str(r["download_kbps"]),
+            "upload": str(r["upload_kbps"]),
+            "linklayer_adaptation_mechanism": "default",
+            "debug_logging": "0",
+            "verbosity": "5",
+        }),
+        UciCommit(config="sqm"),
+        ServiceAction(name="sqm", action="enable"),
+        ShellCommand(command="/etc/init.d/sqm restart 2>/dev/null || true"),
+    ]
+
+
+def _build_sqm(params: dict[str, Any]) -> str:
+    r = _resolve_params(params)
+    iface = r["interface"]
 
     return textwrap.dedent(f"""\
         # --- SQM Smart Queue Management ---
         uci -q delete sqm >/dev/null 2>&1 || true
 
-        uci set sqm.{interface}=queue
-        uci set sqm.{interface}.interface={sh_quote(interface)}
-        uci set sqm.{interface}.enabled='1'
-        uci set sqm.{interface}.script={sh_quote(script)}
-        uci set sqm.{interface}.qdisc={sh_quote(qdisc)}
-        uci set sqm.{interface}.linklayer={sh_quote(link_layer)}
-        uci set sqm.{interface}.overhead={sh_quote(overhead)}
-        uci set sqm.{interface}.download={sh_quote(download_kbps)}
-        uci set sqm.{interface}.upload={sh_quote(upload_kbps)}
-        uci set sqm.{interface}.linklayer_adaptation_mechanism='default'
-        uci set sqm.{interface}.debug_logging='0'
-        uci set sqm.{interface}.verbosity='5'
+        uci set sqm.{iface}=queue
+        uci set sqm.{iface}.interface={sh_quote(iface)}
+        uci set sqm.{iface}.enabled='1'
+        uci set sqm.{iface}.script={sh_quote(r["script"])}
+        uci set sqm.{iface}.qdisc={sh_quote(r["qdisc"])}
+        uci set sqm.{iface}.linklayer={sh_quote(r["link_layer"])}
+        uci set sqm.{iface}.overhead={sh_quote(r["overhead"])}
+        uci set sqm.{iface}.download={sh_quote(r["download_kbps"])}
+        uci set sqm.{iface}.upload={sh_quote(r["upload_kbps"])}
+        uci set sqm.{iface}.linklayer_adaptation_mechanism='default'
+        uci set sqm.{iface}.debug_logging='0'
+        uci set sqm.{iface}.verbosity='5'
         uci commit sqm
 
         /etc/init.d/sqm enable
         /etc/init.d/sqm restart 2>/dev/null || true
-        echo "SQM configured: {download_kbps}/{upload_kbps} kbit/s ({qdisc})"
+        echo "SQM configured: {r['download_kbps']}/{r['upload_kbps']} kbit/s ({r['qdisc']})"
     """)
 
 
@@ -69,6 +109,7 @@ register(UseCase(
                              description="Per-packet overhead in bytes"),
     },
     build_configure=_build_sqm,
+    build_configure_ops=_build_sqm_ops,
     test_status="experimental",
     tested_notes="uci from OpenWrt wiki",
     requires_capabilities=[],

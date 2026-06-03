@@ -4,6 +4,8 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
+from profile.ops import Op, ShellCommand, UciCommit, UciSet
+
 from . import ParamDef, UseCase, register
 
 _AUTO_SQM_SCRIPT = textwrap.dedent("""\
@@ -125,43 +127,112 @@ _AUTO_SQM_SCRIPT = textwrap.dedent("""\
 """)
 
 
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": params.get("mode", "static"),
+        "interface": params.get("interface", "wan"),
+        "device": params.get("device", "eth0"),
+        "target_percent": params.get("target_percent", 90),
+        "qdisc": params.get("qdisc", "cake"),
+        "script": params.get("script", "piece_of_cake.qos"),
+        "measurement_mode": params.get("measurement_mode", "wget"),
+        "download_kbps": params.get("download_kbps", 0),
+        "upload_kbps": params.get("upload_kbps", 0),
+        "iperf3_host": params.get("iperf3_host", ""),
+        "iperf3_port": params.get("iperf3_port", 5201),
+        "test_url": params.get("test_url", "http://speedtest.tele2.net/10MB.zip"),
+        "upload_fallback_kbps": params.get("upload_fallback_kbps", 5000),
+        "hysteresis_percent": params.get("hysteresis_percent", 10),
+        "dynamic_interval_hours": params.get("dynamic_interval_hours", 4),
+    }
+
+
+def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
+    r = _resolve_params(params)
+    mode = r["mode"]
+    interface = r["interface"]
+    download_kbps = r["download_kbps"]
+    dynamic_interval_hours = r["dynamic_interval_hours"]
+
+    ops: list[Op] = [
+        ShellCommand(command="touch /etc/config/auto_sqm"),
+        ShellCommand(command="uci set auto_sqm.config=auto_sqm"),
+        UciSet(config="auto_sqm", section="config", values={
+            "mode": str(r["mode"]),
+            "interface": r["interface"],
+            "device": r["device"],
+            "target_percent": str(r["target_percent"]),
+            "qdisc": r["qdisc"],
+            "script": r["script"],
+            "measurement_mode": r["measurement_mode"],
+            "iperf3_host": r["iperf3_host"],
+            "iperf3_port": str(r["iperf3_port"]),
+            "test_url": r["test_url"],
+            "download_kbps": str(r["download_kbps"]),
+            "upload_kbps": str(r["upload_kbps"]),
+            "upload_fallback_kbps": str(r["upload_fallback_kbps"]),
+            "hysteresis_percent": str(r["hysteresis_percent"]),
+            "dynamic_interval_hours": str(r["dynamic_interval_hours"]),
+        }),
+        UciCommit(config="auto_sqm"),
+    ]
+
+    ops.append(ShellCommand(command="cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm"))
+    for line in _AUTO_SQM_SCRIPT.strip().splitlines():
+        if line.strip():
+            ops.append(ShellCommand(command=line.strip()))
+    ops.append(ShellCommand(command="AUTO_SQM_EOF"))
+    ops.append(ShellCommand(command="chmod +x /usr/sbin/auto-sqm"))
+
+    ops.append(ShellCommand(command="mkdir -p /etc/hotplug.d/iface"))
+    ops.append(ShellCommand(command="cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune"))
+    ops.append(ShellCommand(command="#!/bin/sh"))
+    ops.append(ShellCommand(
+        command=f'[ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "{interface}" ] && /usr/sbin/auto-sqm &'
+    ))
+    ops.append(ShellCommand(command="HOTPLUG_EOF"))
+    ops.append(ShellCommand(command="chmod +x /etc/hotplug.d/iface/10-sqm-autotune"))
+
+    if mode == "dynamic":
+        ops.append(ShellCommand(
+            command=f"echo '0 */{dynamic_interval_hours} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root"
+        ))
+        ops.append(ShellCommand(command="/etc/init.d/cron enable"))
+        ops.append(ShellCommand(command="/etc/init.d/cron restart 2>/dev/null || true"))
+
+    if mode == "static" and download_kbps > 0:
+        ops.append(ShellCommand(command="/usr/sbin/auto-sqm"))
+
+    return ops
+
+
 def _build_auto_sqm(params: dict[str, Any]) -> str:
-    mode = params.get("mode", "static")
-    interface = params.get("interface", "wan")
-    device = params.get("device", "eth0")
-    target_percent = params.get("target_percent", 90)
-    qdisc = params.get("qdisc", "cake")
-    script = params.get("script", "piece_of_cake.qos")
-    measurement_mode = params.get("measurement_mode", "wget")
-    download_kbps = params.get("download_kbps", 0)
-    upload_kbps = params.get("upload_kbps", 0)
-    iperf3_host = params.get("iperf3_host", "")
-    iperf3_port = params.get("iperf3_port", 5201)
-    test_url = params.get("test_url", "http://speedtest.tele2.net/10MB.zip")
-    upload_fallback_kbps = params.get("upload_fallback_kbps", 5000)
-    hysteresis_percent = params.get("hysteresis_percent", 10)
-    dynamic_interval_hours = params.get("dynamic_interval_hours", 4)
+    r = _resolve_params(params)
+    mode = r["mode"]
+    interface = r["interface"]
+    download_kbps = r["download_kbps"]
+    dynamic_interval_hours = r["dynamic_interval_hours"]
 
     lines = [
         "# --- Auto-SQM ---",
         "",
         "touch /etc/config/auto_sqm",
         "uci set auto_sqm.config=auto_sqm",
-        f"uci set auto_sqm.config.mode='{mode}'",
-        f"uci set auto_sqm.config.interface='{interface}'",
-        f"uci set auto_sqm.config.device='{device}'",
-        f"uci set auto_sqm.config.target_percent='{target_percent}'",
-        f"uci set auto_sqm.config.qdisc='{qdisc}'",
-        f"uci set auto_sqm.config.script='{script}'",
-        f"uci set auto_sqm.config.measurement_mode='{measurement_mode}'",
-        f"uci set auto_sqm.config.iperf3_host='{iperf3_host}'",
-        f"uci set auto_sqm.config.iperf3_port='{iperf3_port}'",
-        f"uci set auto_sqm.config.test_url='{test_url}'",
-        f"uci set auto_sqm.config.download_kbps='{download_kbps}'",
-        f"uci set auto_sqm.config.upload_kbps='{upload_kbps}'",
-        f"uci set auto_sqm.config.upload_fallback_kbps='{upload_fallback_kbps}'",
-        f"uci set auto_sqm.config.hysteresis_percent='{hysteresis_percent}'",
-        f"uci set auto_sqm.config.dynamic_interval_hours='{dynamic_interval_hours}'",
+        f"uci set auto_sqm.config.mode='{r['mode']}'",
+        f"uci set auto_sqm.config.interface='{r['interface']}'",
+        f"uci set auto_sqm.config.device='{r['device']}'",
+        f"uci set auto_sqm.config.target_percent='{r['target_percent']}'",
+        f"uci set auto_sqm.config.qdisc='{r['qdisc']}'",
+        f"uci set auto_sqm.config.script='{r['script']}'",
+        f"uci set auto_sqm.config.measurement_mode='{r['measurement_mode']}'",
+        f"uci set auto_sqm.config.iperf3_host='{r['iperf3_host']}'",
+        f"uci set auto_sqm.config.iperf3_port='{r['iperf3_port']}'",
+        f"uci set auto_sqm.config.test_url='{r['test_url']}'",
+        f"uci set auto_sqm.config.download_kbps='{r['download_kbps']}'",
+        f"uci set auto_sqm.config.upload_kbps='{r['upload_kbps']}'",
+        f"uci set auto_sqm.config.upload_fallback_kbps='{r['upload_fallback_kbps']}'",
+        f"uci set auto_sqm.config.hysteresis_percent='{r['hysteresis_percent']}'",
+        f"uci set auto_sqm.config.dynamic_interval_hours='{r['dynamic_interval_hours']}'",
         "uci commit auto_sqm",
         "",
         "cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm",
@@ -240,6 +311,7 @@ register(UseCase(
                                            description="Re-tune interval in hours (dynamic mode)"),
     },
     build_configure=_build_auto_sqm,
+    build_configure_ops=_build_auto_sqm_ops,
     test_status="experimental",
     tested_notes="not validated on hardware",
     requires_capabilities=[],

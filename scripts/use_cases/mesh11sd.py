@@ -1,18 +1,50 @@
 """Mesh11sd — automated 802.11s mesh networking via mesh11sd daemon."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
+
+from profile.ops import Op, ShellCommand, UciCommit, UciSet
 
 from . import ParamDef, UseCase, register
 
 
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mesh_id": params["mesh_id"],
+        "ssid": params.get("ssid", "MeshNet"),
+        "encryption": params.get("encryption", "1"),
+        "key": params.get("key", ""),
+        "auto_config": params.get("auto_config", "0"),
+    }
+
+
+def _build_mesh11sd_ops(params: dict[str, Any]) -> list[Op]:
+    r = _resolve_params(params)
+    values = {
+        "auto_mesh_id": r["mesh_id"],
+        "mesh_gate_base_ssid": r["ssid"],
+        "mesh_gate_encryption": r["encryption"],
+    }
+    if r["key"]:
+        values["mesh_gate_key"] = r["key"]
+    values["auto_config"] = r["auto_config"]
+    return [
+        ShellCommand(command="opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl wpad-basic 2>/dev/null || true"),
+        ShellCommand(command="opkg install wpad-mbedtls 2>/dev/null || true"),
+        ShellCommand(command="service wpad restart 2>/dev/null || true"),
+        UciSet(config="mesh11sd", section="setup", values=values),
+        UciCommit(config="mesh11sd"),
+        ShellCommand(command="service mesh11sd restart 2>/dev/null || true"),
+    ]
+
+
 def _build_mesh11sd(params: dict[str, Any]) -> str:
-    mesh_id = params["mesh_id"]
-    ssid = params.get("ssid", "MeshNet")
-    encryption = params.get("encryption", "1")
-    key = params.get("key", "")
-    auto_config = params.get("auto_config", "0")
+    r = _resolve_params(params)
+    mesh_id = r["mesh_id"]
+    ssid = r["ssid"]
+    encryption = r["encryption"]
+    key = r["key"]
+    auto_config = r["auto_config"]
 
     lines = [
         "# --- Mesh11sd 802.11s mesh ---",
@@ -60,6 +92,7 @@ register(UseCase(
                                 description="0=disabled, 1=auto, 2=auto+commit"),
     },
     build_configure=_build_mesh11sd,
+    build_configure_ops=_build_mesh11sd_ops,
     test_status="untested",
     tested_notes="",
     requires_capabilities=["wifi"],

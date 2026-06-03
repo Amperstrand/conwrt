@@ -7,6 +7,8 @@ import subprocess
 import textwrap
 from typing import Any
 
+from profile.ops import Op, ShellCommand
+
 from . import ParamDef, UseCase, register
 
 _REPO = "OpenTollGate/tollgate-module-basic-go"
@@ -116,12 +118,97 @@ def resolve_ipk(
     return ipk_path
 
 
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "deploy_mode": str(params.get("deploy_mode", "post-flash")),
+        "ipk_url": str(params.get("ipk_url", "")),
+        "mint_url": str(params.get("mint_url", "")),
+        "lightning_address": str(params.get("lightning_address", "")),
+        "price_per_minute": int(params.get("price_per_minute", 1)),
+    }
+
+
+def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
+    r = _resolve_params(params)
+    deploy_mode = r["deploy_mode"]
+    ipk_url = r["ipk_url"]
+    mint_url = r["mint_url"]
+    lightning_address = r["lightning_address"]
+    price_per_minute = r["price_per_minute"]
+
+    ops: list[Op] = []
+
+    if deploy_mode == "bake" and ipk_url:
+        ops.append(ShellCommand("_i=0"))
+        ops.append(ShellCommand("while [ $_i -lt 30 ]; do"))
+        ops.append(ShellCommand("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && break"))
+        ops.append(ShellCommand("sleep 2"))
+        ops.append(ShellCommand("_i=$((_i + 1))"))
+        ops.append(ShellCommand("done"))
+        ops.append(ShellCommand("if ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then"))
+        ops.append(ShellCommand("exit 0"))
+        ops.append(ShellCommand("fi"))
+        ops.append(ShellCommand(
+            f"wget -O /tmp/tollgate-wrt.ipk '{ipk_url}' 2>/dev/null && \\"
+        ))
+        ops.append(ShellCommand("opkg install /tmp/tollgate-wrt.ipk && \\"))
+        ops.append(ShellCommand("rm -f /tmp/tollgate-wrt.ipk"))
+        ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
+        ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
+        ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
+        ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
+        _has_config = False
+        if mint_url:
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"))
+            _has_config = True
+        if lightning_address:
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"))
+            _has_config = True
+        if price_per_minute != 1:
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"))
+            _has_config = True
+        if _has_config:
+            ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/tollgate-wrt enable 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/tollgate-wrt restart 2>/dev/null || true"))
+    else:
+        ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
+        ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
+        ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
+        _has_config = False
+        if mint_url:
+            ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
+            ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"))
+            _has_config = True
+        if lightning_address:
+            if not _has_config:
+                ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
+                ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
+                _has_config = True
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"))
+        if price_per_minute != 1:
+            if not _has_config:
+                ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
+                ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
+                _has_config = True
+            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"))
+        if _has_config:
+            ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
+
+    return ops
+
+
 def _build_tollgate(params: dict[str, Any]) -> str:
-    deploy_mode = params.get("deploy_mode", "post-flash")
-    ipk_url = params.get("ipk_url", "")
-    mint_url = params.get("mint_url", "")
-    lightning_address = params.get("lightning_address", "")
-    price_per_minute = params.get("price_per_minute", 1)
+    r = _resolve_params(params)
+    deploy_mode = r["deploy_mode"]
+    ipk_url = r["ipk_url"]
+    mint_url = r["mint_url"]
+    lightning_address = r["lightning_address"]
+    price_per_minute = r["price_per_minute"]
 
     if deploy_mode == "bake" and ipk_url:
         config_lines: list[str] = []
@@ -240,6 +327,7 @@ register(UseCase(
             description="Price in sats per minute"),
     },
     build_configure=_build_tollgate,
+    build_configure_ops=_build_tollgate_ops,
     test_status="untested",
     tested_notes="post-flash ipk deploy",
     configure_via="ssh",

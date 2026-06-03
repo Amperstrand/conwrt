@@ -39,6 +39,7 @@ class UseCase:
     packages_remove: list[str] = field(default_factory=list)
     params: dict[str, ParamDef] = field(default_factory=dict)
     build_configure: Callable[[dict[str, Any]], str] = field(default=lambda _: "")
+    build_configure_ops: Optional[Callable[[dict[str, Any]], list]] = None
     packages_via: PackageDelivery = "auto"
     configure_via: ConfigureDelivery = "both"
     test_status: TestStatus = "untested"
@@ -46,12 +47,8 @@ class UseCase:
     post_install_notes: str = ""
     requires_capabilities: list[str] = field(default_factory=list)
 
-    def build_defaults(self, params: dict[str, Any]) -> str:
-        """Deprecated alias for build_configure."""
-        return self.build_configure(params)
-
-
 _registry: dict[str, UseCase] = {}
+_discovered: bool = False
 
 
 def register(uc: UseCase) -> None:
@@ -59,8 +56,10 @@ def register(uc: UseCase) -> None:
 
 
 def registry() -> dict[str, UseCase]:
-    if not _registry:
+    global _discovered
+    if not _discovered:
         _discover()
+        _discovered = True
     return dict(_registry)
 
 
