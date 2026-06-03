@@ -4,6 +4,7 @@ from __future__ import annotations
 import textwrap
 from typing import Optional
 
+from profile.ops import Op, ShellCommand, UciSet
 from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
 
 
@@ -97,6 +98,69 @@ def wifi_ap_uci_lines(
         lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
     lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
     return lines
+
+
+def wifi_sta_ops(
+    radio: str,
+    ssid: str,
+    encryption: str,
+    key: str = "",
+    network: str = "wan",
+    country_code: str = "DE",
+) -> list[Op]:
+    """STA configuration as structured ops. Radio must be a concrete name (e.g. 'radio0')."""
+    radio = radio_ref(radio)
+    wifi_encryption(encryption)
+    network = interface_name(network, "network")
+    section = radio_ref(f"default_{radio}")
+    ops: list[Op] = [
+        UciSet(config="wireless", section=radio, values={"disabled": "0", "country": country_code}),
+        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null"),
+        ShellCommand(command=f"uci set wireless.{section}=wifi-iface"),
+        UciSet(config="wireless", section=section, values={
+            "device": radio,
+            "mode": "sta",
+            "ssid": ssid,
+            "encryption": encryption,
+            **({"key": key} if key else {}),
+            "network": network,
+        }),
+    ]
+    return ops
+
+
+def wifi_ap_ops(
+    radio: str,
+    ssid: str,
+    encryption: str,
+    key: str = "",
+    channel: str = "auto",
+    network: str = "lan",
+    country_code: str = "DE",
+) -> list[Op]:
+    """AP configuration as structured ops. Radio must be a concrete name (e.g. 'radio0')."""
+    radio = radio_ref(radio)
+    wifi_encryption(encryption)
+    network = interface_name(network, "network")
+    section = radio_ref(f"default_{radio}")
+    ops: list[Op] = [
+        UciSet(config="wireless", section=radio, values={"disabled": "0", "country": country_code}),
+        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null"),
+    ]
+    if channel and channel != "auto":
+        ops.append(UciSet(config="wireless", section=radio, values={"channel": channel}))
+    ops += [
+        ShellCommand(command=f"uci set wireless.{section}=wifi-iface"),
+        UciSet(config="wireless", section=section, values={
+            "device": radio,
+            "mode": "ap",
+            "ssid": ssid,
+            "encryption": encryption,
+            **({"key": key} if key else {}),
+            "network": network,
+        }),
+    ]
+    return ops
 
 
 def wifi_sta_firstboot_script(
