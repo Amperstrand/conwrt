@@ -6,6 +6,7 @@ import time
 from typing import Callable, Optional
 
 from profile.plan import ProfilePlan, ProfileStep, StepKind
+from profile.ops import RpcCall, render_ubus
 from profile.render import opkg_install_script
 from profile.wifi import wifi_ap_uci_lines, wifi_detect_radio_shell, wifi_sta_uci_lines
 from ssh_utils import ssh_cmd
@@ -160,6 +161,84 @@ def apply_plan(
                 _log(f"  {step.label}...")
                 if _run_ssh(ip, chain, ssh_key, _log):
                     _log(f"  ✓ {step.label}")
+
+    return ip
+
+
+def apply_ubus(
+    plan: ProfilePlan,
+    ip: str,
+    username: str = "root",
+    password: str = "",
+    dry_run: bool = False,
+    log: Optional[LogFn] = None,
+    skip_fallback: bool = True,
+) -> str:
+    """Apply plan steps via ubus HTTP instead of SSH.
+
+    Sends typed ops as ubus RPC calls. ShellCommand ops (fallback=True)
+    are skipped unless ``skip_fallback=False`` — the router must have
+    the rpcd exec plugin for shell fallback to work.
+
+    Steps that require SSH (WiFi radio detection, opkg install) are
+    skipped with a warning. Use SSH transport for full functionality.
+    """
+    from ubus_utils import UbusClient
+
+    _log = log or (lambda _m: None)
+
+    if dry_run:
+        _log("DRY RUN (ubus) — no changes will be made to the router")
+        for step in plan.steps:
+            if not step.ops or step.skipped_reason:
+                continue
+            calls = render_ubus(step.ops)
+            if skip_fallback:
+                calls = [c for c in calls if not c.params.get("fallback")]
+            if calls:
+                _log(f"  {step.label}: {len(calls)} ubus call(s)")
+        return ip
+
+    client = UbusClient(ip)
+    client.login(username, password)
+    _log("  ubus: authenticated")
+
+    for step in plan.steps:
+        if step.skipped_reason:
+            continue
+        if not step.include_in_post_install:
+            continue
+        if not step.ops:
+            continue
+
+        if step.kind in (StepKind.WIFI_STA, StepKind.WIFI_AP):
+            _log(f"  ⚠ {step.label}: skipped (requires SSH for radio detection)")
+            continue
+
+        if step.kind == StepKind.SSH_KEY:
+            continue
+
+        if step.opkg_packages:
+            _log(f"  ⚠ {step.label}: package install skipped (requires SSH)")
+            continue
+
+        calls = render_ubus(step.ops)
+        if skip_fallback:
+            fallback_count = sum(1 for c in calls if c.params.get("fallback"))
+            calls = [c for c in calls if not c.params.get("fallback")]
+            if fallback_count:
+                _log(f"  {step.label}: {fallback_count} shell command(s) skipped")
+
+        if not calls:
+            continue
+
+        try:
+            _log(f"  {step.label}: sending {len(calls)} ubus call(s)...")
+            for call in calls:
+                client.call(call.object_name, call.method, call.params)
+            _log(f"  ✓ {step.label}")
+        except Exception as e:
+            _log(f"  ⚠ {step.label}: {e}")
 
     return ip
 

@@ -92,7 +92,7 @@ save_fingerprint = _router_fingerprint.save_fingerprint
 
 from platform_utils import detect_platform, is_root, has_scapy, has_tcpdump, check_external_deps, configure_interface_ip, remove_interface_ip
 from flash.preflight import run_preflight_checks
-from profile import apply_plan, build_plan, print_plan
+from profile import apply_plan, apply_ubus, build_plan, print_plan
 from profile.apply import verify_persistence as _verify_persistence
 from profile.wifi import build_mgmt_wifi_script
 from inventory import append_to_inventory as _append_to_inventory
@@ -360,6 +360,9 @@ def _apply_profile_post_flash(
     wifi_disable: bool = False,
     lan_ip_mode: str = "",
     hostname_pattern: str = "",
+    transport: str = "ssh",
+    ubus_user: str = "root",
+    ubus_password: str = "",
 ) -> str:
     """Apply config.toml profile via unified plan (WiFi, use cases, LAN IP)."""
     from config import ConwrtConfig
@@ -389,10 +392,17 @@ def _apply_profile_post_flash(
         model_id=model_id,
     )
     if not dry_run:
-        log("Applying profile via SSH...")
-    ip = apply_plan(plan, ip, ssh_key=ssh_key, dry_run=dry_run, log=log)
+        log(f"Applying profile via {transport}...")
+    if transport == "ubus":
+        ip = apply_ubus(
+            plan, ip, username=ubus_user, password=ubus_password,
+            dry_run=dry_run, log=log,
+        )
+    else:
+        ip = apply_plan(plan, ip, ssh_key=ssh_key, dry_run=dry_run, log=log)
 
-    if not dry_run:
+    # --- Post-apply: hostname read-back (SSH only) ---
+    if transport == "ssh" and not dry_run:
         from profile.plan import StepKind as _SK
         has_hostname_step = any(s.kind == _SK.HOSTNAME and s.include_in_post_install for s in plan.steps)
         if has_hostname_step:
@@ -401,7 +411,8 @@ def _apply_profile_post_flash(
                 resolved_hostname = r_host.stdout.strip()
                 log(f"  Hostname resolved: {resolved_hostname}")
 
-    if not dry_run and cfg.lan_ip and interface:
+    # --- Post-apply: static LAN IP (SSH only) ---
+    if transport == "ssh" and not dry_run and cfg.lan_ip and interface:
         new_ip = _apply_lan_ip_post_flash(
             ip, ssh_key=ssh_key, cfg=cfg,
             interface=interface, old_client_ip=old_client_ip,
@@ -409,6 +420,7 @@ def _apply_profile_post_flash(
         if new_ip:
             ip = new_ip
 
+    # --- Post-apply: MAC-hash LAN IP (SSH only) ---
     from profile.plan import StepKind
     from mac_hash import mac_to_lan_ip
     for step in plan.steps:
@@ -418,6 +430,9 @@ def _apply_profile_post_flash(
             continue
         if dry_run:
             log(f"  {step.label} (dry run)")
+            continue
+        if transport != "ssh":
+            log(f"  ⚠ {step.label}: MAC-hash LAN IP requires SSH — skipped for ubus transport")
             continue
 
         script = (step.configure_script or "").replace(" && ", "; ")
@@ -3302,6 +3317,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Device serial number (e.g. from sticker) for hostname and inventory")
     cfg_parser.add_argument("--dry-run", action="store_true",
         help="Print commands without executing")
+    cfg_parser.add_argument("--transport", default="ssh",
+        choices=["ssh", "ubus"],
+        help="Transport: 'ssh' (default) or 'ubus' (HTTP JSON-RPC)")
+    cfg_parser.add_argument("--ubus-user", default="root",
+        help="ubus username (default: root)")
+    cfg_parser.add_argument("--ubus-password", default="",
+        help="ubus password")
 
     profile_parser = subparsers.add_parser("profile",
         help="Inspect operator profile (config.toml) plans")
@@ -3558,13 +3580,15 @@ def cmd_configure(args: argparse.Namespace) -> int:
             wifi_disable=effective_wifi_disable,
             lan_ip_mode=effective_lan_ip_mode,
             hostname_pattern=effective_hostname_pattern,
+            transport=getattr(args, "transport", "ssh"),
+            ubus_user=getattr(args, "ubus_user", "root"),
+            ubus_password=getattr(args, "ubus_password", ""),
         )
         if ssh_pub_path or ssh_key_text:
             print("  # SSH key: idempotent install via authorized_keys check")
         return 0
 
     if ssh_pub_path or ssh_key_text:
-        # SSH key MUST be installed BEFORE password — see _cfg_install_ssh_key docstring
         _cfg_install_ssh_key(ip, key_path=ssh_pub_path, auth_key=ssh_key_path, ssh_key=ssh_key_text)
 
     ip = _apply_profile_post_flash(
@@ -3578,6 +3602,9 @@ def cmd_configure(args: argparse.Namespace) -> int:
         wifi_disable=effective_wifi_disable,
         lan_ip_mode=effective_lan_ip_mode,
         hostname_pattern=effective_hostname_pattern,
+        transport=getattr(args, "transport", "ssh"),
+        ubus_user=getattr(args, "ubus_user", "root"),
+        ubus_password=getattr(args, "ubus_password", ""),
     )
 
     if args.verify and not args.dry_run:

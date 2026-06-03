@@ -1,5 +1,5 @@
 """Unified profile planning for ASU builds and post-install configuration."""
-from profile.apply import apply_plan
+from profile.apply import apply_plan, apply_ubus
 from profile.builder import build_plan
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.render import opkg_install_script, print_plan, ssh_steps_preview
@@ -19,6 +19,7 @@ __all__ = [
     "ProfileStep",
     "StepKind",
     "apply_plan",
+    "apply_ubus",
     "band_to_uci",
     "build_mgmt_wifi_script",
     "build_plan",
