@@ -6,7 +6,12 @@ import json
 import sys
 from pathlib import Path
 
-from jsonschema import Draft7Validator
+try:
+    from jsonschema import Draft7Validator
+except ImportError:
+    print("ERROR: jsonschema is required for model validation.", file=sys.stderr)
+    print("  Install with: pip install jsonschema", file=sys.stderr)
+    raise SystemExit(1) from None
 
 
 ROOT = Path(__file__).resolve().parent.parent

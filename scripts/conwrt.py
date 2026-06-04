@@ -43,8 +43,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-# model_loader is in the same directory
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Version — set by build_ipk.sh or derived from git at runtime
+__version__ = "0.0.0-dev"
+
+# Allow imports from installed location (/usr/share/conwrt) or local directory
+_CONWRT_DIR = str(Path(__file__).resolve().parent)
+if _CONWRT_DIR not in sys.path:
+    sys.path.insert(0, _CONWRT_DIR)
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models, openwrt_asu_profile, find_model_by_board_name
@@ -625,6 +630,34 @@ def _register_wireguard_post_flash(
     )
 
     return pub_key
+
+
+def _deploy_tollgate_post_flash(
+    ip: str, ssh_key: str = "", cfg: object = None,
+) -> None:
+    """Deploy tollgate ipk to the router if the tollgate use case is enabled."""
+    from config import ConwrtConfig
+    if not isinstance(cfg, ConwrtConfig):
+        return
+
+    tollgate_cfg = None
+    for uc in cfg.use_cases:
+        if uc.name == "tollgate":
+            tollgate_cfg = uc.params
+            break
+    if tollgate_cfg is None:
+        return
+
+    from use_cases.tollgate import deploy_tollgate_post_flash
+    deploy_tollgate_post_flash(
+        ip,
+        ssh_key=ssh_key,
+        arch=tollgate_cfg.get("arch", ""),
+        channel=tollgate_cfg.get("channel", "stable"),
+        version=tollgate_cfg.get("version", "latest"),
+        source=tollgate_cfg.get("source", "auto"),
+        log=log,
+    )
 
 
 def _client_ip_for_subnet(router_ip: str) -> str:
@@ -1875,6 +1908,9 @@ def _run_state_machine(
             openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg,
         )
         ctx.wireguard_pubkey = wg_pubkey
+        _deploy_tollgate_post_flash(
+            openwrt_ip, ssh_key=ctx.ssh_key_path, cfg=cfg,
+        )
         _restore_port_isolation(ctx)
         _record_inventory(ctx)
         return 0
@@ -3148,6 +3184,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="conwrt — flash OpenWrt firmware to routers",
     )
+    parser.add_argument("--version", action="version", version=f"conwrt {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     flash_parser = subparsers.add_parser("flash",
@@ -5956,6 +5993,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset", "-h", "--help",
+        "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
