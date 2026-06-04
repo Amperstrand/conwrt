@@ -341,12 +341,12 @@ class TestExtremeHandlers(unittest.TestCase):
             _say_fn=lambda _msg: None,
         )
 
-    @patch("conwrt.TFTPServerManager")
-    @patch("conwrt.configure_interface_ip", return_value=True)
-    @patch("conwrt._write_json_file")
-    @patch("conwrt._ensure_extreme_backup_dir")
-    @patch("conwrt._setup_interface_ips")
-    @patch("conwrt._ssh_with_password")
+    @patch("conwrt.extreme.TFTPServerManager")
+    @patch("conwrt.extreme.configure_interface_ip", return_value=True)
+    @patch("conwrt.extreme._write_json_file")
+    @patch("conwrt.extreme._ensure_extreme_backup_dir")
+    @patch("conwrt.extreme._setup_interface_ips")
+    @patch("conwrt.extreme._ssh_with_password")
     def test_preflight_marks_rdwr_broken_but_continues(
         self,
         mock_ssh,
@@ -377,7 +377,7 @@ class TestExtremeHandlers(unittest.TestCase):
         self.assertTrue(ctx._extreme_rdwr_broken)
         self.assertEqual(ctx.state, State.EXTREME_STOCK_WRITING_UBOOT)
 
-    @patch("conwrt._ssh_with_password")
+    @patch("conwrt.extreme._ssh_with_password")
     def test_stock_writing_uboot_falls_back_to_individual_writes_when_batch_fails(self, mock_ssh):
         ctx = self._ctx()
         ctx._extreme_rdwr_broken = False
@@ -400,7 +400,7 @@ class TestExtremeHandlers(unittest.TestCase):
         self.assertTrue(ctx._extreme_final_vars_written)
         self.assertEqual(ctx.state, State.EXTREME_STOCK_REBOOTING)
 
-    @patch("conwrt._ssh_with_password")
+    @patch("conwrt.extreme._ssh_with_password")
     def test_stock_writing_uboot_writes_final_vars_during_stock_phase(self, mock_ssh):
         ctx = self._ctx()
         event_queue = queue.Queue()
@@ -432,8 +432,8 @@ class TestExtremeHandlers(unittest.TestCase):
         self.assertTrue(ctx._extreme_final_vars_written)
         self.assertEqual(ctx.state, State.EXTREME_STOCK_REBOOTING)
 
-    @patch("conwrt._cleanup_extreme_tftp_assets")
-    @patch("conwrt.log")
+    @patch("conwrt.extreme._cleanup_extreme_tftp_assets")
+    @patch("conwrt.extreme.log")
     def test_bootcmd_restore_skips_when_final_vars_already_written(self, mock_log, mock_cleanup):
         ctx = self._ctx()
         ctx._extreme_final_vars_written = True
@@ -451,8 +451,8 @@ class TestExtremeHandlers(unittest.TestCase):
             mock_log.call_args_list,
         )
 
-    @patch("conwrt._cleanup_extreme_tftp_assets")
-    @patch("conwrt.log")
+    @patch("conwrt.extreme._cleanup_extreme_tftp_assets")
+    @patch("conwrt.extreme.log")
     def test_bootcmd_restore_warns_when_final_vars_not_written(self, mock_log, mock_cleanup):
         ctx = self._ctx()
         event_queue = queue.Queue()
