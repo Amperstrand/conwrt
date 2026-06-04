@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import BlankLine, Comment, Op, ShellCommand, UciCommit, render_shell
+from profile.ops import BlankLine, Comment, Op, ShellCommand, render_shell
 
 from . import ParamDef, UseCase, register
 

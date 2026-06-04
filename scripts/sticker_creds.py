@@ -22,12 +22,11 @@ import argparse
 import json
 import os
 import re
-import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Path setup so we can import sibling modules when run directly

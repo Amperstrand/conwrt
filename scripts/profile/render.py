@@ -1,7 +1,7 @@
 """Render ProfilePlan for display, ASU, or SSH."""
 from __future__ import annotations
 
-from profile.plan import ProfilePlan, ProfileStep, StepKind
+from profile.plan import ProfilePlan, StepKind
 
 
 def opkg_install_script(packages: list[str], remove: list[str] | None = None) -> str:

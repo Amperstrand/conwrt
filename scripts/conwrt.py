@@ -76,8 +76,6 @@ from flash.detect import detect_boot_state as _detect_boot_state
 from flash.device_detect import (
     active_fingerprint as _active_fingerprint,
     match_models as _match_models,
-    FingerprintResult as _FingerprintResult,
-    DeviceCandidate as _DeviceCandidate,
 )
 from flash.oem_handlers import (
     oem_http_accept_reboot, oem_http_change_password, oem_http_login,
@@ -1209,7 +1207,7 @@ class PcapMonitor:
             # Test if we can actually sniff (needs root for raw sockets)
             test_sock = None
             try:
-                from scapy.all import conf, L2socket
+                from scapy.all import L2socket
                 test_sock = L2socket(iface=self.config.interface)
                 test_sock.close()
             except Exception:

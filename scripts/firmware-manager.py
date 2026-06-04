@@ -10,12 +10,10 @@ Subcommands:
 """
 
 import argparse
-import base64
 import hashlib
 import json
 import logging
 import sys
-import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -29,10 +27,7 @@ from flash.context import sha256_file as _sha256_file_impl
 from profile.builder import build_plan
 from profile.render import print_plan
 from profile.wifi import (
-    build_mgmt_wifi_script,
-    wifi_ap_firstboot_script,
     wifi_ap_uci_lines,
-    wifi_sta_firstboot_script,
     wifi_sta_uci_lines,
 )
 

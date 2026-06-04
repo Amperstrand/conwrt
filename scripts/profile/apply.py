@@ -6,7 +6,7 @@ import time
 from typing import Callable, Optional
 
 from profile.plan import ProfilePlan, ProfileStep, StepKind
-from profile.ops import RpcCall, UciCommit, UciDelete, UciSet, render_shell, render_ubus
+from profile.ops import render_shell, render_ubus
 from profile.render import opkg_install_script
 from profile.wifi import band_to_uci, wifi_ap_uci_lines, wifi_detect_radio_shell, wifi_sta_uci_lines
 from ssh_utils import ssh_cmd

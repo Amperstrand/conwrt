@@ -12,7 +12,7 @@ import socket
 import argparse
 import re
 import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

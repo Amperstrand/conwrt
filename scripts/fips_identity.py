@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-import struct
 import sys
 from dataclasses import dataclass
 

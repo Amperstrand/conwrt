@@ -1,19 +1,10 @@
 """HTTP/SSH firmware upload helpers."""
 from __future__ import annotations
-import hashlib
-import hmac
 import os
-import re
 import subprocess
-import sys
-import time
-import urllib.request
-import xml.etree.ElementTree as ET
 from types import SimpleNamespace
-from typing import Optional
 
 from flash.context import DEFAULT_IP, log
-from ssh_utils import ssh_cmd
 
 def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
     try:

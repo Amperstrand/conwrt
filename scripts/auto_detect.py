@@ -3,10 +3,8 @@
 
 import argparse
 import json
-import os
 import re
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -353,7 +351,7 @@ def passive_listen(interface: str, timeout: int = 10) -> dict:
     }
 
     try:
-        from scapy.all import sniff, DHCP, ARP, ICMPv6ND_RA, Ether, IP, conf
+        from scapy.all import sniff, DHCP, ARP, ICMPv6ND_RA, Ether, conf
     except ImportError:
         _passive_listen_tcpdump(interface, timeout, result)
         return result

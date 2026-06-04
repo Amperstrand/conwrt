@@ -8,7 +8,6 @@ Usage:
     python3 scripts/configure-stock-switch.py --new-ip 192.168.13.3 --gateway 192.168.13.1
 """
 import argparse
-import re
 import sys
 import time
 from playwright.sync_api import sync_playwright

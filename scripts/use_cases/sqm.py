@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
-from shell_safe import int_range, interface_name, sh_quote, uci_name
+from shell_safe import int_range, interface_name, uci_name
 
 from . import ParamDef, UseCase, register
 
