@@ -140,18 +140,19 @@ wan_ssh = false
 # dynamic_interval_hours = 4  # Re-tune interval (dynamic mode only)
 #
 # [use_cases.tollgate]
-# # Binary download source:
-# #   "auto"    — try nostr (Blossom) first, fall back to GitHub CI
-# #   "nostr"   — NIP-94 events from trusted publisher on nostr relays
-# #   "github"  — GitHub Actions CI artifacts via `gh` CLI
-# source = "auto"
-# channel = "stable"          # "stable", "beta", "alpha", "dev"
-# version = "latest"          # "latest" or specific version tag (e.g. "v0.4.0")
-# ipk_url = ""                # Direct URL to ipk (overrides source+version, for offline/custom builds)
-# arch = ""                   # Target architecture (auto-detected from router if empty)
-# mint_url = ""               # Cashu mint URL
-# lightning_address = ""      # Lightning address for payouts
-# price_per_minute = 1        # Price in sats per minute
+# # TollGate payment gateway — requires explicit version pinning.
+# # You MUST specify a version (commit hash or version string).
+# # The trusted_pubkey is checked against the nostr event signer.
+# # The expected_sha is verified against the downloaded file.
+# version = "8ec5342"                          # Commit hash or full version like 'main.104.8ec5342'
+# source = "nostr"                              # "nostr" (Blossom via NIP-94) or "github" (CI artifacts)
+# channel = "dev"                               # "stable", "beta", "alpha", "dev"
+# # trusted_pubkey = ""                         # Override trusted publisher (default: TollGate maintainer)
+# # expected_sha = ""                           # Verify downloaded file matches this SHA-256
+# # arch = ""                                   # Target architecture (auto-detected from router if empty)
+# mint_url = ""                                 # Cashu mint URL
+# lightning_address = ""                         # Lightning address for payouts
+# price_per_minute = 1                           # Price in sats per minute
 #
 # [use_cases.wireguard-client]
 # # Management VPN (split tunnel — reach router remotely via VPN server)

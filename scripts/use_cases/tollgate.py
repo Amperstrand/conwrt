@@ -42,13 +42,14 @@ def _sha256_file(path: str) -> str:
 
 
 def resolve_ipk_gh(
-    version: str = "latest",
+    version: str = "",
     arch: str = "",
+    expected_sha: str = "",
     dest: str = "",
 ) -> str:
     """Download a tollgate ipk from GitHub CI artifacts.
 
-    Uses ``gh`` CLI to find the latest successful CI run and downloads the
+    Uses ``gh`` CLI to find the matching CI run and downloads the
     matching artifact.  Returns the local path to the downloaded ipk file.
 
     This runs on the **host**, not on the router.
@@ -56,35 +57,37 @@ def resolve_ipk_gh(
     if not arch:
         raise ValueError("arch is required (e.g. aarch64_cortex-a53)")
 
+    if not version:
+        raise ValueError(
+            "version is required — specify a commit hash (e.g. '8ec5342') "
+            "or CI run number (e.g. '1176'). 'latest' is not accepted."
+        )
+
     if not dest:
         dest = os.path.join(os.environ.get("TMPDIR", "/tmp"), "conwrt-tollgate")
     os.makedirs(dest, exist_ok=True)
 
-    if version == "latest":
-        run_query = (
-            f"gh run list --repo {_REPO} --workflow {_WORKFLOW!r}"
-            f" --branch main --status success --limit 1"
-            f" --json databaseId,runNumber,headSha --jq '.[0]'"
-        )
-    else:
-        run_query = (
-            f"gh run list --repo {_REPO} --workflow {_WORKFLOW!r}"
-            f" --branch main --status success --limit 50"
-            f" --json databaseId,runNumber,headSha"
-        )
+    run_query = (
+        f"gh run list --repo {_REPO} --workflow {_WORKFLOW!r}"
+        f" --branch main --status success --limit 50"
+        f" --json databaseId,runNumber,headSha --jq '.[]'"
+    )
 
     result = subprocess.run(run_query, shell=True, capture_output=True, text=True, check=True)
     runs = json.loads(result.stdout)
 
-    if version == "latest":
-        run_info = runs
-    else:
-        run_info = next(
-            (r for r in runs if str(r["runNumber"]) == str(version)),
-            None,
+    # Match by CI run number or by commit hash
+    run_info = None
+    for r in runs:
+        if str(r["runNumber"]) == str(version) or r["headSha"].startswith(version):
+            run_info = r
+            break
+
+    if run_info is None:
+        raise ValueError(
+            f"No CI run matching version {version!r}. "
+            f"Use 'gh run list --repo {_REPO} --workflow {_WORKFLOW!r} --limit 10' to see available runs."
         )
-        if run_info is None:
-            raise ValueError(f"CI run #{version} not found")
 
     run_id = run_info["databaseId"]
     run_number = run_info["runNumber"]
@@ -111,6 +114,11 @@ def resolve_ipk_gh(
 
     artifact_name = matching[0]
 
+    print(f"  [tollgate] Resolved via GitHub CI:")
+    print(f"    run:      #{run_number}")
+    print(f"    commit:   {short_sha}")
+    print(f"    artifact: {artifact_name}")
+
     dl_cmd = (
         f"gh run download {run_id} --repo {_REPO}"
         f" -n {artifact_name!r} -D {dest!r}"
@@ -122,16 +130,31 @@ def resolve_ipk_gh(
         for root, _dirs, files in os.walk(dest):
             for f in files:
                 if f.endswith(".ipk") and arch.replace("-", "_") in f:
-                    return os.path.join(root, f)
+                    ipk_path = os.path.join(root, f)
+                    break
+
+    if not os.path.exists(ipk_path):
         raise FileNotFoundError(f"ipk not found after download in {dest}")
+
+    actual_sha = _sha256_file(ipk_path)
+    print(f"    sha256:   {actual_sha[:16]}...")
+
+    if expected_sha and actual_sha != expected_sha:
+        os.remove(ipk_path)
+        raise RuntimeError(
+            f"SHA-256 mismatch (operator check) for {artifact_name}: "
+            f"expected {expected_sha}, got {actual_sha}"
+        )
 
     return ipk_path
 
 
 def resolve_ipk_nostr(
     arch: str,
-    channel: str = "stable",
-    version: str = "latest",
+    channel: str = "dev",
+    version: str = "",
+    trusted_pubkey: str = "",
+    expected_sha: str = "",
     dest: str = "",
     timeout: float = 15.0,
 ) -> str:
@@ -146,13 +169,21 @@ def resolve_ipk_nostr(
     """
     from nostr_fetch import DEFAULT_RELAYS, TRUSTED_PUBKEY, query_releases
 
+    if not version:
+        raise ValueError(
+            "version is required — specify a version string (e.g. 'main.104.8ec5342') "
+            "or commit hash (e.g. '8ec5342'). 'latest' is not accepted."
+        )
+
+    pubkey = trusted_pubkey or TRUSTED_PUBKEY
+
     if not dest:
         dest = os.path.join(os.environ.get("TMPDIR", "/tmp"), "conwrt-tollgate")
     os.makedirs(dest, exist_ok=True)
 
     releases = query_releases(
         relay_urls=DEFAULT_RELAYS,
-        trusted_pubkey=TRUSTED_PUBKEY,
+        trusted_pubkey=pubkey,
         package_name="tollgate-wrt",
         architecture=arch,
         release_channel=channel,
@@ -161,25 +192,35 @@ def resolve_ipk_nostr(
 
     if not releases:
         raise RuntimeError(
-            f"No nostr releases found for tollgate-wrt arch={arch} channel={channel}"
+            f"No nostr releases found for tollgate-wrt arch={arch} channel={channel} "
+            f"pubkey={pubkey[:12]}..."
         )
 
-    if version == "latest":
-        event = releases[0]
-    else:
-        event = next(
-            (r for r in releases if r.get("version") == version),
-            None,
+    # Match by version string or by commit hash suffix
+    event = None
+    for r in releases:
+        v = r.get("version", "")
+        if v == version or v.endswith(version):
+            event = r
+            break
+
+    if event is None:
+        available = ", ".join(r.get("version", "?") for r in releases[:10])
+        raise RuntimeError(
+            f"tollgate-wrt version {version!r} not found on nostr. "
+            f"Available: {available}"
         )
-        if event is None:
-            available = ", ".join(r.get("version", "?") for r in releases[:10])
-            raise RuntimeError(
-                f"tollgate-wrt version {version!r} not found on nostr. "
-                f"Available: {available}"
-            )
+
+    # Verify publisher
+    event_pubkey = event.get("pubkey", "")
+    if event_pubkey != pubkey:
+        raise RuntimeError(
+            f"Publisher mismatch: event signed by {event_pubkey[:12]}... "
+            f"but expected {pubkey[:12]}..."
+        )
 
     url = event.get("url", "")
-    expected_sha = event.get("x", "")
+    release_sha = event.get("x", "")
 
     if not url:
         raise RuntimeError("Nostr release event has no download URL")
@@ -189,62 +230,83 @@ def resolve_ipk_nostr(
         local_name = f"tollgate-wrt_{arch}.ipk"
     local_path = os.path.join(dest, local_name)
 
+    print(f"  [tollgate] Resolved via nostr:")
+    print(f"    version:  {event.get('version', '?')}")
+    print(f"    pubkey:   {event_pubkey[:12]}...{event_pubkey[-8:]}")
+    print(f"    sha256:   {release_sha[:16]}...")
+    print(f"    url:      {url[:60]}...")
+
     urlretrieve(url, local_path)
 
-    if expected_sha:
-        actual_sha = _sha256_file(local_path)
-        if actual_sha != expected_sha:
-            os.remove(local_path)
-            raise RuntimeError(
-                f"SHA-256 mismatch for {local_name}: "
-                f"expected {expected_sha}, got {actual_sha}"
-            )
+    # Verify SHA-256 from event
+    actual_sha = _sha256_file(local_path)
+    if release_sha and actual_sha != release_sha:
+        os.remove(local_path)
+        raise RuntimeError(
+            f"SHA-256 mismatch for {local_name}: "
+            f"expected {release_sha}, got {actual_sha}"
+        )
+
+    # Verify SHA-256 from operator (if provided)
+    if expected_sha and actual_sha != expected_sha:
+        os.remove(local_path)
+        raise RuntimeError(
+            f"SHA-256 mismatch (operator check) for {local_name}: "
+            f"expected {expected_sha}, got {actual_sha}"
+        )
 
     return local_path
 
 
 def resolve_ipk_auto(
     arch: str = "",
-    channel: str = "stable",
-    version: str = "latest",
+    channel: str = "dev",
+    version: str = "",
+    trusted_pubkey: str = "",
+    expected_sha: str = "",
     dest: str = "",
-    source: str = "auto",
+    source: str = "nostr",
 ) -> str:
-    """Resolve tollgate ipk from nostr, GitHub, or auto (nostr→gh fallback).
+    """Resolve tollgate ipk from nostr or GitHub.
 
     Args:
         arch: Target ipk architecture (e.g. aarch64_cortex-a53).
         channel: Release channel for nostr lookup.
-        version: 'latest' or specific version string.
+        version: Version string (e.g. 'main.104.8ec5342') or commit hash (e.g. '8ec5342').
+        trusted_pubkey: Nostr pubkey of trusted publisher (default: hardcoded TRUSTED_PUBKEY).
+        expected_sha: If set, verify downloaded file matches this SHA-256.
         dest: Local directory to download into.
-        source: 'nostr', 'github', or 'auto' (try nostr, fall back to github).
+        source: 'nostr' or 'github'.
 
     Returns:
         Local path to the downloaded ipk file.
     """
+    if not version:
+        raise ValueError(
+            "version is required — specify a version string or commit hash. "
+            "'latest' is not accepted."
+        )
+
     if source == "github":
-        return resolve_ipk_gh(version=version, arch=arch, dest=dest)
-    elif source == "nostr":
+        return resolve_ipk_gh(version=version, arch=arch, expected_sha=expected_sha, dest=dest)
+    else:
         if not arch:
             raise ValueError("arch is required for nostr source")
-        return resolve_ipk_nostr(arch=arch, channel=channel, version=version, dest=dest)
-    else:
-        # auto: try nostr first, fall back to github
-        if not arch:
-            return resolve_ipk_gh(version=version, arch=arch, dest=dest)
-        try:
-            return resolve_ipk_nostr(arch=arch, channel=channel, version=version, dest=dest)
-        except Exception:
-            return resolve_ipk_gh(version=version, arch=arch, dest=dest)
+        return resolve_ipk_nostr(
+            arch=arch, channel=channel, version=version,
+            trusted_pubkey=trusted_pubkey, expected_sha=expected_sha, dest=dest,
+        )
 
 
 def deploy_tollgate_post_flash(
     ip: str,
     ssh_key: str = "",
     arch: str = "",
-    channel: str = "stable",
-    version: str = "latest",
-    source: str = "auto",
+    channel: str = "dev",
+    version: str = "",
+    trusted_pubkey: str = "",
+    expected_sha: str = "",
+    source: str = "nostr",
     log: Callable[[str], None] | None = None,
 ) -> bool:
     """Deploy tollgate ipk to a running router after flashing.
@@ -257,8 +319,10 @@ def deploy_tollgate_post_flash(
         ssh_key: Path to SSH private key (optional).
         arch: Target architecture. Auto-detected from router if empty.
         channel: Release channel for nostr lookup.
-        version: 'latest' or specific version.
-        source: 'auto', 'nostr', or 'github'.
+        version: Version string or commit hash (required).
+        trusted_pubkey: Nostr pubkey of trusted publisher.
+        expected_sha: If set, verify downloaded file matches this SHA-256.
+        source: 'nostr' or 'github'.
         log: Optional logging callback.
 
     Returns:
@@ -282,9 +346,13 @@ def deploy_tollgate_post_flash(
         _log(f"Detected architecture: {arch}")
 
     # Download ipk to host
-    _log(f"Resolving tollgate ipk (source={source}, arch={arch})...")
+    _log(f"Resolving tollgate ipk (source={source}, arch={arch}, version={version})...")
     try:
-        ipk_path = resolve_ipk_auto(arch=arch, channel=channel, version=version, source=source)
+        ipk_path = resolve_ipk_auto(
+            arch=arch, channel=channel, version=version,
+            trusted_pubkey=trusted_pubkey, expected_sha=expected_sha,
+            source=source,
+        )
     except Exception as exc:
         _log(f"Failed to resolve ipk: {exc}")
         return False
@@ -384,16 +452,18 @@ register(UseCase(
         "ca-certificates",
     ],
     params={
-        "version": ParamDef(type=str, default="latest",
-            description="TollGate version: 'latest' (main branch CI), or specific run number like '76'"),
-        "ipk_url": ParamDef(type=str, default="",
-            description="Direct URL to ipk file (overrides version lookup, for offline/custom builds)"),
+        "version": ParamDef(type=str, default="",
+            description="TollGate version: commit hash (e.g. '8ec5342') or full version (e.g. 'main.104.8ec5342'). Required."),
+        "trusted_pubkey": ParamDef(type=str, default="",
+            description="Nostr pubkey of trusted publisher (default: hardcoded TollGate maintainer key)"),
+        "expected_sha": ParamDef(type=str, default="",
+            description="Expected SHA-256 of the ipk file (fails download if mismatch)"),
         "arch": ParamDef(type=str, default="",
             description="Target architecture override (auto-detected from model if empty)"),
-        "source": ParamDef(type=str, default="auto",
-            description="Download source: 'auto' (nostr→gh fallback), 'nostr', or 'github'",
-            choices=("auto", "nostr", "github")),
-        "channel": ParamDef(type=str, default="stable",
+        "source": ParamDef(type=str, default="nostr",
+            description="Download source: 'nostr' (Blossom via NIP-94) or 'github' (CI artifacts)",
+            choices=("nostr", "github")),
+        "channel": ParamDef(type=str, default="dev",
             description="Release channel: 'stable', 'beta', 'alpha', 'dev'",
             choices=("stable", "beta", "alpha", "dev")),
         "mint_url": ParamDef(type=str, default="",
