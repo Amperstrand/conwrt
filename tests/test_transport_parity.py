@@ -240,5 +240,6 @@ class TestParityTollgate:
 # Shell-only use cases (no parity test):
 # - auto-sqm: heredoc-written script contains UCI-like lines (sqm.$INTERFACE=queue)
 #   that would contaminate the shell extractor; filesystem ops have no typed equivalent
-# - usb-tether: uses $zone shell variable and ShellCommand for declarations
+# - usb-tether: runtime USB device discovery via /sys/class/net walk; uci commands
+#   use shell variables ($USB_DEV, $zone) not known at op-generation time
 # These intentionally rely on shell constructs that cannot map to ubus RPC.

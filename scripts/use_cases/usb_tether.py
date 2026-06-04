@@ -1,4 +1,12 @@
-"""USB tethering presets — router gets WAN via USB from Android and/or iPhone."""
+"""USB tethering presets — router gets WAN via USB from Android and/or iPhone.
+
+This use case requires ShellCommand ops throughout because it depends on
+runtime hardware discovery: the USB network device is detected by walking
+/sys/class/net at boot time, and the uci commands inside the detection
+script reference shell variables ($USB_DEV, $zone) that are not known at
+op-generation time. This is the canonical example of a use case that
+cannot be promoted to typed ops — it is a first-boot script that probes
+hardware, not a static UCI configuration."""
 from __future__ import annotations
 
 from typing import Any
