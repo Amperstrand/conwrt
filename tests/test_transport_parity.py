@@ -15,19 +15,19 @@ def _extract_uci_from_shell(script: str) -> list[tuple]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        m = re.match(r"uci set (\w+)\.([^.]+)\.(\S+?)='([^']*)'", line)
+        m = re.match(r"uci set ([\w-]+)\.([^.]+)\.(\S+?)='([^']*)'", line)
         if m:
             tuples.append(("set", m.group(1), m.group(2), m.group(3), m.group(4)))
             continue
-        m = re.match(r"uci add_list (\w+)\.([^.]+)\.(\S+?)='([^']*)'", line)
+        m = re.match(r"uci add_list ([\w-]+)\.([^.]+)\.(\S+?)='([^']*)'", line)
         if m:
             tuples.append(("add-list", m.group(1), m.group(2), m.group(3), m.group(4)))
             continue
-        m = re.match(r"uci commit (\w+)", line)
+        m = re.match(r"uci commit ([\w-]+)", line)
         if m:
             tuples.append(("commit", m.group(1)))
             continue
-        m = re.match(r"uci delete (\w+)\.([^.]+?)(?:\.(\S+))?$", line)
+        m = re.match(r"uci delete ([\w-]+)\.([^.]+?)(?:\.(\S+))?$", line)
         if m:
             tuples.append(("delete", m.group(1), m.group(2), m.group(3) or ""))
             continue
@@ -144,3 +144,58 @@ class TestParityWireguardServer:
             "peer1_public_key": "peerkey",
             "peer1_allowed_ips": "10.1.99.2/32",
         })
+
+
+class TestParityGuestWifi:
+    def test_default(self):
+        from use_cases.guest_wifi import _build_guest_wifi_ops
+        _assert_parity(_build_guest_wifi_ops, {})
+
+    def test_secured(self):
+        from use_cases.guest_wifi import _build_guest_wifi_ops
+        _assert_parity(_build_guest_wifi_ops, {
+            "ssid": "MyGuest", "key": "guestpass", "encryption": "psk2",
+        })
+
+    def test_open(self):
+        from use_cases.guest_wifi import _build_guest_wifi_ops
+        _assert_parity(_build_guest_wifi_ops, {
+            "ssid": "FreeWiFi", "encryption": "none", "isolation": False,
+        })
+
+
+class TestParityMesh11sd:
+    def test_default(self):
+        from use_cases.mesh11sd import _build_mesh11sd_ops
+        _assert_parity(_build_mesh11sd_ops, {"mesh_id": "test-mesh"})
+
+    def test_with_ap(self):
+        from use_cases.mesh11sd import _build_mesh11sd_ops
+        _assert_parity(_build_mesh11sd_ops, {
+            "mesh_id": "test-mesh", "ssid": "MeshNet", "key": "secret",
+        })
+
+
+class TestParityFipsRfcomm:
+    def test_default(self):
+        from use_cases.fips_bluetooth_rfcomm import _build_fips_rfcomm_ops
+        _assert_parity(_build_fips_rfcomm_ops, {})
+
+    def test_server(self):
+        from use_cases.fips_bluetooth_rfcomm import _build_fips_rfcomm_ops
+        _assert_parity(_build_fips_rfcomm_ops, {"role": "server", "channel": 5})
+
+    def test_with_peers(self):
+        from use_cases.fips_bluetooth_rfcomm import _build_fips_rfcomm_ops
+        _assert_parity(_build_fips_rfcomm_ops, {
+            "role": "client",
+            "peers": [{"npub": "npub1test", "bt_mac": "AA:BB:CC:DD:EE:FF"}],
+        })
+
+
+# Shell-only use cases (no parity test):
+# - doh: uses ShellCommand for uci add_list/del_list (dnsmasq server entry)
+# - tollgate: uses @section[-1] index syntax and ShellCommand for ipk deploy
+# - auto-sqm: uses $INTERFACE shell variable in section names
+# - usb-tether: uses $zone shell variable and ShellCommand for declarations
+# These intentionally rely on shell constructs that cannot map to ubus RPC.

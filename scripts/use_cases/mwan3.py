@@ -149,8 +149,8 @@ register(UseCase(
         "track_ips": ParamDef(type=list, default=["1.0.0.1", "1.1.1.1", "8.8.8.8", "8.8.4.4"],
                               description="IPs to ping for connectivity tracking"),
     },
-    test_status="untested",
-    tested_notes="",
+    test_status="tested",
+    tested_notes="ops characterization + transport parity",
     build_configure=lambda p: render_shell(_build_mwan3_ops(p)),
     build_configure_ops=_build_mwan3_ops,
 ))

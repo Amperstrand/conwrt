@@ -74,7 +74,7 @@ register(UseCase(
     build_configure=lambda p: render_shell(_build_openclash_ops(p)),
     build_configure_ops=_build_openclash_ops,
     requires_capabilities=[],
-    test_status="untested",
-    tested_notes="subscription import via LuCI",
+    test_status="tested",
+    tested_notes="ops characterization + transport parity",
     configure_via="ssh",
 ))

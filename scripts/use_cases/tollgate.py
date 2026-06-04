@@ -475,7 +475,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_tollgate_ops(p)),
     build_configure_ops=_build_tollgate_ops,
-    test_status="untested",
-    tested_notes="post-flash ipk deploy",
+    test_status="tested",
+    tested_notes="ops characterization + resolve tests + transport parity",
     configure_via="ssh",
 ))

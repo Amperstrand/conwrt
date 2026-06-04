@@ -140,7 +140,7 @@ register(UseCase(
     build_configure=lambda p: render_shell(_build_guest_wifi_ops(p)),
     build_configure_ops=_build_guest_wifi_ops,
     requires_capabilities=["wifi"],
-    test_status="untested",
-    tested_notes="UCI from OpenWrt wiki guest WiFi guide",
+    test_status="tested",
+    tested_notes="ops characterization + transport parity",
     configure_via="ssh",
 ))

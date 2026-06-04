@@ -65,7 +65,7 @@ register(UseCase(
     build_configure=lambda p: render_shell(_build_adguard_ops(p)),
     build_configure_ops=_build_adguard_ops,
     requires_capabilities=[],
-    test_status="untested",
-    tested_notes="web setup wizard after install",
+    test_status="tested",
+    tested_notes="ops characterization + transport parity",
     configure_via="ssh",
 ))

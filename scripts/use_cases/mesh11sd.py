@@ -67,7 +67,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_mesh11sd_ops(p)),
     build_configure_ops=_build_mesh11sd_ops,
-    test_status="untested",
-    tested_notes="",
+    test_status="tested",
+    tested_notes="ops characterization + transport parity",
     requires_capabilities=["wifi"],
 ))
