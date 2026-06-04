@@ -164,6 +164,20 @@ class TestParityGuestWifi:
         })
 
 
+class TestParityDoh:
+    def test_default(self):
+        from use_cases.doh import _build_doh_ops
+        _assert_parity(_build_doh_ops, {})
+
+    def test_google(self):
+        from use_cases.doh import _build_doh_ops
+        _assert_parity(_build_doh_ops, {"provider": "google"})
+
+    def test_custom_port(self):
+        from use_cases.doh import _build_doh_ops
+        _assert_parity(_build_doh_ops, {"listen_port": 5353})
+
+
 class TestParityMesh11sd:
     def test_default(self):
         from use_cases.mesh11sd import _build_mesh11sd_ops
@@ -194,7 +208,6 @@ class TestParityFipsRfcomm:
 
 
 # Shell-only use cases (no parity test):
-# - doh: uses ShellCommand for uci add_list/del_list (dnsmasq server entry)
 # - tollgate: uses @section[-1] index syntax and ShellCommand for ipk deploy
 # - auto-sqm: uses $INTERFACE shell variable in section names
 # - usb-tether: uses $zone shell variable and ShellCommand for declarations

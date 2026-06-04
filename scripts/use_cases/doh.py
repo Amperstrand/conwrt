@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciDelete, UciSet, render_shell
 from shell_safe import sh_quote
 
 from . import ParamDef, UseCase, register
@@ -51,8 +51,8 @@ def _build_doh_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(UciSet(config="dhcp", section="@dnsmasq[0]", values={
         "noresolv": "1",
     }))
-    ops.append(ShellCommand(command=f"uci del_list dhcp.@dnsmasq[0].server >/dev/null 2>&1 || true"))
-    ops.append(ShellCommand(command=f"uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#{port}'"))
+    ops.append(UciDelete(config="dhcp", section="@dnsmasq[0]", option="server"))
+    ops.append(UciAddList(config="dhcp", section="@dnsmasq[0]", option="server", value=f"127.0.0.1#{port}"))
     ops.append(UciCommit(config="dhcp"))
     ops.append(ShellCommand(command="/etc/init.d/dnsmasq restart 2>/dev/null || true"))
     ops.append(ShellCommand(
