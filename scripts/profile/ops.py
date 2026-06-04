@@ -108,8 +108,26 @@ class ShellCommand:
     command: str
 
 
+@dataclass
+class Comment:
+    """Shell comment line — for human readability in generated scripts.
+
+    render_shell emits ``# {text}``. render_ubus silently skips.
+    """
+
+    text: str
+
+
+@dataclass
+class BlankLine:
+    """Empty line separator — for human readability in generated scripts.
+
+    render_shell emits a blank line. render_ubus silently skips.
+    """
+
+
 # Union of all operation types.
-Op = Union[UciSet, UciAdd, UciDelete, UciAddList, UciCommit, ServiceAction, ShellCommand]
+Op = Union[UciSet, UciAdd, UciDelete, UciAddList, UciCommit, ServiceAction, ShellCommand, Comment, BlankLine]
 
 
 # -- Shell renderer ------------------------------------------------------------
@@ -164,6 +182,12 @@ def render_shell(ops: list[Op]) -> str:
 
         elif isinstance(op, ShellCommand):
             lines.append(op.command)
+
+        elif isinstance(op, Comment):
+            lines.append(f"# {op.text}")
+
+        elif isinstance(op, BlankLine):
+            lines.append("")
 
     return "\n".join(lines)
 

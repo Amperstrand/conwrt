@@ -1,4 +1,6 @@
 from profile.ops import (
+    BlankLine,
+    Comment,
     RpcCall,
     ShellCommand,
     UciAdd,
@@ -124,3 +126,21 @@ class TestRenderMixedOps:
 
     def test_empty_ops(self):
         assert render_ubus([]) == []
+
+
+class TestRenderCommentBlankLine:
+    def test_comment_skipped(self):
+        ops = [Comment(text="AdGuard Home"), UciSet(config="system", section="@system[0]", values={"hostname": "r1"})]
+        calls = render_ubus(ops)
+        assert len(calls) == 1
+        assert calls[0].method == "set"
+
+    def test_blank_line_skipped(self):
+        ops = [UciCommit(config="network"), BlankLine(), UciCommit(config="dhcp")]
+        calls = render_ubus(ops)
+        assert len(calls) == 2
+        assert all(c.method == "commit" for c in calls)
+
+    def test_comment_and_blank_together(self):
+        ops = [Comment(text="header"), BlankLine(), UciSet(config="system", section="@system[0]", values={"hostname": "r1"})]
+        assert render_ubus(ops) == [RpcCall(object_name="uci", method="set", params={"config": "system", "section": "@system[0]", "values": {"hostname": "r1"}})]

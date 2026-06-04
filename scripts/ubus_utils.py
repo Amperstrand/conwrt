@@ -109,6 +109,33 @@ class UbusClient:
     def info(self) -> dict:
         return self.call("system", "info")
 
+    def discover_radios(self) -> dict[str, dict[str, Any]]:
+        """Discover wireless radios via ``ubus call network.wireless status``.
+
+        Returns a mapping of radio name → band info, e.g.
+        ``{"radio0": {"band": "2g", "channel": "auto"}, "radio1": {"band": "5g", "channel": "auto"}}``.
+        """
+        status = self.call("network.wireless", "status")
+        radios: dict[str, dict[str, Any]] = {}
+        for radio_name, radio_data in status.items():
+            config = radio_data.get("config", {})
+            band = config.get("band", "")
+            channel = config.get("channel", "auto")
+            if band:
+                radios[radio_name] = {"band": band, "channel": str(channel)}
+        return radios
+
+    def find_radio_for_band(self, target_band: str) -> str | None:
+        """Find a radio matching the target UCI band (``2g``, ``5g``, ``6g``).
+
+        Uses :meth:`discover_radios` internally. Returns the radio name
+        (e.g. ``"radio0"``) or ``None`` if no matching radio is found.
+        """
+        for radio_name, info in self.discover_radios().items():
+            if info["band"] == target_band:
+                return radio_name
+        return None
+
     def _call(self, token: str, object_name: str, method: str, params: dict) -> dict:
         self._id += 1
         payload = json.dumps({

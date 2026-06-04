@@ -1,10 +1,9 @@
 """travelmate — travel router auto-connect for hotel/airport WiFi."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ServiceAction, ShellCommand, UciCommit, UciSet
+from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -27,6 +26,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
 def _build_travelmate_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
     return [
+        Comment(text="--- Travelmate travel router ---"),
         UciSet(config="travelmate", section="global", values={
             "trm_enabled": "1",
             "trm_automatic": "1",
@@ -38,25 +38,8 @@ def _build_travelmate_ops(params: dict[str, Any]) -> list[Op]:
         UciCommit(config="travelmate"),
         ServiceAction(name="travelmate", action="enable"),
         ShellCommand(command="/etc/init.d/travelmate restart 2>/dev/null || true"),
+        ShellCommand(command=f'echo "Travelmate configured: auto-connect on {r["radio"]}"'),
     ]
-
-
-def _build_travelmate(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-
-    return textwrap.dedent(f"""\
-        # --- Travelmate travel router ---
-        uci set travelmate.global.trm_enabled='1'
-        uci set travelmate.global.trm_automatic='1'
-        uci set travelmate.global.trm_captive='{r["captive_flag"]}'
-        uci set travelmate.global.trm_timeout='{r["timeout"]}'
-        uci set travelmate.global.trm_retry='{r["retry"]}'
-        uci set travelmate.global.trm_radio='{r["radio"]}'
-        uci commit travelmate
-        /etc/init.d/travelmate enable
-        /etc/init.d/travelmate restart 2>/dev/null || true
-        echo "Travelmate configured: auto-connect on {r["radio"]}"
-    """)
 
 
 register(UseCase(
@@ -79,7 +62,7 @@ register(UseCase(
         "captive": ParamDef(type=bool, default=True,
                             description="Enable captive portal detection"),
     },
-    build_configure=_build_travelmate,
+    build_configure=lambda p: render_shell(_build_travelmate_ops(p)),
     build_configure_ops=_build_travelmate_ops,
     test_status="experimental",
     tested_notes="wiki-based",

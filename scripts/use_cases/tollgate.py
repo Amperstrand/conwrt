@@ -1,13 +1,14 @@
 """OpenTollGate — Bitcoin Lightning payment gateway for selling internet access."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
-import textwrap
-from typing import Any
+from typing import Any, Callable
+from urllib.request import urlretrieve
 
-from profile.ops import Op, ShellCommand
+from profile.ops import Comment, Op, ShellCommand, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -31,7 +32,16 @@ def arch_from_target(target: str) -> str:
     return _ARCH_MAP.get(target, "")
 
 
-def resolve_ipk(
+def _sha256_file(path: str) -> str:
+    """Compute SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def resolve_ipk_gh(
     version: str = "latest",
     arch: str = "",
     dest: str = "",
@@ -118,10 +128,208 @@ def resolve_ipk(
     return ipk_path
 
 
+def resolve_ipk_nostr(
+    arch: str,
+    channel: str = "stable",
+    version: str = "latest",
+    dest: str = "",
+    timeout: float = 15.0,
+) -> str:
+    """Download a tollgate ipk from nostr relays via Blossom URLs.
+
+    Queries nostr relays for signed release events from the trusted publisher,
+    picks the matching release, downloads the ipk, and verifies its SHA-256.
+
+    Returns the local path to the downloaded ipk file.
+
+    This runs on the **host**, not on the router.
+    """
+    from nostr_fetch import DEFAULT_RELAYS, TRUSTED_PUBKEY, query_releases
+
+    if not dest:
+        dest = os.path.join(os.environ.get("TMPDIR", "/tmp"), "conwrt-tollgate")
+    os.makedirs(dest, exist_ok=True)
+
+    releases = query_releases(
+        relay_urls=DEFAULT_RELAYS,
+        trusted_pubkey=TRUSTED_PUBKEY,
+        package_name="tollgate-wrt",
+        architecture=arch,
+        release_channel=channel,
+        timeout=timeout,
+    )
+
+    if not releases:
+        raise RuntimeError(
+            f"No nostr releases found for tollgate-wrt arch={arch} channel={channel}"
+        )
+
+    if version == "latest":
+        event = releases[0]
+    else:
+        event = next(
+            (r for r in releases if r.get("version") == version),
+            None,
+        )
+        if event is None:
+            available = ", ".join(r.get("version", "?") for r in releases[:10])
+            raise RuntimeError(
+                f"tollgate-wrt version {version!r} not found on nostr. "
+                f"Available: {available}"
+            )
+
+    url = event.get("url", "")
+    expected_sha = event.get("x", "")
+
+    if not url:
+        raise RuntimeError("Nostr release event has no download URL")
+
+    local_name = url.rsplit("/", 1)[-1]
+    if not local_name.endswith(".ipk"):
+        local_name = f"tollgate-wrt_{arch}.ipk"
+    local_path = os.path.join(dest, local_name)
+
+    urlretrieve(url, local_path)
+
+    if expected_sha:
+        actual_sha = _sha256_file(local_path)
+        if actual_sha != expected_sha:
+            os.remove(local_path)
+            raise RuntimeError(
+                f"SHA-256 mismatch for {local_name}: "
+                f"expected {expected_sha}, got {actual_sha}"
+            )
+
+    return local_path
+
+
+def resolve_ipk_auto(
+    arch: str = "",
+    channel: str = "stable",
+    version: str = "latest",
+    dest: str = "",
+    source: str = "auto",
+) -> str:
+    """Resolve tollgate ipk from nostr, GitHub, or auto (nostr→gh fallback).
+
+    Args:
+        arch: Target ipk architecture (e.g. aarch64_cortex-a53).
+        channel: Release channel for nostr lookup.
+        version: 'latest' or specific version string.
+        dest: Local directory to download into.
+        source: 'nostr', 'github', or 'auto' (try nostr, fall back to github).
+
+    Returns:
+        Local path to the downloaded ipk file.
+    """
+    if source == "github":
+        return resolve_ipk_gh(version=version, arch=arch, dest=dest)
+    elif source == "nostr":
+        if not arch:
+            raise ValueError("arch is required for nostr source")
+        return resolve_ipk_nostr(arch=arch, channel=channel, version=version, dest=dest)
+    else:
+        # auto: try nostr first, fall back to github
+        if not arch:
+            return resolve_ipk_gh(version=version, arch=arch, dest=dest)
+        try:
+            return resolve_ipk_nostr(arch=arch, channel=channel, version=version, dest=dest)
+        except Exception:
+            return resolve_ipk_gh(version=version, arch=arch, dest=dest)
+
+
+def deploy_tollgate_post_flash(
+    ip: str,
+    ssh_key: str = "",
+    arch: str = "",
+    channel: str = "stable",
+    version: str = "latest",
+    source: str = "auto",
+    log: Callable[[str], None] | None = None,
+) -> bool:
+    """Deploy tollgate ipk to a running router after flashing.
+
+    This is the main host-side entry point for post-flash tollgate deployment.
+    It resolves the ipk, downloads it, transfers it via SCP, and installs it.
+
+    Args:
+        ip: Router IP address.
+        ssh_key: Path to SSH private key (optional).
+        arch: Target architecture. Auto-detected from router if empty.
+        channel: Release channel for nostr lookup.
+        version: 'latest' or specific version.
+        source: 'auto', 'nostr', or 'github'.
+        log: Optional logging callback.
+
+    Returns:
+        True on success, False on failure.
+    """
+    from ssh_utils import ssh_cmd
+
+    def _log(msg: str) -> None:
+        if log:
+            log(msg)
+
+    # Auto-detect arch from router if not provided
+    if not arch:
+        _log("Detecting architecture from router...")
+        detect_cmd = ssh_cmd(ip, "grep DISTRIB_ARCH /etc/openwrt_release | cut -d\"'\" -f2", key=ssh_key or None)
+        result = subprocess.run(detect_cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0 or not result.stdout.strip():
+            _log(f"Failed to detect architecture: {result.stderr.strip()}")
+            return False
+        arch = result.stdout.strip()
+        _log(f"Detected architecture: {arch}")
+
+    # Download ipk to host
+    _log(f"Resolving tollgate ipk (source={source}, arch={arch})...")
+    try:
+        ipk_path = resolve_ipk_auto(arch=arch, channel=channel, version=version, source=source)
+    except Exception as exc:
+        _log(f"Failed to resolve ipk: {exc}")
+        return False
+    _log(f"Downloaded ipk to {ipk_path}")
+
+    # SCP to router (use -O for dropbear compatibility)
+    _log(f"Transferring ipk to router at {ip}...")
+    scp_args: list[str] = ["scp", "-O"]
+    if ssh_key:
+        scp_args += ["-i", ssh_key]
+    scp_args += [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        ipk_path,
+        f"root@{ip}:/tmp/tollgate-wrt.ipk",
+    ]
+    scp_result = subprocess.run(scp_args, capture_output=True, text=True, timeout=30)
+    if scp_result.returncode != 0:
+        _log(f"SCP failed: {scp_result.stderr.strip()}")
+        return False
+
+    # Install on router
+    _log("Installing tollgate ipk on router...")
+    install_cmd = ssh_cmd(
+        ip,
+        "opkg install /tmp/tollgate-wrt.ipk && /etc/init.d/tollgate-wrt enable",
+        key=ssh_key or None,
+    )
+    install_result = subprocess.run(install_cmd, capture_output=True, text=True, timeout=30)
+    if install_result.returncode != 0:
+        _log(f"Install failed: {install_result.stderr.strip()}")
+        return False
+
+    # Cleanup local ipk
+    try:
+        os.remove(ipk_path)
+    except OSError:
+        pass
+
+    _log("TollGate deployed successfully.")
+    return True
+
+
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     return {
-        "deploy_mode": str(params.get("deploy_mode", "post-flash")),
-        "ipk_url": str(params.get("ipk_url", "")),
         "mint_url": str(params.get("mint_url", "")),
         "lightning_address": str(params.get("lightning_address", "")),
         "price_per_minute": int(params.get("price_per_minute", 1)),
@@ -130,180 +338,45 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
 
 def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
-    deploy_mode = r["deploy_mode"]
-    ipk_url = r["ipk_url"]
     mint_url = r["mint_url"]
     lightning_address = r["lightning_address"]
     price_per_minute = r["price_per_minute"]
 
     ops: list[Op] = []
 
-    if deploy_mode == "bake" and ipk_url:
-        ops.append(ShellCommand("_i=0"))
-        ops.append(ShellCommand("while [ $_i -lt 30 ]; do"))
-        ops.append(ShellCommand("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && break"))
-        ops.append(ShellCommand("sleep 2"))
-        ops.append(ShellCommand("_i=$((_i + 1))"))
-        ops.append(ShellCommand("done"))
-        ops.append(ShellCommand("if ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then"))
-        ops.append(ShellCommand("exit 0"))
-        ops.append(ShellCommand("fi"))
-        ops.append(ShellCommand(
-            f"wget -O /tmp/tollgate-wrt.ipk '{ipk_url}' 2>/dev/null && \\"
-        ))
-        ops.append(ShellCommand("opkg install /tmp/tollgate-wrt.ipk && \\"))
-        ops.append(ShellCommand("rm -f /tmp/tollgate-wrt.ipk"))
-        ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
-        ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
+    # Enable nodogsplash
+    ops.append(Comment(text="--- TollGate: nodogsplash captive portal ---"))
+    ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
+    ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
+    ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
+    ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
+
+    # Configure tollgate UCI if any settings provided
+    _has_config = bool(mint_url or lightning_address or price_per_minute != 1)
+    if _has_config:
+        ops.append(Comment(text="--- TollGate: payment configuration ---"))
         ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
         ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
-        _has_config = False
         if mint_url:
             ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"))
-            _has_config = True
         if lightning_address:
             ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"))
-            _has_config = True
         if price_per_minute != 1:
             ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"))
-            _has_config = True
-        if _has_config:
-            ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/tollgate-wrt enable 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/tollgate-wrt restart 2>/dev/null || true"))
-    else:
-        ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
-        ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
-        ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
-        _has_config = False
-        if mint_url:
-            ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
-            ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"))
-            _has_config = True
-        if lightning_address:
-            if not _has_config:
-                ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
-                ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
-                _has_config = True
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"))
-        if price_per_minute != 1:
-            if not _has_config:
-                ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
-                ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
-                _has_config = True
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"))
-        if _has_config:
-            ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
+        ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
+
+    ops.append(Comment(text="--- TollGate: ipk installed separately via deploy_tollgate_post_flash() ---"))
 
     return ops
 
 
-def _build_tollgate(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-    deploy_mode = r["deploy_mode"]
-    ipk_url = r["ipk_url"]
-    mint_url = r["mint_url"]
-    lightning_address = r["lightning_address"]
-    price_per_minute = r["price_per_minute"]
-
-    if deploy_mode == "bake" and ipk_url:
-        config_lines: list[str] = []
-        if mint_url:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"
-            )
-        if lightning_address:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"
-            )
-        if price_per_minute != 1:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"
-            )
-
-        config_block = ""
-        if config_lines:
-            config_block = "\n".join([""] + config_lines + [
-                "uci commit tollgate 2>/dev/null || true",
-            ])
-
-        return textwrap.dedent(f"""\
-            # --- TollGate install (bake mode) ---
-            # Wait for internet (max 60s)
-            _i=0
-            while [ $_i -lt 30 ]; do
-                ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && break
-                sleep 2
-                _i=$((_i + 1))
-            done
-            if ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
-                echo "TollGate: no internet, skipping ipk install" >&2
-                exit 0
-            fi
-            # Download and install ipk
-            wget -O /tmp/tollgate-wrt.ipk '{ipk_url}' 2>/dev/null && \\
-              opkg install /tmp/tollgate-wrt.ipk && \\
-              rm -f /tmp/tollgate-wrt.ipk
-            # Configure nodogsplash
-            uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true
-            uci commit nodogsplash 2>/dev/null || true
-            /etc/init.d/nodogsplash enable 2>/dev/null || true
-            /etc/init.d/nodogsplash restart 2>/dev/null || true
-            # Configure tollgate
-            touch /etc/config/tollgate 2>/dev/null || true
-            uci add tollgate tollgate 2>/dev/null || true{config_block}
-            /etc/init.d/tollgate-wrt enable 2>/dev/null || true
-            /etc/init.d/tollgate-wrt restart 2>/dev/null || true
-            echo "TollGate: ipk installed and configured (bake mode)"
-        """)
-    else:
-        if deploy_mode == "bake" and not ipk_url:
-            note = "# bake mode requested but no ipk_url — falling back to post-flash deploy"
-        else:
-            note = "# ipk will be deployed post-flash via SSH (SCP + opkg)"
-
-        config_lines = []
-        if mint_url:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"
-            )
-        if lightning_address:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"
-            )
-        if price_per_minute != 1:
-            config_lines.append(
-                f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"
-            )
-
-        config_block = ""
-        if config_lines:
-            config_block = "\n".join([
-                "",
-                "touch /etc/config/tollgate 2>/dev/null || true",
-                "uci add tollgate tollgate 2>/dev/null || true",
-            ] + config_lines + [
-                "uci commit tollgate 2>/dev/null || true",
-            ])
-
-        return textwrap.dedent(f"""\
-            # --- TollGate base setup ---
-            {note}
-            uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true
-            uci commit nodogsplash 2>/dev/null || true
-            /etc/init.d/nodogsplash enable 2>/dev/null || true
-            /etc/init.d/nodogsplash restart 2>/dev/null || true{config_block}
-            echo "TollGate: nodogsplash configured, awaiting ipk deploy"
-        """)
-
-
 register(UseCase(
     name="tollgate",
-    description="OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)",
+    description=(
+        "OpenTollGate Bitcoin/Lightning payment gateway. "
+        "Downloads ipk via nostr (Blossom) with GitHub CI fallback, "
+        "deploys post-flash via SCP + opkg."
+    ),
     packages=[
         "nodogsplash",
         "libustream-wolfssl",
@@ -311,14 +384,18 @@ register(UseCase(
         "ca-certificates",
     ],
     params={
-        "deploy_mode": ParamDef(type=str, default="post-flash",
-            description="How to install tollgate: 'post-flash' (SCP+opkg via SSH) or 'bake' (wget+opkg in first-boot script)"),
         "version": ParamDef(type=str, default="latest",
             description="TollGate version: 'latest' (main branch CI), or specific run number like '76'"),
         "ipk_url": ParamDef(type=str, default="",
             description="Direct URL to ipk file (overrides version lookup, for offline/custom builds)"),
         "arch": ParamDef(type=str, default="",
             description="Target architecture override (auto-detected from model if empty)"),
+        "source": ParamDef(type=str, default="auto",
+            description="Download source: 'auto' (nostr→gh fallback), 'nostr', or 'github'",
+            choices=("auto", "nostr", "github")),
+        "channel": ParamDef(type=str, default="stable",
+            description="Release channel: 'stable', 'beta', 'alpha', 'dev'",
+            choices=("stable", "beta", "alpha", "dev")),
         "mint_url": ParamDef(type=str, default="",
             description="Cashu mint URL"),
         "lightning_address": ParamDef(type=str, default="",
@@ -326,7 +403,7 @@ register(UseCase(
         "price_per_minute": ParamDef(type=int, default=1,
             description="Price in sats per minute"),
     },
-    build_configure=_build_tollgate,
+    build_configure=lambda p: render_shell(_build_tollgate_ops(p)),
     build_configure_ops=_build_tollgate_ops,
     test_status="untested",
     tested_notes="post-flash ipk deploy",

@@ -1,17 +1,13 @@
-"""Characterization and roundtrip tests for ssh_hardening.py UCI generators.
+"""Characterization tests for ssh_hardening.py ops pipeline.
 
-Characterization tests lock the current output of _build_ssh_hardening so
-refactoring to ops can be verified.
-
-Roundtrip tests verify that render_shell(_build_ssh_hardening_ops(...)) matches
-the configuration lines from _build_ssh_hardening(...) (excluding comments/echo).
+render_shell(_build_ssh_hardening_ops(...)) is the authoritative output.
+If ops change, these tests must be updated to match.
 """
-from helpers import config_lines as _config_lines
 from profile.ops import render_shell
-from use_cases.ssh_hardening import _build_ssh_hardening, _build_ssh_hardening_ops
+from use_cases.ssh_hardening import _build_ssh_hardening_ops
 
 
-DEFAULT_PARAMS = {}
+DEFAULT_PARAMS: dict = {}
 CUSTOM_PARAMS = {
     "disable_password_auth": False,
     "idle_timeout": 600,
@@ -20,56 +16,107 @@ CUSTOM_PARAMS = {
     "disable_gateway_ports": False,
 }
 
+EXPECTED_DEFAULT = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].Port='22'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='300'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=off idle=300s max_tries=3 port=22"'
+)
 
-class TestSshHardeningCharacterization:
-    def test_default_params_output(self):
-        script = _build_ssh_hardening(DEFAULT_PARAMS)
-        assert "uci set dropbear.@dropbear[0].PasswordAuth='off'" in script
-        assert "uci set dropbear.@dropbear[0].RootPasswordAuth='off'" in script
-        assert "uci set dropbear.@dropbear[0].Port='22'" in script
-        assert "uci set dropbear.@dropbear[0].IdleTimeout='300'" in script
-        assert "uci set dropbear.@dropbear[0].MaxAuthTries='3'" in script
-        assert "uci set dropbear.@dropbear[0].GatewayPorts='no'" in script
-        assert "uci commit dropbear" in script
+EXPECTED_CUSTOM = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='on'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='on'\n"
+    "uci set dropbear.@dropbear[0].Port='2222'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='600'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='5'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='yes'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=on idle=600s max_tries=5 port=2222"'
+)
 
-    def test_custom_params_output(self):
-        script = _build_ssh_hardening(CUSTOM_PARAMS)
-        assert "uci set dropbear.@dropbear[0].PasswordAuth='on'" in script
-        assert "uci set dropbear.@dropbear[0].RootPasswordAuth='on'" in script
-        assert "uci set dropbear.@dropbear[0].Port='2222'" in script
-        assert "uci set dropbear.@dropbear[0].IdleTimeout='600'" in script
-        assert "uci set dropbear.@dropbear[0].MaxAuthTries='5'" in script
-        assert "uci set dropbear.@dropbear[0].GatewayPorts='yes'" in script
+EXPECTED_PW_ENABLED = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='on'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='on'\n"
+    "uci set dropbear.@dropbear[0].Port='22'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='300'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=on idle=300s max_tries=3 port=22"'
+)
+
+EXPECTED_PORT_TIMEOUT = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].Port='2222'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='0'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=off idle=0s max_tries=3 port=2222"'
+)
+
+EXPECTED_GW_ENABLED = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].Port='22'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='300'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='yes'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=off idle=300s max_tries=3 port=22"'
+)
+
+EXPECTED_ALL_CUSTOM = (
+    "# --- SSH hardening ---\n"
+    "uci set dropbear.@dropbear[0].PasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].RootPasswordAuth='off'\n"
+    "uci set dropbear.@dropbear[0].Port='8022'\n"
+    "uci set dropbear.@dropbear[0].IdleTimeout='120'\n"
+    "uci set dropbear.@dropbear[0].MaxAuthTries='1'\n"
+    "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
+    "uci commit dropbear\n"
+    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    'echo "SSH hardened: password_auth=off idle=120s max_tries=1 port=8022"'
+)
 
 
-class TestSshHardeningOpsRoundtrip:
-    def _assert_config_match(self, params: dict) -> None:
-        script = _build_ssh_hardening(params)
-        ops = _build_ssh_hardening_ops(params)
-        rendered = render_shell(ops)
-        expected = "\n".join(_config_lines(script))
-        assert rendered == expected, f"\n--- rendered ---\n{rendered}\n--- expected ---\n{expected}\n"
-
+class TestSshHardeningOps:
     def test_default_params(self):
-        self._assert_config_match(DEFAULT_PARAMS)
+        assert render_shell(_build_ssh_hardening_ops(DEFAULT_PARAMS)) == EXPECTED_DEFAULT
 
     def test_custom_params(self):
-        self._assert_config_match(CUSTOM_PARAMS)
+        assert render_shell(_build_ssh_hardening_ops(CUSTOM_PARAMS)) == EXPECTED_CUSTOM
 
     def test_password_auth_enabled(self):
-        self._assert_config_match({"disable_password_auth": False})
+        assert render_shell(_build_ssh_hardening_ops({"disable_password_auth": False})) == EXPECTED_PW_ENABLED
 
     def test_custom_port_and_timeout(self):
-        self._assert_config_match({"port": 2222, "idle_timeout": 0})
+        assert render_shell(_build_ssh_hardening_ops({"port": 2222, "idle_timeout": 0})) == EXPECTED_PORT_TIMEOUT
 
     def test_gateway_ports_enabled(self):
-        self._assert_config_match({"disable_gateway_ports": False})
+        assert render_shell(_build_ssh_hardening_ops({"disable_gateway_ports": False})) == EXPECTED_GW_ENABLED
 
     def test_all_custom(self):
-        self._assert_config_match({
+        params = {
             "disable_password_auth": True,
             "idle_timeout": 120,
             "max_auth_tries": 1,
             "port": 8022,
             "disable_gateway_ports": True,
-        })
+        }
+        assert render_shell(_build_ssh_hardening_ops(params)) == EXPECTED_ALL_CUSTOM

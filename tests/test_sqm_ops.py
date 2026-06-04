@@ -1,14 +1,10 @@
-"""Characterization and roundtrip tests for sqm.py UCI generators.
+"""Characterization tests for sqm.py ops pipeline.
 
-Characterization tests lock the current output of _build_sqm so
-refactoring to ops can be verified.
-
-Roundtrip tests verify that render_shell(_build_sqm_ops(...)) matches
-the configuration lines from _build_sqm(...) (excluding comments/echo).
+render_shell(_build_sqm_ops(...)) is the authoritative output.
+If ops change, these tests must be updated to match.
 """
-from helpers import config_lines as _config_lines
 from profile.ops import render_shell
-from use_cases.sqm import _build_sqm, _build_sqm_ops
+from use_cases.sqm import _build_sqm_ops
 
 
 DEFAULT_PARAMS = {"download_kbps": 340000, "upload_kbps": 19000}
@@ -22,42 +18,110 @@ CUSTOM_PARAMS = {
     "overhead": 44,
 }
 
+EXPECTED_DEFAULT = (
+    "# --- SQM Smart Queue Management ---\n"
+    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set sqm.wan=queue\n"
+    "uci set sqm.wan.interface='wan'\n"
+    "uci set sqm.wan.enabled='1'\n"
+    "uci set sqm.wan.script='piece_of_cake.qos'\n"
+    "uci set sqm.wan.qdisc='cake'\n"
+    "uci set sqm.wan.linklayer='none'\n"
+    "uci set sqm.wan.overhead='0'\n"
+    "uci set sqm.wan.download='340000'\n"
+    "uci set sqm.wan.upload='19000'\n"
+    "uci set sqm.wan.linklayer_adaptation_mechanism='default'\n"
+    "uci set sqm.wan.debug_logging='0'\n"
+    "uci set sqm.wan.verbosity='5'\n"
+    "uci commit sqm\n"
+    "\n"
+    "/etc/init.d/sqm enable\n"
+    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    'echo "SQM configured: 340000/19000 kbit/s (cake)"'
+)
 
-class TestSqmCharacterization:
-    def test_default_params_output(self):
-        script = _build_sqm(DEFAULT_PARAMS)
-        assert "uci set sqm.wan=queue" in script
-        assert "uci set sqm.wan.enabled='1'" in script
-        assert "uci set sqm.wan.download='340000'" in script
-        assert "uci set sqm.wan.upload='19000'" in script
-        assert "uci commit sqm" in script
-        assert "/etc/init.d/sqm enable" in script
+EXPECTED_CUSTOM = (
+    "# --- SQM Smart Queue Management ---\n"
+    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set sqm.eth1=queue\n"
+    "uci set sqm.eth1.interface='eth1'\n"
+    "uci set sqm.eth1.enabled='1'\n"
+    "uci set sqm.eth1.script='layer_cake.qos'\n"
+    "uci set sqm.eth1.qdisc='fq_codel'\n"
+    "uci set sqm.eth1.linklayer='ethernet'\n"
+    "uci set sqm.eth1.overhead='44'\n"
+    "uci set sqm.eth1.download='100000'\n"
+    "uci set sqm.eth1.upload='50000'\n"
+    "uci set sqm.eth1.linklayer_adaptation_mechanism='default'\n"
+    "uci set sqm.eth1.debug_logging='0'\n"
+    "uci set sqm.eth1.verbosity='5'\n"
+    "uci commit sqm\n"
+    "\n"
+    "/etc/init.d/sqm enable\n"
+    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    'echo "SQM configured: 100000/50000 kbit/s (fq_codel)"'
+)
 
-    def test_custom_params_output(self):
-        script = _build_sqm(CUSTOM_PARAMS)
-        assert "uci set sqm.eth1=queue" in script
-        assert "uci set sqm.eth1.qdisc='fq_codel'" in script
-        assert "uci set sqm.eth1.script='layer_cake.qos'" in script
-        assert "uci set sqm.eth1.linklayer='ethernet'" in script
-        assert "uci set sqm.eth1.overhead='44'" in script
+EXPECTED_MINIMAL = (
+    "# --- SQM Smart Queue Management ---\n"
+    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set sqm.wan=queue\n"
+    "uci set sqm.wan.interface='wan'\n"
+    "uci set sqm.wan.enabled='1'\n"
+    "uci set sqm.wan.script='piece_of_cake.qos'\n"
+    "uci set sqm.wan.qdisc='cake'\n"
+    "uci set sqm.wan.linklayer='none'\n"
+    "uci set sqm.wan.overhead='0'\n"
+    "uci set sqm.wan.download='1'\n"
+    "uci set sqm.wan.upload='1'\n"
+    "uci set sqm.wan.linklayer_adaptation_mechanism='default'\n"
+    "uci set sqm.wan.debug_logging='0'\n"
+    "uci set sqm.wan.verbosity='5'\n"
+    "uci commit sqm\n"
+    "\n"
+    "/etc/init.d/sqm enable\n"
+    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    'echo "SQM configured: 1/1 kbit/s (cake)"'
+)
+
+EXPECTED_MAX_OVERHEAD = (
+    "# --- SQM Smart Queue Management ---\n"
+    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set sqm.wan=queue\n"
+    "uci set sqm.wan.interface='wan'\n"
+    "uci set sqm.wan.enabled='1'\n"
+    "uci set sqm.wan.script='piece_of_cake.qos'\n"
+    "uci set sqm.wan.qdisc='cake'\n"
+    "uci set sqm.wan.linklayer='none'\n"
+    "uci set sqm.wan.overhead='512'\n"
+    "uci set sqm.wan.download='100'\n"
+    "uci set sqm.wan.upload='100'\n"
+    "uci set sqm.wan.linklayer_adaptation_mechanism='default'\n"
+    "uci set sqm.wan.debug_logging='0'\n"
+    "uci set sqm.wan.verbosity='5'\n"
+    "uci commit sqm\n"
+    "\n"
+    "/etc/init.d/sqm enable\n"
+    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    'echo "SQM configured: 100/100 kbit/s (cake)"'
+)
 
 
-class TestSqmOpsRoundtrip:
-    def _assert_config_match(self, params: dict) -> None:
-        script = _build_sqm(params)
-        ops = _build_sqm_ops(params)
-        rendered = render_shell(ops)
-        expected = "\n".join(_config_lines(script))
-        assert rendered == expected, f"\n--- rendered ---\n{rendered}\n--- expected ---\n{expected}\n"
-
+class TestSqmOps:
     def test_default_params(self):
-        self._assert_config_match(DEFAULT_PARAMS)
+        assert render_shell(_build_sqm_ops(DEFAULT_PARAMS)) == EXPECTED_DEFAULT
 
     def test_custom_params(self):
-        self._assert_config_match(CUSTOM_PARAMS)
+        assert render_shell(_build_sqm_ops(CUSTOM_PARAMS)) == EXPECTED_CUSTOM
 
     def test_minimal_speeds(self):
-        self._assert_config_match({"download_kbps": 1, "upload_kbps": 1})
+        params = {"download_kbps": 1, "upload_kbps": 1}
+        assert render_shell(_build_sqm_ops(params)) == EXPECTED_MINIMAL
 
     def test_max_overhead(self):
-        self._assert_config_match({"download_kbps": 100, "upload_kbps": 100, "overhead": 512})
+        params = {"download_kbps": 100, "upload_kbps": 100, "overhead": 512}
+        assert render_shell(_build_sqm_ops(params)) == EXPECTED_MAX_OVERHEAD

@@ -1,14 +1,9 @@
-"""Characterization and roundtrip tests for travelmate.py UCI generators.
+"""Ops characterization tests for travelmate.py.
 
-Characterization tests lock the current output of _build_travelmate so
-refactoring to ops can be verified.
-
-Roundtrip tests verify that render_shell(_build_travelmate_ops(...)) matches
-the configuration lines from _build_travelmate(...) (excluding comments/echo).
+render_shell(_build_travelmate_ops(...)) is the authoritative output.
 """
-from helpers import config_lines as _config_lines
 from profile.ops import render_shell
-from use_cases.travelmate import _build_travelmate, _build_travelmate_ops
+from use_cases.travelmate import _build_travelmate_ops
 
 
 DEFAULT_PARAMS: dict = {}
@@ -20,40 +15,29 @@ CUSTOM_PARAMS = {
 }
 
 
-class TestTravelmateCharacterization:
-    def test_default_params_output(self):
-        script = _build_travelmate(DEFAULT_PARAMS)
-        assert "uci set travelmate.global.trm_enabled='1'" in script
-        assert "uci set travelmate.global.trm_captive='1'" in script
-        assert "uci set travelmate.global.trm_timeout='60'" in script
-        assert "uci set travelmate.global.trm_radio='radio0'" in script
-        assert "uci commit travelmate" in script
-        assert "/etc/init.d/travelmate enable" in script
-
-    def test_custom_params_output(self):
-        script = _build_travelmate(CUSTOM_PARAMS)
-        assert "uci set travelmate.global.trm_captive='0'" in script
-        assert "uci set travelmate.global.trm_timeout='120'" in script
-        assert "uci set travelmate.global.trm_retry='10'" in script
-        assert "uci set travelmate.global.trm_radio='radio1'" in script
+class TestTravelmateOpsDefault:
+    def test_render_shell(self):
+        rendered = render_shell(_build_travelmate_ops(DEFAULT_PARAMS))
+        assert "uci set travelmate.global.trm_enabled='1'" in rendered
+        assert "uci set travelmate.global.trm_captive='1'" in rendered
+        assert "uci set travelmate.global.trm_timeout='60'" in rendered
+        assert "uci set travelmate.global.trm_radio='radio0'" in rendered
+        assert "uci commit travelmate" in rendered
+        assert "/etc/init.d/travelmate enable" in rendered
 
 
-class TestTravelmateOpsRoundtrip:
-    def _assert_config_match(self, params: dict) -> None:
-        script = _build_travelmate(params)
-        ops = _build_travelmate_ops(params)
-        rendered = render_shell(ops)
-        expected = "\n".join(_config_lines(script))
-        assert rendered == expected, f"\n--- rendered ---\n{rendered}\n--- expected ---\n{expected}\n"
-
-    def test_default_params(self):
-        self._assert_config_match(DEFAULT_PARAMS)
-
+class TestTravelmateOpsCustom:
     def test_custom_params(self):
-        self._assert_config_match(CUSTOM_PARAMS)
+        rendered = render_shell(_build_travelmate_ops(CUSTOM_PARAMS))
+        assert "uci set travelmate.global.trm_captive='0'" in rendered
+        assert "uci set travelmate.global.trm_timeout='120'" in rendered
+        assert "uci set travelmate.global.trm_retry='10'" in rendered
+        assert "uci set travelmate.global.trm_radio='radio1'" in rendered
 
     def test_captive_disabled(self):
-        self._assert_config_match({"captive": False})
+        rendered = render_shell(_build_travelmate_ops({"captive": False}))
+        assert "trm_captive='0'" in rendered
 
     def test_custom_radio(self):
-        self._assert_config_match({"radio": "radio1"})
+        rendered = render_shell(_build_travelmate_ops({"radio": "radio1"}))
+        assert "trm_radio='radio1'" in rendered

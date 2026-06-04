@@ -7,6 +7,8 @@ tests pass, the op-based approach produces identical shell output.
 from __future__ import annotations
 
 from profile.ops import (
+    BlankLine,
+    Comment,
     Op,
     ServiceAction,
     ShellCommand,
@@ -128,6 +130,42 @@ class TestRenderShellCommand:
     def test_basic(self):
         ops: list[Op] = [ShellCommand(command="sync; sync; reboot")]
         assert render_shell(ops) == "sync; sync; reboot"
+
+
+class TestRenderComment:
+    def test_basic(self):
+        ops: list[Op] = [Comment(text="AdGuard Home")]
+        assert render_shell(ops) == "# AdGuard Home"
+
+    def test_with_section_markers(self):
+        ops: list[Op] = [Comment(text="--- WireGuard VPN client ---")]
+        assert render_shell(ops) == "# --- WireGuard VPN client ---"
+
+
+class TestRenderBlankLine:
+    def test_basic(self):
+        ops: list[Op] = [UciCommit(config="network"), BlankLine(), UciSet(config="dhcp", section="@dnsmasq[0]", values={"noresolv": "1"})]
+        lines = render_shell(ops).split("\n")
+        assert lines[0] == "uci commit network"
+        assert lines[1] == ""
+        assert lines[2] == "uci set dhcp.@dnsmasq[0].noresolv='1'"
+
+
+class TestCommentBlankLineCompound:
+    def test_comment_blank_ops_interleaved(self):
+        ops: list[Op] = [
+            Comment(text="AdGuard Home"),
+            UciSet(config="adguardhome", section="adguardhome", values={"enabled": "1"}),
+            UciCommit(config="adguardhome"),
+            BlankLine(),
+            Comment(text="DNS forwarding"),
+            UciSet(config="dhcp", section="@dnsmasq[0]", values={"noresolv": "1"}),
+            UciCommit(config="dhcp"),
+        ]
+        script = render_shell(ops)
+        assert script.startswith("# AdGuard Home\n")
+        assert "\n\n" in script  # blank line between groups
+        assert "# DNS forwarding" in script
 
 
 class TestRenderCompoundScript:

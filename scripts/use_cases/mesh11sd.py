@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import Op, ShellCommand, UciCommit, UciSet
+from profile.ops import BlankLine, Comment, Op, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -29,42 +29,16 @@ def _build_mesh11sd_ops(params: dict[str, Any]) -> list[Op]:
         values["mesh_gate_key"] = r["key"]
     values["auto_config"] = r["auto_config"]
     return [
+        Comment(text="--- Mesh11sd 802.11s mesh ---"),
         ShellCommand(command="opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl wpad-basic 2>/dev/null || true"),
         ShellCommand(command="opkg install wpad-mbedtls 2>/dev/null || true"),
         ShellCommand(command="service wpad restart 2>/dev/null || true"),
+        BlankLine(),
         UciSet(config="mesh11sd", section="setup", values=values),
         UciCommit(config="mesh11sd"),
         ShellCommand(command="service mesh11sd restart 2>/dev/null || true"),
+        ShellCommand(command=f'echo "Mesh11sd configured: mesh_id={r["mesh_id"]} ssid={r["ssid"]}"'),
     ]
-
-
-def _build_mesh11sd(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-    mesh_id = r["mesh_id"]
-    ssid = r["ssid"]
-    encryption = r["encryption"]
-    key = r["key"]
-    auto_config = r["auto_config"]
-
-    lines = [
-        "# --- Mesh11sd 802.11s mesh ---",
-        "opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl wpad-basic 2>/dev/null || true",
-        "opkg install wpad-mbedtls 2>/dev/null || true",
-        "service wpad restart 2>/dev/null || true",
-        "",
-        f"uci set mesh11sd.setup.auto_mesh_id='{mesh_id}'",
-        f"uci set mesh11sd.setup.mesh_gate_base_ssid='{ssid}'",
-        f"uci set mesh11sd.setup.mesh_gate_encryption='{encryption}'",
-    ]
-    if key:
-        lines.append(f"uci set mesh11sd.setup.mesh_gate_key='{key}'")
-    lines.append(f"uci set mesh11sd.setup.auto_config='{auto_config}'")
-    lines.extend([
-        "uci commit mesh11sd",
-        "service mesh11sd restart 2>/dev/null || true",
-        f'echo "Mesh11sd configured: mesh_id={mesh_id} ssid={ssid}"',
-    ])
-    return "\n".join(lines) + "\n"
 
 
 register(UseCase(
@@ -91,7 +65,7 @@ register(UseCase(
         "auto_config": ParamDef(type=str, default="0",
                                 description="0=disabled, 1=auto, 2=auto+commit"),
     },
-    build_configure=_build_mesh11sd,
+    build_configure=lambda p: render_shell(_build_mesh11sd_ops(p)),
     build_configure_ops=_build_mesh11sd_ops,
     test_status="untested",
     tested_notes="",

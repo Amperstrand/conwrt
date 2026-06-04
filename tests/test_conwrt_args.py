@@ -85,3 +85,38 @@ class TestSubcommandRouting:
         with patch("sys.argv", ["conwrt", "profile", "plan"]):
             args = conwrt._build_parser().parse_args()
             assert args.command == "profile"
+
+
+class TestConfigureParser:
+    def _parse(self, *args: str):
+        import conwrt
+        with patch("sys.argv", ["conwrt", "configure", *args]):
+            return conwrt._build_parser().parse_args()
+
+    def test_transport_default_ssh(self):
+        args = self._parse("--ip", "192.168.1.1")
+        assert args.transport == "ssh"
+
+    def test_transport_ubus(self):
+        args = self._parse("--ip", "192.168.1.1", "--transport", "ubus")
+        assert args.transport == "ubus"
+
+    def test_ubus_user_default(self):
+        args = self._parse("--ip", "192.168.1.1", "--transport", "ubus")
+        assert args.ubus_user == "root"
+
+    def test_ubus_password_default(self):
+        args = self._parse("--ip", "192.168.1.1", "--transport", "ubus")
+        assert args.ubus_password == ""
+
+    def test_ubus_credentials(self):
+        args = self._parse("--ip", "192.168.1.1", "--transport", "ubus",
+                           "--ubus-user", "admin", "--ubus-password", "secret")
+        assert args.ubus_user == "admin"
+        assert args.ubus_password == "secret"
+
+    def test_transport_invalid_rejected(self):
+        import argparse
+        import pytest
+        with pytest.raises(SystemExit):
+            self._parse("--ip", "192.168.1.1", "--transport", "telnet")

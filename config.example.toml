@@ -140,10 +140,15 @@ wan_ssh = false
 # dynamic_interval_hours = 4  # Re-tune interval (dynamic mode only)
 #
 # [use_cases.tollgate]
-# deploy_mode = "post-flash"  # "post-flash" (host downloads ipk, SCP+opkg) or "bake" (first-boot wget)
-# version = "latest"          # "latest" (main branch CI build) or specific run ID
-# ipk_url = ""                # Direct URL to ipk (overrides version lookup, for offline/custom builds)
-# arch = ""                   # Target architecture (auto-detected from model if empty)
+# # Binary download source:
+# #   "auto"    — try nostr (Blossom) first, fall back to GitHub CI
+# #   "nostr"   — NIP-94 events from trusted publisher on nostr relays
+# #   "github"  — GitHub Actions CI artifacts via `gh` CLI
+# source = "auto"
+# channel = "stable"          # "stable", "beta", "alpha", "dev"
+# version = "latest"          # "latest" or specific version tag (e.g. "v0.4.0")
+# ipk_url = ""                # Direct URL to ipk (overrides source+version, for offline/custom builds)
+# arch = ""                   # Target architecture (auto-detected from router if empty)
 # mint_url = ""               # Cashu mint URL
 # lightning_address = ""      # Lightning address for payouts
 # price_per_minute = 1        # Price in sats per minute

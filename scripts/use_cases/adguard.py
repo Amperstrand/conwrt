@@ -1,10 +1,9 @@
 """adguard — network-wide ad blocking via AdGuard Home."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -27,6 +26,7 @@ def _build_adguard_ops(params: dict[str, Any]) -> list[Op]:
     dns_port = r["dns_port"]
 
     return [
+        Comment(text="--- AdGuard Home ---"),
         ShellCommand(command="uci set adguardhome.adguardhome=adguardhome"),
         UciSet(config="adguardhome", section="adguardhome", values={
             "enabled": "1",
@@ -36,37 +36,15 @@ def _build_adguard_ops(params: dict[str, Any]) -> list[Op]:
         UciCommit(config="adguardhome"),
         ServiceAction(name="adguardhome", action="enable"),
         ShellCommand(command="/etc/init.d/adguardhome start 2>/dev/null || true"),
+        BlankLine(),
         UciSet(config="dhcp", section="@dnsmasq[0]", values={
             "noresolv": "1",
         }),
         UciAddList(config="dhcp", section="@dnsmasq[0]", option="server", value=f"127.0.0.1#{dns_port}"),
         UciCommit(config="dhcp"),
         ShellCommand(command="/etc/init.d/dnsmasq restart 2>/dev/null || true"),
+        ShellCommand(command=f'echo "AdGuard Home configured: DNS on port {dns_port}, web UI at {listen_ip}:{web_port}"'),
     ]
-
-
-def _build_adguard(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-    listen_ip = r["listen_ip"]
-    web_port = r["web_port"]
-    dns_port = r["dns_port"]
-
-    return textwrap.dedent(f"""\
-        # --- AdGuard Home ---
-        uci set adguardhome.adguardhome=adguardhome
-        uci set adguardhome.adguardhome.enabled='1'
-        uci set adguardhome.adguardhome.http_address='{listen_ip}:{web_port}'
-        uci set adguardhome.adguardhome.dns_port='{dns_port}'
-        uci commit adguardhome
-        /etc/init.d/adguardhome enable
-        /etc/init.d/adguardhome start 2>/dev/null || true
-
-        uci set dhcp.@dnsmasq[0].noresolv='1'
-        uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#{dns_port}'
-        uci commit dhcp
-        /etc/init.d/dnsmasq restart 2>/dev/null || true
-        echo "AdGuard Home configured: DNS on port {dns_port}, web UI at {listen_ip}:{web_port}"
-    """)
 
 
 register(UseCase(
@@ -84,7 +62,7 @@ register(UseCase(
         "bootstrap_dns": ParamDef(type=str, default="1.1.1.1,8.8.8.8",
                                   description="Upstream DNS for bootstrap"),
     },
-    build_configure=_build_adguard,
+    build_configure=lambda p: render_shell(_build_adguard_ops(p)),
     build_configure_ops=_build_adguard_ops,
     requires_capabilities=[],
     test_status="untested",

@@ -1,14 +1,10 @@
-"""Characterization and roundtrip tests for mwan3.py UCI generators.
+"""Characterization tests for mwan3.py ops pipeline.
 
-Characterization tests lock the current output of _build_mwan3 so
-refactoring to ops can be verified.
-
-Roundtrip tests verify that render_shell(_build_mwan3_ops(...)) matches
-the configuration lines from _build_mwan3(...) (excluding comments/echo).
+render_shell(_build_mwan3_ops(...)) is the authoritative output.
+If ops change, these tests must be updated to match.
 """
-from helpers import config_lines as _config_lines
 from profile.ops import render_shell
-from use_cases.mwan3 import _build_mwan3, _build_mwan3_ops
+from use_cases.mwan3 import _build_mwan3_ops
 
 
 DEFAULT_PARAMS: dict = {}
@@ -18,56 +14,323 @@ CUSTOM_TRACK_PARAMS: dict = {
 }
 
 
-class TestMwan3Characterization:
-    def test_default_failover_output(self):
-        script = _build_mwan3(DEFAULT_PARAMS)
-        assert "uci set mwan3.wan=interface" in script
-        assert "uci set mwan3.wan.enabled='1'" in script
-        assert "uci set mwan3.usbwan=interface" in script
-        assert "uci set mwan3.wan_m1_w1=member" in script
-        assert "uci set mwan3.usbwan_m2_w1=member" in script
-        assert "uci set mwan3.wan_policy=policy" in script
-        assert "uci commit mwan3" in script
+EXPECTED_DEFAULT = (
+    "# --- mwan3 multi-WAN ---\n"
+    "uci -q delete mwan3 >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set mwan3.wan=interface\n"
+    "uci set mwan3.wan.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.wan.family='ipv4'\n"
+    "uci set mwan3.wan.reliability='1'\n"
+    "uci set mwan3.wan.count='1'\n"
+    "uci set mwan3.wan.timeout='2'\n"
+    "uci set mwan3.wan.interval='5'\n"
+    "uci set mwan3.wan.down='3'\n"
+    "uci set mwan3.wan.up='8'\n"
+    "\n"
+    "uci set mwan3.usbwan=interface\n"
+    "uci set mwan3.usbwan.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.usbwan.family='ipv4'\n"
+    "uci set mwan3.usbwan.reliability='1'\n"
+    "uci set mwan3.usbwan.count='1'\n"
+    "uci set mwan3.usbwan.timeout='2'\n"
+    "uci set mwan3.usbwan.interval='5'\n"
+    "uci set mwan3.usbwan.down='3'\n"
+    "uci set mwan3.usbwan.up='8'\n"
+    "\n"
+    "uci set mwan3.wan_m1_w1=member\n"
+    "uci set mwan3.wan_m1_w1.interface='wan'\n"
+    "uci set mwan3.wan_m1_w1.metric='1'\n"
+    "uci set mwan3.wan_m1_w1.weight='1'\n"
+    "uci set mwan3.usbwan_m2_w1=member\n"
+    "uci set mwan3.usbwan_m2_w1.interface='usbwan'\n"
+    "uci set mwan3.usbwan_m2_w1.metric='2'\n"
+    "uci set mwan3.usbwan_m2_w1.weight='1'\n"
+    "\n"
+    "uci set mwan3.wan_policy=policy\n"
+    "uci add_list mwan3.wan_policy.use_member='wan_m1_w1'\n"
+    "uci add_list mwan3.wan_policy.use_member='usbwan_m2_w1'\n"
+    "uci set mwan3.wan_policy.last_resort='default'\n"
+    "\n"
+    "uci set mwan3.default_rule_v4=rule\n"
+    "uci set mwan3.default_rule_v4.dest_ip='0.0.0.0/0'\n"
+    "uci set mwan3.default_rule_v4.use_policy='wan_policy'\n"
+    "uci set mwan3.default_rule_v4.family='ipv4'\n"
+    "uci set mwan3.https_rule=rule\n"
+    "uci set mwan3.https_rule.dest_port='443'\n"
+    "uci set mwan3.https_rule.proto='tcp'\n"
+    "uci set mwan3.https_rule.sticky='1'\n"
+    "uci set mwan3.https_rule.use_policy='wan_policy'\n"
+    "\n"
+    "uci commit mwan3\n"
+    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    'echo "mwan3 configured: wan (primary) + usbwan (failover)"'
+)
 
-    def test_balanced_policy_output(self):
-        script = _build_mwan3(BALANCED_PARAMS)
-        assert "uci set mwan3.wan_m1_w2=member" in script
-        assert "uci set mwan3.usbwan_m1_w1=member" in script
+EXPECTED_BALANCED = (
+    "# --- mwan3 multi-WAN ---\n"
+    "uci -q delete mwan3 >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set mwan3.wan=interface\n"
+    "uci set mwan3.wan.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.wan.family='ipv4'\n"
+    "uci set mwan3.wan.reliability='1'\n"
+    "uci set mwan3.wan.count='1'\n"
+    "uci set mwan3.wan.timeout='2'\n"
+    "uci set mwan3.wan.interval='5'\n"
+    "uci set mwan3.wan.down='3'\n"
+    "uci set mwan3.wan.up='8'\n"
+    "\n"
+    "uci set mwan3.usbwan=interface\n"
+    "uci set mwan3.usbwan.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.usbwan.family='ipv4'\n"
+    "uci set mwan3.usbwan.reliability='1'\n"
+    "uci set mwan3.usbwan.count='1'\n"
+    "uci set mwan3.usbwan.timeout='2'\n"
+    "uci set mwan3.usbwan.interval='5'\n"
+    "uci set mwan3.usbwan.down='3'\n"
+    "uci set mwan3.usbwan.up='8'\n"
+    "\n"
+    "uci set mwan3.wan_m1_w2=member\n"
+    "uci set mwan3.wan_m1_w2.interface='wan'\n"
+    "uci set mwan3.wan_m1_w2.metric='1'\n"
+    "uci set mwan3.wan_m1_w2.weight='2'\n"
+    "uci set mwan3.usbwan_m1_w1=member\n"
+    "uci set mwan3.usbwan_m1_w1.interface='usbwan'\n"
+    "uci set mwan3.usbwan_m1_w1.metric='1'\n"
+    "uci set mwan3.usbwan_m1_w1.weight='1'\n"
+    "\n"
+    "uci set mwan3.wan_policy=policy\n"
+    "uci add_list mwan3.wan_policy.use_member='wan_m1_w2'\n"
+    "uci add_list mwan3.wan_policy.use_member='usbwan_m1_w1'\n"
+    "uci set mwan3.wan_policy.last_resort='default'\n"
+    "\n"
+    "uci set mwan3.default_rule_v4=rule\n"
+    "uci set mwan3.default_rule_v4.dest_ip='0.0.0.0/0'\n"
+    "uci set mwan3.default_rule_v4.use_policy='wan_policy'\n"
+    "uci set mwan3.default_rule_v4.family='ipv4'\n"
+    "uci set mwan3.https_rule=rule\n"
+    "uci set mwan3.https_rule.dest_port='443'\n"
+    "uci set mwan3.https_rule.proto='tcp'\n"
+    "uci set mwan3.https_rule.sticky='1'\n"
+    "uci set mwan3.https_rule.use_policy='wan_policy'\n"
+    "\n"
+    "uci commit mwan3\n"
+    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    'echo "mwan3 configured: wan (primary) + usbwan (balanced)"'
+)
 
-    def test_custom_track_ips_output(self):
-        script = _build_mwan3(CUSTOM_TRACK_PARAMS)
-        assert "list track_ip '9.9.9.9'" in script
-        assert "list track_ip '149.112.112.112'" in script
-        assert "list track_ip '1.0.0.1'" not in script
+EXPECTED_CUSTOM_TRACK = (
+    "# --- mwan3 multi-WAN ---\n"
+    "uci -q delete mwan3 >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set mwan3.wan=interface\n"
+    "uci set mwan3.wan.enabled='1'\n"
+    "list track_ip '9.9.9.9'\n"
+    "list track_ip '149.112.112.112'\n"
+    "uci set mwan3.wan.family='ipv4'\n"
+    "uci set mwan3.wan.reliability='1'\n"
+    "uci set mwan3.wan.count='1'\n"
+    "uci set mwan3.wan.timeout='2'\n"
+    "uci set mwan3.wan.interval='5'\n"
+    "uci set mwan3.wan.down='3'\n"
+    "uci set mwan3.wan.up='8'\n"
+    "\n"
+    "uci set mwan3.usbwan=interface\n"
+    "uci set mwan3.usbwan.enabled='1'\n"
+    "list track_ip '9.9.9.9'\n"
+    "list track_ip '149.112.112.112'\n"
+    "uci set mwan3.usbwan.family='ipv4'\n"
+    "uci set mwan3.usbwan.reliability='1'\n"
+    "uci set mwan3.usbwan.count='1'\n"
+    "uci set mwan3.usbwan.timeout='2'\n"
+    "uci set mwan3.usbwan.interval='5'\n"
+    "uci set mwan3.usbwan.down='3'\n"
+    "uci set mwan3.usbwan.up='8'\n"
+    "\n"
+    "uci set mwan3.wan_m1_w1=member\n"
+    "uci set mwan3.wan_m1_w1.interface='wan'\n"
+    "uci set mwan3.wan_m1_w1.metric='1'\n"
+    "uci set mwan3.wan_m1_w1.weight='1'\n"
+    "uci set mwan3.usbwan_m2_w1=member\n"
+    "uci set mwan3.usbwan_m2_w1.interface='usbwan'\n"
+    "uci set mwan3.usbwan_m2_w1.metric='2'\n"
+    "uci set mwan3.usbwan_m2_w1.weight='1'\n"
+    "\n"
+    "uci set mwan3.wan_policy=policy\n"
+    "uci add_list mwan3.wan_policy.use_member='wan_m1_w1'\n"
+    "uci add_list mwan3.wan_policy.use_member='usbwan_m2_w1'\n"
+    "uci set mwan3.wan_policy.last_resort='default'\n"
+    "\n"
+    "uci set mwan3.default_rule_v4=rule\n"
+    "uci set mwan3.default_rule_v4.dest_ip='0.0.0.0/0'\n"
+    "uci set mwan3.default_rule_v4.use_policy='wan_policy'\n"
+    "uci set mwan3.default_rule_v4.family='ipv4'\n"
+    "uci set mwan3.https_rule=rule\n"
+    "uci set mwan3.https_rule.dest_port='443'\n"
+    "uci set mwan3.https_rule.proto='tcp'\n"
+    "uci set mwan3.https_rule.sticky='1'\n"
+    "uci set mwan3.https_rule.use_policy='wan_policy'\n"
+    "\n"
+    "uci commit mwan3\n"
+    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    'echo "mwan3 configured: wan (primary) + usbwan (failover)"'
+)
+
+EXPECTED_CUSTOM_INTERFACES = (
+    "# --- mwan3 multi-WAN ---\n"
+    "uci -q delete mwan3 >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set mwan3.wan=interface\n"
+    "uci set mwan3.wan.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.wan.family='ipv4'\n"
+    "uci set mwan3.wan.reliability='1'\n"
+    "uci set mwan3.wan.count='1'\n"
+    "uci set mwan3.wan.timeout='2'\n"
+    "uci set mwan3.wan.interval='5'\n"
+    "uci set mwan3.wan.down='3'\n"
+    "uci set mwan3.wan.up='8'\n"
+    "\n"
+    "uci set mwan3.eth1=interface\n"
+    "uci set mwan3.eth1.enabled='1'\n"
+    "list track_ip '1.0.0.1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "list track_ip '8.8.8.8'\n"
+    "list track_ip '8.8.4.4'\n"
+    "uci set mwan3.eth1.family='ipv4'\n"
+    "uci set mwan3.eth1.reliability='1'\n"
+    "uci set mwan3.eth1.count='1'\n"
+    "uci set mwan3.eth1.timeout='2'\n"
+    "uci set mwan3.eth1.interval='5'\n"
+    "uci set mwan3.eth1.down='3'\n"
+    "uci set mwan3.eth1.up='8'\n"
+    "\n"
+    "uci set mwan3.eth0_m1_w1=member\n"
+    "uci set mwan3.eth0_m1_w1.interface='eth0'\n"
+    "uci set mwan3.eth0_m1_w1.metric='1'\n"
+    "uci set mwan3.eth0_m1_w1.weight='1'\n"
+    "uci set mwan3.eth1_m2_w1=member\n"
+    "uci set mwan3.eth1_m2_w1.interface='eth1'\n"
+    "uci set mwan3.eth1_m2_w1.metric='2'\n"
+    "uci set mwan3.eth1_m2_w1.weight='1'\n"
+    "\n"
+    "uci set mwan3.eth0_policy=policy\n"
+    "uci add_list mwan3.eth0_policy.use_member='eth0_m1_w1'\n"
+    "uci add_list mwan3.eth0_policy.use_member='eth1_m2_w1'\n"
+    "uci set mwan3.eth0_policy.last_resort='default'\n"
+    "\n"
+    "uci set mwan3.default_rule_v4=rule\n"
+    "uci set mwan3.default_rule_v4.dest_ip='0.0.0.0/0'\n"
+    "uci set mwan3.default_rule_v4.use_policy='eth0_policy'\n"
+    "uci set mwan3.default_rule_v4.family='ipv4'\n"
+    "uci set mwan3.https_rule=rule\n"
+    "uci set mwan3.https_rule.dest_port='443'\n"
+    "uci set mwan3.https_rule.proto='tcp'\n"
+    "uci set mwan3.https_rule.sticky='1'\n"
+    "uci set mwan3.https_rule.use_policy='eth0_policy'\n"
+    "\n"
+    "uci commit mwan3\n"
+    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    'echo "mwan3 configured: eth0 (primary) + eth1 (failover)"'
+)
+
+EXPECTED_ALL_CUSTOM = (
+    "# --- mwan3 multi-WAN ---\n"
+    "uci -q delete mwan3 >/dev/null 2>&1 || true\n"
+    "\n"
+    "uci set mwan3.wan=interface\n"
+    "uci set mwan3.wan.enabled='1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "uci set mwan3.wan.family='ipv4'\n"
+    "uci set mwan3.wan.reliability='1'\n"
+    "uci set mwan3.wan.count='1'\n"
+    "uci set mwan3.wan.timeout='2'\n"
+    "uci set mwan3.wan.interval='5'\n"
+    "uci set mwan3.wan.down='3'\n"
+    "uci set mwan3.wan.up='8'\n"
+    "\n"
+    "uci set mwan3.wwan=interface\n"
+    "uci set mwan3.wwan.enabled='1'\n"
+    "list track_ip '1.1.1.1'\n"
+    "uci set mwan3.wwan.family='ipv4'\n"
+    "uci set mwan3.wwan.reliability='1'\n"
+    "uci set mwan3.wwan.count='1'\n"
+    "uci set mwan3.wwan.timeout='2'\n"
+    "uci set mwan3.wwan.interval='5'\n"
+    "uci set mwan3.wwan.down='3'\n"
+    "uci set mwan3.wwan.up='8'\n"
+    "\n"
+    "uci set mwan3.wan2_m1_w2=member\n"
+    "uci set mwan3.wan2_m1_w2.interface='wan2'\n"
+    "uci set mwan3.wan2_m1_w2.metric='1'\n"
+    "uci set mwan3.wan2_m1_w2.weight='2'\n"
+    "uci set mwan3.wwan_m1_w1=member\n"
+    "uci set mwan3.wwan_m1_w1.interface='wwan'\n"
+    "uci set mwan3.wwan_m1_w1.metric='1'\n"
+    "uci set mwan3.wwan_m1_w1.weight='1'\n"
+    "\n"
+    "uci set mwan3.wan2_policy=policy\n"
+    "uci add_list mwan3.wan2_policy.use_member='wan2_m1_w2'\n"
+    "uci add_list mwan3.wan2_policy.use_member='wwan_m1_w1'\n"
+    "uci set mwan3.wan2_policy.last_resort='default'\n"
+    "\n"
+    "uci set mwan3.default_rule_v4=rule\n"
+    "uci set mwan3.default_rule_v4.dest_ip='0.0.0.0/0'\n"
+    "uci set mwan3.default_rule_v4.use_policy='wan2_policy'\n"
+    "uci set mwan3.default_rule_v4.family='ipv4'\n"
+    "uci set mwan3.https_rule=rule\n"
+    "uci set mwan3.https_rule.dest_port='443'\n"
+    "uci set mwan3.https_rule.proto='tcp'\n"
+    "uci set mwan3.https_rule.sticky='1'\n"
+    "uci set mwan3.https_rule.use_policy='wan2_policy'\n"
+    "\n"
+    "uci commit mwan3\n"
+    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    'echo "mwan3 configured: wan2 (primary) + wwan (balanced)"'
+)
 
 
-class TestMwan3OpsRoundtrip:
-    def _assert_config_match(self, params: dict) -> None:
-        script = _build_mwan3(params)
-        ops = _build_mwan3_ops(params)
-        rendered = render_shell(ops)
-        expected = "\n".join(_config_lines(script))
-        assert rendered == expected, f"\n--- rendered ---\n{rendered}\n--- expected ---\n{expected}\n"
-
+class TestMwan3Ops:
     def test_default_failover(self):
-        self._assert_config_match(DEFAULT_PARAMS)
+        assert render_shell(_build_mwan3_ops(DEFAULT_PARAMS)) == EXPECTED_DEFAULT
 
     def test_balanced_policy(self):
-        self._assert_config_match(BALANCED_PARAMS)
+        assert render_shell(_build_mwan3_ops(BALANCED_PARAMS)) == EXPECTED_BALANCED
 
     def test_custom_track_ips(self):
-        self._assert_config_match(CUSTOM_TRACK_PARAMS)
+        assert render_shell(_build_mwan3_ops(CUSTOM_TRACK_PARAMS)) == EXPECTED_CUSTOM_TRACK
+        rendered = render_shell(_build_mwan3_ops(CUSTOM_TRACK_PARAMS))
+        assert "list track_ip '1.0.0.1'" not in rendered
 
     def test_custom_interfaces(self):
-        self._assert_config_match({
-            "primary": "eth0",
-            "secondary": "eth1",
-        })
+        params = {"primary": "eth0", "secondary": "eth1"}
+        assert render_shell(_build_mwan3_ops(params)) == EXPECTED_CUSTOM_INTERFACES
 
     def test_all_custom(self):
-        self._assert_config_match({
+        params = {
             "primary": "wan2",
             "secondary": "wwan",
             "policy": "balanced",
             "track_ips": ["1.1.1.1"],
-        })
+        }
+        assert render_shell(_build_mwan3_ops(params)) == EXPECTED_ALL_CUSTOM

@@ -18,6 +18,10 @@ ConfigureDelivery = Literal["firstboot", "ssh", "both"]
 TestStatus = Literal["tested", "experimental", "untested"]
 
 
+def _empty_configure(_: dict[str, Any]) -> str:
+    return ""
+
+
 @dataclass
 class ParamDef:
     """Definition of a use-case configuration parameter."""
@@ -38,7 +42,7 @@ class UseCase:
     packages: list[str] = field(default_factory=list)
     packages_remove: list[str] = field(default_factory=list)
     params: dict[str, ParamDef] = field(default_factory=dict)
-    build_configure: Callable[[dict[str, Any]], str] = field(default=lambda _: "")
+    build_configure: Callable[[dict[str, Any]], str] = field(default=_empty_configure)
     build_configure_ops: Optional[Callable[[dict[str, Any]], list]] = None
     packages_via: PackageDelivery = "auto"
     configure_via: ConfigureDelivery = "both"
@@ -46,6 +50,13 @@ class UseCase:
     tested_notes: str = ""
     post_install_notes: str = ""
     requires_capabilities: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.build_configure_ops is not None and self.build_configure is _empty_configure:
+            from profile.ops import render_shell
+
+            _ops_fn = self.build_configure_ops
+            self.build_configure = lambda params: render_shell(_ops_fn(params))
 
 _registry: dict[str, UseCase] = {}
 _discovered: bool = False

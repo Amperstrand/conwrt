@@ -1,10 +1,9 @@
 """wireguard-client — WireGuard VPN client for routing traffic through a VPN tunnel."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ShellCommand, UciAddList, UciCommit, UciSet
+from profile.ops import BlankLine, Comment, Op, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -23,7 +22,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_wireguard_client(params: dict[str, Any]) -> str:
+def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
     private_key = r["private_key"]
     peer_public_key = r["peer_public_key"]
@@ -35,126 +34,74 @@ def _build_wireguard_client(params: dict[str, Any]) -> str:
     kill_switch = r["kill_switch"]
     allowed_ips = r["allowed_ips"]
 
-    lines = [
-        "# --- WireGuard VPN client ---",
-        f"uci set network.wg0=interface",
-        f"uci set network.wg0.proto='wireguard'",
-        f"uci set network.wg0.private_key='{private_key}'",
-        f"uci set network.wg0.addresses='{address}'",
+    ops: list[Op] = [
+        Comment(text="--- WireGuard VPN client ---"),
+        ShellCommand(command="uci set network.wg0=interface"),
+        UciSet(config="network", section="wg0", values={
+            "proto": "wireguard",
+            "private_key": private_key,
+            "addresses": address,
+        }),
     ]
 
     if dns:
-        lines.append(f"uci add_list network.wg0.dns='{dns}'")
+        ops.append(UciAddList(config="network", section="wg0", option="dns", value=dns))
 
-    lines.extend([
-        f"uci set network.wg0_peer=wireguard_wg0",
-        f"uci set network.wg0_peer.public_key='{peer_public_key}'",
-        f"uci set network.wg0_peer.endpoint_host='{endpoint_host}'",
-        f"uci set network.wg0_peer.endpoint_port='{endpoint_port}'",
-        f"uci set network.wg0_peer.allowed_ips='{allowed_ips}'",
-        f"uci set network.wg0_peer.route_allowed_ips='1'",
-        f"uci set network.wg0_peer.persistent_keepalive='25'",
+    ops.extend([
+        ShellCommand(command="uci set network.wg0_peer=wireguard_wg0"),
+        UciSet(config="network", section="wg0_peer", values={
+            "public_key": peer_public_key,
+            "endpoint_host": endpoint_host,
+            "endpoint_port": str(endpoint_port),
+            "allowed_ips": allowed_ips,
+            "route_allowed_ips": "1",
+            "persistent_keepalive": "25",
+        }),
     ])
 
     if peer_psk:
-        lines.append(f"uci set network.wg0_peer.preshared_key='{peer_psk}'")
+        ops.append(UciSet(config="network", section="wg0_peer", values={"preshared_key": peer_psk}))
 
-    lines.extend([
-        "",
-        "uci add firewall zone",
-        "uci set firewall.@zone[-1].name='vpn'",
-        "uci set firewall.@zone[-1].input='REJECT'",
-        "uci set firewall.@zone[-1].output='ACCEPT'",
-        "uci set firewall.@zone[-1].forward='REJECT'",
-        "uci set firewall.@zone[-1].masq='1'",
-        "uci set firewall.@zone[-1].mtu_fix='1'",
-        "uci set firewall.@zone[-1].network='wg0'",
-        "",
-        "uci add firewall forwarding",
-        "uci set firewall.@forwarding[-1].src='lan'",
-        "uci set firewall.@forwarding[-1].dest='vpn'",
+    ops.extend([
+        BlankLine(),
+        ShellCommand(command="uci add firewall zone"),
+        UciSet(config="firewall", section="@zone[-1]", values={
+            "name": "vpn",
+            "input": "REJECT",
+            "output": "ACCEPT",
+            "forward": "REJECT",
+            "masq": "1",
+            "mtu_fix": "1",
+            "network": "wg0",
+        }),
+        BlankLine(),
+        ShellCommand(command="uci add firewall forwarding"),
+        UciSet(config="firewall", section="@forwarding[-1]", values={
+            "src": "lan",
+            "dest": "vpn",
+        }),
     ])
 
     if kill_switch:
-        lines.extend([
-            "",
-            "uci add firewall rule",
-            "uci set firewall.@rule[-1].name='KillSwitch-Reject-NonVPN'",
-            "uci set firewall.@rule[-1].src='lan'",
-            "uci set firewall.@rule[-1].dest='wan'",
-            "uci set firewall.@rule[-1].proto='all'",
-            "uci set firewall.@rule[-1].target='REJECT'",
+        ops.extend([
+            BlankLine(),
+            ShellCommand(command="uci add firewall rule"),
+            UciSet(config="firewall", section="@rule[-1]", values={
+                "name": "KillSwitch-Reject-NonVPN",
+                "src": "lan",
+                "dest": "wan",
+                "proto": "all",
+                "target": "REJECT",
+            }),
         ])
 
-    lines.extend([
-        "",
-        "uci commit network",
-        "uci commit firewall",
-        "/etc/init.d/network restart 2>/dev/null || true",
-        f"echo 'WireGuard client configured: {endpoint_host}:{endpoint_port}'",
+    ops.extend([
+        BlankLine(),
+        UciCommit(config="network"),
+        UciCommit(config="firewall"),
+        ShellCommand(command="/etc/init.d/network restart 2>/dev/null || true"),
+        ShellCommand(command=f"echo 'WireGuard client configured: {endpoint_host}:{endpoint_port}'"),
     ])
-
-    return textwrap.dedent("\n".join(lines))
-
-
-def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
-    r = _resolve_params(params)
-
-    ops = []
-
-    ops.append(ShellCommand(command="uci set network.wg0=interface"))
-    ops.append(UciSet(config="network", section="wg0", values={
-        "proto": "wireguard",
-        "private_key": r["private_key"],
-        "addresses": r["address"],
-    }))
-
-    if r["dns"]:
-        ops.append(UciAddList(config="network", section="wg0", option="dns", value=r["dns"]))
-
-    ops.append(ShellCommand(command="uci set network.wg0_peer=wireguard_wg0"))
-    peer_values = {
-        "public_key": r["peer_public_key"],
-        "endpoint_host": r["endpoint_host"],
-        "endpoint_port": str(r["endpoint_port"]),
-        "allowed_ips": r["allowed_ips"],
-        "route_allowed_ips": "1",
-        "persistent_keepalive": "25",
-    }
-    if r["peer_psk"]:
-        peer_values["preshared_key"] = r["peer_psk"]
-    ops.append(UciSet(config="network", section="wg0_peer", values=peer_values))
-
-    ops.append(ShellCommand(command="uci add firewall zone"))
-    ops.append(UciSet(config="firewall", section="@zone[-1]", values={
-        "name": "vpn",
-        "input": "REJECT",
-        "output": "ACCEPT",
-        "forward": "REJECT",
-        "masq": "1",
-        "mtu_fix": "1",
-        "network": "wg0",
-    }))
-
-    ops.append(ShellCommand(command="uci add firewall forwarding"))
-    ops.append(UciSet(config="firewall", section="@forwarding[-1]", values={
-        "src": "lan",
-        "dest": "vpn",
-    }))
-
-    if r["kill_switch"]:
-        ops.append(ShellCommand(command="uci add firewall rule"))
-        ops.append(UciSet(config="firewall", section="@rule[-1]", values={
-            "name": "KillSwitch-Reject-NonVPN",
-            "src": "lan",
-            "dest": "wan",
-            "proto": "all",
-            "target": "REJECT",
-        }))
-
-    ops.append(UciCommit(config="network"))
-    ops.append(UciCommit(config="firewall"))
-    ops.append(ShellCommand(command="/etc/init.d/network restart 2>/dev/null || true"))
 
     return ops
 
@@ -187,7 +134,7 @@ register(UseCase(
         "allowed_ips": ParamDef(type=str, default="0.0.0.0/0, ::/0",
                                 description="IPs to route through tunnel"),
     },
-    build_configure=_build_wireguard_client,
+    build_configure=lambda p: render_shell(_build_wireguard_client_ops(p)),
     build_configure_ops=_build_wireguard_client_ops,
     test_status="tested",
     tested_notes="D-Link COVR-X1860 A1",

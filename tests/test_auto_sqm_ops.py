@@ -1,6 +1,9 @@
-from helpers import config_lines
+"""Characterization tests for auto_sqm.py ops pipeline.
+
+render_shell(_build_auto_sqm_ops(...)) is the authoritative output.
+"""
 from profile.ops import render_shell
-from use_cases.auto_sqm import _build_auto_sqm, _build_auto_sqm_ops
+from use_cases.auto_sqm import _build_auto_sqm_ops
 
 
 DEFAULT_PARAMS = {}
@@ -8,53 +11,59 @@ STATIC_SPEED_PARAMS = {"mode": "static", "download_kbps": 50000, "upload_kbps": 
 DYNAMIC_PARAMS = {"mode": "dynamic", "dynamic_interval_hours": 6}
 
 
-def _config_lines(script: str) -> list[str]:
-    return config_lines(script, comment_prefix="# ---", keep_echo_with_redirect=True, redirect_chars=(">", ">>"))
+class TestAutoSqmOpsDefault:
+    def test_render_shell_contains_config(self):
+        rendered = render_shell(_build_auto_sqm_ops(DEFAULT_PARAMS))
+        assert "uci set auto_sqm.config=auto_sqm" in rendered
+        assert "uci set auto_sqm.config.mode='static'" in rendered
+        assert "uci commit auto_sqm" in rendered
+
+    def test_render_shell_contains_heredoc(self):
+        rendered = render_shell(_build_auto_sqm_ops(DEFAULT_PARAMS))
+        assert "cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm" in rendered
+        assert "chmod +x /usr/sbin/auto-sqm" in rendered
+
+    def test_default_does_not_run_auto_sqm(self):
+        rendered = render_shell(_build_auto_sqm_ops(DEFAULT_PARAMS))
+        assert "/usr/sbin/auto-sqm" not in rendered.split("cat <<'AUTO_SQM_EOF'")[0]
+
+    def test_default_echoes_will_measure(self):
+        rendered = render_shell(_build_auto_sqm_ops(DEFAULT_PARAMS))
+        assert "echo 'auto-sqm: will measure and configure on WAN ifup'" in rendered
 
 
+class TestAutoSqmOpsStaticSpeed:
+    def test_runs_auto_sqm(self):
+        rendered = render_shell(_build_auto_sqm_ops(STATIC_SPEED_PARAMS))
+        assert "/usr/sbin/auto-sqm" in rendered
 
-class TestAutoSqmCharacterization:
-    def test_default_produces_config_block(self):
-        script = _build_auto_sqm(DEFAULT_PARAMS)
-        assert "uci set auto_sqm.config.mode='static'" in script
-        assert "uci commit auto_sqm" in script
-        assert "cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm" in script
-        assert "chmod +x /usr/sbin/auto-sqm" in script
+    def test_no_cron(self):
+        rendered = render_shell(_build_auto_sqm_ops(STATIC_SPEED_PARAMS))
+        assert "/etc/crontabs/root" not in rendered
 
-    def test_static_with_speed_runs_auto_sqm(self):
-        script = _build_auto_sqm(STATIC_SPEED_PARAMS)
-        assert "/usr/sbin/auto-sqm" in script
 
-    def test_dynamic_adds_cron(self):
-        script = _build_auto_sqm(DYNAMIC_PARAMS)
-        assert "/etc/crontabs/root" in script
-        assert "/etc/init.d/cron enable" in script
-        assert "/etc/init.d/cron restart" in script
+class TestAutoSqmOpsDynamic:
+    def test_adds_cron(self):
+        rendered = render_shell(_build_auto_sqm_ops(DYNAMIC_PARAMS))
+        assert "/etc/crontabs/root" in rendered
+        assert "/etc/init.d/cron enable" in rendered
+        assert "/etc/init.d/cron restart" in rendered
 
+    def test_cron_interval(self):
+        rendered = render_shell(_build_auto_sqm_ops(DYNAMIC_PARAMS))
+        assert "0 */6 * * * /usr/sbin/auto-sqm" in rendered
+
+
+class TestAutoSqmOpsCustomParams:
     def test_custom_interface_in_hotplug(self):
-        script = _build_auto_sqm({"interface": "wan2"})
-        assert '[ "$INTERFACE" = "wan2" ]' in script
+        rendered = render_shell(_build_auto_sqm_ops({"interface": "wan2"}))
+        assert '[ "$INTERFACE" = "wan2" ]' in rendered
 
-
-class TestAutoSqmOpsRoundtrip:
-    def _assert_config_match(self, params: dict) -> None:
-        script = _build_auto_sqm(params)
-        ops = _build_auto_sqm_ops(params)
-        rendered = "\n".join(_config_lines(render_shell(ops)))
-        expected = "\n".join(_config_lines(script))
-        assert rendered == expected, f"\n--- rendered ---\n{rendered}\n--- expected ---\n{expected}\n"
-
-    def test_default_params(self):
-        self._assert_config_match(DEFAULT_PARAMS)
-
-    def test_static_with_speed(self):
-        self._assert_config_match(STATIC_SPEED_PARAMS)
-
-    def test_dynamic_mode(self):
-        self._assert_config_match(DYNAMIC_PARAMS)
-
-    def test_custom_interface_and_device(self):
-        self._assert_config_match({"interface": "wwan", "device": "eth1"})
+    def test_custom_device(self):
+        rendered = render_shell(_build_auto_sqm_ops({"device": "eth1"}))
+        assert "uci set auto_sqm.config.device='eth1'" in rendered
 
     def test_custom_qdisc(self):
-        self._assert_config_match({"qdisc": "fq_codel", "script": "simple.qos"})
+        rendered = render_shell(_build_auto_sqm_ops({"qdisc": "fq_codel", "script": "simple.qos"}))
+        assert "uci set auto_sqm.config.qdisc='fq_codel'" in rendered
+        assert "uci set auto_sqm.config.script='simple.qos'" in rendered

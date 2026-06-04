@@ -1,10 +1,9 @@
 """ssh-hardening — Optional Dropbear SSH hardening beyond core key/password setup."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ShellCommand, UciCommit, UciSet
+from profile.ops import Comment, Op, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -29,6 +28,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
 def _build_ssh_hardening_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
     return [
+        Comment(text="--- SSH hardening ---"),
         UciSet(config="dropbear", section="@dropbear[0]", values={
             "PasswordAuth": r["password_auth"],
             "RootPasswordAuth": r["root_password_auth"],
@@ -39,24 +39,8 @@ def _build_ssh_hardening_ops(params: dict[str, Any]) -> list[Op]:
         }),
         UciCommit(config="dropbear"),
         ShellCommand(command="/etc/init.d/dropbear restart 2>/dev/null || true"),
+        ShellCommand(command=f'echo "SSH hardened: password_auth={r["password_auth"]} idle={r["idle_timeout"]}s max_tries={r["max_auth_tries"]} port={r["port"]}"'),
     ]
-
-
-def _build_ssh_hardening(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-
-    return textwrap.dedent(f"""\
-        # --- SSH hardening ---
-        uci set dropbear.@dropbear[0].PasswordAuth='{r["password_auth"]}'
-        uci set dropbear.@dropbear[0].RootPasswordAuth='{r["root_password_auth"]}'
-        uci set dropbear.@dropbear[0].Port='{r["port"]}'
-        uci set dropbear.@dropbear[0].IdleTimeout='{r["idle_timeout"]}'
-        uci set dropbear.@dropbear[0].MaxAuthTries='{r["max_auth_tries"]}'
-        uci set dropbear.@dropbear[0].GatewayPorts='{r["gateway_ports"]}'
-        uci commit dropbear
-        /etc/init.d/dropbear restart 2>/dev/null || true
-        echo "SSH hardened: password_auth={r['password_auth']} idle={r['idle_timeout']}s max_tries={r['max_auth_tries']} port={r['port']}"
-    """)
 
 
 register(UseCase(
@@ -76,7 +60,7 @@ register(UseCase(
         "disable_gateway_ports": ParamDef(type=bool, default=True,
             description="Disable remote port forwarding (GatewayPorts)"),
     },
-    build_configure=_build_ssh_hardening,
+    build_configure=lambda p: render_shell(_build_ssh_hardening_ops(p)),
     build_configure_ops=_build_ssh_hardening_ops,
     test_status="untested",
     tested_notes="",

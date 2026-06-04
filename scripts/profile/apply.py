@@ -6,9 +6,9 @@ import time
 from typing import Callable, Optional
 
 from profile.plan import ProfilePlan, ProfileStep, StepKind
-from profile.ops import RpcCall, render_ubus
+from profile.ops import RpcCall, UciCommit, UciDelete, UciSet, render_shell, render_ubus
 from profile.render import opkg_install_script
-from profile.wifi import wifi_ap_uci_lines, wifi_detect_radio_shell, wifi_sta_uci_lines
+from profile.wifi import band_to_uci, wifi_ap_uci_lines, wifi_detect_radio_shell, wifi_sta_uci_lines
 from ssh_utils import ssh_cmd
 
 
@@ -144,10 +144,12 @@ def apply_plan(
             _apply_wifi_step(ip, step, ssh_key, _log, reload_wifi=reload)
             continue
 
-        if step.kind == StepKind.USE_CASE and step.configure_script:
+        script = render_shell(step.ops) if step.ops else step.configure_script
+
+        if step.kind == StepKind.USE_CASE and script:
             _log(f"  use case '{step.use_case_name}': applying...")
             chain = "; ".join(
-                ln for ln in step.configure_script.strip().splitlines()
+                ln for ln in script.strip().splitlines()
                 if ln.strip() and not ln.strip().startswith("#")
             )
             if chain and _run_ssh(ip, chain, ssh_key, _log):
@@ -155,14 +157,73 @@ def apply_plan(
             elif chain:
                 _log(f"  ⚠ use case '{step.use_case_name}': failed")
 
-        elif step.configure_script and step.kind not in (StepKind.USE_CASE,):
-            chain = step.configure_script.replace("\n", " && ")
+        elif script and step.kind not in (StepKind.USE_CASE,):
+            chain = " && ".join(
+                ln for ln in script.strip().splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            )
             if chain:
                 _log(f"  {step.label}...")
                 if _run_ssh(ip, chain, ssh_key, _log):
                     _log(f"  ✓ {step.label}")
 
     return ip
+
+
+def _apply_wifi_ubus(
+    client: object,
+    step: ProfileStep,
+    log: LogFn,
+) -> bool:
+    """Configure WiFi via ubus: discover radio, then apply STA/AP settings.
+
+    Two-phase flow:
+    1. ``ubus call network.wireless status`` → find radio matching band
+    2. ``uci.set`` / ``uci.delete`` / ``uci.commit`` via ubus RPC
+    """
+    from ubus_utils import UbusClient
+
+    assert isinstance(client, UbusClient)
+    uci_band = band_to_uci(step.wifi_detect_band)
+    radio = client.find_radio_for_band(uci_band)
+    if not radio:
+        log(f"  ⚠ {step.label}: no radio for band '{step.wifi_detect_band}'")
+        return False
+
+    section = f"default_{radio}"
+    p = step.wifi_params
+
+    try:
+        client.uci_set("wireless", radio, {"disabled": "0"})
+
+        if step.wifi_role == "ap":
+            channel = p.get("channel", "auto")
+            if channel and channel != "auto":
+                client.uci_set("wireless", radio, {"channel": channel})
+
+        try:
+            client.uci_delete("wireless", section, "disabled")
+        except Exception:
+            pass
+
+        values: dict[str, str] = {
+            "device": radio,
+            "mode": step.wifi_role,
+            "ssid": p["ssid"],
+            "encryption": p["encryption"],
+        }
+        if p.get("key"):
+            values["key"] = p["key"]
+        values["network"] = p.get("network", "lan" if step.wifi_role == "ap" else "wan")
+
+        client.uci_set("wireless", section, values)
+        client.uci_commit("wireless")
+
+        log(f"  ✓ {step.label}: configured on {radio}")
+        return True
+    except Exception as e:
+        log(f"  ⚠ {step.label}: {e}")
+        return False
 
 
 def apply_ubus(
@@ -180,8 +241,8 @@ def apply_ubus(
     are skipped unless ``skip_fallback=False`` — the router must have
     the rpcd exec plugin for shell fallback to work.
 
-    Steps that require SSH (WiFi radio detection, opkg install) are
-    skipped with a warning. Use SSH transport for full functionality.
+    WiFi steps use two-phase ubus: discover radio via
+    ``network.wireless status``, then apply UCI settings.
     """
     from ubus_utils import UbusClient
 
@@ -212,7 +273,7 @@ def apply_ubus(
             continue
 
         if step.kind in (StepKind.WIFI_STA, StepKind.WIFI_AP):
-            _log(f"  ⚠ {step.label}: skipped (requires SSH for radio detection)")
+            _apply_wifi_ubus(client, step, _log)
             continue
 
         if step.kind == StepKind.SSH_KEY:

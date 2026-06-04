@@ -1,130 +1,129 @@
 """auto-sqm — Auto-measure WAN speed and configure SQM to eliminate bufferbloat."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ShellCommand, UciCommit, UciSet
+from profile.ops import BlankLine, Comment, Op, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
-_AUTO_SQM_SCRIPT = textwrap.dedent("""\
-    #!/bin/sh
-    # auto-sqm — measure WAN link speed and configure SQM
+_AUTO_SQM_SCRIPT = """\
+#!/bin/sh
+# auto-sqm — measure WAN link speed and configure SQM
 
-    MODE=$(uci -q get auto_sqm.config.mode || echo "static")
-    INTERFACE=$(uci -q get auto_sqm.config.interface || echo "wan")
-    DEVICE=$(uci -q get auto_sqm.config.device || echo "eth0")
-    TARGET_PCT=$(uci -q get auto_sqm.config.target_percent || echo "90")
-    QDISC=$(uci -q get auto_sqm.config.qdisc || echo "cake")
-    QOS_SCRIPT=$(uci -q get auto_sqm.config.script || echo "piece_of_cake.qos")
-    MEAS_MODE=$(uci -q get auto_sqm.config.measurement_mode || echo "wget")
-    IPERF3_HOST=$(uci -q get auto_sqm.config.iperf3_host || echo "")
-    IPERF3_PORT=$(uci -q get auto_sqm.config.iperf3_port || echo "5201")
-    TEST_URL=$(uci -q get auto_sqm.config.test_url || echo "")
-    UPLOAD_FALLBACK=$(uci -q get auto_sqm.config.upload_fallback_kbps || echo "5000")
-    HYSTERESIS=$(uci -q get auto_sqm.config.hysteresis_percent || echo "10")
+MODE=$(uci -q get auto_sqm.config.mode || echo "static")
+INTERFACE=$(uci -q get auto_sqm.config.interface || echo "wan")
+DEVICE=$(uci -q get auto_sqm.config.device || echo "eth0")
+TARGET_PCT=$(uci -q get auto_sqm.config.target_percent || echo "90")
+QDISC=$(uci -q get auto_sqm.config.qdisc || echo "cake")
+QOS_SCRIPT=$(uci -q get auto_sqm.config.script || echo "piece_of_cake.qos")
+MEAS_MODE=$(uci -q get auto_sqm.config.measurement_mode || echo "wget")
+IPERF3_HOST=$(uci -q get auto_sqm.config.iperf3_host || echo "")
+IPERF3_PORT=$(uci -q get auto_sqm.config.iperf3_port || echo "5201")
+TEST_URL=$(uci -q get auto_sqm.config.test_url || echo "")
+UPLOAD_FALLBACK=$(uci -q get auto_sqm.config.upload_fallback_kbps || echo "5000")
+HYSTERESIS=$(uci -q get auto_sqm.config.hysteresis_percent || echo "10")
 
-    DL_SPEED=0
-    UL_SPEED=0
+DL_SPEED=0
+UL_SPEED=0
 
-    measure_wget() {
-        [ -z "$DEVICE" ] && return 1
-        [ -z "$TEST_URL" ] && return 1
-        bytes_before=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
-        t1=$(date +%s)
-        wget -O /dev/null -T 30 "$TEST_URL" 2>/dev/null || return 1
-        t2=$(date +%s)
-        bytes_after=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
-        elapsed=$((t2 - t1))
-        [ "$elapsed" -eq 0 ] && elapsed=1
-        speed_bps=$(( (bytes_after - bytes_before) * 8 / elapsed ))
-        DL_SPEED=$((speed_bps / 1000))
-        DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
-    }
+measure_wget() {
+    [ -z "$DEVICE" ] && return 1
+    [ -z "$TEST_URL" ] && return 1
+    bytes_before=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
+    t1=$(date +%s)
+    wget -O /dev/null -T 30 "$TEST_URL" 2>/dev/null || return 1
+    t2=$(date +%s)
+    bytes_after=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
+    elapsed=$((t2 - t1))
+    [ "$elapsed" -eq 0 ] && elapsed=1
+    speed_bps=$(( (bytes_after - bytes_before) * 8 / elapsed ))
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
 
-    measure_iperf3() {
-        [ -z "$IPERF3_HOST" ] && return 1
-        command -v iperf3 >/dev/null 2>&1 || return 1
-        json_out=$(iperf3 -c "$IPERF3_HOST" -p "$IPERF3_PORT" -t 5 -J 2>/dev/null) || return 1
-        speed_bps=$(echo "$json_out" | jsonfilter -e "@.end.sum_received.bits_per_second" 2>/dev/null) || return 1
-        speed_bps=$(echo "$speed_bps" | cut -d. -f1)
-        DL_SPEED=$((speed_bps / 1000))
-        DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
-    }
+measure_iperf3() {
+    [ -z "$IPERF3_HOST" ] && return 1
+    command -v iperf3 >/dev/null 2>&1 || return 1
+    json_out=$(iperf3 -c "$IPERF3_HOST" -p "$IPERF3_PORT" -t 5 -J 2>/dev/null) || return 1
+    speed_bps=$(echo "$json_out" | jsonfilter -e "@.end.sum_received.bits_per_second" 2>/dev/null) || return 1
+    speed_bps=$(echo "$speed_bps" | cut -d. -f1)
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
 
-    apply_sqm() {
-        dl=$1
-        ul=$2
-        [ "$dl" -eq 0 ] && return 1
+apply_sqm() {
+    dl=$1
+    ul=$2
+    [ "$dl" -eq 0 ] && return 1
 
-        cur_dl=$(uci -q get sqm."$INTERFACE".download || echo "0")
-        cur_ul=$(uci -q get sqm."$INTERFACE".upload || echo "0")
+    cur_dl=$(uci -q get sqm."$INTERFACE".download || echo "0")
+    cur_ul=$(uci -q get sqm."$INTERFACE".upload || echo "0")
 
-        if [ "$cur_dl" -gt 0 ] && [ "$cur_ul" -gt 0 ]; then
-            lo=$((100 - HYSTERESIS))
-            hi=$((100 + HYSTERESIS))
-            pct_dl=$((cur_dl * 100 / dl))
-            pct_ul=$((cur_ul * 100 / ul))
-            if [ "$pct_dl" -ge "$lo" ] && [ "$pct_dl" -le "$hi" ] && [ "$pct_ul" -ge "$lo" ] && [ "$pct_ul" -le "$hi" ]; then
-                echo "auto-sqm: change within hysteresis, skipping"
-                return 0
-            fi
-        fi
-
-        touch /etc/config/sqm
-
-        uci set sqm.$INTERFACE=queue
-        uci set sqm.$INTERFACE.interface="$INTERFACE"
-        uci set sqm.$INTERFACE.enabled='1'
-        uci set sqm.$INTERFACE.script="$QOS_SCRIPT"
-        uci set sqm.$INTERFACE.qdisc="$QDISC"
-        uci set sqm.$INTERFACE.linklayer='none'
-        uci set sqm.$INTERFACE.overhead='0'
-        uci set sqm.$INTERFACE.linklayer_adaptation_mechanism='default'
-        uci set sqm.$INTERFACE.debug_logging='0'
-        uci set sqm.$INTERFACE.verbosity='5'
-        uci set sqm.$INTERFACE.download="$dl"
-        uci set sqm.$INTERFACE.upload="$ul"
-        uci commit sqm
-
-        /etc/init.d/sqm enable
-        /etc/init.d/sqm restart 2>/dev/null || true
-
-        echo "auto-sqm: SQM applied ${dl}/${ul} kbit/s (${QDISC})"
-    }
-
-    STATIC_DL=$(uci -q get auto_sqm.config.download_kbps || echo "0")
-    STATIC_UL=$(uci -q get auto_sqm.config.upload_kbps || echo "0")
-
-    if [ "$MODE" = "static" ] && [ "$STATIC_DL" -gt 0 ]; then
-        DL_SPEED=$((STATIC_DL * TARGET_PCT / 100))
-        if [ "$STATIC_UL" -gt 0 ]; then
-            UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
-        else
-            UL_SPEED=$UPLOAD_FALLBACK
-        fi
-    else
-        if [ "$MEAS_MODE" = "iperf3" ] && [ -n "$IPERF3_HOST" ]; then
-            measure_iperf3 || measure_wget
-        else
-            measure_wget || measure_iperf3
-        fi
-
-        if [ "$DL_SPEED" -eq 0 ]; then
-            echo "auto-sqm: measurement failed, will retry on next trigger" >&2
-            exit 1
-        fi
-
-        if [ "$STATIC_UL" -gt 0 ]; then
-            UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
-        else
-            UL_SPEED=$UPLOAD_FALLBACK
+    if [ "$cur_dl" -gt 0 ] && [ "$cur_ul" -gt 0 ]; then
+        lo=$((100 - HYSTERESIS))
+        hi=$((100 + HYSTERESIS))
+        pct_dl=$((cur_dl * 100 / dl))
+        pct_ul=$((cur_ul * 100 / ul))
+        if [ "$pct_dl" -ge "$lo" ] && [ "$pct_dl" -le "$hi" ] && [ "$pct_ul" -ge "$lo" ] && [ "$pct_ul" -le "$hi" ]; then
+            echo "auto-sqm: change within hysteresis, skipping"
+            return 0
         fi
     fi
 
-    apply_sqm "$DL_SPEED" "$UL_SPEED"
-""")
+    touch /etc/config/sqm
+
+    uci set sqm.$INTERFACE=queue
+    uci set sqm.$INTERFACE.interface="$INTERFACE"
+    uci set sqm.$INTERFACE.enabled='1'
+    uci set sqm.$INTERFACE.script="$QOS_SCRIPT"
+    uci set sqm.$INTERFACE.qdisc="$QDISC"
+    uci set sqm.$INTERFACE.linklayer='none'
+    uci set sqm.$INTERFACE.overhead='0'
+    uci set sqm.$INTERFACE.linklayer_adaptation_mechanism='default'
+    uci set sqm.$INTERFACE.debug_logging='0'
+    uci set sqm.$INTERFACE.verbosity='5'
+    uci set sqm.$INTERFACE.download="$dl"
+    uci set sqm.$INTERFACE.upload="$ul"
+    uci commit sqm
+
+    /etc/init.d/sqm enable
+    /etc/init.d/sqm restart 2>/dev/null || true
+
+    echo "auto-sqm: SQM applied ${dl}/${ul} kbit/s (${QDISC})"
+}
+
+STATIC_DL=$(uci -q get auto_sqm.config.download_kbps || echo "0")
+STATIC_UL=$(uci -q get auto_sqm.config.upload_kbps || echo "0")
+
+if [ "$MODE" = "static" ] && [ "$STATIC_DL" -gt 0 ]; then
+    DL_SPEED=$((STATIC_DL * TARGET_PCT / 100))
+    if [ "$STATIC_UL" -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+else
+    if [ "$MEAS_MODE" = "iperf3" ] && [ -n "$IPERF3_HOST" ]; then
+        measure_iperf3 || measure_wget
+    else
+        measure_wget || measure_iperf3
+    fi
+
+    if [ "$DL_SPEED" -eq 0 ]; then
+        echo "auto-sqm: measurement failed, will retry on next trigger" >&2
+        exit 1
+    fi
+
+    if [ "$STATIC_UL" -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+fi
+
+apply_sqm "$DL_SPEED" "$UL_SPEED"
+"""
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -155,6 +154,8 @@ def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
     dynamic_interval_hours = r["dynamic_interval_hours"]
 
     ops: list[Op] = [
+        Comment(text="--- Auto-SQM ---"),
+        BlankLine(),
         ShellCommand(command="touch /etc/config/auto_sqm"),
         ShellCommand(command="uci set auto_sqm.config=auto_sqm"),
         UciSet(config="auto_sqm", section="config", values={
@@ -175,15 +176,16 @@ def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
             "dynamic_interval_hours": str(r["dynamic_interval_hours"]),
         }),
         UciCommit(config="auto_sqm"),
+        BlankLine(),
+        ShellCommand(command="cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm"),
     ]
 
-    ops.append(ShellCommand(command="cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm"))
     for line in _AUTO_SQM_SCRIPT.strip().splitlines():
-        if line.strip():
-            ops.append(ShellCommand(command=line.strip()))
+        ops.append(ShellCommand(command=line))
+
     ops.append(ShellCommand(command="AUTO_SQM_EOF"))
     ops.append(ShellCommand(command="chmod +x /usr/sbin/auto-sqm"))
-
+    ops.append(BlankLine())
     ops.append(ShellCommand(command="mkdir -p /etc/hotplug.d/iface"))
     ops.append(ShellCommand(command="cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune"))
     ops.append(ShellCommand(command="#!/bin/sh"))
@@ -194,78 +196,22 @@ def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(ShellCommand(command="chmod +x /etc/hotplug.d/iface/10-sqm-autotune"))
 
     if mode == "dynamic":
+        ops.append(BlankLine())
         ops.append(ShellCommand(
             command=f"echo '0 */{dynamic_interval_hours} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root"
         ))
         ops.append(ShellCommand(command="/etc/init.d/cron enable"))
         ops.append(ShellCommand(command="/etc/init.d/cron restart 2>/dev/null || true"))
 
+    ops.append(BlankLine())
     if mode == "static" and download_kbps > 0:
         ops.append(ShellCommand(command="/usr/sbin/auto-sqm"))
+    else:
+        ops.append(ShellCommand(command="echo 'auto-sqm: will measure and configure on WAN ifup'"))
+
+    ops.append(ShellCommand(command="echo 'Auto-SQM configured'"))
 
     return ops
-
-
-def _build_auto_sqm(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-    mode = r["mode"]
-    interface = r["interface"]
-    download_kbps = r["download_kbps"]
-    dynamic_interval_hours = r["dynamic_interval_hours"]
-
-    lines = [
-        "# --- Auto-SQM ---",
-        "",
-        "touch /etc/config/auto_sqm",
-        "uci set auto_sqm.config=auto_sqm",
-        f"uci set auto_sqm.config.mode='{r['mode']}'",
-        f"uci set auto_sqm.config.interface='{r['interface']}'",
-        f"uci set auto_sqm.config.device='{r['device']}'",
-        f"uci set auto_sqm.config.target_percent='{r['target_percent']}'",
-        f"uci set auto_sqm.config.qdisc='{r['qdisc']}'",
-        f"uci set auto_sqm.config.script='{r['script']}'",
-        f"uci set auto_sqm.config.measurement_mode='{r['measurement_mode']}'",
-        f"uci set auto_sqm.config.iperf3_host='{r['iperf3_host']}'",
-        f"uci set auto_sqm.config.iperf3_port='{r['iperf3_port']}'",
-        f"uci set auto_sqm.config.test_url='{r['test_url']}'",
-        f"uci set auto_sqm.config.download_kbps='{r['download_kbps']}'",
-        f"uci set auto_sqm.config.upload_kbps='{r['upload_kbps']}'",
-        f"uci set auto_sqm.config.upload_fallback_kbps='{r['upload_fallback_kbps']}'",
-        f"uci set auto_sqm.config.hysteresis_percent='{r['hysteresis_percent']}'",
-        f"uci set auto_sqm.config.dynamic_interval_hours='{r['dynamic_interval_hours']}'",
-        "uci commit auto_sqm",
-        "",
-        "cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm",
-    ]
-
-    for script_line in _AUTO_SQM_SCRIPT.strip().splitlines():
-        lines.append(script_line)
-
-    lines.append("AUTO_SQM_EOF")
-    lines.append("chmod +x /usr/sbin/auto-sqm")
-    lines.append("")
-    lines.append("mkdir -p /etc/hotplug.d/iface")
-    lines.append("cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune")
-    lines.append("#!/bin/sh")
-    lines.append(f'[ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "{interface}" ] && /usr/sbin/auto-sqm &')
-    lines.append("HOTPLUG_EOF")
-    lines.append("chmod +x /etc/hotplug.d/iface/10-sqm-autotune")
-
-    if mode == "dynamic":
-        lines.append("")
-        lines.append(f"echo '0 */{dynamic_interval_hours} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root")
-        lines.append("/etc/init.d/cron enable")
-        lines.append("/etc/init.d/cron restart 2>/dev/null || true")
-
-    lines.append("")
-    if mode == "static" and download_kbps > 0:
-        lines.append("/usr/sbin/auto-sqm")
-    else:
-        lines.append("echo 'auto-sqm: will measure and configure on WAN ifup'")
-
-    lines.append("echo 'Auto-SQM configured'")
-
-    return textwrap.dedent("\n".join(lines))
 
 
 register(UseCase(
@@ -310,7 +256,7 @@ register(UseCase(
         "dynamic_interval_hours": ParamDef(type=int, default=4,
                                            description="Re-tune interval in hours (dynamic mode)"),
     },
-    build_configure=_build_auto_sqm,
+    build_configure=lambda p: render_shell(_build_auto_sqm_ops(p)),
     build_configure_ops=_build_auto_sqm_ops,
     test_status="experimental",
     tested_notes="not validated on hardware",

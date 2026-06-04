@@ -181,6 +181,83 @@ class TestUbusClientErrors:
             client.call("system", "board")
 
 
+class TestUbusClientDiscoverRadios:
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_discover_radios(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({
+            "result": [0, {
+                "radio0": {"config": {"band": "2g", "channel": "auto", "country": "DE"}},
+                "radio1": {"config": {"band": "5g", "channel": "36"}},
+            }],
+        })
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        radios = client.discover_radios()
+        assert radios == {
+            "radio0": {"band": "2g", "channel": "auto"},
+            "radio1": {"band": "5g", "channel": "36"},
+        }
+
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_discover_radios_calls_wireless_status(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({"result": [0, {}]})
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        client.discover_radios()
+        payload = json.loads(mock_urlopen.call_args[0][0].data)
+        assert payload["params"][1] == "network.wireless"
+        assert payload["params"][2] == "status"
+
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_discover_radios_skips_no_band(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({
+            "result": [0, {
+                "radio0": {"config": {"band": "2g"}},
+                "radio1": {"config": {"channel": "36"}},
+            }],
+        })
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        radios = client.discover_radios()
+        assert "radio0" in radios
+        assert "radio1" not in radios
+
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_find_radio_for_band_2g(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({
+            "result": [0, {
+                "radio0": {"config": {"band": "2g"}},
+                "radio1": {"config": {"band": "5g"}},
+            }],
+        })
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        assert client.find_radio_for_band("2g") == "radio0"
+
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_find_radio_for_band_5g(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({
+            "result": [0, {
+                "radio0": {"config": {"band": "2g"}},
+                "radio1": {"config": {"band": "5g"}},
+            }],
+        })
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        assert client.find_radio_for_band("5g") == "radio1"
+
+    @patch("ubus_utils.urllib.request.urlopen")
+    def test_find_radio_for_band_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({
+            "result": [0, {
+                "radio0": {"config": {"band": "2g"}},
+            }],
+        })
+        client = UbusClient("192.168.1.1")
+        client.token = "tok"
+        assert client.find_radio_for_band("6g") is None
+
+
 class TestUbusClientRequestId:
     @patch("ubus_utils.urllib.request.urlopen")
     def test_request_ids_increment(self, mock_urlopen):

@@ -1,10 +1,9 @@
 """openclash — transparent proxy via Clash/Mihomo for censorship bypass."""
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
-from profile.ops import Op, ServiceAction, ShellCommand, UciCommit, UciSet
+from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -20,6 +19,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
 def _build_openclash_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
     return [
+        Comment(text="--- OpenClash transparent proxy ---"),
         ShellCommand(command="mkdir -p /etc/openclash/config"),
         UciSet(config="openclash", section="config", values={
             "enable": "1",
@@ -32,27 +32,9 @@ def _build_openclash_ops(params: dict[str, Any]) -> list[Op]:
         }),
         UciCommit(config="openclash"),
         ServiceAction(name="openclash", action="enable"),
+        ShellCommand(command=f'echo "OpenClash configured: {r["core_type"]} core, {r["proxy_type"]} proxy"'),
+        ShellCommand(command='echo "Post-flash: import your subscription config via the LuCI web UI"'),
     ]
-
-
-def _build_openclash(params: dict[str, Any]) -> str:
-    r = _resolve_params(params)
-
-    return textwrap.dedent(f"""\
-        # --- OpenClash transparent proxy ---
-        mkdir -p /etc/openclash/config
-        uci set openclash.config.enable='1'
-        uci set openclash.config.config_path='/etc/openclash/config/config.yaml'
-        uci set openclash.config.proxy_type='{r["proxy_type"]}'
-        uci set openclash.config.core_type='{r["core_type"]}'
-        uci set openclash.config.dashboard_type='Official'
-        uci set openclash.config.dns_mode='{r["dns_mode"]}'
-        uci set openclash.config.operation_mode='{r["dns_mode"]}'
-        uci commit openclash
-        /etc/init.d/openclash enable
-        echo "OpenClash configured: {r['core_type']} core, {r['proxy_type']} proxy"
-        echo "Post-flash: import your subscription config via the LuCI web UI"
-    """)
 
 
 register(UseCase(
@@ -89,7 +71,7 @@ register(UseCase(
             description="DNS mode: redir-host or fake-ip"
         ),
     },
-    build_configure=_build_openclash,
+    build_configure=lambda p: render_shell(_build_openclash_ops(p)),
     build_configure_ops=_build_openclash_ops,
     requires_capabilities=[],
     test_status="untested",
