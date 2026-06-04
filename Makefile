@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci clean
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -90,6 +90,9 @@ ci: ## Run all hardware-safe CI checks
 	@$(MAKE) validate-schemas
 	@$(MAKE) validate-models
 	@$(MAKE) test
+
+ipk: ## Build conwrt ipk for OpenWrt
+	@$(SCRIPTS_DIR)/build_ipk.sh --output dist $(ARGS)
 
 clean: ## Remove .tmp files from runs/
 	@echo "Cleaning .tmp directories..."

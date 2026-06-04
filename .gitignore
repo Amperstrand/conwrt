@@ -1,6 +1,7 @@
 # --- Personal / device-specific data (never commit) ---
 config.toml
 data/
+dist/
 .env
 secrets/
 backups/

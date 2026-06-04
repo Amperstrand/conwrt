@@ -137,7 +137,8 @@ echo "2.0" > "$STAGING/debian-binary"
 # Assemble ipk (ar archive)
 IPK_PATH="$OUTPUT_DIR/$IPK_FILENAME"
 mkdir -p "$OUTPUT_DIR"
-(cd "$STAGING" && ar rcs "$IPK_PATH" debian-binary control.tar.gz data.tar.gz)
+IPK_ABS="$(cd "$OUTPUT_DIR" && pwd)/$IPK_FILENAME"
+(cd "$STAGING" && ar rcs "$IPK_ABS" debian-binary control.tar.gz data.tar.gz)
 
 # ── Summary ──────────────────────────────────────────────────────────
 SIZE=$(du -sk "$IPK_PATH" | cut -f1)
