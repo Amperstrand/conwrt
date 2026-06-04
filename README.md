@@ -37,6 +37,7 @@ Useful targets:
 | `make validate-models` | Validate every `models/*.json` against `schemas/model.schema.json` | Yes |
 | `make test` | Python unit tests plus the existing smoke test | Yes |
 | `make ci` | lint + typecheck + schemas + models + tests | Yes |
+| `make ipk` | Build conwrt as an arch-independent OpenWrt ipk package | Yes |
 
 Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or other network-mutating commands from tests. Use mocks/stubs only. Commands such as `python3 scripts/conwrt.py ...`, `scripts/tftp-server.py`, and router SSH/SCP helpers can mutate real devices and should only be run intentionally against hardware you control.
 
@@ -208,6 +209,8 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--no-upload` | Dry run, detect only |
 | `--interface IFACE` | Ethernet interface (auto-detected) |
 | `--capture PATH` | Save pcap capture |
+| `--transport ssh\|ubus` | Transport for `configure` command: SSH shell or ubus HTTP |
+| `--version` | Print version and exit |
 
 ## Data Model
 
@@ -227,10 +230,12 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 - SHA-256 firmware verification
 - SSH verification and inventory collection after flash
 - ASU integration for custom firmware builds with baked-in SSH keys, passwords, WAN SSH
-- Use case presets — flash OpenWrt pre-configured for tethering, SQM, VPN, etc.
+- Use case presets — flash OpenWrt pre-configured for tethering, SQM, VPN, guest WiFi, etc.
+- Transport-agnostic ops pipeline — each use case generates typed operations that render to shell or ubus HTTP
 - Firmware cache management (`conwrt cache list/clean`)
 - Automatic ethernet interface detection
 - Link monitoring survives pcap writer death during reboot
+- conwrt ipk package — install on OpenWrt routers for router-to-router flashing
 
 ## Use Case Presets
 
@@ -284,6 +289,8 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 | `tether-ios` | USB WAN from iPhone. Enable Personal Hotspot manually on the phone. | No |
 | `sqm` | Bufferbloat fix via CAKE/fq_codel (manual speeds) | No |
 | `auto-sqm` | Auto-measure WAN speed + configure SQM (experimental) | No |
+| `guest-wifi` | Isolated guest WiFi with separate subnet, DHCP, and firewall zone | No |
+| `doh` | DNS-over-HTTPS via https-dns-proxy for encrypted DNS | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |
 | `travelmate` | Auto-connect to captive portal WiFi | No |
 | `tollgate` | Bitcoin/Lightning payment gateway (ipk from GitHub CI) | Yes (ipk deploy) |

@@ -187,6 +187,18 @@ wan_ssh = false
 # retry = 5                   # Retry count to find a suitable uplink
 # captive = true              # Enable captive portal detection
 #
+# [use_cases.guest-wifi]
+# ssid = "Guest"              # Guest network SSID
+# key = ""                    # WiFi password (leave empty for open network)
+# encryption = "psk2"         # Encryption: psk2, psk-mixed, none (open)
+# band = "2.4ghz"             # WiFi band: 2.4ghz, 5ghz
+# isolation = true            # Enable client isolation (guests can't see each other)
+# network_name = "guest"      # UCI network interface name
+#
+# [use_cases.doh]
+# provider = "cloudflare"     # DNS provider: cloudflare, google, quad9, mullvad, adguard, or custom URL
+# listen_port = 5053          # Local DoH proxy listen port
+#
 # [use_cases.adguard]
 # listen_ip = "0.0.0.0"      # Web UI listen address
 # web_port = 3000             # Web UI port (initial setup)
