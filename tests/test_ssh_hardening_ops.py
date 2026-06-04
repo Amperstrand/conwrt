@@ -25,7 +25,7 @@ EXPECTED_DEFAULT = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=off idle=300s max_tries=3 port=22"'
 )
 
@@ -38,7 +38,7 @@ EXPECTED_CUSTOM = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='5'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='yes'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=on idle=600s max_tries=5 port=2222"'
 )
 
@@ -51,7 +51,7 @@ EXPECTED_PW_ENABLED = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=on idle=300s max_tries=3 port=22"'
 )
 
@@ -64,7 +64,7 @@ EXPECTED_PORT_TIMEOUT = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=off idle=0s max_tries=3 port=2222"'
 )
 
@@ -77,7 +77,7 @@ EXPECTED_GW_ENABLED = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='3'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='yes'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=off idle=300s max_tries=3 port=22"'
 )
 
@@ -90,7 +90,7 @@ EXPECTED_ALL_CUSTOM = (
     "uci set dropbear.@dropbear[0].MaxAuthTries='1'\n"
     "uci set dropbear.@dropbear[0].GatewayPorts='no'\n"
     "uci commit dropbear\n"
-    "/etc/init.d/dropbear restart 2>/dev/null || true\n"
+    "/etc/init.d/dropbear restart\n"
     'echo "SSH hardened: password_auth=off idle=120s max_tries=1 port=8022"'
 )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import Comment, Op, ShellCommand, UciCommit, UciSet, render_shell
+from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -38,7 +38,7 @@ def _build_ssh_hardening_ops(params: dict[str, Any]) -> list[Op]:
             "GatewayPorts": r["gateway_ports"],
         }),
         UciCommit(config="dropbear"),
-        ShellCommand(command="/etc/init.d/dropbear restart 2>/dev/null || true"),
+        ServiceAction(name="dropbear", action="restart"),
         ShellCommand(command=f'echo "SSH hardened: password_auth={r["password_auth"]} idle={r["idle_timeout"]}s max_tries={r["max_auth_tries"]} port={r["port"]}"'),
     ]
 

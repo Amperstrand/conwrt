@@ -71,7 +71,7 @@ EXPECTED_DEFAULT = (
     "uci set mwan3.https_rule.use_policy='wan_policy'\n"
     "\n"
     "uci commit mwan3\n"
-    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    "/etc/init.d/mwan3 restart\n"
     'echo "mwan3 configured: wan (primary) + usbwan (failover)"'
 )
 
@@ -132,7 +132,7 @@ EXPECTED_BALANCED = (
     "uci set mwan3.https_rule.use_policy='wan_policy'\n"
     "\n"
     "uci commit mwan3\n"
-    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    "/etc/init.d/mwan3 restart\n"
     'echo "mwan3 configured: wan (primary) + usbwan (balanced)"'
 )
 
@@ -189,7 +189,7 @@ EXPECTED_CUSTOM_TRACK = (
     "uci set mwan3.https_rule.use_policy='wan_policy'\n"
     "\n"
     "uci commit mwan3\n"
-    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    "/etc/init.d/mwan3 restart\n"
     'echo "mwan3 configured: wan (primary) + usbwan (failover)"'
 )
 
@@ -250,7 +250,7 @@ EXPECTED_CUSTOM_INTERFACES = (
     "uci set mwan3.https_rule.use_policy='eth0_policy'\n"
     "\n"
     "uci commit mwan3\n"
-    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    "/etc/init.d/mwan3 restart\n"
     'echo "mwan3 configured: eth0 (primary) + eth1 (failover)"'
 )
 
@@ -305,7 +305,7 @@ EXPECTED_ALL_CUSTOM = (
     "uci set mwan3.https_rule.use_policy='wan2_policy'\n"
     "\n"
     "uci commit mwan3\n"
-    "/etc/init.d/mwan3 restart 2>/dev/null || true\n"
+    "/etc/init.d/mwan3 restart\n"
     'echo "mwan3 configured: wan2 (primary) + wwan (balanced)"'
 )
 

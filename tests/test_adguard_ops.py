@@ -22,12 +22,12 @@ EXPECTED_DEFAULT = (
     "uci set adguardhome.adguardhome.dns_port='5353'\n"
     "uci commit adguardhome\n"
     "/etc/init.d/adguardhome enable\n"
-    "/etc/init.d/adguardhome start 2>/dev/null || true\n"
+    "/etc/init.d/adguardhome start\n"
     "\n"
     "uci set dhcp.@dnsmasq[0].noresolv='1'\n"
     "uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'\n"
     "uci commit dhcp\n"
-    "/etc/init.d/dnsmasq restart 2>/dev/null || true\n"
+    "/etc/init.d/dnsmasq restart\n"
     'echo "AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000"'
 )
 
@@ -39,12 +39,12 @@ EXPECTED_CUSTOM = (
     "uci set adguardhome.adguardhome.dns_port='53'\n"
     "uci commit adguardhome\n"
     "/etc/init.d/adguardhome enable\n"
-    "/etc/init.d/adguardhome start 2>/dev/null || true\n"
+    "/etc/init.d/adguardhome start\n"
     "\n"
     "uci set dhcp.@dnsmasq[0].noresolv='1'\n"
     "uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'\n"
     "uci commit dhcp\n"
-    "/etc/init.d/dnsmasq restart 2>/dev/null || true\n"
+    "/etc/init.d/dnsmasq restart\n"
     'echo "AdGuard Home configured: DNS on port 53, web UI at 192.168.1.1:8080"'
 )
 

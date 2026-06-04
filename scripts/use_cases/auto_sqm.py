@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import BlankLine, Comment, Op, ShellCommand, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -200,8 +200,8 @@ def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(ShellCommand(
             command=f"echo '0 */{dynamic_interval_hours} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root"
         ))
-        ops.append(ShellCommand(command="/etc/init.d/cron enable"))
-        ops.append(ShellCommand(command="/etc/init.d/cron restart 2>/dev/null || true"))
+        ops.append(ServiceAction(name="cron", action="enable"))
+        ops.append(ServiceAction(name="cron", action="restart"))
 
     ops.append(BlankLine())
     if mode == "static" and download_kbps > 0:

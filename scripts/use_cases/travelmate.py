@@ -37,7 +37,7 @@ def _build_travelmate_ops(params: dict[str, Any]) -> list[Op]:
         }),
         UciCommit(config="travelmate"),
         ServiceAction(name="travelmate", action="enable"),
-        ShellCommand(command="/etc/init.d/travelmate restart 2>/dev/null || true"),
+        ServiceAction(name="travelmate", action="restart"),
         ShellCommand(command=f'echo "Travelmate configured: auto-connect on {r["radio"]}"'),
     ]
 

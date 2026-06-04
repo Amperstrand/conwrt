@@ -50,6 +50,16 @@ def _extract_uci_from_ubus(calls: list) -> list[tuple]:
         elif call.method == "delete" and call.object_name == "uci":
             p = call.params
             tuples.append(("delete", p["config"], p["section"], p.get("option", "")))
+        elif call.method == "add" and call.object_name == "uci":
+            p = call.params
+            config = p["config"]
+            section_type = p["type"]
+            for k, v in p.get("values", {}).items():
+                if isinstance(v, list):
+                    for item in v:
+                        tuples.append(("add-list", config, f"@{section_type}[-1]", k, str(item)))
+                else:
+                    tuples.append(("set", config, f"@{section_type}[-1]", k, str(v)))
     return tuples
 
 
@@ -207,8 +217,28 @@ class TestParityFipsRfcomm:
         })
 
 
+class TestParityTollgate:
+    def test_default(self):
+        from use_cases.tollgate import _build_tollgate_ops
+        _assert_parity(_build_tollgate_ops, {})
+
+    def test_with_payment(self):
+        from use_cases.tollgate import _build_tollgate_ops
+        _assert_parity(_build_tollgate_ops, {
+            "mint_url": "https://mint.example.com",
+            "lightning_address": "pay@node.com",
+            "price_per_minute": 5,
+        })
+
+    def test_mint_only(self):
+        from use_cases.tollgate import _build_tollgate_ops
+        _assert_parity(_build_tollgate_ops, {
+            "mint_url": "https://mint.example.com",
+        })
+
+
 # Shell-only use cases (no parity test):
-# - tollgate: uses @section[-1] index syntax and ShellCommand for ipk deploy
-# - auto-sqm: uses $INTERFACE shell variable in section names
+# - auto-sqm: heredoc-written script contains UCI-like lines (sqm.$INTERFACE=queue)
+#   that would contaminate the shell extractor; filesystem ops have no typed equivalent
 # - usb-tether: uses $zone shell variable and ShellCommand for declarations
 # These intentionally rely on shell constructs that cannot map to ubus RPC.

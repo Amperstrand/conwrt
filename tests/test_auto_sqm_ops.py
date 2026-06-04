@@ -53,6 +53,11 @@ class TestAutoSqmOpsDynamic:
         rendered = render_shell(_build_auto_sqm_ops(DYNAMIC_PARAMS))
         assert "0 */6 * * * /usr/sbin/auto-sqm" in rendered
 
+    def test_dynamic_cron_no_defensive_wrappers(self):
+        rendered = render_shell(_build_auto_sqm_ops(DYNAMIC_PARAMS))
+        assert "/etc/init.d/cron restart 2>/dev/null || true" not in rendered
+        assert "/etc/init.d/cron enable 2>/dev/null || true" not in rendered
+
 
 class TestAutoSqmOpsCustomParams:
     def test_custom_interface_in_hotplug(self):

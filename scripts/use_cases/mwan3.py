@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import BlankLine, Comment, Op, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -127,7 +127,7 @@ def _build_mwan3_ops(params: dict[str, Any]) -> list[Op]:
 
     # --- Commit and restart ---
     ops.append(UciCommit(config="mwan3"))
-    ops.append(ShellCommand(command="/etc/init.d/mwan3 restart 2>/dev/null || true"))
+    ops.append(ServiceAction(name="mwan3", action="restart"))
     ops.append(ShellCommand(command=f'echo "mwan3 configured: {primary} (primary) + {secondary} ({policy})"'))
 
     return ops

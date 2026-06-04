@@ -35,14 +35,14 @@ def _build_adguard_ops(params: dict[str, Any]) -> list[Op]:
         }),
         UciCommit(config="adguardhome"),
         ServiceAction(name="adguardhome", action="enable"),
-        ShellCommand(command="/etc/init.d/adguardhome start 2>/dev/null || true"),
+        ServiceAction(name="adguardhome", action="start"),
         BlankLine(),
         UciSet(config="dhcp", section="@dnsmasq[0]", values={
             "noresolv": "1",
         }),
         UciAddList(config="dhcp", section="@dnsmasq[0]", option="server", value=f"127.0.0.1#{dns_port}"),
         UciCommit(config="dhcp"),
-        ShellCommand(command="/etc/init.d/dnsmasq restart 2>/dev/null || true"),
+        ServiceAction(name="dnsmasq", action="restart"),
         ShellCommand(command=f'echo "AdGuard Home configured: DNS on port {dns_port}, web UI at {listen_ip}:{web_port}"'),
     ]
 

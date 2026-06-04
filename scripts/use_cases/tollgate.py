@@ -8,7 +8,7 @@ import subprocess
 from typing import Any, Callable
 from urllib.request import urlretrieve
 
-from profile.ops import Comment, Op, ShellCommand, render_shell
+from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciAdd, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -414,24 +414,25 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
 
     # Enable nodogsplash
     ops.append(Comment(text="--- TollGate: nodogsplash captive portal ---"))
-    ops.append(ShellCommand("uci set nodogsplash.@nodogsplash[0].enabled='1' 2>/dev/null || true"))
-    ops.append(ShellCommand("uci commit nodogsplash 2>/dev/null || true"))
-    ops.append(ShellCommand("/etc/init.d/nodogsplash enable 2>/dev/null || true"))
-    ops.append(ShellCommand("/etc/init.d/nodogsplash restart 2>/dev/null || true"))
+    ops.append(UciSet(config="nodogsplash", section="@nodogsplash[0]", values={"enabled": "1"}))
+    ops.append(UciCommit(config="nodogsplash"))
+    ops.append(ServiceAction(name="nodogsplash", action="enable"))
+    ops.append(ServiceAction(name="nodogsplash", action="restart"))
 
     # Configure tollgate UCI if any settings provided
     _has_config = bool(mint_url or lightning_address or price_per_minute != 1)
     if _has_config:
         ops.append(Comment(text="--- TollGate: payment configuration ---"))
-        ops.append(ShellCommand("touch /etc/config/tollgate 2>/dev/null || true"))
-        ops.append(ShellCommand("uci add tollgate tollgate 2>/dev/null || true"))
+        ops.append(ShellCommand("touch /etc/config/tollgate"))
+        values: dict[str, str] = {}
         if mint_url:
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].mint_url='{mint_url}' 2>/dev/null || true"))
+            values["mint_url"] = mint_url
         if lightning_address:
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].lightning_address='{lightning_address}' 2>/dev/null || true"))
+            values["lightning_address"] = lightning_address
         if price_per_minute != 1:
-            ops.append(ShellCommand(f"uci set tollgate.@tollgate[0].price_per_minute='{price_per_minute}' 2>/dev/null || true"))
-        ops.append(ShellCommand("uci commit tollgate 2>/dev/null || true"))
+            values["price_per_minute"] = str(price_per_minute)
+        ops.append(UciAdd(config="tollgate", type="tollgate", values=values))
+        ops.append(UciCommit(config="tollgate"))
 
     ops.append(Comment(text="--- TollGate: ipk installed separately via deploy_tollgate_post_flash() ---"))
 

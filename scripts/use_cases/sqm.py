@@ -54,7 +54,7 @@ def _build_sqm_ops(params: dict[str, Any]) -> list[Op]:
         UciCommit(config="sqm"),
         BlankLine(),
         ServiceAction(name="sqm", action="enable"),
-        ShellCommand(command="/etc/init.d/sqm restart 2>/dev/null || true"),
+        ServiceAction(name="sqm", action="restart"),
         ShellCommand(command=f'echo "SQM configured: {r["download_kbps"]}/{r["upload_kbps"]} kbit/s ({r["qdisc"]})"'),
     ]
 

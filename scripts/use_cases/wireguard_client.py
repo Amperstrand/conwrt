@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import BlankLine, Comment, Op, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -99,7 +99,7 @@ def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
         BlankLine(),
         UciCommit(config="network"),
         UciCommit(config="firewall"),
-        ShellCommand(command="/etc/init.d/network restart 2>/dev/null || true"),
+        ServiceAction(name="network", action="restart"),
         ShellCommand(command=f"echo 'WireGuard client configured: {endpoint_host}:{endpoint_port}'"),
     ])
 

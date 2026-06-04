@@ -37,7 +37,7 @@ EXPECTED_DEFAULT = (
     "uci commit sqm\n"
     "\n"
     "/etc/init.d/sqm enable\n"
-    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    "/etc/init.d/sqm restart\n"
     'echo "SQM configured: 340000/19000 kbit/s (cake)"'
 )
 
@@ -60,7 +60,7 @@ EXPECTED_CUSTOM = (
     "uci commit sqm\n"
     "\n"
     "/etc/init.d/sqm enable\n"
-    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    "/etc/init.d/sqm restart\n"
     'echo "SQM configured: 100000/50000 kbit/s (fq_codel)"'
 )
 
@@ -83,7 +83,7 @@ EXPECTED_MINIMAL = (
     "uci commit sqm\n"
     "\n"
     "/etc/init.d/sqm enable\n"
-    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    "/etc/init.d/sqm restart\n"
     'echo "SQM configured: 1/1 kbit/s (cake)"'
 )
 
@@ -106,7 +106,7 @@ EXPECTED_MAX_OVERHEAD = (
     "uci commit sqm\n"
     "\n"
     "/etc/init.d/sqm enable\n"
-    "/etc/init.d/sqm restart 2>/dev/null || true\n"
+    "/etc/init.d/sqm restart\n"
     'echo "SQM configured: 100/100 kbit/s (cake)"'
 )
 

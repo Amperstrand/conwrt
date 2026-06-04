@@ -44,7 +44,7 @@ def _build_doh_ops(params: dict[str, Any]) -> list[Op]:
     }))
     ops.append(UciCommit(config="https-dns-proxy"))
     ops.append(ServiceAction(name="https-dns-proxy", action="enable"))
-    ops.append(ShellCommand(command="/etc/init.d/https-dns-proxy restart 2>/dev/null || true"))
+    ops.append(ServiceAction(name="https-dns-proxy", action="restart"))
 
     ops.append(BlankLine())
     ops.append(Comment(text=f"--- Point dnsmasq to DoH proxy on port {port} ---"))
@@ -54,7 +54,7 @@ def _build_doh_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(UciDelete(config="dhcp", section="@dnsmasq[0]", option="server"))
     ops.append(UciAddList(config="dhcp", section="@dnsmasq[0]", option="server", value=f"127.0.0.1#{port}"))
     ops.append(UciCommit(config="dhcp"))
-    ops.append(ShellCommand(command="/etc/init.d/dnsmasq restart 2>/dev/null || true"))
+    ops.append(ServiceAction(name="dnsmasq", action="restart"))
     ops.append(ShellCommand(
         command=f'echo "DoH configured: {r["provider"]} on port {port}"',
     ))
