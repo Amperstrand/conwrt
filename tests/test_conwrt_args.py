@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def test_conwrt_script_compiles() -> None:
-    py_compile.compile(str(ROOT / "scripts" / "conwrt.py"), doraise=True)
+    py_compile.compile(str(ROOT / "scripts" / "conwrt" / "__init__.py"), doraise=True)
 
 
 def test_firmware_manager_script_compiles() -> None:

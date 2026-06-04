@@ -69,11 +69,11 @@ class TestBuildIpk(unittest.TestCase):
         self.assertIn("python3-light", text)
         self.assertIn("Version: 0.0.0-alpha", text)
 
-    def test_data_has_conwrt_py(self) -> None:
+    def test_data_has_conwrt_package(self) -> None:
         ipk_path = _build_ipk(self.output_dir)
         _extract_ipk(ipk_path, self.extract_dir)
-        conwrt_py = os.path.join(self.extract_dir, "data", "usr", "share", "conwrt", "conwrt.py")
-        self.assertTrue(os.path.exists(conwrt_py))
+        init_py = os.path.join(self.extract_dir, "data", "usr", "share", "conwrt", "conwrt", "__init__.py")
+        self.assertTrue(os.path.exists(init_py))
 
     def test_data_has_wrapper(self) -> None:
         ipk_path = _build_ipk(self.output_dir)
@@ -83,7 +83,7 @@ class TestBuildIpk(unittest.TestCase):
         with open(wrapper) as f:
             text = f.read()
         self.assertIn("python3", text)
-        self.assertIn("/usr/share/conwrt/conwrt.py", text)
+        self.assertIn("python3 -m conwrt", text)
 
     def test_data_has_models(self) -> None:
         ipk_path = _build_ipk(self.output_dir)
@@ -128,7 +128,7 @@ class TestBuildIpk(unittest.TestCase):
 class TestConwrtVersion(unittest.TestCase):
     def test_version_flag(self) -> None:
         result = subprocess.run(
-            ["python3", str(ROOT / "scripts" / "conwrt.py"), "--version"],
+            ["python3", str(ROOT / "scripts" / "conwrt" / "__init__.py"), "--version"],
             capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0)
@@ -137,7 +137,7 @@ class TestConwrtVersion(unittest.TestCase):
 
     def test_version_importable(self) -> None:
         import importlib
-        spec = importlib.util.spec_from_file_location("conwrt", str(ROOT / "scripts" / "conwrt.py"))
+        spec = importlib.util.spec_from_file_location("conwrt", str(ROOT / "scripts" / "conwrt" / "__init__.py"))
         assert spec and spec.loader
         mod = importlib.util.module_from_spec(spec)
         sys_modules_key = "conwrt_test_version"

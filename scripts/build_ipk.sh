@@ -53,16 +53,23 @@ mkdir -p "$DATA_DIR/etc/conwrt/models"
 mkdir -p "$CTRL_DIR"
 
 # ── Install Python files ─────────────────────────────────────────────
-# Core scripts
+# Core scripts (top-level .py files in scripts/)
 for f in "$SCRIPT_DIR"/*.py; do
     [ -f "$f" ] && cp "$f" "$DATA_DIR/usr/share/conwrt/"
 done
+
+# conwrt package (scripts/conwrt/ → /usr/share/conwrt/conwrt/)
+if [ -d "$SCRIPT_DIR/conwrt" ]; then
+    mkdir -p "$DATA_DIR/usr/share/conwrt/conwrt"
+    for f in "$SCRIPT_DIR/conwrt"/*.py; do
+        [ -f "$f" ] && cp "$f" "$DATA_DIR/usr/share/conwrt/conwrt/"
+    done
+fi
 
 # Sub-packages
 for pkg in flash profile use_cases lib; do
     if [ -d "$SCRIPT_DIR/$pkg" ]; then
         mkdir -p "$DATA_DIR/usr/share/conwrt/$pkg"
-        # Copy .py files only (no __pycache__)
         for f in "$SCRIPT_DIR/$pkg"/*.py; do
             [ -f "$f" ] && cp "$f" "$DATA_DIR/usr/share/conwrt/$pkg/"
         done
@@ -84,7 +91,7 @@ fi
 # ── Wrapper script ───────────────────────────────────────────────────
 cat > "$DATA_DIR/usr/bin/conwrt" << 'WRAPPER'
 #!/bin/sh
-exec python3 /usr/share/conwrt/conwrt.py "$@"
+exec python3 -m conwrt "$@"
 WRAPPER
 chmod 755 "$DATA_DIR/usr/bin/conwrt"
 
