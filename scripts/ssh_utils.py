@@ -18,20 +18,6 @@ DROPBEAR_SSH_OPTIONS: list[str] = [
 ]
 
 
-def detect_ssh_server(ip: str, port: int = 22, timeout: float = 5.0) -> str | None:
-    """Detect SSH server type by banner grab. Returns 'dropbear', 'openssh', or None."""
-    try:
-        with socket.create_connection((ip, port), timeout=timeout) as sock:
-            banner = sock.recv(256).decode("ascii", errors="replace").strip().lower()
-            if "dropbear" in banner:
-                return "dropbear"
-            if "openssh" in banner:
-                return "openssh"
-            return None
-    except (OSError, socket.timeout):
-        return None
-
-
 def ssh_cmd(
     ip: str,
     command: str | Sequence[str],

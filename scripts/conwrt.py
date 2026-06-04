@@ -851,24 +851,6 @@ def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
     return checks
 
 
-def probe_router_info(ip: str = DEFAULT_IP) -> Optional[dict]:
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from router_probe import probe_router as _probe_router
-        result = _probe_router(ip=ip)
-        return {
-            "model": result.model,
-            "vendor": result.vendor,
-            "firmware_version": result.firmware_version,
-            "mac": result.mac,
-            "ssh_key_count": result.ssh_key_count,
-            "state": result.state,
-        }
-    except Exception as e:
-        log(f"Router probe failed: {e}")
-        return None
-
-
 class PcapMonitor:
     """Background thread that captures packets and emits events to a queue."""
 

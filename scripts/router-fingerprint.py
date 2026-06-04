@@ -67,35 +67,6 @@ def parse_ssh_output(output: str) -> Dict[str, str]:
         result[key] = '\n'.join(value)
     return result
 
-def extract_field(text: str, field: str, pattern: Optional[str] = None) -> str:
-    """Extract value from text using regex or field name."""
-    if not text:
-        return ''
-
-    if pattern:
-        match = re.search(pattern, text)
-        return match.group(1).strip() if match else ''
-
-    # Try to find field in text
-    for line in text.split('\n'):
-        if field.lower() in line.lower():
-            parts = line.split(':', 1)
-            if len(parts) > 1:
-                return parts[1].strip()
-    return ''
-
-def extract_mac(text: str, interface: str) -> str:
-    """Extract MAC address for specific interface from text."""
-    if not text:
-        return ''
-
-    for line in text.split('\n'):
-        if interface in line and 'link/ether' in line:
-            parts = line.split()
-            if len(parts) > 1:
-                return parts[1]
-    return ''
-
 def extract_all_macs(text: str) -> Dict[str, str]:
     """Extract all MAC addresses from text."""
     macs = {}

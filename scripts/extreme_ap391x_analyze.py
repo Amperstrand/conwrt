@@ -184,13 +184,6 @@ def download_url(url: str, temp_dir: Path) -> tuple[Optional[Path], dict[str, An
         return None, {"requested_url": url, "blocked": True, "reason": str(exc.reason)}, f"Download failed: {exc.reason}"
 
 
-def safe_relative_path(base_dir: Path, target_path: Path) -> Optional[str]:
-    try:
-        return str(target_path.resolve().relative_to(base_dir.resolve()))
-    except ValueError:
-        return None
-
-
 def extract_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, dest_root: Path) -> Optional[Path]:
     if not member.isfile():
         return None

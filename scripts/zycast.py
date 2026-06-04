@@ -194,24 +194,6 @@ def run_zycast(
     return proc
 
 
-def read_zycast_progress(proc: subprocess.Popen) -> Optional[str]:
-    """Non-blocking read of zycast stderr for progress output.
-
-    Returns any available output, or None if nothing available.
-    """
-    import selectors
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stderr, selectors.EVENT_READ)
-    output = ""
-    for key, _ in sel.select(timeout=0.1):
-        if key.data == selectors.EVENT_READ:
-            chunk = proc.stderr.read1(4096)  # type: ignore
-            if chunk:
-                output += chunk
-    sel.close()
-    return output or None
-
-
 # ---------------------------------------------------------------------------
 # Pure Python multicast zycast sender (fallback for OpenWrt/MIPS)
 # ---------------------------------------------------------------------------
@@ -464,25 +446,6 @@ class ZycastPythonSender:
     def kill(self) -> None:
         """Alias for ``terminate()`` (Popen compatibility)."""
         self.terminate()
-
-
-def ensure_zycast_sender(
-    force_rebuild: bool = False,
-) -> tuple[str, object]:
-    """Ensure a zycast sender is available, preferring the C binary.
-
-    Returns:
-        ``(sender_type, sender_ref)`` where *sender_type* is ``"binary"``
-        or ``"python"`` and *sender_ref* is either the binary `Path`
-        (for use with :func:`run_zycast`) or the :func:`zycast_send_python`
-        callable.
-    """
-    try:
-        binary = ensure_zycast_binary(force_rebuild=force_rebuild)
-        return ("binary", binary)
-    except RuntimeError:
-        logger.info("C binary unavailable, will use pure Python multicast sender")
-        return ("python", zycast_send_python)
 
 
 def run_zycast_auto(

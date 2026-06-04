@@ -346,32 +346,6 @@ def oem_http_accept_reboot(stock_ip: str, cookie: str) -> bool:
         return True
 
 
-def oem_http_reboot(stock_ip: str, cookie: str) -> bool:
-    """Simple reboot via ZyXEL OEM web UI (no firmware upload).
-
-    Uses cmd=5889 (System → Maintenance → Restart). Requires auth cookie
-    from oem_http_login().
-
-    WARNING: PoE MCU reinitializes on reboot — all PoE devices lose power briefly.
-    If MAC table corruption was the reason for reboot, prefer bridge port isolation
-    (bridge.sh) instead to prevent the corruption in the first place.
-    """
-    reboot_url = f"http://{stock_ip}/cgi-bin/dispatcher.cgi?cmd=5889"
-    try:
-        cmd = ["curl", "-s", "--max-time", "10", "-X", "POST", reboot_url]
-        if cookie:
-            cmd.extend(["-b", cookie])
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
-        if r.returncode == 0:
-            log("Reboot command accepted — device is restarting")
-            return True
-        log(f"Reboot response: exit={r.returncode} {r.stderr[:200]}")
-        return False
-    except Exception as e:
-        log(f"Reboot error: {e}")
-        return False
-
-
 # ─── OEM FTP handlers (ZyXEL GS1920-24 style) ─────────────────
 
 
