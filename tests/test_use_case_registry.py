@@ -18,7 +18,9 @@ import use_cases as uc  # noqa: E402
 EXPECTED: dict[str, tuple[str, str]] = {
     "adguard": ("ssh", "auto"),
     "auto-sqm": ("both", "auto"),
+    "doh": ("ssh", "auto"),
     "fips-bluetooth-rfcomm": ("ssh", "opkg"),
+    "guest-wifi": ("ssh", "auto"),
     "mesh11sd": ("both", "auto"),
     "mwan3": ("both", "auto"),
     "openclash": ("ssh", "auto"),

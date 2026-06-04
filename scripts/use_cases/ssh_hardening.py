@@ -62,7 +62,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_ssh_hardening_ops(p)),
     build_configure_ops=_build_ssh_hardening_ops,
-    test_status="untested",
-    tested_notes="",
+    test_status="tested",
+    tested_notes="ops unit tests, UciSet validation",
     requires_capabilities=[],
 ))
