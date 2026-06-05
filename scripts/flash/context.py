@@ -4,7 +4,7 @@ import hashlib
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Optional, TypedDict
 
@@ -106,6 +106,50 @@ class PcapMonitorConfig:
     silence_timeout: int = SILENCE_TIMEOUT_DEFAULT
     zycast_multicast_group: str = ""
     zycast_multicast_port: int = 0
+
+
+@dataclass
+class RecoveryContext:
+    profile: object
+    image_path: str
+    interface: str
+    pcap_path: str
+    initramfs_path: str = ""
+    no_upload: bool = False
+    no_voice: bool = False
+    router_mac_openwrt: str = ""
+    router_mac_uboot: str = ""
+    timeline: Timeline = field(default_factory=Timeline)
+    state: State = State.WAITING_FOR_POWER_OFF
+    sha256_before: str = ""
+    sha256_after: str = ""
+    generated_password: str = ""
+    password_set: bool = False
+    auth_type: str = ""
+    wireguard_pubkey: str = ""
+    wan_ssh_enabled: bool = False
+    force_uboot: bool = False
+    no_pcap: bool = False
+    boot_state: str = "unknown"
+    ssh_key_path: str = ""
+    serial_port: str = ""
+    serial_method: str = ""
+    serial_baud: int = 115200
+    tftp_root: str = ""
+    uboot_commands: list = field(default_factory=list)
+    request_hash: str = ""
+    cache_key: str = ""
+    packages: list = field(default_factory=list)
+    defaults_script: str = ""
+    assume_yes: bool = False
+    _say_fn: object = field(default=None, repr=False)
+    oem_state: dict | OemState = field(default_factory=dict)
+    isolate_port: str = ""
+    port_isolator: object | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if self._say_fn is None:
+            self._say_fn = say
 
 
 def ts() -> float:
