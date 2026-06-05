@@ -1163,7 +1163,7 @@ def _handle_oem_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> Non
 
 def _handle_oem_rebooting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     profile = ctx.profile
-    openwrt_ip = profile.openwrt_ip or "192.168.1.1"
+    openwrt_ip = profile.openwrt_ip or DEFAULT_IP
 
     ctx._say_fn("Device is rebooting into OpenWrt initramfs.")
     install_fn = get_oem_install_fn(profile.flash_method)
@@ -1438,7 +1438,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mgmt_parser = subparsers.add_parser("setup-mgmt-wifi",
         help="Configure management WiFi on a running router")
-    mgmt_parser.add_argument("--ip", default="192.168.1.1",
+    mgmt_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address")
     mgmt_parser.add_argument("--model-id", default=None,
         help="Model ID (for SSH key detection)")
@@ -1447,7 +1447,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Backup MTD flash partitions from a stock ZyXEL router via SSH")
     backup_parser.add_argument("--model-id", default="zyxel-nr7101",
         help="Model ID (default: zyxel-nr7101)")
-    backup_parser.add_argument("--ip", default="192.168.1.1",
+    backup_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address (default: 192.168.1.1)")
     backup_parser.add_argument("--serial", default=None,
         help="Device serial number (printed on unit label). Used to generate stock SSH password.")
@@ -1494,7 +1494,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cfg_parser = subparsers.add_parser("configure",
         help="Apply config.toml settings to a running OpenWrt router via SSH")
-    cfg_parser.add_argument("--ip", default="192.168.1.1",
+    cfg_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address (default: 192.168.1.1)")
     cfg_parser.add_argument("--model-id", default=None,
         help="Model ID for capability filtering (auto-detected if omitted)")
@@ -1543,7 +1543,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     reset_parser = subparsers.add_parser("reset",
         help="Factory reset an OpenWrt router (SSH firstboot or failsafe mode)")
-    reset_parser.add_argument("--ip", default="192.168.1.1",
+    reset_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address (default: 192.168.1.1)")
     reset_parser.add_argument("--interface", default=None,
         help="Ethernet interface for failsafe monitoring (auto-detected if omitted)")
@@ -2031,7 +2031,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         return 1
 
     # Resolve IP
-    default_ip = model.get("openwrt", {}).get("default_ip", "192.168.1.1")
+    default_ip = model.get("openwrt", {}).get("default_ip", DEFAULT_IP)
     ip = args.ip or default_ip
 
     # Safety check: --i-want-a-brick required unless --dry-run
