@@ -81,3 +81,12 @@ def run_ssh(ip, command, key=None, connect_timeout=10, timeout=30, **kwargs):
         cmd,
         capture_output=True, text=True, timeout=timeout, check=False, **kwargs,
     )
+
+
+def check_ssh(ip: str, connect_timeout: int = 3, sentinel: str = "SSH_OK") -> bool:
+    try:
+        r = run_ssh(ip, f"echo {sentinel}", connect_timeout=connect_timeout,
+                     timeout=connect_timeout + 5)
+        return r.returncode == 0 and sentinel in r.stdout
+    except Exception:
+        return False

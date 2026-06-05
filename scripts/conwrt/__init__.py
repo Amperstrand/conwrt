@@ -48,7 +48,7 @@ __version__ = "0.0.0-dev"
 _CONWRT_DIR = str(Path(__file__).resolve().parent.parent)  # scripts/ — sibling modules live here
 if _CONWRT_DIR not in sys.path:
     sys.path.insert(0, _CONWRT_DIR)
-from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, ssh_cmd, scp_cmd
+from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, check_ssh, run_ssh, ssh_cmd, scp_cmd
 from config import load_config as _load_config
 from model_loader import load_model, list_models, openwrt_asu_profile, find_model_by_board_name
 from flash.device_profile import build_profile_from_model as _build_profile_from_model
@@ -191,15 +191,12 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
     return 0
 
 
-from conwrt.monitors import check_ssh
-
-
 from conwrt.postflash import (
     _apply_profile_post_flash, _apply_sticker_credentials_post_flash,
     _register_wireguard_post_flash, _deploy_tollgate_post_flash,
     _client_ip_for_subnet, _interface_exists, _apply_lan_ip_post_flash,
     verify_router,
-    _ssh_run, _cfg_install_ssh_key, _cfg_set_password,
+    _cfg_install_ssh_key, _cfg_set_password,
     _record_configure_inventory, _resolve_configure_options,
 )
 
@@ -1585,7 +1582,7 @@ def cmd_configure(args: argparse.Namespace) -> int:
     if interface and not args.dry_run:
         from pathlib import Path as _P
         if _P(f"/sys/class/net/{interface}").exists():
-            r = _ssh_run(ip, "uci get network.lan.ipaddr 2>/dev/null || echo ''", key=ssh_key_path)
+            r = run_ssh(ip, "uci get network.lan.ipaddr 2>/dev/null || echo ''", key=ssh_key_path)
             current_lan = r.stdout.strip().split("/")[0]
             old_client_ip = _client_ip_for_subnet(current_lan)
 
@@ -1669,7 +1666,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         if args.dry_run:
             print(f"  ssh root@{ip} 'firstboot -y && reboot'")
             return 0
-        r = _ssh_run(ip, "firstboot -y && reboot", key=ssh_key, timeout=15)
+        r = run_ssh(ip, "firstboot -y && reboot", key=ssh_key, timeout=15)
         if r.returncode != 0 and not r.stdout and not r.stderr:
             # Connection closed by remote — expected during reboot
             pass
@@ -1785,7 +1782,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
             f"Run 'sudo -v' to cache sudo credentials, then retry.")
         return 1
 
-    r = _ssh_run(ip, "firstboot -y && reboot", key=ssh_key, timeout=15)
+    r = run_ssh(ip, "firstboot -y && reboot", key=ssh_key, timeout=15)
     if r.returncode != 0 and (r.stdout or r.stderr):
         log(f"firstboot via failsafe SSH failed: {r.stderr.strip()}")
         return 1
@@ -2188,7 +2185,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
 
     def _run_ssh(command: str, timeout: int = 60) -> subprocess.CompletedProcess:
         """Run SSH command on router (delegates to the module-level _ssh_run)."""
-        return _ssh_run(ip, command, key=ssh_key, timeout=timeout)
+        return run_ssh(ip, command, key=ssh_key, timeout=timeout)
 
     def _install_kmod_mtd_rw() -> bool:
         """Install kmod-mtd-rw with required module parameter. Returns True on success."""

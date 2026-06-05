@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, ssh_cmd
+from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, run_ssh, ssh_cmd
 from model_loader import load_model
 from flash.context import DEFAULT_IP, log
 from sticker_creds import dump_and_extract_config2, apply_credentials_to_openwrt
@@ -94,7 +94,7 @@ def _apply_profile_post_flash(
         from profile.plan import StepKind as _SK
         has_hostname_step = any(s.kind == _SK.HOSTNAME and s.include_in_post_install for s in plan.steps)
         if has_hostname_step:
-            r_host = _ssh_run(ip, "cat /proc/sys/kernel/hostname", key=ssh_key, timeout=10)
+            r_host = run_ssh(ip, "cat /proc/sys/kernel/hostname", key=ssh_key, timeout=10)
             if r_host.returncode == 0 and r_host.stdout.strip():
                 resolved_hostname = r_host.stdout.strip()
                 log(f"  Hostname resolved: {resolved_hostname}")
@@ -132,7 +132,7 @@ def _apply_profile_post_flash(
             continue
 
         # Read eth0 MAC BEFORE changing IP so we can compute the new IP in Python
-        r_mac = _ssh_run(ip, "cat /sys/class/net/eth0/address 2>/dev/null", key=ssh_key)
+        r_mac = run_ssh(ip, "cat /sys/class/net/eth0/address 2>/dev/null", key=ssh_key)
         if r_mac.returncode != 0 or not r_mac.stdout.strip():
             log(f"  ⚠ {step.label}: could not read eth0 MAC — skipping")
             continue
@@ -140,10 +140,10 @@ def _apply_profile_post_flash(
         expected_ip = mac_to_lan_ip(eth0_mac, subnet)
         log(f"  {step.label}... (eth0={eth0_mac}, expected={expected_ip})")
 
-        r = _ssh_run(ip, script, key=ssh_key)
+        r = run_ssh(ip, script, key=ssh_key)
         if r.returncode == 0:
             log(f"  ✓ {step.label} — IP set to {expected_ip}, rebooting...")
-            _ssh_run(ip, "sync; sync; reboot", key=ssh_key, timeout=5)
+            run_ssh(ip, "sync; sync; reboot", key=ssh_key, timeout=5)
             time.sleep(30)
 
             # Set up local interface on new subnet before reconnecting
@@ -536,13 +536,6 @@ def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
     return checks
 
 
-def _ssh_run(ip: str, command: str, key: str = "", timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ssh_cmd(ip, command, key=key or None, connect_timeout=10),
-        capture_output=True, text=True, timeout=timeout, check=False,
-    )
-
-
 def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: str = "") -> bool:
     """Idempotent SSH key installation. Skips if key already present.
 
@@ -571,7 +564,7 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
         return False
 
     log("  SSH key: checking current state...")
-    r = _ssh_run(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
+    r = run_ssh(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
     current_keys = r.stdout.strip()
     if pub_key in current_keys:
         log("  ✓ SSH key: already installed")
@@ -582,7 +575,7 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
     op = ">" if needs_create or not current_keys else ">>"
     escaped = pub_key.replace("'", "'\\''")
     auth_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]
-    install_r = _ssh_run(
+    install_r = run_ssh(
         ip,
         f"mkdir -p {auth_dir} && echo '{escaped}' {op} {DROPBEAR_AUTH_KEYS_PATH} && chmod 600 {DROPBEAR_AUTH_KEYS_PATH}",
         key=auth_key,
@@ -591,7 +584,7 @@ def _cfg_install_ssh_key(ip: str, key_path: str, auth_key: str = "", ssh_key: st
         log(f"  ⚠ SSH key: install failed (rc={install_r.returncode})")
         return False
 
-    verify_r = _ssh_run(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
+    verify_r = run_ssh(ip, f"cat {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || echo ''", key=auth_key)
     if pub_key in verify_r.stdout:
         log("  ✓ SSH key: installed and verified")
         return True
@@ -607,7 +600,7 @@ def _cfg_set_password(ip: str, password: str, ssh_key: str = "") -> bool:
 
     log("  Password: setting...")
     pw_b64 = base64.b64encode(password.encode()).decode()
-    r = _ssh_run(
+    r = run_ssh(
         ip,
         f"printf '%s\\n%s\\n' \"$(echo '{pw_b64}' | base64 -d)\" \"$(echo '{pw_b64}' | base64 -d)\" | passwd root",
         key=ssh_key,

@@ -10,20 +10,7 @@ from typing import Optional
 
 from flash.context import DEFAULT_IP, Event, PcapMonitorConfig, get_link_state, log, ts
 from platform_utils import is_root, has_scapy, has_tcpdump
-from ssh_utils import ssh_cmd
-
-
-def check_ssh(ip: str = DEFAULT_IP) -> bool:
-    # NOTE: intentionally distinct from flash.detect.check_ssh — this probe uses
-    # a unique SSH_OK sentinel and a 3s connect timeout. Do not collapse the two.
-    try:
-        r = subprocess.run(
-            ssh_cmd(ip, "echo SSH_OK", connect_timeout=3),
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-        return "SSH_OK" in r.stdout
-    except Exception:
-        return False
+from ssh_utils import check_ssh, ssh_cmd
 
 
 class PcapMonitor:

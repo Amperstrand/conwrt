@@ -15,17 +15,17 @@ def _mock_run(stdout="", stderr="", returncode=0):
 
 
 class TestCheckSsh(TestCase):
-    @patch("flash.detect.subprocess.run")
+    @patch("ssh_utils.subprocess.run")
     def test_ssh_ok(self, mock_run):
-        mock_run.return_value = _mock_run(stdout="ok")
+        mock_run.return_value = _mock_run(stdout="SSH_OK")
         self.assertTrue(check_ssh("192.168.1.1"))
 
-    @patch("flash.detect.subprocess.run")
+    @patch("ssh_utils.subprocess.run")
     def test_ssh_fail(self, mock_run):
         mock_run.return_value = _mock_run(stdout="", returncode=1)
         self.assertFalse(check_ssh("192.168.1.1"))
 
-    @patch("flash.detect.subprocess.run")
+    @patch("ssh_utils.subprocess.run")
     def test_ssh_timeout(self, mock_run):
         import subprocess
         mock_run.side_effect = subprocess.TimeoutExpired("ssh", 10)

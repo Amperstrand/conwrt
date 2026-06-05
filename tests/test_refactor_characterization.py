@@ -53,13 +53,13 @@ def test_check_ssh_false_on_exception() -> None:
         assert conwrt.check_ssh("192.168.1.1") is False
 
 
-# ── conwrt._ssh_run wrapper ──────────────────────────────────────────────
+# ── ssh_utils.run_ssh wrapper ──────────────────────────────────────────────
 
 def test_ssh_run_builds_expected_argv() -> None:
-    import conwrt
-    with patch("conwrt.subprocess.run") as mock_run:
+    with patch("ssh_utils.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        conwrt._ssh_run("10.0.0.2", "uci show network", key="/tmp/id", timeout=15)
+        from ssh_utils import run_ssh
+        run_ssh("10.0.0.2", "uci show network", key="/tmp/id", timeout=15)
     argv = mock_run.call_args.args[0]
     assert argv[0] == "ssh"
     assert "root@10.0.0.2" in argv
@@ -69,10 +69,10 @@ def test_ssh_run_builds_expected_argv() -> None:
 
 
 def test_ssh_run_without_key_omits_identity_flag() -> None:
-    import conwrt
-    with patch("conwrt.subprocess.run") as mock_run:
+    with patch("ssh_utils.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        conwrt._ssh_run("10.0.0.2", "echo hi")
+        from ssh_utils import run_ssh
+        run_ssh("10.0.0.2", "echo hi")
     argv = mock_run.call_args.args[0]
     assert "-i" not in argv
 

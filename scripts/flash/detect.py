@@ -5,19 +5,7 @@ from types import SimpleNamespace
 from typing import Optional
 from flash.context import DEFAULT_IP, log
 from flash.upload import detect_uboot_http
-from ssh_utils import ssh_cmd
-
-def check_ssh(ip: str = DEFAULT_IP) -> bool:
-    try:
-        r = subprocess.run(
-            ssh_cmd(ip, "echo ok", connect_timeout=5),
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-        return r.returncode == 0 and "ok" in r.stdout
-    except Exception:
-        return False
-
-
+from ssh_utils import check_ssh, ssh_cmd
 
 
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
