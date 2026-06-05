@@ -4,7 +4,7 @@ import queue
 import subprocess
 import time
 
-from flash.context import Event, State, log, say, ts, sha256_file, poll_until
+from flash.context import Event, State, DEFAULT_IP, log, say, ts, sha256_file, poll_until
 from ssh_utils import ssh_cmd, scp_cmd
 from ssh_utils import check_ssh
 from conwrt.infrastructure import RecoveryContext
@@ -114,7 +114,7 @@ def _handle_edgeos_port_swap(ctx: RecoveryContext, event_queue: queue.Queue) -> 
     port_note = ctx.profile.port_swap_note or "Move the ethernet cable to a LAN port."
     ctx._say_fn(f"Important! {port_note}")
     log(f"PORT SWAP: {port_note}")
-    log("Waiting for SSH on 192.168.1.1...")
+    log(f"Waiting for SSH on {DEFAULT_IP}...")
 
     openwrt_ip = ctx.profile.openwrt_ip
     timeout = 120

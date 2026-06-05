@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from ssh_utils import check_ssh, run_ssh
-from flash.context import log, say, poll_until, get_link_state
+from flash.context import log, say, poll_until, get_link_state, DEFAULT_CLIENT_IP
 from platform_utils import configure_interface_ip, remove_interface_ip
 from conwrt.flash_utils import _detect_ssh_key_path
 from conwrt.device_inventory import auto_detect_interface
@@ -133,7 +133,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
     if not args.no_voice:
         say("Failsafe mode detected. Connecting via SSH.")
 
-    client_ip = "192.168.1.2"
+    client_ip = DEFAULT_CLIENT_IP
     configured = configure_interface_ip(interface, client_ip, "24")
     if not configured:
         log(f"ERROR: Could not configure {interface} with IP {client_ip}. "

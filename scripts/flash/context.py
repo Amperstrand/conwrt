@@ -13,6 +13,8 @@ from typing import Callable, Optional, TypedDict
 from platform_utils import get_link_state as platform_get_link_state
 
 DEFAULT_IP = "192.168.1.1"
+DEFAULT_CLIENT_IP = "192.168.1.2"
+PROBE_IPS = [DEFAULT_IP, "192.168.0.1"]
 REBOOT_TIMEOUT = 360
 SILENCE_TIMEOUT_DEFAULT = 30
 

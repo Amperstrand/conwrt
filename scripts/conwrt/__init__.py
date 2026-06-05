@@ -44,6 +44,7 @@ from flash.device_profile import build_profile_from_model as _build_profile_from
 from flash.context import (
     DEFAULT_IP,
     Event,
+    PROBE_IPS,
     REBOOT_TIMEOUT,
     SILENCE_TIMEOUT_DEFAULT,
     State,
@@ -855,7 +856,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     ssh_key_path = _detect_ssh_key_path()
 
     if not args.model_id:
-        for probe_ip in ["192.168.1.1", "192.168.0.1"]:
+        for probe_ip in PROBE_IPS:
             fp = fingerprint_router(probe_ip)
             if fp:
                 board = fp.get("identity", {}).get("board", "")
@@ -867,7 +868,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                         break
 
         if not args.model_id:
-            for probe_ip in ["192.168.1.1", "192.168.0.1"]:
+            for probe_ip in PROBE_IPS:
                 log(f"Active fingerprinting {probe_ip}...")
                 fp_result = _active_fingerprint(probe_ip, timeout=5.0)
                 if fp_result.candidates:
