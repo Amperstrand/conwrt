@@ -53,7 +53,7 @@ class TestCmdBackup(TestCase):
         rc = conwrt.cmd_backup(args)
         self.assertEqual(rc, 1)
 
-    @patch("conwrt._ssh_with_password")
+    @patch("conwrt.cmd_backup._ssh_with_password")
     def test_ssh_failure_returns_1(self, mock_ssh):
         import conwrt
         mock_ssh.return_value = MagicMock(
