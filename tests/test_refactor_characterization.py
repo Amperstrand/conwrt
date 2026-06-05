@@ -28,10 +28,13 @@ def _load_firmware_manager():
 
 
 # ── conwrt.check_ssh probe ───────────────────────────────────────────────
+# check_ssh lives in ssh_utils but is re-exported as conwrt.check_ssh.
+# Patch ssh_utils.subprocess.run (the actual call site) — not conwrt.subprocess.run
+# which works only because Python modules are singletons.
 
 def test_check_ssh_true_when_sentinel_in_stdout() -> None:
     import conwrt
-    with patch("conwrt.subprocess.run") as mock_run:
+    with patch("ssh_utils.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="SSH_OK\n", stderr="")
         assert conwrt.check_ssh("192.168.1.1") is True
     # The probe command is the SSH_OK echo (distinct from flash.detect.check_ssh).
@@ -42,14 +45,14 @@ def test_check_ssh_true_when_sentinel_in_stdout() -> None:
 
 def test_check_ssh_false_when_sentinel_absent() -> None:
     import conwrt
-    with patch("conwrt.subprocess.run") as mock_run:
+    with patch("ssh_utils.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="nope", stderr="")
         assert conwrt.check_ssh("192.168.1.1") is False
 
 
 def test_check_ssh_false_on_exception() -> None:
     import conwrt
-    with patch("conwrt.subprocess.run", side_effect=OSError("boom")):
+    with patch("ssh_utils.subprocess.run", side_effect=OSError("boom")):
         assert conwrt.check_ssh("192.168.1.1") is False
 
 

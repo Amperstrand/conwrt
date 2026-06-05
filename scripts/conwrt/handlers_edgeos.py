@@ -116,7 +116,7 @@ def _handle_edgeos_port_swap(ctx: RecoveryContext, event_queue: queue.Queue) -> 
     log(f"PORT SWAP: {port_note}")
     log(f"Waiting for SSH on {DEFAULT_IP}...")
 
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     timeout = 120
     if poll_until(lambda: check_ssh(openwrt_ip), timeout=timeout, interval=5):
         ctx.timeline.ssh_available = ts()
@@ -133,7 +133,7 @@ def _handle_edgeos_port_swap(ctx: RecoveryContext, event_queue: queue.Queue) -> 
 
 def _handle_edgeos_stage2_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     """Stage 2a: Upload sysupgrade.tar to OpenWrt initramfs."""
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     image_path = ctx.image_path
 
     if not image_path or not os.path.isfile(image_path):
@@ -181,7 +181,7 @@ def _handle_edgeos_stage2_uploading(ctx: RecoveryContext, event_queue: queue.Que
 
 def _handle_edgeos_stage2_flashing(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     """Stage 2b: Manual dd — extract kernel+rootfs from tar and write to eMMC."""
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     profile = ctx.profile
     model_id = profile.name
 

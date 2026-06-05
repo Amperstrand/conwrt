@@ -294,7 +294,10 @@ class PcapMonitor:
                     self._restart_writer()
                     if self._reader_proc and self._reader_proc.poll() is None:
                         self._reader_proc.terminate()
-                        self._reader_proc.wait(timeout=3)
+                        try:
+                            self._reader_proc.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            self._reader_proc.kill()
                     time.sleep(1)
                     self._reader_proc = self._start_reader()
 
