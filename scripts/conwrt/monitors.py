@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Optional
 
@@ -517,3 +518,25 @@ def _teardown_monitors(
     if pcap_thread:
         pcap_thread.join(timeout=5)
     link_thread.join(timeout=5)
+
+
+@contextmanager
+def monitor_lifecycle(
+    interface: str,
+    event_queue: queue.Queue,
+    pcap_path: str,
+    profile: object,
+    args: argparse.Namespace,
+    pcap_enabled: bool = True,
+):
+    """Context manager for monitor setup/teardown.
+
+    Yields (pcap_monitor, link_monitor) tuple.
+    """
+    pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
+        interface, event_queue, pcap_path, profile, args, pcap_enabled=pcap_enabled)
+
+    try:
+        yield pcap_mon, link_mon
+    finally:
+        _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)

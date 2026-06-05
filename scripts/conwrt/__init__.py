@@ -27,6 +27,8 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -204,6 +206,7 @@ from conwrt.postflash import (
 from conwrt.monitors import (
     PcapMonitor, LinkMonitor, SSHMonitor,
     _setup_monitors, _teardown_monitors,
+    monitor_lifecycle,
 )
 
 
@@ -222,6 +225,86 @@ from conwrt.cmd_backup import cmd_backup
 from conwrt.cmd_reset import cmd_reset
 from conwrt.cmd_info import cmd_list, cmd_list_use_cases, cmd_cache
 from conwrt.cmd_detect import cmd_fingerprint, cmd_auto
+
+
+@dataclass
+class FlashModeConfig:
+    initial_state: State
+    pcap_enabled: bool = True
+    has_monitors: bool = True        # serial mode has no monitors
+    setup_interface: bool = False    # uboot mode needs _setup_interface_ips
+    cleanup: Optional[Callable] = None
+
+
+def _extreme_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    _cleanup_extreme_tftp_assets(ctx)
+    openwrt_client_ip = getattr(profile, "openwrt_client_ip", "")
+    if openwrt_client_ip and openwrt_client_ip != getattr(profile, "client_ip", ""):
+        remove_interface_ip(interface, openwrt_client_ip, "24")
+
+
+def _serial_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    driver = getattr(ctx, '_serial_driver', None)
+    if driver:
+        driver.close()
+    tftp_mgr = getattr(ctx, '_tftp_manager', None)
+    if tftp_mgr:
+        tftp_mgr.stop()
+
+
+def _zycast_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    zycast_proc = getattr(ctx, '_zycast_proc', None)
+    if zycast_proc and zycast_proc.poll() is None:
+        zycast_proc.terminate()
+
+
+FLASH_MODES: dict[str, FlashModeConfig] = {
+    "sysupgrade": FlashModeConfig(State.SYSUPGRADE_UPLOADING, pcap_enabled=False),
+    "edgeos": FlashModeConfig(State.EDGEOS_STAGE1, pcap_enabled=False),
+    "extreme": FlashModeConfig(State.EXTREME_STOCK_PREFLIGHT, pcap_enabled=False, cleanup=_extreme_cleanup),
+    "serial": FlashModeConfig(State.SERIAL_WAITING_FOR_BOOTMENU, has_monitors=False, cleanup=_serial_cleanup),
+    "zycast": FlashModeConfig(State.ZYCAST_WAITING_FOR_DEVICE, cleanup=_zycast_cleanup),
+    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True),
+}
+
+
+def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespace,
+                         use_sysupgrade: bool) -> str:
+    """Determine flash mode from profile attributes and boot state."""
+    is_serial_tftp = getattr(profile, 'is_serial_tftp', False)
+    is_zycast = getattr(profile, 'is_zycast', False)
+    is_edgeos_ks = getattr(profile, 'is_edgeos_kernel_swap', False)
+    is_extreme_rdwr_tftp = getattr(profile, 'is_extreme_rdwr_tftp', False)
+
+    if use_sysupgrade:
+        return "sysupgrade"
+    if is_edgeos_ks:
+        return "edgeos"
+    if is_extreme_rdwr_tftp:
+        return "extreme"
+    if is_serial_tftp:
+        return "serial"
+    if is_zycast:
+        return "zycast"
+    return "uboot"
+
+
+def _resolve_initial_state(mode: str, profile: object, boot_state: str) -> State:
+    """Resolve the initial state for the state machine."""
+    config = FLASH_MODES[mode]
+
+    if mode == "uboot":
+        if boot_state == "uboot":
+            found, detail = detect_uboot_http(profile.recovery_ip)
+            if found:
+                log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
+                return State.UBOOT_UPLOADING
+        return State.WAITING_FOR_POWER_OFF
+
+    if mode == "extreme" and boot_state != "stock-extreme":
+        return State.DETECTING
+
+    return config.initial_state
 
 
 def _run_state_machine(
@@ -393,13 +476,7 @@ def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -
     openwrt_ip = ctx.profile.openwrt_ip
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     if _wait_for_sysupgrade_reboot(openwrt_ip):
-        ctx.timeline.ssh_available = ts()
-        ctx._say_fn("Recovery complete! Router is back online.")
-        log(f"SUCCESS — {method} recovery complete.")
-        verify_router(openwrt_ip,
-                     wan_ssh_expected=ctx.wan_ssh_enabled,
-                     mgmt_wifi_expected=bool(ctx.defaults_script))
-        ctx.state = State.COMPLETE
+        ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)
     else:
         ctx._say_fn("Device did not come back after flash.")
         log(f"FAIL: SSH not available after {method} reboot.")
@@ -453,13 +530,7 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
         except queue.Empty:
             pass
         if check_ssh(openwrt_ip):
-            ctx.timeline.ssh_available = ts()
-            ctx._say_fn("Recovery complete! Router is back online.")
-            log("SUCCESS — router recovered (SSH poll detected).")
-            verify_router(openwrt_ip,
-                         wan_ssh_expected=ctx.wan_ssh_enabled,
-                         mgmt_wifi_expected=bool(ctx.defaults_script))
-            ctx.state = State.COMPLETE
+            ctx.mark_success("router recovered (SSH poll detected).", verify_fn=verify_router)
             return
     else:
         log(f"OpenWrt did not appear within {timeout_after_link}s after link up.")
@@ -489,22 +560,10 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
     ssh_monitor.stop()
 
     if result == Event.SSH_UP:
-        ctx.timeline.ssh_available = ts()
-        ctx._say_fn("Recovery complete! Router is back online.")
-        log("SUCCESS — router recovered.")
-        verify_router(openwrt_ip,
-                     wan_ssh_expected=ctx.wan_ssh_enabled,
-                     mgmt_wifi_expected=bool(ctx.defaults_script))
-        ctx.state = State.COMPLETE
+        ctx.mark_success("router recovered.", verify_fn=verify_router)
     else:
         if check_ssh(openwrt_ip):
-            ctx.timeline.ssh_available = ts()
-            ctx._say_fn("Recovery complete! Router is back online.")
-            log("SUCCESS — router recovered (SSH fallback check).")
-            verify_router(openwrt_ip,
-                         wan_ssh_expected=ctx.wan_ssh_enabled,
-                         mgmt_wifi_expected=bool(ctx.defaults_script))
-            ctx.state = State.COMPLETE
+            ctx.mark_success("router recovered (SSH fallback check).", verify_fn=verify_router)
         else:
             ctx.state = State.FAILED
 
@@ -1086,25 +1145,10 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log("No running router detected at this IP (expected — device needs recovery)")
         print()
 
-    if is_serial_tftp:
-        initial_state = State.SERIAL_WAITING_FOR_BOOTMENU
-    elif is_zycast and not use_sysupgrade:
-        initial_state = State.ZYCAST_WAITING_FOR_DEVICE
-    elif is_edgeos_ks and not use_sysupgrade:
-        initial_state = State.EDGEOS_STAGE1
-    elif is_extreme_rdwr_tftp and not use_sysupgrade:
-        initial_state = State.EXTREME_STOCK_PREFLIGHT if boot_state == "stock-extreme" else State.DETECTING
-    elif use_sysupgrade:
-        initial_state = State.SYSUPGRADE_UPLOADING
-    elif boot_state == "uboot":
-        found, detail = detect_uboot_http(profile.recovery_ip)
-        if found:
-            log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
-            initial_state = State.UBOOT_UPLOADING
-        else:
-            initial_state = State.WAITING_FOR_POWER_OFF
-    else:
-        initial_state = State.WAITING_FOR_POWER_OFF
+    mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    config = FLASH_MODES[mode]
+
+    initial_state = _resolve_initial_state(mode, profile, boot_state)
 
     if args.isolate_port:
         initial_state = State.PORT_ISOLATION
@@ -1144,104 +1188,60 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     event_queue: queue.Queue = queue.Queue()
 
-    if use_sysupgrade:
-        _say_fn(f"Starting {profile.description} sysupgrade recovery.")
-        _, _, link_mon, link_thr = _setup_monitors(
-            interface, event_queue, pcap_path, profile, args, pcap_enabled=False)
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, link_mon)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-        finally:
-            _teardown_monitors(None, None, link_mon, link_thr)
-        return rc
+    if mode == "serial" and getattr(profile, 'lan_port', ''):
+        log(f"IMPORTANT: Connect Ethernet cable to {profile.lan_port} port")
+    if mode == "zycast":
+        log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
 
-    if is_edgeos_ks and not use_sysupgrade:
-        _say_fn(f"Starting {profile.description} edgeos-kernel-swap flash.")
-        _, _, link_mon, link_thr = _setup_monitors(
-            interface, event_queue, pcap_path, profile, args, pcap_enabled=False)
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, link_mon)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-        finally:
-            _teardown_monitors(None, None, link_mon, link_thr)
-        return rc
+    if config.has_monitors:
+        if config.setup_interface:
+            _setup_interface_ips(interface, profile)
 
-    if is_extreme_rdwr_tftp and not use_sysupgrade:
-        _say_fn(f"Starting {profile.description} extreme stock flash.")
-        _, _, link_mon, link_thr = _setup_monitors(
-            interface, event_queue, pcap_path, profile, args, pcap_enabled=False)
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, link_mon)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-        finally:
-            _cleanup_extreme_tftp_assets(ctx)
-            _teardown_monitors(None, None, link_mon, link_thr)
-            openwrt_client_ip = getattr(profile, "openwrt_client_ip", "")
-            if openwrt_client_ip and openwrt_client_ip != getattr(profile, "client_ip", ""):
-                remove_interface_ip(interface, openwrt_client_ip, "24")
-        return rc
+        say_label = {
+            "sysupgrade": "sysupgrade recovery",
+            "edgeos": "edgeos-kernel-swap flash",
+            "extreme": "extreme stock flash",
+            "zycast": "multicast recovery",
+        }.get(mode, "recovery. Listen for instructions")
+        _say_fn(f"Starting {profile.description} {say_label}.")
 
-    if is_serial_tftp:
+        with monitor_lifecycle(
+            interface, event_queue, pcap_path, profile, args,
+            pcap_enabled=config.pcap_enabled,
+        ) as (pcap, link):
+            try:
+                rc = _run_state_machine(ctx, event_queue, pcap, link)
+            except KeyboardInterrupt:
+                log("Interrupted by user.")
+                rc = 1
+    else:
         _say_fn(f"Starting {profile.description} serial recovery.")
-        if getattr(profile, 'lan_port', ''):
-            log(f"IMPORTANT: Connect Ethernet cable to {profile.lan_port} port")
         try:
             rc = _run_state_machine(ctx, event_queue, None, None)
         except KeyboardInterrupt:
             log("Interrupted by user.")
             rc = 1
-        finally:
-            driver = getattr(ctx, '_serial_driver', None)
-            if driver:
-                driver.close()
-            tftp_mgr = getattr(ctx, '_tftp_manager', None)
-            if tftp_mgr:
-                tftp_mgr.stop()
-        return rc
 
-    if is_zycast:
-        _say_fn(f"Starting {profile.description} multicast recovery.")
-        log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
-
-        pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
-            interface, event_queue, pcap_path, profile, args, pcap_enabled=True)
-
-        try:
-            rc = _run_state_machine(ctx, event_queue, pcap_mon, link_mon)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-        finally:
-            _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)
-            zycast_proc = getattr(ctx, '_zycast_proc', None)
-            if zycast_proc and zycast_proc.poll() is None:
-                zycast_proc.terminate()
-        return rc
-
-    _setup_interface_ips(interface, profile)
-
-    pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
-        interface, event_queue, pcap_path, profile, args, pcap_enabled=True)
-
-    _say_fn(f"Starting {profile.description} recovery. Listen for instructions.")
-
-    try:
-        rc = _run_state_machine(ctx, event_queue, pcap_mon, link_mon)
-    except KeyboardInterrupt:
-        log("Interrupted by user.")
-        rc = 1
-    finally:
-        _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)
+    if config.cleanup:
+        config.cleanup(ctx, profile, interface)
 
     return rc
 
 
+
+
+_COMMANDS = {
+    "list": cmd_list,
+    "list-use-cases": cmd_list_use_cases,
+    "cache": cmd_cache,
+    "setup-mgmt-wifi": cmd_setup_mgmt_wifi,
+    "configure": cmd_configure,
+    "backup": cmd_backup,
+    "auto": cmd_auto,
+    "fingerprint": cmd_fingerprint,
+    "setup-nor-recovery": cmd_setup_nor_recovery,
+    "reset": cmd_reset,
+}
 
 
 def main() -> int:
@@ -1255,33 +1255,14 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "list":
-        return cmd_list(args)
-    elif args.command == "list-use-cases":
-        return cmd_list_use_cases(args)
-    elif args.command == "cache":
-        return cmd_cache(args)
-    elif args.command == "setup-mgmt-wifi":
-        return cmd_setup_mgmt_wifi(args)
-    elif args.command == "configure":
-        return cmd_configure(args)
-    elif args.command == "profile":
+    if args.command == "profile":
         if getattr(args, "profile_command", None) == "plan":
             return cmd_profile_plan(args)
         _build_parser().print_help(sys.stderr)
         return 1
-    elif args.command == "backup":
-        return cmd_backup(args)
-    elif args.command == "auto":
-        return cmd_auto(args)
-    elif args.command == "fingerprint":
-        return cmd_fingerprint(args)
-    elif args.command == "setup-nor-recovery":
-        return cmd_setup_nor_recovery(args)
-    elif args.command == "reset":
-        return cmd_reset(args)
-    else:
-        return cmd_flash(args)
+
+    handler = _COMMANDS.get(args.command, cmd_flash)
+    return handler(args)
 
 
 if __name__ == "__main__":

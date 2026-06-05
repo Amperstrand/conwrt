@@ -155,6 +155,19 @@ class RecoveryContext:
         if self._say_fn is None:
             self._say_fn = say
 
+    def mark_success(self, message: str, verify_fn: object = None) -> None:
+        """Mark recovery as complete with a success message."""
+        self.timeline.ssh_available = ts()
+        self._say_fn("Recovery complete! Router is back online.")
+        log(f"SUCCESS — {message}")
+        if verify_fn is not None:
+            verify_fn(
+                self.profile.openwrt_ip or self.profile.recovery_ip,
+                wan_ssh_expected=self.wan_ssh_enabled,
+                mgmt_wifi_expected=bool(self.defaults_script),
+            )
+        self.state = State.COMPLETE
+
 
 def ts() -> float:
     return time.time()
