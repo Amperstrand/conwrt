@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-from flash.context import Event, State, log, say, ts
+from flash.context import Event, State, DEFAULT_IP, log, say, ts
 from flash.context import sha256_file
 from ssh_utils import ssh_cmd, scp_cmd
 from platform_utils import configure_interface_ip
@@ -624,7 +624,7 @@ def _handle_extreme_stock_rebooting(ctx: RecoveryContext, event_queue: queue.Que
 
 
 def _handle_extreme_openwrt_initramfs_waiting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     timeout = ctx.profile.flash_time_seconds
     start = ts()
     while ts() - start < timeout:

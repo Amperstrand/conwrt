@@ -448,7 +448,7 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
 
 
 def _handle_sysupgrade_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     if ctx.profile.flash_method == "mtd-write":
         model = load_model(ctx.profile.name)
         mtd_cfg = model.get("flash_methods", {}).get("mtd-write", {})
@@ -473,7 +473,7 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 
 
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip
+    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     if _wait_for_sysupgrade_reboot(openwrt_ip):
         ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)

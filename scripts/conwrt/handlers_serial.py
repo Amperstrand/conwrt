@@ -74,30 +74,30 @@ def _handle_serial_uboot_interacting(ctx: RecoveryContext, eq: queue.Queue) -> N
 
     ctx._say_fn("Setting up network and starting flash process.")
 
-    setup_interface_for_serial(ctx)
-
-    commands = ctx.uboot_commands
-    if not commands:
-        commands = profile.uboot_commands
-
-    if not commands:
-        log("ERROR: No U-Boot commands defined in model JSON")
-        ctx.state = State.FAILED
-        tftp_mgr.stop()
-        driver.close()
-        return
-
-    ctx.timeline.upload_start = ts()
-    ctx.sha256_before = sha256_file(ctx.image_path) if ctx.image_path else ""
-
     try:
+        setup_interface_for_serial(ctx)
+
+        commands = ctx.uboot_commands
+        if not commands:
+            commands = profile.uboot_commands
+
+        if not commands:
+            log("ERROR: No U-Boot commands defined in model JSON")
+            ctx.state = State.FAILED
+            tftp_mgr.stop()
+            driver.close()
+            return
+
+        ctx.timeline.upload_start = ts()
+        ctx.sha256_before = sha256_file(ctx.image_path) if ctx.image_path else ""
+
         success = driver.run_commands(
             commands, eq,
             say_fn=ctx._say_fn,
             flash_time_seconds=profile.flash_time_seconds,
         )
     except Exception:
-        log(f"ERROR: Serial communication failed during flash commands")
+        log("ERROR: Serial operation failed")
         tftp_mgr.stop()
         driver.close()
         ctx.state = State.FAILED
