@@ -626,7 +626,7 @@ class TestOemHttpStateTransitions(TestCase):
         self._handle_oem_login, self._handle_oem_prepare, self._handle_oem_uploading = _import_conwrt_handlers()
 
     @patch("flash.oem_handlers.subprocess.run")
-    @patch("conwrt.load_model")
+    @patch("conwrt.handlers_oem.load_model")
     def test_login_success_transitions_to_uploading(self, mock_load_model, mock_run):
         mock_load_model.return_value = {
             "stock_default_creds": {"username": "admin", "password": "1234"}
@@ -648,7 +648,7 @@ class TestOemHttpStateTransitions(TestCase):
         self.assertIn("cookie", ctx.oem_state)
 
     @patch("flash.oem_handlers.subprocess.run")
-    @patch("conwrt.load_model")
+    @patch("conwrt.handlers_oem.load_model")
     def test_login_failure_transitions_to_failed(self, mock_load_model, mock_run):
         mock_load_model.return_value = {
             "stock_default_creds": {"username": "admin", "password": "1234"}

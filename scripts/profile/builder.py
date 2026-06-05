@@ -15,6 +15,7 @@ from profile.wifi import (
     wifi_sta_firstboot_script,
 )
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
+from shell_safe import sh_quote
 
 _VALID_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
 
@@ -481,7 +482,7 @@ def build_plan(
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
             label=f"LAN IP → {cfg.lan_ip}",
-            configure_script=f"uci set network.lan.ipaddr='{cfg.lan_ip}'",
+                configure_script=f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}",
             include_in_asu=False,
             ops=[
                 UciSet(config="network", section="lan", values={"ipaddr": cfg.lan_ip}),

@@ -122,7 +122,7 @@ def _handle_edgeos_port_swap(ctx: RecoveryContext, event_queue: queue.Queue) -> 
         ctx.timeline.ssh_available = ts()
         log(f"SSH available at {openwrt_ip} — initramfs booted successfully.")
         ctx._say_fn("Initramfs is up. Starting stage 2.")
-        event_queue.put((Event.EDGEOS_PORT_SWAP_DONE, ""))
+        event_queue.put((Event.EDGEOS_PORT_SWAP_DONE, ts(), ""))
         ctx.state = State.EDGEOS_STAGE2_UPLOADING
         return
 
@@ -170,8 +170,8 @@ def _handle_edgeos_stage2_uploading(ctx: RecoveryContext, event_queue: queue.Que
             log(f"Remote MD5: {remote_hash}")
         else:
             log(f"Could not verify remote file: {r.stderr[:200]}")
-    except Exception:
-        pass  # Verification is best-effort
+    except Exception as e:
+        log(f"WARNING: upload verification failed: {e}")
 
     ctx.timeline.upload_complete = ts()
     ctx._say_fn("Upload complete. Flashing firmware.")

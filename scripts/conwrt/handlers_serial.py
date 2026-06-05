@@ -32,12 +32,18 @@ def _handle_serial_waiting_for_bootmenu(ctx: RecoveryContext, eq: queue.Queue) -
     driver = SerialUBootDriver(port, baud)
     ctx._serial_driver = driver
 
-    got_prompt = driver.wait_for_bootmenu(
-        timeout=profile.bootmenu_timeout,
-        interrupt=profile.bootmenu_interrupt,
-        console_option=profile.bootmenu_select_console,
-        say_fn=ctx._say_fn,
-    )
+    try:
+        got_prompt = driver.wait_for_bootmenu(
+            timeout=profile.bootmenu_timeout,
+            interrupt=profile.bootmenu_interrupt,
+            console_option=profile.bootmenu_select_console,
+            say_fn=ctx._say_fn,
+        )
+    except Exception:
+        log(f"ERROR: Serial communication failed during bootmenu wait")
+        driver.close()
+        ctx.state = State.FAILED
+        return
 
     if not got_prompt:
         ctx._say_fn("Failed to get U-Boot prompt. Check serial connection and try again.")
@@ -84,11 +90,18 @@ def _handle_serial_uboot_interacting(ctx: RecoveryContext, eq: queue.Queue) -> N
     ctx.timeline.upload_start = ts()
     ctx.sha256_before = sha256_file(ctx.image_path) if ctx.image_path else ""
 
-    success = driver.run_commands(
-        commands, eq,
-        say_fn=ctx._say_fn,
-        flash_time_seconds=profile.flash_time_seconds,
-    )
+    try:
+        success = driver.run_commands(
+            commands, eq,
+            say_fn=ctx._say_fn,
+            flash_time_seconds=profile.flash_time_seconds,
+        )
+    except Exception:
+        log(f"ERROR: Serial communication failed during flash commands")
+        tftp_mgr.stop()
+        driver.close()
+        ctx.state = State.FAILED
+        return
 
     tftp_mgr.stop()
 

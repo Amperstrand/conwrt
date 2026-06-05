@@ -123,15 +123,19 @@ def _handle_oem_uploading(ctx: RecoveryContext, event_queue: queue.Queue) -> Non
 
         filename = os.path.basename(initramfs_path)
         upload_path = initramfs_path
+        temp_copy = False
         if len(filename) > 64:
             upload_path = os.path.join(tempfile.gettempdir(), "openwrt-initramfs.bin")
             shutil.copy2(initramfs_path, upload_path)
-            log(f"Renamed initramfs (>{len(filename)} chars) to {os.path.basename(upload_path)} for v2.90 compatibility")
+            temp_copy = True
+            log(f"Renamed initramps (>{len(filename)} chars) to {os.path.basename(upload_path)} for v2.90 compatibility")
 
-        timeout = profile.flash_time_seconds + 60
-        success, response = oem_http_upload(stock_ip, cookie, upload_path, upload_endpoint, timeout=timeout)
-        if upload_path != initramfs_path and os.path.exists(upload_path):
-            os.unlink(upload_path)
+        try:
+            timeout = profile.flash_time_seconds + 60
+            success, response = oem_http_upload(stock_ip, cookie, upload_path, upload_endpoint, timeout=timeout)
+        finally:
+            if temp_copy and os.path.exists(upload_path):
+                os.unlink(upload_path)
 
         if not success:
             log(f"ERROR: OEM HTTP upload failed: {response}")

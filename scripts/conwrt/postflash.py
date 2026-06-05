@@ -279,7 +279,8 @@ def _register_wireguard_post_flash(
     )
     address = r3.stdout.strip()
     if not address:
-        address = "0.0.0.0/0"
+        log("  ⚠ WG: no tunnel address configured on router — skipping registration")
+        return ""
 
     # Register the peer with the VPN server
     log(f"  WG: registering peer {address} with {server}...")
@@ -303,7 +304,7 @@ def _register_wireguard_post_flash(
         f"printf '\\n[Peer]\\nPublicKey = {pub_key}\\nAllowedIPs = {addr_host}/32\\n' "
         f">> /etc/wireguard/{wg_if}.conf"
     )
-    subprocess.run(
+    r5 = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no",
          "-o", "UserKnownHostsFile=/dev/null",
          "-o", "BatchMode=yes",
@@ -311,6 +312,8 @@ def _register_wireguard_post_flash(
          server, persist_cmd],
         capture_output=True, text=True, timeout=15, check=False,
     )
+    if r5.returncode != 0:
+        log(f"  ⚠ WG: peer persistence failed (rc={r5.returncode}) — peer may not survive reboot")
 
     return pub_key
 
