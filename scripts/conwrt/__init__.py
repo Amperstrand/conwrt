@@ -68,6 +68,7 @@ from flash.context import (
     sha256_file,
     ts,
     ts_str,
+    wait_for_event,
 )
 from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
 from flash.hnap import _flash_via_dlink_hnap
@@ -1276,55 +1277,7 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
             ctx.state = State.FAILED
 
 
-def _wait_for_event_or_timeout(
-    eq: queue.Queue,
-    timeout: int,
-    target_events: set[Event],
-    success_state: Optional[State],
-    fail_message: str,
-    fail_say: str,
-    ctx: RecoveryContext,
-) -> Optional[Event]:
-    """Wait for one of the target events or timeout.
-
-    Returns the Event that was found, or None on timeout.
-    Sets ctx.state to success_state on success, or State.FAILED on timeout.
-    """
-    start = ts()
-    while ts() - start < timeout:
-        try:
-            event, event_ts, detail = eq.get(timeout=1.0)
-
-            if event in target_events:
-                if success_state is not None:
-                    ctx.state = success_state
-                return event
-
-            if event == Event.LINK_UP and ctx.timeline.link_up is None:
-                ctx.timeline.link_up = event_ts
-                if ctx.state in (State.REBOOTING, State.OPENWRT_BOOTING):
-                    ctx._say_fn("Link up. Waiting for OpenWrt to boot.")
-            elif event == Event.LINK_DOWN and ctx.timeline.power_off is None:
-                ctx.timeline.power_off = event_ts
-            elif event == Event.ICMPV6_FROM_ROUTER and ctx.timeline.first_openwrt_packet is None:
-                ctx.timeline.first_openwrt_packet = event_ts
-                ctx._say_fn("OpenWrt is booting.")
-            elif event == Event.SSH_UP:
-                ctx.timeline.ssh_available = event_ts
-                if success_state is not None:
-                    ctx.state = success_state
-                return event
-            elif event == Event.UBOOT_HTTP and ctx.timeline.uboot_http_first is None:
-                ctx.timeline.uboot_http_first = event_ts
-
-        except queue.Empty:
-            pass
-
-    log(fail_message)
-    ctx._say_fn(fail_say)
-    if success_state is not None:
-        ctx.state = State.FAILED
-    return None
+_wait_for_event_or_timeout = wait_for_event
 
 
 def _drain_events(eq: queue.Queue, ctx: RecoveryContext) -> None:

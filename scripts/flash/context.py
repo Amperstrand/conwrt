@@ -1,6 +1,8 @@
+# pyright: reportCallIssue=false
 """Flash state machine types and logging."""
 from __future__ import annotations
 import hashlib
+import queue
 import subprocess
 import sys
 import time
@@ -200,3 +202,49 @@ def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 
             return True
         time.sleep(interval)
     return False
+
+
+def wait_for_event(
+    eq: queue.Queue,
+    timeout: int,
+    target_events: set[Event],
+    success_state: Optional[State],
+    fail_message: str,
+    fail_say: str,
+    ctx: RecoveryContext,
+) -> Optional[Event]:
+    start = ts()
+    while ts() - start < timeout:
+        try:
+            event, event_ts, detail = eq.get(timeout=1.0)
+
+            if event in target_events:
+                if success_state is not None:
+                    ctx.state = success_state
+                return event
+
+            if event == Event.LINK_UP and ctx.timeline.link_up is None:
+                ctx.timeline.link_up = event_ts
+                if ctx.state in (State.REBOOTING, State.OPENWRT_BOOTING):
+                    ctx._say_fn("Link up. Waiting for OpenWrt to boot.")
+            elif event == Event.LINK_DOWN and ctx.timeline.power_off is None:
+                ctx.timeline.power_off = event_ts
+            elif event == Event.ICMPV6_FROM_ROUTER and ctx.timeline.first_openwrt_packet is None:
+                ctx.timeline.first_openwrt_packet = event_ts
+                ctx._say_fn("OpenWrt is booting.")
+            elif event == Event.SSH_UP:
+                ctx.timeline.ssh_available = event_ts
+                if success_state is not None:
+                    ctx.state = success_state
+                return event
+            elif event == Event.UBOOT_HTTP and ctx.timeline.uboot_http_first is None:
+                ctx.timeline.uboot_http_first = event_ts
+
+        except queue.Empty:
+            pass
+
+    log(fail_message)
+    ctx._say_fn(fail_say)
+    if success_state is not None:
+        ctx.state = State.FAILED
+    return None
