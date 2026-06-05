@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 
 # Version — set by build_ipk.sh or derived from git at runtime
 __version__ = "0.0.0-dev"
@@ -229,74 +229,54 @@ def _run_state_machine(
 ) -> int:
     ctx.timeline.recovery_start = ts()
 
+    def _uboot_with_link(c: RecoveryContext, eq: queue.Queue) -> None:
+        _handle_waiting_for_uboot(c, eq, link_monitor)
+
+    def _flashing_with_pcap(c: RecoveryContext, eq: queue.Queue) -> None:
+        _handle_uboot_flashing(c, eq, pcap_monitor)
+
+    _dispatch: dict[State, Callable[[RecoveryContext, queue.Queue], None]] = {
+        State.DETECTING: _handle_detecting,
+        State.SYSUPGRADE_UPLOADING: _handle_sysupgrade_uploading,
+        State.SYSUPGRADE_REBOOTING: _handle_sysupgrade_rebooting,
+        State.SYSUPGRADE_BOOTING: _handle_sysupgrade_booting,
+        State.WAITING_FOR_POWER_OFF: _handle_waiting_for_power_off,
+        State.WAITING_FOR_UBOOT: _uboot_with_link,
+        State.UBOOT_UPLOADING: _handle_uboot_uploading,
+        State.UBOOT_FLASHING: _flashing_with_pcap,
+        State.SERIAL_WAITING_FOR_BOOTMENU: _handle_serial_waiting_for_bootmenu,
+        State.SERIAL_UBOOT_INTERACTING: _handle_serial_uboot_interacting,
+        State.ZYCAST_WAITING_FOR_DEVICE: _handle_zycast_waiting,
+        State.ZYCAST_SENDING: _handle_zycast_sending,
+        State.REBOOTING: _handle_rebooting,
+        State.OPENWRT_BOOTING: _handle_openwrt_booting,
+        State.EDGEOS_STAGE1: _handle_edgeos_stage1,
+        State.EDGEOS_STAGE1_REBOOTING: _handle_edgeos_stage1_rebooting,
+        State.EDGEOS_PORT_SWAP: _handle_edgeos_port_swap,
+        State.EDGEOS_STAGE2_UPLOADING: _handle_edgeos_stage2_uploading,
+        State.EDGEOS_STAGE2_FLASHING: _handle_edgeos_stage2_flashing,
+        State.EXTREME_STOCK_PREFLIGHT: _handle_extreme_stock_preflight,
+        State.EXTREME_STOCK_WRITING_UBOOT: _handle_extreme_stock_writing_uboot,
+        State.EXTREME_STOCK_REBOOTING: _handle_extreme_stock_rebooting,
+        State.EXTREME_OPENWRT_INITRAMFS_WAITING: _handle_extreme_openwrt_initramfs_waiting,
+        State.EXTREME_OPENWRT_BACKUP: _handle_extreme_openwrt_backup,
+        State.EXTREME_BOOTCMD_RESTORE: _handle_extreme_bootcmd_restore,
+        State.EXTREME_SYSUPGRADE_UPLOADING: _handle_extreme_sysupgrade_uploading,
+        State.EXTREME_SYSUPGRADE_FLASHING: _handle_extreme_sysupgrade_flashing,
+        State.PORT_ISOLATION: _handle_port_isolation,
+        State.OEM_LOGIN: _handle_oem_login,
+        State.OEM_PREPARE: _handle_oem_prepare,
+        State.OEM_UPLOADING: _handle_oem_uploading,
+        State.OEM_REBOOTING: _handle_oem_rebooting,
+    }
+
     while ctx.state not in (State.COMPLETE, State.FAILED):
-        if ctx.state == State.DETECTING:
-            _handle_detecting(ctx, event_queue)
-        elif ctx.state == State.SYSUPGRADE_UPLOADING:
-            _handle_sysupgrade_uploading(ctx, event_queue)
-        elif ctx.state == State.SYSUPGRADE_REBOOTING:
-            _handle_sysupgrade_rebooting(ctx, event_queue)
-        elif ctx.state == State.SYSUPGRADE_BOOTING:
-            _handle_sysupgrade_booting(ctx, event_queue)
-        elif ctx.state == State.WAITING_FOR_POWER_OFF:
-            _handle_waiting_for_power_off(ctx, event_queue)
-        elif ctx.state == State.WAITING_FOR_UBOOT:
-            _handle_waiting_for_uboot(ctx, event_queue, link_monitor)
-        elif ctx.state == State.UBOOT_UPLOADING:
-            _handle_uboot_uploading(ctx, event_queue)
-        elif ctx.state == State.UBOOT_FLASHING:
-            _handle_uboot_flashing(ctx, event_queue, pcap_monitor)
-        elif ctx.state == State.SERIAL_WAITING_FOR_BOOTMENU:
-            _handle_serial_waiting_for_bootmenu(ctx, event_queue)
-        elif ctx.state == State.SERIAL_UBOOT_INTERACTING:
-            _handle_serial_uboot_interacting(ctx, event_queue)
-        elif ctx.state == State.ZYCAST_WAITING_FOR_DEVICE:
-            _handle_zycast_waiting(ctx, event_queue)
-        elif ctx.state == State.ZYCAST_SENDING:
-            _handle_zycast_sending(ctx, event_queue)
-        elif ctx.state == State.REBOOTING:
-            _handle_rebooting(ctx, event_queue)
-        elif ctx.state == State.OPENWRT_BOOTING:
-            _handle_openwrt_booting(ctx, event_queue)
-        elif ctx.state == State.EDGEOS_STAGE1:
-            _handle_edgeos_stage1(ctx, event_queue)
-        elif ctx.state == State.EDGEOS_STAGE1_REBOOTING:
-            _handle_edgeos_stage1_rebooting(ctx, event_queue)
-        elif ctx.state == State.EDGEOS_PORT_SWAP:
-            _handle_edgeos_port_swap(ctx, event_queue)
-        elif ctx.state == State.EDGEOS_STAGE2_UPLOADING:
-            _handle_edgeos_stage2_uploading(ctx, event_queue)
-        elif ctx.state == State.EDGEOS_STAGE2_FLASHING:
-            _handle_edgeos_stage2_flashing(ctx, event_queue)
-        elif ctx.state == State.EXTREME_STOCK_PREFLIGHT:
-            _handle_extreme_stock_preflight(ctx, event_queue)
-        elif ctx.state == State.EXTREME_STOCK_WRITING_UBOOT:
-            _handle_extreme_stock_writing_uboot(ctx, event_queue)
-        elif ctx.state == State.EXTREME_STOCK_REBOOTING:
-            _handle_extreme_stock_rebooting(ctx, event_queue)
-        elif ctx.state == State.EXTREME_OPENWRT_INITRAMFS_WAITING:
-            _handle_extreme_openwrt_initramfs_waiting(ctx, event_queue)
-        elif ctx.state == State.EXTREME_OPENWRT_BACKUP:
-            _handle_extreme_openwrt_backup(ctx, event_queue)
-        elif ctx.state == State.EXTREME_BOOTCMD_RESTORE:
-            _handle_extreme_bootcmd_restore(ctx, event_queue)
-        elif ctx.state == State.EXTREME_SYSUPGRADE_UPLOADING:
-            _handle_extreme_sysupgrade_uploading(ctx, event_queue)
-        elif ctx.state == State.EXTREME_SYSUPGRADE_FLASHING:
-            _handle_extreme_sysupgrade_flashing(ctx, event_queue)
-        elif ctx.state == State.PORT_ISOLATION:
-            _handle_port_isolation(ctx, event_queue)
-        elif ctx.state == State.OEM_LOGIN:
-            _handle_oem_login(ctx, event_queue)
-        elif ctx.state == State.OEM_PREPARE:
-            _handle_oem_prepare(ctx, event_queue)
-        elif ctx.state == State.OEM_UPLOADING:
-            _handle_oem_uploading(ctx, event_queue)
-        elif ctx.state == State.OEM_REBOOTING:
-            _handle_oem_rebooting(ctx, event_queue)
-        else:
-            log(f"Unknown state: {ctx.state}")
+        handler = _dispatch.get(ctx.state)
+        if handler is None:
+            log(f"Unhandled state: {ctx.state}")
             ctx.state = State.FAILED
+        else:
+            handler(ctx, event_queue)
 
     if ctx.state == State.COMPLETE:
         _print_timeline(ctx)

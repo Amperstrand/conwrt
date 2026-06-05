@@ -47,7 +47,6 @@ class Event(Enum):
 class State(Enum):
     DETECTING = auto()
     SYSUPGRADE_UPLOADING = auto()
-    SYSUPGRADE_FLASHING = auto()
     SYSUPGRADE_REBOOTING = auto()
     SYSUPGRADE_BOOTING = auto()
     WAITING_FOR_POWER_OFF = auto()
@@ -56,7 +55,6 @@ class State(Enum):
     UBOOT_FLASHING = auto()
     SERIAL_WAITING_FOR_BOOTMENU = auto()
     SERIAL_UBOOT_INTERACTING = auto()
-    SERIAL_TFTP_FLASHING = auto()
     ZYCAST_WAITING_FOR_DEVICE = auto()
     ZYCAST_SENDING = auto()
     EDGEOS_STAGE1 = auto()
