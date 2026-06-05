@@ -6,7 +6,7 @@ import sys
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional, TypedDict
+from typing import Callable, Optional, TypedDict
 
 from platform_utils import get_link_state as platform_get_link_state
 
@@ -147,3 +147,12 @@ def sha256_file(path: str) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 1.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False

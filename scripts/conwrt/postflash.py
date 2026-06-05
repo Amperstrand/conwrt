@@ -16,7 +16,7 @@ from typing import Optional
 
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH, run_ssh, ssh_cmd
 from model_loader import load_model
-from flash.context import DEFAULT_IP, log
+from flash.context import DEFAULT_IP, log, poll_until
 from sticker_creds import dump_and_extract_config2, apply_credentials_to_openwrt
 from platform_utils import configure_interface_ip, remove_interface_ip, detect_platform
 from profile import apply_plan, apply_ubus, build_plan
@@ -418,14 +418,9 @@ def _apply_lan_ip_post_flash(
     # Interface may have dropped during router network restart (USB adapter re-enumeration)
     if not _interface_exists(interface):
         log(f"  Interface {interface} dropped during network restart. Waiting for it to come back...")
-        reappear_deadline = time.time() + 30
-        while time.time() < reappear_deadline:
-            if _interface_exists(interface):
-                log(f"  Interface {interface} reappeared.")
-                break
-            time.sleep(1)
+        if poll_until(lambda: _interface_exists(interface), timeout=30, interval=1):
+            log(f"  Interface {interface} reappeared.")
         else:
-            # Interface didn't come back with same name — try auto-detect
             new_iface = auto_detect_interface()
             if new_iface and new_iface != interface:
                 log(f"  Interface re-enumerated as {new_iface}")

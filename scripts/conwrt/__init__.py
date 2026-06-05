@@ -63,6 +63,7 @@ from flash.context import (
     Timeline,
     get_link_state,
     log,
+    poll_until,
     say,
     sha256_file,
     ts,
@@ -465,16 +466,13 @@ def _handle_edgeos_port_swap(ctx: RecoveryContext, event_queue: queue.Queue) -> 
 
     openwrt_ip = ctx.profile.openwrt_ip
     timeout = 120
-    start = time.time()
-    while time.time() - start < timeout:
-        if check_ssh(openwrt_ip):
-            ctx.timeline.ssh_available = ts()
-            log(f"SSH available at {openwrt_ip} — initramfs booted successfully.")
-            ctx._say_fn("Initramfs is up. Starting stage 2.")
-            event_queue.put((Event.EDGEOS_PORT_SWAP_DONE, ""))
-            ctx.state = State.EDGEOS_STAGE2_UPLOADING
-            return
-        time.sleep(5)
+    if poll_until(lambda: check_ssh(openwrt_ip), timeout=timeout, interval=5):
+        ctx.timeline.ssh_available = ts()
+        log(f"SSH available at {openwrt_ip} — initramfs booted successfully.")
+        ctx._say_fn("Initramfs is up. Starting stage 2.")
+        event_queue.put((Event.EDGEOS_PORT_SWAP_DONE, ""))
+        ctx.state = State.EDGEOS_STAGE2_UPLOADING
+        return
 
     ctx._say_fn("Timed out waiting for initramfs SSH.")
     log(f"FAIL: SSH not available at {openwrt_ip} after {timeout}s.")
@@ -1686,13 +1684,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     log("Waiting for link down...")
     link_was_up = get_link_state(interface)
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if link_was_up and not get_link_state(interface):
-            break
-        if not link_was_up:
-            break
-        time.sleep(0.5)
+    if link_was_up:
+        poll_until(lambda: not get_link_state(interface), timeout=30, interval=0.5)
 
     if not args.no_voice:
         say("Power disconnected. Now plug in the power cable.")
@@ -2287,13 +2280,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         time.sleep(10)  # Brief wait before starting to poll
         reboot_timeout = 120
         reboot_start = time.time()
-        ssh_back = False
-        while time.time() - reboot_start < reboot_timeout:
-            if check_ssh(ip):
-                ssh_back = True
-                break
-            time.sleep(5)
-        if not ssh_back:
+        if not poll_until(lambda: check_ssh(ip), timeout=reboot_timeout, interval=5):
             print(f"ERROR: Router did not come back after U-Boot flash within {reboot_timeout}s.", file=sys.stderr)
             print("The device may be bricked. Check via serial/UART.", file=sys.stderr)
             return 1
