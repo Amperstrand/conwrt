@@ -61,14 +61,17 @@ class TestBuilderInlineOps:
         steps = [s for s in plan.steps if s.kind == StepKind.WAN_SSH]
         assert len(steps) == 1
         step = steps[0]
-        assert len(step.ops) == 4
-        assert isinstance(step.ops[0], UciAdd)
-        assert step.ops[0].config == "firewall"
-        assert step.ops[0].type == "rule"
-        assert isinstance(step.ops[1], UciCommit)
+        assert len(step.ops) == 6
+        assert isinstance(step.ops[0], ShellCommand)  # cleanup old anonymous rules
+        assert "Allow-SSH-WAN" in step.ops[0].command
+        assert isinstance(step.ops[1], ShellCommand)  # uci set firewall.allow_ssh_wan=rule
         assert isinstance(step.ops[2], UciSet)
-        assert step.ops[2].config == "dropbear"
+        assert step.ops[2].config == "firewall"
+        assert step.ops[2].section == "allow_ssh_wan"
         assert isinstance(step.ops[3], UciCommit)
+        assert isinstance(step.ops[4], UciSet)
+        assert step.ops[4].config == "dropbear"
+        assert isinstance(step.ops[5], UciCommit)
 
     def test_cellular_step_has_ops(self):
         cfg = ConwrtConfig()

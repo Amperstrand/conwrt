@@ -54,12 +54,12 @@ def _password_ops(password: str) -> list[Op]:
 
 
 _WAN_SSH_SCRIPT = "\n".join([
-    "uci add firewall rule",
-    "uci set firewall.@rule[-1].name='Allow-SSH-WAN'",
-    "uci set firewall.@rule[-1].src='wan'",
-    "uci set firewall.@rule[-1].dest_port='22'",
-    "uci set firewall.@rule[-1].proto='tcp'",
-    "uci set firewall.@rule[-1].target='ACCEPT'",
+    "uci set firewall.allow_ssh_wan=rule",
+    "uci set firewall.allow_ssh_wan.name='Allow-SSH-WAN'",
+    "uci set firewall.allow_ssh_wan.src='wan'",
+    "uci set firewall.allow_ssh_wan.dest_port='22'",
+    "uci set firewall.allow_ssh_wan.proto='tcp'",
+    "uci set firewall.allow_ssh_wan.target='ACCEPT'",
     "uci commit firewall",
     "uci set dropbear.@dropbear[0].PasswordAuth='off'",
     "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
@@ -67,7 +67,9 @@ _WAN_SSH_SCRIPT = "\n".join([
 ])
 
 _WAN_SSH_OPS: list[Op] = [
-    UciAdd(config="firewall", type="rule", values={
+    ShellCommand(command="while uci show firewall 2>/dev/null | grep -q \"name='Allow-SSH-WAN'\"; do _s=$(uci show firewall 2>/dev/null | grep \"name='Allow-SSH-WAN'\" | head -1 | cut -d. -f2 | cut -d. -f1); uci delete firewall.$_s 2>/dev/null; done; true"),
+    ShellCommand(command="uci set firewall.allow_ssh_wan=rule"),
+    UciSet(config="firewall", section="allow_ssh_wan", values={
         "name": "Allow-SSH-WAN",
         "src": "wan",
         "dest_port": "22",
