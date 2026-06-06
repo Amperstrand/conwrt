@@ -50,10 +50,24 @@ def _build_wireguard_server_ops(params: dict[str, Any]) -> list[Op]:
             peer_values["preshared_key"] = peer1_psk
         ops.append(UciSet(config="network", section="wg0_peer1", values=peer_values))
 
+    # Named firewall sections + while-loop cleanup of stale anonymous sections
     ops.extend([
         BlankLine(),
-        ShellCommand(command="uci add firewall zone"),
-        UciSet(config="firewall", section="@zone[-1]", values={
+        ShellCommand(
+            command="while uci show firewall | grep -q \"name='vpn'\"; do"
+            " _s=$(uci show firewall | grep \"name='vpn'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
+            " uci delete \"firewall.$_s\";"
+            " done",
+        ),
+        ShellCommand(
+            command="while uci show firewall | grep -q \"name='Allow-WireGuard'\"; do"
+            " _s=$(uci show firewall | grep \"name='Allow-WireGuard'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
+            " uci delete \"firewall.$_s\";"
+            " done",
+        ),
+        BlankLine(),
+        ShellCommand(command="uci set firewall.wg_server_vpn=zone"),
+        UciSet(config="firewall", section="wg_server_vpn", values={
             "name": "vpn",
             "input": "ACCEPT",
             "output": "ACCEPT",
@@ -63,20 +77,20 @@ def _build_wireguard_server_ops(params: dict[str, Any]) -> list[Op]:
             "network": "wg0",
         }),
         BlankLine(),
-        ShellCommand(command="uci add firewall forwarding"),
-        UciSet(config="firewall", section="@forwarding[-1]", values={
+        ShellCommand(command="uci set firewall.wg_server_fwd_lan=forwarding"),
+        UciSet(config="firewall", section="wg_server_fwd_lan", values={
             "src": "vpn",
             "dest": "lan",
         }),
         BlankLine(),
-        ShellCommand(command="uci add firewall forwarding"),
-        UciSet(config="firewall", section="@forwarding[-1]", values={
+        ShellCommand(command="uci set firewall.wg_server_fwd_wan=forwarding"),
+        UciSet(config="firewall", section="wg_server_fwd_wan", values={
             "src": "vpn",
             "dest": "wan",
         }),
         BlankLine(),
-        ShellCommand(command="uci add firewall rule"),
-        UciSet(config="firewall", section="@rule[-1]", values={
+        ShellCommand(command="uci set firewall.wg_server_allow=rule"),
+        UciSet(config="firewall", section="wg_server_allow", values={
             "name": "Allow-WireGuard",
             "src": "wan",
             "dest_port": listen_port,

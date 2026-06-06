@@ -162,7 +162,7 @@ def test_wwan_setup_step_before_wifi_sta() -> None:
     assert len(sta_steps) == 1
     assert "network.wwan=interface" in wwan_steps[0].configure_script
     assert "proto='dhcp'" in wwan_steps[0].configure_script
-    assert "firewall.@zone[1].network='wwan'" in wwan_steps[0].configure_script
+    assert "'wan'" in wwan_steps[0].configure_script
     assert sta_steps[0].wifi_params["network"] == "wwan"
     wwan_idx = plan.steps.index(wwan_steps[0])
     sta_idx = plan.steps.index(sta_steps[0])

@@ -100,12 +100,23 @@ def wifi_ap_uci_lines(
     return lines
 
 
+def _add_to_wan_zone_sh(iface: str) -> str:
+    """Shell snippet: find wan zone by name, del_list then add_list (idempotent)."""
+    return (
+        f"for _z in $(uci show firewall 2>/dev/null | grep '=zone' | cut -d. -f2 | cut -d= -f1 || true); do"
+        f" [ \"$(uci -q get firewall.$_z.name)\" = 'wan' ] &&"
+        f" uci del_list firewall.$_z.network='{iface}' 2>/dev/null;"
+        f" uci add_list firewall.$_z.network='{iface}';"
+        f" break; done"
+    )
+
+
 def wwan_setup_ops() -> list[Op]:
     """Create wwan interface for WiFi STA WAN and add to wan firewall zone."""
     return [
         ShellCommand(command="uci set network.wwan=interface"),
         ShellCommand(command="uci set network.wwan.proto='dhcp'"),
-        ShellCommand(command="uci add_list firewall.@zone[1].network='wwan'"),
+        ShellCommand(command=_add_to_wan_zone_sh("wwan")),
         ShellCommand(command="uci commit network"),
         ShellCommand(command="uci commit firewall"),
     ]
@@ -116,7 +127,7 @@ def wwan_setup_shell() -> str:
     return (
         "uci set network.wwan=interface && "
         "uci set network.wwan.proto='dhcp' && "
-        "uci add_list firewall.@zone[1].network='wwan' && "
+        + _add_to_wan_zone_sh("wwan") + " && "
         "uci commit network && "
         "uci commit firewall"
     )
@@ -128,7 +139,7 @@ def wwan_setup_firstboot() -> str:
         "# --- WWAN interface for WiFi STA ---",
         "uci set network.wwan=interface",
         "uci set network.wwan.proto='dhcp'",
-        "uci add_list firewall.@zone[1].network='wwan'",
+        _add_to_wan_zone_sh("wwan"),
         "uci commit network",
         "uci commit firewall",
     ])
@@ -293,9 +304,14 @@ def build_mgmt_wifi_script(txpower: Optional[int] = None) -> str:
         uci -q delete network.mgmt_dev
         uci -q delete network.mgmt
         uci -q delete dhcp.mgmt
-        idx=0
-        while uci -q get wireless.@wifi-iface[$idx] >/dev/null 2>&1; do
-            uci delete wireless.@wifi-iface[$idx]
+        _mi=0
+        while uci -q get wireless.@wifi-iface[$_mi] >/dev/null 2>&1; do
+            _mnet=$(uci -q get wireless.@wifi-iface[$_mi].network 2>/dev/null || true)
+            if [ "$_mnet" = "mgmt" ]; then
+                uci delete wireless.@wifi-iface[$_mi]
+            else
+                _mi=$((_mi + 1))
+            fi
         done
         for zone in $(uci show firewall 2>/dev/null | grep "=zone" | cut -d. -f2 | cut -d= -f1 || true); do
             name=$(uci -q get firewall.$zone.name || true)
@@ -309,20 +325,20 @@ def build_mgmt_wifi_script(txpower: Optional[int] = None) -> str:
         uci set network.mgmt.proto='static'
         uci set network.mgmt.ipaddr='172.16.0.1'
         uci set network.mgmt.netmask='255.255.255.0'
-        uci add wireless wifi-iface
-        uci set wireless.@wifi-iface[-1].device="$RADIO_2G"
-        uci set wireless.@wifi-iface[-1].network='mgmt'
-        uci set wireless.@wifi-iface[-1].mode='ap'
-        uci set wireless.@wifi-iface[-1].ssid="$SSID"
-        uci set wireless.@wifi-iface[-1].hidden='1'
-        uci set wireless.@wifi-iface[-1].encryption='none'
-        uci set wireless.@wifi-iface[-1].disabled='0'
-        uci add firewall zone
-        uci set firewall.@zone[-1].name='mgmt'
-        uci add_list firewall.@zone[-1].network='mgmt'
-        uci set firewall.@zone[-1].input='ACCEPT'
-        uci set firewall.@zone[-1].output='ACCEPT'
-        uci set firewall.@zone[-1].forward='REJECT'
+        uci set wireless.mgmt_ap=wifi-iface
+        uci set wireless.mgmt_ap.device="$RADIO_2G"
+        uci set wireless.mgmt_ap.network='mgmt'
+        uci set wireless.mgmt_ap.mode='ap'
+        uci set wireless.mgmt_ap.ssid="$SSID"
+        uci set wireless.mgmt_ap.hidden='1'
+        uci set wireless.mgmt_ap.encryption='none'
+        uci set wireless.mgmt_ap.disabled='0'
+        uci set firewall.mgmt=zone
+        uci set firewall.mgmt.name='mgmt'
+        uci set firewall.mgmt.input='ACCEPT'
+        uci set firewall.mgmt.output='ACCEPT'
+        uci set firewall.mgmt.forward='REJECT'
+        uci set firewall.mgmt.network='mgmt'
         uci set dhcp.mgmt=dhcp
         uci set dhcp.mgmt.interface='mgmt'
         uci set dhcp.mgmt.ignore='0'

@@ -64,17 +64,17 @@ class TestWireguardClientOpsDefault:
         assert "uci set network.wg0_peer=wireguard_wg0" in rendered
         assert "uci set network.wg0_peer.endpoint_host='vpn.example.com'" in rendered
         assert "uci set network.wg0_peer.endpoint_port='51820'" in rendered
-        assert "uci add firewall zone" in rendered
+        assert "uci set firewall.wg_client_vpn=zone" in rendered
         assert "uci commit network" in rendered
         assert "uci commit firewall" in rendered
 
     def test_kill_switch_present_by_default(self):
         rendered = render_shell(_build_wireguard_client_ops(DEFAULT_PARAMS))
-        assert "uci set firewall.@rule[-1].name='KillSwitch-Reject-NonVPN'" in rendered
+        assert "uci set firewall.wg_client_killswitch.name='KillSwitch-Reject-NonVPN'" in rendered
 
     def test_no_kill_switch(self):
         rendered = render_shell(_build_wireguard_client_ops(NO_KILL_SWITCH_PARAMS))
-        assert "KillSwitch" not in rendered
+        assert "wg_client_killswitch" not in rendered
 
     def test_dns_present(self):
         rendered = render_shell(_build_wireguard_client_ops(DNS_PARAMS))
@@ -105,4 +105,4 @@ class TestWireguardClientOpsCustom:
 
     def test_without_kill_switch(self):
         rendered = render_shell(_build_wireguard_client_ops(NO_KILL_SWITCH_PARAMS))
-        assert "KillSwitch" not in rendered
+        assert "wg_client_killswitch" not in rendered
