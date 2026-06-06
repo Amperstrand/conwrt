@@ -464,16 +464,26 @@ def build_plan(
         ))
 
     if effective_lan_ip_mode == "mac-hash" and model_lan_subnet:
+        # On DSA devices (most modern OpenWrt hardware), eth0 is the CPU-facing
+        # port with an unstable MAC.  br-lan always carries the factory base MAC.
+        _mac_src_fb = (
+            "_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+            "; [ -z \"$_mac\" ] && _mac=$(cat /sys/class/net/eth0/address 2>/dev/null)"
+        )
+        _mac_src_ssh = (
+            '_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)'
+            '; [ -z "$_mac" ] && _mac=$(cat /sys/class/net/eth0/address 2>/dev/null)'
+        )
         _mac_ip_fb = "\n".join([
-            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+            f"{_mac_src_fb}",
             "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
             "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
             f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
             "uci commit network",
         ])
-        _mac_ip_ssh = " && ".join([
-            "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
+        _mac_ip_ssh = " ; ".join([
+            f"{_mac_src_ssh}",
             "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
             "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
@@ -488,7 +498,7 @@ def build_plan(
             include_in_post_install=True,
             wifi_params={"lan_subnet": model_lan_subnet},
             ops=[
-                ShellCommand("_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)"),
+                ShellCommand(f"{_mac_src_fb}"),
                 ShellCommand("_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"),
                 ShellCommand("_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))"),
                 ShellCommand("_host=$((_host % 200 + 2))"),
