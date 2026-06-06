@@ -35,7 +35,7 @@ class ProfileStep:
     label: str
     # ASU first-boot shell fragment (uci-defaults)
     firstboot_script: str = ""
-    # Post-install: opkg package names (installed before configure_script)
+    # Post-install: opkg package names (installed after WAN up, before use case scripts)
     opkg_packages: list[str] = field(default_factory=list)
     opkg_remove: list[str] = field(default_factory=list)
     # Post-install SSH: shell to run (may be multi-line)

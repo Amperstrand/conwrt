@@ -15,6 +15,22 @@ from ssh_utils import ssh_cmd
 LogFn = Callable[[str], None]
 
 
+def _wait_for_internet(ip: str, ssh_key: str, log: LogFn, timeout: int = 60) -> bool:
+    start = time.time()
+    log("  waiting for internet connectivity...")
+    while time.time() - start < timeout:
+        r = subprocess.run(
+            ssh_cmd(ip, "ping -c 1 -W 3 1.1.1.1", key=ssh_key or None, connect_timeout=5),
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if r.returncode == 0:
+            elapsed = int(time.time() - start)
+            log(f"  ✓ internet reachable ({elapsed}s)")
+            return True
+        time.sleep(5)
+    return False
+
+
 def _run_ssh(
     ip: str,
     command: str,
@@ -102,6 +118,7 @@ def apply_plan(
             print(f"  {line}")
         return ip
 
+    # Collect opkg packages from use cases (installed after WAN is up)
     opkg_pkgs: list[str] = []
     opkg_remove: list[str] = []
     for step in plan.steps:
@@ -113,30 +130,20 @@ def apply_plan(
                 if r not in opkg_remove:
                     opkg_remove.append(r)
 
-    if opkg_pkgs or opkg_remove:
-        _log(f"  opkg: installing {len(opkg_pkgs)} package(s)...")
-        script = opkg_install_script(opkg_pkgs, opkg_remove)
-        if not _run_ssh(ip, script, ssh_key, _log, timeout=300):
-            _log("  ⚠ opkg install failed")
+    # Steps deferred to later phases
+    _deferred = (StepKind.USE_CASE, StepKind.OPKG_BATCH,
+                 StepKind.LAN_IP, StepKind.LAN_IP_MAC_HASH, StepKind.SSH_KEY)
 
+    # Phase 1: Infrastructure — hostname, password, WAN SSH, WWAN, WiFi
     wifi_steps = [s for s in plan.steps if s.kind in (StepKind.WIFI_STA, StepKind.WIFI_AP)]
     last_wifi_idx = len(wifi_steps) - 1
     wifi_i = 0
 
     for step in plan.steps:
-        if step.skipped_reason:
+        if step.skipped_reason or not step.include_in_post_install:
             continue
-        if not step.include_in_post_install:
+        if step.kind in _deferred:
             continue
-        if step.kind in (StepKind.OPKG_BATCH,):
-            continue
-        if step.kind == StepKind.LAN_IP:
-            continue  # caller handles LAN IP last
-        if step.kind == StepKind.LAN_IP_MAC_HASH:
-            continue  # caller handles MAC-hash IP last (drops SSH)
-
-        if step.kind == StepKind.SSH_KEY:
-            continue  # caller installs keys idempotently before apply_plan (configure)
 
         if step.kind in (StepKind.WIFI_STA, StepKind.WIFI_AP):
             reload = wifi_i >= last_wifi_idx
@@ -145,8 +152,35 @@ def apply_plan(
             continue
 
         script = render_shell(step.ops) if step.ops else step.configure_script
+        if script:
+            chain = " && ".join(
+                ln for ln in script.strip().splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            )
+            if chain:
+                _log(f"  {step.label}...")
+                if _run_ssh(ip, chain, ssh_key, _log):
+                    _log(f"  ✓ {step.label}")
 
-        if step.kind == StepKind.USE_CASE and script:
+    # Phase 2: Install packages (after WWAN_SETUP + WIFI_STA brought WAN up)
+    if opkg_pkgs or opkg_remove:
+        if _wait_for_internet(ip, ssh_key, _log, timeout=60):
+            _log(f"  opkg: installing {len(opkg_pkgs)} package(s)...")
+            script = opkg_install_script(opkg_pkgs, opkg_remove)
+            if not _run_ssh(ip, script, ssh_key, _log, timeout=300):
+                _log("  ⚠ opkg install failed")
+        else:
+            _log("  ⚠ opkg: no internet after 60s — skipping package install")
+
+    # Phase 3: Use case configure scripts (packages now installed)
+    for step in plan.steps:
+        if step.skipped_reason or not step.include_in_post_install:
+            continue
+        if step.kind != StepKind.USE_CASE:
+            continue
+
+        script = render_shell(step.ops) if step.ops else step.configure_script
+        if script:
             _log(f"  use case '{step.use_case_name}': applying...")
             chain = "; ".join(
                 ln for ln in script.strip().splitlines()
@@ -156,16 +190,6 @@ def apply_plan(
                 _log(f"  ✓ use case '{step.use_case_name}': applied")
             elif chain:
                 _log(f"  ⚠ use case '{step.use_case_name}': failed")
-
-        elif script and step.kind not in (StepKind.USE_CASE,):
-            chain = " && ".join(
-                ln for ln in script.strip().splitlines()
-                if ln.strip() and not ln.strip().startswith("#")
-            )
-            if chain:
-                _log(f"  {step.label}...")
-                if _run_ssh(ip, chain, ssh_key, _log):
-                    _log(f"  ✓ {step.label}")
 
     return ip
 
