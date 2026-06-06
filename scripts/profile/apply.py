@@ -1,8 +1,13 @@
 """Apply a ProfilePlan to a running router via SSH."""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import tempfile
 import time
+import urllib.request
+import urllib.error
 from typing import Callable, Optional
 
 from profile.plan import ProfilePlan, ProfileStep, StepKind
@@ -50,6 +55,113 @@ def _run_ssh(
             log(f"    stderr: {r.stderr.strip()[:200]}")
         return False
     return True
+
+
+def _scp_install_packages(
+    ip: str,
+    packages: list[str],
+    ssh_key: str,
+    log: LogFn,
+) -> bool:
+    r = subprocess.run(
+        ssh_cmd(ip, "cat /etc/openwrt_release", key=ssh_key or None, connect_timeout=10),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if r.returncode != 0:
+        log("  ⚠ scp fallback: cannot read /etc/openwrt_release from device")
+        return False
+
+    release_info: dict[str, str] = {}
+    for line in r.stdout.strip().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            release_info[k.strip()] = v.strip().strip("'\"")
+
+    release = release_info.get("DISTRIB_RELEASE", "")
+    arch = release_info.get("DISTRIB_ARCH", "")
+    if not release or not arch:
+        log("  ⚠ scp fallback: missing DISTRIB_RELEASE or DISTRIB_ARCH")
+        return False
+
+    log(f"  scp fallback: OpenWrt {release}, arch={arch}")
+
+    pkgs_base = f"https://downloads.openwrt.org/releases/{release}/packages/{arch}/packages"
+    tmpdir = tempfile.mkdtemp(prefix="conwrt-scp-")
+    try:
+        log("  scp fallback: downloading package index...")
+        index_data = _download_package_index(pkgs_base, log)
+        if index_data is None:
+            return False
+
+        pkg_to_filename = _parse_package_filenames(index_data)
+
+        local_paths: list[str] = []
+        for pkg in packages:
+            filename = pkg_to_filename.get(pkg)
+            if not filename:
+                log(f"  ⚠ scp fallback: {pkg} not found in package index")
+                continue
+            local_path = os.path.join(tmpdir, os.path.basename(filename))
+            url = f"{pkgs_base}/{filename}"
+            log(f"  scp fallback: downloading {pkg}...")
+            try:
+                urllib.request.urlretrieve(url, local_path)
+                local_paths.append(local_path)
+            except (urllib.error.URLError, OSError) as e:
+                log(f"  ⚠ scp fallback: download failed for {pkg}: {e}")
+
+        if not local_paths:
+            log("  ⚠ scp fallback: no packages could be downloaded")
+            return False
+
+        log(f"  scp fallback: transferring {len(local_paths)} package(s) to device...")
+        for path in local_paths:
+            scp_args = ["scp", "-O",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-o", "BatchMode=yes"]
+            if ssh_key:
+                scp_args += ["-i", ssh_key]
+            scp_args += [path, f"root@{ip}:/tmp/"]
+            sr = subprocess.run(scp_args, capture_output=True, text=True, timeout=30, check=False)
+            if sr.returncode != 0:
+                log(f"  ⚠ scp fallback: transfer failed: {sr.stderr.strip()[:200]}")
+                return False
+
+        basenames = [os.path.basename(p) for p in local_paths]
+        install_targets = " ".join(f"/tmp/{n}" for n in basenames)
+        log(f"  scp fallback: installing {len(local_paths)} package(s) on device...")
+        return _run_ssh(ip, f"opkg install {install_targets}", ssh_key, log, timeout=300)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _download_package_index(base_url: str, log: LogFn) -> str | None:
+    for suffix in ("Packages.gz", "Packages"):
+        url = f"{base_url}/{suffix}"
+        try:
+            req = urllib.request.urlopen(url, timeout=30)
+            raw = req.read()
+            if suffix.endswith(".gz"):
+                import gzip
+                raw = gzip.decompress(raw)
+            return raw.decode("utf-8", errors="replace")
+        except (urllib.error.URLError, OSError):
+            continue
+    log("  ⚠ scp fallback: cannot download package index (tried Packages.gz and Packages)")
+    return None
+
+
+def _parse_package_filenames(index_data: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    current_pkg = ""
+    for line in index_data.splitlines():
+        if line.startswith("Package: "):
+            current_pkg = line.split(":", 1)[1].strip()
+        elif line.startswith("Filename: ") and current_pkg:
+            result[current_pkg] = line.split(":", 1)[1].strip()
+            current_pkg = ""
+    return result
 
 
 def _apply_wifi_step(
@@ -168,9 +280,11 @@ def apply_plan(
             _log(f"  opkg: installing {len(opkg_pkgs)} package(s)...")
             script = opkg_install_script(opkg_pkgs, opkg_remove)
             if not _run_ssh(ip, script, ssh_key, _log, timeout=300):
-                _log("  ⚠ opkg install failed")
+                _log("  ⚠ opkg install failed, trying SCP fallback...")
+                _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
         else:
-            _log("  ⚠ opkg: no internet after 60s — skipping package install")
+            _log("  ⚠ opkg: no internet after 60s — trying SCP fallback...")
+            _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
 
     # Phase 3: Use case configure scripts (packages now installed)
     for step in plan.steps:
