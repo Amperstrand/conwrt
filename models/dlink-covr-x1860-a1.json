@@ -29,8 +29,8 @@
       "upload_endpoint": "/upload",
       "upload_field": "firmware",
       "trigger_flash_endpoint": "",
-      "flash_time_seconds": 120,
-      "silence_timeout": 30,
+            "flash_time_seconds": 300,
+            "silence_timeout": 60,
       "reset_instructions": "Connect ethernet to any port (WAN or LAN). Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
       "led_pattern": "status LED blinks red"
     },

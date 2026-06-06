@@ -59,7 +59,7 @@ def _apply_wifi_step(
     p = step.wifi_params
     if step.wifi_role == "sta":
         cmds = wifi_sta_uci_lines(
-            radio, p["ssid"], p["encryption"], p.get("key", ""), p.get("network", "wan"),
+            radio, p["ssid"], p["encryption"], p.get("key", ""), p.get("network", "wwan"),
             country_code=p.get("country_code", "DE"),
         )
     else:
@@ -214,7 +214,7 @@ def _apply_wifi_ubus(
         }
         if p.get("key"):
             values["key"] = p["key"]
-        values["network"] = p.get("network", "lan" if step.wifi_role == "ap" else "wan")
+        values["network"] = p.get("network", "lan" if step.wifi_role == "ap" else "wwan")
 
         client.uci_set("wireless", section, values)
         client.uci_commit("wireless")

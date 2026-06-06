@@ -18,6 +18,7 @@ class StepKind(Enum):
     PASSWORD = "password"
     WAN_SSH = "wan_ssh"
     MGMT_WIFI = "mgmt_wifi"
+    WWAN_SETUP = "wwan_setup"
     WIFI_STA = "wifi_sta"
     WIFI_AP = "wifi_ap"
     WIFI_DISABLE = "wifi_disable"

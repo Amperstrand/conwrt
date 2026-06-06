@@ -13,6 +13,9 @@ from profile.wifi import (
     build_mgmt_wifi_script,
     wifi_ap_firstboot_script,
     wifi_sta_firstboot_script,
+    wwan_setup_firstboot,
+    wwan_setup_shell,
+    wwan_setup_ops,
 )
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
 from shell_safe import sh_quote
@@ -336,11 +339,21 @@ def build_plan(
 
     if cfg.wifi_sta:
         sta = cfg.wifi_sta
+        # Create wwan interface for WiFi STA WAN
+        wwan_fb = wwan_setup_firstboot()
+        wwan_ssh = wwan_setup_shell()
+        steps.append(ProfileStep(
+            kind=StepKind.WWAN_SETUP,
+            label="WWAN interface for WiFi STA",
+            firstboot_script=wwan_fb,
+            configure_script=wwan_ssh,
+            ops=wwan_setup_ops(),
+        ))
         steps.append(ProfileStep(
             kind=StepKind.WIFI_STA,
             label=f"WiFi STA: {sta.ssid} ({sta.band})",
             firstboot_script=wifi_sta_firstboot_script(
-                sta.band, sta.ssid, sta.encryption, key=sta.key, network="wan",
+                sta.band, sta.ssid, sta.encryption, key=sta.key, network="wwan",
                 country_code=cfg.country_code,
             ),
             wifi_detect_band=sta.band,
@@ -349,7 +362,7 @@ def build_plan(
                 "ssid": sta.ssid,
                 "encryption": sta.encryption,
                 "key": sta.key,
-                "network": "wan",
+                "network": "wwan",
                 "country_code": cfg.country_code,
             },
         ))

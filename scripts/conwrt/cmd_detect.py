@@ -37,6 +37,7 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
                     "hostname": c.hostname,
                     "ssh_banner": c.ssh_banner,
                     "open_ports": c.open_ports,
+                    "board_name": c.board_name,
                 }
                 for c in result.candidates
             ],
@@ -63,6 +64,8 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
                 print(f"  SSH Banner: {c.ssh_banner}")
             if c.open_ports:
                 print(f"  Open Ports: {c.open_ports}")
+            if c.board_name:
+                print(f"  Board:      {c.board_name}")
 
         if matched:
             print()

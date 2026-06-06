@@ -26,13 +26,13 @@ class TestWifiStaUciLinesCharacterization:
         assert STA_LINES_NO_KEY == [
             "uci set wireless.radio0.disabled='0'",
             "uci set wireless.radio0.country='DE'",
-            "uci del wireless.default_radio0.disabled 2>/dev/null",
+            "uci del wireless.default_radio0.disabled 2>/dev/null || true",
             "uci set wireless.default_radio0=wifi-iface",
             "uci set wireless.default_radio0.device='radio0'",
             "uci set wireless.default_radio0.mode='sta'",
             "uci set wireless.default_radio0.ssid='UpstreamNet'",
             "uci set wireless.default_radio0.encryption='psk2'",
-            "uci set wireless.default_radio0.network='wan'",
+            "uci set wireless.default_radio0.network='wwan'",
         ]
 
     def test_with_key(self):
@@ -49,7 +49,7 @@ class TestWifiApUciLinesCharacterization:
         assert AP_LINES_NO_KEY == [
             "uci set wireless.radio0.disabled='0'",
             "uci set wireless.radio0.country='DE'",
-            "uci del wireless.default_radio0.disabled 2>/dev/null",
+            "uci del wireless.default_radio0.disabled 2>/dev/null || true",
             "uci set wireless.default_radio0=wifi-iface",
             "uci set wireless.default_radio0.device='radio0'",
             "uci set wireless.default_radio0.mode='ap'",

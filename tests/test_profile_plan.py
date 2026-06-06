@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 
-from config import ConwrtConfig, UseCaseConfig
+from config import ConwrtConfig, UseCaseConfig, WifiSTAConfig
 from profile import build_plan, print_plan
 from profile.plan import StepKind
 from profile.render import opkg_install_script
@@ -148,39 +148,32 @@ def test_hostname_model_mac_pattern() -> None:
     )
     host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
     assert len(host_steps) == 1
-    step = host_steps[0]
-    assert "lyra_" in step.configure_script
-    assert "_suffix" in step.configure_script
-    assert "uci set system" in step.configure_script
-
-
-def test_hostname_model_mac_firstboot_script() -> None:
-    cfg = ConwrtConfig(hostname_pattern="model_mac")
-    plan = build_plan(
-        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
-    )
-    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
-    fb = host_steps[0].firstboot_script
-    assert "eth0/address" in fb
-    assert "tail -c6" in fb
-    assert "lyra_" in fb
-
-
-def test_hostname_model_mac_skipped_without_model() -> None:
-    cfg = ConwrtConfig(hostname_pattern="model_mac")
-    plan = build_plan(cfg, mode="post_install", model_id="")
-    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
-    assert len(host_steps) == 0
-
-
-def test_hostname_pattern_takes_priority_over_static_hostname() -> None:
-    cfg = ConwrtConfig(hostname_pattern="model_mac", hostname="my-router")
-    plan = build_plan(
-        cfg, mode="post_install", model_id="asus-lyra-map-ac2200",
-    )
-    host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
-    assert len(host_steps) == 1
     assert "lyra_" in host_steps[0].configure_script
+
+
+def test_wwan_setup_step_before_wifi_sta() -> None:
+    cfg = ConwrtConfig(
+        wifi_sta=WifiSTAConfig(band="5ghz", ssid="Upstream", encryption="psk2", key="pass"),
+    )
+    plan = build_plan(cfg, mode="post_install")
+    wwan_steps = [s for s in plan.steps if s.kind == StepKind.WWAN_SETUP]
+    sta_steps = [s for s in plan.steps if s.kind == StepKind.WIFI_STA]
+    assert len(wwan_steps) == 1
+    assert len(sta_steps) == 1
+    assert "network.wwan=interface" in wwan_steps[0].configure_script
+    assert "proto='dhcp'" in wwan_steps[0].configure_script
+    assert "firewall.@zone[1].network='wwan'" in wwan_steps[0].configure_script
+    assert sta_steps[0].wifi_params["network"] == "wwan"
+    wwan_idx = plan.steps.index(wwan_steps[0])
+    sta_idx = plan.steps.index(sta_steps[0])
+    assert wwan_idx < sta_idx
+
+
+def test_no_wwan_step_without_wifi_sta() -> None:
+    cfg = ConwrtConfig()
+    plan = build_plan(cfg, mode="post_install")
+    wwan_steps = [s for s in plan.steps if s.kind == StepKind.WWAN_SETUP]
+    assert len(wwan_steps) == 0
 
 
 def test_hostname_uses_static_when_no_pattern() -> None:

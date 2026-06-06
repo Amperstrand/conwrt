@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +21,7 @@ class DeviceCandidate:
     dhcp_vendor_class: str | None = None
     open_ports: list[int] = field(default_factory=list)
     ssh_banner: str | None = None
+    board_name: str | None = None  # OpenWrt board_name from SSH probe
 
 
 @dataclass
@@ -216,16 +218,48 @@ def _enrich_from_models(candidates: list[DeviceCandidate], models: list[dict]) -
 
 
 def grab_ssh_banner(ip: str, port: int = 22, timeout: float = 5.0) -> str | None:
-    """Connect to SSH port and read the banner string."""
+    """Connect to SSH port and read the banner string (first line only)."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         sock.connect((ip, port))
-        banner = sock.recv(1024)
+        data = b""
+        while b"\n" not in data:
+            chunk = sock.recv(256)
+            if not chunk:
+                break
+            data += chunk
         sock.close()
-        return banner.decode("utf-8", errors="replace").strip()
+        banner_line = data.split(b"\n", 1)[0]
+        return banner_line.decode("utf-8", errors="replace").strip()
     except (OSError, socket.timeout):
         return None
+
+
+def probe_ssh_board_name(ip: str, timeout: float = 5.0) -> str | None:
+    """SSH into an OpenWrt device and read /tmp/sysinfo/board_name.
+
+    Uses BatchMode=yes (key-only auth) — works if the host's SSH key is
+    authorized on the device, which is the common case for already-flashed
+    OpenWrt routers. Returns None if SSH fails or board_name is unavailable.
+    """
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "BatchMode=yes",
+        "-o", "PasswordAuthentication=no",
+        "-o", f"ConnectTimeout={int(timeout)}",
+        f"root@{ip}",
+        "cat /tmp/sysinfo/board_name",
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2, check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return None
 
 
 def probe_http_title(ip: str, port: int = 80, timeout: float = 5.0) -> str | None:
@@ -268,23 +302,23 @@ _COMMON_PORTS = [22, 23, 80, 443, 8080, 8443, 161, 4430, 5903]
 
 def active_fingerprint(ip: str, timeout: float = 10.0) -> FingerprintResult:
     """Run active probes against a device to identify it."""
-    per_probe_timeout = min(timeout / 3, 5.0)
+    probe_timeout = min(timeout / 4, 3.0)
     signals: dict = {}
-
-    ssh_banner = grab_ssh_banner(ip, timeout=per_probe_timeout)
-    if ssh_banner:
-        signals["ssh_banner"] = ssh_banner
-
-    http_title = probe_http_title(ip, timeout=per_probe_timeout)
-    if http_title:
-        signals["http_title"] = http_title
 
     open_ports: list[int] = []
     for port in _COMMON_PORTS:
-        if _scan_port(ip, port, timeout=per_probe_timeout):
+        if _scan_port(ip, port, timeout=0.3):
             open_ports.append(port)
     if open_ports:
         signals["open_ports"] = open_ports
+
+    ssh_banner = grab_ssh_banner(ip, timeout=probe_timeout)
+    if ssh_banner:
+        signals["ssh_banner"] = ssh_banner
+
+    http_title = probe_http_title(ip, timeout=probe_timeout)
+    if http_title:
+        signals["http_title"] = http_title
 
     evidence: list[str] = []
     vendor = "unknown"
@@ -296,19 +330,39 @@ def active_fingerprint(ip: str, timeout: float = 10.0) -> FingerprintResult:
     if open_ports:
         evidence.append(f"open_ports={open_ports}")
 
+    board_name: str | None = None
+    is_openwrt = ssh_banner and "dropbear" in ssh_banner.lower()
+    if is_openwrt:
+        board_name = probe_ssh_board_name(ip, timeout=probe_timeout)
+        if board_name:
+            signals["board_name"] = board_name
+            evidence.append(f"board_name={board_name}")
+
     confidence = "low"
-    if ssh_banner and http_title:
+    if board_name:
+        confidence = "high"
+    elif ssh_banner and http_title:
         confidence = "high"
     elif ssh_banner or http_title:
         confidence = "medium"
 
+    model_id: str | None = None
+    if board_name:
+        from model_loader import find_model_by_board_name
+        model = find_model_by_board_name(board_name)
+        if model:
+            model_id = model.get("id")
+            if model.get("vendor"):
+                vendor = model["vendor"]
+
     candidate = DeviceCandidate(
         vendor=vendor,
-        model_id=None,
+        model_id=model_id,
         confidence=confidence,
         evidence=evidence,
         open_ports=open_ports,
         ssh_banner=ssh_banner,
+        board_name=board_name,
     )
 
     return FingerprintResult(

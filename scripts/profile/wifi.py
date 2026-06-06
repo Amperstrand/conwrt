@@ -44,7 +44,7 @@ def wifi_sta_uci_lines(
     ssid: str,
     encryption: str,
     key: str = "",
-    network: str = "wan",
+    network: str = "wwan",
     country_code: str = "DE",
 ) -> list[str]:
     radio = radio_ref(radio)
@@ -54,7 +54,7 @@ def wifi_sta_uci_lines(
     lines = [
         f"uci set wireless.{radio}.disabled='0'",
         f"uci set wireless.{radio}.country='{country_code}'",
-        f"uci del wireless.{section}.disabled 2>/dev/null",
+        f"uci del wireless.{section}.disabled 2>/dev/null || true",
         f"uci set wireless.{section}=wifi-iface",
         f"uci set wireless.{section}.device={sh_quote(radio)}",
         f"uci set wireless.{section}.mode='sta'",
@@ -83,7 +83,7 @@ def wifi_ap_uci_lines(
     lines = [
         f"uci set wireless.{radio}.disabled='0'",
         f"uci set wireless.{radio}.country='{country_code}'",
-        f"uci del wireless.{section}.disabled 2>/dev/null",
+        f"uci del wireless.{section}.disabled 2>/dev/null || true",
     ]
     if channel and channel != "auto":
         lines.append(f"uci set wireless.{radio}.channel={sh_quote(channel)}")
@@ -100,12 +100,46 @@ def wifi_ap_uci_lines(
     return lines
 
 
+def wwan_setup_ops() -> list[Op]:
+    """Create wwan interface for WiFi STA WAN and add to wan firewall zone."""
+    return [
+        ShellCommand(command="uci set network.wwan=interface"),
+        ShellCommand(command="uci set network.wwan.proto='dhcp'"),
+        ShellCommand(command="uci add_list firewall.@zone[1].network='wwan'"),
+        ShellCommand(command="uci commit network"),
+        ShellCommand(command="uci commit firewall"),
+    ]
+
+
+def wwan_setup_shell() -> str:
+    """Single-line shell for wwan setup (SSH configure_script)."""
+    return (
+        "uci set network.wwan=interface && "
+        "uci set network.wwan.proto='dhcp' && "
+        "uci add_list firewall.@zone[1].network='wwan' && "
+        "uci commit network && "
+        "uci commit firewall"
+    )
+
+
+def wwan_setup_firstboot() -> str:
+    """Multi-line shell for wwan setup (ASU first-boot script)."""
+    return "\n".join([
+        "# --- WWAN interface for WiFi STA ---",
+        "uci set network.wwan=interface",
+        "uci set network.wwan.proto='dhcp'",
+        "uci add_list firewall.@zone[1].network='wwan'",
+        "uci commit network",
+        "uci commit firewall",
+    ])
+
+
 def wifi_sta_ops(
     radio: str,
     ssid: str,
     encryption: str,
     key: str = "",
-    network: str = "wan",
+    network: str = "wwan",
     country_code: str = "DE",
 ) -> list[Op]:
     """STA configuration as structured ops. Radio must be a concrete name (e.g. 'radio0')."""
@@ -115,7 +149,7 @@ def wifi_sta_ops(
     section = radio_ref(f"default_{radio}")
     ops: list[Op] = [
         UciSet(config="wireless", section=radio, values={"disabled": "0", "country": country_code}),
-        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null"),
+        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null || true"),
         ShellCommand(command=f"uci set wireless.{section}=wifi-iface"),
         UciSet(config="wireless", section=section, values={
             "device": radio,
@@ -145,7 +179,7 @@ def wifi_ap_ops(
     section = radio_ref(f"default_{radio}")
     ops: list[Op] = [
         UciSet(config="wireless", section=radio, values={"disabled": "0", "country": country_code}),
-        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null"),
+        ShellCommand(command=f"uci del wireless.{section}.disabled 2>/dev/null || true"),
     ]
     if channel and channel != "auto":
         ops.append(UciSet(config="wireless", section=radio, values={"channel": channel}))
@@ -168,10 +202,11 @@ def wifi_sta_firstboot_script(
     ssid: str,
     encryption: str,
     key: str = "",
-    network: str = "wan",
+    network: str = "wwan",
     country_code: str = "DE",
 ) -> str:
     band_uci = band_to_uci(band)
+    wwan_setup = wwan_setup_firstboot()
     frags = wifi_sta_uci_lines("$_r", ssid, encryption, key, network, country_code)
     script = (
         "for _r in radio0 radio1 radio2 radio3; do "
@@ -181,7 +216,7 @@ def wifi_sta_firstboot_script(
     )
     script += "; ".join(frags) + "; "
     script += "uci commit wireless; wifi reload; exit 0; fi; done"
-    return script
+    return wwan_setup + "\n" + script
 
 
 def wifi_ap_firstboot_script(
