@@ -24,14 +24,18 @@ def _wait_for_internet(ip: str, ssh_key: str, log: LogFn, timeout: int = 60) -> 
     start = time.time()
     log("  waiting for internet connectivity...")
     while time.time() - start < timeout:
-        r = subprocess.run(
-            ssh_cmd(ip, "ping -c 1 -W 3 1.1.1.1", key=ssh_key or None, connect_timeout=5),
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-        if r.returncode == 0:
-            elapsed = int(time.time() - start)
-            log(f"  ✓ internet reachable ({elapsed}s)")
-            return True
+        try:
+            r = subprocess.run(
+                ssh_cmd(ip, "ping -c 1 -W 3 1.1.1.1", key=ssh_key or None, connect_timeout=5),
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        else:
+            if r.returncode == 0:
+                elapsed = int(time.time() - start)
+                log(f"  ✓ internet reachable ({elapsed}s)")
+                return True
         time.sleep(5)
     return False
 
