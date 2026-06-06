@@ -23,7 +23,7 @@ class TestGuestWifiOpsDefault:
         rendered = render_shell(_build_guest_wifi_ops(DEFAULT_PARAMS))
         assert "uci set network.guest=interface" in rendered
         assert "proto" in rendered
-        assert "192.168.3.1" in rendered
+        assert "192.168.4.1" in rendered
 
     def test_creates_dhcp(self):
         rendered = render_shell(_build_guest_wifi_ops(DEFAULT_PARAMS))

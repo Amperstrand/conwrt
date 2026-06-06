@@ -1,5 +1,6 @@
 {
   "id": "zyxel-gs1920-24",
+  "lan_subnet": "10.213.244.0/24",
   "vendor": "Zyxel",
   "description": "GS1920-24 24-port managed gigabit switch (non-PoE), Realtek RTL8392M",
   "openwrt": {

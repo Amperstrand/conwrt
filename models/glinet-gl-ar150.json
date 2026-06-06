@@ -1,5 +1,6 @@
 {
   "id": "glinet-gl-ar150",
+  "lan_subnet": "10.135.117.0/24",
   "vendor": "GL.iNet",
   "description": "AR150 Mini Router (all variants)",
   "openwrt": {

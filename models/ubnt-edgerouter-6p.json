@@ -1,5 +1,6 @@
 {
   "id": "ubnt-edgerouter-6p",
+  "lan_subnet": "10.141.185.0/24",
   "vendor": "Ubiquiti",
   "description": "EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi",
   "openwrt": {
@@ -57,7 +58,10 @@
       "ssh_user": "ubnt",
       "bootloader_version": "e301_003_6be37",
       "cmdline": "root=/dev/mmcblk0p2 rootdelay=10 rw rootsqimg=squashfs.img rootsqwdir=w mtdparts=spi32766.0:2048k(boot0),2048k(boot1),64k(eeprom) console=ttyS0,115200",
-      "boot_partition_contents": ["vmlinux.64", "vmlinux.64.md5"],
+      "boot_partition_contents": [
+        "vmlinux.64",
+        "vmlinux.64.md5"
+      ],
       "vmlinux64_size_bytes": 6768600,
       "md5_file_size_bytes": 33
     }

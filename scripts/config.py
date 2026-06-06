@@ -82,7 +82,7 @@ class ConwrtConfig:
     use_cases: list[UseCaseConfig] = field(default_factory=list)
     hostname: str = ""
     wifi_disable: bool = False
-    lan_ip_mode: str = "static"        # "static" (use cfg.lan_ip) or "mac-hash" (derive from MAC)
+    lan_ip_mode: str = "mac-hash"      # "mac-hash" (derive from MAC, default) or "static" (use cfg.lan_ip)
     hostname_pattern: str = "static"   # "static", "model_mac", "model_seq"
 
     @property
@@ -324,6 +324,6 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         use_cases=use_cases_list,
         hostname=raw.get("device", {}).get("hostname", ""),
         wifi_disable=raw.get("device", {}).get("wifi_disable", False),
-        lan_ip_mode=raw.get("device", {}).get("lan_ip_mode", "static"),
+        lan_ip_mode=raw.get("device", {}).get("lan_ip_mode", "mac-hash"),
         hostname_pattern=raw.get("device", {}).get("hostname_pattern", "static"),
     )

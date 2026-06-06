@@ -1,5 +1,6 @@
 {
   "id": "glinet-gl-ar300m-lite",
+  "lan_subnet": "10.193.202.0/24",
   "vendor": "GL.iNet",
   "description": "AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)",
   "openwrt": {
@@ -11,7 +12,7 @@
   },
   "hardware": {
     "soc": "QCA9533 v2 (MIPS 24Kc) @ 650MHz",
-    "flash": "NOR 16MB (Winbond W25Q128) only \u2014 no NAND",
+    "flash": "NOR 16MB (Winbond W25Q128) only — no NAND",
     "ram": "128MB DDR2",
     "ethernet_ports": "2x 10/100 (1 WAN eth1 + 1 LAN eth0)",
     "wifi": "2.4GHz 802.11b/g/n (QCA9533 integrated)",
@@ -23,7 +24,7 @@
   ],
   "stock_default_ip": "192.168.8.1",
   "switch": {
-    "description": "No physical switch on this model \u2014 always boots from NOR. This is a NOR-only device (AR300M16/AR300M-Lite) with no NAND flash."
+    "description": "No physical switch on this model — always boots from NOR. This is a NOR-only device (AR300M16/AR300M-Lite) with no NAND flash."
   },
   "flash_layout": {
     "nor": {

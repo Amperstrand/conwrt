@@ -1,5 +1,6 @@
 {
   "id": "linksys-mx4200-v1",
+  "lan_subnet": "10.36.125.0/24",
   "vendor": "Linksys",
   "description": "Velop AX4200 WiFi 6 System V1 — CVE-2019-16340 auth bypass for initial flash",
   "openwrt": {

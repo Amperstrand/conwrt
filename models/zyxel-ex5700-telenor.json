@@ -1,7 +1,8 @@
 {
   "id": "zyxel-ex5700-telenor",
+  "lan_subnet": "10.13.237.0/24",
   "vendor": "Zyxel",
-  "description": "EX5700 (Telenor) \u2014 MediaTek MT7986B, WiFi 6 tri-band",
+  "description": "EX5700 (Telenor) — MediaTek MT7986B, WiFi 6 tri-band",
   "openwrt": {
     "target": "mediatek/filogic",
     "device": "zyxel,ex5700-telenor",

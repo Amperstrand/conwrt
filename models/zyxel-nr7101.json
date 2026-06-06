@@ -1,5 +1,6 @@
 {
   "id": "zyxel-nr7101",
+  "lan_subnet": "10.63.178.0/24",
   "vendor": "Zyxel",
   "description": "NR7101 — 5G/NR outdoor router, MediaTek MT7621",
   "openwrt": {
@@ -176,7 +177,9 @@
     "requires_password": true,
     "password_tool": "zyxel_pwgen",
     "password_input": "device serial number (printed on unit)",
-    "critical_partitions": ["Factory"],
+    "critical_partitions": [
+      "Factory"
+    ],
     "note": "SSH as root/supervisor with generated password. Dump all MTD partitions before zycast. Factory partition is irreplaceable."
   },
   "modem_inventory": {
@@ -185,22 +188,58 @@
     "note": "AT commands work via raw echo+cat to /dev/ttyUSB2 (no picocom/stty needed on OpenWrt). uqmi fails after sysupgrade -n because modem interface is unconfigured. AT commands always work.",
     "usb_sysfs": {
       "path": "/sys/bus/usb/devices/2-1/",
-      "manufacturer": { "cmd": "cat /sys/bus/usb/devices/2-1/manufacturer", "example": "Quectel" },
-      "product": { "cmd": "cat /sys/bus/usb/devices/2-1/product", "example": "RG502Q-EA" },
-      "vendor_id": { "cmd": "cat /sys/bus/usb/devices/2-1/idVendor", "example": "2c7c" },
-      "product_id": { "cmd": "cat /sys/bus/usb/devices/2-1/idProduct", "example": "0800" }
+      "manufacturer": {
+        "cmd": "cat /sys/bus/usb/devices/2-1/manufacturer",
+        "example": "Quectel"
+      },
+      "product": {
+        "cmd": "cat /sys/bus/usb/devices/2-1/product",
+        "example": "RG502Q-EA"
+      },
+      "vendor_id": {
+        "cmd": "cat /sys/bus/usb/devices/2-1/idVendor",
+        "example": "2c7c"
+      },
+      "product_id": {
+        "cmd": "cat /sys/bus/usb/devices/2-1/idProduct",
+        "example": "0800"
+      }
     },
     "at_commands": {
       "at_port": "/dev/ttyUSB2",
       "send_pattern": "echo -e 'AT<command>\\r' > /dev/ttyUSB2 && sleep 1 && cat /dev/ttyUSB2 (kill after 2s)",
-      "model": { "cmd": "ATI", "response_pattern": "Quectel / RG502Q-EA / Revision: <firmware>" },
-      "firmware": { "cmd": "AT+GMR", "example": "RG502QEAACR13A03M4G_ZYXEL" },
-      "imei": { "cmd": "AT+GSN", "example": "354351110824785" },
-      "sim_status": { "cmd": "AT+QSIMDET?", "response_pattern": "+QSIMDET: <auto_detect>,<present> (0,1 = auto off, SIM present)" },
-      "iccid": { "cmd": "AT+QCCID", "example": "89470000220307144371" },
-      "usb_mode": { "cmd": "AT+QCFG=\"usbnet\"", "response": "0=QMI/RmNet, 1=ECM, 2=MBIM" },
-      "signal": { "cmd": "AT+CSQ", "note": "Basic signal quality" },
-      "network": { "cmd": "AT+COPS?", "note": "Current operator" }
+      "model": {
+        "cmd": "ATI",
+        "response_pattern": "Quectel / RG502Q-EA / Revision: <firmware>"
+      },
+      "firmware": {
+        "cmd": "AT+GMR",
+        "example": "RG502QEAACR13A03M4G_ZYXEL"
+      },
+      "imei": {
+        "cmd": "AT+GSN",
+        "example": "354351110824785"
+      },
+      "sim_status": {
+        "cmd": "AT+QSIMDET?",
+        "response_pattern": "+QSIMDET: <auto_detect>,<present> (0,1 = auto off, SIM present)"
+      },
+      "iccid": {
+        "cmd": "AT+QCCID",
+        "example": "89470000220307144371"
+      },
+      "usb_mode": {
+        "cmd": "AT+QCFG=\"usbnet\"",
+        "response": "0=QMI/RmNet, 1=ECM, 2=MBIM"
+      },
+      "signal": {
+        "cmd": "AT+CSQ",
+        "note": "Basic signal quality"
+      },
+      "network": {
+        "cmd": "AT+COPS?",
+        "note": "Current operator"
+      }
     },
     "uqmi_commands": {
       "note": "Only works after modem WAN interface is configured (uci set network.wan.proto=qmi). Returns 'Failed to connect to service' on fresh sysupgrade -n.",

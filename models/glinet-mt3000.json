@@ -1,5 +1,6 @@
 {
   "id": "glinet-mt3000",
+  "lan_subnet": "10.230.236.0/24",
   "vendor": "GL.iNet",
   "description": "Beryl AX (GL-MT3000) WiFi 6 travel router",
   "openwrt": {

@@ -1,5 +1,6 @@
 {
   "id": "ubnt-edgerouter-x",
+  "lan_subnet": "10.78.162.0/24",
   "vendor": "Ubiquiti",
   "description": "EdgeRouter X (ER-X) — MediaTek MT7621A, 5x GbE, no WiFi",
   "openwrt": {

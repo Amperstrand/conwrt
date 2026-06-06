@@ -1,7 +1,8 @@
 {
   "id": "linksys-whw03-v2",
+  "lan_subnet": "10.61.168.0/24",
   "vendor": "Linksys",
-  "description": "Velop Tri-Band V2 (WHW03 V2) \u2014 U-Boot HTTP recovery signatures needed",
+  "description": "Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed",
   "openwrt": {
     "target": "ipq40xx/generic",
     "device": "linksys,whw03v2",

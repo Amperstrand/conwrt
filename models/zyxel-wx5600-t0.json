@@ -1,7 +1,8 @@
 {
   "id": "zyxel-wx5600-t0",
+  "lan_subnet": "10.220.129.0/24",
   "vendor": "Zyxel",
-  "description": "WX5600-T0 (AX6000) \u2014 Altibox/Lyse ISP build, MediaTek MT7986B",
+  "description": "WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B",
   "openwrt": {
     "target": "mediatek/filogic",
     "device": "zyxel,wx5600-t0-ubootmod",
@@ -38,7 +39,7 @@
       "flash_time_seconds": 120,
       "silence_timeout": 30,
       "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
-      "led_pattern": "no specific LED pattern \u2014 watch serial output",
+      "led_pattern": "no specific LED pattern — watch serial output",
       "images": {
         "preloader": {
           "filename": "*-ubootmod-preloader.bin",
@@ -89,7 +90,7 @@
       "flash_time_seconds": 300,
       "silence_timeout": 30,
       "reset_instructions": "Connect FTDI serial adapter to internal UART header (3.3V). Open case required.",
-      "led_pattern": "no specific LED pattern \u2014 watch serial output",
+      "led_pattern": "no specific LED pattern — watch serial output",
       "images": {
         "stock_bl2": {
           "filename": "zyxel-bl2.bin",

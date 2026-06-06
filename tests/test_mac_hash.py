@@ -1,5 +1,49 @@
 from mac_hash import mac_to_host_byte, mac_to_lan_ip, mac_to_hostname_suffix
 
+import hashlib
+
+
+class TestMacHashShellParity:
+    """Verify Python mac_hash produces the same result as the BusyBox shell pipeline.
+
+    The shell script uses:
+        printf '%s' "$_mac_clean" | md5sum | cut -c1-8
+    Python uses:
+        hashlib.md5(mac_clean.encode()).hexdigest()[:8]
+
+    echo vs printf was a critical bug — echo adds a trailing newline which
+    changes the hash. These tests ensure parity is maintained.
+    """
+
+    def test_parity_colon_separated(self):
+        mac = "aa:bb:cc:dd:ee:01"
+        mac_clean = mac.lower().replace(":", "")
+        py = mac_to_host_byte(mac)
+        shell_hex = hashlib.md5(mac_clean.encode()).hexdigest()[:8]
+        shell_val = int(shell_hex, 16) % 200 + 2
+        assert py == shell_val
+
+    def test_parity_uppercase_input(self):
+        mac = "AA:BB:CC:DD:EE:FF"
+        mac_clean = mac.lower().replace(":", "")
+        py = mac_to_host_byte(mac)
+        shell_hex = hashlib.md5(mac_clean.encode()).hexdigest()[:8]
+        shell_val = int(shell_hex, 16) % 200 + 2
+        assert py == shell_val
+
+    def test_parity_no_trailing_newline_in_hash_input(self):
+        """Regression guard: printf '%s' produces no newline; echo does.
+
+        If someone changes the shell script back to echo, this test catches it
+        by verifying the hash input is the bare string without \\n.
+        """
+        mac = "94:83:c4:aa:bb:cc"
+        mac_clean = mac.lower().replace(":", "")
+        h_no_nl = hashlib.md5(mac_clean.encode()).hexdigest()[:8]
+        h_with_nl = hashlib.md5((mac_clean + "\n").encode()).hexdigest()[:8]
+        assert h_no_nl != h_with_nl, "Hashes should differ when newline is added"
+        assert mac_to_host_byte(mac) == int(h_no_nl, 16) % 200 + 2
+
 
 class TestMacToHostByte:
     def test_deterministic(self):

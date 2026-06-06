@@ -1,5 +1,6 @@
 {
   "id": "zyxel-gs1900-8hp-a1",
+  "lan_subnet": "10.172.177.0/24",
   "vendor": "Zyxel",
   "description": "GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget",
   "openwrt": {
@@ -97,26 +98,86 @@
     "oem_stock": {
       "description": "Original Zyxel OEM dual-partition layout",
       "source": "OpenWrt DTS rtl8380_zyxel_gs1900_gpio.dtsi",
-      "mtd0": { "name": "u-boot", "size": "256K", "offset": "0x0" },
-      "mtd1": { "name": "u-boot-env", "size": "64K", "offset": "0x40000" },
-      "mtd2": { "name": "u-boot-env2", "size": "64K", "offset": "0x50000" },
-      "mtd3": { "name": "jffs", "size": "1024K", "offset": "0x60000" },
-      "mtd4": { "name": "jffs2", "size": "1024K", "offset": "0x160000" },
-      "mtd5": { "name": "firmware", "size": "6976K", "offset": "0x260000", "note": "Active partition (partition 0)" },
-      "mtd6": { "name": "runtime2", "size": "6976K", "offset": "0x930000", "note": "Backup partition with OEM firmware" }
+      "mtd0": {
+        "name": "u-boot",
+        "size": "256K",
+        "offset": "0x0"
+      },
+      "mtd1": {
+        "name": "u-boot-env",
+        "size": "64K",
+        "offset": "0x40000"
+      },
+      "mtd2": {
+        "name": "u-boot-env2",
+        "size": "64K",
+        "offset": "0x50000"
+      },
+      "mtd3": {
+        "name": "jffs",
+        "size": "1024K",
+        "offset": "0x60000"
+      },
+      "mtd4": {
+        "name": "jffs2",
+        "size": "1024K",
+        "offset": "0x160000"
+      },
+      "mtd5": {
+        "name": "firmware",
+        "size": "6976K",
+        "offset": "0x260000",
+        "note": "Active partition (partition 0)"
+      },
+      "mtd6": {
+        "name": "runtime2",
+        "size": "6976K",
+        "offset": "0x930000",
+        "note": "Backup partition with OEM firmware"
+      }
     },
     "openwrt_25_merged": {
       "description": "Merged single-partition layout after OpenWrt 25.12.1 sysupgrade",
       "source": "Verified on hardware (cat /proc/mtd), 2026-05-21",
-      "mtd0": { "name": "u-boot", "size": "256K" },
-      "mtd1": { "name": "u-boot-env", "size": "64K" },
-      "mtd2": { "name": "u-boot-env2", "size": "64K" },
-      "mtd3": { "name": "jffs", "size": "1024K" },
-      "mtd4": { "name": "jffs2", "size": "1024K" },
-      "mtd5": { "name": "firmware", "size": "13824K", "note": "Merged from dual 6976K+6976K partitions" },
-      "mtd6": { "name": "kernel", "size": "3712K" },
-      "mtd7": { "name": "rootfs", "size": "10176K", "note": "squashfs" },
-      "mtd8": { "name": "rootfs_data", "size": "7504K", "note": "JFFS2 overlay" }
+      "mtd0": {
+        "name": "u-boot",
+        "size": "256K"
+      },
+      "mtd1": {
+        "name": "u-boot-env",
+        "size": "64K"
+      },
+      "mtd2": {
+        "name": "u-boot-env2",
+        "size": "64K"
+      },
+      "mtd3": {
+        "name": "jffs",
+        "size": "1024K"
+      },
+      "mtd4": {
+        "name": "jffs2",
+        "size": "1024K"
+      },
+      "mtd5": {
+        "name": "firmware",
+        "size": "13824K",
+        "note": "Merged from dual 6976K+6976K partitions"
+      },
+      "mtd6": {
+        "name": "kernel",
+        "size": "3712K"
+      },
+      "mtd7": {
+        "name": "rootfs",
+        "size": "10176K",
+        "note": "squashfs"
+      },
+      "mtd8": {
+        "name": "rootfs_data",
+        "size": "7504K",
+        "note": "JFFS2 overlay"
+      }
     }
   },
   "uboot": {
@@ -137,9 +198,19 @@
         "tftpboot 0x84f00000 ${serverip}:openwrt-initramfs.bin",
         "bootm"
       ],
-      "switch_to_primary_partition": ["setsys bootpartition 0", "savesys"],
-      "switch_to_backup_partition": ["setsys bootpartition 1", "savesys"],
-      "return_to_stock": ["setsys bootpartition 1", "savesys", "boot"]
+      "switch_to_primary_partition": [
+        "setsys bootpartition 0",
+        "savesys"
+      ],
+      "switch_to_backup_partition": [
+        "setsys bootpartition 1",
+        "savesys"
+      ],
+      "return_to_stock": [
+        "setsys bootpartition 1",
+        "savesys",
+        "boot"
+      ]
     }
   },
   "signatures": {
@@ -241,12 +312,20 @@
     "ssh": {
       "description": "Restricted Cisco-like CLI via /bin/cli binary (426KB, symlinked to /bin/login). NOT a Linux shell.",
       "available_commands": [
-        "show info", "show version", "show interfaces all",
-        "show vlan", "show mac address-table",
-        "show lldp neighbor", "show cable-diag interfaces",
+        "show info",
+        "show version",
+        "show interfaces all",
+        "show vlan",
+        "show mac address-table",
+        "show lldp neighbor",
+        "show cable-diag interfaces",
         "show power inline consumption",
-        "ping", "traceroute", "ping6",
-        "boot", "reload", "logout",
+        "ping",
+        "traceroute",
+        "ping6",
+        "boot",
+        "reload",
+        "logout",
         "clear (mac-flush, igmp-flush)"
       ],
       "not_available": [
@@ -270,10 +349,26 @@
         "register (read/write hardware registers)",
         "port (PHY port configuration)",
         "chip (chip configure)",
-        "vlan", "stg", "l2-table", "acl", "mirror",
-        "led", "mib", "qos", "bandwidth", "storm-control",
-        "eee", "flowctrl", "nic", "sflow", "rspan",
-        "debug", "trunk", "dot1x", "svlan", "system"
+        "vlan",
+        "stg",
+        "l2-table",
+        "acl",
+        "mirror",
+        "led",
+        "mib",
+        "qos",
+        "bandwidth",
+        "storm-control",
+        "eee",
+        "flowctrl",
+        "nic",
+        "sflow",
+        "rspan",
+        "debug",
+        "trunk",
+        "dot1x",
+        "svlan",
+        "system"
       ],
       "verdict": "Register-level hardware access only. No process execution, no filesystem access, no shell.",
       "note": "PoE control on stock firmware requires web UI or HTTP API. The diagnostic 'port' command is for PHY registers, not PoE management."
@@ -309,7 +404,11 @@
   "switch_initiated_flashing": {
     "from_openwrt": {
       "description": "Switch running OpenWrt permanently can serve as flash host for target devices",
-      "requires": ["conwrt-lite or conwrt.py + Python deps", "firmware image in /tmp", "target device on same L2"],
+      "requires": [
+        "conwrt-lite or conwrt.py + Python deps",
+        "firmware image in /tmp",
+        "target device on same L2"
+      ],
       "poe_control": "ubus call poe manage or uci set poe.@port[N].enable",
       "tftp_server": "busybox tftp or Python tftp-server.py",
       "status": "conwrt-lite framework created (#10), integration pending (#9)"

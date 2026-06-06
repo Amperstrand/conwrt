@@ -1,5 +1,6 @@
 {
   "id": "glinet-gl-ar300m-nand",
+  "lan_subnet": "10.64.224.0/24",
   "vendor": "GL.iNet",
   "description": "AR300M / AR300M-Ext / AR300MD (NAND boot, switch LEFT)",
   "openwrt": {
@@ -24,28 +25,28 @@
   "stock_default_ip": "192.168.8.1",
   "switch": {
     "description": "Physical slide switch. RECOMMENDED: always leave LEFT (toward USB) for NAND boot. NAND is 128MB and faster; NOR is only 16MB.",
-    "recommendation": "Always use NAND (switch LEFT). NOR serves as automatic failsafe \u2014 if NAND fails 3 times, U-Boot falls back to NOR automatically.",
-    "purpose": "Selects NAND vs NOR boot when boot_dev=on. U-Boot source: switch_boot_load() returns val=0 (switch RIGHT) \u2192 bootm 0x9f050000 (NOR), val=1/2 (switch LEFT) \u2192 nboot (NAND). GL_BOOT_ADDR=0x9f050000 is the NOR firmware address. Switch-based NOR boot may not work on all U-Boot versions \u2014 use bootcount method as fallback.",
+    "recommendation": "Always use NAND (switch LEFT). NOR serves as automatic failsafe — if NAND fails 3 times, U-Boot falls back to NOR automatically.",
+    "purpose": "Selects NAND vs NOR boot when boot_dev=on. U-Boot source: switch_boot_load() returns val=0 (switch RIGHT) → bootm 0x9f050000 (NOR), val=1/2 (switch LEFT) → nboot (NAND). GL_BOOT_ADDR=0x9f050000 is the NOR firmware address. Switch-based NOR boot may not work on all U-Boot versions — use bootcount method as fallback.",
     "positions": {
       "left": {
         "label": "Toward USB/reset button",
         "boot_source": "NAND (nboot 0x81000000 0)",
         "uboot_recovery": true,
-        "gpio_state": "GPIO 0 or 1 HIGH (val=1 or 2 \u2192 nboot NAND)",
+        "gpio_state": "GPIO 0 or 1 HIGH (val=1 or 2 → nboot NAND)",
         "notes": "Boots kernel from NAND mtd4, rootfs from NAND UBI mtd5. This is the default and recommended boot source."
       },
       "right": {
         "label": "Away from USB port",
         "boot_source": "NOR (bootm 0x9f050000)",
         "uboot_recovery": true,
-        "gpio_state": "GPIO 0,1 both LOW (val=0 \u2192 bootm GL_BOOT_ADDR = 0x9f050000 = NOR firmware address)",
-        "notes": "Switch RIGHT triggers NOR boot via bootm 0x9f050000. GL_BOOT_ADDR is set from BOOT_ADDR in configs/ar300m-ar71xx_generic.mk = 0x9f050000 (NOR firmware partition). May not work reliably on all U-Boot versions \u2014 GL.iNet forum reports from 2017-2018 say switch NOR boot broken. Possibly caused by NAND-specific bootargs causing NOR kernel panic. Retest pending with correct bootargs."
+        "gpio_state": "GPIO 0,1 both LOW (val=0 → bootm GL_BOOT_ADDR = 0x9f050000 = NOR firmware address)",
+        "notes": "Switch RIGHT triggers NOR boot via bootm 0x9f050000. GL_BOOT_ADDR is set from BOOT_ADDR in configs/ar300m-ar71xx_generic.mk = 0x9f050000 (NOR firmware partition). May not work reliably on all U-Boot versions — GL.iNet forum reports from 2017-2018 say switch NOR boot broken. Possibly caused by NAND-specific bootargs causing NOR kernel panic. Retest pending with correct bootargs."
       }
     },
     "uboot_env": {
       "boot_dev": "Set 'on' via fw_setenv boot_dev on to enable switch-based boot selection. Enables GPIO reading via switch_boot_load(). Default: not set (router always boots NAND).",
       "bootlimit": "3 failed NAND boots triggers automatic NOR fallback (altbootcmd=run blf).",
-      "bootcmd": "if nand bad; then nboot 0x81000000 0 || run blf; else run blf; fi \u2014 always tries NAND first. select_boot_dev() runs BEFORE bootcmd in GL.iNet U-Boot and handles switch-based selection.",
+      "bootcmd": "if nand bad; then nboot 0x81000000 0 || run blf; else run blf; fi — always tries NAND first. select_boot_dev() runs BEFORE bootcmd in GL.iNet U-Boot and handles switch-based selection.",
       "bootargs": "Must be generic for dual-boot: 'console=ttyS0,115200 rootfstype=squashfs,jffs2 noinitrd'. Default contains 'root=/dev/mtdblock8 ubi.mtd=5' which is NAND-only and causes NOR kernel panic."
     }
   },
@@ -107,7 +108,7 @@
   },
   "flash_methods": {
     "recovery-http": {
-      "description": "U-Boot HTTP recovery via pepe2k/u-boot_mod. Hold reset button while powering on. Always boots NAND regardless of switch position \u2014 switch only affects normal boot.",
+      "description": "U-Boot HTTP recovery via pepe2k/u-boot_mod. Hold reset button while powering on. Always boots NAND regardless of switch position — switch only affects normal boot.",
       "recovery_ip": "192.168.1.1",
       "client_ip": "192.168.1.2",
       "client_subnet": "255.255.255.0",
@@ -130,7 +131,7 @@
       "silence_timeout": 30,
       "reset_instructions": "Hold reset button while connecting power. Hold for ~5 seconds until LEDs flash. Switch position does not matter for U-Boot recovery.",
       "led_pattern": "LEDs flash 5 times during U-Boot entry",
-      "firmware_note": "Use the factory.img (e.g. glinet_gl-ar300m-nand-squashfs-factory.img) for first-time NAND flash. NOT initramfs \u2014 the factory.img writes directly to NAND. For subsequent updates, use sysupgrade from running OpenWrt."
+      "firmware_note": "Use the factory.img (e.g. glinet_gl-ar300m-nand-squashfs-factory.img) for first-time NAND flash. NOT initramfs — the factory.img writes directly to NAND. For subsequent updates, use sysupgrade from running OpenWrt."
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
@@ -176,7 +177,7 @@
     }
   },
   "nor_recovery": {
-    "description": "Set up NOR flash as a recovery OpenWrt partition. Creates a dual-boot setup: NAND (switch LEFT) = primary, NOR = recovery. NOR boot can be triggered via switch RIGHT (with boot_dev=on, designed to call bootm 0x9f050000) or via bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions \u2014 use bootcount as reliable fallback.",
+    "description": "Set up NOR flash as a recovery OpenWrt partition. Creates a dual-boot setup: NAND (switch LEFT) = primary, NOR = recovery. NOR boot can be triggered via switch RIGHT (with boot_dev=on, designed to call bootm 0x9f050000) or via bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions — use bootcount as reliable fallback.",
     "warning": "Flashing U-Boot (mtd0) can brick the device if power is lost during write. Only recoverable via UART serial.",
     "uboot_upgrade": {
       "url": "https://raw.githubusercontent.com/gl-inet/uboot-for-qca95xx/master/bin/uboot-gl-ar300m-20220216-md5-97ff7bb80cbf129fa21f34ded1559ff8.bin",
@@ -196,7 +197,7 @@
       "sha256": "0d38524166f2602e327e03203425f65595c9331ebe4b9955b377c0de3c1b2f88",
       "mtd_partition": "nor_firmware",
       "mtd_index": 2,
-      "description": "Stock OpenWrt for NOR recovery partition. Minimal, clean, always boots fresh \u2014 no custom config that could be corrupted."
+      "description": "Stock OpenWrt for NOR recovery partition. Minimal, clean, always boots fresh — no custom config that could be corrupted."
     },
     "recovery_hostname": "ar300-nor-recovery",
     "bootargs_fix": "console=ttyS0,115200 rootfstype=squashfs,jffs2 noinitrd",
@@ -207,32 +208,32 @@
     },
     "boot_method": {
       "recommended": "bootcount",
-      "description": "Set fw_setenv bootcount 3 and power cycle. U-Boot increments to 4, exceeds bootlimit=3, sets nand_boot_failed=1 and changes bootcmd to bootm 0x9f050000. CAVEAT: With working NAND kernel, select_boot_dev() runs nboot first which boots NAND and never returns \u2014 NOR bootm is never reached. Bootcount NOR boot may only work when NAND kernel is broken (nboot fails/returns, allowing fallthrough to NOR bootm).",
-      "switch_method_status": "Switch RIGHT (val=0) triggers bootm 0x9f050000 (NOR address) in select_boot_dev(). Tested 2026-05-17: NOR kernel starts but PANICS. ROOT CAUSE CONFIRMED from source: mips_cache_flush() in cmd_bootm.c runs BEFORE LZMA decompression, not after. Decompressed kernel at 0x80060000 stays dirty in D-cache, I-cache fetches stale RAM. bootm 0xbf050000 (uncached alias) ALSO FAILS \u2014 destination writes still dirty D-cache. NAND also has the same bug but survives probabilistically (D-cache pre-state from DMA reads causes corruption to land in non-critical code). Fix: flush_cache after decompression (applied in fork https://github.com/Amperstrand/uboot-for-qca95xx branch conwrt-fix). CI green, artifact built. NOT YET TESTED ON DEVICE.",
+      "description": "Set fw_setenv bootcount 3 and power cycle. U-Boot increments to 4, exceeds bootlimit=3, sets nand_boot_failed=1 and changes bootcmd to bootm 0x9f050000. CAVEAT: With working NAND kernel, select_boot_dev() runs nboot first which boots NAND and never returns — NOR bootm is never reached. Bootcount NOR boot may only work when NAND kernel is broken (nboot fails/returns, allowing fallthrough to NOR bootm).",
+      "switch_method_status": "Switch RIGHT (val=0) triggers bootm 0x9f050000 (NOR address) in select_boot_dev(). Tested 2026-05-17: NOR kernel starts but PANICS. ROOT CAUSE CONFIRMED from source: mips_cache_flush() in cmd_bootm.c runs BEFORE LZMA decompression, not after. Decompressed kernel at 0x80060000 stays dirty in D-cache, I-cache fetches stale RAM. bootm 0xbf050000 (uncached alias) ALSO FAILS — destination writes still dirty D-cache. NAND also has the same bug but survives probabilistically (D-cache pre-state from DMA reads causes corruption to land in non-critical code). Fix: flush_cache after decompression (applied in fork https://github.com/Amperstrand/uboot-for-qca95xx branch conwrt-fix). CI green, artifact built. NOT YET TESTED ON DEVICE.",
       "tested_2026-05-17": {
-        "switch_method": "FAILED \u2014 switch RIGHT, boot_dev=on. bootm 0x9f050000 (KSEG0 cached). NOR kernel starts but panics. Root cause: D-cache not flushed after LZMA decompression (cmd_bootm.c:325 vs 390).",
-        "bootcount_method": "UNRELIABLE \u2014 With working NAND, nboot boots NAND and never returns to NOR bootm. Previously worked when NAND was broken. Same D-cache flush bug applies.",
+        "switch_method": "FAILED — switch RIGHT, boot_dev=on. bootm 0x9f050000 (KSEG0 cached). NOR kernel starts but panics. Root cause: D-cache not flushed after LZMA decompression (cmd_bootm.c:325 vs 390).",
+        "bootcount_method": "UNRELIABLE — With working NAND, nboot boots NAND and never returns to NOR bootm. Previously worked when NAND was broken. Same D-cache flush bug applies.",
         "nor_partition_verified": "MD5 of NOR mtd2 matches source image exactly. Valid uImage header (LZMA comp, MIPS OpenWrt Linux-6.6.93). Same kernel version as NAND (6.6.93, 14 bytes smaller).",
-        "uncached_test": "TESTED bootm 0xbf050000 (KSEG1 uncached alias) via boot_dev=off + custom bootcmd. ALSO FAILED. Uncached source reads don't help \u2014 destination writes at 0x80060000 still dirty D-cache. Device required U-Boot safe mode recovery.",
+        "uncached_test": "TESTED bootm 0xbf050000 (KSEG1 uncached alias) via boot_dev=off + custom bootcmd. ALSO FAILED. Uncached source reads don't help — destination writes at 0x80060000 still dirty D-cache. Device required U-Boot safe mode recovery.",
         "root_cause_confirmed": "cmd_bootm.c lines 321-406: mips_cache_flush() runs BEFORE decompression. No flush between LZMA output and kernel jump. MIPS 24Kc Harvard arch: I-cache fills from RAM, can't see dirty D-cache. Fix: add flush_cache(hdr->ih_load, unc_len) after decompression."
       }
     },
     "requires_kmod_mtd_rw": true,
     "mtd_rw_module_param": "i_want_a_brick=1",
     "sources": {
-      "firmware_format": "NAND image is UBI (tar/uImage+UBI), NOR image is raw squashfs (uImage). NOT interchangeable. Source: openwrt/openwrt target/linux/ath79/image/nand.mk \u2014 Device/glinet_gl-ar300m-nand uses 'append-ubi', Device/glinet_gl-ar300m-nor uses default NOR layout. Verified 2026-05-17: NAND sysupgrade=POSIX tar, NOR sysupgrade=u-boot uImage.",
-      "uboot_source": "https://github.com/gl-inet/uboot-for-qca95xx \u2014 GL.iNet fork of pepe2k/u-boot_mod. Binary: uboot-gl-ar300m-20220216. Patched fork with flush_cache fix: https://github.com/Amperstrand/uboot-for-qca95xx (branch conwrt-fix). CI-built u-boot.bin available as artifact from GitHub Actions run 25995448558.",
-      "dual_boot_docs": "https://docs.gl-inet.com/router/en/3/specification/gl-ar300m/ \u2014 'The router has two flash so we have two firmwares.' Switch selects boot source when boot_dev=on.",
-      "openwrt_wiki": "https://openwrt.org/toh/gl.inet/gl-ar300m \u2014 'The suggested way of installing OpenWrt on the GL-AR300M is using the u-boot bootloader.'",
-      "risk_assessment": "U-Boot flash (mtd0) is the only dangerous operation. Power loss during mtd0 write = brick, recoverable only via UART serial. NOR firmware flash (mtd2) is safe \u2014 NAND boot is unaffected. Failsafe: 3 failed NAND boots auto-fallback to NOR (bootlimit=3, altbootcmd=run blf).",
-      "bootargs_fix": "CRITICAL: Default U-Boot bootargs contains 'root=/dev/mtdblock8 ubi.mtd=5,2048' which is NAND-specific. NOR kernel uses different MTD layout (only ~5 partitions) so mtdblock8 doesn't exist. Must change bootargs to 'console=ttyS0,115200 rootfstype=squashfs,jffs2 noinitrd' for dual-boot to work. Source: gl-inet/uboot-for-qca95xx src/common/device_check.c and src/include/configs/board953x.h \u2014 bootargs hardcoded for NAND layout.",
+      "firmware_format": "NAND image is UBI (tar/uImage+UBI), NOR image is raw squashfs (uImage). NOT interchangeable. Source: openwrt/openwrt target/linux/ath79/image/nand.mk — Device/glinet_gl-ar300m-nand uses 'append-ubi', Device/glinet_gl-ar300m-nor uses default NOR layout. Verified 2026-05-17: NAND sysupgrade=POSIX tar, NOR sysupgrade=u-boot uImage.",
+      "uboot_source": "https://github.com/gl-inet/uboot-for-qca95xx — GL.iNet fork of pepe2k/u-boot_mod. Binary: uboot-gl-ar300m-20220216. Patched fork with flush_cache fix: https://github.com/Amperstrand/uboot-for-qca95xx (branch conwrt-fix). CI-built u-boot.bin available as artifact from GitHub Actions run 25995448558.",
+      "dual_boot_docs": "https://docs.gl-inet.com/router/en/3/specification/gl-ar300m/ — 'The router has two flash so we have two firmwares.' Switch selects boot source when boot_dev=on.",
+      "openwrt_wiki": "https://openwrt.org/toh/gl.inet/gl-ar300m — 'The suggested way of installing OpenWrt on the GL-AR300M is using the u-boot bootloader.'",
+      "risk_assessment": "U-Boot flash (mtd0) is the only dangerous operation. Power loss during mtd0 write = brick, recoverable only via UART serial. NOR firmware flash (mtd2) is safe — NAND boot is unaffected. Failsafe: 3 failed NAND boots auto-fallback to NOR (bootlimit=3, altbootcmd=run blf).",
+      "bootargs_fix": "CRITICAL: Default U-Boot bootargs contains 'root=/dev/mtdblock8 ubi.mtd=5,2048' which is NAND-specific. NOR kernel uses different MTD layout (only ~5 partitions) so mtdblock8 doesn't exist. Must change bootargs to 'console=ttyS0,115200 rootfstype=squashfs,jffs2 noinitrd' for dual-boot to work. Source: gl-inet/uboot-for-qca95xx src/common/device_check.c and src/include/configs/board953x.h — bootargs hardcoded for NAND layout.",
       "boot_local_env": "GL.iNet U-Boot has 'boot_local' env var as alternative to GPIO-based switch. boot_local=nor forces NOR boot, boot_local=nand forces NAND. Checked in select_boot_dev() after switch_boot_load(). Source: gl-inet/uboot-for-qca95xx src/common/device_check.c lines 95-105.",
-      "gpio_switch": "Slider switch reads hardware GPIO 0 and 1 (mask 0x3) via AR7240_GPIO_IN register. switch_boot_load() debounces by reading twice with 20ms delay. val=0 (both LOW, switch RIGHT) \u2192 bootm GL_BOOT_ADDR (0x9f050000 = NOR address). val=1 or 2 (switch LEFT) \u2192 nboot 0x81000000 0 (NAND). val=3 \u2192 fall through. GL_BOOT_ADDR is the NOR firmware partition address, NOT a NAND address. Source: gl-inet/uboot-for-qca95xx configs/ar300m-ar71xx_generic.mk:24, src/board/atheros/board953x/board953x.c:426-438, src/common/device_check.c:71-113."
+      "gpio_switch": "Slider switch reads hardware GPIO 0 and 1 (mask 0x3) via AR7240_GPIO_IN register. switch_boot_load() debounces by reading twice with 20ms delay. val=0 (both LOW, switch RIGHT) → bootm GL_BOOT_ADDR (0x9f050000 = NOR address). val=1 or 2 (switch LEFT) → nboot 0x81000000 0 (NAND). val=3 → fall through. GL_BOOT_ADDR is the NOR firmware partition address, NOT a NAND address. Source: gl-inet/uboot-for-qca95xx configs/ar300m-ar71xx_generic.mk:24, src/board/atheros/board953x/board953x.c:426-438, src/common/device_check.c:71-113."
     },
     "post_setup_verification": {
-      "nand_boot": "Switch LEFT, power cycle \u2192 NAND OpenWrt (primary, hostname from NAND overlay). TESTED 2026-05-17: works correctly, bootcount auto-resets to 0.",
-      "nor_boot": "Bootcount method: fw_setenv bootcount 3, power cycle \u2192 NOR OpenWrt (recovery, hostname ar300-nor-recovery). After NOR boot, reset bootcount to 0 via fw_setenv bootcount 0 to restore normal NAND boot.",
-      "nor_boot_switch_method": "BROKEN \u2014 do not rely on switch position for NOR boot. Use bootcount method.",
+      "nand_boot": "Switch LEFT, power cycle → NAND OpenWrt (primary, hostname from NAND overlay). TESTED 2026-05-17: works correctly, bootcount auto-resets to 0.",
+      "nor_boot": "Bootcount method: fw_setenv bootcount 3, power cycle → NOR OpenWrt (recovery, hostname ar300-nor-recovery). After NOR boot, reset bootcount to 0 via fw_setenv bootcount 0 to restore normal NAND boot.",
+      "nor_boot_switch_method": "BROKEN — do not rely on switch position for NOR boot. Use bootcount method.",
       "failsafe": "3 failed NAND boots auto-fallback to NOR (bootlimit=3, altbootcmd=run blf). NOT YET TESTED.",
       "nor_hostname_command": "echo ar300-nor-recovery > /proc/sys/kernel/hostname && echo ar300-nor-recovery > /etc/hostname && uci set system.@system[0].hostname='ar300-nor-recovery' && uci commit system",
       "return_to_nand": "From NOR: fw_setenv bootcount 0 && reboot. After reboot, NAND boots normally (bootcount resets on NAND boot)."
@@ -252,7 +253,7 @@
     "nand_boot": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "AR300M boots NAND OpenWrt 24.10.2 (hostname: switchleft, glinet,gl-ar300m-nand DTB). UBI rootfs with ~113MB overlay. Survived NOR setup (U-Boot upgrade + NOR firmware flash + bootargs fix). Also tested returning from NOR boot: switch LEFT + power cycle \u2192 NAND boots correctly, bootcount auto-resets to 0."
+      "notes": "AR300M boots NAND OpenWrt 24.10.2 (hostname: switchleft, glinet,gl-ar300m-nand DTB). UBI rootfs with ~113MB overlay. Survived NOR setup (U-Boot upgrade + NOR firmware flash + bootargs fix). Also tested returning from NOR boot: switch LEFT + power cycle → NAND boots correctly, bootcount auto-resets to 0."
     },
     "nor_setup": {
       "tested": true,
@@ -262,12 +263,12 @@
     "nor_boot_switch_method": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "FAILED. Switch RIGHT + boot_dev=on \u2192 select_boot_dev() tries bootm 0x9f050000 but returns (fails). Falls through to NAND boot. boot_local=nor also tried and failed. NOR partition verified correct (MD5 match). Root cause unknown."
+      "notes": "FAILED. Switch RIGHT + boot_dev=on → select_boot_dev() tries bootm 0x9f050000 but returns (fails). Falls through to NAND boot. boot_local=nor also tried and failed. NOR partition verified correct (MD5 match). Root cause unknown."
     },
     "nor_boot_bootcount_method": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "SUCCESS. fw_setenv bootcount 3, power cycle. U-Boot: bootcount=4 > bootlimit=3 \u2192 nand_boot_failed=1 \u2192 bootm 0x9f050000 forced. NOR kernel boots: glinet,gl-ar300m-nor DTB, squashfs rootfs on NOR mtd4, jffs2 overlay 8.9MB. Hostname set to ar300-nor-recovery."
+      "notes": "SUCCESS. fw_setenv bootcount 3, power cycle. U-Boot: bootcount=4 > bootlimit=3 → nand_boot_failed=1 → bootm 0x9f050000 forced. NOR kernel boots: glinet,gl-ar300m-nor DTB, squashfs rootfs on NOR mtd4, jffs2 overlay 8.9MB. Hostname set to ar300-nor-recovery."
     },
     "nand_boot_after_nor": {
       "tested": true,
@@ -277,23 +278,23 @@
     "tether-android-adb": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "Android phone via USB. Installed kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, adb manually via SCP (no internet on router). ADB authorized (one-time phone-side accept). adb shell svc usb setFunctions rndis \u2192 usb0 appears (RNDIS). DHCP lease from phone. Ping 8.8.8.8 succeeds (38-178ms). Required packages: kmod-mii, kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-rndis, adb, zlib, libopenssl3, libatomic1."
+      "notes": "Android phone via USB. Installed kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, adb manually via SCP (no internet on router). ADB authorized (one-time phone-side accept). adb shell svc usb setFunctions rndis → usb0 appears (RNDIS). DHCP lease from phone. Ping 8.8.8.8 succeeds (38-178ms). Required packages: kmod-mii, kmod-usb-net, kmod-usb-net-cdc-ether, kmod-usb-net-rndis, adb, zlib, libopenssl3, libatomic1."
     },
     "sqm": {
       "tested": true,
       "date": "2026-05-17",
       "experimental": true,
-      "notes": "EXPERIMENTAL \u2014 not broadly tested. CAKE with piece_of_cake.qos on usb0 (cell tether). Static 15000/5000 kbit/s on QCA9533 (650MHz, 128MB RAM). CPU headroom confirmed at ~30 Mbit/s cell speeds (~27% CPU). Auto-SQM architecture designed (hotplug + byte-counter measurement + cron re-tune for variable links) but not implemented. Cell link is the bottleneck, not USB 2.0. Needs: more devices tested, dynamic bandwidth tuning, verification on ethernet/fiber WAN links."
+      "notes": "EXPERIMENTAL — not broadly tested. CAKE with piece_of_cake.qos on usb0 (cell tether). Static 15000/5000 kbit/s on QCA9533 (650MHz, 128MB RAM). CPU headroom confirmed at ~30 Mbit/s cell speeds (~27% CPU). Auto-SQM architecture designed (hotplug + byte-counter measurement + cron re-tune for variable links) but not implemented. Cell link is the bottleneck, not USB 2.0. Needs: more devices tested, dynamic bandwidth tuning, verification on ethernet/fiber WAN links."
     }
   },
   "sysupgrade": {
     "description": "AR300M uses glinet_nand_nor_do_upgrade() which auto-detects image type and flashes the correct partition regardless of current boot source.",
     "cross_flash": true,
-    "mechanism": "Auto-detects by magic number: 0x27051956 (U-Boot Image Magic) \u2192 NOR upgrade (writes to NOR firmware partition), tar archive \u2192 NAND upgrade (writes to NAND kernel + UBI partitions). Source: openwrt/openwrt target/linux/ath79/nand/base-files/lib/upgrade/platform.sh, commit 55e6c903ae.",
+    "mechanism": "Auto-detects by magic number: 0x27051956 (U-Boot Image Magic) → NOR upgrade (writes to NOR firmware partition), tar archive → NAND upgrade (writes to NAND kernel + UBI partitions). Source: openwrt/openwrt target/linux/ath79/nand/base-files/lib/upgrade/platform.sh, commit 55e6c903ae.",
     "nand_firmware_format": "POSIX tar archive (sysupgrade.bin is actually tar containing kernel + rootfs + CONTROL metadata). Contains NAND kernel + UBI rootfs.",
     "nor_firmware_format": "Raw uImage (U-Boot Image Magic 0x27051956, LZMA compressed MIPS kernel). Contains combined kernel+rootfs for NOR squashfs.",
-    "after_nand_upgrade": "Auto-sets fw_setenv bootcount 0 (next boot \u2192 NAND). Ensures device boots from newly flashed NAND.",
-    "after_nor_upgrade": "Auto-sets fw_setenv bootcount 3 (next boot \u2192 NOR via bootlimit). Ensures device boots from newly flashed NOR.",
+    "after_nand_upgrade": "Auto-sets fw_setenv bootcount 0 (next boot → NAND). Ensures device boots from newly flashed NAND.",
+    "after_nor_upgrade": "Auto-sets fw_setenv bootcount 3 (next boot → NOR via bootlimit). Ensures device boots from newly flashed NOR.",
     "supported_devices": {
       "nand_image": [
         "glinet,gl-ar300m-nand",

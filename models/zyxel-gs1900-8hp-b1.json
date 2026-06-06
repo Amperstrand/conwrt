@@ -1,5 +1,6 @@
 {
   "id": "zyxel-gs1900-8hp-b1",
+  "lan_subnet": "10.47.149.0/24",
   "vendor": "Zyxel",
   "description": "GS1900-8HP B1 (formerly v1) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget",
   "openwrt": {

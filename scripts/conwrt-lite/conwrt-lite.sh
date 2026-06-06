@@ -78,13 +78,13 @@ _conwrt_get_opt() {
     shift
     for _arg in "$@"; do
         case "$_arg" in
-            "$_needle"*) echo "${_arg#$_needle}"; return 0 ;;
+            "$_needle"*) echo "${_arg#"$_needle"}"; return 0 ;;
         esac
     done
     return 1
 }
 
-_conwrt_ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+_CONWRT_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
 _conwrt_cmd_setup() {
     _switch_ip=$(_conwrt_get_opt switch-ip "$@") || _switch_ip="192.168.1.1"
@@ -101,7 +101,7 @@ _conwrt_cmd_setup() {
     echo "waiting for SSH on $_switch_ip..."
     _elapsed=0
     while [ "$_elapsed" -lt 120 ]; do
-        if ssh $_conwrt_ssh_opts -o BatchMode=yes "$_remote" "true" 2>/dev/null; then
+        if ssh $_CONWRT_SSH_OPTS -o BatchMode=yes "$_remote" "true" 2>/dev/null; then
             echo "SSH available after ${_elapsed}s"
             break
         fi
@@ -115,10 +115,10 @@ _conwrt_cmd_setup() {
 
     if [ -n "$_bundle" ] && [ -f "$_bundle" ]; then
         echo "uploading conwrt-lite bundle..."
-        scp $_conwrt_ssh_opts -O "$_bundle" "${_remote}:/tmp/conwrt-lite.tar.gz" || {
+        scp $_CONWRT_SSH_OPTS -O "$_bundle" "${_remote}:/tmp/conwrt-lite.tar.gz" || {
             echo "scp bundle failed" >&2; return 1;
         }
-        ssh $_conwrt_ssh_opts "$_remote" "cd /tmp && tar xzf conwrt-lite.tar.gz" || {
+        ssh $_CONWRT_SSH_OPTS "$_remote" "cd /tmp && tar xzf conwrt-lite.tar.gz" || {
             echo "extract bundle failed" >&2; return 1;
         }
         echo "conwrt-lite deployed to $_switch_ip:/tmp/"
@@ -126,7 +126,7 @@ _conwrt_cmd_setup() {
 
     echo "uploading firmware image..."
     _image_name=$(basename "$_image")
-    scp $_conwrt_ssh_opts -O "$_image" "${_remote}:/tmp/${_image_name}" || {
+    scp $_CONWRT_SSH_OPTS -O "$_image" "${_remote}:/tmp/${_image_name}" || {
         echo "scp image failed" >&2; return 1;
     }
     echo "firmware uploaded: /tmp/$_image_name"
@@ -134,10 +134,10 @@ _conwrt_cmd_setup() {
     if [ -n "$_tftp_bin" ] && [ -f "$_tftp_bin" ]; then
         echo "uploading TFTP server binary..."
         _tftp_name=$(basename "$_tftp_bin")
-        scp $_conwrt_ssh_opts -O "$_tftp_bin" "${_remote}:/tmp/${_tftp_name}" || {
+        scp $_CONWRT_SSH_OPTS -O "$_tftp_bin" "${_remote}:/tmp/${_tftp_name}" || {
             echo "scp tftp binary failed" >&2; return 1;
         }
-        ssh $_conwrt_ssh_opts "$_remote" "chmod +x /tmp/${_tftp_name}" || {
+        ssh $_CONWRT_SSH_OPTS "$_remote" "chmod +x /tmp/${_tftp_name}" || {
             echo "chmod tftp binary failed" >&2; return 1;
         }
         echo "TFTP binary deployed: /tmp/$_tftp_name"

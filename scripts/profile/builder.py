@@ -194,7 +194,8 @@ def build_plan(
             model_data = load_model(model_id)
         except FileNotFoundError:
             pass
-    model_lan_subnet = model_data.get("lan_subnet", "")
+    model_lan_subnet_raw = model_data.get("lan_subnet", "")
+    model_lan_subnet = model_lan_subnet_raw
     if model_lan_subnet and "/" in model_lan_subnet:
         model_lan_subnet = model_lan_subnet.split("/")[0]
         parts = model_lan_subnet.split(".")
@@ -436,7 +437,11 @@ def build_plan(
                 ))
                 continue
 
-        resolved = _apply_defaults(uc.name, uc_cfg.params)
+        uc_params = dict(uc_cfg.params)
+        # Inject model's LAN subnet into guest-wifi so it derives a non-conflicting guest subnet
+        if uc.name == "guest-wifi" and model_lan_subnet_raw:
+            uc_params["lan_subnet"] = model_lan_subnet_raw
+        resolved = _apply_defaults(uc.name, uc_params)
         pkgs, remove = _uc_packages_for_mode(uc, mode)
         fb = _firstboot_for_mode(uc, resolved, mode)
         cfg_script = _configure_script_for_mode(uc, resolved, mode)
@@ -461,16 +466,16 @@ def build_plan(
     if effective_lan_ip_mode == "mac-hash" and model_lan_subnet:
         _mac_ip_fb = "\n".join([
             "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
-            "_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')",
-            "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
+            "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
+            "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
             f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
             "uci commit network",
         ])
         _mac_ip_ssh = " && ".join([
             "_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)",
-            "_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')",
-            "_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))",
+            "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
+            "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
             "_host=$((_host % 200 + 2))",
             f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
             "uci commit network",
@@ -484,8 +489,8 @@ def build_plan(
             wifi_params={"lan_subnet": model_lan_subnet},
             ops=[
                 ShellCommand("_mac=$(cat /sys/class/net/eth0/address 2>/dev/null)"),
-                ShellCommand("_mac_clean=$(echo \"$_mac\" | tr -d ':\\n')"),
-                ShellCommand("_host=$(printf '%d' 0x$(echo \"$_mac_clean\" | md5sum | cut -c1-8))"),
+                ShellCommand("_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"),
+                ShellCommand("_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))"),
                 ShellCommand("_host=$((_host % 200 + 2))"),
                 ShellCommand(f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\""),
                 ShellCommand("uci commit network"),

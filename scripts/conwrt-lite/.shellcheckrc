@@ -1,0 +1,13 @@
+# conwrt-lite shellcheck configuration
+#
+# These scripts run on OpenWrt (BusyBox ash) and use intentional patterns
+# that trigger shellcheck info-level warnings.
+
+# Allow sourcing files from lib/ directory
+external-sources=true
+
+# Suppress intentional patterns:
+# - SC2086: SSH opts vars are unquoted so word-splitting produces separate args
+# - SC2029: SSH command strings expand variables on client side by design
+# - SC1091: Sourced lib files resolved at runtime
+disable=SC2086,SC2029,SC1091

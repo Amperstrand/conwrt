@@ -1,5 +1,6 @@
 {
   "id": "extreme-networks-ws-ap3915i",
+  "lan_subnet": "10.47.217.0/24",
   "vendor": "Extreme Networks",
   "description": "WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg",
   "openwrt": {
@@ -25,8 +26,10 @@
       "stock_default_user": "admin",
       "stock_default_password": "new2day",
       "stock_legacy_ssh_options": [
-        "-o", "HostKeyAlgorithms=+ssh-rsa",
-        "-o", "KexAlgorithms=+diffie-hellman-group1-sha1"
+        "-o",
+        "HostKeyAlgorithms=+ssh-rsa",
+        "-o",
+        "KexAlgorithms=+diffie-hellman-group1-sha1"
       ],
       "stock_ssh_timeout_disable_commands": [
         "cset sshtimeout 0",
@@ -71,15 +74,73 @@
       "dts_partition_layout": {
         "note": "OpenWrt DTS partition table (qcom-ipq4029-ws-ap3915i.dts). ALL partitions except 'firmware' are marked read-only. Stock firmware MTD indices differ from OpenWrt MTD indices.",
         "partitions": [
-          {"name": "CFG1", "offset": "0xe0000", "size": "0x10000", "label": "U-Boot env block 1", "read_only": true, "stock_mtd": "mtd1", "openwrt_mtd": "mtd0"},
-          {"name": "BootBAK", "offset": "0xf0000", "size": "0x70000", "label": "Backup U-Boot", "read_only": true},
-          {"name": "WINGCFG1", "offset": "0x160000", "size": "0x10000", "label": "WiNG config 1", "read_only": true},
-          {"name": "ART", "offset": "0x170000", "size": "0x10000", "label": "Radio calibration (IRREPLACEABLE)", "read_only": true},
-          {"name": "BootPRI", "offset": "0x180000", "size": "0x70000", "label": "Primary U-Boot + boot scripts", "read_only": true},
-          {"name": "WINGCFG2", "offset": "0x1f0000", "size": "0x10000", "label": "WiNG config 2", "read_only": true},
-          {"name": "FS", "offset": "0x200000", "size": "0x80000", "label": "JFFS2 filesystem", "read_only": true},
-          {"name": "firmware", "offset": "0x280000", "size": "0x1d60000", "label": "OpenWrt firmware (merged PriImg+SecImg)", "read_only": false},
-          {"name": "CFG2", "offset": "0x1fe0000", "size": "0x10000", "label": "U-Boot env block 2", "read_only": true, "stock_mtd": "mtd10", "openwrt_mtd": "mtd8"}
+          {
+            "name": "CFG1",
+            "offset": "0xe0000",
+            "size": "0x10000",
+            "label": "U-Boot env block 1",
+            "read_only": true,
+            "stock_mtd": "mtd1",
+            "openwrt_mtd": "mtd0"
+          },
+          {
+            "name": "BootBAK",
+            "offset": "0xf0000",
+            "size": "0x70000",
+            "label": "Backup U-Boot",
+            "read_only": true
+          },
+          {
+            "name": "WINGCFG1",
+            "offset": "0x160000",
+            "size": "0x10000",
+            "label": "WiNG config 1",
+            "read_only": true
+          },
+          {
+            "name": "ART",
+            "offset": "0x170000",
+            "size": "0x10000",
+            "label": "Radio calibration (IRREPLACEABLE)",
+            "read_only": true
+          },
+          {
+            "name": "BootPRI",
+            "offset": "0x180000",
+            "size": "0x70000",
+            "label": "Primary U-Boot + boot scripts",
+            "read_only": true
+          },
+          {
+            "name": "WINGCFG2",
+            "offset": "0x1f0000",
+            "size": "0x10000",
+            "label": "WiNG config 2",
+            "read_only": true
+          },
+          {
+            "name": "FS",
+            "offset": "0x200000",
+            "size": "0x80000",
+            "label": "JFFS2 filesystem",
+            "read_only": true
+          },
+          {
+            "name": "firmware",
+            "offset": "0x280000",
+            "size": "0x1d60000",
+            "label": "OpenWrt firmware (merged PriImg+SecImg)",
+            "read_only": false
+          },
+          {
+            "name": "CFG2",
+            "offset": "0x1fe0000",
+            "size": "0x10000",
+            "label": "U-Boot env block 2",
+            "read_only": true,
+            "stock_mtd": "mtd10",
+            "openwrt_mtd": "mtd8"
+          }
         ],
         "firmware_size_kb": 30080,
         "ap391x_warning": "AP391x uses SPLIT firmware layout (firmware + firmware2, ~15MB each, IMAGE_SIZE=15040k). AP3915i uses MERGED layout (single firmware ~30MB, IMAGE_SIZE=30080k). Verify /proc/mtd firmware size from initramfs before sysupgrade."
@@ -141,9 +202,12 @@
       "algorithm_negotiation": {
         "problem": "Dropbear 2025.89 on AP3915i may lack ssh-rsa hostkey. openssh-client from an OpenWrt host needs explicit algorithm enablement.",
         "required_options": [
-          "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
-          "-o", "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
-          "-o", "Ciphers=+aes128-ctr,aes256-ctr"
+          "-o",
+          "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
+          "-o",
+          "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
+          "-o",
+          "Ciphers=+aes128-ctr,aes256-ctr"
         ]
       },
       "ordering": {

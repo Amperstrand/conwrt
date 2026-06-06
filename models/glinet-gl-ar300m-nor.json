@@ -1,7 +1,8 @@
 {
   "id": "glinet-gl-ar300m-nor",
+  "lan_subnet": "10.107.186.0/24",
   "vendor": "GL.iNet",
-  "description": "AR300M / AR300M-Ext (NOR boot). NOT recommended for general use \u2014 NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.",
+  "description": "AR300M / AR300M-Ext (NOR boot). NOT recommended for general use — NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.",
   "openwrt": {
     "target": "ath79/nand",
     "device": "glinet,gl-ar300m-nor",
@@ -23,7 +24,7 @@
   ],
   "stock_default_ip": "192.168.8.1",
   "switch": {
-    "description": "Physical slide switch. Designed to select NAND vs NOR boot when boot_dev=on. Switch LEFT \u2192 NAND (nboot), switch RIGHT \u2192 NOR (bootm 0x9f050000). NOR boot via switch may not work on all U-Boot versions. This NOR model is NOT recommended for general use \u2014 NAND is 128MB vs NOR's 16MB.",
+    "description": "Physical slide switch. Designed to select NAND vs NOR boot when boot_dev=on. Switch LEFT → NAND (nboot), switch RIGHT → NOR (bootm 0x9f050000). NOR boot via switch may not work on all U-Boot versions. This NOR model is NOT recommended for general use — NAND is 128MB vs NOR's 16MB.",
     "recommendation": "Use glinet-gl-ar300m-nand (switch LEFT) instead. NOR is only useful as automatic failsafe fallback.",
     "positions": {
       "left": {
@@ -33,7 +34,7 @@
       "right": {
         "label": "Away from USB port",
         "boot_source": "NOR (bootm 0x9f050000, val=0)",
-        "notes": "Switch RIGHT triggers NOR boot via bootm 0x9f050000 (GL_BOOT_ADDR). May not work on all U-Boot versions. Use bootcount method (fw_setenv bootcount 3) as reliable fallback. Only 16MB \u2014 very limited package space. Source: U-Boot device_check.c:71-113."
+        "notes": "Switch RIGHT triggers NOR boot via bootm 0x9f050000 (GL_BOOT_ADDR). May not work on all U-Boot versions. Use bootcount method (fw_setenv bootcount 3) as reliable fallback. Only 16MB — very limited package space. Source: U-Boot device_check.c:71-113."
       }
     }
   },
@@ -156,21 +157,21 @@
     "nor_boot_switch": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "Switch RIGHT is designed to boot NOR via bootm 0x9f050000 (GL_BOOT_ADDR). Tested 2026-05-17: NOR kernel starts but PANICS. ROOT CAUSE CONFIRMED: D-cache not flushed after LZMA decompression (cmd_bootm.c bug). MIPS 24Kc has zero hardware I/D coherency. Uncached alias 0xbf050000 also fails \u2014 destination writes still dirty. Fix applied in fork https://github.com/Amperstrand/uboot-for-qca95xx (branch conwrt-fix). NOT YET TESTED ON DEVICE. See recipes/glinet/ar300m/README.md for full analysis."
+      "notes": "Switch RIGHT is designed to boot NOR via bootm 0x9f050000 (GL_BOOT_ADDR). Tested 2026-05-17: NOR kernel starts but PANICS. ROOT CAUSE CONFIRMED: D-cache not flushed after LZMA decompression (cmd_bootm.c bug). MIPS 24Kc has zero hardware I/D coherency. Uncached alias 0xbf050000 also fails — destination writes still dirty. Fix applied in fork https://github.com/Amperstrand/uboot-for-qca95xx (branch conwrt-fix). NOT YET TESTED ON DEVICE. See recipes/glinet/ar300m/README.md for full analysis."
     },
     "nand_boot_after_nor": {
       "tested": true,
       "date": "2026-05-17",
-      "notes": "SUCCESS. After NOR boot (bootcount=4), switch LEFT, power cycle \u2192 NAND booted correctly (hostname: switchleft, glinet,gl-ar300m-nand). Bootcount auto-reset to 0."
+      "notes": "SUCCESS. After NOR boot (bootcount=4), switch LEFT, power cycle → NAND booted correctly (hostname: switchleft, glinet,gl-ar300m-nand). Bootcount auto-reset to 0."
     }
   },
   "sysupgrade": {
     "description": "AR300M uses glinet_nand_nor_do_upgrade() which auto-detects image type and flashes the correct partition regardless of current boot source.",
     "cross_flash": true,
-    "mechanism": "Auto-detects by magic number: 0x27051956 (U-Boot Image Magic) \u2192 NOR upgrade (writes to NOR firmware partition), tar archive \u2192 NAND upgrade (writes to NAND kernel + UBI partitions).",
+    "mechanism": "Auto-detects by magic number: 0x27051956 (U-Boot Image Magic) → NOR upgrade (writes to NOR firmware partition), tar archive → NAND upgrade (writes to NAND kernel + UBI partitions).",
     "nor_firmware_format": "Raw uImage (U-Boot Image Magic 0x27051956). Same as NAND model's NOR image.",
-    "after_nor_upgrade": "Auto-sets fw_setenv bootcount 3 (next boot \u2192 NOR).",
-    "after_nand_upgrade": "Auto-sets fw_setenv bootcount 0 (next boot \u2192 NAND).",
-    "notes": "When booted from NOR, you can flash NAND firmware via sysupgrade. The tar is detected and written to NAND partitions. Next boot will be NAND (bootcount=0). This is the intended recovery path: boot NOR \u2192 sysupgrade NAND \u2192 reboot to NAND."
+    "after_nor_upgrade": "Auto-sets fw_setenv bootcount 3 (next boot → NOR).",
+    "after_nand_upgrade": "Auto-sets fw_setenv bootcount 0 (next boot → NAND).",
+    "notes": "When booted from NOR, you can flash NAND firmware via sysupgrade. The tar is detected and written to NAND partitions. Next boot will be NAND (bootcount=0). This is the intended recovery path: boot NOR → sysupgrade NAND → reboot to NAND."
   }
 }

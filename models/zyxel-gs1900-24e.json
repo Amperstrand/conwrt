@@ -1,5 +1,6 @@
 {
   "id": "zyxel-gs1900-24e",
+  "lan_subnet": "10.44.172.0/24",
   "vendor": "Zyxel",
   "description": "GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M",
   "openwrt": {

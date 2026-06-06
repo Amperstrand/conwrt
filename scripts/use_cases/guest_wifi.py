@@ -9,6 +9,25 @@ from shell_safe import sh_quote, uci_name
 from . import ParamDef, UseCase, register
 
 
+def _derive_guest_subnet(lan_subnet: str) -> str:
+    """Derive guest subnet from LAN subnet by incrementing third octet (wrap at 255→0).
+
+    Args:
+        lan_subnet: LAN subnet in "10.x.y.0/24" or "10.x.y" prefix form.
+
+    Returns:
+        Guest subnet prefix like "10.89.5"
+    """
+    prefix = lan_subnet.split("/")[0]
+    parts = prefix.split(".")
+    if len(parts) == 4:
+        parts = parts[:3]
+    third = int(parts[2])
+    third = (third + 1) % 256
+    parts[2] = str(third)
+    return ".".join(parts)
+
+
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     ssid = sh_quote(str(params.get("ssid", "Guest")))
     encryption = str(params.get("encryption", "psk2"))
@@ -16,6 +35,8 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     band = str(params.get("band", "2.4ghz"))
     isolated = "1" if params.get("isolation", True) else "0"
     network = uci_name(str(params.get("network_name", "guest")), "guest network name")
+    lan_subnet = str(params.get("lan_subnet", "192.168.3.0/24"))
+    guest_prefix = _derive_guest_subnet(lan_subnet)
     return {
         "ssid": ssid,
         "encryption": encryption,
@@ -23,6 +44,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "band": band,
         "isolated": isolated,
         "network": network,
+        "guest_ipaddr": f"{guest_prefix}.1",
     }
 
 
@@ -40,7 +62,7 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(ShellCommand(command=f"uci set network.{net}=interface"))
     ops.append(UciSet(config="network", section=net, values={
         "proto": "static",
-        "ipaddr": "192.168.3.1",
+        "ipaddr": r["guest_ipaddr"],
         "netmask": "255.255.255.0",
     }))
     ops.append(UciCommit(config="network"))
@@ -136,6 +158,8 @@ register(UseCase(
             description="Enable client isolation (guests can't see each other)"),
         "network_name": ParamDef(type=str, default="guest",
             description="UCI network interface name"),
+        "lan_subnet": ParamDef(type=str, default="192.168.3.0/24",
+            description="LAN subnet to derive guest subnet from (third octet + 1)"),
     },
     build_configure=lambda p: render_shell(_build_guest_wifi_ops(p)),
     build_configure_ops=_build_guest_wifi_ops,
