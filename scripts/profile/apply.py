@@ -269,7 +269,7 @@ def apply_plan(
 
         script = render_shell(step.ops) if step.ops else step.configure_script
         if script:
-            chain = " && ".join(
+            chain = "; ".join(
                 ln for ln in script.strip().splitlines()
                 if ln.strip() and not ln.strip().startswith("#")
             )
