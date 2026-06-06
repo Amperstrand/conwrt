@@ -123,7 +123,7 @@ def _apply_profile_post_flash(
             log(f"  ⚠ {step.label}: MAC-hash LAN IP requires SSH — skipped for ubus transport")
             continue
 
-        script = (step.configure_script or "").replace(" && ", "; ")
+        script = step.configure_script or ""
         if not script:
             continue
         subnet = (step.wifi_params or {}).get("lan_subnet", "")

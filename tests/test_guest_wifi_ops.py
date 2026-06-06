@@ -32,7 +32,7 @@ class TestGuestWifiOpsDefault:
 
     def test_creates_firewall_zone(self):
         rendered = render_shell(_build_guest_wifi_ops(DEFAULT_PARAMS))
-        assert "uci add firewall zone" in rendered
+        assert "uci set firewall.guest=zone" in rendered
         assert "name" in rendered
         assert "REJECT" in rendered
 
@@ -44,7 +44,7 @@ class TestGuestWifiOpsDefault:
 
     def test_forwards_guest_to_wan(self):
         rendered = render_shell(_build_guest_wifi_ops(DEFAULT_PARAMS))
-        assert "uci add firewall forwarding" in rendered
+        assert "uci set firewall.guest_fwd=forwarding" in rendered
         assert "dest" in rendered
         assert "wan" in rendered
 

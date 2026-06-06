@@ -35,7 +35,7 @@ def _build_sqm_ops(params: dict[str, Any]) -> list[Op]:
     iface = r["interface"]
     return [
         Comment(text="--- SQM Smart Queue Management ---"),
-        ShellCommand(command="uci -q delete sqm >/dev/null 2>&1 || true"),
+        ShellCommand(command="for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"),
         BlankLine(),
         ShellCommand(command=f"uci set sqm.{iface}=queue"),
         UciSet(config="sqm", section=iface, values={

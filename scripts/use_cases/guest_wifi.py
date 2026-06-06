@@ -82,30 +82,32 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(BlankLine())
 
     # Guest firewall zone (isolated, no LAN forwarding)
-    ops.append(ShellCommand(command=f"uci add firewall zone"))
-    ops.append(UciSet(config="firewall", section="@zone[-1]", values={
+    # Use named sections (e.g. firewall.guest) instead of anonymous @zone[-1]
+    # to avoid ambiguity when multiple uci add/delete ops run in one chain.
+    ops.append(ShellCommand(command=f"uci set firewall.{net}=zone"))
+    ops.append(UciSet(config="firewall", section=net, values={
         "name": net,
         "network": net,
         "input": "REJECT",
         "output": "ACCEPT",
         "forward": "REJECT",
     }))
-    ops.append(ShellCommand(command=f"uci add firewall forwarding"))
-    ops.append(UciSet(config="firewall", section="@forwarding[-1]", values={
+    ops.append(ShellCommand(command=f"uci set firewall.{net}_fwd=forwarding"))
+    ops.append(UciSet(config="firewall", section=f"{net}_fwd", values={
         "src": net,
         "dest": "wan",
     }))
     # Allow DNS and DHCP to guest zone
-    ops.append(ShellCommand(command=f"uci add firewall rule"))
-    ops.append(UciSet(config="firewall", section="@rule[-1]", values={
+    ops.append(ShellCommand(command=f"uci set firewall.{net}_dns=rule"))
+    ops.append(UciSet(config="firewall", section=f"{net}_dns", values={
         "name": f"Allow-DNS-{net}",
         "src": net,
         "dest_port": "53",
         "proto": "tcpudp",
         "target": "ACCEPT",
     }))
-    ops.append(ShellCommand(command=f"uci add firewall rule"))
-    ops.append(UciSet(config="firewall", section="@rule[-1]", values={
+    ops.append(ShellCommand(command=f"uci set firewall.{net}_dhcp=rule"))
+    ops.append(UciSet(config="firewall", section=f"{net}_dhcp", values={
         "name": f"Allow-DHCP-{net}",
         "src": net,
         "dest_port": "67-68",
@@ -116,17 +118,25 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
 
     ops.append(BlankLine())
 
-    # Guest WiFi SSID (on radio matching band — uses runtime detection)
+    # Create guest VAP: find radio device by band, then add a new wifi-iface
+    band_short = r["band"][:1] + "g"  # "2g", "5g", "6g"
     ops.append(ShellCommand(
-        command="for _r in $(uci show wireless | grep '=wifi-iface' | cut -d. -f2 | cut -d= -f1); do "
-                "_b=$(uci get wireless.${_r}.band 2>/dev/null); "
-                f'if [ "$_b" = "{r["band"][:1]}"g ] ; then '
-                f"uci set wireless.${{_r}}.ssid={r['ssid']} ; "
-                f"uci set wireless.${{_r}}.encryption={enc} ; "
-                + (f"uci set wireless.${{_r}}.key={key} ; " if key else "") +
-                f"uci set wireless.${{_r}}.network={net} ; "
-                f"uci set wireless.${{_r}}.isolate={r['isolated']} ; "
-                "break ; fi ; done",
+        command=
+            f'_radio=""; '
+            f'for _r in radio0 radio1 radio2 radio3; do '
+            f'_b=$(uci get wireless.${{_r}}.band 2>/dev/null); '
+            f'if [ "$_b" = "{band_short}" ]; then _radio=$_r; break; fi; '
+            f'done; '
+            f'if [ -n "$_radio" ]; then '
+            f'uci add wireless wifi-iface; '
+            f'uci set wireless.@wifi-iface[-1].device=$_radio; '
+            f'uci set wireless.@wifi-iface[-1].mode=ap; '
+            f'uci set wireless.@wifi-iface[-1].ssid={r["ssid"]}; '
+            f'uci set wireless.@wifi-iface[-1].encryption={enc}; '
+            + (f'uci set wireless.@wifi-iface[-1].key={key}; ' if key else "") +
+            f'uci set wireless.@wifi-iface[-1].network={net}; '
+            f'uci set wireless.@wifi-iface[-1].isolate={r["isolated"]}; '
+            f'fi',
     ))
     ops.append(UciCommit(config="wireless"))
 

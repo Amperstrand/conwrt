@@ -20,7 +20,7 @@ CUSTOM_PARAMS = {
 
 EXPECTED_DEFAULT = (
     "# --- SQM Smart Queue Management ---\n"
-    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true\n"
     "\n"
     "uci set sqm.wan=queue\n"
     "uci set sqm.wan.interface='wan'\n"
@@ -43,7 +43,7 @@ EXPECTED_DEFAULT = (
 
 EXPECTED_CUSTOM = (
     "# --- SQM Smart Queue Management ---\n"
-    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true\n"
     "\n"
     "uci set sqm.eth1=queue\n"
     "uci set sqm.eth1.interface='eth1'\n"
@@ -66,7 +66,7 @@ EXPECTED_CUSTOM = (
 
 EXPECTED_MINIMAL = (
     "# --- SQM Smart Queue Management ---\n"
-    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true\n"
     "\n"
     "uci set sqm.wan=queue\n"
     "uci set sqm.wan.interface='wan'\n"
@@ -89,7 +89,7 @@ EXPECTED_MINIMAL = (
 
 EXPECTED_MAX_OVERHEAD = (
     "# --- SQM Smart Queue Management ---\n"
-    "uci -q delete sqm >/dev/null 2>&1 || true\n"
+    "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true\n"
     "\n"
     "uci set sqm.wan=queue\n"
     "uci set sqm.wan.interface='wan'\n"
