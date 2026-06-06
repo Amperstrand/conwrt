@@ -118,7 +118,12 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
 
     ops.append(BlankLine())
 
-    # Create guest VAP: find radio device by band, then add a new wifi-iface
+    # Delete old guest VAPs from previous runs, then create fresh one
+    ops.append(ShellCommand(
+        command=f"while uci show wireless 2>/dev/null | grep -q \"network='{net}'\"; do "
+                f"_s=$(uci show wireless 2>/dev/null | grep \"network='{net}'\" | head -1 | cut -d. -f2 | cut -d. -f1); "
+                f"uci delete wireless.$_s 2>/dev/null; done; true",
+    ))
     band_short = r["band"][:1] + "g"  # "2g", "5g", "6g"
     ops.append(ShellCommand(
         command=

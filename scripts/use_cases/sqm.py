@@ -37,9 +37,18 @@ def _build_sqm_ops(params: dict[str, Any]) -> list[Op]:
         Comment(text="--- SQM Smart Queue Management ---"),
         ShellCommand(command="for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"),
         BlankLine(),
+        # Resolve UCI network name to actual linux device (e.g. wan→phy1-sta0 on WiFi STA)
+        ShellCommand(
+            command=f'_sqm_dev=$(uci get network.{iface}.device 2>/dev/null); '
+                    f'if [ -z "$_sqm_dev" ] || ! ip addr show "$_sqm_dev" 2>/dev/null | grep -q "inet "; then '
+                    f'_sqm_dev=$(ip route show default 0.0.0.0/0 2>/dev/null | awk \'{{print $5}}\' | head -1); '
+                    f'fi; '
+                    f'if [ -z "$_sqm_dev" ]; then _sqm_dev={iface}; fi',
+        ),
         ShellCommand(command=f"uci set sqm.{iface}=queue"),
+        # interface must be the actual device name, not a UCI network name
+        ShellCommand(command=f'uci set sqm.{iface}.interface="$_sqm_dev"'),
         UciSet(config="sqm", section=iface, values={
-            "interface": iface,
             "enabled": "1",
             "script": r["script"],
             "qdisc": r["qdisc"],
@@ -55,7 +64,7 @@ def _build_sqm_ops(params: dict[str, Any]) -> list[Op]:
         BlankLine(),
         ServiceAction(name="sqm", action="enable"),
         ServiceAction(name="sqm", action="restart"),
-        ShellCommand(command=f'echo "SQM configured: {r["download_kbps"]}/{r["upload_kbps"]} kbit/s ({r["qdisc"]})"'),
+        ShellCommand(command=f'echo "SQM configured: {r["download_kbps"]}/{r["upload_kbps"]} kbit/s ({r["qdisc"]}) on $_sqm_dev"'),
     ]
 
 
