@@ -454,9 +454,30 @@ def _apply_lan_ip_post_flash(
     if _wait_for_sysupgrade_reboot(new_ip, timeout=120):
         log(f"  ✓ LAN IP changed to {new_ip}")
         return new_ip
+
+    # Router didn't come back at new IP — try rollback to old IP
+    log(f"  ⚠ LAN IP: router did not come back at {new_ip}")
+    log(f"  Attempting rollback to {ip}...")
+    remove_interface_ip(interface, new_client_ip, "24")
+    configure_interface_ip(interface, old_client_ip or _client_ip_for_subnet(ip), "24")
+    if old_client_ip:
+        log(f"  Reverted client IP to {old_client_ip}")
+
+    # Flush ARP for old IP
+    if plat == "darwin":
+        subprocess.run(["sudo", "arp", "-d", ip], capture_output=True, check=False)
     else:
-        log(f"  ⚠ LAN IP: router did not come back at {new_ip}")
-        return ""
+        subprocess.run(["ip", "neigh", "flush", "to", ip], capture_output=True, check=False)
+
+    if _wait_for_sysupgrade_reboot(ip, timeout=60):
+        log(f"  ✓ LAN IP rollback succeeded — router back at {ip}")
+        log(f"  The LAN IP change was reverted. Check router logs for why {new_ip} failed.")
+        return ip
+
+    log(f"  ⚠ LAN IP: rollback failed — router unreachable at both {new_ip} and {ip}")
+    log(f"  Recovery: connect via serial or reset button, or manually set client IP:")
+    log(f"    sudo ifconfig <interface> inet {old_client_ip or _client_ip_for_subnet(ip)}/24 alias")
+    return ""
 
 
 def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,

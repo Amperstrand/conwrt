@@ -378,6 +378,10 @@ def _run_state_machine(
             interface=ctx.interface,
             old_client_ip=ctx.profile.openwrt_client_ip or ctx.profile.client_ip,
         )
+        if not openwrt_ip:
+            log("  ⚠ Post-flash profile application failed (no IP). Aborting post-flash chain.")
+            _restore_port_isolation(ctx)
+            return 1
         if openwrt_ip != (ctx.profile.openwrt_ip or ctx.profile.recovery_ip):
             ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
@@ -852,6 +856,10 @@ def cmd_configure(args: argparse.Namespace) -> int:
         ubus_user=getattr(args, "ubus_user", "root"),
         ubus_password=getattr(args, "ubus_password", ""),
     )
+
+    if not ip and not args.dry_run:
+        log("  ⚠ Profile application failed (no IP). Aborting configure.")
+        return 1
 
     if args.verify and not args.dry_run:
         _verify_persistence(
