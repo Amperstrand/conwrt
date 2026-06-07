@@ -39,7 +39,7 @@ def _scp_upload(device_ip: str, firmware_path: str, ssh_key: Optional[str] = Non
     except subprocess.TimeoutExpired:
         log("SCP upload timed out.")
         return False, remote_path
-    except Exception as e:
+    except OSError as e:
         log(f"SCP error: {e}")
         return False, remote_path
     return True, remote_path
@@ -70,7 +70,7 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
             else:
                 log("Overlay upload failed, falling back to sysupgrade -n without overlay.")
                 cmd = f"sysupgrade -n {remote_path}"
-        except Exception:
+        except OSError:
             log("Overlay generation failed, falling back to sysupgrade -n without overlay.")
             cmd = f"sysupgrade -n {remote_path}"
         finally:
@@ -105,7 +105,7 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
     except subprocess.TimeoutExpired:
         log("sysupgrade command timed out (may have started reboot).")
         return True
-    except Exception as e:
+    except OSError as e:
         log(f"sysupgrade error: {e}")
         return False
 
@@ -140,7 +140,7 @@ def _flash_via_mtd_write(device_ip: str, firmware_path: str, ssh_key: Optional[s
     except subprocess.TimeoutExpired:
         log("mtd write command timed out (may have started reboot).")
         return True
-    except Exception as e:
+    except OSError as e:
         log(f"mtd write error: {e}")
         return False
 

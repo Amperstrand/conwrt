@@ -41,7 +41,7 @@ def _generate_zyxel_password(serial: str) -> Optional[str]:
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().split("\n")[-1].strip()
-    except Exception:
+    except OSError:
         pass
     return None
 
@@ -616,7 +616,7 @@ def _handle_extreme_stock_rebooting(ctx: RecoveryContext, event_queue: queue.Que
             timeout=10,
             extra_ssh_options=stock_ssh_options,
         )
-    except Exception:
+    except OSError:
         pass
     ctx._say_fn("AP rebooting. Waiting for OpenWrt initramfs. This takes about 90 seconds.")
     time.sleep(10)
@@ -791,7 +791,7 @@ def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue
             else:
                 log("Overlay upload failed, falling back to sysupgrade -n without overlay.")
                 cmd = f"sysupgrade -n {shlex.quote(remote_path)}"
-        except Exception:
+        except OSError:
             log("Overlay generation failed, falling back to sysupgrade -n without overlay.")
             cmd = f"sysupgrade -n {shlex.quote(remote_path)}"
         finally:
@@ -894,5 +894,5 @@ def _restore_port_isolation(ctx: RecoveryContext) -> None:
     log(f"Restoring port {ctx.isolate_port} from isolation...")
     try:
         isolator.restore(ctx.isolate_port)
-    except Exception as e:
+    except OSError as e:
         log(f"WARNING: Port restoration failed: {e}")

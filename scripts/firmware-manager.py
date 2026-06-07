@@ -299,11 +299,11 @@ def cmd_request(args: argparse.Namespace) -> int:
         body = ""
         try:
             body = exc.read().decode()
-        except Exception:
+        except UnicodeDecodeError:
             pass
         logger.error("ASU build request failed (HTTP %d): %s", exc.code, body)
         return 1
-    except Exception as exc:
+    except urllib.error.URLError as exc:
         logger.error("ASU build request failed: %s", exc)
         return 1
 
@@ -321,7 +321,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     while time.time() < deadline:
         try:
             status_data = _http_get_json(status_url, timeout=15)
-        except Exception as exc:
+        except (json.JSONDecodeError, urllib.error.URLError) as exc:
             logger.warning("poll error: %s", exc)
             time.sleep(POLL_INTERVAL)
             continue
@@ -384,7 +384,7 @@ def cmd_request(args: argparse.Namespace) -> int:
                         if not chunk:
                             break
                         f.write(chunk)
-        except Exception as exc:
+        except (urllib.error.URLError, json.JSONDecodeError) as exc:
             logger.error("download failed for %s: %s", filename, exc)
             dest_path.unlink(missing_ok=True)
             return 1

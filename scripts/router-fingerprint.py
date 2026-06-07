@@ -44,7 +44,7 @@ def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
                         parts = line.split()
                         if 'gateway' in parts:
                             return parts[parts.index('gateway') + 1]
-    except Exception:
+    except subprocess.SubprocessError:
         pass
     return None
 
@@ -145,7 +145,7 @@ def run_ssh_command(ip: str, quiet: bool = False) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         print('[!] SSH connection timeout', file=sys.stderr)
         return False, ''
-    except Exception as e:
+    except OSError as e:
         print(f'[!] SSH error: {e}', file=sys.stderr)
         return False, ''
 
@@ -354,7 +354,7 @@ def save_fingerprint(fingerprint: Dict[str, Any], board_id: str = "") -> Optiona
     try:
         path.write_text(json.dumps(fingerprint, indent=2) + "\n")
         return path
-    except Exception:
+    except OSError:
         return None
 
 
@@ -427,7 +427,7 @@ Examples:
                 f.write(output)
             if not args.quiet:
                 print(f'[+] Output written to {args.output}', file=sys.stderr)
-        except Exception as e:
+        except OSError as e:
             print(f'[!] Failed to write output file: {e}', file=sys.stderr)
             sys.exit(1)
     else:

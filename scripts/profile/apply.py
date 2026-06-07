@@ -355,7 +355,7 @@ def _apply_wifi_ubus(
 
         try:
             client.uci_delete("wireless", section, "disabled")
-        except Exception:
+        except ValueError:
             pass
 
         values: dict[str, str] = {
@@ -373,7 +373,7 @@ def _apply_wifi_ubus(
 
         log(f"  ✓ {step.label}: configured on {radio}")
         return True
-    except Exception as e:
+    except (OSError, ValueError) as e:
         log(f"  ⚠ {step.label}: {e}")
         return False
 
@@ -450,7 +450,7 @@ def apply_ubus(
             for call in calls:
                 client.call(call.object_name, call.method, call.params)
             _log(f"  ✓ {step.label}")
-        except Exception as e:
+        except (OSError, ValueError) as e:
             _log(f"  ⚠ {step.label}: {e}")
 
     return ip
@@ -492,7 +492,7 @@ def verify_persistence(
             if "SSH_OK" in r.stdout:
                 back = True
                 break
-        except Exception:
+        except (OSError, ConnectionError):
             pass
         time.sleep(5)
 
