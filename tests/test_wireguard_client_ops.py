@@ -103,6 +103,16 @@ class TestWireguardClientOpsCustom:
         rendered = render_shell(_build_wireguard_client_ops(KILL_SWITCH_PARAMS))
         assert "KillSwitch" in rendered
 
+    def test_kill_switch_includes_tunnel_verification(self):
+        rendered = render_shell(_build_wireguard_client_ops(KILL_SWITCH_PARAMS))
+        assert "wg show wg0" in rendered
+        assert "uci delete firewall.wg_client_killswitch" in rendered
+        assert "fw4 restart" in rendered
+
+    def test_kill_switch_no_verification_when_disabled(self):
+        rendered = render_shell(_build_wireguard_client_ops(NO_KILL_SWITCH_PARAMS))
+        assert "wg show wg0" not in rendered
+
     def test_without_kill_switch(self):
         rendered = render_shell(_build_wireguard_client_ops(NO_KILL_SWITCH_PARAMS))
         assert "wg_client_killswitch" not in rendered

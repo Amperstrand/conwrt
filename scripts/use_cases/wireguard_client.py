@@ -119,6 +119,21 @@ def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
         ShellCommand(command=f"echo 'WireGuard client configured: {endpoint_host}:{endpoint_port}'"),
     ])
 
+    if kill_switch:
+        ops.append(ShellCommand(
+            command=(
+                "i=0; while [ $i -lt 30 ]; do"
+                " if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then"
+                " echo 'WG kill-switch: tunnel verified'; exit 0;"
+                " fi; sleep 1; i=$((i+1));"
+                " done;"
+                " echo 'WG kill-switch: tunnel failed — removing kill switch to restore WAN';"
+                " uci delete firewall.wg_client_killswitch;"
+                " uci commit firewall;"
+                " fw4 restart"
+            ),
+        ))
+
     return ops
 
 
