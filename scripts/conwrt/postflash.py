@@ -246,7 +246,7 @@ def _register_wireguard_post_flash(
 
     # Try to read the public key directly (interface may already be up)
     r = subprocess.run(
-        ssh_cmd(ip, "wg show wg0 public-key 2>/dev/null", key=key, connect_timeout=10),
+        ssh_cmd(ip, f"wg show {wg_if} public-key 2>/dev/null", key=key, connect_timeout=10),
         capture_output=True, text=True, timeout=15, check=False,
     )
     pub_key = r.stdout.strip()
@@ -255,7 +255,7 @@ def _register_wireguard_post_flash(
     # to the process table (pipe via stdin, not command-line args)
     if not pub_key or len(pub_key) < 40:
         r1 = subprocess.run(
-            ssh_cmd(ip, "uci -q get network.wg0.private_key", key=key, connect_timeout=10),
+            ssh_cmd(ip, f"uci -q get network.{wg_if}.private_key", key=key, connect_timeout=10),
             capture_output=True, text=True, timeout=15, check=False,
         )
         priv_key = r1.stdout.strip()
@@ -277,7 +277,7 @@ def _register_wireguard_post_flash(
 
     # Read the tunnel address from the router
     r3 = subprocess.run(
-        ssh_cmd(ip, "uci -q get network.wg0.addresses", key=key, connect_timeout=10),
+        ssh_cmd(ip, f"uci -q get network.{wg_if}.addresses", key=key, connect_timeout=10),
         capture_output=True, text=True, timeout=15, check=False,
     )
     address = r3.stdout.strip()
