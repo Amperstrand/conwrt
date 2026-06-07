@@ -4,7 +4,7 @@ from __future__ import annotations
 import textwrap
 from typing import Optional
 
-from profile.ops import Op, ShellCommand, UciSet
+from profile.ops import Op, ShellCommand, UciSet, render_shell
 from profile.uci_helpers import uci_add_to_wan_zone_sh
 from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
 
@@ -48,24 +48,8 @@ def wifi_sta_uci_lines(
     network: str = "wwan",
     country_code: str = "DE",
 ) -> list[str]:
-    radio = radio_ref(radio)
-    wifi_encryption(encryption)
-    network = interface_name(network, "network")
-    section = radio_ref(f"default_{radio}")
-    lines = [
-        f"uci set wireless.{radio}.disabled='0'",
-        f"uci set wireless.{radio}.country='{country_code}'",
-        f"uci del wireless.{section}.disabled 2>/dev/null || true",
-        f"uci set wireless.{section}=wifi-iface",
-        f"uci set wireless.{section}.device={sh_quote(radio)}",
-        f"uci set wireless.{section}.mode='sta'",
-        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
-        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
-    ]
-    if key:
-        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
-    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
-    return lines
+    """STA configuration as raw uci command strings. Derived from wifi_sta_ops()."""
+    return render_shell(wifi_sta_ops(radio, ssid, encryption, key, network, country_code)).split("\n")
 
 
 def wifi_ap_uci_lines(
@@ -77,28 +61,8 @@ def wifi_ap_uci_lines(
     network: str = "lan",
     country_code: str = "DE",
 ) -> list[str]:
-    radio = radio_ref(radio)
-    wifi_encryption(encryption)
-    network = interface_name(network, "network")
-    section = radio_ref(f"default_{radio}")
-    lines = [
-        f"uci set wireless.{radio}.disabled='0'",
-        f"uci set wireless.{radio}.country='{country_code}'",
-        f"uci del wireless.{section}.disabled 2>/dev/null || true",
-    ]
-    if channel and channel != "auto":
-        lines.append(f"uci set wireless.{radio}.channel={sh_quote(channel)}")
-    lines += [
-        f"uci set wireless.{section}=wifi-iface",
-        f"uci set wireless.{section}.device={sh_quote(radio)}",
-        f"uci set wireless.{section}.mode='ap'",
-        f"uci set wireless.{section}.ssid={sh_quote(ssid)}",
-        f"uci set wireless.{section}.encryption={sh_quote(encryption)}",
-    ]
-    if key:
-        lines.append(f"uci set wireless.{section}.key={sh_quote(key)}")
-    lines.append(f"uci set wireless.{section}.network={sh_quote(network)}")
-    return lines
+    """AP configuration as raw uci command strings. Derived from wifi_ap_ops()."""
+    return render_shell(wifi_ap_ops(radio, ssid, encryption, key, channel, network, country_code)).split("\n")
 
 
 def wwan_setup_ops() -> list[Op]:
@@ -114,25 +78,12 @@ def wwan_setup_ops() -> list[Op]:
 
 def wwan_setup_shell() -> str:
     """Single-line shell for wwan setup (SSH configure_script)."""
-    return (
-        "uci set network.wwan=interface && "
-        "uci set network.wwan.proto='dhcp' && "
-        + uci_add_to_wan_zone_sh("wwan") + " && "
-        "uci commit network && "
-        "uci commit firewall"
-    )
+    return render_shell(wwan_setup_ops()).replace("\n", " && ")
 
 
 def wwan_setup_firstboot() -> str:
     """Multi-line shell for wwan setup (ASU first-boot script)."""
-    return "\n".join([
-        "# --- WWAN interface for WiFi STA ---",
-        "uci set network.wwan=interface",
-        "uci set network.wwan.proto='dhcp'",
-        uci_add_to_wan_zone_sh("wwan"),
-        "uci commit network",
-        "uci commit firewall",
-    ])
+    return "# --- WWAN interface for WiFi STA ---\n" + render_shell(wwan_setup_ops())
 
 
 def wifi_sta_ops(
