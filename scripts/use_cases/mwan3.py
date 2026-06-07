@@ -4,13 +4,14 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from shell_safe import interface_name
 
 from . import ParamDef, UseCase, register
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
-    primary = str(params.get("primary", "wan"))
-    secondary = str(params.get("secondary", "usbwan"))
+    primary = interface_name(str(params.get("primary", "wan")), "primary WAN interface")
+    secondary = interface_name(str(params.get("secondary", "usbwan")), "secondary WAN interface")
     policy = str(params.get("policy", "failover"))
     track_ips = params.get("track_ips", ["1.0.0.1", "1.1.1.1", "8.8.8.8", "8.8.4.4"])
     if isinstance(track_ips, str):

@@ -5,16 +5,23 @@ from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
 from profile.uci_helpers import uci_cleanup_sections
+from shell_safe import validate_host, validate_port
 
 from . import ParamDef, UseCase, register
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    endpoint_host = str(params.get("endpoint_host", ""))
+    if endpoint_host:
+        endpoint_host = validate_host(endpoint_host, "endpoint_host")
+    endpoint_port = params.get("endpoint_port", 51820)
+    if isinstance(endpoint_port, int):
+        endpoint_port = validate_port(endpoint_port, "endpoint_port")
     return {
         "private_key": params.get("private_key", "generate"),
         "peer_public_key": params.get("peer_public_key", ""),
-        "endpoint_host": params.get("endpoint_host", ""),
-        "endpoint_port": params.get("endpoint_port", 51820),
+        "endpoint_host": endpoint_host,
+        "endpoint_port": endpoint_port,
         "peer_psk": params.get("peer_psk", ""),
         "address": params.get("address", "10.67.0.2/32"),
         "dns": params.get("dns", ""),

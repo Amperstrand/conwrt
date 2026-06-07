@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
+from shell_safe import interface_name
 
 from . import ParamDef, UseCase, register
 
@@ -129,8 +130,8 @@ apply_sqm "$DL_SPEED" "$UL_SPEED"
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": params.get("mode", "static"),
-        "interface": params.get("interface", "wan"),
-        "device": params.get("device", "eth0"),
+        "interface": interface_name(str(params.get("interface", "wan")), "WAN interface"),
+        "device": interface_name(str(params.get("device", "eth0")), "SQM device"),
         "target_percent": params.get("target_percent", 90),
         "qdisc": params.get("qdisc", "cake"),
         "script": params.get("script", "piece_of_cake.qos"),
