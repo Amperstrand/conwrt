@@ -124,7 +124,7 @@ def get_link_state(interface: str) -> bool:
         )
         if r.returncode == 0:
             return r.stdout.strip().lower() == "up"
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     # macOS fallback: parse ifconfig output
@@ -135,7 +135,7 @@ def get_link_state(interface: str) -> bool:
         )
         if r.returncode == 0 and "status: active" in r.stdout.lower():
             return True
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     return False
@@ -158,7 +158,7 @@ def has_tcpdump() -> bool:
             capture_output=True, text=True, timeout=5, check=False,
         )
         return r.returncode == 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
 
 
@@ -173,7 +173,7 @@ def check_external_deps() -> list[str]:
             )
             if r.returncode != 0:
                 missing.append(tool)
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             missing.append(tool)
     try:
         subprocess.run(

@@ -197,7 +197,7 @@ class TestGetLinkState:
         ]
         assert get_link_state("en0") is True
 
-    @patch("platform_utils.subprocess.run", side_effect=Exception("timeout"))
+    @patch("platform_utils.subprocess.run", side_effect=OSError("timeout"))
     def test_returns_false_on_exception(self, mock_run):
         assert get_link_state("eth0") is False
 
@@ -223,7 +223,7 @@ class TestHasTcpdump:
         mock_run.return_value = _completed(returncode=1)
         assert has_tcpdump() is False
 
-    @patch("platform_utils.subprocess.run", side_effect=Exception("fail"))
+    @patch("platform_utils.subprocess.run", side_effect=OSError("fail"))
     def test_returns_false_on_exception(self, mock_run):
         assert has_tcpdump() is False
 
