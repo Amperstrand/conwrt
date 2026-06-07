@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from profile.uci_helpers import uci_cleanup_sections
 
 from . import ParamDef, UseCase, register
 
@@ -53,18 +54,8 @@ def _build_wireguard_server_ops(params: dict[str, Any]) -> list[Op]:
     # Named firewall sections + while-loop cleanup of stale anonymous sections
     ops.extend([
         BlankLine(),
-        ShellCommand(
-            command="while uci show firewall | grep -q \"name='vpn'\"; do"
-            " _s=$(uci show firewall | grep \"name='vpn'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
-            " uci delete \"firewall.$_s\";"
-            " done",
-        ),
-        ShellCommand(
-            command="while uci show firewall | grep -q \"name='Allow-WireGuard'\"; do"
-            " _s=$(uci show firewall | grep \"name='Allow-WireGuard'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
-            " uci delete \"firewall.$_s\";"
-            " done",
-        ),
+        uci_cleanup_sections("firewall", "name='vpn'"),
+        uci_cleanup_sections("firewall", "name='Allow-WireGuard'"),
         BlankLine(),
         ShellCommand(command="uci set firewall.wg_server_vpn=zone"),
         UciSet(config="firewall", section="wg_server_vpn", values={

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ShellCommand, render_shell
+from profile.uci_helpers import uci_add_to_wan_zone_sh
 
 from . import ParamDef, UseCase, register
 
@@ -85,14 +86,7 @@ if [ -n "$USB_DEV" ]; then
     uci set network.{iface}.proto='dhcp'
     uci set network.{iface}.device="$USB_DEV"
     uci set network.{iface}.metric='20'
-    for zone in $(uci show firewall 2>/dev/null | grep "=zone" | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ "$name" = "wan" ]; then
-            uci del_list firewall.$zone.network='{iface}' 2>/dev/null || true
-            uci add_list firewall.$zone.network='{iface}'
-            break
-        fi
-    done
+    {uci_add_to_wan_zone_sh(iface)}
     uci commit network
     uci commit firewall
     ifup {iface} 2>/dev/null || true

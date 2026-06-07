@@ -5,6 +5,7 @@ import textwrap
 from typing import Optional
 
 from profile.ops import Op, ShellCommand, UciSet
+from profile.uci_helpers import uci_add_to_wan_zone_sh
 from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
 
 
@@ -100,23 +101,12 @@ def wifi_ap_uci_lines(
     return lines
 
 
-def _add_to_wan_zone_sh(iface: str) -> str:
-    """Shell snippet: find wan zone by name, del_list then add_list (idempotent)."""
-    return (
-        f"for _z in $(uci show firewall 2>/dev/null | grep '=zone' | cut -d. -f2 | cut -d= -f1 || true); do"
-        f" [ \"$(uci -q get firewall.$_z.name)\" = 'wan' ] &&"
-        f" uci del_list firewall.$_z.network='{iface}' 2>/dev/null;"
-        f" uci add_list firewall.$_z.network='{iface}';"
-        f" break; done"
-    )
-
-
 def wwan_setup_ops() -> list[Op]:
     """Create wwan interface for WiFi STA WAN and add to wan firewall zone."""
     return [
         ShellCommand(command="uci set network.wwan=interface"),
         ShellCommand(command="uci set network.wwan.proto='dhcp'"),
-        ShellCommand(command=_add_to_wan_zone_sh("wwan")),
+        ShellCommand(command=uci_add_to_wan_zone_sh("wwan")),
         ShellCommand(command="uci commit network"),
         ShellCommand(command="uci commit firewall"),
     ]
@@ -127,7 +117,7 @@ def wwan_setup_shell() -> str:
     return (
         "uci set network.wwan=interface && "
         "uci set network.wwan.proto='dhcp' && "
-        + _add_to_wan_zone_sh("wwan") + " && "
+        + uci_add_to_wan_zone_sh("wwan") + " && "
         "uci commit network && "
         "uci commit firewall"
     )
@@ -139,7 +129,7 @@ def wwan_setup_firstboot() -> str:
         "# --- WWAN interface for WiFi STA ---",
         "uci set network.wwan=interface",
         "uci set network.wwan.proto='dhcp'",
-        _add_to_wan_zone_sh("wwan"),
+        uci_add_to_wan_zone_sh("wwan"),
         "uci commit network",
         "uci commit firewall",
     ])

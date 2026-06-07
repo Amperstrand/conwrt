@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from profile.uci_helpers import uci_add_to_wan_zone_sh
 from ssh_utils import ssh_cmd
 
 PEER_CONFIGS_PATH = "/etc/wireguard/clients"
@@ -91,11 +92,7 @@ def build_uci_commands(pc: PeerConfig) -> list[str]:
         f"uci set network.wg0_peer.persistent_keepalive='{pc.keepalive}'",
         f"uci set network.wg0_peer.route_allowed_ips='1'",
         "",
-        "for _z in $(uci show firewall 2>/dev/null | grep '=zone' | cut -d. -f2 | cut -d= -f1 || true); do"
-        " [ \"$(uci -q get firewall.$_z.name)\" = 'wan' ] &&"
-        " uci del_list firewall.$_z.network='wg0' 2>/dev/null;"
-        " uci add_list firewall.$_z.network='wg0';"
-        " break; done",
+        uci_add_to_wan_zone_sh("wg0"),
         "",
         "uci commit network",
         "uci commit firewall",

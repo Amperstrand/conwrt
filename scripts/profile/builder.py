@@ -8,6 +8,7 @@ from typing import Optional
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
 from profile.ops import Op, ShellCommand, UciAdd, UciCommit, UciSet
+from profile.uci_helpers import uci_cleanup_sections
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
     build_mgmt_wifi_script,
@@ -67,7 +68,7 @@ _WAN_SSH_SCRIPT = "\n".join([
 ])
 
 _WAN_SSH_OPS: list[Op] = [
-    ShellCommand(command="while uci show firewall 2>/dev/null | grep -q \"name='Allow-SSH-WAN'\"; do _s=$(uci show firewall 2>/dev/null | grep \"name='Allow-SSH-WAN'\" | head -1 | cut -d. -f2 | cut -d. -f1); uci delete firewall.$_s 2>/dev/null; done; true"),
+    uci_cleanup_sections("firewall", "name='Allow-SSH-WAN'"),
     ShellCommand(command="uci set firewall.allow_ssh_wan=rule"),
     UciSet(config="firewall", section="allow_ssh_wan", values={
         "name": "Allow-SSH-WAN",

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
+from profile.uci_helpers import uci_cleanup_sections
 from shell_safe import sh_quote, uci_name
 
 from . import ParamDef, UseCase, register
@@ -119,11 +120,7 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(BlankLine())
 
     # Delete old guest VAPs from previous runs, then create fresh one
-    ops.append(ShellCommand(
-        command=f"while uci show wireless 2>/dev/null | grep -q \"network='{net}'\"; do "
-                f"_s=$(uci show wireless 2>/dev/null | grep \"network='{net}'\" | head -1 | cut -d. -f2 | cut -d. -f1); "
-                f"uci delete wireless.$_s 2>/dev/null; done; true",
-    ))
+    ops.append(uci_cleanup_sections("wireless", f"network='{net}'"))
     band_short = r["band"][:1] + "g"  # "2g", "5g", "6g"
     ops.append(ShellCommand(
         command=

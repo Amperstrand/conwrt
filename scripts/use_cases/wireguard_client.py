@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from profile.uci_helpers import uci_cleanup_sections
 
 from . import ParamDef, UseCase, register
 
@@ -67,24 +68,9 @@ def _build_wireguard_client_ops(params: dict[str, Any]) -> list[Op]:
     ops.extend([
         BlankLine(),
         Comment(text="--- Cleanup stale anonymous WireGuard firewall sections ---"),
-        ShellCommand(
-            command="while uci show firewall | grep -q \"name='vpn'\"; do"
-            " _s=$(uci show firewall | grep \"name='vpn'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
-            " uci delete \"firewall.$_s\";"
-            " done",
-        ),
-        ShellCommand(
-            command="while uci show firewall | grep -q \"dest='vpn'\"; do"
-            " _s=$(uci show firewall | grep \"dest='vpn'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
-            " uci delete \"firewall.$_s\";"
-            " done",
-        ),
-        ShellCommand(
-            command="while uci show firewall | grep -q \"name='KillSwitch-Reject-NonVPN'\"; do"
-            " _s=$(uci show firewall | grep \"name='KillSwitch-Reject-NonVPN'\" | head -1 | cut -d. -f2 | cut -d= -f1);"
-            " uci delete \"firewall.$_s\";"
-            " done",
-        ),
+        uci_cleanup_sections("firewall", "name='vpn'"),
+        uci_cleanup_sections("firewall", "dest='vpn'"),
+        uci_cleanup_sections("firewall", "name='KillSwitch-Reject-NonVPN'"),
         BlankLine(),
         Comment(text="--- WireGuard firewall zone + forwarding ---"),
         ShellCommand(command="uci set firewall.wg_client_vpn=zone"),
