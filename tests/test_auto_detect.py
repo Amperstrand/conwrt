@@ -500,7 +500,7 @@ class TestArpLookup:
         mock_run.return_value = _completed(stdout="? (192.168.1.1) at (incomplete)")
         assert _arp_lookup("192.168.1.1") == ""
 
-    @patch("auto_detect.subprocess.run", side_effect=Exception("fail"))
+    @patch("auto_detect.subprocess.run", side_effect=FileNotFoundError("fail"))
     @patch("auto_detect.detect_platform", return_value="darwin")
     def test_exception(self, mock_plat, mock_run):
         assert _arp_lookup("1.2.3.4") == ""

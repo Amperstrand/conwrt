@@ -123,7 +123,7 @@ def probe_link_state(interface: str) -> ProbeResult:
                 m = re.search(r"media:\s*(.+)", output)
                 if m:
                     detail = m.group(1).strip()
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("link_state", status, detail)
 
@@ -153,7 +153,7 @@ def probe_arp(mac_prefix: str, interface: str) -> ProbeResult:
                 ether_m = re.search(r"ether\s+([\da-fA-F:]{17})", r2.stdout)
                 if ether_m:
                     detail = f"local_mac={ether_m.group(1)}"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("arp_from_router", status, detail)
 
@@ -179,7 +179,7 @@ def probe_failsafe_broadcast(interface: str, timeout: int = 10) -> ProbeResult:
     except FileNotFoundError:
         status = "unavailable"
         detail = "tcpdump not installed"
-    except Exception as exc:
+    except OSError as exc:
         detail = str(exc)
     return ("failsafe_broadcast", status, detail)
 
@@ -206,7 +206,7 @@ def probe_icmpv6_ra(interface: str, timeout: int = 5) -> ProbeResult:
     except FileNotFoundError:
         status = "unavailable"
         detail = "tcpdump not installed"
-    except Exception as exc:
+    except OSError as exc:
         detail = str(exc)
     return ("icmpv6_ra", status, detail)
 
@@ -225,7 +225,7 @@ def start_pcap_capture(interface: str, state_label: str) -> Optional[subprocess.
     except FileNotFoundError:
         logger.debug("tcpdump not available for pcap capture")
         return None
-    except Exception as exc:
+    except OSError as exc:
         logger.debug("pcap capture failed: %s", exc)
         return None
 
@@ -258,7 +258,7 @@ def probe_http_get(device_ip: str) -> ProbeResult:
         if r.returncode == 0 and len(body) > 0:
             status = "unknown_http"
             detail = f"got {len(body)} bytes, no known signature"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("http_get", status, detail)
 
@@ -280,7 +280,7 @@ def probe_http_head(device_ip: str) -> ProbeResult:
             status = "headers_received"
             server_m = re.search(r"Server:\s*(.+)", headers, re.IGNORECASE)
             detail = server_m.group(1).strip() if server_m else headers.split("\n")[0].strip()
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("http_head", status, detail)
 
@@ -320,7 +320,7 @@ def probe_ssh(device_ip: str) -> ProbeResult:
     except subprocess.TimeoutExpired:
         status = "ssh_timeout"
         detail = "SSH connection timed out"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("ssh", status, detail)
 
@@ -346,7 +346,7 @@ def probe_ssh_failsafe(device_ip: str) -> ProbeResult:
             if r2.returncode == 0 and "jffs2" not in r2.stdout and "overlay" not in r2.stdout:
                 status = "failsafe"
                 detail = "no overlay mount — likely failsafe mode"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("ssh_failsafe", status, detail)
 
@@ -363,7 +363,7 @@ def probe_ping(device_ip: str) -> ProbeResult:
             m = re.search(r"time[= ]([\d.]+)\s*ms", r.stdout)
             detail = f"reply in {m.group(1)}ms" if m else "reply received"
             status = "reachable"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("ping", status, detail)
 
@@ -409,7 +409,7 @@ def probe_ssh_details(device_ip: str) -> tuple[str, str, str, int]:
         )
         if r3.returncode == 0:
             ssh_key_count = int(r3.stdout.strip().split()[0])
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         pass
     return model, vendor, firmware_version, ssh_key_count
 

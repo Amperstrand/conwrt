@@ -159,7 +159,7 @@ def _ensure_route(subnet_ip: str, interface: str) -> bool:
             our_ip = f"{subnet}.2"
             configure_interface_ip(interface, our_ip, "24")
             return True
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
 
 
@@ -196,7 +196,7 @@ def lldp_probe(interface: str, timeout: int = 15) -> dict[str, LLDPInfo]:
             if not line:
                 break
             output_lines.append(line)
-    except Exception:
+    except OSError:
         pass
     finally:
         if proc.poll() is None:
@@ -336,7 +336,7 @@ def _parse_zyxel_lldp(info: LLDPInfo, subtype: int, payload: bytes) -> None:
             info.vendor_specific["zyxel_mgmt_url"] = info.management_url
         else:
             info.vendor_specific[f"zyxel_sub{subtype}"] = data.decode("utf-8", errors="replace").strip()
-    except Exception:
+    except (UnicodeDecodeError, ValueError):
         pass
 
 
@@ -391,7 +391,7 @@ def passive_listen(interface: str, timeout: int = 10) -> dict:
     try:
         conf.iface = interface
         sniff(iface=interface, timeout=timeout, store=False, prn=_packet_callback)
-    except (PermissionError, OSError, Exception):
+    except (PermissionError, OSError):
         _passive_listen_tcpdump(interface, timeout, result)
 
     return result
@@ -408,7 +408,7 @@ def _passive_listen_tcpdump(interface: str, timeout: int, result: dict) -> None:
             if r.returncode == 0:
                 tcpdump_path = candidate
                 break
-        except Exception:
+        except (subprocess.SubprocessError, FileNotFoundError):
             continue
 
     if not tcpdump_path:
@@ -442,7 +442,7 @@ def _passive_listen_tcpdump(interface: str, timeout: int, result: dict) -> None:
                 result["macs"][mac] = {"source": "arp", "ip": ip_addr}
         proc.terminate()
         proc.wait(timeout=3)
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
 
@@ -476,7 +476,7 @@ def dhcp_client_probe(interface: str, timeout: int = 5) -> dict:
     try:
         conf.iface = interface
         reply = srp1(dhcp_discover, iface=interface, timeout=timeout, verbose=False)
-    except (PermissionError, OSError, Exception):
+    except (PermissionError, OSError):
         return result
 
     if reply is None:
@@ -528,7 +528,7 @@ def arp_scan(interface: str, target_ips: Optional[list[str]] = None) -> list[dic
         try:
             conf.iface = interface
             reply = srp1(arp_req, iface=interface, timeout=3, verbose=False)
-        except (PermissionError, OSError, Exception):
+        except (PermissionError, OSError):
             reply = _arp_lookup(ip)
 
         if reply and reply.haslayer(ARP):
@@ -566,7 +566,7 @@ def _arp_lookup(ip: str) -> str:
         match = re.search(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})", r.stdout)
         if match:
             return match.group(1)
-    except Exception:
+    except (subprocess.SubprocessError, FileNotFoundError):
         pass
     return ""
 

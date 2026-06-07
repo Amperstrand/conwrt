@@ -10,7 +10,7 @@ Usage:
 import argparse
 import sys
 import time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 
 def _wait_for_frame_url(page, expected_cmd, timeout=10):
@@ -89,7 +89,7 @@ def main():
             try:
                 pw_frame.evaluate("submitForm()")
                 pw_frame.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
+            except PlaywrightError:
                 pass
             time.sleep(2)
             effective_password = args.new_password
@@ -156,7 +156,7 @@ def main():
             t = inp.get_attribute("type") or ""
             try:
                 v = inp.input_value() if t not in ("password",) else "***"
-            except Exception:
+            except PlaywrightError:
                 v = "(error)"
             if n:
                 print(f"    {n} ({t}): {v[:60]}")
@@ -236,13 +236,13 @@ def main():
             try:
                 content_frame.evaluate("submitForm()")
                 content_frame.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
+            except PlaywrightError:
                 pass
         elif submit_btn.count() > 0:
             print(f"  Clicking Apply button...")
             try:
                 submit_btn.first.click(timeout=5000)
-            except Exception as e:
+            except PlaywrightError as e:
                 if "timeout" in str(e).lower():
                     print(f"  Clicked (timeout expected)")
                 else:
@@ -270,7 +270,7 @@ def main():
                     # Check if this looks like a save page
                     if "save" in result["text"].lower() or "Save" in result["text"]:
                         print(f"    *** Possible save page: {result['text'][:100]}")
-            except Exception:
+            except PlaywrightError:
                 pass
 
         browser.close()

@@ -20,7 +20,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
         if check_ssh(openwrt_ip):
             log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
             return "openwrt"
-    except Exception as e:
+    except OSError as e:
         log(f"SSH probe failed for {openwrt_ip}: {e}")
 
     # When flash_method is dlink-hnap, check HNAP FIRST — the stock firmware
@@ -36,7 +36,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
             if "HNAP" in r.stdout or "soap" in r.stdout.lower():
                 log(f"HNAP API detected at {recovery_ip} — device is running stock firmware")
                 return "stock-hnap"
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     # EdgeOS detection — check before uboot to prevent false "uboot" detection
@@ -61,7 +61,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                 if r.returncode == 0:
                     log(f"EdgeOS detected at {edgeos_ip} — device is running stock firmware")
                     return "stock-edgeos"
-            except Exception as e:
+            except (subprocess.SubprocessError, OSError) as e:
                 log(f"EdgeOS SSH probe failed for {edgeos_ip}: {e}")
 
     if profile and getattr(profile, 'flash_method', '') == 'extreme-rdwr-tftp-initramfs':
@@ -86,7 +86,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
                 if r.returncode == 0:
                     log(f"Extreme stock firmware detected at {extreme_ip} — rdwr_boot_cfg available")
                     return "stock-extreme"
-            except Exception as e:
+            except (subprocess.SubprocessError, OSError) as e:
                 log(f"Extreme SSH probe failed for {extreme_ip}: {e}")
 
     if profile and getattr(profile, 'flash_method', '').startswith('oem-'):
@@ -109,7 +109,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
             if "login" in r2.stdout.lower() or "password" in r2.stdout.lower() or r2.returncode == 0:
                 log(f"OEM web UI detected at {stock_ip} — stock firmware (form login)")
                 return "stock-zyxel"
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             log(f"OEM probe failed for {stock_ip}: {e}")
 
     try:
@@ -117,7 +117,7 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
         if found:
             log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
             return "uboot"
-    except Exception as e:
+    except OSError as e:
         log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
 
     if profile and profile.openwrt_ip and profile.recovery_ip:
