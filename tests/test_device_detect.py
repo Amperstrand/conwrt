@@ -1,8 +1,9 @@
-"""Tests for device fingerprinting."""
+"""Tests for device fingerprinting and boot state detection."""
 import json
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
@@ -488,3 +489,158 @@ class TestMatchModels(TestCase):
             fp_result = FingerprintResult()
             matches = match_models(fp_result, model_dir=tmpdir)
             self.assertEqual(matches, [])
+
+
+from flash.detect import detect_boot_state
+
+
+class _P(SimpleNamespace):
+    pass
+
+
+class TestDetectBootState(TestCase):
+    @patch("flash.detect.detect_uboot_http", return_value=(False, "no response"))
+    @patch("flash.detect.check_ssh", return_value=True)
+    def test_openwrt_ssh_reachable(self, mock_ssh, mock_uboot):
+        result = detect_boot_state("eth0")
+        self.assertEqual(result, "openwrt")
+        mock_ssh.assert_called_once_with("192.168.1.1")
+
+    @patch("flash.detect.detect_uboot_http", return_value=(False, "no response"))
+    @patch("flash.detect.check_ssh", side_effect=OSError("unreachable"))
+    def test_unknown_when_all_probes_fail(self, mock_ssh, mock_uboot):
+        result = detect_boot_state("eth0")
+        self.assertEqual(result, "unknown")
+
+    @patch("flash.detect.detect_uboot_http", return_value=(True, "firmware page"))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_uboot_detected_via_http(self, mock_ssh, mock_uboot):
+        result = detect_boot_state("eth0")
+        self.assertEqual(result, "uboot")
+        mock_uboot.assert_called_once_with("192.168.0.1")
+
+    @patch("flash.detect.detect_uboot_http", return_value=(True, "recovery page"))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_uboot_with_custom_recovery_ip(self, mock_ssh, mock_uboot):
+        p = _P(openwrt_ip="10.0.0.1", recovery_ip="10.0.0.2")
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "uboot")
+        mock_uboot.assert_called_once_with("10.0.0.2")
+
+    @patch("flash.detect.detect_uboot_http", return_value=(False, "no response"))
+    @patch("flash.detect.check_ssh", return_value=True)
+    def test_openwrt_uses_profile_ip(self, mock_ssh, mock_uboot):
+        p = _P(openwrt_ip="172.16.0.1", recovery_ip="172.16.0.2")
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "openwrt")
+        mock_ssh.assert_called_once_with("172.16.0.1")
+
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_hnap_detected(self, mock_ssh, mock_uboot, mock_run):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="dlink-hnap",
+        )
+        mock_run.return_value = MagicMock(stdout='<html>HNAP soap stuff</html>', returncode=0)
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-hnap")
+
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_hnap_soap_keyword(self, mock_ssh, mock_uboot, mock_run):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="dlink-hnap",
+        )
+        mock_run.return_value = MagicMock(stdout='<SOAP-ENV:Envelope/>', returncode=0)
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-hnap")
+
+    @patch("flash.detect.subprocess.run", side_effect=OSError("curl missing"))
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_hnap_subprocess_error_falls_through(self, mock_ssh, mock_uboot, mock_run):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="dlink-hnap",
+        )
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "unknown")
+
+    @patch("shutil.which", return_value="/usr/bin/sshpass")
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_edgeos_detected(self, mock_ssh, mock_uboot, mock_run, mock_which):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="edgeos-kernel-swap",
+            edgeos_ip="192.168.1.1", edgeos_user="ubnt", edgeos_password="ubnt",
+        )
+        mock_run.return_value = MagicMock(stdout="1.10.0\n", returncode=0)
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-edgeos")
+
+    @patch("shutil.which", return_value="/usr/bin/sshpass")
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_extreme_detected(self, mock_ssh, mock_uboot, mock_run, mock_which):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="extreme-rdwr-tftp-initramfs",
+            stock_default_ip="192.168.1.1", stock_default_user="admin",
+            stock_default_password="admin",
+        )
+        mock_run.return_value = MagicMock(stdout="/usr/bin/rdwr_boot_cfg\n", returncode=0)
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-extreme")
+
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_zyxel_oem_dispatcher(self, mock_ssh, mock_uboot, mock_run):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="oem-zyxel",
+            stock_default_ip="192.168.1.1",
+        )
+        mock_run.return_value = MagicMock(stdout='<html>Dispatcher page with Password field</html>', returncode=0)
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-zyxel")
+
+    @patch("flash.detect.subprocess.run")
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_stock_zyxel_oem_login_page(self, mock_ssh, mock_uboot, mock_run):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="oem-zyxel",
+            stock_default_ip="192.168.1.1",
+        )
+        r1 = MagicMock(stdout='<html>no match</html>', returncode=0)
+        r2 = MagicMock(stdout='<html><body>Please Login</body></html>', returncode=0)
+        mock_run.side_effect = [r1, r2]
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "stock-zyxel")
+
+    @patch("flash.detect.detect_uboot_http", side_effect=OSError("network error"))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_uboot_probe_oserror_falls_through(self, mock_ssh, mock_uboot):
+        result = detect_boot_state("eth0")
+        self.assertEqual(result, "unknown")
+
+    @patch("shutil.which", return_value=None)
+    @patch("flash.detect.detect_uboot_http", return_value=(False, ""))
+    @patch("flash.detect.check_ssh", return_value=False)
+    def test_edgeos_no_sshpass_skips(self, mock_ssh, mock_uboot, mock_which):
+        p = _P(
+            openwrt_ip="192.168.1.1", recovery_ip="192.168.0.1",
+            flash_method="edgeos-kernel-swap",
+            edgeos_ip="192.168.1.1", edgeos_user="ubnt", edgeos_password="ubnt",
+        )
+        result = detect_boot_state("eth0", profile=p)
+        self.assertEqual(result, "unknown")
