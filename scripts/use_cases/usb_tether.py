@@ -88,6 +88,7 @@ if [ -n "$USB_DEV" ]; then
     for zone in $(uci show firewall 2>/dev/null | grep "=zone" | cut -d. -f2 | cut -d= -f1 || true); do
         name=$(uci -q get firewall.$zone.name || true)
         if [ "$name" = "wan" ]; then
+            uci del_list firewall.$zone.network='{iface}' 2>/dev/null || true
             uci add_list firewall.$zone.network='{iface}'
             break
         fi
