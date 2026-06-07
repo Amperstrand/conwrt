@@ -144,3 +144,64 @@ def test_apply_plan_no_packages_skips_phase2() -> None:
         apply_plan(plan, ip="1.2.3.4", ssh_key="", log=log)
 
     mock_wait.assert_not_called()
+
+
+def test_wifi_sta_failure_aborts_apply() -> None:
+    cfg = ConwrtConfig(
+        wifi_sta=WifiSTAConfig(band="5ghz", ssid="Upstream", encryption="psk2", key="pass"),
+        use_cases=[
+            UseCaseConfig(name="sqm", params={"download_kbps": 1000, "upload_kbps": 500}),
+        ],
+    )
+    from profile import build_plan
+    plan = build_plan(cfg, mode="post_install")
+
+    def track_run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "wireless" in cmd_str or "wifi" in cmd_str:
+            return _mock_run(1)
+        return _mock_run(0)
+
+    log = MagicMock()
+    with patch("profile.apply.subprocess.run", side_effect=track_run), \
+         patch("profile.apply._wait_for_internet") as mock_wait, \
+         patch("profile.apply.time.sleep"):
+        result = apply_plan(plan, ip="1.2.3.4", ssh_key="", log=log)
+
+    assert result == "1.2.3.4"
+    abort_msgs = [str(c) for c in log.call_args_list if "no WAN uplink" in str(c)]
+    assert abort_msgs, "Expected abort log message about WAN uplink"
+    mock_wait.assert_not_called()
+
+
+def test_package_failure_logs_affected_use_cases() -> None:
+    cfg = ConwrtConfig(
+        use_cases=[
+            UseCaseConfig(name="sqm", params={"download_kbps": 1000, "upload_kbps": 500}),
+        ],
+    )
+    from profile import build_plan
+    plan = build_plan(cfg, mode="post_install")
+
+    run_count = 0
+
+    def track_run(*args, **kwargs):
+        nonlocal run_count
+        run_count += 1
+        cmd = args[0] if args else kwargs.get("args", [])
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "opkg" in cmd_str:
+            return _mock_run(1)
+        return _mock_run(0)
+
+    log = MagicMock()
+    with patch("profile.apply.subprocess.run", side_effect=track_run), \
+         patch("profile.apply._wait_for_internet", return_value=True), \
+         patch("profile.apply._scp_install_packages", return_value=False) as mock_scp, \
+         patch("profile.apply.time.sleep"):
+        apply_plan(plan, ip="1.2.3.4", ssh_key="", log=log)
+
+    mock_scp.assert_called_once()
+    affected_msgs = [str(c) for c in log.call_args_list if "may be broken" in str(c)]
+    assert affected_msgs, "Expected warning about affected use cases"

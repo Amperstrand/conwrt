@@ -264,7 +264,10 @@ def apply_plan(
         if step.kind in (StepKind.WIFI_STA, StepKind.WIFI_AP):
             reload = wifi_i >= last_wifi_idx
             wifi_i += 1
-            _apply_wifi_step(ip, step, ssh_key, _log, reload_wifi=reload)
+            ok = _apply_wifi_step(ip, step, ssh_key, _log, reload_wifi=reload)
+            if not ok and step.kind == StepKind.WIFI_STA:
+                _log("  ⚠ WiFi STA failed — device has no WAN uplink. Aborting apply.")
+                return ip
             continue
 
         script = render_shell(step.ops) if step.ops else step.configure_script
@@ -279,16 +282,23 @@ def apply_plan(
                     _log(f"  ✓ {step.label}")
 
     # Phase 2: Install packages (after WWAN_SETUP + WIFI_STA brought WAN up)
+    packages_ok = True
     if opkg_pkgs or opkg_remove:
         if _wait_for_internet(ip, ssh_key, _log, timeout=60):
             _log(f"  opkg: installing {len(opkg_pkgs)} package(s)...")
             script = opkg_install_script(opkg_pkgs, opkg_remove)
             if not _run_ssh(ip, script, ssh_key, _log, timeout=300):
                 _log("  ⚠ opkg install failed, trying SCP fallback...")
-                _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
+                packages_ok = _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
         else:
             _log("  ⚠ opkg: no internet after 60s — trying SCP fallback...")
-            _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
+            packages_ok = _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
+
+    if not packages_ok and opkg_pkgs:
+        affected = [s.use_case_name for s in plan.steps
+                    if s.kind == StepKind.USE_CASE and s.opkg_packages and s.include_in_post_install]
+        if affected:
+            _log(f"  ⚠ Package install failed — use cases may be broken: {', '.join(affected)}")
 
     # Phase 3: Use case configure scripts (packages now installed)
     for step in plan.steps:
