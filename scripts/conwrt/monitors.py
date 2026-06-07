@@ -99,7 +99,7 @@ class PcapMonitor:
             return
         try:
             self._pcap_writer.close()
-        except Exception:
+        except OSError:
             pass
         self._pcap_writer = None
 
@@ -108,7 +108,7 @@ class PcapMonitor:
             self._open_pcap_writer(append=os.path.exists(self.config.pcap_path))
         try:
             self._pcap_writer.write(packet)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             log(f"pcap writer error, reopening append writer: {e}")
             self._close_pcap_writer()
             self._open_pcap_writer(append=os.path.exists(self.config.pcap_path))
@@ -117,7 +117,7 @@ class PcapMonitor:
     def _packet_detail(self, packet: object) -> str:
         try:
             return str(packet.summary())[:120]
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
             return packet.__class__.__name__[:120]
 
     def _payload_looks_like_http(self, packet: object) -> bool:
@@ -128,7 +128,7 @@ class PcapMonitor:
             if raw_layer is None:
                 return False
             payload = bytes(getattr(raw_layer, "load", b""))
-        except Exception:
+        except (AttributeError, TypeError):
             return False
         return payload.startswith((
             b"GET ",
@@ -163,7 +163,7 @@ class PcapMonitor:
                         return
                     self._emit(Event.UBOOT_ARP_192_168_1_2, detail)
                     return
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 pass
 
         if packet.haslayer(self._scapy.IP):
@@ -177,7 +177,7 @@ class PcapMonitor:
                     and self._payload_looks_like_http(packet)
                 ):
                     self._emit(Event.UBOOT_HTTP, detail)
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 pass
 
         if self.config.router_mac_openwrt and packet.haslayer(self._scapy.IPv6):
@@ -192,7 +192,7 @@ class PcapMonitor:
                     and int(getattr(ipv6, "nh", -1)) == 58
                 ):
                     self._emit(Event.ICMPV6_FROM_ROUTER, detail)
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 pass
 
         if packet.haslayer(self._scapy.UDP):
@@ -215,7 +215,7 @@ class PcapMonitor:
                             and dst_port == self.config.zycast_multicast_port
                         ):
                             self._emit(Event.ZYCAST_MULTICAST_DETECTED, detail)
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 pass
 
     def _check_silence(self, last_silence_check: float, interval: int = 5) -> float:
@@ -312,7 +312,7 @@ class PcapMonitor:
                         raw_line = self._reader_proc.stdout.readline()
                         if raw_line:
                             self._parse_line(raw_line.decode(errors="replace"))
-                except Exception:
+                except (OSError, ValueError):
                     pass
             else:
                 if self._reader_proc:
@@ -358,7 +358,7 @@ class PcapMonitor:
                 from scapy.all import L2socket
                 test_sock = L2socket(iface=self.config.interface)
                 test_sock.close()
-            except Exception:
+            except OSError:
                 raise PermissionError(
                     f"no permission to capture on {self.config.interface} "
                     f"(need root or CAP_NET_RAW)"
@@ -368,7 +368,7 @@ class PcapMonitor:
             self._run_tcpdump_fallback()
             log("Pcap monitor stopped")
             return
-        except Exception as e:
+        except ImportError as e:
             log(f"scapy unavailable, falling back to tcpdump capture: {e}")
             tcpdump_result = self._run_tcpdump_fallback()
             if tcpdump_result is None:
@@ -408,7 +408,7 @@ class PcapMonitor:
                         timeout=1,
                         stop_filter=lambda _pkt: self._stop.is_set(),
                     )
-                except Exception as e:
+                except OSError as e:
                     if not self._stop.is_set():
                         log(f"scapy sniff error on {self.config.interface}: {e}")
                         time.sleep(1)
@@ -442,7 +442,7 @@ class LinkMonitor:
                     else:
                         self.event_queue.put((Event.LINK_DOWN, ts(), ""))
                 self._last_state = current
-            except Exception:
+            except OSError:
                 pass
             self._stop.wait(self._poll_interval)
 
@@ -465,7 +465,7 @@ class SSHMonitor:
                 if check_ssh(self.ip):
                     self.event_queue.put((Event.SSH_UP, ts(), ""))
                     return
-            except Exception:
+            except OSError:
                 pass
             self._stop.wait(self._poll_interval)
 

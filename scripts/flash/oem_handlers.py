@@ -56,7 +56,7 @@ def _read_xssid_cookie(cookie_file: str) -> str:
                     parts = line.split()
                     if len(parts) >= 7:
                         return f"HTTP_XSSID={parts[-1]}"
-    except Exception:
+    except OSError:
         pass
     return ""
 
@@ -158,7 +158,7 @@ def oem_http_login(stock_ip: str, username: str, password: str) -> tuple[bool, s
         log("V2.80+ login did not get authId, trying V2.00 plaintext fallback...")
         return oem_http_login_v200(stock_ip, username, password)
 
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"V2.80+ login error: {e}, trying V2.00 fallback...")
         return oem_http_login_v200(stock_ip, username, password)
     finally:
@@ -206,7 +206,7 @@ def oem_http_login_v200(stock_ip: str, username: str, password: str) -> tuple[bo
                     return True, cookie_value
                 return True, ""
         return False, r.stdout[:200]
-    except Exception as e:
+    except subprocess.SubprocessError as e:
         return False, str(e)[:200]
 
 
@@ -279,7 +279,7 @@ def oem_http_change_password(stock_ip: str, username: str, old_password: str,
 
         return False, f"Unexpected response: {r_change.stdout[:200]}"
 
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return False, f"Password change error: {e}"
 
 
@@ -323,7 +323,7 @@ def oem_http_upload(stock_ip: str, cookie: str, firmware_path: str,
     except subprocess.TimeoutExpired:
         log("OEM HTTP upload timed out.")
         return False, "timeout"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"OEM HTTP upload error: {e}")
         return False, str(e)
 
@@ -341,7 +341,7 @@ def oem_http_accept_reboot(stock_ip: str, cookie: str) -> bool:
             return True
         log(f"Reboot response: {r.stdout[:200]}")
         return True
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"Reboot accept error: {e}")
         return True
 
@@ -373,7 +373,7 @@ def oem_ftp_login(stock_ip: str, username: str, password: str) -> tuple[bool, st
             log(f"GS1920-24 login HTTP {r.stdout.strip()}")
             return True, cookie_file
         return False, f"HTTP {r.stdout.strip()}"
-    except Exception as e:
+    except subprocess.SubprocessError as e:
         return False, str(e)
 
 
@@ -406,7 +406,7 @@ def oem_ftp_enable_service(stock_ip: str, cookie_file: str) -> tuple[bool, str]:
             time.sleep(2)
             return True, f"HTTP {code}"
         return False, f"Unexpected HTTP {code}"
-    except Exception as e:
+    except subprocess.SubprocessError as e:
         return False, str(e)
 
 
@@ -453,7 +453,7 @@ def oem_ftp_upload(stock_ip: str, username: str, password: str,
         return False, f"FTP failed (exit {r.returncode}): {output[-300:]}"
     except subprocess.TimeoutExpired:
         return False, "FTP upload timed out"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
 
 
@@ -498,7 +498,7 @@ def install_sysupgrade(ctx, openwrt_ip: str) -> bool:
                 cmd = f"sysupgrade -n -f {overlay_remote} /tmp/{remote_name}"
             else:
                 log("Overlay upload failed, falling back to sysupgrade -n.")
-        except Exception as exc:
+        except (ImportError, OSError, subprocess.SubprocessError) as exc:
             log(f"Overlay generation failed ({exc}), falling back to sysupgrade -n.")
         finally:
             try:

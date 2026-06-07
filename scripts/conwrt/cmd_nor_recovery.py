@@ -78,7 +78,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
     except subprocess.TimeoutExpired:
         print(f"ERROR: SSH connection to {ip} timed out.", file=sys.stderr)
         return 1
-    except Exception as exc:
+    except OSError as exc:
         print(f"ERROR: SSH connection to {ip} failed: {exc}", file=sys.stderr)
         return 1
 
@@ -96,7 +96,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
             ssh_cmd(ip, "cat /tmp/sysinfo/board_name", key=ssh_key, connect_timeout=10),
             capture_output=True, text=True, timeout=15, check=False,
         )
-    except Exception as exc:
+    except OSError as exc:
         print(f"ERROR: Failed to check board name: {exc}", file=sys.stderr)
         return 1
 
@@ -149,7 +149,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
                     print(f"  WARNING: U-Boot SHA256 mismatch!", file=sys.stderr)
                     print(f"    Expected: {expected_sha256}", file=sys.stderr)
                     print(f"    Got:      {actual_sha256}", file=sys.stderr)
-            except Exception as exc:
+            except OSError as exc:
                 log(f"  Failed to download U-Boot: {exc}")
 
         if nor_fw_cfg:
@@ -166,7 +166,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
                     print(f"  WARNING: NOR firmware SHA256 mismatch!", file=sys.stderr)
                     print(f"    Expected: {expected_sha256}", file=sys.stderr)
                     print(f"    Got:      {actual_sha256}", file=sys.stderr)
-            except Exception as exc:
+            except OSError as exc:
                 log(f"  Failed to download NOR firmware: {exc}")
 
         print()
@@ -212,7 +212,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         log(f"  Downloading {local_name}...")
         try:
             urllib.request.urlretrieve(url, local_path)
-        except Exception as exc:
+        except OSError as exc:
             print(f"ERROR: Failed to download {local_name}: {exc}", file=sys.stderr)
             return False
         actual = sha256_file(local_path)
@@ -269,7 +269,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         except subprocess.TimeoutExpired:
             # Expected: mtd -r reboots the router, SSH drops
             pass
-        except Exception as exc:
+        except OSError as exc:
             # Connection reset is expected during reboot
             if "reset" not in str(exc).lower() and "broken" not in str(exc).lower():
                 print(f"WARNING: Unexpected error during U-Boot flash: {exc}", file=sys.stderr)
