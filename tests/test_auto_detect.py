@@ -279,21 +279,21 @@ class TestAssessReadiness:
         assert result["ready"] is False
         assert any("not identified" in i for i in result["issues"])
 
-    @patch("auto_detect.load_model", side_effect=FileNotFoundError)
+    @patch("router_classify.load_model", side_effect=FileNotFoundError)
     def test_model_not_found(self, mock_load):
         r = DetectedRouter(ip="1.2.3.4", mac="AA:BB:CC:DD:EE:FF", firmware_state="zyxel_stock", model_id="missing")
         result = assess_readiness(r)
         assert result["ready"] is False
         assert any("No model definition" in i for i in result["issues"])
 
-    @patch("auto_detect.load_model", return_value={"flash_methods": {}})
+    @patch("router_classify.load_model", return_value={"flash_methods": {}})
     def test_no_flash_methods(self, mock_load):
         r = DetectedRouter(ip="1.2.3.4", mac="AA:BB:CC:DD:EE:FF", firmware_state="zyxel_stock", model_id="test")
         result = assess_readiness(r)
         assert result["ready"] is False
         assert any("No flash methods" in i for i in result["issues"])
 
-    @patch("auto_detect.load_model", return_value={
+    @patch("router_classify.load_model", return_value={
         "flash_methods": {"oem-http": {"default_password": "1234"}},
         "stock_default_creds": {"username": "admin", "password": "1234"},
     })
@@ -307,7 +307,7 @@ class TestAssessReadiness:
         assert result["ready"] is True
         assert result["flash_method"] == "oem-http"
 
-    @patch("auto_detect.load_model", return_value={"flash_methods": {"sysupgrade": {}}})
+    @patch("router_classify.load_model", return_value={"flash_methods": {"sysupgrade": {}}})
     def test_ssh_available(self, mock_load):
         r = DetectedRouter(
             ip="1.2.3.4", mac="AA:BB:CC:DD:EE:FF",
@@ -318,7 +318,7 @@ class TestAssessReadiness:
         assert result["ready"] is True
         assert result["flash_method"] == "sysupgrade"
 
-    @patch("auto_detect.load_model", return_value={
+    @patch("router_classify.load_model", return_value={
         "flash_methods": {"oem-http": {}},
         "safety": {"serial_number_warning": "check serial first"},
     })
@@ -328,7 +328,7 @@ class TestAssessReadiness:
         assert any("check serial" in w for w in result["warnings"])
         assert result.get("serial_check_required") is True
 
-    @patch("auto_detect.load_model", return_value={
+    @patch("router_classify.load_model", return_value={
         "flash_methods": {"oem-http": {}},
         "safety": {"serial_number_warning": "check serial"},
     })
@@ -341,7 +341,7 @@ class TestAssessReadiness:
         result = assess_readiness(r)
         assert any("below recommended" in i for i in result["issues"])
 
-    @patch("auto_detect.load_model", return_value={
+    @patch("router_classify.load_model", return_value={
         "flash_methods": {"oem-http": {}},
         "safety": {"serial_number_warning": "check serial"},
     })
