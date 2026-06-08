@@ -21,6 +21,13 @@ import conwrt
 from flash.context import Event, State
 from flash.detect import detect_boot_state
 from flash.device_profile import build_profile_from_model, find_recovery_flash_method
+from conwrt.infrastructure import RecoveryContext
+from conwrt.extreme import (
+    _handle_extreme_stock_preflight,
+    _handle_extreme_stock_writing_uboot,
+    _handle_extreme_bootcmd_restore,
+    _resolve_extreme_uboot_value,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -321,7 +328,7 @@ class TestExtremeHandlers(unittest.TestCase):
     def _profile(self) -> SimpleNamespace:
         return build_profile_from_model(MODEL_ID, flash_method="extreme-rdwr-tftp-initramfs")
 
-    def _ctx(self, profile: SimpleNamespace | None = None) -> conwrt.RecoveryContext:
+    def _ctx(self, profile: SimpleNamespace | None = None) -> RecoveryContext:
         if profile is None:
             profile = self._profile()
         tmpdir = tempfile.TemporaryDirectory()
@@ -330,7 +337,7 @@ class TestExtremeHandlers(unittest.TestCase):
         image_path = Path(tmpdir.name) / "sysupgrade.bin"
         initramfs_path.write_bytes(b"initramfs")
         image_path.write_bytes(b"sysupgrade")
-        return conwrt.RecoveryContext(
+        return RecoveryContext(
             profile=profile,
             image_path=str(image_path),
             initramfs_path=str(initramfs_path),
@@ -372,7 +379,7 @@ class TestExtremeHandlers(unittest.TestCase):
             return MagicMock(returncode=0, stdout="ok\n", stderr="")
 
         mock_ssh.side_effect = ssh_side_effect
-        conwrt._handle_extreme_stock_preflight(ctx, event_queue)
+        _handle_extreme_stock_preflight(ctx, event_queue)
 
         self.assertTrue(ctx._extreme_rdwr_broken)
         self.assertEqual(ctx.state, State.EXTREME_STOCK_WRITING_UBOOT)
@@ -394,7 +401,7 @@ class TestExtremeHandlers(unittest.TestCase):
             raise AssertionError(f"Unexpected command: {command}")
 
         mock_ssh.side_effect = ssh_side_effect
-        conwrt._handle_extreme_stock_writing_uboot(ctx, event_queue)
+        _handle_extreme_stock_writing_uboot(ctx, event_queue)
 
         self.assertTrue(ctx._extreme_rdwr_broken)
         self.assertTrue(ctx._extreme_final_vars_written)
@@ -406,7 +413,7 @@ class TestExtremeHandlers(unittest.TestCase):
         event_queue = queue.Queue()
         required_lines = []
         for key, value in ctx.profile.required_uboot_vars.items():
-            resolved = conwrt._resolve_extreme_uboot_value(ctx.profile, value)
+            resolved = _resolve_extreme_uboot_value(ctx.profile, value)
             if value == "<TEMP_AP_IP>":
                 resolved = ctx.profile.stock_default_ip
             required_lines.append(f"{key}={resolved}")
@@ -425,7 +432,7 @@ class TestExtremeHandlers(unittest.TestCase):
             raise AssertionError(f"Unexpected command: {command}")
 
         mock_ssh.side_effect = ssh_side_effect
-        conwrt._handle_extreme_stock_writing_uboot(ctx, event_queue)
+        _handle_extreme_stock_writing_uboot(ctx, event_queue)
 
         commands = [call.args[3] for call in mock_ssh.call_args_list]
         self.assertTrue(any("bootcmd=run boot_openwrt; run boot_net" in command for command in commands))
@@ -439,7 +446,7 @@ class TestExtremeHandlers(unittest.TestCase):
         ctx._extreme_final_vars_written = True
         event_queue = queue.Queue()
 
-        conwrt._handle_extreme_bootcmd_restore(ctx, event_queue)
+        _handle_extreme_bootcmd_restore(ctx, event_queue)
 
         mock_cleanup.assert_called_once_with(ctx)
         self.assertEqual(ctx.state, State.EXTREME_SYSUPGRADE_UPLOADING)
@@ -457,7 +464,7 @@ class TestExtremeHandlers(unittest.TestCase):
         ctx = self._ctx()
         event_queue = queue.Queue()
 
-        conwrt._handle_extreme_bootcmd_restore(ctx, event_queue)
+        _handle_extreme_bootcmd_restore(ctx, event_queue)
 
         mock_cleanup.assert_called_once_with(ctx)
         self.assertEqual(ctx.state, State.EXTREME_SYSUPGRADE_UPLOADING)
@@ -471,7 +478,7 @@ class TestExtremeHandlers(unittest.TestCase):
     def test_resolve_extreme_uboot_value_uses_openwrt_client_ip(self):
         profile = self._profile()
         self.assertEqual(
-            conwrt._resolve_extreme_uboot_value(profile, "<CONWRT_TFTP_SERVER_IP>"),
+            _resolve_extreme_uboot_value(profile, "<CONWRT_TFTP_SERVER_IP>"),
             profile.openwrt_client_ip,
         )
 

@@ -28,12 +28,15 @@ from model_loader import load_model
 
 
 def _import_conwrt_handlers():
-    import importlib
-    mod = importlib.import_module("conwrt")
+    from conwrt.handlers_oem import (
+        _handle_oem_login,
+        _handle_oem_prepare,
+        _handle_oem_uploading,
+    )
     return (
-        mod._handle_oem_login,
-        mod._handle_oem_prepare,
-        mod._handle_oem_uploading,
+        _handle_oem_login,
+        _handle_oem_prepare,
+        _handle_oem_uploading,
     )
 
 

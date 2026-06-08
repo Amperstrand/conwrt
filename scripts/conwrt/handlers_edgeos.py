@@ -8,7 +8,7 @@ from flash.context import Event, State, DEFAULT_IP, log, say, ts, sha256_file, p
 from ssh_utils import ssh_cmd, scp_cmd
 from ssh_utils import check_ssh
 from conwrt.infrastructure import RecoveryContext
-from conwrt.extreme import _ssh_with_password
+from conwrt.extreme_helpers import _ssh_with_password
 
 
 def _handle_edgeos_stage1(ctx: RecoveryContext, event_queue: queue.Queue) -> None:

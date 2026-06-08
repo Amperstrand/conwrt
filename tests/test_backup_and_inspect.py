@@ -34,28 +34,28 @@ class TestBackupModelConfig(TestCase):
 
 class TestCmdBackup(TestCase):
     def test_none_model_id_returns_1(self):
-        import conwrt
+        from conwrt.cmd_backup import cmd_backup
         args = argparse.Namespace(
             model_id=None, ip="192.168.1.1",
             password="test", serial=None, output_dir=None,
             partitions=None, user="root",
         )
-        rc = conwrt.cmd_backup(args)
+        rc = cmd_backup(args)
         self.assertEqual(rc, 1)
 
     def test_requires_password_or_serial(self):
-        import conwrt
+        from conwrt.cmd_backup import cmd_backup
         args = argparse.Namespace(
             model_id="zyxel-nr7101", ip="192.168.1.1",
             password=None, serial=None, output_dir=None,
             partitions=None, user="root",
         )
-        rc = conwrt.cmd_backup(args)
+        rc = cmd_backup(args)
         self.assertEqual(rc, 1)
 
     @patch("conwrt.cmd_backup._ssh_with_password")
     def test_ssh_failure_returns_1(self, mock_ssh):
-        import conwrt
+        from conwrt.cmd_backup import cmd_backup
         mock_ssh.return_value = MagicMock(
             returncode=1, stderr="Connection refused", stdout=""
         )
@@ -64,7 +64,7 @@ class TestCmdBackup(TestCase):
             password="test", serial=None, output_dir=None,
             partitions=None, user="root",
         )
-        rc = conwrt.cmd_backup(args)
+        rc = cmd_backup(args)
         self.assertEqual(rc, 1)
 
 

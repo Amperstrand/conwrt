@@ -6,7 +6,7 @@ from pathlib import Path
 
 from model_loader import load_model
 from flash.context import log
-from conwrt.extreme import _ssh_with_password, _scp_with_password, _generate_zyxel_password
+from conwrt.extreme_helpers import _ssh_with_password, _scp_with_password, _generate_zyxel_password
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
