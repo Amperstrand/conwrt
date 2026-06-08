@@ -91,6 +91,7 @@ from conwrt.cmd_backup import cmd_backup
 from conwrt.cmd_reset import cmd_reset
 from conwrt.cmd_info import cmd_list, cmd_list_use_cases, cmd_cache
 from conwrt.cmd_detect import cmd_fingerprint, cmd_auto
+from conwrt.cmd_probe import cmd_probe
 
 from conwrt.flash_dispatcher import (
     FlashModeConfig, _run_state_machine, _resolve_flash_mode, _resolve_initial_state,
@@ -111,13 +112,15 @@ _COMMANDS = {
     "fingerprint": cmd_fingerprint,
     "setup-nor-recovery": cmd_setup_nor_recovery,
     "reset": cmd_reset,
+    "probe": cmd_probe,
 }
 
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
-        "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset", "-h", "--help",
+        "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
+        "probe", "-h", "--help",
         "--version", "-V",
     ):
         sys.argv.insert(1, "flash")

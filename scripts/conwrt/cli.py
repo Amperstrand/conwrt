@@ -216,4 +216,15 @@ def _build_parser() -> argparse.ArgumentParser:
     reset_parser.add_argument("--model-id", default=None,
         help="Model ID (for reference/documentation)")
 
+    probe_parser = subparsers.add_parser("probe",
+        help="Probe an interface for connected routers")
+    probe_parser.add_argument("--interface", default=None,
+        help="Ethernet interface (auto-detected if omitted)")
+    probe_parser.add_argument("--timeout", type=float, default=3.0,
+        help="Per-target timeout in seconds (default: 3)")
+    probe_parser.add_argument("--json", action="store_true", dest="json_output",
+        help="Output results as JSON")
+    probe_parser.add_argument("--quiet", action="store_true",
+        help="Only print responding IPs")
+
     return parser
