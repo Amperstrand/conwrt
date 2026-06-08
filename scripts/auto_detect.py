@@ -23,6 +23,8 @@ from model_match import (
     match_model_by_board,
     match_model_by_http,
     match_model_by_lldp,
+    _normalize_mac,
+    _mac_prefix,
 )
 from platform_utils import configure_interface_ip, detect_platform, get_link_state, is_root
 from probe_utils import curl_get as _curl_get, curl_head as _curl_head, ping_host as _ping
@@ -66,15 +68,6 @@ class DetectedRouter:
 
 def _add_evidence(router: DetectedRouter, phase: str, message: str) -> None:
     router.evidence.append(f"[{phase}] {message}")
-
-
-def _normalize_mac(mac: str) -> str:
-    return mac.upper().replace("-", ":")
-
-
-def _mac_prefix(mac: str) -> str:
-    parts = _normalize_mac(mac).split(":")
-    return ":".join(parts[:3])
 
 
 def _ensure_route(subnet_ip: str, interface: str) -> bool:
