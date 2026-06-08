@@ -189,7 +189,7 @@ def build_plan(
     steps: list[ProfileStep] = []
 
     effective_lan_ip_mode = lan_ip_mode or cfg.lan_ip_mode
-    effective_hostname_pattern = hostname_pattern or cfg.hostname_pattern
+    effective_hostname_pattern = hostname_pattern or cfg.hostname_pattern or "model_mac"
 
     model_data: dict = {}
     if model_id:
@@ -441,9 +441,6 @@ def build_plan(
                 continue
 
         uc_params = dict(uc_cfg.params)
-        # Inject model's LAN subnet into guest-wifi so it derives a non-conflicting guest subnet
-        if uc.name == "guest-wifi" and model_lan_subnet_raw:
-            uc_params["lan_subnet"] = model_lan_subnet_raw
         resolved = _apply_defaults(uc.name, uc_params)
         pkgs, remove = _uc_packages_for_mode(uc, mode)
         fb = _firstboot_for_mode(uc, resolved, mode)
@@ -466,7 +463,7 @@ def build_plan(
             include_in_post_install=bool(cfg_script or pkgs),
         ))
 
-    if effective_lan_ip_mode == "mac-hash" and model_lan_subnet:
+    if effective_lan_ip_mode == "mac-hash":
         # On DSA devices (most modern OpenWrt hardware), eth0 is the CPU-facing
         # port with an unstable MAC.  br-lan always carries the factory base MAC.
         _mac_src_fb = (
@@ -477,35 +474,43 @@ def build_plan(
             '_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)'
             '; [ -z "$_mac" ] && _mac=$(cat /sys/class/net/eth0/address 2>/dev/null)'
         )
+        # Derive two subnet octets from MAC md5 hash, last octet always 1.
+        # Matches Python: mac_to_subnet_octets() in mac_hash.py
+        _hash_derive = (
+            "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"
+            "; _hash=$(printf '%s' \"$_mac_clean\" | md5sum)"
+            "; _o2=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c1-8))"
+            "; _o2=$((_o2 % 250 + 1))"
+            "; _o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"
+            "; _o3=$((_o3 % 250 + 1))"
+        )
         _mac_ip_fb = "\n".join([
             f"{_mac_src_fb}",
-            "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
-            "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
-            "_host=$((_host % 200 + 2))",
-            f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
+            _hash_derive.replace("; ", "\n"),
+            'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
             "uci commit network",
         ])
         _mac_ip_ssh = " ; ".join([
             f"{_mac_src_ssh}",
-            "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')",
-            "_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))",
-            "_host=$((_host % 200 + 2))",
-            f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\"",
+            _hash_derive,
+            'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
             "uci commit network",
         ])
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP_MAC_HASH,
-            label=f"LAN IP → {model_lan_subnet}.<mac-hash>",
+            label="LAN IP → 10.<mac-hash>.<mac-hash>.1",
             firstboot_script=_mac_ip_fb,
             configure_script=_mac_ip_ssh,
             include_in_post_install=True,
-            wifi_params={"lan_subnet": model_lan_subnet},
             ops=[
                 ShellCommand(f"{_mac_src_fb}"),
                 ShellCommand("_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"),
-                ShellCommand("_host=$(printf '%d' 0x$(printf '%s' \"$_mac_clean\" | md5sum | cut -c1-8))"),
-                ShellCommand("_host=$((_host % 200 + 2))"),
-                ShellCommand(f"uci set network.lan.ipaddr=\"{model_lan_subnet}.$_host\""),
+                ShellCommand("_hash=$(printf '%s' \"$_mac_clean\" | md5sum)"),
+                ShellCommand("_o2=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c1-8))"),
+                ShellCommand("_o2=$((_o2 % 250 + 1))"),
+                ShellCommand("_o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"),
+                ShellCommand("_o3=$((_o3 % 250 + 1))"),
+                ShellCommand('uci set network.lan.ipaddr="10.$_o2.$_o3.1"'),
                 ShellCommand("uci commit network"),
             ],
         ))

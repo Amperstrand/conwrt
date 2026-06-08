@@ -57,8 +57,8 @@ class TestHandleOemLoginHttpSuccess(TestCase):
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
         self.assertEqual(ctx.state, State.OEM_UPLOADING)
-        self.assertEqual(ctx.oem_state["cookie"], "XSSID=abc")
-        self.assertEqual(ctx.oem_state["password"], "1234")
+        self.assertEqual(ctx.oem_state.get("cookie"), "XSSID=abc")
+        self.assertEqual(ctx.oem_state.get("password"), "1234")
 
 
 class TestHandleOemLoginHttpPrepare(TestCase):
@@ -121,7 +121,7 @@ class TestHandleOemLoginPasswordChange(TestCase):
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
         self.assertEqual(ctx.state, State.OEM_UPLOADING)
-        self.assertEqual(ctx.oem_state["cookie"], "XSSID=new")
+        self.assertEqual(ctx.oem_state.get("cookie"), "XSSID=new")
         self.assertEqual(mock_login.call_count, 2)
 
 
@@ -137,7 +137,7 @@ class TestHandleOemLoginPasswordChangeFailure(TestCase):
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
         self.assertEqual(ctx.state, State.OEM_UPLOADING)
-        self.assertEqual(ctx.oem_state["cookie"], "XSSID=old")
+        self.assertEqual(ctx.oem_state.get("cookie"), "XSSID=old")
 
 
 class TestHandleOemLoginFtpSuccess(TestCase):
@@ -149,7 +149,7 @@ class TestHandleOemLoginFtpSuccess(TestCase):
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
         self.assertEqual(ctx.state, State.OEM_PREPARE)
-        self.assertEqual(ctx.oem_state["cookie_file"], "/tmp/cookies.txt")
+        self.assertEqual(ctx.oem_state.get("cookie_file"), "/tmp/cookies.txt")
 
 
 class TestHandleOemLoginFtpFailure(TestCase):

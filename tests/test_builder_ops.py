@@ -85,7 +85,7 @@ class TestBuilderInlineOps:
         assert isinstance(step.ops[1], UciCommit)
 
     def test_lan_ip_step_has_ops(self):
-        cfg = ConwrtConfig(lan_ip="192.168.50.1")
+        cfg = ConwrtConfig(lan_ip="192.168.50.1", lan_ip_mode="static")
         plan = build_plan(cfg, mode="post_install")
         steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP]
         assert len(steps) == 1

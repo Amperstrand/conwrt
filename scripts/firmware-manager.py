@@ -684,8 +684,8 @@ def main() -> int:
         help="ASU device profile (e.g. dlink_covr-x1860-a1)",
     )
     p_request.add_argument(
-        "--version", default="24.10.2",
-        help="OpenWrt version (default: 24.10.2)",
+        "--version", default="25.12.4",
+        help="OpenWrt version (default: 25.12.4)",
     )
     p_request.add_argument(
         "--target", default=None,

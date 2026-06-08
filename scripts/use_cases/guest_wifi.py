@@ -10,60 +10,38 @@ from shell_safe import sh_quote, uci_name
 from . import ParamDef, UseCase, register
 
 
-def _derive_guest_subnet(lan_subnet: str) -> str:
-    """Derive guest subnet from LAN subnet by incrementing third octet (wrap at 255→0).
-
-    Args:
-        lan_subnet: LAN subnet in "10.x.y.0/24" or "10.x.y" prefix form.
-
-    Returns:
-        Guest subnet prefix like "10.89.5"
-    """
-    prefix = lan_subnet.split("/")[0]
-    parts = prefix.split(".")
-    if len(parts) == 4:
-        parts = parts[:3]
-    third = int(parts[2])
-    third = (third + 1) % 256
-    parts[2] = str(third)
-    return ".".join(parts)
-
-
-def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ssid = sh_quote(str(params.get("ssid", "Guest")))
     encryption = str(params.get("encryption", "psk2"))
     key = sh_quote(str(params.get("key", ""))) if params.get("key") else ""
     band = str(params.get("band", "2.4ghz"))
     isolated = "1" if params.get("isolation", True) else "0"
-    network = uci_name(str(params.get("network_name", "guest")), "guest network name")
-    lan_subnet = str(params.get("lan_subnet", "192.168.3.0/24"))
-    guest_prefix = _derive_guest_subnet(lan_subnet)
-    return {
-        "ssid": ssid,
-        "encryption": encryption,
-        "key": key,
-        "band": band,
-        "isolated": isolated,
-        "network": network,
-        "guest_ipaddr": f"{guest_prefix}.1",
-    }
-
-
-def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
-    r = _resolve_params(params)
-    net = r["network"]
-    enc = r["encryption"]
-    key = r["key"]
+    net = uci_name(str(params.get("network_name", "guest")), "guest network name")
+    band_short = band[:1] + "g"
 
     ops: list[Op] = [
-        Comment(text=f"--- Guest WiFi: {r['ssid']} ---"),
+        Comment(text=f"--- Guest WiFi: {ssid} ---"),
     ]
 
-    # Create guest network interface
+    # Derive guest subnet from current LAN IP (third octet + 1).
+    # Runs AFTER the LAN IP step, so network.lan.ipaddr is already set.
+    ops.append(ShellCommand(
+        command="_lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo '192.168.1.1')"))
+    ops.append(ShellCommand(
+        command='_guest_o3=$(echo "$_lan_ip" | cut -d. -f3)'))
+    ops.append(ShellCommand(
+        command='_guest_o3=$((_guest_o3 + 1))'))
+    ops.append(ShellCommand(
+        command='[ "$_guest_o3" -gt 255 ] && _guest_o3=0'))
+    ops.append(ShellCommand(
+        command='_guest_prefix=$(echo "$_lan_ip" | cut -d. -f1-2).$_guest_o3'))
+
+    ops.append(BlankLine())
+
     ops.append(ShellCommand(command=f"uci set network.{net}=interface"))
+    ops.append(ShellCommand(command=f'uci set network.{net}.ipaddr="$_guest_prefix.1"'))
     ops.append(UciSet(config="network", section=net, values={
         "proto": "static",
-        "ipaddr": r["guest_ipaddr"],
         "netmask": "255.255.255.0",
     }))
     ops.append(UciCommit(config="network"))
@@ -83,8 +61,7 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(BlankLine())
 
     # Guest firewall zone (isolated, no LAN forwarding)
-    # Use named sections (e.g. firewall.guest) instead of anonymous @zone[-1]
-    # to avoid ambiguity when multiple uci add/delete ops run in one chain.
+    # Named sections avoid duplicates across reconfigure runs.
     ops.append(ShellCommand(command=f"uci set firewall.{net}=zone"))
     ops.append(UciSet(config="firewall", section=net, values={
         "name": net,
@@ -98,7 +75,6 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
         "src": net,
         "dest": "wan",
     }))
-    # Allow DNS and DHCP to guest zone
     ops.append(ShellCommand(command=f"uci set firewall.{net}_dns=rule"))
     ops.append(UciSet(config="firewall", section=f"{net}_dns", values={
         "name": f"Allow-DNS-{net}",
@@ -119,9 +95,9 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
 
     ops.append(BlankLine())
 
-    # Delete old guest VAPs from previous runs, then create fresh one
+    # Named WiFi VAP section (idempotent — overwrites on reconfigure).
+    # Cleanup old anonymous sections from previous versions.
     ops.append(uci_cleanup_sections("wireless", f"network='{net}'"))
-    band_short = r["band"][:1] + "g"  # "2g", "5g", "6g"
     ops.append(ShellCommand(
         command=
             f'_radio=""; '
@@ -130,14 +106,14 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
             f'if [ "$_b" = "{band_short}" ]; then _radio=$_r; break; fi; '
             f'done; '
             f'if [ -n "$_radio" ]; then '
-            f'uci add wireless wifi-iface; '
-            f'uci set wireless.@wifi-iface[-1].device=$_radio; '
-            f'uci set wireless.@wifi-iface[-1].mode=ap; '
-            f'uci set wireless.@wifi-iface[-1].ssid={r["ssid"]}; '
-            f'uci set wireless.@wifi-iface[-1].encryption={enc}; '
-            + (f'uci set wireless.@wifi-iface[-1].key={key}; ' if key else "") +
-            f'uci set wireless.@wifi-iface[-1].network={net}; '
-            f'uci set wireless.@wifi-iface[-1].isolate={r["isolated"]}; '
+            f'uci set wireless.guest_ap=wifi-iface; '
+            f'uci set wireless.guest_ap.device=$_radio; '
+            f'uci set wireless.guest_ap.mode=ap; '
+            f'uci set wireless.guest_ap.ssid={ssid}; '
+            f'uci set wireless.guest_ap.encryption={encryption}; '
+            + (f'uci set wireless.guest_ap.key={key}; ' if key else "") +
+            f'uci set wireless.guest_ap.network={net}; '
+            f'uci set wireless.guest_ap.isolate={isolated}; '
             f'fi',
     ))
     ops.append(UciCommit(config="wireless"))
@@ -146,7 +122,7 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(ServiceAction(name="network", action="restart"))
     ops.append(ServiceAction(name="firewall", action="restart"))
     ops.append(ShellCommand(
-        command=f'echo "Guest WiFi configured: SSID={r["ssid"]} network={net} isolated={r["isolated"]}"',
+        command=f'echo "Guest WiFi configured: SSID={ssid} network={net} isolated={isolated}"',
     ))
 
     return ops
@@ -170,8 +146,6 @@ register(UseCase(
             description="Enable client isolation (guests can't see each other)"),
         "network_name": ParamDef(type=str, default="guest",
             description="UCI network interface name"),
-        "lan_subnet": ParamDef(type=str, default="192.168.3.0/24",
-            description="LAN subnet to derive guest subnet from (third octet + 1)"),
     },
     build_configure=lambda p: render_shell(_build_guest_wifi_ops(p)),
     build_configure_ops=_build_guest_wifi_ops,

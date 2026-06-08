@@ -107,7 +107,7 @@ def test_mac_hash_ip_step_generated() -> None:
     mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
     assert len(mac_steps) == 1
     step = mac_steps[0]
-    assert "10.231.9" in step.configure_script
+    assert "10.$_o2.$_o3.1" in step.configure_script
     assert "md5sum" in step.configure_script
     assert step.include_in_post_install is True
 
@@ -125,11 +125,11 @@ def test_mac_hash_ip_firstboot_script() -> None:
     assert "uci commit network" in fb
 
 
-def test_mac_hash_ip_skipped_without_model() -> None:
+def test_mac_hash_ip_works_without_model() -> None:
     cfg = ConwrtConfig(lan_ip_mode="mac-hash")
     plan = build_plan(cfg, mode="post_install", model_id="")
     mac_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP_MAC_HASH]
-    assert len(mac_steps) == 0
+    assert len(mac_steps) == 1
 
 
 def test_mac_hash_ip_skipped_with_static_mode() -> None:

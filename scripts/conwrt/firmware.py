@@ -36,7 +36,7 @@ def _request_custom_image(
 
     model = load_model(model_id)
     target = model.get("openwrt", {}).get("target", "")
-    version = model.get("openwrt", {}).get("version", "24.10.2")
+    version = model.get("openwrt", {}).get("version", "25.12.4")
 
     request_args = argparse.Namespace(
         profile=asu_profile,

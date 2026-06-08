@@ -126,13 +126,7 @@ def _apply_profile_post_flash(
         script = step.configure_script or ""
         if not script:
             continue
-        subnet = (step.wifi_params or {}).get("lan_subnet", "")
-        if not subnet:
-            log(f"  ⚠ {step.label}: no subnet configured — skipping")
-            continue
 
-        # Read MAC before changing IP so we can predict the new IP.
-        # br-lan has the stable factory MAC; eth0 is the CPU port (unstable on DSA).
         r_mac = run_ssh(ip, "cat /sys/class/net/br-lan/address 2>/dev/null", key=ssh_key)
         if r_mac.returncode != 0 or not r_mac.stdout.strip():
             r_mac = run_ssh(ip, "cat /sys/class/net/eth0/address 2>/dev/null", key=ssh_key)
@@ -140,7 +134,7 @@ def _apply_profile_post_flash(
             log(f"  ⚠ {step.label}: could not read MAC — skipping")
             continue
         device_mac = r_mac.stdout.strip()
-        expected_ip = mac_to_lan_ip(device_mac, subnet)
+        expected_ip = mac_to_lan_ip(device_mac)
         log(f"  {step.label}... (mac={device_mac}, expected={expected_ip})")
 
         r = run_ssh(ip, script, key=ssh_key)
