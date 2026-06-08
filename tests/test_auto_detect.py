@@ -161,7 +161,7 @@ class TestClassifyWebUI:
 
 
 class TestMatchModelByBoard:
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_exact_device_match(self, mock_list):
         mock_list.return_value = [{"id": "zyxel-gs1900-8hp-v1", "openwrt": {"device": "zyxel,gs1900-8hp"}}]
         board_json = '{"model": {"id": "zyxel,gs1900-8hp"}}'
@@ -169,7 +169,7 @@ class TestMatchModelByBoard:
         assert result is not None
         assert result["id"] == "zyxel-gs1900-8hp-v1"
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_substring_device_match(self, mock_list):
         mock_list.return_value = [{"id": "test", "openwrt": {"device": "vendor,big-model-name"}}]
         board_json = '{"model": {"id": "big-model-name"}}'
@@ -177,7 +177,7 @@ class TestMatchModelByBoard:
         assert result is not None
         assert result["id"] == "test"
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_no_match(self, mock_list):
         mock_list.return_value = [{"id": "other", "openwrt": {"device": "vendor,other"}}]
         board_json = '{"model": {"id": "vendor,unknown"}}'
@@ -189,14 +189,14 @@ class TestMatchModelByBoard:
     def test_invalid_json(self):
         assert match_model_by_board("not json") is None
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_missing_model_key(self, mock_list):
         mock_list.return_value = []
         assert match_model_by_board('{"other": "data"}') is None
 
 
 class TestMatchModelByHttp:
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_http_title_match(self, mock_list):
         mock_list.return_value = [{
             "id": "dlink-covr",
@@ -207,7 +207,7 @@ class TestMatchModelByHttp:
         assert len(result) == 1
         assert result[0]["id"] == "dlink-covr"
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_vendor_match_dlink(self, mock_list):
         mock_list.return_value = [{
             "id": "dlink-foo",
@@ -217,7 +217,7 @@ class TestMatchModelByHttp:
         result = match_model_by_http("Welcome to D-Link", "")
         assert len(result) == 1
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_vendor_match_glinet(self, mock_list):
         mock_list.return_value = [{
             "id": "glinet-foo",
@@ -227,7 +227,7 @@ class TestMatchModelByHttp:
         result = match_model_by_http("GL-iNet device", "")
         assert len(result) == 1
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_vendor_match_linksys(self, mock_list):
         mock_list.return_value = [{
             "id": "linksys-foo",
@@ -237,7 +237,7 @@ class TestMatchModelByHttp:
         result = match_model_by_http("Linksys smart wifi", "")
         assert len(result) == 1
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_no_match(self, mock_list):
         mock_list.return_value = [{"id": "x", "signatures": {}, "vendor": "unknown-vendor"}]
         result = match_model_by_http("generic page", "")
@@ -245,7 +245,7 @@ class TestMatchModelByHttp:
 
 
 class TestMatchModelByLldp:
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_matches_description_keyword(self, mock_list):
         mock_list.return_value = [{"id": "zyxel-gs1900", "description": "ZyXEL GS1900-8HP Switch"}]
         info = LLDPInfo(system_description="GS1900-8HP Ethernet Switch")
@@ -253,14 +253,14 @@ class TestMatchModelByLldp:
         assert len(result) == 1
         assert result[0]["id"] == "zyxel-gs1900"
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_matches_without_hyphen(self, mock_list):
         mock_list.return_value = [{"id": "zyxel-gs1900", "description": "ZyXEL GS1900-8HP"}]
         info = LLDPInfo(system_description="GS19008HP device")
         result = match_model_by_lldp(info)
         assert len(result) == 1
 
-    @patch("auto_detect.list_models")
+    @patch("model_match.list_models")
     def test_no_match(self, mock_list):
         mock_list.return_value = [{"id": "x", "description": "Other Device"}]
         info = LLDPInfo(system_description="completely different")
@@ -434,14 +434,14 @@ class TestParseLldpHexBlock:
 
 
 class TestCurlGet:
-    @patch("auto_detect.subprocess.run")
+    @patch("probe_utils.subprocess.run")
     def test_success(self, mock_run):
         mock_run.return_value = _completed(0, stdout="<html>body</html>", stderr="")
         rc, body, err = _curl_get("http://1.2.3.4/")
         assert rc == 0
         assert body == "<html>body</html>"
 
-    @patch("auto_detect.subprocess.run", side_effect=FileNotFoundError)
+    @patch("probe_utils.subprocess.run", side_effect=FileNotFoundError)
     def test_curl_missing(self, mock_run):
         rc, body, err = _curl_get("http://1.2.3.4/")
         assert rc == -1
@@ -449,14 +449,14 @@ class TestCurlGet:
 
 
 class TestCurlHead:
-    @patch("auto_detect.subprocess.run")
+    @patch("probe_utils.subprocess.run")
     def test_success(self, mock_run):
         mock_run.return_value = _completed(0, stdout="HTTP/1.1 200 OK\r\nServer: LuCI\r\n", stderr="")
         rc, headers, err = _curl_head("http://1.2.3.4/")
         assert rc == 0
         assert "LuCI" in headers
 
-    @patch("auto_detect.subprocess.run", side_effect=FileNotFoundError)
+    @patch("probe_utils.subprocess.run", side_effect=FileNotFoundError)
     def test_curl_missing(self, mock_run):
         rc, headers, err = _curl_head("http://1.2.3.4/")
         assert rc == -1
@@ -464,25 +464,25 @@ class TestCurlHead:
 
 
 class TestPing:
-    @patch("auto_detect.subprocess.run")
-    @patch("auto_detect.detect_platform", return_value="darwin")
+    @patch("probe_utils.subprocess.run")
+    @patch("probe_utils.detect_platform", return_value="darwin")
     def test_success_darwin(self, mock_plat, mock_run):
         mock_run.return_value = _completed(0)
         assert _ping("1.2.3.4") is True
 
-    @patch("auto_detect.subprocess.run")
-    @patch("auto_detect.detect_platform", return_value="linux")
+    @patch("probe_utils.subprocess.run")
+    @patch("probe_utils.detect_platform", return_value="linux")
     def test_success_linux(self, mock_plat, mock_run):
         mock_run.return_value = _completed(0)
         assert _ping("1.2.3.4") is True
 
-    @patch("auto_detect.subprocess.run", return_value=_completed(1))
-    @patch("auto_detect.detect_platform", return_value="darwin")
+    @patch("probe_utils.subprocess.run", return_value=_completed(1))
+    @patch("probe_utils.detect_platform", return_value="darwin")
     def test_failure(self, mock_plat, mock_run):
         assert _ping("1.2.3.4") is False
 
-    @patch("auto_detect.subprocess.run", side_effect=FileNotFoundError)
-    @patch("auto_detect.detect_platform", return_value="darwin")
+    @patch("probe_utils.subprocess.run", side_effect=FileNotFoundError)
+    @patch("probe_utils.detect_platform", return_value="darwin")
     def test_exception(self, mock_plat, mock_run):
         assert _ping("1.2.3.4") is False
 

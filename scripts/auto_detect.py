@@ -11,28 +11,22 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-from urllib.request import urlopen, Request
-from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from model_loader import list_models, load_model, find_model_by_mac_oui
+from lldp import LLDPInfo, lldp_probe, _parse_lldp_hex_block, _parse_zyxel_lldp
+from model_loader import list_models, load_model
+from model_match import (
+    FIRMWARE_PATTERNS,
+    lookup_mac_vendor,
+    match_models_by_oui,
+    match_model_by_board,
+    match_model_by_http,
+    match_model_by_lldp,
+)
 from platform_utils import configure_interface_ip, detect_platform, get_link_state, is_root
+from probe_utils import curl_get as _curl_get, curl_head as _curl_head, ping_host as _ping
 from ssh_utils import run_ssh
-
-
-@dataclass
-class LLDPInfo:
-    """Parsed LLDP neighbor information."""
-    chassis_mac: str = ""
-    chassis_name: str = ""
-    management_ip: str = ""
-    management_url: str = ""
-    system_description: str = ""
-    port_id: str = ""
-    port_description: str = ""
-    vendor_specific: dict = field(default_factory=dict)
-    raw_tlvs: list = field(default_factory=list)
 
 
 COMMON_GATEWAY_IPS = [
@@ -41,16 +35,6 @@ COMMON_GATEWAY_IPS = [
     "192.168.8.1",
     "10.0.0.1",
     "192.168.2.1",
-]
-
-FIRMWARE_PATTERNS = [
-    (re.compile(r"FIRMWARE.?UPDATE|firmware.*<form", re.IGNORECASE), "uboot"),
-    (re.compile(r"uIP|u%-Boot|U%-Boot HTTP", re.IGNORECASE), "uboot"),
-    (re.compile(r"openwrt|luci", re.IGNORECASE), "openwrt"),
-    (re.compile(r"gl[\-_.]?inet|glinet", re.IGNORECASE), "glinet_stock"),
-    (re.compile(r"linksys|jnap", re.IGNORECASE), "linksys_stock"),
-    (re.compile(r"d[\-_.]?link|hnap|covr", re.IGNORECASE), "dlink_stock"),
-    (re.compile(r"dispatcher\.cgi|intelligent[\s\-_]?switch", re.IGNORECASE), "zyxel_stock"),
 ]
 
 SEPARATOR = "=" * 45
@@ -82,41 +66,6 @@ class DetectedRouter:
 
 def _add_evidence(router: DetectedRouter, phase: str, message: str) -> None:
     router.evidence.append(f"[{phase}] {message}")
-
-
-def _curl_get(url: str, timeout: int = 3) -> tuple[int, str, str]:
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "--max-time", str(timeout), url],
-            capture_output=True, text=True, timeout=timeout + 2, check=False,
-        )
-        return r.returncode, r.stdout, r.stderr
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return -1, "", "curl failed"
-
-
-def _curl_head(url: str, timeout: int = 3) -> tuple[int, str, str]:
-    try:
-        r = subprocess.run(
-            ["curl", "-sI", "--max-time", str(timeout), url],
-            capture_output=True, text=True, timeout=timeout + 2, check=False,
-        )
-        return r.returncode, r.stdout, r.stderr
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return -1, "", "curl head failed"
-
-
-def _ping(ip: str, timeout: int = 2) -> bool:
-    plat = detect_platform()
-    if plat == "darwin":
-        cmd = ["ping", "-c", "1", "-W", str(timeout * 1000), ip]
-    else:
-        cmd = ["ping", "-c", "1", "-W", str(timeout), ip]
-    try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout + 2, check=False)
-        return r.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
 
 
 def _normalize_mac(mac: str) -> str:
@@ -162,182 +111,6 @@ def _ensure_route(subnet_ip: str, interface: str) -> bool:
     except (subprocess.SubprocessError, OSError):
         return False
 
-
-def lldp_probe(interface: str, timeout: int = 15) -> dict[str, LLDPInfo]:
-    """Capture and parse LLDP frames on an interface.
-
-    Returns dict mapping management_ip -> LLDPInfo.
-    Uses tcpdump (no scapy dependency).
-    """
-    results: dict[str, LLDPInfo] = {}
-
-    try:
-        proc = subprocess.Popen(
-            [
-                "sudo", "-n", "tcpdump",
-                "-i", interface,
-                "-n", "-e", "-XX",
-                "-c", "1",
-                "-t",
-                "ether", "proto", "0x88cc",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except FileNotFoundError:
-        return results
-
-    output_lines: list[str] = []
-    end_time = time.monotonic() + timeout
-    try:
-        while time.monotonic() < end_time:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            output_lines.append(line)
-    except OSError:
-        pass
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
-    if not output_lines:
-        return results
-
-    full_output = "".join(output_lines)
-    hex_blocks = re.split(r"(?=\n\S)", full_output)
-    for block in hex_blocks:
-        info = _parse_lldp_hex_block(block)
-        if info and (info.management_ip or info.chassis_mac):
-            key = info.management_ip or info.chassis_mac
-            if key not in results:
-                results[key] = info
-
-    return results
-
-
-def _parse_lldp_hex_block(block: str) -> Optional[LLDPInfo]:
-    """Parse a single tcpdump hex dump block into LLDPInfo.
-
-    TODO: Replace with tshark JSON output (`tshark -T json -e lldp`) or
-    scapy LLDP layer (scapy.layers.l2.LLDP) for proper vendor-specific TLV
-    decoding. The hand-rolled parser handles standard TLVs + ZyXEL OUI
-    (00:a0:c5) subtypes 2-5 but will miss other vendor TLVs.
-    """
-    hex_bytes: list[str] = []
-    for line in block.splitlines():
-        m = re.search(r':\s+((?:[0-9a-fA-F]{4}\s)+)', line)
-        if m:
-            for word in m.group(1).split():
-                hex_bytes.append(word[0:2])
-                hex_bytes.append(word[2:4])
-
-    if len(hex_bytes) < 14:
-        return None
-
-    raw_bytes = bytes(int(h, 16) for h in hex_bytes)
-
-    eth_dst = raw_bytes[0:6]
-    if eth_dst != b"\x01\x80\xc2\x00\x00\x0e" and eth_dst != b"\x01\x80\xc2\x00\x00\x03":
-        return None
-    if len(raw_bytes) < 14 or raw_bytes[12:14] != b"\x88\xcc":
-        return None
-
-    lldp_data = raw_bytes[14:]
-    info = LLDPInfo()
-
-    offset = 0
-    while offset + 2 <= len(lldp_data):
-        tlv_header = (lldp_data[offset] << 8) | lldp_data[offset + 1]
-        tlv_type = (tlv_header >> 9) & 0x7F
-        tlv_len = tlv_header & 0x1FF
-        offset += 2
-
-        if tlv_type == 0:
-            break
-
-        if offset + tlv_len > len(lldp_data):
-            break
-
-        tlv_value = lldp_data[offset:offset + tlv_len]
-
-        if tlv_type == 1:  # Chassis ID
-            if tlv_len > 1:
-                subtype = tlv_value[0]
-                if subtype == 4:  # MAC address
-                    info.chassis_mac = ":".join(f"{b:02X}" for b in tlv_value[1:7])
-
-        elif tlv_type == 2:  # Port ID
-            if tlv_len > 1:
-                subtype = tlv_value[0]
-                if subtype == 3:  # MAC address
-                    info.port_id = ":".join(f"{b:02X}" for b in tlv_value[1:7])
-                elif subtype == 7:  # Locally assigned
-                    info.port_id = tlv_value[1:].decode("utf-8", errors="replace")
-
-        elif tlv_type == 5:  # System Name
-            info.chassis_name = tlv_value.decode("utf-8", errors="replace").strip()
-
-        elif tlv_type == 6:  # System Description
-            info.system_description = tlv_value.decode("utf-8", errors="replace").strip()
-
-        elif tlv_type == 8:  # Management Address
-            if tlv_len > 2:
-                addr_len = tlv_value[0]
-                addr_subtype = tlv_value[1]
-                if addr_subtype == 1 and addr_len >= 5:  # IPv4
-                    ip_bytes = tlv_value[2:6]
-                    info.management_ip = socket.inet_ntoa(ip_bytes)
-
-        elif tlv_type == 127:  # Org-specific
-            if tlv_len >= 4:
-                oui = tlv_value[0:3]
-                sub = tlv_value[3]
-                oui_hex = oui.hex().upper()
-                oui_str = ":".join(f"{b:02X}" for b in oui)
-                payload = tlv_value[4:]
-
-                if oui == b"\x00\xa0\xc5":
-                    _parse_zyxel_lldp(info, sub, payload)
-                else:
-                    info.vendor_specific.setdefault(f"oui_{oui_str}_{sub}", payload.hex())
-
-        info.raw_tlvs.append((tlv_type, tlv_value.hex()))
-
-        offset += tlv_len
-
-    return info if (info.chassis_mac or info.management_ip) else None
-
-
-def _parse_zyxel_lldp(info: LLDPInfo, subtype: int, payload: bytes) -> None:
-    """Parse ZyXEL OUI (00:a0:c5) TLV subtypes."""
-    # ZyXEL subtypes: 2=device model, 3=firmware, 4=serial/MAC, 5=management URL
-    # Payload starts with a 1-byte length prefix before the actual string data
-    try:
-        if len(payload) > 1:
-            data = payload[1:]
-        else:
-            data = payload
-
-        if subtype == 2:
-            info.vendor_specific["zyxel_device"] = data.decode("utf-8", errors="replace").strip()
-        elif subtype == 3:
-            info.vendor_specific["zyxel_firmware"] = data.decode("utf-8", errors="replace").strip()
-        elif subtype == 4:
-            text = data.decode("utf-8", errors="replace").strip()
-            info.vendor_specific["zyxel_serial"] = text
-        elif subtype == 5:
-            info.management_url = data.decode("utf-8", errors="replace").strip()
-            info.vendor_specific["zyxel_mgmt_url"] = info.management_url
-        else:
-            info.vendor_specific[f"zyxel_sub{subtype}"] = data.decode("utf-8", errors="replace").strip()
-    except (UnicodeDecodeError, ValueError):
-        pass
 
 
 # Phase 1: Passive Listen
@@ -709,88 +482,6 @@ def classify_web_ui(probe_data: dict) -> str:
 
 
 # Phase 5: Identification
-
-def lookup_mac_vendor(mac: str) -> str:
-    prefix = _mac_prefix(mac)
-    try:
-        url = f"https://api.macvendors.com/{prefix}"
-        req = Request(url, headers={"User-Agent": "conwrt/1.0"})
-        resp = urlopen(req, timeout=5)
-        return resp.read().decode("utf-8", errors="replace").strip()
-    except (URLError, OSError):
-        return ""
-
-
-def match_models_by_oui(mac: str) -> list[dict]:
-    prefix = _mac_prefix(mac)
-    return find_model_by_mac_oui(prefix)
-
-
-def match_model_by_board(board_json_str: str) -> Optional[dict]:
-    if not board_json_str:
-        return None
-    try:
-        board = json.loads(board_json_str)
-    except json.JSONDecodeError:
-        return None
-    board_model = board.get("model", {}).get("id", "")
-    if not board_model:
-        return None
-
-    for model_def in list_models():
-        owrt = model_def.get("openwrt", {})
-        device = owrt.get("device", "")
-        if device and device == board_model:
-            return model_def
-        if board_model in device:
-            return model_def
-    return None
-
-
-def match_model_by_http(body: str, headers: str) -> list[dict]:
-    combined = f"{headers}\n{body}"
-    matches: list[dict] = []
-    for model_def in list_models():
-        sigs = model_def.get("signatures", {})
-        recovery_sig = sigs.get("recovery", {})
-        http_title = recovery_sig.get("http_title", "")
-        if http_title and http_title.lower() in combined.lower():
-            matches.append(model_def)
-            continue
-        vendor = model_def.get("vendor", "").lower()
-        if vendor and vendor in combined.lower():
-            model_id = model_def.get("id", "")
-            if vendor in ("d-link", "dlink") and ("d-link" in combined.lower() or "dlink" in combined.lower()):
-                matches.append(model_def)
-            elif vendor in ("gl-inet", "glinet") and ("gl-inet" in combined.lower() or "glinet" in combined.lower()):
-                matches.append(model_def)
-            elif vendor in ("linksys",) and "linksys" in combined.lower():
-                matches.append(model_def)
-    return matches
-
-
-def match_model_by_lldp(lldp_info: LLDPInfo) -> list[dict]:
-    """Match LLDP system description / device name against model JSONs."""
-    matches: list[dict] = []
-    search_text = f"{lldp_info.system_description} {lldp_info.chassis_name}".lower()
-    search_text += f" {lldp_info.vendor_specific.get('zyxel_device', '')}".lower()
-
-    for model_def in list_models():
-        desc = model_def.get("description", "").lower()
-        model_id = model_def.get("id", "").lower()
-
-        # Extract model keywords from description (e.g. "GS1900-8HP")
-        model_keywords = re.findall(r"[a-z]{2,}\d{3,}[\-]?\w*", desc)
-        for kw in model_keywords:
-            if kw in search_text:
-                matches.append(model_def)
-                break
-            # Also try without hyphens
-            if kw.replace("-", "") in search_text.replace("-", ""):
-                matches.append(model_def)
-                break
-
-    return matches
 
 
 def assess_readiness(router: DetectedRouter) -> dict:

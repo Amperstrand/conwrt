@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from probe_utils import curl_get, curl_head, ping_host
 from ssh_utils import ssh_cmd, run_ssh
 
 logger = logging.getLogger("conwrt.probe")
@@ -238,11 +239,7 @@ def probe_http_get(device_ip: str) -> ProbeResult:
     status = "no_response"
     detail = ""
     try:
-        r = run_cmd(
-            ["curl", "-s", "--max-time", "3", f"http://{device_ip}/"],
-            check=False,
-        )
-        body = r.stdout
+        rc, body, _err = curl_get(f"http://{device_ip}/", timeout=3)
         if "FIRMWARE UPDATE" in body:
             return ("http_get", "uboot", "U-Boot firmware update page detected via GET")
         if "firmware" in body.lower() and "<form" in body.lower():
@@ -255,7 +252,7 @@ def probe_http_get(device_ip: str) -> ProbeResult:
             return ("http_get", "linksys_stock", "Linksys web interface detected")
         if "uIP" in body:
             return ("http_get", "uboot", "uIP server signature in body")
-        if r.returncode == 0 and len(body) > 0:
+        if rc == 0 and len(body) > 0:
             status = "unknown_http"
             detail = f"got {len(body)} bytes, no known signature"
     except (subprocess.SubprocessError, OSError) as exc:
@@ -267,16 +264,12 @@ def probe_http_head(device_ip: str) -> ProbeResult:
     status = "no_response"
     detail = ""
     try:
-        r = run_cmd(
-            ["curl", "-sI", "--max-time", "3", f"http://{device_ip}/"],
-            check=False,
-        )
-        headers = r.stdout
+        rc, headers, _err = curl_head(f"http://{device_ip}/", timeout=3)
         if "uIP" in headers:
             return ("http_head", "uboot", f"Server header contains uIP")
         if "HTTP/1.1 405" in headers:
             return ("http_head", "method_not_allowed", "HEAD rejected with 405 (MT3000 U-Boot behavior)")
-        if r.returncode == 0 and headers.strip():
+        if rc == 0 and headers.strip():
             status = "headers_received"
             server_m = re.search(r"Server:\s*(.+)", headers, re.IGNORECASE)
             detail = server_m.group(1).strip() if server_m else headers.split("\n")[0].strip()
@@ -355,14 +348,9 @@ def probe_ping(device_ip: str) -> ProbeResult:
     status = "unreachable"
     detail = ""
     try:
-        r = run_cmd(
-            ["ping", "-c", "1", "-W", "2", "-t", "1", device_ip],
-            check=False,
-        )
-        if r.returncode == 0:
-            m = re.search(r"time[= ]([\d.]+)\s*ms", r.stdout)
-            detail = f"reply in {m.group(1)}ms" if m else "reply received"
+        if ping_host(device_ip, timeout=2):
             status = "reachable"
+            detail = "reply received"
     except (subprocess.SubprocessError, OSError) as exc:
         detail = str(exc)
     return ("ping", status, detail)
