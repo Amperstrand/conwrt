@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import re
 import shutil
@@ -70,15 +69,11 @@ UIMAGE_COMP = {
 }
 
 
+from flash.context import sha256_file as _sha256_file_impl
+
+
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+    return _sha256_file_impl(str(path))
 
 
 def run_command(command: list[str], timeout: int = 60) -> dict[str, Any]:

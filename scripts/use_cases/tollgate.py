@@ -1,13 +1,13 @@
 """OpenTollGate — Bitcoin Lightning payment gateway for selling internet access."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
 from typing import Any, Callable
 from urllib.request import urlretrieve
 
+from flash.context import sha256_file as _sha256_file
 from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciAdd, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
@@ -30,15 +30,6 @@ _ARCH_MAP: dict[str, str] = {
 def arch_from_target(target: str) -> str:
     """Map an OpenWrt target (e.g. ``mediatek/filogic``) to ipk architecture."""
     return _ARCH_MAP.get(target, "")
-
-
-def _sha256_file(path: str) -> str:
-    """Compute SHA-256 hex digest of a file."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def resolve_ipk_gh(
