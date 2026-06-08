@@ -547,7 +547,7 @@ def verify_router(ip: str = DEFAULT_IP, wan_ssh_expected: bool = False,
         if nmap_ok == "yes":
             log("  ✓ extra package: nmap installed")
 
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"Verification failed: {e}")
     return checks
 
@@ -693,7 +693,7 @@ def _record_configure_inventory(
         log(f"  ✓ inventory: entry appended to {inventory_path}")
         if password:
             log(f"  ✓ inventory: password recorded for serial={serial or '(unknown)'}")
-    except Exception as e:
+    except (OSError, TypeError) as e:
         log(f"  ⚠ inventory: failed to write — {e}")
 
 

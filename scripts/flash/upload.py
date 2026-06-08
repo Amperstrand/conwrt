@@ -24,7 +24,7 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
             if "HNAP1" not in r.stdout and "D-LINK" not in r.stdout:
                 return True, "HTML response"
         return False, r.stdout[:100] if r.stdout.strip() else "no response"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)[:80]
 
 
@@ -59,7 +59,7 @@ def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 30
     except subprocess.TimeoutExpired:
         log("Upload timed out.")
         return False, "timeout"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"Upload error: {e}")
         return False, str(e)
 
@@ -93,7 +93,7 @@ def trigger_flash(profile: SimpleNamespace) -> bool:
     except subprocess.TimeoutExpired:
         log(f"Flash trigger timed out after {flash_timeout}s — flash may still be in progress.")
         return True
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"Flash trigger error: {e}")
     return False
 

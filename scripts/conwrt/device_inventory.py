@@ -114,7 +114,7 @@ def _record_inventory(ctx: RecoveryContext) -> None:
     try:
         model = load_model(model_id)
         openwrt_target = model.get("openwrt", {}).get("target", "")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
     board = ident.get("board", "")
@@ -158,7 +158,7 @@ def _record_inventory(ctx: RecoveryContext) -> None:
     try:
         _append_to_inventory(entry, str(inventory_path))
         log(f"Inventory entry appended to {inventory_path}")
-    except Exception as e:
+    except (OSError, TypeError) as e:
         log(f"Failed to write inventory: {e}")
 
 

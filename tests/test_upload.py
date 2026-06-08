@@ -53,7 +53,7 @@ class TestDetectUbootHttp(TestCase):
 
     @patch("flash.upload.subprocess.run")
     def test_exception_returns_false(self, mock_run):
-        mock_run.side_effect = Exception("Network error")
+        mock_run.side_effect = OSError("Network error")
         detected, reason = detect_uboot_http("192.168.1.1")
         self.assertFalse(detected)
         self.assertIn("Network error", reason)

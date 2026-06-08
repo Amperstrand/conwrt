@@ -64,7 +64,7 @@ def _handle_oem_login(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
                     password = new_password
                 else:
                     log(f"WARNING: Password change failed: {pw_msg}")
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             log(f"WARNING: Password change check failed: {e}")
 
         ctx.oem_state["cookie"] = cookie

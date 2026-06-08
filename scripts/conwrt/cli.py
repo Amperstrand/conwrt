@@ -8,7 +8,7 @@ from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
 def _build_parser() -> argparse.ArgumentParser:
     try:
         available_ids = [m["id"] for m in list_models()]
-    except Exception:
+    except (OSError, ValueError):
         available_ids = []
 
     parser = argparse.ArgumentParser(

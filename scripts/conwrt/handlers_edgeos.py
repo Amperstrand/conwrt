@@ -170,7 +170,7 @@ def _handle_edgeos_stage2_uploading(ctx: RecoveryContext, event_queue: queue.Que
             log(f"Remote MD5: {remote_hash}")
         else:
             log(f"Could not verify remote file: {r.stderr[:200]}")
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"WARNING: upload verification failed: {e}")
 
     ctx.timeline.upload_complete = ts()

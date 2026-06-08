@@ -64,7 +64,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         )
         mac_line = [l for l in mac_r.stdout.splitlines() if "ether " in l]
         local_mac = mac_line[0].split("ether ")[1].split()[0] if mac_line else ""
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     tcpdump_filter = ["not", "ether", "src", local_mac] if local_mac else []
@@ -99,7 +99,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
                     continue
                 if boot_detected and time.time() >= failsafe_deadline:
                     break
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         log(f"tcpdump error: {exc}")
     finally:
         if tcpdump_proc is not None:

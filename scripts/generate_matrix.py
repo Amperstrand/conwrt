@@ -68,9 +68,7 @@ def load_use_cases() -> list[dict]:
                 commands_html = (
                     f'<button class="cmd-toggle" data-cmd-id="{cmd_id}">Show commands</button>'
                 )
-        except (ValueError, TypeError, KeyError):
-            commands_html = '<em class="note">requires configuration</em>'
-        except Exception:
+        except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, ImportError):
             commands_html = '<em class="note">requires configuration</em>'
 
         ucs.append({

@@ -353,7 +353,7 @@ def deploy_tollgate_post_flash(
             trusted_pubkey=trusted_pubkey, expected_sha=expected_sha,
             source=source,
         )
-    except Exception as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         _log(f"Failed to resolve ipk: {exc}")
         return False
     _log(f"Downloaded ipk to {ipk_path}")

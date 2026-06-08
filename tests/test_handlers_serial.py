@@ -230,7 +230,7 @@ class TestUbootInteractingNoCommands(TestCase):
 
 class TestUbootInteractingException(TestCase):
     @patch("conwrt.handlers_serial.setup_interface_for_serial",
-           side_effect=RuntimeError("Interface config failed"))
+           side_effect=OSError("Interface config failed"))
     @patch("conwrt.handlers_serial.TFTPServerManager")
     def test_exception_sets_failed(self, mock_tftp_cls, mock_setup):
         ctx = _make_ctx(

@@ -70,7 +70,7 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
             multicast_port=multicast_port,
             image_type=image_type,
         )
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         log(f"ERROR: Failed to start zycast: {e}")
         ctx.state = State.FAILED
         return

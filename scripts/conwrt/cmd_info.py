@@ -43,7 +43,7 @@ def cmd_list_use_cases(args: argparse.Namespace) -> int:
             model = load_model(args.model_id)
             model_caps = model.get("capabilities", [])
             model_name = model.get("id", args.model_id)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Warning: could not load model '{args.model_id}': {e}", file=sys.stderr)
 
     print(f"{'Use Case':<25s}  {'Status':<14s}  {'Description':<40s}  {'Pkgs':<5s}  {'Caps':<12s}  Post")

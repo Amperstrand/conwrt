@@ -53,7 +53,7 @@ def cmd_setup_mgmt_wifi(args: argparse.Namespace) -> int:
     except subprocess.TimeoutExpired:
         print(f"ERROR: Timed out configuring management WiFi on {args.ip}.", file=sys.stderr)
         return 1
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         print(f"ERROR: Failed to run setup script over SSH: {exc}", file=sys.stderr)
         return 1
 

@@ -277,7 +277,7 @@ class TestVerifyRouter:
         assert d["board"] == "xiaomi,redmi-router-ax1800"
         assert d["sshkey_count"] == "1"
 
-    @patch("conwrt.postflash.subprocess.run", side_effect=Exception("timeout"))
+    @patch("conwrt.postflash.subprocess.run", side_effect=OSError("timeout"))
     def test_ssh_fails_returns_empty_list(self, mock_run):
         from conwrt.postflash import verify_router
         checks = verify_router("192.168.1.1")

@@ -135,7 +135,7 @@ def main() -> int:
         import lzma
         try:
             payload = lzma.decompress(compressed_payload)
-        except Exception as e:
+        except (lzma.LZMAError, EOFError, ValueError) as e:
             fail(f"RasCode LZMA decompression failed: {e}")
         check(len(payload) == ras.osize, f"RasCode decompressed size matches osize ({len(payload)} vs {ras.osize})")
         check(internet_checksum(payload) == ras.ocsum, "RasCode ocsum (decompressed) validates")

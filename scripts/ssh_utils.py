@@ -88,5 +88,5 @@ def check_ssh(ip: str, connect_timeout: int = 3, sentinel: str = "SSH_OK") -> bo
         r = run_ssh(ip, f"echo {sentinel}", connect_timeout=connect_timeout,
                      timeout=connect_timeout + 5)
         return r.returncode == 0 and sentinel in r.stdout
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False

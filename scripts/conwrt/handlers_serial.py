@@ -1,6 +1,12 @@
 # pyright: reportMissingImports=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportCallIssue=false, reportAttributeAccessIssue=false
 import os
 import queue
+import subprocess
+
+try:
+    from serial import SerialException as _SerialException
+except ImportError:
+    _SerialException = OSError  # type: ignore[misc, assignment]
 
 from flash.context import Event, State, log, say, ts, sha256_file
 from platform_utils import configure_interface_ip
@@ -39,7 +45,7 @@ def _handle_serial_waiting_for_bootmenu(ctx: RecoveryContext, eq: queue.Queue) -
             console_option=profile.bootmenu_select_console,
             say_fn=ctx._say_fn,
         )
-    except Exception:
+    except (_SerialException, OSError):
         log(f"ERROR: Serial communication failed during bootmenu wait")
         driver.close()
         ctx.state = State.FAILED
@@ -96,7 +102,7 @@ def _handle_serial_uboot_interacting(ctx: RecoveryContext, eq: queue.Queue) -> N
             say_fn=ctx._say_fn,
             flash_time_seconds=profile.flash_time_seconds,
         )
-    except Exception:
+    except (_SerialException, OSError, subprocess.SubprocessError):
         log("ERROR: Serial operation failed")
         tftp_mgr.stop()
         driver.close()

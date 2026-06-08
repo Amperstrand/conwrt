@@ -134,7 +134,7 @@ class TestHandleZycastSendingException(TestCase):
     @patch("conwrt.handlers_zycast.log")
     @patch("conwrt.handlers_zycast.ts", side_effect=[0, 0, 0, 1])
     def test_run_zycast_exception_goes_to_failed(self, mock_ts, mock_log, mock_sha):
-        with patch("conwrt.handlers_zycast.run_zycast_auto", side_effect=Exception("boom")):
+        with patch("conwrt.handlers_zycast.run_zycast_auto", side_effect=OSError("boom")):
             ctx = _make_ctx(state=State.ZYCAST_SENDING)
             eq = queue.Queue()
             _handle_zycast_sending(ctx, eq)

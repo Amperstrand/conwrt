@@ -420,7 +420,7 @@ class ZycastPythonSender:
                 _stop_event=self._stop_event,
             )
             self.returncode = 0
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             logger.error(f"Python zycast sender failed: {exc}")
             self.returncode = 1
 

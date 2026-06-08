@@ -78,7 +78,7 @@ class TFTPServerManager:
                 return False
             log(f"TFTP server serving {self.tftp_root} on {self.bind_ip}:69 (PID {self._proc.pid})")
             return True
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             log(f"TFTP server error: {e}")
             self._proc = None
             return False

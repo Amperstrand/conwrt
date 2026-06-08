@@ -315,7 +315,7 @@ class TestHandleOemRebootingReturnsNone(TestCase):
 class TestHandleOemLoginPasswordChangeException(TestCase):
     @patch("conwrt.handlers_oem.oem_has_prepare_step", return_value=False)
     @patch("conwrt.handlers_oem.oem_http_login", return_value=(True, "XSSID=abc"))
-    @patch("conwrt.handlers_oem.subprocess.run", side_effect=Exception("curl crashed"))
+    @patch("conwrt.handlers_oem.subprocess.run", side_effect=OSError("curl crashed"))
     @patch("conwrt.handlers_oem.os.path.isfile", return_value=True)
     def test_password_check_exception_continues(self, mock_isfile, mock_run, mock_login, mock_prep):
         ctx = _make_ctx(flash_method="oem-http", stock_default_password="1234")
