@@ -1,7 +1,7 @@
 import argparse
 
 from model_loader import list_models
-from conwrt import __version__
+from conwrt._version import __version__
 from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
 
 

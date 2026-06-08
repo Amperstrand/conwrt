@@ -25,8 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Version — set by build_ipk.sh or derived from git at runtime
-__version__ = "0.0.0-dev"
+from conwrt._version import __version__
 
 _CONWRT_DIR = str(Path(__file__).resolve().parent.parent)  # scripts/ — sibling modules live here
 if _CONWRT_DIR not in sys.path:
