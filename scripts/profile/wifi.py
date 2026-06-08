@@ -158,7 +158,7 @@ def wifi_sta_firstboot_script(
     country_code: str = "DE",
 ) -> str:
     band_uci = band_to_uci(band)
-    wwan_setup = wwan_setup_firstboot()
+    wwan_setup = ""  # WWAN is added as a separate step by the builder
     frags = wifi_sta_uci_lines("$_r", ssid, encryption, key, network, country_code)
     script = (
         "for _r in radio0 radio1 radio2 radio3; do "
@@ -168,7 +168,7 @@ def wifi_sta_firstboot_script(
     )
     script += "; ".join(frags) + "; "
     script += "uci commit wireless; wifi reload; exit 0; fi; done"
-    return wwan_setup + "\n" + script
+    return script
 
 
 def wifi_ap_firstboot_script(
