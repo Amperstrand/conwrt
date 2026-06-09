@@ -311,21 +311,6 @@ class TestEnsureExtremeBackupDir(TestCase):
     def tearDown(self):
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
-    @patch("conwrt.extreme.Path")
-    def test_uses_serial_from_preflight_data(self, mock_path_cls):
-        fake_dir = MagicMock(spec=Path)
-        fake_dir.mkdir = MagicMock()
-        # Make the path expression return our fake dir
-        mock_path_cls.return_value.resolve.return_value.parent.parent.__truediv__.side_effect = [
-            MagicMock(__truediv__=lambda self, other: MagicMock(__truediv__=lambda self2, other2: fake_dir)),
-        ]
-        # Simplify: just test device_id selection directly
-        ctx = _make_ctx()
-        ctx._extreme_backup_dir = ""
-        # We'll test with a real temp dir to avoid Path mocking complexity
-        # by patching only the __file__ resolution
-        pass
-
     def test_creates_dir_and_caches_on_ctx(self):
         """Test that backup dir is created and cached on ctx."""
         ctx = _make_ctx()
@@ -554,13 +539,14 @@ class TestPrepareExtremeTftpRoot(TestCase):
             ),
         )
         tftp_root, _ = _prepare_extreme_tftp_root(ctx)
+        self.assertIsNotNone(tftp_root)
+        assert tftp_root is not None
         try:
             alt_path = tftp_root / "alt.bin"
             self.assertTrue(alt_path.exists())
             self.assertEqual(alt_path.stat().st_size, 1024)
         finally:
-            if tftp_root:
-                shutil.rmtree(tftp_root, ignore_errors=True)
+            shutil.rmtree(tftp_root, ignore_errors=True)
 
     def test_skips_alt_when_same_as_primary(self):
         ctx = _make_ctx(
@@ -571,14 +557,14 @@ class TestPrepareExtremeTftpRoot(TestCase):
             ),
         )
         tftp_root, _ = _prepare_extreme_tftp_root(ctx)
+        self.assertIsNotNone(tftp_root)
+        assert tftp_root is not None
         try:
-            # Only one file in tftp_root
             entries = list(tftp_root.iterdir())
             self.assertEqual(len(entries), 1)
             self.assertEqual(entries[0].name, "same.bin")
         finally:
-            if tftp_root:
-                shutil.rmtree(tftp_root, ignore_errors=True)
+            shutil.rmtree(tftp_root, ignore_errors=True)
 
 
 # ===========================================================================
