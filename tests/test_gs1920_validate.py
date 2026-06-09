@@ -219,9 +219,10 @@ class TestConstants(TestCase):
 
 class TestRombinHeaderDataclass(TestCase):
     def test_frozen_dataclass_immutable(self):
+        import dataclasses
         h = gs.RombinHeader(
             offset=0, addr=0, sig=b"SIG", type=3, osize=0, csize=0,
             flags=0, ocsum=0, ccsum=0, ver=b"v1", mmap_addr=0,
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(dataclasses.FrozenInstanceError):
             h.offset = 99
