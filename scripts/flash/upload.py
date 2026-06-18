@@ -29,22 +29,52 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
 
 
 def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 300) -> tuple[bool, str]:
-    size_mb = os.path.getsize(image_path) / 1024 / 1024
+    file_size = os.path.getsize(image_path)
+    size_mb = file_size / 1024 / 1024
     endpoint = f"http://{profile.recovery_ip}{profile.upload_endpoint}"
-    log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB) to {profile.upload_endpoint}...")
+    log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB, {file_size} bytes) to {profile.upload_endpoint}...")
     try:
         r = subprocess.run(
             [
                 "curl", "-sk", "--show-error",
                 "-H", "Expect:",
                 "--max-time", str(timeout),
+                "-w", "\n%{size_upload}",
                 "-F", f"{profile.upload_field}=@{image_path};type=application/octet-stream",
                 endpoint,
             ],
             capture_output=True, text=True, timeout=timeout + 30, check=False,
         )
         if r.returncode == 0 and r.stdout.strip():
-            response_text = r.stdout.strip()
+            # Split response body from curl write-out (last line is size_upload)
+            lines = r.stdout.rsplit("\n", 1)
+            response_text = lines[0].strip()
+            uploaded_bytes_str = lines[1].strip() if len(lines) > 1 else ""
+
+            if uploaded_bytes_str:
+                try:
+                    uploaded_bytes = int(uploaded_bytes_str)
+                    # Multipart form adds ~500 bytes overhead; tolerance 5%
+                    min_expected = file_size * 0.95
+                    max_expected = file_size * 1.10
+                    if uploaded_bytes < min_expected:
+                        log(f"WARNING: Upload may be truncated! File={file_size} bytes, "
+                            f"uploaded={uploaded_bytes} bytes ({uploaded_bytes/file_size*100:.1f}%). "
+                            f"Router may fail to boot.")
+                        return False, f"truncated upload: {uploaded_bytes}/{file_size} bytes"
+                    elif uploaded_bytes > max_expected:
+                        log(f"NOTE: Upload larger than file (multipart overhead): "
+                            f"file={file_size}, uploaded={uploaded_bytes}")
+                    else:
+                        log(f"Upload size verified: {uploaded_bytes} bytes "
+                            f"({uploaded_bytes/file_size*100:.1f}% of file)")
+                except ValueError:
+                    log(f"Could not parse upload size from curl write-out: '{uploaded_bytes_str}'")
+
+            if not response_text:
+                log("Upload returned empty response body")
+                return False, "empty response"
+
             # D-Link and similar routers return HTML instead of "size md5hash"
             if response_text.lower().startswith("<!doctype") or response_text.lower().startswith("<html"):
                 log("Upload accepted (HTML response)")

@@ -72,6 +72,7 @@ def _request_custom_image(
         preferred_types = ["sysupgrade"]
 
     image_path = None
+    selected_type = None
     for img_type in preferred_types:
         find_args = argparse.Namespace(
             profile=asu_profile,
@@ -83,7 +84,14 @@ def _request_custom_image(
         candidate = find_buf.getvalue().strip()
         if candidate and os.path.isfile(candidate):
             image_path = candidate
+            selected_type = img_type
             break
+
+    if selected_type != preferred_types[0] and image_path:
+        log(f"WARNING: Preferred image type '{preferred_types[0]}' not found. "
+            f"Falling back to '{selected_type}'. "
+            f"Some devices (e.g. D-Link COVR-X1860) require '{preferred_types[0]}' "
+            f"for recovery-http flash — factory.bin causes boot failure.")
 
     if not image_path:
         find_args = argparse.Namespace(
