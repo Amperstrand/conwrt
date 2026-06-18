@@ -8,7 +8,7 @@ from typing import Any, Callable
 from urllib.request import urlretrieve
 
 from flash.context import sha256_file as _sha256_file
-from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciAdd, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAdd, UciAddList, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
@@ -392,7 +392,21 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "mint_url": str(params.get("mint_url", "")),
         "lightning_address": str(params.get("lightning_address", "")),
         "price_per_minute": int(params.get("price_per_minute", 1)),
+        "gateway_name": str(params.get("gateway_name", "")),
+        "gateway_domain": str(params.get("gateway_domain", "")),
+        "clientid": str(params.get("clientid", "mac")),
+        "install_hotplug": params.get("install_hotplug", True),
+        "hotplug_interface": str(params.get("hotplug_interface", "wwan")),
     }
+
+
+_HOTPLUG_SCRIPT = """\
+#!/bin/sh
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "{iface}" ] || exit 0
+logger -t tollgate-hotplug "{iface} up \\u2014 restarting tollgate"
+/etc/init.d/tollgate-wrt restart &
+"""
 
 
 def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
@@ -400,19 +414,48 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     mint_url = r["mint_url"]
     lightning_address = r["lightning_address"]
     price_per_minute = r["price_per_minute"]
+    gateway_name = r["gateway_name"]
+    gateway_domain = r["gateway_domain"]
+    clientid = r["clientid"]
+    install_hotplug = r["install_hotplug"]
+    hotplug_iface = r["hotplug_interface"]
 
     ops: list[Op] = []
 
-    # Enable nodogsplash
     ops.append(Comment(text="--- TollGate: nodogsplash captive portal ---"))
     ops.append(UciSet(config="nodogsplash", section="@nodogsplash[0]", values={"enabled": "1"}))
+
+    nds_values: dict[str, str] = {}
+    if gateway_name:
+        nds_values["gatewayname"] = gateway_name
+    if gateway_domain:
+        nds_values["gatewaydomainname"] = gateway_domain
+    if clientid:
+        nds_values["clientid"] = clientid
+    if nds_values:
+        ops.append(UciSet(config="nodogsplash", section="@nodogsplash[0]", values=nds_values))
+
+    ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
+                          option="users_to_router", value="allow tcp port 2121"))
+    ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
+                          option="users_to_router", value="allow tcp port 2050"))
     ops.append(UciCommit(config="nodogsplash"))
     ops.append(ServiceAction(name="nodogsplash", action="enable"))
     ops.append(ServiceAction(name="nodogsplash", action="restart"))
 
-    # Configure tollgate UCI if any settings provided
-    _has_config = bool(mint_url or lightning_address or price_per_minute != 1)
-    if _has_config:
+    if install_hotplug:
+        ops.append(BlankLine())
+        ops.append(Comment(text=f"--- TollGate: hotplug ({hotplug_iface} ifup \\u2192 tollgate restart) ---"))
+        script = _HOTPLUG_SCRIPT.format(iface=hotplug_iface)
+        escaped = script.replace("'", "'\\''")
+        ops.append(ShellCommand(
+            command=f"mkdir -p /etc/hotplug.d/iface && "
+                    f"printf '%s' '{escaped}' > /etc/hotplug.d/iface/95-tollgate-restart && "
+                    f"chmod +x /etc/hotplug.d/iface/95-tollgate-restart"
+        ))
+
+    if mint_url or lightning_address or price_per_minute != 1:
+        ops.append(BlankLine())
         ops.append(Comment(text="--- TollGate: payment configuration ---"))
         ops.append(ShellCommand("touch /etc/config/tollgate"))
         values: dict[str, str] = {}
@@ -425,6 +468,7 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(UciAdd(config="tollgate", type="tollgate", values=values))
         ops.append(UciCommit(config="tollgate"))
 
+    ops.append(BlankLine())
     ops.append(Comment(text="--- TollGate: ipk installed separately via deploy_tollgate_post_flash() ---"))
 
     return ops
@@ -435,7 +479,9 @@ register(UseCase(
     description=(
         "OpenTollGate Bitcoin/Lightning payment gateway. "
         "Downloads ipk via nostr (Blossom) with GitHub CI fallback, "
-        "deploys post-flash via SCP + opkg."
+        "deploys post-flash via SCP + opkg. "
+        "Configures nodogsplash captive portal, hotplug for WiFi STA, "
+        "and optional gateway branding."
     ),
     packages=[
         "nodogsplash",
@@ -445,7 +491,7 @@ register(UseCase(
     ],
     params={
         "version": ParamDef(type=str, default="",
-            description="TollGate version: commit hash (e.g. '8ec5342') or full version (e.g. 'main.104.8ec5342'). Required."),
+            description="TollGate version: commit hash (e.g. 'd68c099') or full version (e.g. 'main.117.d68c099'). Required."),
         "trusted_pubkey": ParamDef(type=str, default="",
             description="Nostr pubkey of trusted publisher (default: hardcoded TollGate maintainer key)"),
         "expected_sha": ParamDef(type=str, default="",
@@ -464,10 +510,27 @@ register(UseCase(
             description="Lightning address for payouts"),
         "price_per_minute": ParamDef(type=int, default=1,
             description="Price in sats per minute"),
+        "gateway_name": ParamDef(type=str, default="",
+            description="Nodogsplash gateway name shown to clients (e.g. 'net4sats')"),
+        "gateway_domain": ParamDef(type=str, default="",
+            description="Nodogsplash gateway domain (e.g. 'net4sats.lan')"),
+        "clientid": ParamDef(type=str, default="mac",
+            description="Client identification method: 'mac', 'token', or 'ip'",
+            choices=("mac", "token", "ip")),
+        "install_hotplug": ParamDef(type=bool, default=True,
+            description="Install hotplug script to restart tollgate when WiFi STA comes up"),
+        "hotplug_interface": ParamDef(type=str, default="wwan",
+            description="Network interface name that triggers tollgate restart (default: wwan)"),
     },
     build_configure=lambda p: render_shell(_build_tollgate_ops(p)),
     build_configure_ops=_build_tollgate_ops,
     test_status="tested",
-    tested_notes="ops characterization + resolve tests + transport parity",
+    tested_notes="ops characterization + resolve tests + transport parity + physical router verification",
     configure_via="ssh",
+    post_install_notes=(
+        "TollGate ipk is installed via deploy_tollgate_post_flash(). "
+        "Nodogsplash is configured as the captive portal. "
+        "Hotplug script restarts tollgate when WiFi STA connects. "
+        "Pair with the 'ssl' use case for trusted HTTPS on the payment API."
+    ),
 ))
