@@ -120,8 +120,12 @@ def deploy_configurationwizzard(
     _ssh("/etc/init.d/uhttpd restart")
     _ssh("/etc/init.d/nodogsplash restart 2>/dev/null; true")
 
+    # Add tollgate.lan DNS entry
+    _log("Adding tollgate.lan DNS...")
+    _ssh(f"grep -q 'tollgate.lan' /etc/hosts || echo '{ip} tollgate.lan' >> /etc/hosts; killall -HUP dnsmasq 2>/dev/null; true")
+
     _log("ConfigurationWizzard deployed.")
-    _log(f"  Admin:  http://{ip}/")
+    _log(f"  Admin:  http://tollgate.lan/ or http://{ip}/")
     _log(f"  Portal: http://{ip}:2050/ (via NDS)")
     _log(f"  LuCI:   http://{ip}:8080/")
     return True
