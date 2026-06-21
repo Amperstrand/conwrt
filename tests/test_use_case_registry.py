@@ -17,6 +17,7 @@ import use_cases as uc  # noqa: E402
 # Resolved (configure_via, packages_via) captured from the pre-migration registry.
 EXPECTED: dict[str, tuple[str, str]] = {
     "adguard": ("ssh", "auto"),
+    "ap-nostr-id": ("ssh", "auto"),
     "auto-sqm": ("both", "auto"),
     "configurationwizzard": ("ssh", "auto"),
     "doh": ("ssh", "auto"),
