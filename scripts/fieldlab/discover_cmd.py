@@ -100,7 +100,7 @@ def _scan_ports(host: Host, target_ip: str, ports: list[int]) -> list[dict]:
                 f"\" 2>/dev/null"
             )
         else:
-            probe = f"nc {shlex.quote(target_ip)} {port} </dev/null 2>/dev/null && echo open || echo closed"
+            probe = f"nc {shlex.quote(target_ip)} {port} </dev/null >/dev/null 2>&1 && echo open || echo closed"
 
         result = run_remote(host, probe, timeout=8)
         output = result.stdout.strip().split("\n")[-1].strip().lower() if result.stdout else ""
