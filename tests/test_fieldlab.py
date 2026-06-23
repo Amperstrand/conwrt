@@ -368,3 +368,162 @@ class TestInspectCommand:
         assert tools["tcpdump"] == "/usr/bin/tcpdump"
         assert tools["curl"] == "missing"
         assert tools["nc"] == "/usr/bin/nc"
+
+
+# ---------------------------------------------------------------------------
+# Network platform abstraction
+# ---------------------------------------------------------------------------
+
+class TestNetworkPlatform:
+    def test_cidr_to_netmask_24(self):
+        from fieldlab.network import _cidr_to_netmask
+        assert _cidr_to_netmask(24) == "255.255.255.0"
+
+    def test_cidr_to_netmask_16(self):
+        from fieldlab.network import _cidr_to_netmask
+        assert _cidr_to_netmask(16) == "255.255.0.0"
+
+    def test_cidr_to_netmask_8(self):
+        from fieldlab.network import _cidr_to_netmask
+        assert _cidr_to_netmask(8) == "255.0.0.0"
+
+    def test_ip_assignment_properties(self):
+        from fieldlab.network import IpAssignment
+        a = IpAssignment(interface="internet", ip="192.168.50.1", cidr=24)
+        assert a.ip_cidr == "192.168.50.1/24"
+        assert a.netmask == "255.255.255.0"
+        assert a.network == "192.168.50.0"
+
+    def test_assign_ip_linux(self):
+        from fieldlab.network import assign_ip_commands, LINUX
+        cmd = assign_ip_commands("eth0", "192.168.1.10", 24, LINUX)
+        assert "ip addr add 192.168.1.10/24 dev eth0" in cmd
+
+    def test_assign_ip_macos(self):
+        from fieldlab.network import assign_ip_commands, MACOS
+        cmd = assign_ip_commands("en6", "192.168.1.10", 24, MACOS)
+        assert "ifconfig" in cmd
+        assert "alias" in cmd
+        assert "192.168.1.10" in cmd
+
+    def test_remove_ip_linux(self):
+        from fieldlab.network import remove_ip_commands, LINUX
+        cmd = remove_ip_commands("eth0", "192.168.1.10", LINUX)
+        assert "ip addr del" in cmd
+
+    def test_remove_ip_macos(self):
+        from fieldlab.network import remove_ip_commands, MACOS
+        cmd = remove_ip_commands("en6", "192.168.1.10", MACOS)
+        assert "ifconfig" in cmd
+        assert "-alias" in cmd
+
+    def test_dhcp_server_config(self):
+        from fieldlab.network import DhcpServerConfig
+        c = DhcpServerConfig(
+            interface="internet", server_ip="192.168.50.1",
+            pool_start="192.168.50.100", pool_end="192.168.50.200",
+        )
+        assert c.netmask == "255.255.255.0"
+        assert c.gateway == "192.168.50.1"
+
+
+# ---------------------------------------------------------------------------
+# Serve command
+# ---------------------------------------------------------------------------
+
+class TestServeCommand:
+    def test_parse_subnet_with_cidr(self):
+        from fieldlab.serve_cmd import _parse_subnet
+        ip, cidr = _parse_subnet("192.168.50.1/24")
+        assert ip == "192.168.50.1"
+        assert cidr == 24
+
+    def test_parse_subnet_no_cidr(self):
+        from fieldlab.serve_cmd import _parse_subnet
+        ip, cidr = _parse_subnet("10.0.0.1")
+        assert ip == "10.0.0.1"
+        assert cidr == 24
+
+    def test_pool_range(self):
+        from fieldlab.serve_cmd import _pool_range
+        start, end = _pool_range("192.168.50.1")
+        assert start == "192.168.50.100"
+        assert end == "192.168.50.200"
+
+    @patch("fieldlab.serve_cmd.run_remote")
+    def test_uci_setup_dhcp_sends_commands(self, mock_run):
+        mock_run.return_value = _completed(returncode=0)
+        from fieldlab.serve_cmd import _uci_setup_dhcp
+        from fieldlab.transport import Host
+        _uci_setup_dhcp(
+            Host.parse("root@1.2.3.4"), "internet",
+            "192.168.50.1", "192.168.50.100", "192.168.50.200",
+            "1h", None,
+        )
+        assert mock_run.call_count >= 10
+        first_call = mock_run.call_args_list[0][0]
+        assert "uci set network.fieldlab=interface" in str(first_call)
+
+    @patch("fieldlab.serve_cmd.run_remote")
+    def test_uci_cleanup_deletes_sections(self, mock_run):
+        mock_run.return_value = _completed(returncode=0)
+        from fieldlab.serve_cmd import _uci_cleanup_dhcp
+        from fieldlab.transport import Host
+        _uci_cleanup_dhcp(Host.parse("root@1.2.3.4"))
+        call_strs = [str(c) for c in mock_run.call_args_list]
+        assert any("uci delete network.fieldlab" in s for s in call_strs)
+        assert any("uci delete dhcp.fieldlab" in s for s in call_strs)
+
+    @patch("fieldlab.serve_cmd.check_ssh")
+    def test_serve_dhcp_no_ssh_returns_1(self, mock_ssh):
+        mock_ssh.return_value = False
+        from fieldlab.serve_cmd import cmd_serve_dhcp
+        from fieldlab.transport import Host
+        args = _make_args(probe_if="internet", subnet="192.168.50.1/24",
+                          pool_start=None, pool_end=None, lease_time="1h",
+                          tftp_root=None)
+        assert cmd_serve_dhcp(args, Host.parse("root@1.2.3.4")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint command
+# ---------------------------------------------------------------------------
+
+class TestFingerprintCommand:
+    def test_parse_sections_basic(self):
+        from fieldlab.fingerprint_cmd import _parse_sections
+        raw = "===MODEL===\nGL.iNet AR300M\n===BOARD_NAME===\nglinet,gl-ar300m-nand\n"
+        sections = _parse_sections(raw)
+        assert sections["MODEL"] == "GL.iNet AR300M"
+        assert sections["BOARD_NAME"] == "glinet,gl-ar300m-nand"
+
+    @patch("fieldlab.fingerprint_cmd.run_remote")
+    def test_fingerprint_success(self, mock_run):
+        mock_run.return_value = _completed(
+            stdout='===MODEL===\nGL.iNet GL-AR300M (NAND)\n'
+                   '===BOARD_NAME===\nglinet,gl-ar300m-nand\n'
+                   '===HOSTNAME===\nswitchleft\n',
+            returncode=0,
+        )
+        from fieldlab.fingerprint_cmd import cmd_fingerprint
+        from fieldlab.transport import Host
+        args = SimpleNamespace(
+            host="root@10.89.4.1",
+            target="192.168.1.1",
+            session=None,
+        )
+        result = cmd_fingerprint(args, Host.parse("root@10.89.4.1"))
+        assert result == 0
+
+    @patch("fieldlab.fingerprint_cmd.run_remote")
+    def test_fingerprint_ssh_failure(self, mock_run):
+        mock_run.return_value = _completed(stderr="Connection refused", returncode=255)
+        from fieldlab.fingerprint_cmd import cmd_fingerprint
+        from fieldlab.transport import Host
+        args = SimpleNamespace(
+            host="root@10.89.4.1",
+            target="192.168.1.99",
+            session=None,
+        )
+        result = cmd_fingerprint(args, Host.parse("root@10.89.4.1"))
+        assert result == 1
