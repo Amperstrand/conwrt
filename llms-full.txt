@@ -1,0 +1,476 @@
+# conwrt — Full Documentation for LLMs
+
+> Safety-first OpenWrt router flashing and device discovery tooling. conwrt flashes firmware onto real hardware with hardware validation, AI-assisted discovery for new devices, and automated flashing for known ones.
+
+This file contains the full content of conwrt's key documentation, inlined for single-fetch ingestion by AI systems. Source: https://github.com/Amperstrand/conwrt
+
+---
+
+## SAFETY RULES (from AGENTS.md — READ FIRST)
+
+These rules are safety-critical. Violating them can brick real hardware.
+
+### NEVER Force Sysupgrade
+
+**`sysupgrade -F` is FORBIDDEN.** No exceptions.
+
+The `-F` flag bypasses hardware validation and can brick devices by writing firmware for the wrong hardware. If sysupgrade rejects an image with "Device X not supported by this image", the image is wrong for the hardware. STOP.
+
+Do NOT:
+- Use `sysupgrade -F` or `--force`
+- Override hardware validation checks
+- Assume board.json is accurate (it reflects firmware, not hardware)
+
+Instead:
+- Investigate why the identity doesn't match
+- Use `cat /tmp/sysinfo/board_name` to check device identity
+- Download the correct firmware for the actual hardware
+- If hardware identity is ambiguous, ask the operator before proceeding
+
+### Always Identify Before Flashing
+
+1. SSH to the device and read board.json AND `/tmp/sysinfo/board_name`
+2. Cross-reference with the operator's claimed device model
+3. If there's a mismatch, STOP and report it to the operator
+4. Never assume the operator's claim is correct if the device says otherwise
+
+### Trust Hardware Checks Over Firmware State
+
+- `board.json` = what firmware was flashed (can be wrong)
+- `/tmp/sysinfo/board_name` = firmware's device identity (can be wrong)
+- `sysupgrade` validation = authoritative hardware check (trust this)
+- Physical labels / MAC OUI = ground truth
+
+### Test Before You Commit
+
+Any shell script that modifies device state (uci set, network config, IP changes) must be tested end-to-end via SSH before being committed to automated flows.
+
+1. SSH manually first: Run the exact shell commands on the device
+2. Read back the value: After `uci set`, run `uci get` to confirm
+3. Test persistence: Reboot and verify the change survives
+4. Verify recovery: Confirm you know how to undo the change
+5. Then automate: Only after steps 1-4 pass
+
+Specific rules:
+- Never `uci commit` a network IP change without verifying `uci get` returns the expected value first
+- Shell variables in uci commands MUST use double quotes (not single quotes) for expansion
+- On-device shell scripts use BusyBox tools only (`md5sum`, not `sha256sum`; no `chpasswd`, no `hostname`)
+- Python-side hash algorithms MUST match what BusyBox provides (md5, not sha256)
+- For UBIFS overlay devices: `uci commit` is permanent after reboot — there is no "undo" after reboot
+
+### CI Rules
+
+- `make ci` must not touch real routers (no SSH, ASU, TFTP, sysupgrade in tests)
+- Mock network/hardware; use fixtures under `tests/` and `examples/`
+
+---
+
+## CLI REFERENCE
+
+### Main CLI: conwrt.py
+
+```bash
+python3 scripts/conwrt.py [--version]
+                          {flash,list,list-use-cases,cache,setup-mgmt-wifi,backup,
+                           fingerprint,auto,configure,profile,reset,probe,flow} ...
+```
+
+**Subcommands:**
+
+| Command | Description |
+|---------|-------------|
+| `flash` | Flash firmware to device (default if no subcommand given) |
+| `list` | List available device models |
+| `list-use-cases` | List available use case presets |
+| `cache` | Manage cached firmware images |
+| `configure` | Apply config.toml settings to a running OpenWrt router via SSH |
+| `profile` | Inspect operator profile (config.toml) plans |
+| `probe` | Probe an interface for connected routers |
+| `fingerprint` | Fingerprint a device to identify its model |
+| `auto` | Auto-detect connected router and offer to flash it |
+| `reset` | Factory reset an OpenWrt router (SSH firstboot or failsafe mode) |
+| `backup` | Backup MTD flash partitions from a stock ZyXEL router via SSH |
+| `flow` | Deploy or generate a composite flow (e.g. net4sats) |
+
+### Flash command options
+
+```
+python3 scripts/conwrt.py flash \
+  --model-id MODEL_ID          # Model ID from models/ (auto-detected if OpenWrt running)
+  --image IMAGE                # Path to firmware image (vanilla or custom)
+  --request-image              # Request custom image from ASU with baked-in settings
+  --ssh-key SSH_KEY            # Path to SSH public key
+  --password PASSWORD          # Set root password (default: random, printed once)
+  --no-password                # Skip password (key-only auth)
+  --wan-ssh                    # Open SSH on WAN port (requires --ssh-key)
+  --interface INTERFACE        # Ethernet interface (auto-detected)
+  --no-voice                   # Disable voice guidance
+  --no-upload                  # Stop after detecting U-Boot (dry run)
+  --no-pcap                    # Disable pcap monitoring (polling-only mode)
+  --force-uboot                # Force U-Boot recovery mode even if OpenWrt detected
+  --capture PATH               # Save pcap capture to file
+  --flash-method METHOD        # Force specific flash method (auto-detected if omitted)
+  --yes                        # Skip destructive-operation confirmations
+```
+
+### Common workflows
+
+```bash
+# List all supported devices
+python3 scripts/conwrt.py list
+
+# List all use case presets
+python3 scripts/conwrt.py list-use-cases
+
+# Auto-detect connected router
+python3 scripts/conwrt.py auto
+
+# Probe an interface for devices
+python3 scripts/conwrt.py probe --json
+
+# Fingerprint a device at a known IP
+python3 scripts/conwrt.py fingerprint 192.168.1.1 --json
+
+# Preview what config.toml would apply (dry-run)
+python3 scripts/conwrt.py profile plan --model-id dlink-covr-x1860-a1
+
+# Flash with a prebuilt image
+python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --image firmware.bin
+
+# Request custom ASU image (bakes SSH key + config), then flash
+python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 \
+  --request-image --ssh-key ~/.ssh/id_ed25519.pub --no-password --wan-ssh
+
+# Dry-run: detect recovery mode, skip upload
+python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --image fw.bin --no-upload
+
+# Apply config.toml to a running router
+python3 scripts/conwrt.py configure --ip 192.168.1.1
+python3 scripts/conwrt.py configure --dry-run --ip 192.168.1.1
+
+# Request custom ASU image only (no flash)
+python3 scripts/firmware-manager.py request --profile dlink_covr-x1860-a1 --dry-run
+```
+
+---
+
+## SUPPORTED DEVICES (21 models)
+
+| Model ID | Vendor | Target | Flash Methods |
+|----------|--------|--------|---------------|
+| asus-lyra-map-ac2200 | ASUS | ipq40xx/generic | stock-ssh-mtd, sysupgrade, wifi-sta-flash |
+| dlink-covr-x1860-a1 | D-Link | ramips/mt7621 | recovery-http, sysupgrade, dlink-hnap |
+| extreme-networks-ws-ap3915i | Extreme Networks | ipq40xx/generic | extreme-rdwr-tftp-initramfs, sysupgrade, tftp |
+| glinet-gl-ar150 | GL.iNet | ath79/generic | sysupgrade |
+| glinet-gl-ar300m-lite | GL.iNet | ath79/generic | recovery-http, sysupgrade |
+| glinet-gl-ar300m-nand | GL.iNet | ath79/nand | recovery-http, sysupgrade |
+| glinet-gl-ar300m-nor | GL.iNet | ath79/nand | recovery-http, sysupgrade |
+| glinet-mt3000 | GL.iNet | mediatek/filogic | uboot-http, sysupgrade |
+| glinet-mt6000 | GL.iNet | mediatek/filogic | uboot-http, sysupgrade |
+| linksys-mx4200-v1 | Linksys | qualcommax/ipq807x | sysupgrade, linksys-jnap-cve |
+| linksys-whw03-v1 | Linksys | ipq40xx/generic | sysupgrade |
+| linksys-whw03-v2 | Linksys | ipq40xx/generic | sysupgrade |
+| ubnt-edgerouter-6p | Ubiquiti | octeon/generic | edgeos-kernel-swap, sysupgrade, tftp |
+| ubnt-edgerouter-x | Ubiquiti | ramips/mt7621 | sysupgrade |
+| zyxel-ex5700-telenor | Zyxel | mediatek/filogic | sysupgrade |
+| zyxel-gs1900-24e | Zyxel | realtek/rtl838x | oem-http, sysupgrade, mtd-write, serial-tftp-openwrt |
+| zyxel-gs1900-8hp-a1 | Zyxel | realtek/rtl838x | oem-http, sysupgrade, mtd-write, serial-tftp-openwrt |
+| zyxel-gs1900-8hp-b1 | Zyxel | realtek/rtl838x | oem-http, sysupgrade, mtd-write, serial-tftp-openwrt |
+| zyxel-gs1920-24 | Zyxel | realtek/rtl839x | oem-ftp, sysupgrade, serial-tftp-openwrt |
+| zyxel-nr7101 | Zyxel | ramips/mt7621 | zycast, sysupgrade |
+| zyxel-wx5600-t0 | Zyxel | mediatek/filogic | serial-tftp-openwrt, serial-tftp-stock-restore, sysupgrade |
+
+---
+
+## USE CASE PRESETS (21 presets)
+
+Each preset is a Python file in `scripts/use_cases/` declaring packages + first-boot uci config. Enable in `config.toml`:
+
+```toml
+[use_cases]
+enabled = ["tether", "sqm", "wireguard-client"]
+```
+
+| Preset | Description | Status | Requires |
+|--------|-------------|--------|----------|
+| tether | Auto-detect Android or iPhone USB WAN | tested | usb |
+| tether-android | USB WAN from Android phone | tested | usb |
+| tether-android-adb | USB WAN + ADB auto-enable | tested | usb |
+| tether-ios | USB WAN from iPhone | tested | usb |
+| sqm | Smart Queue Management with CAKE | tested | - |
+| auto-sqm | Auto-measure WAN speed + SQM | experimental | - |
+| wireguard-client | WireGuard VPN client | tested | - |
+| wireguard-server | WireGuard VPN server | tested | - |
+| adguard | Network-wide ad blocking | tested | - |
+| guest-wifi | Isolated guest WiFi | untested | wifi |
+| travelmate | Auto-connect captive portal WiFi | untested | wifi |
+| mwan3 | Multi-WAN failover/load balancing | untested | - |
+| doh | DNS-over-HTTPS | untested | - |
+| mesh11sd | 802.11s mesh networking | experimental | wifi |
+| openclash | Transparent proxy (Clash/Mihomo) | tested | - |
+| tollgate | Bitcoin/Lightning payment gateway | tested | - |
+| ssh-hardening | Dropbear hardening | untested | - |
+| ssl | Trusted HTTPS certs for LAN | experimental | ethernet |
+| ap-nostr-id | Nostr keypair per AP | experimental | ethernet |
+| fips-bluetooth-rfcomm | FIPS mesh over Bluetooth | experimental | bluetooth |
+| configurationwizzard | net4sats admin UI | experimental | - |
+
+---
+
+## CONFIGURATION (config.toml)
+
+config.toml is the operator profile — gitignored, stays local. Copy from config.example.toml.
+
+```toml
+[ssh]
+# Public keys for the router's authorized_keys.
+# First key is also used for ASU image builds.
+keys = ["~/.ssh/id_ed25519.pub"]
+
+[password]
+# "random" = generate random password, print once (default)
+# "key-only" = no password, SSH key auth only
+# "<literal>" = use this exact string
+mode = "random"
+
+[asu]
+extra_packages = ["luci", "luci-app-attendedsysupgrade"]
+
+[network]
+# lan_ip = "192.168.1.1"        # Router LAN IP (when set, conwrt changes it post-flash)
+wan_ssh = false                  # Allow SSH on WAN interface
+# mgmt_wifi = true               # Hidden management WiFi AP
+# mgmt_wifi_txpower = 5          # dBm override
+
+# WiFi STA (client mode — connect to upstream AP)
+# [network.sta]
+# band = "5ghz"                  # 2.4ghz, 5ghz, 5ghz-low, 5ghz-high
+# ssid = "UpstreamNetwork"
+# encryption = "psk2"            # psk2, psk3, sae, none
+# key = "passphrase"
+
+# WiFi AP (access point mode)
+# [network.ap]
+# band = "2.4ghz"
+# ssid = "MyOpenWrt"
+# encryption = "psk2"
+# key = "passphrase"
+
+# Use case presets
+# [use_cases]
+# enabled = ["tether", "sqm"]
+#
+# [use_cases.sqm]
+# download_kbps = 340000         # 85-95% of actual download speed
+# upload_kbps = 19000            # 85-95% of actual upload speed
+```
+
+---
+
+## INTERNAL PYTHON API
+
+Scripts use `sys.path.insert(0, scripts_dir)` for imports. Hyphenated filenames (`firmware-manager.py`, `router-fingerprint.py`) are NOT importable by name — use `importlib.import_module()` or `importlib.util.spec_from_file_location()`.
+
+### Model Management (model_loader.py)
+
+```python
+from model_loader import list_models, load_model, find_model_by_board_name
+
+models = list_models()                          # list[dict] — all 21 models
+model = load_model("dlink-covr-x1860-a1")       # dict — single model definition
+model = find_model_by_board_name("dlink,covr-x1860-a1")  # dict|None
+```
+
+### Use Case Registry (use_cases/__init__.py)
+
+```python
+from use_cases import registry, get, apply_defaults
+
+ucs = registry()                    # dict[str, UseCase] — all presets
+uc = get("tether")                  # UseCase|None — single preset
+params = apply_defaults("sqm", {"download_kbps": 340000})  # dict — merged with defaults
+```
+
+### Device Detection
+
+```python
+# Fingerprint via SSH (router-fingerprint.py — hyphenated, use importlib)
+import importlib
+fp = importlib.import_module("router-fingerprint")
+result = fp.fingerprint_router("192.168.1.1")   # dict|None — full fingerprint
+
+# Probe boot state (router-probe.py — hyphenated)
+rp = importlib.import_module("router-probe")
+state = rp.probe_router(interface="en0", ip="192.168.1.1")  # RouterState
+
+# Auto-detect (auto_detect.py)
+from auto_detect import auto_detect
+routers = auto_detect(interface="en0", passive_timeout=10)  # list[DetectedRouter]
+```
+
+### SSH Utilities (ssh_utils.py)
+
+```python
+from ssh_utils import run_ssh, check_ssh
+
+result = run_ssh("192.168.1.1", "cat /etc/openwrt_release")  # CompletedProcess
+reachable = check_ssh("192.168.1.1")                          # bool
+```
+
+### Inventory (inventory.py)
+
+```python
+from inventory import read_inventory, append_to_inventory, find_device
+
+entries = read_inventory()                         # list[dict] — all devices
+find_device(serial="ABC123")                       # dict|None
+append_to_inventory({"mac": "...", "model": "..."})  # None
+```
+
+### Model JSON Structure
+
+```json
+{
+  "id": "dlink-covr-x1860-a1",
+  "vendor": "D-Link",
+  "description": "COVR-X1860 A1 mesh WiFi",
+  "openwrt": {
+    "target": "ramips/mt7621",
+    "device": "dlink,covr-x1860-a1",
+    "profile": "dlink_covr-x1860-a1",
+    "version": "24.10.2"
+  },
+  "hardware": {
+    "soc": "MT7621AT",
+    "flash": "NAND 128MB",
+    "ram": "256MB"
+  },
+  "capabilities": ["wifi", "ethernet"],
+  "mac_oui": ["BC:22:28"],
+  "flash_methods": {
+    "recovery-http": { "description": "U-Boot HTTP recovery", "recovery_ip": "192.168.0.1" },
+    "sysupgrade": { "description": "Standard sysupgrade over SSH" }
+  },
+  "tested_hardware": {
+    "recovery-http": { "tested": true, "date": "2026-05-16" }
+  }
+}
+```
+
+---
+
+## FLASH METHODS
+
+| Method | How it works | Requires | Speed |
+|--------|-------------|----------|-------|
+| sysupgrade | SSH + SCP, runs sysupgrade -n | Running OpenWrt + SSH | ~3 min |
+| recovery-http | Reset button, uboot HTTP server | Physical access + reset pin | ~2 min |
+| dlink-hnap | HNAP SOAP API upload via stock web UI | Stock D-Link firmware | BLOCKED on COVR-X1860 |
+| tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
+| extreme-rdwr-tftp | SSH to stock → rdwr_boot_cfg → TFTP → sysupgrade | Stock Extreme firmware, SSH | ~5 min |
+| zycast | Multicast to many devices | Network broadcast domain | varies |
+
+---
+
+## FILE STRUCTURE
+
+```
+conwrt/
+├── llms.txt                    # This file's slim index version
+├── llms-full.txt               # This file (full content)
+├── README.md                   # Full project documentation
+├── AGENTS.md                   # Safety rules for AI agents (READ FIRST)
+├── CONTRIBUTING.md             # Contribution guidelines
+├── config.example.toml         # Annotated config template
+├── pyproject.toml              # Python project config (deps, ruff, pyright)
+├── Makefile                    # CI targets: lint, typecheck, validate-models, test, ci, ipk
+├── models/                     # 21 device model JSON files (species-level, static)
+├── schemas/                    # JSON Schema for model validation
+├── scripts/
+│   ├── conwrt.py               # Main CLI dispatcher
+│   ├── conwrt/                 # CLI package (cli.py, cmd_*.py, flash/, profile/)
+│   ├── router-fingerprint.py   # SSH device fingerprinting
+│   ├── router-probe.py         # Boot state detection
+│   ├── firmware-manager.py     # ASU firmware build/download/cache
+│   ├── model_loader.py         # Shared model registry reader
+│   ├── use_cases/              # 21 use case preset plugins
+│   ├── generate_matrix.py      # Generates docs/index.html (device matrix + landing page)
+│   ├── generate_site.py        # Generates docs/wizard-bundle.json
+│   ├── ssh_utils.py            # SSH execution helpers
+│   ├── inventory.py            # Device inventory (specimen-level)
+│   ├── tftp-server.py          # Bundled TFTP server (no dnsmasq dep)
+│   └── platform_utils.py       # Platform detection (darwin/linux/openwrt)
+├── docs/                       # GitHub Pages site (auto-deployed)
+│   ├── index.html              # Landing page + device matrix
+│   ├── wizard.html             # Interactive deployment wizard
+│   ├── user-stories.html       # 5 persona-based stories
+│   ├── getting-started.html    # Step-by-step guide
+│   ├── process.md              # AI discovery workflow
+│   ├── gotchas.md              # Device-specific quirks
+│   ├── testing-status.md       # Hardware testing status
+│   └── design-ops-pipeline.md  # Ops pipeline architecture
+├── prompts/                    # AI discovery step templates (Stage 1)
+├── recipes/                    # Per-device procedures and notes
+├── examples/                   # Example artifacts (redacted)
+├── tests/                      # Python unit tests + smoke tests
+└── data/                       # Runtime data (gitignored)
+    ├── inventory.jsonl          # Append-only device inventory
+    └── *.bin                    # Cached firmware images
+```
+
+---
+
+## RUNNING ON OPENWRT (Router-to-Router)
+
+conwrt can run FROM an OpenWrt router to flash another router:
+
+```bash
+# On the host OpenWrt router:
+opkg install python3-base python3-light python3-urllib python3-json \
+  python3-codecs python3-ctypes python3-email python3-logging \
+  python3-openssl python3-struct python3-fcntl curl
+
+# Copy conwrt to the router (use scp -O — dropbear has no sftp-server)
+scp -O -r scripts/ root@<host-ip>:/tmp/conwrt/
+scp -O models/<model>.json root@<host-ip>:/tmp/conwrt/models/
+scp -O firmware.bin root@<host-ip>:/tmp/conwrt/
+
+# Run from the router
+ssh root@<host-ip>
+cd /tmp/conwrt/scripts
+python3 conwrt.py --model-id dlink-covr-x1860-a1 \
+  --image /tmp/conwrt/firmware.bin --no-pcap --no-voice
+```
+
+The interface is auto-detected as `br-lan` on OpenWrt. Use `--no-pcap` for polling-only mode (no tcpdump needed).
+
+---
+
+## OFFLINE DEVICE PACKAGE INSTALLATION
+
+When a router has no internet access, use `scp -O` to transfer .ipk files:
+
+```bash
+# Download on host (with internet)
+REPO_BASE="https://downloads.openwrt.org/releases/24.10.2/targets/mediatek/filogic"
+PACKAGES_BASE="https://downloads.openwrt.org/releases/24.10.2/packages/aarch64_cortex-a53"
+curl -O "${PACKAGES_BASE}/packages/kmod-usb-net-rndis_*.ipk"
+
+# Transfer to router (scp -O required — dropbear has no sftp-server)
+scp -O -i ~/.ssh/id_ed25519 *.ipk root@<router-ip>:/tmp/
+
+# Install on router (dependencies first, or use wildcard)
+ssh root@<router-ip> "opkg install /tmp/*.ipk"
+```
+
+Key: Always use `scp -O` — OpenWrt dropbear lacks `/usr/libexec/sftp-server`.
+
+---
+
+## EXTERNAL REPOSITORY ETIQUETTE
+
+Never contribute to, comment on, or file issues against repositories outside the Amperstrand organization. This includes starring, fork-sync PRs, issue comments, and discussion posts. Reference external repos for research only.
+
+## Related Projects
+
+- **realtek-poe fork**: Amperstrand/realtek-poe — AI experimentation workspace for PoE research on OpenWrt switches. All AI work on the `ai-experiments` branch. Never interact with upstream Hurricos/realtek-poe.

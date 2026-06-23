@@ -1,0 +1,84 @@
+# conwrt
+
+> Safety-first OpenWrt router flashing and device discovery tooling. conwrt flashes firmware onto real hardware with hardware validation, AI-assisted discovery for new devices, and automated flashing for known ones. 21 devices supported across 7 vendors.
+
+conwrt is a Python 3.10+ framework with a 2-stage workflow:
+
+1. **AI-assisted discovery** (`prompts/`): Encounter an unknown router, identify it, fingerprint its attack surface, plan a capture strategy, and analyze pcap artifacts to determine flash methods and boot signatures.
+2. **Automated flashing** (`scripts/` + `models/`): Once a model is defined with its flash method and boot signatures, subsequent flashes are fully automated — detect recovery mode, upload firmware, verify, and collect inventory.
+
+**Critical safety rule**: `sysupgrade -F` is FORBIDDEN. It bypasses hardware validation and can brick devices. If sysupgrade rejects an image, the image is wrong for the hardware. See AGENTS.md for full safety rules.
+
+The project lives at `https://github.com/Amperstrand/conwrt`. The device support matrix is at `https://amperstrand.github.io/conwrt/`.
+
+## Getting Started
+
+- [Getting Started Guide](https://amperstrand.github.io/conwrt/getting-started.html): Step-by-step install through first flash (HTML, interactive)
+- [README](https://raw.githubusercontent.com/Amperstrand/conwrt/master/README.md): Full project documentation — CLI options, use cases, flash methods, WiFi config, WireGuard, router-to-router flashing
+- [Device Support Matrix](https://amperstrand.github.io/conwrt/): Live auto-generated table of all 21 supported devices with flash method status
+- [Deployment Wizard](https://amperstrand.github.io/conwrt/wizard.html): Interactive tool — pick your router, pick a feature, get the exact shell script
+
+## Safety Rules (READ FIRST)
+
+- [AGENTS.md](https://raw.githubusercontent.com/Amperstrand/conwrt/master/AGENTS.md): Safety-critical rules for AI agents operating on real hardware. Covers sysupgrade -F ban, hardware identification before flashing, test-before-commit, offline device package installation, external repo etiquette.
+
+## CLI Reference
+
+- [conwrt.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/conwrt.py): Main CLI dispatcher. Subcommands: flash, list, list-use-cases, cache, configure, profile, probe, fingerprint, auto, reset, backup, flow. Run `python3 scripts/conwrt.py --help` for full options.
+- [router-fingerprint.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/router-fingerprint.py): SSH-based device fingerprinting. Connects to a router, collects board info, MAC, kernel, packages.
+- [router-probe.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/router-probe.py): Device boot state detection (off/uboot/openwrt) via ARP, HTTP, SSH, ICMP probing.
+- [firmware-manager.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/firmware-manager.py): ASU firmware build/download/cache management. Request custom images with baked-in SSH keys, passwords, use cases.
+
+## Configuration
+
+- [config.example.toml](https://raw.githubusercontent.com/Amperstrand/conwrt/master/config.example.toml): Annotated config template. Covers SSH keys, passwords, ASU settings, network (LAN IP, WAN SSH, WiFi STA/AP), and all 21 use case presets with their parameters.
+
+## Internal Python API (for programmatic use)
+
+- [model_loader.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/model_loader.py): `list_models()`, `load_model(model_id)`, `find_model_by_board_name(board)`, `find_model_by_target(target)`. The shared model registry reader.
+- [use_cases/__init__.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/use_cases/__init__.py): `registry()`, `get(name)`, `apply_defaults(name, params)`. Use case preset registry — each preset declares packages + first-boot shell script.
+- [inventory.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/inventory.py): `append_to_inventory(entry)`, `read_inventory()`, `find_device(serial)`. Specimen-level device inventory (MAC, serial, flash timeline).
+- [ssh_utils.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/ssh_utils.py): `run_ssh(ip, command)`, `check_ssh(ip)`. SSH execution helpers used across all scripts.
+
+## Device Models
+
+- [models/ directory](https://github.com/Amperstrand/conwrt/tree/master/models): 21 device JSON files. Each contains vendor info, OpenWrt target/device/arch, hardware specs (SoC, flash, RAM, ports, WiFi), MAC OUI prefixes, flash method definitions, and boot milestone patterns.
+- [Model schema](https://raw.githubusercontent.com/Amperstrand/conwrt/master/schemas/model.schema.json): JSON Schema for validating model definitions.
+
+## Use Case Presets
+
+conwrt installs OpenWrt pre-configured for a specific use case. Each preset is a Python file in `scripts/use_cases/` that declares packages to include and a shell script of uci commands for first boot.
+
+Available presets: tether (Android/iPhone USB WAN), sqm (bufferbloat fix), wireguard-client, wireguard-server, adguard, guest-wifi, travelmate, mwan3, doh, mesh11sd, openclash, tollgate, and more. See `python3 scripts/conwrt.py list-use-cases` for the full list.
+
+## Stage 1: AI-Assisted Discovery (new devices)
+
+- [Discovery Process](https://raw.githubusercontent.com/Amperstrand/conwrt/master/docs/process.md): End-to-end workflow for the 4-step AI discovery process.
+- [Step 1: Identify Device](https://raw.githubusercontent.com/Amperstrand/conwrt/master/prompts/step-01-identify-device.md): Passive device identification via network scan, nmap, API probing.
+- [Step 2: Fingerprint Surface](https://raw.githubusercontent.com/Amperstrand/conwrt/master/prompts/step-02-fingerprint-surface.md): Map exposed services, boot behavior, recovery interfaces.
+- [Step 3: Plan Capture](https://raw.githubusercontent.com/Amperstrand/conwrt/master/prompts/step-03-plan-capture.md): Design a pcap capture strategy for the boot sequence.
+- [Step 4: Analyze Artifacts](https://raw.githubusercontent.com/Amperstrand/conwrt/master/prompts/step-04-analyze-artifacts.md): Extract boot signatures, recovery mode patterns, flash method from captures.
+
+## Flash Methods
+
+| Method | How it works | Requires |
+|--------|-------------|----------|
+| sysupgrade | SSH + SCP, runs sysupgrade -n | Running OpenWrt + SSH |
+| recovery-http | Reset button, uboot HTTP server | Physical access + reset pin |
+| dlink-hnap | HNAP SOAP API upload via stock firmware web UI | Stock D-Link firmware (does NOT work on COVR-X1860) |
+| tftp | TFTP server for uboot network boot | Serial or uboot access |
+| extreme-rdwr-tftp | SSH to stock, rdwr_boot_cfg, TFTP boot initramfs, sysupgrade | Stock Extreme firmware, SSH access |
+| zycast | Multicast to many devices simultaneously | Network broadcast domain |
+
+## User Stories
+
+- [User Stories](https://amperstrand.github.io/conwrt/user-stories.html): 5 real-world deployment scenarios — traveler (USB tether + VPN), homelab operator (AdGuard + guest WiFi), mesh builder, developer (Python API), device rescuer (recovery mode flashing).
+
+## Optional
+
+- [Gotchas](https://raw.githubusercontent.com/Amperstrand/conwrt/master/docs/gotchas.md): Hard-won knowledge from real device interactions — UBIFS quirks, BusyBox limitations, ASU build quirks.
+- [Testing Status](https://raw.githubusercontent.com/Amperstrand/conwrt/master/docs/testing-status.md): What's verified on real hardware vs defined from documentation only.
+- [Ops Pipeline Design](https://raw.githubusercontent.com/Amperstrand/conwrt/master/docs/design-ops-pipeline.md): Architecture for the transport-agnostic operations pipeline (render, flows, ops).
+- [Redaction Patterns](https://raw.githubusercontent.com/Amperstrand/conwrt/master/docs/redaction.md): Privacy patterns for capturing and sharing device data safely.
+- [Per-Device Recipes](https://github.com/Amperstrand/conwrt/tree/master/recipes): Detailed per-device procedures, flash scripts, and research notes.
+- [Contributing](https://raw.githubusercontent.com/Amperstrand/conwrt/master/CONTRIBUTING.md): Standard PR-based workflow. Device contributions need model JSON + recipe notes + boot signatures + real hardware testing.
