@@ -38,7 +38,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
-        "probe", "flow", "-h", "--help", "--version", "-V",
+        "probe", "flow", "lan-migrate", "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
@@ -74,6 +74,7 @@ def main() -> int:
         "reset": ("conwrt.cmd_reset", "cmd_reset"),
         "probe": ("conwrt.cmd_probe", "cmd_probe"),
         "flow": ("conwrt.cmd_flow", "cmd_flow"),
+        "lan-migrate": ("conwrt.cmd_lan_migrate", "cmd_lan_migrate"),
     }
 
     entry = _COMMAND_MAP.get(command)

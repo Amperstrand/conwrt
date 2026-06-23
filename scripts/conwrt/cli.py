@@ -249,4 +249,15 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Stack an add-on, repeatable: random-password, set-password, hostname, wan-ssh")
     flow_parser.set_defaults(flow_command="list")
 
+    mig_parser = subparsers.add_parser("lan-migrate",
+        help="Re-IP a running router's LAN to the model's lan_subnet (idempotent, self-verifying, auto-rollback)")
+    mig_parser.add_argument("--model-id", required=True,
+                        help="Model ID whose lan_subnet is the target (e.g. dlink-covr-x1860-a1)")
+    mig_parser.add_argument("--ip", default=DEFAULT_IP,
+                        help="Router's current LAN IP (default 192.168.1.1)")
+    mig_parser.add_argument("--interface", default=None,
+                        help="Host ethernet interface (auto-detected if omitted)")
+    mig_parser.add_argument("--rollback-secs", type=int, default=60,
+                        help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+
     return parser
