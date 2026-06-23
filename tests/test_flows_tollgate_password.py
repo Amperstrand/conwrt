@@ -18,8 +18,28 @@ def test_tollgate_is_net4sats_minus_portal_with_generic_branding():
     assert [s.title for s in tollgate.steps][:3] == [s.title for s in net4sats.steps][:3]
     assert not any(s.package == "configurationwizzard" for s in tollgate.steps)
     assert any(s.package == "configurationwizzard" for s in net4sats.steps)
-    assert tollgate.steps[-1].use_case_params["gateway_name"] == "TollGate"
-    assert net4sats.steps[-1].use_case_params["gateway_name"] == "net4sats"
+    tg_brand = next(s for s in tollgate.steps if s.kind == "apply_use_case")
+    ns_brand = next(s for s in net4sats.steps if s.kind == "apply_use_case")
+    assert tg_brand.use_case_params["gateway_name"] == "TollGate"
+    assert ns_brand.use_case_params["gateway_name"] == "net4sats"
+
+
+def test_set_lan_ip_step_moves_lan_to_model_subnet_gateway():
+    flow = Flow(name="lan", description="", steps=[Step(kind="set_lan_ip", title="Move the LAN off 192.168.1.1")])
+    script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+    assert "uci set network.lan.ipaddr='10.89.4.1'" in script
+    assert "uci set network.lan.netmask='255.255.255.0'" in script
+    assert "10.89.4.0/24" in script
+    assert "network restart" in script
+
+
+def test_set_lan_ip_step_skipped_when_model_has_no_subnet():
+    from model_loader import load_model
+    model = load_model("dlink-covr-x1860-a1")
+    model["lan_subnet"] = ""
+    flow = Flow(name="lan", description="", steps=[Step(kind="set_lan_ip", title="Move LAN")])
+    script = render_flow_shell(flow, model, {}, version="24.10.7")
+    assert "skip LAN move" in script
 
 
 def test_password_step_renders_chpasswd():

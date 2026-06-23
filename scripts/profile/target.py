@@ -97,10 +97,26 @@ def derive_target_profile(
     """Bundle every per-router derivative a renderer/deployer needs.
 
     Keys: ``model_id``, ``target``, ``arch``, ``pkg_manager``, ``version``,
-    ``image_kind``, ``firmware_url``, ``default_ip``.
+    ``image_kind``, ``firmware_url``, ``default_ip``, ``lan_subnet``,
+    ``lan_gateway``.
+
+    ``lan_gateway`` is the router's own address on ``lan_subnet`` (network +1),
+    used to move the LAN off the OpenWrt default 192.168.1.1 so a freshly
+    flashed router doesn't collide with neighbour devices (e.g. a peer router
+    sitting in U-Boot recovery at 192.168.1.1).
     """
+    import ipaddress
+
     ow = model["openwrt"]
     ver = version or ow["version"]
+    lan_subnet = model.get("lan_subnet", "")
+    lan_gateway = ""
+    if lan_subnet:
+        try:
+            net = ipaddress.ip_network(lan_subnet, strict=False)
+            lan_gateway = str(net.network_address + 1)
+        except ValueError:
+            lan_gateway = ""
     return {
         "model_id": model.get("id", ""),
         "target": ow["target"],
@@ -110,4 +126,6 @@ def derive_target_profile(
         "image_kind": image_kind,
         "firmware_url": firmware_image_url(model, ver, image_kind),
         "default_ip": ow.get("default_ip", "192.168.1.1"),
+        "lan_subnet": lan_subnet,
+        "lan_gateway": lan_gateway,
     }

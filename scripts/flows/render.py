@@ -127,6 +127,19 @@ def _wan_ssh_ops() -> list[Op]:
     ]
 
 
+def _set_lan_ip_ops(target: dict[str, Any]) -> list[Op]:
+    gw = target.get("lan_gateway", "")
+    subnet = target.get("lan_subnet", "")
+    if not gw:
+        return [Comment("skip LAN move — model has no lan_subnet defined")]
+    return [
+        Comment(f"move LAN off 192.168.1.1 → {gw} ({subnet})"),
+        UciSet(config="network", section="lan", values={"ipaddr": gw, "netmask": "255.255.255.0"}),
+        UciCommit(config="network"),
+        ShellCommand(command=f"(/etc/init.d/network restart &) ; echo 'LAN moving to {gw} — reconnect on that subnet'"),
+    ]
+
+
 def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> tuple[list[str], list[Op]]:
     if step.kind == "wifi_sta":
         return ([], _wifi_sta_ops(step, params))
@@ -142,6 +155,8 @@ def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> t
         return ([], _hostname_ops(step))
     if step.kind == "wan_ssh":
         return ([], _wan_ssh_ops())
+    if step.kind == "set_lan_ip":
+        return ([], _set_lan_ip_ops(target))
     return ([], [])  # "flash" and unknowns are documentation-only
 
 
