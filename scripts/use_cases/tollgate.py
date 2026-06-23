@@ -15,21 +15,7 @@ from . import ParamDef, UseCase, register
 _REPO = "OpenTollGate/tollgate-module-basic-go"
 _WORKFLOW = "Build and Publish"
 
-_ARCH_MAP: dict[str, str] = {
-    "mediatek/filogic": "aarch64_cortex-a53",
-    "ipq40xx/generic": "arm_cortex-a7",
-    "bcm27xx/bcm2711": "aarch64_cortex-a72",
-    "bcm27xx/bcm2709": "arm_cortex-a7",
-    "ramips/mt7621": "mipsel_24kc",
-    "ath79/generic": "mips_24kc",
-    "ath79/nand": "mips_24kc",
-    "x86/64": "x86_64",
-}
-
-
-def arch_from_target(target: str) -> str:
-    """Map an OpenWrt target (e.g. ``mediatek/filogic``) to ipk architecture."""
-    return _ARCH_MAP.get(target, "")
+from profile.target import arch_from_target  # canonical arch map lives in profile.target (DRY)
 
 
 def resolve_ipk_gh(
@@ -349,8 +335,9 @@ def deploy_tollgate_post_flash(
         return False
     _log(f"Downloaded ipk to {ipk_path}")
 
-    # SCP to router (use -O for dropbear compatibility)
-    _log(f"Transferring ipk to router at {ip}...")
+    ext = os.path.splitext(ipk_path)[1] or ".ipk"
+    remote_pkg = f"/tmp/tollgate-wrt{ext}"
+    _log(f"Transferring tollgate package to router at {ip}...")
     scp_args: list[str] = ["scp", "-O"]
     if ssh_key:
         scp_args += ["-i", ssh_key]
@@ -358,20 +345,20 @@ def deploy_tollgate_post_flash(
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         ipk_path,
-        f"root@{ip}:/tmp/tollgate-wrt.ipk",
+        f"root@{ip}:{remote_pkg}",
     ]
     scp_result = subprocess.run(scp_args, capture_output=True, text=True, timeout=30)
     if scp_result.returncode != 0:
         _log(f"SCP failed: {scp_result.stderr.strip()}")
         return False
 
-    # Install on router
-    _log("Installing tollgate ipk on router...")
-    install_cmd = ssh_cmd(
-        ip,
-        "opkg install /tmp/tollgate-wrt.ipk && /etc/init.d/tollgate-wrt enable",
-        key=ssh_key or None,
-    )
+    if ext == ".apk":
+        # --allow-untrusted: tollgate packages are unsigned (TODO: sign releases).
+        install_remote = f"apk add --allow-untrusted {remote_pkg} && /etc/init.d/tollgate-wrt enable"
+    else:
+        install_remote = f"opkg install {remote_pkg} && /etc/init.d/tollgate-wrt enable"
+    _log(f"Installing tollgate on router ({ext})...")
+    install_cmd = ssh_cmd(ip, install_remote, key=ssh_key or None)
     install_result = subprocess.run(install_cmd, capture_output=True, text=True, timeout=30)
     if install_result.returncode != 0:
         _log(f"Install failed: {install_result.stderr.strip()}")
