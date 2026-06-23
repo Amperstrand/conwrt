@@ -60,6 +60,10 @@
       <label>Feature (flow)</label>
       <select id="flow"></select>
     </div>
+    <div>
+      <label>OpenWrt version</label>
+      <select id="version"></select>
+    </div>
   </div>
   <div id="params"></div>
   <div style="margin-top:0.8rem">
@@ -98,9 +102,10 @@ async function init() {
   }
   populateModels();
   populateFlows();
+  populateVersions();
   renderParams();
   document.getElementById("opt-password").addEventListener("change", render);
-  render();
+  onModelChange();
 }
 
 function populateModels() {
@@ -112,7 +117,28 @@ function populateModels() {
     opt.textContent = `${m.description} (${m.id})`;
     sel.appendChild(opt);
   }
+  sel.addEventListener("change", onModelChange);
+}
+
+function populateVersions() {
+  const sel = document.getElementById("version");
+  sel.innerHTML = "";
+  for (const v of BUNDLE.versions) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    sel.appendChild(opt);
+  }
   sel.addEventListener("change", render);
+}
+
+function onModelChange() {
+  const m = BUNDLE.models.find(x => x.id === document.getElementById("model").value);
+  const vsel = document.getElementById("version");
+  if (m && m.version && [...vsel.options].some(o => o.value === m.version)) {
+    vsel.value = m.version;
+  }
+  render();
 }
 
 function populateFlows() {
@@ -183,7 +209,8 @@ function render() {
   const flow = selectedFlow();
   const out = document.getElementById("output");
   if (!modelId || !flow) { out.innerHTML = '<span class="empty">Select a router and a feature…</span>'; return; }
-  const entry = (BUNDLE.rendered[modelId] || {})[flow.name];
+  const version = document.getElementById("version").value;
+  const entry = ((BUNDLE.rendered[modelId] || {})[flow.name] || {})[version];
   if (!entry) { out.innerHTML = '<span class="empty">No rendered output for this combination.</span>'; return; }
   const vals = paramValues();
   const missing = Object.entries(flow.params).filter(([n, p]) => p.required && !vals[n]);

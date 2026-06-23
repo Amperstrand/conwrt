@@ -52,6 +52,7 @@ def build_bundle() -> dict[str, Any]:
         "vendor": m.get("vendor", ""),
         "description": m.get("description", ""),
         "target": m.get("openwrt", {}).get("target", ""),
+        "version": m.get("openwrt", {}).get("version", ""),
         "capabilities": m.get("capabilities", []),
     } for m in full_models]
 
@@ -61,20 +62,23 @@ def build_bundle() -> dict[str, Any]:
         "params": _serialize_params(f.params),
     } for f in flow_registry().values()]
 
-    rendered: dict[str, dict[str, dict[str, str]]] = {}
+    versions = sorted({m["version"] for m in models if m["version"] and m["version"] != "snapshot"})
+
+    rendered: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
     for flow in flow_registry().values():
         placeholders = _placeholder_params(flow)
         for model in full_models:
             mid = model["id"]
-            rendered.setdefault(mid, {})[flow.name] = {
-                "shell": render_flow_shell(flow, model, placeholders),
-                "markdown": render_flow_markdown(flow, model, placeholders),
-            }
+            for ver in versions:
+                rendered.setdefault(mid, {}).setdefault(flow.name, {})[ver] = {
+                    "shell": render_flow_shell(flow, model, placeholders, version=ver),
+                    "markdown": render_flow_markdown(flow, model, placeholders, version=ver),
+                }
 
     password_snippet = _password_snippet(full_models[0])
 
-    return {"models": models, "flows": flows, "rendered": rendered,
-            "password_snippet": password_snippet}
+    return {"models": models, "flows": flows, "versions": versions,
+            "rendered": rendered, "password_snippet": password_snippet}
 
 
 def _password_snippet(sample_model: dict[str, Any]) -> dict[str, str]:
