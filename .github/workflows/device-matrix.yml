@@ -6,8 +6,8 @@ on:
     paths:
       - 'models/*.json'
       - '.github/workflows/device-matrix.yml'
-      - 'scripts/use_cases/*.py'
-      - 'scripts/generate_matrix.py'
+      - 'scripts/**/*.py'
+      - 'docs/wizard.html'
   workflow_dispatch:
 
 permissions:
