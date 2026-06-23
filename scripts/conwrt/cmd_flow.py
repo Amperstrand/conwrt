@@ -55,12 +55,26 @@ def cmd_flow(args: SimpleNamespace) -> int:
         return 0
 
     flow, params = _resolve_flow(args)
+    from flows import Flow as _Flow, Step as _Step
+    from flows import addons as _addons
+    flow = _Flow(name=flow.name, description=flow.description,
+                 params=flow.params, steps=list(flow.steps))
+
     if getattr(args, "set_password", False):
-        from flows import Flow, Step
-        pw_step = Step(kind="password", title="Set a random root password",
-                       detail="Generates a random 16-char root password and prints it once.")
-        flow = Flow(name=flow.name, description=flow.description,
-                    params=flow.params, steps=[pw_step] + list(flow.steps))
+        flow.steps.insert(0, _Step(kind="password", title="Set a random root password",
+                                   detail="Generates a random 16-char root password and prints it once."))
+
+    for name in getattr(args, "addon", None) or []:
+        addon = _addons.get(name)
+        if addon is None:
+            known = ", ".join(sorted(_addons.registry())) or "none"
+            raise SystemExit(f"Unknown add-on {name!r}. Known: {known}")
+        missing = [k for k, pdef in addon.params.items() if pdef.required and not params.get(k)]
+        if missing:
+            raise SystemExit(f"Add-on {name!r} requires --set {missing[0]}=VALUE")
+        if addon.build_step is not None:
+            flow.steps.append(addon.build_step({k: params.get(k, "") for k in addon.params}))
+
     model = load_model(args.model_id)
 
     if flow_command == "script":

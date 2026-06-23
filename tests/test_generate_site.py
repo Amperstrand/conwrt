@@ -45,7 +45,12 @@ def test_bundle_is_json_serializable_roundtrip():
     assert json.loads(s) == b
 
 
-def test_bundle_includes_password_snippet():
+def test_bundle_includes_addons():
     b = build_bundle()
-    assert "chpasswd" in b["password_snippet"]["shell"]
-    assert "## Set a random root password" in b["password_snippet"]["markdown"]
+    names = [a["name"] for a in b["addons"]]
+    assert "random-password" in names
+    assert "hostname" in names
+    rp = next(a for a in b["addons"] if a["name"] == "random-password")
+    assert "chpasswd" in rp["shell"]
+    hn = next(a for a in b["addons"] if a["name"] == "hostname")
+    assert "{{hostname}}" in hn["shell"]

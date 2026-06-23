@@ -244,6 +244,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Flow param, repeatable (e.g. --set upstream_ssid=home)")
         _p.add_argument("--set-password", dest="set_password", action="store_true",
                         help="Prepend a step that sets a random root password (composes with any flow)")
+        _p.add_argument("--addon", dest="addon", action="append", default=[],
+                        metavar="NAME",
+                        help="Stack an add-on, repeatable: random-password, set-password, hostname, wan-ssh")
     flow_parser.set_defaults(flow_command="list")
 
     return parser

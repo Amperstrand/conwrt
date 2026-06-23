@@ -70,3 +70,29 @@ def test_flow_script_with_set_password_injects_password_step(capsys):
     assert rc == 0
     assert "chpasswd" in out
     assert "root password: $PW" in out
+
+
+def test_flow_script_with_addon_hostname(capsys):
+    rc = cmd_flow(_args(
+        flow_command="script", flow="net4sats", model_id="glinet-mt3000", version="24.10.7",
+        overrides=["upstream_ssid=A", "upstream_key=B", "hostname=flint"], addon=["hostname"],
+    ))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "uci set system.@system[0].hostname='flint'" in out
+
+
+def test_flow_addon_requires_its_param(capsys):
+    with pytest.raises(SystemExit):
+        cmd_flow(_args(
+            flow_command="script", flow="net4sats", model_id="glinet-mt3000", version="24.10.7",
+            overrides=["upstream_ssid=A", "upstream_key=B"], addon=["hostname"],
+        ))
+
+
+def test_flow_unknown_addon_exits(capsys):
+    with pytest.raises(SystemExit):
+        cmd_flow(_args(
+            flow_command="script", flow="net4sats", model_id="glinet-mt3000", version="24.10.7",
+            overrides=["upstream_ssid=A", "upstream_key=B"], addon=["nope"],
+        ))

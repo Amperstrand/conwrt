@@ -75,23 +75,34 @@ def build_bundle() -> dict[str, Any]:
                     "markdown": render_flow_markdown(flow, model, placeholders, version=ver),
                 }
 
-    password_snippet = _password_snippet(full_models[0])
+    addons_out = _addons_bundle(full_models[0])
 
     return {"models": models, "flows": flows, "versions": versions,
-            "rendered": rendered, "password_snippet": password_snippet}
+            "rendered": rendered, "addons": addons_out}
 
 
-def _password_snippet(sample_model: dict[str, Any]) -> dict[str, str]:
-    from flows import Flow, Step
+def _addons_bundle(sample_model: dict[str, Any]) -> list[dict[str, Any]]:
+    from flows import Flow, addons
     from flows.render import render_flow_markdown, render_flow_shell
 
-    pw_flow = Flow(name="_password", description="",
-                   steps=[Step(kind="password", title="Set a random root password")])
-    shell_full = render_flow_shell(pw_flow, sample_model, {})
-    md_full = render_flow_markdown(pw_flow, sample_model, {})
-    shell_block = shell_full[shell_full.find("# ---"):]
-    md_block = md_full[md_full.find("## "):]
-    return {"shell": shell_block, "markdown": md_block}
+    out: list[dict[str, Any]] = []
+    for name, ao in addons.registry().items():
+        if ao.build_step is None:
+            continue
+        placeholders = {k: "{{" + k + "}}" for k in ao.params}
+        step = ao.build_step(placeholders)
+        flow = Flow(name="_addon_" + name, description="", steps=[step])
+        shell_full = render_flow_shell(flow, sample_model, {})
+        md_full = render_flow_markdown(flow, sample_model, {})
+        out.append({
+            "name": name,
+            "title": ao.title,
+            "description": ao.description,
+            "params": _serialize_params(ao.params),
+            "shell": shell_full[shell_full.find("# ---"):],
+            "markdown": md_full[md_full.find("## "):],
+        })
+    return out
 
 
 def main() -> None:
