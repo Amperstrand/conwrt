@@ -149,4 +149,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="IP to assign to the probe interface (default: 192.168.1.2)",
     )
 
+    fp_p = subparsers.add_parser(
+        "fingerprint",
+        help="Identify the target device via SSH ProxyJump through the field router",
+    )
+    fp_p.add_argument(
+        "--host", required=True,
+        help="Field router SSH target (the jump host, e.g. root@10.89.4.1)",
+    )
+    fp_p.add_argument(
+        "--target", required=True,
+        help="Target device IP to fingerprint (e.g. 192.168.1.1)",
+    )
+    fp_p.add_argument(
+        "--session", default=None,
+        help="Run session ID",
+    )
+
     return parser

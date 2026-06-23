@@ -50,16 +50,20 @@ _FIELDLAB_SSH_OPTIONS = [
 ] + DROPBEAR_SSH_OPTIONS
 
 
-def _ssh_base(host: Host, connect_timeout: int = 10) -> list[str]:
+def _ssh_base(host: Host, connect_timeout: int = 10, jump: str = "") -> list[str]:
     """Build base SSH command list for field-lab."""
-    return [
+    cmd = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "BatchMode=yes",
         "-o", "PasswordAuthentication=no",
         "-o", f"ConnectTimeout={connect_timeout}",
-    ] + DROPBEAR_SSH_OPTIONS + [f"{host.user}@{host.ip}"]
+    ] + DROPBEAR_SSH_OPTIONS
+    if jump:
+        cmd += ["-J", jump]
+    cmd.append(f"{host.user}@{host.ip}")
+    return cmd
 
 
 # ---------------------------------------------------------------------------
@@ -71,14 +75,11 @@ def run_remote(
     command: str,
     timeout: int = 30,
     connect_timeout: int = 10,
+    jump: str = "",
 ) -> subprocess.CompletedProcess:
-    """Run a command on the remote field router, return CompletedProcess.
-
-    This is the field-lab equivalent of ssh_utils.run_ssh, but uses
-    Host objects and Dropbear-compatible options by default.
-    """
+    """Run a command on the remote host, optionally via a jump host."""
     h = host if isinstance(host, Host) else Host.parse(host)
-    cmd = _ssh_base(h, connect_timeout) + [command]
+    cmd = _ssh_base(h, connect_timeout, jump=jump) + [command]
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, check=False,
     )
@@ -88,19 +89,16 @@ def stream_remote(
     host: Host | str,
     command: str,
     connect_timeout: int = 10,
+    jump: str = "",
 ) -> subprocess.Popen[bytes]:
-    """Start a remote command with stdout piped for binary streaming.
-
-    Caller is responsible for reading proc.stdout and calling proc.terminate().
-    Used by capture.py for `tcpdump -w -` streaming.
-    """
+    """Start a remote command with stdout piped for binary streaming."""
     h = host if isinstance(host, Host) else Host.parse(host)
-    cmd = _ssh_base(h, connect_timeout) + [command]
+    cmd = _ssh_base(h, connect_timeout, jump=jump) + [command]
     return subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=False,  # Binary mode — pcap data
+        text=False,
     )
 
 

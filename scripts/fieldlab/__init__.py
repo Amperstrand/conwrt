@@ -74,6 +74,10 @@ def main() -> int:
         parser.print_help(sys.stderr)
         return 1
 
+    if command == "fingerprint":
+        from fieldlab.fingerprint_cmd import cmd_fingerprint
+        return cmd_fingerprint(args, host)
+
     parser.print_help(sys.stderr)
     return 1
 
