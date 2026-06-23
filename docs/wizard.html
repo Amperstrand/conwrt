@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>conwrt — Deployment Wizard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; padding: 2rem; padding-top: 70px; }
+  h1 { font-size: 1.7rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1rem; color: #555; margin: 1.5rem 0 0.5rem; }
+  .subtitle { color: #666; margin-bottom: 1.5rem; }
+  nav.sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 2rem; display: flex; gap: 1.5rem; align-items: center; }
+  nav.sticky a { color: #555; font-size: 0.85rem; text-decoration: none; }
+  nav.sticky a:hover { color: #0366d6; }
+  nav.sticky .brand { font-weight: 700; color: #1a1a1a; }
+  .panel { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+  label { display: block; font-size: 0.8rem; font-weight: 600; color: #444; margin: 0.6rem 0 0.2rem; }
+  label .req { color: #c0392b; }
+  label .desc { font-weight: 400; color: #888; font-size: 0.75rem; }
+  select, input[type=text], input[type=number] { width: 100%; max-width: 420px; padding: 6px 8px; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 200px; }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; }
+  .tab { padding: 8px 16px; cursor: pointer; border: 1px solid #e0e0e0; border-bottom: none; background: #f5f5f5; font-size: 0.85rem; border-radius: 4px 4px 0 0; }
+  .tab.active { background: #0366d6; color: #fff; }
+  .out-wrap { border: 1px solid #e0e0e0; border-radius: 0 4px 4px 4px; position: relative; }
+  .out-wrap pre { margin: 0; padding: 14px; overflow: auto; max-height: 60vh; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; white-space: pre; background: #f8f9fa; }
+  .copy { position: absolute; top: 8px; right: 8px; padding: 4px 12px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  .copy:hover { background: #0257a5; }
+  .meta { font-size: 0.8rem; color: #666; margin: 0.3rem 0 0.8rem; }
+  .meta code { background: #eee; padding: 1px 5px; border-radius: 3px; font-size: 0.78rem; }
+  .warn { background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 1rem; }
+  .empty { color: #999; font-style: italic; padding: 14px; }
+  footer { margin-top: 2rem; color: #999; font-size: 0.78rem; }
+  a { color: #0366d6; }
+</style>
+</head>
+<body>
+
+<nav class="sticky">
+  <span class="brand">conwrt</span>
+  <a href="index.html">Device Matrix</a>
+  <a href="wizard.html">Wizard</a>
+  <a href="https://github.com/amperstrand/conwrt">GitHub</a>
+</nav>
+
+<h1>conwrt Deployment Wizard</h1>
+<p class="subtitle">Pick a router and a feature, fill in your options, and get the exact shell script or step-by-step instructions conwrt would run. Generated from the same source of truth as the CLI — no drift.</p>
+
+<div id="load-warn" class="warn" style="display:none">Loading bundle… if this persists, run <code>python3 scripts/generate_site.py</code> and commit <code>docs/wizard-bundle.json</code>.</div>
+
+<div class="panel">
+  <div class="row">
+    <div>
+      <label>Router</label>
+      <select id="model"></select>
+    </div>
+    <div>
+      <label>Feature (flow)</label>
+      <select id="flow"></select>
+    </div>
+  </div>
+  <div id="params"></div>
+  <div style="margin-top:0.8rem">
+    <label style="display:inline-flex;align-items:center;gap:0.4rem;font-weight:400;cursor:pointer">
+      <input type="checkbox" id="opt-password" style="width:auto;max-width:none"> Set a random root password
+      <span class="desc">(composes with any flow)</span>
+    </label>
+  </div>
+</div>
+
+<div class="meta" id="target-meta"></div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="shell">Shell script</div>
+  <div class="tab" data-tab="markdown">Instructions</div>
+</div>
+<div class="out-wrap">
+  <button class="copy" id="copy-btn">Copy</button>
+  <pre id="output"><span class="empty">Select a router and a feature…</span></pre>
+</div>
+
+<footer>Generated from <code>models/*.json</code> + <code>scripts/flows/*.py</code>. Same data the <code>conwrt</code> CLI uses.</footer>
+
+<script>
+let BUNDLE = null;
+let currentTab = "shell";
+
+async function init() {
+  try {
+    const r = await fetch("wizard-bundle.json", {cache: "no-store"});
+    BUNDLE = await r.json();
+  } catch (e) {
+    document.getElementById("load-warn").style.display = "block";
+    document.getElementById("load-warn").textContent = "Could not load wizard-bundle.json. Run: python3 scripts/generate_site.py";
+    return;
+  }
+  populateModels();
+  populateFlows();
+  renderParams();
+  document.getElementById("opt-password").addEventListener("change", render);
+  render();
+}
+
+function populateModels() {
+  const sel = document.getElementById("model");
+  sel.innerHTML = "";
+  for (const m of BUNDLE.models) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = `${m.description} (${m.id})`;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", render);
+}
+
+function populateFlows() {
+  const sel = document.getElementById("flow");
+  sel.innerHTML = "";
+  for (const f of BUNDLE.flows) {
+    const opt = document.createElement("option");
+    opt.value = f.name;
+    opt.textContent = `${f.name} — ${f.description.slice(0, 60)}`;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", () => { renderParams(); render(); });
+}
+
+function selectedFlow() {
+  const name = document.getElementById("flow").value;
+  return BUNDLE.flows.find(f => f.name === name);
+}
+
+function renderParams() {
+  const flow = selectedFlow();
+  const box = document.getElementById("params");
+  box.innerHTML = "";
+  if (!flow || !flow.params) return;
+  for (const [name, p] of Object.entries(flow.params)) {
+    const lbl = document.createElement("label");
+    const req = p.required ? ' <span class="req">*</span>' : "";
+    lbl.innerHTML = `${name}${req} <span class="desc">${p.description || ""}</span>`;
+    box.appendChild(lbl);
+    let inp;
+    if (p.choices && p.choices.length) {
+      inp = document.createElement("select");
+      for (const c of p.choices) { const o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); }
+      inp.value = p.default || p.choices[0];
+    } else if (p.type === "bool") {
+      inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!p.default;
+    } else if (p.type === "int") {
+      inp = document.createElement("input"); inp.type = "number"; inp.value = p.default ?? "";
+    } else {
+      inp = document.createElement("input"); inp.type = "text";
+      inp.value = (p.default && p.default !== "") ? p.default : "";
+      if (p.required) inp.placeholder = "required";
+    }
+    inp.id = "param-" + name; inp.dataset.param = name;
+    inp.addEventListener("input", render); inp.addEventListener("change", render);
+    box.appendChild(inp);
+  }
+}
+
+function paramValues() {
+  const flow = selectedFlow();
+  const vals = {};
+  if (!flow) return vals;
+  for (const name of Object.keys(flow.params)) {
+    const el = document.getElementById("param-" + name);
+    if (!el) continue;
+    vals[name] = (el.type === "checkbox") ? (el.checked ? "true" : "false") : el.value;
+  }
+  return vals;
+}
+
+function substitute(text, vals) {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, k) => (vals[k] != null ? vals[k] : ""));
+}
+
+function render() {
+  const modelId = document.getElementById("model").value;
+  const flow = selectedFlow();
+  const out = document.getElementById("output");
+  if (!modelId || !flow) { out.innerHTML = '<span class="empty">Select a router and a feature…</span>'; return; }
+  const entry = (BUNDLE.rendered[modelId] || {})[flow.name];
+  if (!entry) { out.innerHTML = '<span class="empty">No rendered output for this combination.</span>'; return; }
+  const vals = paramValues();
+  const missing = Object.entries(flow.params).filter(([n, p]) => p.required && !vals[n]);
+  let text = substitute(currentTab === "shell" ? entry.shell : entry.markdown, vals);
+  if (document.getElementById("opt-password").checked && BUNDLE.password_snippet) {
+    text = BUNDLE.password_snippet[currentTab] + "\n\n" + text;
+  }
+  out.textContent = text;
+  const m = BUNDLE.models.find(x => x.id === modelId);
+  const fm = text.match(/OpenWrt[^\n]*·[^\n]*·[^\n]*/);
+  document.getElementById("target-meta").innerHTML = m ? `Target: <code>${m.id}</code> · ${fm ? fm[0] : ""}` : "";
+  document.getElementById("copy-btn").textContent = "Copy";
+  if (missing.length) {
+    document.getElementById("target-meta").innerHTML += ` — <span style="color:#c0392b">missing required: ${missing.map(x=>x[0]).join(", ")}</span>`;
+  }
+}
+
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  currentTab = t.dataset.tab;
+  render();
+}));
+
+document.getElementById("copy-btn").addEventListener("click", () => {
+  navigator.clipboard.writeText(document.getElementById("output").textContent).then(() => {
+    const b = document.getElementById("copy-btn"); b.textContent = "Copied!"; setTimeout(() => b.textContent = "Copy", 1500);
+  });
+});
+
+init();
+</script>
+</body>
+</html>
