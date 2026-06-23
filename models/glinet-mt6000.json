@@ -1,0 +1,51 @@
+{
+  "id": "glinet-mt6000",
+  "lan_subnet": "10.230.237.0/24",
+  "vendor": "GL.iNet",
+  "description": "Flint 2 (GL-MT6000) WiFi 6 router",
+  "openwrt": {
+    "target": "mediatek/filogic",
+    "device": "glinet,gl-mt6000",
+    "default_ip": "192.168.1.1",
+    "profile": "glinet_gl-mt6000",
+    "version": "24.10.7"
+  },
+  "hardware": {
+    "soc": "MT7986A (Filogic 830) quad-core Cortex-A53 @ 1.8GHz",
+    "flash": "NAND 1024MB",
+    "ram": "1024MB DDR4",
+    "ethernet_ports": "1x WAN 2.5G + 4x LAN 1G",
+    "wifi": "2.4GHz + 5GHz WiFi 6 (MT7986A + MT7976C, AX6000)",
+    "power": "DC 12V/2A"
+  },
+  "mac_oui": [
+    "94:83:C4"
+  ],
+  "stock_default_ip": "192.168.8.1",
+  "flash_methods": {
+    "uboot-http": {
+      "description": "U-Boot HTTP recovery (hold reset button, power on). GL.iNet U-Boot is shared across the Filogic line; mirrors glinet-mt3000 — LED timing and reset location NOT yet pcap-verified on MT6000.",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.254",
+      "client_subnet": "255.255.255.0",
+      "upload_endpoint": "/upload",
+      "upload_field": "firmware",
+      "trigger_flash_endpoint": "/result",
+      "flash_time_seconds": 360,
+      "silence_timeout": 30,
+      "reset_instructions": "Press and hold the reset button on the side of the device, then plug in power. Hold until the LED signals recovery mode.",
+      "led_pattern": "unverified — assume blue LED flashes then solid (per MT3000); confirm via pcap before relying on it"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt, or GL.iNet web UI (More Settings → Advanced → Upload Firmware, untick Keep settings)",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "usb"
+  ],
+  "tested_hardware": {}
+}
