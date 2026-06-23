@@ -100,6 +100,33 @@ def _password_ops() -> list[Op]:
     ]
 
 
+def _set_password_ops(step: Step) -> list[Op]:
+    return [
+        Comment("set root password"),
+        ShellCommand(command=f"echo 'root:{step.password}' | chpasswd"),
+    ]
+
+
+def _hostname_ops(step: Step) -> list[Op]:
+    return [
+        Comment(f"set hostname to {step.hostname}"),
+        UciSet(config="system", section="@system[0]", values={"hostname": step.hostname}),
+        UciCommit(config="system"),
+        ShellCommand(command=f"echo {sh_quote(step.hostname)} > /proc/sys/kernel/hostname"),
+    ]
+
+
+def _wan_ssh_ops() -> list[Op]:
+    return [
+        Comment("enable SSH on the WAN port"),
+        ShellCommand(command="uci -q delete firewall.wan_ssh; uci set firewall.wan_ssh=rule"),
+        UciSet(config="firewall", section="wan_ssh",
+               values={"src": "wan", "dest_port": "22", "proto": "tcp", "target": "ACCEPT"}),
+        UciCommit(config="firewall"),
+        ServiceAction(name="firewall", action="restart"),
+    ]
+
+
 def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> tuple[list[str], list[Op]]:
     if step.kind == "wifi_sta":
         return ([], _wifi_sta_ops(step, params))
@@ -109,6 +136,12 @@ def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> t
         return ([], _apply_use_case_ops(step))
     if step.kind == "password":
         return ([], _password_ops())
+    if step.kind == "set_password":
+        return ([], _set_password_ops(step))
+    if step.kind == "hostname":
+        return ([], _hostname_ops(step))
+    if step.kind == "wan_ssh":
+        return ([], _wan_ssh_ops())
     return ([], [])  # "flash" and unknowns are documentation-only
 
 

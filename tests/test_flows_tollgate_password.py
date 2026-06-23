@@ -36,3 +36,26 @@ def test_tollgate_flow_renders_without_portal():
                                {"upstream_ssid": "A", "upstream_key": "B"}, version="24.10.7")
     assert "gatewayname='TollGate'" in script
     assert "configurationwizzard" not in script
+
+
+def test_set_password_step_renders_chpasswd_with_value():
+    flow = Flow(name="sp", description="",
+                steps=[Step(kind="set_password", title="Set root password", password="s3cr3t")])
+    script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+    assert "echo 'root:s3cr3t' | chpasswd" in script
+
+
+def test_hostname_step_renders_uci_and_proc():
+    flow = Flow(name="hn", description="",
+                steps=[Step(kind="hostname", title="Set hostname", hostname="net4sats")])
+    script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+    assert "uci set system.@system[0].hostname='net4sats'" in script
+    assert "echo 'net4sats' > /proc/sys/kernel/hostname" in script
+
+
+def test_wan_ssh_step_opens_firewall_port_22():
+    flow = Flow(name="ws", description="", steps=[Step(kind="wan_ssh", title="WAN SSH")])
+    script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+    assert "firewall.wan_ssh" in script
+    assert "firewall.wan_ssh.dest_port='22'" in script
+    assert "/etc/init.d/firewall restart" in script

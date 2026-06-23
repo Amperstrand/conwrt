@@ -33,6 +33,8 @@ class Step:
     encryption: str = "psk2"
     use_case: str = ""
     use_case_params: dict[str, Any] = field(default_factory=dict)
+    password: str = ""
+    hostname: str = ""
 
 
 @dataclass
