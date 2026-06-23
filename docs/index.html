@@ -71,19 +71,126 @@
   .sticky-nav a:hover { color: #0366d6; border-bottom-color: #0366d6; text-decoration: none; }
   .sticky-nav a.active { color: #0366d6; border-bottom-color: #0366d6; }
   body { padding-top: 48px; }
+
+  /* Landing page sections */
+  .section { margin-bottom: 3rem; }
+  .hero { text-align: center; padding: 3.5rem 1rem 3rem; margin-bottom: 3rem; border-radius: 8px; background: linear-gradient(135deg, #f0f6ff 0%, #fafafa 70%); border: 1px solid #e0e0e0; }
+  .hero h1 { font-size: 2.6rem; line-height: 1.15; margin-bottom: 1rem; color: #1a1a1a; }
+  .hero .subtitle { font-size: 1.15rem; max-width: 640px; margin: 0 auto 2rem; line-height: 1.6; }
+  .hero-ctas { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 0.7rem 1.4rem; border-radius: 6px; font-size: 0.95rem; font-weight: 600; text-decoration: none; transition: background 0.15s, border-color 0.15s; border: 1px solid transparent; }
+  .btn:hover { text-decoration: none; }
+  .btn-primary { background: #0366d6; color: #fff; border-color: #0366d6; }
+  .btn-primary:hover { background: #0257a5; }
+  .btn-secondary { background: #fff; color: #0366d6; border-color: #0366d6; }
+  .btn-secondary:hover { background: #eef4fb; }
+  .btn-ghost { background: transparent; color: #555; border-color: #ccc; }
+  .btn-ghost:hover { border-color: #0366d6; color: #0366d6; }
+
+  .section-head { margin-bottom: 1.5rem; }
+  .section-head h2 { font-size: 1.5rem; color: #1a1a1a; margin: 0 0 0.3rem; }
+  .section-head .subtitle { color: #666; margin: 0; }
+
+  .steps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+  .step-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.25rem; }
+  .step-card .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #0366d6; color: #fff; font-weight: 700; font-size: 0.85rem; margin-bottom: 0.6rem; }
+  .step-card h3 { font-size: 1.05rem; margin-bottom: 0.6rem; }
+  .step-card .code-block { background: #f8f9fa; border-radius: 4px; padding: 0.75rem; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.8rem; overflow-x: auto; white-space: pre; border: 1px solid #ececec; }
+  .step-note { font-size: 0.85rem; color: #666; margin-top: 1rem; text-align: center; }
+
+  .cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+  .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.25rem; }
+  .card h3 { font-size: 1.05rem; margin-bottom: 0.5rem; color: #1a1a1a; }
+  .card p { color: #555; font-size: 0.9rem; line-height: 1.55; margin: 0; }
+  .card .card-link { display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: #0366d6; }
+
+  .docs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; }
+  .doc-link { display: block; background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.9rem 1.1rem; text-decoration: none; transition: border-color 0.15s, background 0.15s; }
+  .doc-link:hover { text-decoration: none; border-color: #0366d6; background: #f0f6ff; }
+  .doc-link .doc-title { font-weight: 600; font-size: 0.92rem; color: #0366d6; }
+  .doc-link .doc-desc { font-size: 0.8rem; color: #888; margin-top: 0.2rem; }
 </style>
 </head>
 <body>
 
 <nav class="sticky-nav">
   <a class="nav-brand" href="#">conwrt</a>
-  <a href="#flash-methods">Flash Methods</a>
-  <a href="#testing-log">Testing Log</a>
+  <a href="#quick-start">Quick Start</a>
+  <a href="#features">Features</a>
+  <a href="#stories">User Stories</a>
+  <a href="wizard.html">Wizard</a>
+  <a href="#flash-methods">Devices</a>
   <a href="#use-cases">Use Cases</a>
+  <a href="#docs">Docs</a>
+  <a href="https://github.com/amperstrand/conwrt">GitHub</a>
 </nav>
 
-<h1>conwrt Device Support Matrix</h1>
-<p class="subtitle">Auto-generated from <code>models/*.json</code> — the authoritative single source of truth.</p>
+<section class="hero">
+  <h1>Flash OpenWrt onto any router.</h1>
+  <p class="subtitle">conwrt is a framework for flashing routers with OpenWrt — AI-assisted discovery for new devices, automated flashing for known ones. 21 devices supported across 7 vendors.</p>
+  <div class="hero-ctas">
+    <a class="btn btn-primary" href="wizard.html">Deployment Wizard &rarr;</a>
+    <a class="btn btn-secondary" href="#quick-start">Quick Start &darr;</a>
+    <a class="btn btn-ghost" href="https://github.com/amperstrand/conwrt">View on GitHub</a>
+  </div>
+</section>
+
+<section class="section" id="quick-start">
+  <div class="section-head">
+    <h2>Quick Start</h2>
+    <p class="subtitle">From clone to flash in three commands.</p>
+  </div>
+  <div class="steps-grid">
+    <div class="step-card">
+      <span class="step-num">1</span>
+      <h3>Install</h3>
+      <div class="code-block">git clone https://github.com/amperstrand/conwrt &amp;&amp; cd conwrt &amp;&amp; python3 -m venv .venv &amp;&amp; source .venv/bin/activate &amp;&amp; python -m pip install -e '.[dev]'</div>
+    </div>
+    <div class="step-card">
+      <span class="step-num">2</span>
+      <h3>Connect &amp; Detect</h3>
+      <div class="code-block"># Plug ethernet to your router, then:
+python3 scripts/conwrt.py probe
+# Or auto-detect:
+python3 scripts/conwrt.py auto</div>
+    </div>
+    <div class="step-card">
+      <span class="step-num">3</span>
+      <h3>Flash</h3>
+      <div class="code-block">python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --request-image --wan-ssh</div>
+    </div>
+  </div>
+  <p class="step-note">Or use the interactive <a href="wizard.html">Wizard &rarr;</a> to pick your router and get the exact commands.</p>
+</section>
+
+<section class="section" id="features">
+  <div class="section-head">
+    <h2>What conwrt can do</h2>
+    <p class="subtitle">Six core capabilities that make router flashing reproducible.</p>
+  </div>
+  <div class="cards-grid">
+    <div class="card"><h3>Auto-Detect Devices</h3><p>Probe any ethernet interface to identify connected routers via SSH fingerprint, MAC OUI, or boot-state detection. No manual IP guessing.</p></div>
+    <div class="card"><h3>21 Supported Devices</h3><p>D-Link, GL.iNet, Linksys, Ubiquiti, ZyXEL, ASUS, Extreme Networks. Each with tested flash methods and boot signatures.</p></div>
+    <div class="card"><h3>One-Command Flash</h3><p>conwrt flash handles the full lifecycle: detect recovery mode &rarr; upload firmware &rarr; verify SHA-256 &rarr; confirm SSH &rarr; collect inventory.</p></div>
+    <div class="card"><h3>21 Pre-configured Presets</h3><p>USB tethering, SQM bufferbloat fix, WireGuard VPN, AdGuard, mesh networking, travelmate captive portal — all baked into the firmware image.</p></div>
+    <div class="card"><h3>Custom ASU Builds</h3><p>Request firmware from the OpenWrt ASU builder with your SSH key, password, WiFi config, and use cases baked in. Flash and forget.</p></div>
+    <div class="card"><h3>Router-to-Router</h3><p>Install conwrt on an OpenWrt router to flash other routers. Multicast flash (zycast) for provisioning many devices at once.</p></div>
+  </div>
+</section>
+
+<section class="section" id="stories">
+  <div class="section-head">
+    <h2>Who uses conwrt?</h2>
+    <p class="subtitle">Real-world deployment scenarios.</p>
+  </div>
+  <div class="cards-grid">
+    <div class="card"><h3>The Traveler</h3><p>USB tether + VPN + SQM on a pocket-sized GL.iNet Beryl AX.</p><a class="card-link" href="user-stories.html#traveler">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Homelab Operator</h3><p>AdGuard + guest WiFi + WireGuard remote access on a Linksys MX4200.</p><a class="card-link" href="user-stories.html#homelab">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Mesh Builder</h3><p>802.11s mesh network from repurposed consumer routers.</p><a class="card-link" href="user-stories.html#mesh">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Developer</h3><p>Python API, model definitions, CLI scripting for full infrastructure-as-code.</p><a class="card-link" href="user-stories.html#developer">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Device Rescuer</h3><p>Recovery-mode flashing for bricked or stock-firmware-locked routers.</p><a class="card-link" href="user-stories.html#rescuer">Read full story &rarr;</a></div>
+  </div>
+</section>
 
 <div class="legend">
   <div class="legend-item"><span class="badge tested">tested</span> Verified on real hardware</div>
@@ -100,7 +207,7 @@
       <th>SoC</th>
       <th>RAM</th>
       <th>Flash</th>
-          <th>oem<br>playwright</th>
+          <th>oem<br>http</th>
           <th>sysupgrade</th>
           <th>recovery<br>http</th>
           <th>uboot<br>http</th>
@@ -114,6 +221,24 @@
     </tr>
   </thead>
   <tbody>
+        <tr>
+          <td class="vendor">ASUS</td>
+          <td class="model">Lyra MAP-AC2200 tri-band WiFi mesh node (IPQ4019 + QCA9886)<br><small class="id">asus-lyra-map-ac2200</small></td>
+          <td class="soc">Qualcomm IPQ4019 (quad-core Cortex-A7) @ 717MHz</td>
+          <td>256MB DDR3 (Nanya NT5CC128M16IP-DI)</td>
+          <td>NAND 128MB (Macronix)</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
         <tr>
           <td class="vendor">D-Link</td>
           <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink-covr-x1860-a1</small></td>
@@ -131,6 +256,24 @@
 <td></td>
 <td></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Extreme Networks</td>
+          <td class="model">WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg<br><small class="id">extreme-networks-ws-ap3915i</small></td>
+          <td class="soc">Qualcomm IPQ4029 (4x Cortex-A7 @ 717 MHz)</td>
+          <td>512MB DDR3</td>
+          <td>SPI-NOR 32MB (Macronix MX25L25635E, verified from DTS and hardware)</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
@@ -223,6 +366,42 @@
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
         </tr>
         <tr>
+          <td class="vendor">GL.iNet</td>
+          <td class="model">Flint 2 (GL-MT6000) WiFi 6 router<br><small class="id">glinet-mt6000</small></td>
+          <td class="soc">MT7986A (Filogic 830) quad-core Cortex-A53 @ 1.8GHz</td>
+          <td>1024MB DDR4</td>
+          <td>NAND 1024MB</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> <span class="cap">usb</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Linksys</td>
+          <td class="model">Velop AX4200 WiFi 6 System V1 — CVE-2019-16340 auth bypass for initial flash<br><small class="id">linksys-mx4200-v1</small></td>
+          <td class="soc">IPQ8174 (quad-core Cortex-A53) @ 1.0GHz</td>
+          <td>512MB DDR3</td>
+          <td>NAND 256MB</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> <span class="cap">wifi</span> </td>
+        </tr>
+        <tr>
           <td class="vendor">Linksys</td>
           <td class="model">Velop Tri-Band V1 (WHW03) — U-Boot HTTP recovery signatures needed<br><small class="id">linksys-whw03-v1</small></td>
           <td class="soc">IPQ4019 (quad-core Cortex-A7) @ 716MHz</td>
@@ -277,6 +456,24 @@
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">usb</span> </td>
         </tr>
         <tr>
+          <td class="vendor">Ubiquiti</td>
+          <td class="model">EdgeRouter X (ER-X) — MediaTek MT7621A, 5x GbE, no WiFi<br><small class="id">ubnt-edgerouter-x</small></td>
+          <td class="soc">MediaTek MT7621A (MIPS)</td>
+          <td>256MB DDR3</td>
+          <td>256MB SPI NAND</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
+        </tr>
+        <tr>
           <td class="vendor">Zyxel</td>
           <td class="model">EX5700 (Telenor) — MediaTek MT7986B, WiFi 6 tri-band<br><small class="id">zyxel-ex5700-telenor</small></td>
           <td class="soc">MT7986B (Filogic 830) quad-core Cortex-A53</td>
@@ -314,6 +511,60 @@
         </tr>
         <tr>
           <td class="vendor">Zyxel</td>
+          <td class="model">GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget<br><small class="id">zyxel-gs1900-8hp-a1</small></td>
+          <td class="soc">Realtek RTL8380M MIPS 4KEc @ 500MHz</td>
+          <td>128 MiB DDR3 SDRAM (Samsung K4B1G0846G)</td>
+          <td>16 MiB SPI NOR (Macronix MX25L12835F)</td>
+<td><span class="badge tested">tested</span></td>
+<td><span class="badge tested">tested</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">GS1900-8HP B1 (formerly v1) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget<br><small class="id">zyxel-gs1900-8hp-b1</small></td>
+          <td class="soc">Realtek RTL8380M MIPS 4KEc @ 500MHz</td>
+          <td>128 MiB DDR2 SDRAM (Nanya NT5TU128M8HE-AC)</td>
+          <td>16 MiB SPI NOR (Macronix MX25L12835F)</td>
+<td><span class="badge defined">defined</span></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
+          <td class="model">GS1920-24 24-port managed gigabit switch (non-PoE), Realtek RTL8392M<br><small class="id">zyxel-gs1920-24</small></td>
+          <td class="soc">Realtek RTL8392M MIPS 4KEc @ 500MHz</td>
+          <td>128 MiB DDR2 SDRAM</td>
+          <td>16 MiB SPI NOR (dual-slot, 8 MiB per slot)</td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="badge defined">defined</span></td>
+<td></td>
+<td></td>
+          <td class="caps"><span class="cap">ethernet</span> </td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
           <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel-nr7101</small></td>
           <td class="soc">MT7621A (MediaTek) dual-core MIPS 1004Kc @ 880MHz</td>
           <td>256MB DDR3</td>
@@ -327,7 +578,7 @@
 <td></td>
 <td></td>
 <td></td>
-<td><span class="badge defined">defined</span></td>
+<td><span class="badge tested">tested</span></td>
           <td class="caps"><span class="cap">ethernet</span> <span class="cap">cellular</span> </td>
         </tr>
         <tr>
@@ -363,12 +614,23 @@
   </thead>
   <tbody>
         <tr>
+          <td class="vendor">ASUS</td>
+          <td class="model">Lyra MAP-AC2200 tri-band WiFi mesh node (IPQ4019 + QCA9886)<br><small class="id">asus-lyra-map-ac2200</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>stock-ssh-mtd-batch1</code> <span class="badge tested">tested</span> <span class="date">2026-05-26</span></div>
+<div class="test-entry tested"><code>stock-ssh-mtd-batch2</code> <span class="badge tested">tested</span> <span class="date">2026-05-27</span></div></td>
+        </tr>
+        <tr>
           <td class="vendor">D-Link</td>
           <td class="model">COVR-X1860 A1 mesh WiFi<br><small class="id">dlink-covr-x1860-a1</small></td>
-          <td class="test-entries"><div class="test-entry tested"><code>recovery-http</code> <span class="badge tested">tested</span> <span class="date">2026-05-18</span></div>
+          <td class="test-entries"><div class="test-entry tested"><code>recovery-http</code> <span class="badge tested">tested</span> <span class="date">2026-05-24</span></div>
 <div class="test-entry defined"><code>dlink-hnap</code> <span class="badge defined">defined</span></div>
 <div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <span class="date">2026-05-18</span></div>
 <div class="test-entry tested"><code>wifi_sta_ap</code> <span class="badge tested">tested</span> <span class="date">2026-05-15</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">Extreme Networks</td>
+          <td class="model">WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg<br><small class="id">extreme-networks-ws-ap3915i</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>extreme-rdwr-tftp-initramfs</code> <span class="badge tested">tested</span> <span class="date">2026-05-23</span></div></td>
         </tr>
         <tr>
           <td class="vendor">GL.iNet</td>
@@ -379,7 +641,7 @@
 <div class="test-entry tested"><code>nor_boot_switch_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>nor_boot_bootcount_method</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>nand_boot_after_nor</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
-<div class="test-entry tested"><code>android-tether-adb</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
+<div class="test-entry tested"><code>tether-android-adb</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div>
 <div class="test-entry tested"><code>sqm</code> <span class="badge tested">tested</span> <span class="date">2026-05-17</span></div></td>
         </tr>
         <tr>
@@ -404,7 +666,7 @@
         <tr>
           <td class="vendor">Zyxel</td>
           <td class="model">GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M<br><small class="id">zyxel-gs1900-24e</small></td>
-          <td class="test-entries"><div class="test-entry tested"><code>oem-playwright</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">Uploaded initramfs via Playwright, device booted into OpenWrt initramfs in ~90s</span> <span class="date">2026-05-18</span></div>
+          <td class="test-entries"><div class="test-entry tested"><code>oem-http</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">Uploaded initramfs via Playwright, device booted into OpenWrt initramfs in ~90s</span> <span class="date">2026-05-18</span></div>
 <div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">sysupgrade -n completed, SSH access after ~120s boot</span> <span class="date">2026-05-18</span></div>
 <div class="test-entry tested"><code>mtd-write</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/bbaf09c" class="commit-link">@<code>bbaf09c</code></a> <span class="verified">mtd -r write succeeded, device booted into 25.12.1 initramfs</span> <span class="date">2026-05-18</span></div>
 <div class="test-entry defined"><code>serial-tftp-openwrt</code> <span class="badge defined">defined</span></div>
@@ -412,9 +674,17 @@
         </tr>
         <tr>
           <td class="vendor">Zyxel</td>
+          <td class="model">GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget<br><small class="id">zyxel-gs1900-8hp-a1</small></td>
+          <td class="test-entries"><div class="test-entry tested"><code>oem-stock-upgrade</code> <span class="badge tested">tested</span> <span class="verified">V2.00(AAHI.2) → V2.90(AAHI.0) via Playwright HTTP upload, cmd=5903, partition=0 (Active)</span> <span class="date">2026-05-21</span></div>
+<div class="test-entry tested"><code>oem-http</code> <span class="badge tested">tested</span> <span class="verified">Uploaded OpenWrt 25.12.1 initramfs via OEM HTTP to V2.90 OEM firmware, device booted into initramfs in ~24s</span> <span class="date">2026-05-21</span></div>
+<div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <span class="verified">sysupgrade -n from 25.12.1 initramfs to 25.12.1 squashfs permanent install, SSH access after ~105s boot</span> <span class="date">2026-05-21</span></div>
+<div class="test-entry defined"><code>serial-tftp-openwrt</code> <span class="badge defined">defined</span></div></td>
+        </tr>
+        <tr>
+          <td class="vendor">Zyxel</td>
           <td class="model">NR7101 — 5G/NR outdoor router, MediaTek MT7621<br><small class="id">zyxel-nr7101</small></td>
           <td class="test-entries"><div class="test-entry tested"><code>sysupgrade</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/5b45579" class="commit-link">@<code>5b45579</code></a> <span class="verified">sysupgrade -n 24.10.5→25.12.4, SSH key auth after ~60s boot</span> <span class="date">2026-05-19</span></div>
-<div class="test-entry defined"><code>zycast</code> <span class="badge defined">defined</span></div>
+<div class="test-entry tested"><code>zycast</code> <span class="badge tested">tested</span> <span class="verified">Go zycast binary on MIPS OpenWrt switch, NR7101 Telenor (MAC 78:c5:7d:13:91:9c), PoE power cycle, initramfs-recovery image</span> <span class="date">2026-05-26</span></div>
 <div class="test-entry tested"><code>modem_inventory</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/5b45579" class="commit-link">@<code>5b45579</code></a> <span class="verified">AT commands on /dev/ttyUSB2: ATI, AT+GMR, AT+QCCID all responded</span> <span class="date">2026-05-19</span></div>
 <div class="test-entry tested"><code>cellular_data</code> <span class="badge tested">tested</span> <a href="https://github.com/amperstrand/conwrt/commit/b68de06" class="commit-link">@<code>b68de06</code></a> <span class="verified">SIM card (ice+), ping 8.8.8.8 via LTE, 56Mbps down, 43ms latency</span> <span class="date">2026-05-19</span></div></td>
         </tr>
@@ -437,26 +707,18 @@
         <tr>
           <td><code>adguard</code></td>
           <td>Network-wide ad blocking via AdGuard Home (post-flash setup)</td>
-          <td><span class="badge untested">untested</span><br><small>web setup wizard after install</small></td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
           <td>none</td>
           <td><small>adguardhome, luci-app-adguardhome</small></td>
           <td><button class="cmd-toggle" data-cmd-id="cmd-0">Show commands</button></td>
         </tr>
         <tr>
-          <td><code>android-tether</code></td>
-          <td>USB WAN from Android phone. Enable tethering manually on the phone.</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+          <td><code>ap-nostr-id</code></td>
+          <td>Generate a Nostr keypair per access point. Writes npub as hostapd nas_identifier so RADIUS requests self-identify the AP, and saves nsec to /etc/tollgate/ap-nsec for future use.</td>
+          <td><span class="badge untested">untested</span></td>
+          <td>ethernet</td>
+          <td><small></small></td>
           <td><button class="cmd-toggle" data-cmd-id="cmd-1">Show commands</button></td>
-        </tr>
-        <tr>
-          <td><code>android-tether-adb</code></td>
-          <td>USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-2">Show commands</button></td>
         </tr>
         <tr>
           <td><code>auto-sqm</code></td>
@@ -464,20 +726,44 @@
           <td><span class="badge defined">experimental</span><br><small>not validated on hardware</small></td>
           <td>none</td>
           <td><small>sqm-scripts, luci-app-sqm, jsonfilter, iperf3</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-2">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>configurationwizzard</code></td>
+          <td>net4sats admin UI + captive portal (Preact). Builds and deploys portal to NDS htdocs, admin to /www/net4sats/, installs rpcd plugin for backend API bridge. Run deploy_configurationwizzard() post-flash to build + deploy.</td>
+          <td><span class="badge tested">tested</span><br><small>Full E2E on COVR-X1860: captive portal, Lightning payment, internet access</small></td>
+          <td>none</td>
+          <td><small></small></td>
           <td><button class="cmd-toggle" data-cmd-id="cmd-3">Show commands</button></td>
         </tr>
         <tr>
-          <td><code>iphone-tether</code></td>
-          <td>USB WAN from iPhone. Enable Personal Hotspot manually on the phone.</td>
-          <td><span class="badge defined">experimental</span><br><small>wiki-based; needs hardware validation</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
+          <td><code>doh</code></td>
+          <td>DNS-over-HTTPS via https-dns-proxy for encrypted DNS resolution</td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
+          <td>none</td>
+          <td><small>https-dns-proxy, luci-app-https-dns-proxy</small></td>
           <td><button class="cmd-toggle" data-cmd-id="cmd-4">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>fips-bluetooth-rfcomm</code></td>
+          <td>FIPS mesh networking over Bluetooth RFCOMM (star topology with TUN)</td>
+          <td><span class="badge defined">experimental</span><br><small>ASUS Lyra MAP-AC2200, star topology, RFCOMM transport</small></td>
+          <td>bluetooth</td>
+          <td><small>bluez-libs, bluez-utils, bluez-utils-extra, kmod-tun</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-5">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>guest-wifi</code></td>
+          <td>Isolated guest WiFi network with separate subnet, DHCP, and firewall zone</td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
+          <td>wifi</td>
+          <td><small></small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-6">Show commands</button></td>
         </tr>
         <tr>
           <td><code>mesh11sd</code></td>
           <td>802.11s mesh networking with auto-config via mesh11sd</td>
-          <td><span class="badge untested">untested</span></td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
           <td>wifi</td>
           <td><small>mesh11sd, ip-full, kmod-nft-bridge, vxlan</small></td>
           <td><em class="note">requires configuration</em></td>
@@ -485,18 +771,18 @@
         <tr>
           <td><code>mwan3</code></td>
           <td>Multi-WAN failover or load balancing via mwan3</td>
-          <td><span class="badge untested">untested</span></td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
           <td>none</td>
           <td><small>mwan3</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-6">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-8">Show commands</button></td>
         </tr>
         <tr>
           <td><code>openclash</code></td>
           <td>Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)</td>
-          <td><span class="badge untested">untested</span><br><small>subscription import via LuCI</small></td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
           <td>none</td>
           <td><small>luci-app-openclash, coreutils-nohup, bash, iptables, dnsmasq-full +4 more</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-7">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-9">Show commands</button></td>
         </tr>
         <tr>
           <td><code>sqm</code></td>
@@ -504,23 +790,63 @@
           <td><span class="badge defined">experimental</span><br><small>uci from OpenWrt wiki</small></td>
           <td>none</td>
           <td><small>sqm-scripts, luci-app-sqm</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-8">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-10">Show commands</button></td>
         </tr>
         <tr>
           <td><code>ssh-hardening</code></td>
           <td>Optional Dropbear hardening: disable password auth, idle timeout, rate limit</td>
-          <td><span class="badge untested">untested</span></td>
+          <td><span class="badge tested">tested</span><br><small>ops unit tests, UciSet validation</small></td>
           <td>none</td>
           <td><small></small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-9">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-11">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>ssl</code></td>
+          <td>Trusted HTTPS certificates for LAN devices. Downloads real Let's Encrypt certs from lancert.dev or qip.sh — no domain ownership required. Configures uhttpd HTTPS and opens port 443.</td>
+          <td><span class="badge defined">experimental</span><br><small>cert download + uhttpd config verified on COVR-X1860</small></td>
+          <td>none</td>
+          <td><small>libustream-wolfssl, ca-bundle</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-12">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>tether</code></td>
+          <td>Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000, Android RNDIS</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-13">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>tether-android</code></td>
+          <td>USB WAN from Android phone. Enable tethering manually on the phone.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-14">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>tether-android-adb</code></td>
+          <td>USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.</td>
+          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +1 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-15">Show commands</button></td>
+        </tr>
+        <tr>
+          <td><code>tether-ios</code></td>
+          <td>USB WAN from iPhone. Enable Personal Hotspot manually on the phone.</td>
+          <td><span class="badge defined">experimental</span><br><small>wiki-based; needs hardware validation</small></td>
+          <td>usb</td>
+          <td><small>kmod-usb-net, kmod-usb-net-ipheth, kmod-usb-net-cdc-ether, usbmuxd, libimobiledevice +2 more</small></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-16">Show commands</button></td>
         </tr>
         <tr>
           <td><code>tollgate</code></td>
-          <td>OpenTollGate Bitcoin/Lightning payment gateway (post-flash deploy)</td>
-          <td><span class="badge untested">untested</span><br><small>post-flash ipk deploy</small></td>
+          <td>OpenTollGate Bitcoin/Lightning payment gateway. Downloads ipk via nostr (Blossom) with GitHub CI fallback, deploys post-flash via SCP + opkg. Configures nodogsplash captive portal, hotplug for WiFi STA, and optional gateway branding.</td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + resolve tests + transport parity + physical router verification</small></td>
           <td>none</td>
           <td><small>nodogsplash, libustream-wolfssl, ca-bundle, ca-certificates</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-10">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-17">Show commands</button></td>
         </tr>
         <tr>
           <td><code>travelmate</code></td>
@@ -528,15 +854,7 @@
           <td><span class="badge defined">experimental</span><br><small>wiki-based</small></td>
           <td>wifi</td>
           <td><small>travelmate, luci-app-travelmate, ca-bundle, ca-certificates</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-11">Show commands</button></td>
-        </tr>
-        <tr>
-          <td><code>usb-tether</code></td>
-          <td>Auto-detect Android or iPhone USB WAN. For Android, includes ADB auto-enable.</td>
-          <td><span class="badge tested">tested</span><br><small>GL.iNet MT3000, Android RNDIS</small></td>
-          <td>usb</td>
-          <td><small>kmod-usb-net, kmod-usb-net-rndis, kmod-usb-net-cdc-ether, kmod-usb2, usbutils +8 more</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-12">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-18">Show commands</button></td>
         </tr>
         <tr>
           <td><code>wireguard-client</code></td>
@@ -544,22 +862,39 @@
           <td><span class="badge tested">tested</span><br><small>D-Link COVR-X1860 A1</small></td>
           <td>none</td>
           <td><small>wireguard-tools, luci-proto-wireguard</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-13">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-19">Show commands</button></td>
         </tr>
         <tr>
           <td><code>wireguard-server</code></td>
           <td>WireGuard VPN server — remote access to home network</td>
-          <td><span class="badge untested">untested</span><br><small>post-install peer setup</small></td>
+          <td><span class="badge tested">tested</span><br><small>ops characterization + transport parity</small></td>
           <td>none</td>
           <td><small>wireguard-tools, luci-proto-wireguard, qrencode</small></td>
-          <td><button class="cmd-toggle" data-cmd-id="cmd-14">Show commands</button></td>
+          <td><button class="cmd-toggle" data-cmd-id="cmd-20">Show commands</button></td>
         </tr>
   </tbody>
 </table>
 
+<section class="section" id="docs">
+  <div class="section-head">
+    <h2>Documentation</h2>
+    <p class="subtitle">Source files and design docs on GitHub.</p>
+  </div>
+  <div class="docs-grid">
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt#readme"><span class="doc-title">README</span><span class="doc-desc">Full feature reference, CLI options, use case docs</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/CONTRIBUTING.md"><span class="doc-title">Contributing</span><span class="doc-desc">PR-based workflow, device contribution guide</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/process.md"><span class="doc-title">AI Discovery Process</span><span class="doc-desc">Stage 1 onboarding for unknown routers</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/gotchas.md"><span class="doc-title">Device Gotchas</span><span class="doc-desc">Per-model quirks and known issues</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/testing-status.md"><span class="doc-title">Testing Status</span><span class="doc-desc">Hardware verification log and test matrix</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/design-ops-pipeline.md"><span class="doc-title">Ops Pipeline Design</span><span class="doc-desc">Transport-agnostic operation rendering</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/tree/master/recipes"><span class="doc-title">Per-Device Recipes</span><span class="doc-desc">Step-by-step procedures and field notes</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/AGENTS.md"><span class="doc-title">Safety Rules (AGENTS.md)</span><span class="doc-desc">Hardware-safety constraints for automated agents</span></a>
+  </div>
+</section>
+
 <footer>
-Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-Last update: 2026-05-19 17:27 UTC
+  Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a> — the authoritative single source of truth.<br>
+  Last update: 2026-06-23 20:22 UTC · <a href="wizard.html">Deployment Wizard</a> · <a href="https://github.com/amperstrand/conwrt">GitHub</a>
 </footer>
 
 <div class="cmd-source" id="cmd-0"># --- AdGuard Home ---
@@ -569,124 +904,26 @@ uci set adguardhome.adguardhome.http_address=&#x27;0.0.0.0:3000&#x27;
 uci set adguardhome.adguardhome.dns_port=&#x27;5353&#x27;
 uci commit adguardhome
 /etc/init.d/adguardhome enable
-/etc/init.d/adguardhome start 2&gt;/dev/null || true
+/etc/init.d/adguardhome start
 
 uci set dhcp.@dnsmasq[0].noresolv=&#x27;1&#x27;
 uci add_list dhcp.@dnsmasq[0].server=&#x27;127.0.0.1#5353&#x27;
 uci commit dhcp
-/etc/init.d/dnsmasq restart 2&gt;/dev/null || true
+/etc/init.d/dnsmasq restart
 echo &quot;AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000&quot;</div>
-<div class="cmd-source" id="cmd-1"># --- Android USB tethering (manual) ---
-USB_DEV=&quot;&quot;
-for _ in $(seq 1 45); do
-    for dev in /sys/class/net/*; do
-        name=$(basename &quot;$dev&quot;)
-        case &quot;$name&quot; in
-            lo|br-lan|eth0|wlan*) continue ;;
-        esac
-        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
-            USB_DEV=&quot;$name&quot;
-            break 2
-        fi
+<div class="cmd-source" id="cmd-1"># --- AP Nostr identity ---
+mkdir -p /etc/tollgate
+[ -f /etc/tollgate/ap-nsec ] || printf &#x27;%s\n&#x27; &#x27;nsec1n9950zndchvq3cxnslzpyxc0vccj6pxgxg47gnf02ss23f0d5ylskx79k5&#x27; &gt; /etc/tollgate/ap-nsec
+[ -f /etc/tollgate/ap-nsec ] || chmod 600 /etc/tollgate/ap-nsec
+[ -f /etc/tollgate/ap-npub ] || printf &#x27;%s\n&#x27; &#x27;npub1qdlepjvuwvkadmfplgd5k00nr8kykcekscq7pevl0m7vwzmrvssq2p5ffud&#x27; &gt; /etc/tollgate/ap-npub
+[ -f /etc/tollgate/ap-npub ] || chmod 644 /etc/tollgate/ap-npub
 
-    done
-    sleep 1
-done
-if [ -z &quot;$USB_DEV&quot; ]; then
-    for cand in usb0 usb1; do
-        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-    done
-fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi</div>
-<div class="cmd-source" id="cmd-2"># --- Android USB tethering (ADB auto-enable) ---
-USB_DEV=&quot;&quot;
-for _ in $(seq 1 45); do
-    for dev in /sys/class/net/*; do
-        name=$(basename &quot;$dev&quot;)
-        case &quot;$name&quot; in
-            lo|br-lan|eth0|wlan*) continue ;;
-        esac
-        driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-        if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
-            USB_DEV=&quot;$name&quot;
-            break 2
-        fi
-
-    done
-    sleep 1
-done
-if [ -z &quot;$USB_DEV&quot; ]; then
-    for cand in usb0 usb1; do
-        [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-    done
-fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi
-mkdir -p /etc/hotplug.d/usb
-cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
-[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
-[ &quot;$PRODUCT&quot; ] || exit 0
-(
-HOME=/root
-export HOME
-command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
-DELAY=1
-for attempt in 1 2 3 4 5 6 7; do
-    sleep $DELAY
-    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-        exit 0
-    fi
-    STATE=$(adb get-state 2&gt;/dev/null)
-    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
-        adb shell svc usb setFunctions rndis 2&gt;/dev/null
-        sleep 3
-        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
-            exit 0
-        fi
-    fi
-    DELAY=$((DELAY * 2))
-done
-logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
-) &amp;
-HOTPLUG_EOF</div>
-<div class="cmd-source" id="cmd-3"># --- Auto-SQM ---
+# --- Set nas_identifier on all wifi-iface sections ---
+for _s in $(uci show wireless 2&gt;/dev/null | grep &#x27;=wifi-iface&#x27; | cut -d. -f2 | cut -d= -f1); do uci set wireless.$_s.nas_identifier=&#x27;npub1qdlepjvuwvkadmfplgd5k00nr8kykcekscq7pevl0m7vwzmrvssq2p5ffud&#x27;; done
+uci commit wireless
+wifi reload 2&gt;/dev/null || true
+echo &quot;AP Nostr identity configured: npub=npub1qdlepjvuwvkadmfplgd...&quot;</div>
+<div class="cmd-source" id="cmd-2"># --- Auto-SQM ---
 
 touch /etc/config/auto_sqm
 uci set auto_sqm.config=auto_sqm
@@ -835,114 +1072,191 @@ chmod +x /etc/hotplug.d/iface/10-sqm-autotune
 
 echo &#x27;auto-sqm: will measure and configure on WAN ifup&#x27;
 echo &#x27;Auto-SQM configured&#x27;</div>
-<div class="cmd-source" id="cmd-4"># --- iPhone USB tethering ---
-/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
-        USB_DEV=&quot;&quot;
-        for _ in $(seq 1 45); do
-            for dev in /sys/class/net/*; do
-                name=$(basename &quot;$dev&quot;)
-                case &quot;$name&quot; in
-                    lo|br-lan|eth0|wlan*) continue ;;
-                esac
-                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-                if echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
-                    USB_DEV=&quot;$name&quot;
-                    break 2
-                fi
-                iface_desc=&quot;&quot;
-[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
-if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
-    USB_DEV=&quot;$name&quot;
-    break 2
-fi
-            done
-            sleep 1
-        done
-        if [ -z &quot;$USB_DEV&quot; ]; then
-            for cand in usb0 usb1; do
-                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-            done
-        fi
-if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
-else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
-fi</div>
-<div class="cmd-source" id="cmd-6"># --- mwan3 multi-WAN ---
-        uci -q delete mwan3 &gt;/dev/null 2&gt;&amp;1 || true
+<div class="cmd-source" id="cmd-3"># --- configurationwizzard: deployed via deploy_configurationwizzard() ---
+# Admin: http://router/ (uhttpd port 80)
+# Portal: served by NDS on port 2050
+# rpcd plugin bridges ubus → tollgate CLI</div>
+<div class="cmd-source" id="cmd-4"># --- DNS-over-HTTPS (cloudflare) ---
+uci -q delete https-dns-proxy &gt;/dev/null 2&gt;&amp;1 || true
 
-        uci set mwan3.wan=interface
-        uci set mwan3.wan.enabled=&#x27;1&#x27;
-	list track_ip &#x27;1.0.0.1&#x27;
-	list track_ip &#x27;1.1.1.1&#x27;
-	list track_ip &#x27;8.8.8.8&#x27;
-	list track_ip &#x27;8.8.4.4&#x27;
-        uci set mwan3.wan.family=&#x27;ipv4&#x27;
-        uci set mwan3.wan.reliability=&#x27;1&#x27;
-        uci set mwan3.wan.count=&#x27;1&#x27;
-        uci set mwan3.wan.timeout=&#x27;2&#x27;
-        uci set mwan3.wan.interval=&#x27;5&#x27;
-        uci set mwan3.wan.down=&#x27;3&#x27;
-        uci set mwan3.wan.up=&#x27;8&#x27;
+uci set https-dns-proxy.main=https_dns_proxy
+uci set https-dns-proxy.main.bootstrap_dns=&#x27;1.1.1.1,8.8.8.8&#x27;
+uci set https-dns-proxy.main.listen_addr=&#x27;127.0.0.1&#x27;
+uci set https-dns-proxy.main.listen_port=&#x27;5053&#x27;
+uci set https-dns-proxy.main.resolver_url=&#x27;https://cloudflare-dns.com/dns-query&#x27;
+uci commit https-dns-proxy
+/etc/init.d/https-dns-proxy enable
+/etc/init.d/https-dns-proxy restart
 
-        uci set mwan3.usbwan=interface
-        uci set mwan3.usbwan.enabled=&#x27;1&#x27;
-	list track_ip &#x27;1.0.0.1&#x27;
-	list track_ip &#x27;1.1.1.1&#x27;
-	list track_ip &#x27;8.8.8.8&#x27;
-	list track_ip &#x27;8.8.4.4&#x27;
-        uci set mwan3.usbwan.family=&#x27;ipv4&#x27;
-        uci set mwan3.usbwan.reliability=&#x27;1&#x27;
-        uci set mwan3.usbwan.count=&#x27;1&#x27;
-        uci set mwan3.usbwan.timeout=&#x27;2&#x27;
-        uci set mwan3.usbwan.interval=&#x27;5&#x27;
-        uci set mwan3.usbwan.down=&#x27;3&#x27;
-        uci set mwan3.usbwan.up=&#x27;8&#x27;
+# --- Point dnsmasq to DoH proxy on port 5053 ---
+uci set dhcp.@dnsmasq[0].noresolv=&#x27;1&#x27;
+uci delete dhcp.@dnsmasq[0].server
+uci add_list dhcp.@dnsmasq[0].server=&#x27;127.0.0.1#5053&#x27;
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+echo &quot;DoH configured: cloudflare on port 5053&quot;</div>
+<div class="cmd-source" id="cmd-5">mkdir -p /etc/fips
+echo &#x27;node:&#x27; &gt; /etc/fips/fips.yaml
+echo &#x27;  identity:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    persistent: true&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;tun:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  enabled: true&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;dns:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  enabled: true&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;transports:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  rfcomm:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    mode: &quot;client&quot;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    channel: 1&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    mtu: 1000&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    auto_connect: true&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;peers: []&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;gateway:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  enabled: true&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  pool: &quot;fd01::/112&quot;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  lan_interface: &quot;br-lan&quot;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;  dns:&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    listen: &quot;[::1]:5353&quot;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    upstream: &quot;[::1]:5354&quot;&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;    ttl: 60&#x27; &gt;&gt; /etc/fips/fips.yaml
+echo &#x27;0000&#x27; &gt; /etc/fips/bt-pin
+echo &#x27;#!/bin/sh /etc/rc.common&#x27; &gt; /etc/init.d/bt-agent
+echo &#x27;START=98&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;STOP=10&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;start() {&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;    hciconfig hci0 up&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;    command -v bt-agent &gt;/dev/null 2&gt;&amp;1 &amp;&amp; bt-agent -c NoInputNoOutput -p /etc/fips/bt-pin &amp;&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;}&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;stop() {&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;    killall bt-agent 2&gt;/dev/null&#x27; &gt;&gt; /etc/init.d/bt-agent
+echo &#x27;}&#x27; &gt;&gt; /etc/init.d/bt-agent
+chmod +x /etc/init.d/bt-agent
+/etc/init.d/bt-agent enable
+echo &#x27;#!/bin/sh /etc/rc.common&#x27; &gt; /etc/init.d/fips
+echo &#x27;START=99&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;STOP=10&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;start() {&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;    fips -c /etc/fips/fips.yaml &amp;&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;}&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;stop() {&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;    killall fips 2&gt;/dev/null&#x27; &gt;&gt; /etc/init.d/fips
+echo &#x27;}&#x27; &gt;&gt; /etc/init.d/fips
+chmod +x /etc/init.d/fips
+/etc/init.d/fips enable
+echo &#x27;FIPS Bluetooth RFCOMM configured (client, channel 1, 0 peer(s))&#x27;</div>
+<div class="cmd-source" id="cmd-6"># --- Guest WiFi: &#x27;Guest&#x27; ---
+_lan_ip=$(uci get network.lan.ipaddr 2&gt;/dev/null || echo &#x27;192.168.1.1&#x27;)
+_guest_o3=$(echo &quot;$_lan_ip&quot; | cut -d. -f3)
+_guest_o3=$((_guest_o3 + 1))
+[ &quot;$_guest_o3&quot; -gt 255 ] &amp;&amp; _guest_o3=0
+_guest_prefix=$(echo &quot;$_lan_ip&quot; | cut -d. -f1-2).$_guest_o3
 
-        uci set mwan3.wan_m1_w1=member
-        uci set mwan3.wan_m1_w1.interface=&#x27;wan&#x27;
-        uci set mwan3.wan_m1_w1.metric=&#x27;1&#x27;
-        uci set mwan3.wan_m1_w1.weight=&#x27;1&#x27;
+uci set network.guest=interface
+uci set network.guest.ipaddr=&quot;$_guest_prefix.1&quot;
+uci set network.guest.proto=&#x27;static&#x27;
+uci set network.guest.netmask=&#x27;255.255.255.0&#x27;
+uci commit network
 
-        uci set mwan3.usbwan_m2_w1=member
-        uci set mwan3.usbwan_m2_w1.interface=&#x27;usbwan&#x27;
-        uci set mwan3.usbwan_m2_w1.metric=&#x27;2&#x27;
-        uci set mwan3.usbwan_m2_w1.weight=&#x27;1&#x27;
+uci set dhcp.guest=dhcp
+uci set dhcp.guest.interface=&#x27;guest&#x27;
+uci set dhcp.guest.start=&#x27;100&#x27;
+uci set dhcp.guest.limit=&#x27;50&#x27;
+uci set dhcp.guest.leasetime=&#x27;1h&#x27;
+uci commit dhcp
 
-        uci set mwan3.wan_policy=policy
-        uci add_list mwan3.wan_policy.use_member=&#x27;wan_m1_w1&#x27;
-        uci add_list mwan3.wan_policy.use_member=&#x27;usbwan_m2_w1&#x27;
-        uci set mwan3.wan_policy.last_resort=&#x27;default&#x27;
+uci set firewall.guest=zone
+uci set firewall.guest.name=&#x27;guest&#x27;
+uci set firewall.guest.network=&#x27;guest&#x27;
+uci set firewall.guest.input=&#x27;REJECT&#x27;
+uci set firewall.guest.output=&#x27;ACCEPT&#x27;
+uci set firewall.guest.forward=&#x27;REJECT&#x27;
+uci set firewall.guest_fwd=forwarding
+uci set firewall.guest_fwd.src=&#x27;guest&#x27;
+uci set firewall.guest_fwd.dest=&#x27;wan&#x27;
+uci set firewall.guest_dns=rule
+uci set firewall.guest_dns.name=&#x27;Allow-DNS-guest&#x27;
+uci set firewall.guest_dns.src=&#x27;guest&#x27;
+uci set firewall.guest_dns.dest_port=&#x27;53&#x27;
+uci set firewall.guest_dns.proto=&#x27;tcpudp&#x27;
+uci set firewall.guest_dns.target=&#x27;ACCEPT&#x27;
+uci set firewall.guest_dhcp=rule
+uci set firewall.guest_dhcp.name=&#x27;Allow-DHCP-guest&#x27;
+uci set firewall.guest_dhcp.src=&#x27;guest&#x27;
+uci set firewall.guest_dhcp.dest_port=&#x27;67-68&#x27;
+uci set firewall.guest_dhcp.proto=&#x27;udp&#x27;
+uci set firewall.guest_dhcp.target=&#x27;ACCEPT&#x27;
+uci commit firewall
 
-        uci set mwan3.default_rule_v4=rule
-        uci set mwan3.default_rule_v4.dest_ip=&#x27;0.0.0.0/0&#x27;
-        uci set mwan3.default_rule_v4.use_policy=&#x27;wan_policy&#x27;
-        uci set mwan3.default_rule_v4.family=&#x27;ipv4&#x27;
+while uci show wireless 2&gt;/dev/null | grep -q &quot;network=&#x27;guest&#x27;&quot;; do _s=$(uci show wireless 2&gt;/dev/null | grep &quot;network=&#x27;guest&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;wireless.$_s&quot; 2&gt;/dev/null; done; true
+_radio=&quot;&quot;; for _r in radio0 radio1 radio2 radio3; do _b=$(uci get wireless.${_r}.band 2&gt;/dev/null); if [ &quot;$_b&quot; = &quot;2g&quot; ]; then _radio=$_r; break; fi; done; if [ -n &quot;$_radio&quot; ]; then uci set wireless.guest_ap=wifi-iface; uci set wireless.guest_ap.device=$_radio; uci set wireless.guest_ap.mode=ap; uci set wireless.guest_ap.ssid=&#x27;Guest&#x27;; uci set wireless.guest_ap.encryption=psk2; uci set wireless.guest_ap.network=guest; uci set wireless.guest_ap.isolate=1; fi
+uci commit wireless
 
-        uci set mwan3.https_rule=rule
-        uci set mwan3.https_rule.dest_port=&#x27;443&#x27;
-        uci set mwan3.https_rule.proto=&#x27;tcp&#x27;
-        uci set mwan3.https_rule.sticky=&#x27;1&#x27;
-        uci set mwan3.https_rule.use_policy=&#x27;wan_policy&#x27;
+/etc/init.d/network restart
+/etc/init.d/firewall restart
+echo &quot;Guest WiFi configured: SSID=&#x27;Guest&#x27; network=guest isolated=1&quot;</div>
+<div class="cmd-source" id="cmd-8"># --- mwan3 multi-WAN ---
+uci -q delete mwan3 &gt;/dev/null 2&gt;&amp;1 || true
 
-        uci commit mwan3
-        /etc/init.d/mwan3 restart 2&gt;/dev/null || true
-        echo &quot;mwan3 configured: wan (primary) + usbwan (failover)&quot;</div>
-<div class="cmd-source" id="cmd-7"># --- OpenClash transparent proxy ---
+uci set mwan3.wan=interface
+uci set mwan3.wan.enabled=&#x27;1&#x27;
+list track_ip &#x27;1.0.0.1&#x27;
+list track_ip &#x27;1.1.1.1&#x27;
+list track_ip &#x27;8.8.8.8&#x27;
+list track_ip &#x27;8.8.4.4&#x27;
+uci set mwan3.wan.family=&#x27;ipv4&#x27;
+uci set mwan3.wan.reliability=&#x27;1&#x27;
+uci set mwan3.wan.count=&#x27;1&#x27;
+uci set mwan3.wan.timeout=&#x27;2&#x27;
+uci set mwan3.wan.interval=&#x27;5&#x27;
+uci set mwan3.wan.down=&#x27;3&#x27;
+uci set mwan3.wan.up=&#x27;8&#x27;
+
+uci set mwan3.usbwan=interface
+uci set mwan3.usbwan.enabled=&#x27;1&#x27;
+list track_ip &#x27;1.0.0.1&#x27;
+list track_ip &#x27;1.1.1.1&#x27;
+list track_ip &#x27;8.8.8.8&#x27;
+list track_ip &#x27;8.8.4.4&#x27;
+uci set mwan3.usbwan.family=&#x27;ipv4&#x27;
+uci set mwan3.usbwan.reliability=&#x27;1&#x27;
+uci set mwan3.usbwan.count=&#x27;1&#x27;
+uci set mwan3.usbwan.timeout=&#x27;2&#x27;
+uci set mwan3.usbwan.interval=&#x27;5&#x27;
+uci set mwan3.usbwan.down=&#x27;3&#x27;
+uci set mwan3.usbwan.up=&#x27;8&#x27;
+
+uci set mwan3.wan_m1_w1=member
+uci set mwan3.wan_m1_w1.interface=&#x27;wan&#x27;
+uci set mwan3.wan_m1_w1.metric=&#x27;1&#x27;
+uci set mwan3.wan_m1_w1.weight=&#x27;1&#x27;
+uci set mwan3.usbwan_m2_w1=member
+uci set mwan3.usbwan_m2_w1.interface=&#x27;usbwan&#x27;
+uci set mwan3.usbwan_m2_w1.metric=&#x27;2&#x27;
+uci set mwan3.usbwan_m2_w1.weight=&#x27;1&#x27;
+
+uci set mwan3.wan_policy=policy
+uci add_list mwan3.wan_policy.use_member=&#x27;wan_m1_w1&#x27;
+uci add_list mwan3.wan_policy.use_member=&#x27;usbwan_m2_w1&#x27;
+uci set mwan3.wan_policy.last_resort=&#x27;default&#x27;
+
+uci set mwan3.default_rule_v4=rule
+uci set mwan3.default_rule_v4.dest_ip=&#x27;0.0.0.0/0&#x27;
+uci set mwan3.default_rule_v4.use_policy=&#x27;wan_policy&#x27;
+uci set mwan3.default_rule_v4.family=&#x27;ipv4&#x27;
+uci set mwan3.https_rule=rule
+uci set mwan3.https_rule.dest_port=&#x27;443&#x27;
+uci set mwan3.https_rule.proto=&#x27;tcp&#x27;
+uci set mwan3.https_rule.sticky=&#x27;1&#x27;
+uci set mwan3.https_rule.use_policy=&#x27;wan_policy&#x27;
+
+uci commit mwan3
+/etc/init.d/mwan3 restart
+echo &quot;mwan3 configured: wan (primary) + usbwan (failover)&quot;</div>
+<div class="cmd-source" id="cmd-9"># --- OpenClash transparent proxy ---
 mkdir -p /etc/openclash/config
 uci set openclash.config.enable=&#x27;1&#x27;
 uci set openclash.config.config_path=&#x27;/etc/openclash/config/config.yaml&#x27;
@@ -955,11 +1269,12 @@ uci commit openclash
 /etc/init.d/openclash enable
 echo &quot;OpenClash configured: Meta core, ss proxy&quot;
 echo &quot;Post-flash: import your subscription config via the LuCI web UI&quot;</div>
-<div class="cmd-source" id="cmd-8"># --- SQM Smart Queue Management ---
-uci -q delete sqm &gt;/dev/null 2&gt;&amp;1 || true
+<div class="cmd-source" id="cmd-10"># --- SQM Smart Queue Management ---
+for _s in $(uci -q show sqm 2&gt;/dev/null | grep &#x27;=queue&#x27; | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true
 
+_sqm_dev=$(uci get network.wan.device 2&gt;/dev/null); if [ -z &quot;$_sqm_dev&quot; ] || ! ip addr show &quot;$_sqm_dev&quot; 2&gt;/dev/null | grep -q &quot;inet &quot;; then _sqm_dev=$(ip route show default 0.0.0.0/0 2&gt;/dev/null | awk &#x27;{print $5}&#x27; | head -1); fi; if [ -z &quot;$_sqm_dev&quot; ]; then _sqm_dev=wan; fi
 uci set sqm.wan=queue
-uci set sqm.wan.interface=&#x27;wan&#x27;
+uci set sqm.wan.interface=&quot;$_sqm_dev&quot;
 uci set sqm.wan.enabled=&#x27;1&#x27;
 uci set sqm.wan.script=&#x27;piece_of_cake.qos&#x27;
 uci set sqm.wan.qdisc=&#x27;cake&#x27;
@@ -973,9 +1288,9 @@ uci set sqm.wan.verbosity=&#x27;5&#x27;
 uci commit sqm
 
 /etc/init.d/sqm enable
-/etc/init.d/sqm restart 2&gt;/dev/null || true
-echo &quot;SQM configured: 10000/5000 kbit/s (cake)&quot;</div>
-<div class="cmd-source" id="cmd-9"># --- SSH hardening ---
+/etc/init.d/sqm restart
+echo &quot;SQM configured: 10000/5000 kbit/s (cake) on $_sqm_dev&quot;</div>
+<div class="cmd-source" id="cmd-11"># --- SSH hardening ---
 uci set dropbear.@dropbear[0].PasswordAuth=&#x27;off&#x27;
 uci set dropbear.@dropbear[0].RootPasswordAuth=&#x27;off&#x27;
 uci set dropbear.@dropbear[0].Port=&#x27;22&#x27;
@@ -983,72 +1298,57 @@ uci set dropbear.@dropbear[0].IdleTimeout=&#x27;300&#x27;
 uci set dropbear.@dropbear[0].MaxAuthTries=&#x27;3&#x27;
 uci set dropbear.@dropbear[0].GatewayPorts=&#x27;no&#x27;
 uci commit dropbear
-/etc/init.d/dropbear restart 2&gt;/dev/null || true
+/etc/init.d/dropbear restart
 echo &quot;SSH hardened: password_auth=off idle=300s max_tries=3 port=22&quot;</div>
-<div class="cmd-source" id="cmd-10"># --- TollGate base setup ---
-# ipk will be deployed post-flash via SSH (SCP + opkg)
-uci set nodogsplash.@nodogsplash[0].enabled=&#x27;1&#x27; 2&gt;/dev/null || true
-uci commit nodogsplash 2&gt;/dev/null || true
-/etc/init.d/nodogsplash enable 2&gt;/dev/null || true
-/etc/init.d/nodogsplash restart 2&gt;/dev/null || true
-echo &quot;TollGate: nodogsplash configured, awaiting ipk deploy&quot;</div>
-<div class="cmd-source" id="cmd-11"># --- Travelmate travel router ---
-uci set travelmate.global.trm_enabled=&#x27;1&#x27;
-uci set travelmate.global.trm_automatic=&#x27;1&#x27;
-uci set travelmate.global.trm_captive=&#x27;1&#x27;
-uci set travelmate.global.trm_timeout=&#x27;60&#x27;
-uci set travelmate.global.trm_retry=&#x27;5&#x27;
-uci set travelmate.global.trm_radio=&#x27;radio0&#x27;
-uci commit travelmate
-/etc/init.d/travelmate enable
-/etc/init.d/travelmate restart 2&gt;/dev/null || true
-echo &quot;Travelmate configured: auto-connect on radio0&quot;</div>
-<div class="cmd-source" id="cmd-12"># --- USB tethering (auto-detect) ---
+<div class="cmd-source" id="cmd-12"># --- SSL: trusted HTTPS via lancert ---
+# -- uhttpd HTTPS (admin interface) --
+uci set uhttpd.main.cert=&#x27;/etc/tollgate/ssl/server.crt&#x27;
+uci set uhttpd.main.key=&#x27;/etc/tollgate/ssl/server.key&#x27;
+uci -q delete uhttpd.main.listen_https &amp;&amp; uci add_list uhttpd.main.listen_https=&#x27;0.0.0.0:443&#x27; &amp;&amp; uci add_list uhttpd.main.listen_https=&#x27;[::]:443&#x27;
+uci commit uhttpd
+/etc/init.d/uhttpd restart
+# -- Allow port 443 through nodogsplash --
+uci -q show nodogsplash &gt;/dev/null 2&gt;&amp;1 &amp;&amp; uci add_list nodogsplash.@nodogsplash[0].users_to_router=&#x27;allow tcp port 443&#x27; &amp;&amp; uci commit nodogsplash &amp;&amp; /etc/init.d/nodogsplash restart || true</div>
+<div class="cmd-source" id="cmd-13"># --- USB tethering (auto-detect) ---
 /usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
-        USB_DEV=&quot;&quot;
-        for _ in $(seq 1 45); do
-            for dev in /sys/class/net/*; do
-                name=$(basename &quot;$dev&quot;)
-                case &quot;$name&quot; in
-                    lo|br-lan|eth0|wlan*) continue ;;
-                esac
-                driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
-                if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet\|ipheth&quot;; then
-                    USB_DEV=&quot;$name&quot;
-                    break 2
-                fi
-                iface_desc=&quot;&quot;
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+for dev in /sys/class/net/*; do
+name=$(basename &quot;$dev&quot;)
+case &quot;$name&quot; in
+lo|br-lan|eth0|wlan*) continue ;;
+esac
+driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet\|ipheth&quot;; then
+USB_DEV=&quot;$name&quot;
+break 2
+fi
+iface_desc=&quot;&quot;
 [ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
 if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
-    USB_DEV=&quot;$name&quot;
-    break 2
+USB_DEV=&quot;$name&quot;
+break 2
 fi
-            done
-            sleep 1
-        done
-        if [ -z &quot;$USB_DEV&quot; ]; then
-            for cand in usb0 usb1; do
-                [ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
-            done
-        fi
+done
+sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+for cand in usb0 usb1; do
+[ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+done
+fi
 if [ -n &quot;$USB_DEV&quot; ]; then
-    uci set network.usbwan=interface
-    uci set network.usbwan.proto=&#x27;dhcp&#x27;
-    uci set network.usbwan.device=&quot;$USB_DEV&quot;
-    uci set network.usbwan.metric=&#x27;20&#x27;
-    for zone in $(uci show firewall 2&gt;/dev/null | grep &quot;=zone&quot; | cut -d. -f2 | cut -d= -f1 || true); do
-        name=$(uci -q get firewall.$zone.name || true)
-        if [ &quot;$name&quot; = &quot;wan&quot; ]; then
-            uci add_list firewall.$zone.network=&#x27;usbwan&#x27;
-            break
-        fi
-    done
-    uci commit network
-    uci commit firewall
-    ifup usbwan 2&gt;/dev/null || true
-    echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+uci set network.usbwan=interface
+uci set network.usbwan.proto=&#x27;dhcp&#x27;
+uci set network.usbwan.device=&quot;$USB_DEV&quot;
+uci set network.usbwan.metric=&#x27;20&#x27;
+for _z in $(uci show firewall 2&gt;/dev/null | grep &#x27;=zone&#x27; | cut -d. -f2 | cut -d= -f1 || true); do [ &quot;$(uci -q get firewall.$_z.name)&quot; = &#x27;wan&#x27; ] &amp;&amp; uci del_list firewall.$_z.network=&#x27;usbwan&#x27; 2&gt;/dev/null; uci add_list firewall.$_z.network=&#x27;usbwan&#x27;; break; done
+uci commit network
+uci commit firewall
+ifup usbwan 2&gt;/dev/null || true
+echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
 else
-    echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
 fi
 mkdir -p /etc/hotplug.d/usb
 cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
@@ -1060,25 +1360,193 @@ export HOME
 command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
 DELAY=1
 for attempt in 1 2 3 4 5 6 7; do
-    sleep $DELAY
-    if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-        exit 0
-    fi
-    STATE=$(adb get-state 2&gt;/dev/null)
-    if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
-        adb shell svc usb setFunctions rndis 2&gt;/dev/null
-        sleep 3
-        if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
-            logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
-            exit 0
-        fi
-    fi
-    DELAY=$((DELAY * 2))
+sleep $DELAY
+if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+exit 0
+fi
+STATE=$(adb get-state 2&gt;/dev/null)
+if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
+adb shell svc usb setFunctions rndis 2&gt;/dev/null
+sleep 3
+if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
+exit 0
+fi
+fi
+DELAY=$((DELAY * 2))
 done
 logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
 ) &amp;
 HOTPLUG_EOF</div>
-<div class="cmd-source" id="cmd-13"># --- WireGuard VPN client ---
+<div class="cmd-source" id="cmd-14"># --- Android USB tethering (manual) ---
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+for dev in /sys/class/net/*; do
+name=$(basename &quot;$dev&quot;)
+case &quot;$name&quot; in
+lo|br-lan|eth0|wlan*) continue ;;
+esac
+driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+USB_DEV=&quot;$name&quot;
+break 2
+fi
+
+done
+sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+for cand in usb0 usb1; do
+[ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+uci set network.usbwan=interface
+uci set network.usbwan.proto=&#x27;dhcp&#x27;
+uci set network.usbwan.device=&quot;$USB_DEV&quot;
+uci set network.usbwan.metric=&#x27;20&#x27;
+for _z in $(uci show firewall 2&gt;/dev/null | grep &#x27;=zone&#x27; | cut -d. -f2 | cut -d= -f1 || true); do [ &quot;$(uci -q get firewall.$_z.name)&quot; = &#x27;wan&#x27; ] &amp;&amp; uci del_list firewall.$_z.network=&#x27;usbwan&#x27; 2&gt;/dev/null; uci add_list firewall.$_z.network=&#x27;usbwan&#x27;; break; done
+uci commit network
+uci commit firewall
+ifup usbwan 2&gt;/dev/null || true
+echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</div>
+<div class="cmd-source" id="cmd-15"># --- Android USB tethering (ADB auto-enable) ---
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+for dev in /sys/class/net/*; do
+name=$(basename &quot;$dev&quot;)
+case &quot;$name&quot; in
+lo|br-lan|eth0|wlan*) continue ;;
+esac
+driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+if echo &quot;$driver&quot; | grep -qi &quot;rndis\|cdc_ether\|usbnet&quot;; then
+USB_DEV=&quot;$name&quot;
+break 2
+fi
+
+done
+sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+for cand in usb0 usb1; do
+[ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+uci set network.usbwan=interface
+uci set network.usbwan.proto=&#x27;dhcp&#x27;
+uci set network.usbwan.device=&quot;$USB_DEV&quot;
+uci set network.usbwan.metric=&#x27;20&#x27;
+for _z in $(uci show firewall 2&gt;/dev/null | grep &#x27;=zone&#x27; | cut -d. -f2 | cut -d= -f1 || true); do [ &quot;$(uci -q get firewall.$_z.name)&quot; = &#x27;wan&#x27; ] &amp;&amp; uci del_list firewall.$_z.network=&#x27;usbwan&#x27; 2&gt;/dev/null; uci add_list firewall.$_z.network=&#x27;usbwan&#x27;; break; done
+uci commit network
+uci commit firewall
+ifup usbwan 2&gt;/dev/null || true
+echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi
+mkdir -p /etc/hotplug.d/usb
+cat &gt; /etc/hotplug.d/usb/99-usb-tether-adb &lt;&lt; &#x27;HOTPLUG_EOF&#x27;
+[ &quot;$ACTION&quot; = &quot;bind&quot; ] || exit 0
+[ &quot;$PRODUCT&quot; ] || exit 0
+(
+HOME=/root
+export HOME
+command -v adb &gt;/dev/null 2&gt;&amp;1 || exit 0
+DELAY=1
+for attempt in 1 2 3 4 5 6 7; do
+sleep $DELAY
+if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+exit 0
+fi
+STATE=$(adb get-state 2&gt;/dev/null)
+if [ &quot;$STATE&quot; = &quot;device&quot; ]; then
+adb shell svc usb setFunctions rndis 2&gt;/dev/null
+sleep 3
+if ip addr show usb0 2&gt;/dev/null | grep -q &quot;inet &quot;; then
+logger -t usb-tether &quot;ADB enabled tethering (attempt $attempt)&quot;
+exit 0
+fi
+fi
+DELAY=$((DELAY * 2))
+done
+logger -t usb-tether &quot;ADB tethering gave up after $attempt attempts&quot;
+) &amp;
+HOTPLUG_EOF</div>
+<div class="cmd-source" id="cmd-16"># --- iPhone USB tethering ---
+/usr/sbin/usbmuxd -v -U -f &gt;/dev/null 2&gt;&amp;1 &amp;
+USB_DEV=&quot;&quot;
+for _ in $(seq 1 45); do
+for dev in /sys/class/net/*; do
+name=$(basename &quot;$dev&quot;)
+case &quot;$name&quot; in
+lo|br-lan|eth0|wlan*) continue ;;
+esac
+driver=$(readlink &quot;$dev/device/driver&quot; 2&gt;/dev/null || true)
+if echo &quot;$driver&quot; | grep -qi &quot;ipheth&quot;; then
+USB_DEV=&quot;$name&quot;
+break 2
+fi
+iface_desc=&quot;&quot;
+[ -e &quot;$dev/device/interface&quot; ] &amp;&amp; iface_desc=$(cat &quot;$dev/device/interface&quot; 2&gt;/dev/null || true)
+if echo &quot;$iface_desc&quot; | grep -qi &quot;apple\|iphone&quot;; then
+USB_DEV=&quot;$name&quot;
+break 2
+fi
+done
+sleep 1
+done
+if [ -z &quot;$USB_DEV&quot; ]; then
+for cand in usb0 usb1; do
+[ -e &quot;/sys/class/net/$cand&quot; ] &amp;&amp; USB_DEV=&quot;$cand&quot; &amp;&amp; break
+done
+fi
+if [ -n &quot;$USB_DEV&quot; ]; then
+uci set network.usbwan=interface
+uci set network.usbwan.proto=&#x27;dhcp&#x27;
+uci set network.usbwan.device=&quot;$USB_DEV&quot;
+uci set network.usbwan.metric=&#x27;20&#x27;
+for _z in $(uci show firewall 2&gt;/dev/null | grep &#x27;=zone&#x27; | cut -d. -f2 | cut -d= -f1 || true); do [ &quot;$(uci -q get firewall.$_z.name)&quot; = &#x27;wan&#x27; ] &amp;&amp; uci del_list firewall.$_z.network=&#x27;usbwan&#x27; 2&gt;/dev/null; uci add_list firewall.$_z.network=&#x27;usbwan&#x27;; break; done
+uci commit network
+uci commit firewall
+ifup usbwan 2&gt;/dev/null || true
+echo &quot;USB tethering enabled on $USB_DEV -&gt; usbwan&quot;
+else
+echo &quot;USB tethering: no USB network device found, skipping&quot; &gt;&amp;2
+fi</div>
+<div class="cmd-source" id="cmd-17"># --- TollGate: nodogsplash captive portal ---
+uci set nodogsplash.@nodogsplash[0].enabled=&#x27;1&#x27;
+uci set nodogsplash.@nodogsplash[0].clientid=&#x27;mac&#x27;
+uci add_list nodogsplash.@nodogsplash[0].users_to_router=&#x27;allow tcp port 2121&#x27;
+uci add_list nodogsplash.@nodogsplash[0].users_to_router=&#x27;allow tcp port 2050&#x27;
+uci commit nodogsplash
+/etc/init.d/nodogsplash enable
+/etc/init.d/nodogsplash restart
+
+# --- TollGate: hotplug (wwan ifup \u2192 tollgate restart) ---
+mkdir -p /etc/hotplug.d/iface &amp;&amp; printf &#x27;%s&#x27; &#x27;#!/bin/sh
+[ &quot;$ACTION&quot; = &quot;ifup&quot; ] || exit 0
+[ &quot;$INTERFACE&quot; = &quot;wwan&quot; ] || exit 0
+logger -t tollgate-hotplug &quot;wwan up \u2014 restarting tollgate&quot;
+/etc/init.d/tollgate-wrt restart &amp;
+&#x27; &gt; /etc/hotplug.d/iface/95-tollgate-restart &amp;&amp; chmod +x /etc/hotplug.d/iface/95-tollgate-restart
+
+# --- TollGate: ipk installed separately via deploy_tollgate_post_flash() ---</div>
+<div class="cmd-source" id="cmd-18"># --- Travelmate travel router ---
+uci set travelmate.global.trm_enabled=&#x27;1&#x27;
+uci set travelmate.global.trm_automatic=&#x27;1&#x27;
+uci set travelmate.global.trm_captive=&#x27;1&#x27;
+uci set travelmate.global.trm_timeout=&#x27;60&#x27;
+uci set travelmate.global.trm_retry=&#x27;5&#x27;
+uci set travelmate.global.trm_radio=&#x27;radio0&#x27;
+uci commit travelmate
+/etc/init.d/travelmate enable
+/etc/init.d/travelmate restart
+echo &quot;Travelmate configured: auto-connect on radio0&quot;</div>
+<div class="cmd-source" id="cmd-19"># --- WireGuard VPN client ---
 uci set network.wg0=interface
 uci set network.wg0.proto=&#x27;wireguard&#x27;
 uci set network.wg0.private_key=&#x27;generate&#x27;
@@ -1091,65 +1559,74 @@ uci set network.wg0_peer.allowed_ips=&#x27;0.0.0.0/0, ::/0&#x27;
 uci set network.wg0_peer.route_allowed_ips=&#x27;1&#x27;
 uci set network.wg0_peer.persistent_keepalive=&#x27;25&#x27;
 
-uci add firewall zone
-uci set firewall.@zone[-1].name=&#x27;vpn&#x27;
-uci set firewall.@zone[-1].input=&#x27;REJECT&#x27;
-uci set firewall.@zone[-1].output=&#x27;ACCEPT&#x27;
-uci set firewall.@zone[-1].forward=&#x27;REJECT&#x27;
-uci set firewall.@zone[-1].masq=&#x27;1&#x27;
-uci set firewall.@zone[-1].mtu_fix=&#x27;1&#x27;
-uci set firewall.@zone[-1].network=&#x27;wg0&#x27;
+# --- Cleanup stale anonymous WireGuard firewall sections ---
+while uci show firewall 2&gt;/dev/null | grep -q &quot;name=&#x27;vpn&#x27;&quot;; do _s=$(uci show firewall 2&gt;/dev/null | grep &quot;name=&#x27;vpn&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;firewall.$_s&quot; 2&gt;/dev/null; done; true
+while uci show firewall 2&gt;/dev/null | grep -q &quot;dest=&#x27;vpn&#x27;&quot;; do _s=$(uci show firewall 2&gt;/dev/null | grep &quot;dest=&#x27;vpn&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;firewall.$_s&quot; 2&gt;/dev/null; done; true
+while uci show firewall 2&gt;/dev/null | grep -q &quot;name=&#x27;KillSwitch-Reject-NonVPN&#x27;&quot;; do _s=$(uci show firewall 2&gt;/dev/null | grep &quot;name=&#x27;KillSwitch-Reject-NonVPN&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;firewall.$_s&quot; 2&gt;/dev/null; done; true
 
-uci add firewall forwarding
-uci set firewall.@forwarding[-1].src=&#x27;lan&#x27;
-uci set firewall.@forwarding[-1].dest=&#x27;vpn&#x27;
+# --- WireGuard firewall zone + forwarding ---
+uci set firewall.wg_client_vpn=zone
+uci set firewall.wg_client_vpn.name=&#x27;vpn&#x27;
+uci set firewall.wg_client_vpn.input=&#x27;REJECT&#x27;
+uci set firewall.wg_client_vpn.output=&#x27;ACCEPT&#x27;
+uci set firewall.wg_client_vpn.forward=&#x27;REJECT&#x27;
+uci set firewall.wg_client_vpn.masq=&#x27;1&#x27;
+uci set firewall.wg_client_vpn.mtu_fix=&#x27;1&#x27;
+uci set firewall.wg_client_vpn.network=&#x27;wg0&#x27;
 
-uci add firewall rule
-uci set firewall.@rule[-1].name=&#x27;KillSwitch-Reject-NonVPN&#x27;
-uci set firewall.@rule[-1].src=&#x27;lan&#x27;
-uci set firewall.@rule[-1].dest=&#x27;wan&#x27;
-uci set firewall.@rule[-1].proto=&#x27;all&#x27;
-uci set firewall.@rule[-1].target=&#x27;REJECT&#x27;
+uci set firewall.wg_client_fwd=forwarding
+uci set firewall.wg_client_fwd.src=&#x27;lan&#x27;
+uci set firewall.wg_client_fwd.dest=&#x27;vpn&#x27;
+
+uci set firewall.wg_client_killswitch=rule
+uci set firewall.wg_client_killswitch.name=&#x27;KillSwitch-Reject-NonVPN&#x27;
+uci set firewall.wg_client_killswitch.src=&#x27;lan&#x27;
+uci set firewall.wg_client_killswitch.dest=&#x27;wan&#x27;
+uci set firewall.wg_client_killswitch.proto=&#x27;all&#x27;
+uci set firewall.wg_client_killswitch.target=&#x27;REJECT&#x27;
 
 uci commit network
 uci commit firewall
-/etc/init.d/network restart 2&gt;/dev/null || true
-echo &#x27;WireGuard client configured: :51820&#x27;</div>
-<div class="cmd-source" id="cmd-14"># --- WireGuard VPN server ---
+/etc/init.d/network restart
+echo &#x27;WireGuard client configured: :51820&#x27;
+i=0; while [ $i -lt 30 ]; do if wg show wg0 2&gt;/dev/null | grep -q &#x27;latest handshake&#x27;; then echo &#x27;WG kill-switch: tunnel verified&#x27;; exit 0; fi; sleep 1; i=$((i+1)); done; echo &#x27;WG kill-switch: tunnel failed — removing kill switch to restore WAN&#x27;; uci delete firewall.wg_client_killswitch; uci commit firewall; fw4 restart</div>
+<div class="cmd-source" id="cmd-20"># --- WireGuard VPN server ---
 uci set network.wg0=interface
 uci set network.wg0.proto=&#x27;wireguard&#x27;
 uci set network.wg0.private_key=&#x27;&#x27;
 uci set network.wg0.listen_port=&#x27;51820&#x27;
 uci add_list network.wg0.addresses=&#x27;10.1.99.1/24&#x27;
 
+while uci show firewall 2&gt;/dev/null | grep -q &quot;name=&#x27;vpn&#x27;&quot;; do _s=$(uci show firewall 2&gt;/dev/null | grep &quot;name=&#x27;vpn&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;firewall.$_s&quot; 2&gt;/dev/null; done; true
+while uci show firewall 2&gt;/dev/null | grep -q &quot;name=&#x27;Allow-WireGuard&#x27;&quot;; do _s=$(uci show firewall 2&gt;/dev/null | grep &quot;name=&#x27;Allow-WireGuard&#x27;&quot; | head -1 | cut -d. -f2 | cut -d= -f1); uci delete &quot;firewall.$_s&quot; 2&gt;/dev/null; done; true
 
-uci add firewall zone
-uci set firewall.@zone[-1].name=&#x27;vpn&#x27;
-uci set firewall.@zone[-1].input=&#x27;ACCEPT&#x27;
-uci set firewall.@zone[-1].output=&#x27;ACCEPT&#x27;
-uci set firewall.@zone[-1].forward=&#x27;REJECT&#x27;
-uci set firewall.@zone[-1].masq=&#x27;1&#x27;
-uci set firewall.@zone[-1].mtu_fix=&#x27;1&#x27;
-uci set firewall.@zone[-1].network=&#x27;wg0&#x27;
+uci set firewall.wg_server_vpn=zone
+uci set firewall.wg_server_vpn.name=&#x27;vpn&#x27;
+uci set firewall.wg_server_vpn.input=&#x27;ACCEPT&#x27;
+uci set firewall.wg_server_vpn.output=&#x27;ACCEPT&#x27;
+uci set firewall.wg_server_vpn.forward=&#x27;REJECT&#x27;
+uci set firewall.wg_server_vpn.masq=&#x27;1&#x27;
+uci set firewall.wg_server_vpn.mtu_fix=&#x27;1&#x27;
+uci set firewall.wg_server_vpn.network=&#x27;wg0&#x27;
 
-uci add firewall forwarding
-uci set firewall.@forwarding[-1].src=&#x27;vpn&#x27;
-uci set firewall.@forwarding[-1].dest=&#x27;lan&#x27;
+uci set firewall.wg_server_fwd_lan=forwarding
+uci set firewall.wg_server_fwd_lan.src=&#x27;vpn&#x27;
+uci set firewall.wg_server_fwd_lan.dest=&#x27;lan&#x27;
 
-uci add firewall forwarding
-uci set firewall.@forwarding[-1].src=&#x27;vpn&#x27;
-uci set firewall.@forwarding[-1].dest=&#x27;wan&#x27;
+uci set firewall.wg_server_fwd_wan=forwarding
+uci set firewall.wg_server_fwd_wan.src=&#x27;vpn&#x27;
+uci set firewall.wg_server_fwd_wan.dest=&#x27;wan&#x27;
 
-uci add firewall rule
-uci set firewall.@rule[-1].name=&#x27;Allow-WireGuard&#x27;
-uci set firewall.@rule[-1].src=&#x27;wan&#x27;
-uci set firewall.@rule[-1].dest_port=&#x27;51820&#x27;
-uci set firewall.@rule[-1].proto=&#x27;udp&#x27;
-uci set firewall.@rule[-1].target=&#x27;ACCEPT&#x27;
+uci set firewall.wg_server_allow=rule
+uci set firewall.wg_server_allow.name=&#x27;Allow-WireGuard&#x27;
+uci set firewall.wg_server_allow.src=&#x27;wan&#x27;
+uci set firewall.wg_server_allow.dest_port=&#x27;51820&#x27;
+uci set firewall.wg_server_allow.proto=&#x27;udp&#x27;
+uci set firewall.wg_server_allow.target=&#x27;ACCEPT&#x27;
 
 uci commit network
 uci commit firewall
-/etc/init.d/network restart 2&gt;/dev/null || true
+/etc/init.d/network restart
 echo &quot;WireGuard server configured: port 51820, subnet 10.1.99.1/24&quot;</div>
 <div id="cmd-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><span class="modal-title">Shell Commands</span><button class="modal-close">&times;</button></div><pre class="modal-code"><code id="modal-code-content"></code></pre><button class="modal-copy">Copy</button></div></div>
 <script>

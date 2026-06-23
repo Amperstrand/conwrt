@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>conwrt — Getting Started</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; padding: 2rem; padding-top: 70px; line-height: 1.5; }
+  h1 { font-size: 1.7rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.3rem; margin-bottom: 0.5rem; }
+  .subtitle { color: #666; margin-bottom: 2rem; }
+  nav.sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 2rem; display: flex; gap: 1.5rem; align-items: center; }
+  nav.sticky a { color: #555; font-size: 0.85rem; text-decoration: none; }
+  nav.sticky a:hover { color: #0366d6; }
+  nav.sticky .brand { font-weight: 700; color: #1a1a1a; }
+  .step { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  .step h2 { font-size: 1.3rem; margin-bottom: 0.5rem; }
+  .step .step-number { display: inline-block; background: #0366d6; color: #fff; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; font-weight: 700; margin-right: 0.5rem; }
+  .step p { margin-bottom: 0.75rem; }
+  .step ul { margin: 0.5rem 0 0.75rem 1.5rem; }
+  .step li { margin-bottom: 0.4rem; }
+  pre { margin: 0.75rem 0; padding: 12px 14px; overflow-x: auto; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; white-space: pre; background: #f8f9fa; border-radius: 4px; }
+  code { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem; background: #eee; padding: 1px 5px; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  .warn { background: #fff3cd; border-left: 4px solid #ffc107; padding: 0.75rem 1rem; border-radius: 0 4px 4px 0; margin: 1rem 0; font-size: 0.85rem; }
+  .warn strong { font-weight: 600; }
+  .next-steps { margin-top: 2rem; }
+  .next-steps ul { margin: 0.5rem 0 0.75rem 1.5rem; }
+  .next-steps li { margin-bottom: 0.4rem; }
+  footer { margin-top: 2rem; color: #999; font-size: 0.78rem; }
+  a { color: #0366d6; }
+</style>
+</head>
+<body>
+
+<nav class="sticky">
+  <a class="brand" href="index.html">conwrt</a>
+  <a href="index.html#quick-start">Quick Start</a>
+  <a href="index.html#features">Features</a>
+  <a href="user-stories.html">User Stories</a>
+  <a href="wizard.html">Wizard</a>
+  <a href="index.html#flash-methods">Devices</a>
+  <a href="https://github.com/amperstrand/conwrt">GitHub</a>
+</nav>
+
+<h1>Getting Started with conwrt</h1>
+<p class="subtitle">From zero to OpenWrt in 30 minutes.</p>
+
+<div class="step">
+  <h2><span class="step-number">0</span>Prerequisites</h2>
+  <p>Before you begin, ensure you have the following:</p>
+  <ul>
+    <li>macOS (uses <code>say</code> for voice guidance, <code>ifconfig</code> for interface detection) or Linux</li>
+    <li>Python 3.10+</li>
+    <li><code>tcpdump</code> and <code>sudo</code> for pcap capture and network monitoring</li>
+    <li>An ethernet cable and a router to flash</li>
+    <li>A firmware image OR willingness to request one from ASU</li>
+  </ul>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">1</span>Install conwrt</h2>
+  <p>Clone the repository and set up a Python virtual environment:</p>
+  <pre>git clone https://github.com/amperstrand/conwrt.git
+cd conwrt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'</pre>
+  <p>Verify the installation:</p>
+  <pre>python3 scripts/conwrt.py --version</pre>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">2</span>Check supported devices</h2>
+  <p>Run this command to see which device models conwrt supports:</p>
+  <pre>python3 scripts/conwrt.py list</pre>
+  <p>If your device is listed, you are in <strong>Stage 2</strong> (automated flashing). If not listed, you need <strong>Stage 1</strong> (AI-assisted discovery) — see the <code>prompts/</code> directory for templates.</p>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">3</span>Connect your router</h2>
+  <p>Physically connect your computer to the router:</p>
+  <ul>
+    <li>Plug an ethernet cable from your computer to one of the router's LAN ports (do NOT use WAN)</li>
+    <li>Ensure your computer's ethernet interface gets a DHCP lease from the router, or set a static IP in the router's subnet</li>
+    <li>Verify basic connectivity with <code>ping &lt;router-ip&gt;</code> or proceed to the next step and let conwrt discover the device</li>
+  </ul>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">4</span>Detect and identify the device</h2>
+  <p>conwrt provides three commands to discover connected devices:</p>
+  <p><strong>Scan the ethernet interface for connected devices:</strong></p>
+  <pre>python3 scripts/conwrt.py probe --json</pre>
+  <p><strong>Auto-detect the router and its boot state (off/uboot/openwrt):</strong></p>
+  <pre>python3 scripts/conwrt.py auto --no-menu</pre>
+  <p><strong>If the router is already running OpenWrt, fingerprint it for full identity:</strong></p>
+  <pre>python3 scripts/conwrt.py fingerprint &lt;ip&gt; --json</pre>
+  <p>Explanation: <code>probe</code> finds devices on the interface. <code>auto</code> detects boot state and identifies the model. <code>fingerprint</code> extracts board_name, MAC address, kernel version, and installed packages via SSH (only works if OpenWrt is already running).</p>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">5</span>Get firmware</h2>
+  <p>You have two options for obtaining firmware:</p>
+  <p><strong>Option A — Use an existing image:</strong></p>
+  <ul>
+    <li>Download a factory or sysupgrade image from the OpenWrt Firmware Selector or the ASU server</li>
+    <li>Place the <code>.bin</code> file somewhere accessible on your computer</li>
+  </ul>
+  <p><strong>Option B — Request a custom ASU image (recommended):</strong></p>
+  <pre># Dry-run: see what would be built
+python3 scripts/firmware-manager.py request --profile dlink_covr-x1860-a1 --dry-run
+
+# Real request (bakes in your SSH key, password, use cases)
+python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --request-image --ssh-key ~/.ssh/id_ed25519.pub --wan-ssh</pre>
+  <p>Custom ASU images automatically embed your SSH keys, set your preferred password mode, and pre-configure use cases (tethering, SQM, VPN, etc.) defined in <code>config.toml</code>.</p>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">6</span>Flash</h2>
+  <p><strong>DRY RUN FIRST</strong> — detect recovery mode without uploading anything:</p>
+  <pre>python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --image firmware.bin --no-upload</pre>
+  <p><strong>Real flash</strong> — once dry-run succeeds:</p>
+  <pre>python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --image firmware.bin</pre>
+  <div class="warn">
+    <strong>SAFETY NOTE:</strong> Never use <code>sysupgrade -F</code> or any force flag. If sysupgrade rejects an image with a validation error, the image is wrong for the hardware. Do not force it. The <code>-F</code> flag bypasses hardware validation checks and can brick devices. See <code>AGENTS.md</code> for safety rules.
+  </div>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">7</span>Verify</h2>
+  <p>After flashing, conwrt automatically verifies the flash and collects inventory:</p>
+  <ul>
+    <li>Polls for SSH connectivity on the new device</li>
+    <li>Verifies the firmware version via <code>/etc/openwrt_release</code></li>
+    <li>Collects device inventory (MAC address, serial number, installed packages) and appends to <code>data/inventory.jsonl</code></li>
+    <li>Reports the randomly generated root password (if <code>--no-password</code> was not used)</li>
+  </ul>
+  <p>The verification process ensures the flash succeeded and the device is running the expected firmware.</p>
+</div>
+
+<div class="step">
+  <h2><span class="step-number">8</span>Configure (optional)</h2>
+  <p>After flashing, you can apply configuration defined in <code>config.toml</code> to a running router:</p>
+  <p><strong>Preview what config.toml would apply (dry-run):</strong></p>
+  <pre>python3 scripts/conwrt.py profile plan --model-id dlink-covr-x1860-a1</pre>
+  <p><strong>Apply configuration to a running router:</strong></p>
+  <pre># Dry-run first (no changes)
+python3 scripts/conwrt.py configure --dry-run --ip 192.168.1.1
+
+# Apply for real
+python3 scripts/conwrt.py configure --ip 192.168.1.1</pre>
+  <p>This step applies use cases, WiFi settings, network configuration, and other options from your operator profile.</p>
+</div>
+
+<div class="next-steps">
+  <h2>Next steps</h2>
+  <ul>
+    <li>Explore use case presets: <code>python3 scripts/conwrt.py list-use-cases</code></li>
+    <li>Try the interactive <a href="wizard.html">Wizard</a> to build deployment scripts</li>
+    <li>Read <a href="user-stories.html">User Stories</a> for real-world examples</li>
+    <li>Full CLI reference: See the <a href="https://github.com/amperstrand/conwrt">README</a> on GitHub</li>
+  </ul>
+</div>
+
+<footer>
+  conwrt — OpenWrt flashing framework. <a href="https://github.com/amperstrand/conwrt">GitHub</a>
+</footer>
+
+</body>
+</html>

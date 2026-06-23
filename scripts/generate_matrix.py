@@ -329,19 +329,126 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
   .sticky-nav a:hover {{ color: #0366d6; border-bottom-color: #0366d6; text-decoration: none; }}
   .sticky-nav a.active {{ color: #0366d6; border-bottom-color: #0366d6; }}
   body {{ padding-top: 48px; }}
+
+  /* Landing page sections */
+  .section {{ margin-bottom: 3rem; }}
+  .hero {{ text-align: center; padding: 3.5rem 1rem 3rem; margin-bottom: 3rem; border-radius: 8px; background: linear-gradient(135deg, #f0f6ff 0%, #fafafa 70%); border: 1px solid #e0e0e0; }}
+  .hero h1 {{ font-size: 2.6rem; line-height: 1.15; margin-bottom: 1rem; color: #1a1a1a; }}
+  .hero .subtitle {{ font-size: 1.15rem; max-width: 640px; margin: 0 auto 2rem; line-height: 1.6; }}
+  .hero-ctas {{ display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; }}
+  .btn {{ display: inline-block; padding: 0.7rem 1.4rem; border-radius: 6px; font-size: 0.95rem; font-weight: 600; text-decoration: none; transition: background 0.15s, border-color 0.15s; border: 1px solid transparent; }}
+  .btn:hover {{ text-decoration: none; }}
+  .btn-primary {{ background: #0366d6; color: #fff; border-color: #0366d6; }}
+  .btn-primary:hover {{ background: #0257a5; }}
+  .btn-secondary {{ background: #fff; color: #0366d6; border-color: #0366d6; }}
+  .btn-secondary:hover {{ background: #eef4fb; }}
+  .btn-ghost {{ background: transparent; color: #555; border-color: #ccc; }}
+  .btn-ghost:hover {{ border-color: #0366d6; color: #0366d6; }}
+
+  .section-head {{ margin-bottom: 1.5rem; }}
+  .section-head h2 {{ font-size: 1.5rem; color: #1a1a1a; margin: 0 0 0.3rem; }}
+  .section-head .subtitle {{ color: #666; margin: 0; }}
+
+  .steps-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }}
+  .step-card {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.25rem; }}
+  .step-card .step-num {{ display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #0366d6; color: #fff; font-weight: 700; font-size: 0.85rem; margin-bottom: 0.6rem; }}
+  .step-card h3 {{ font-size: 1.05rem; margin-bottom: 0.6rem; }}
+  .step-card .code-block {{ background: #f8f9fa; border-radius: 4px; padding: 0.75rem; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.8rem; overflow-x: auto; white-space: pre; border: 1px solid #ececec; }}
+  .step-note {{ font-size: 0.85rem; color: #666; margin-top: 1rem; text-align: center; }}
+
+  .cards-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }}
+  .card {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.25rem; }}
+  .card h3 {{ font-size: 1.05rem; margin-bottom: 0.5rem; color: #1a1a1a; }}
+  .card p {{ color: #555; font-size: 0.9rem; line-height: 1.55; margin: 0; }}
+  .card .card-link {{ display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: #0366d6; }}
+
+  .docs-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; }}
+  .doc-link {{ display: block; background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.9rem 1.1rem; text-decoration: none; transition: border-color 0.15s, background 0.15s; }}
+  .doc-link:hover {{ text-decoration: none; border-color: #0366d6; background: #f0f6ff; }}
+  .doc-link .doc-title {{ font-weight: 600; font-size: 0.92rem; color: #0366d6; }}
+  .doc-link .doc-desc {{ font-size: 0.8rem; color: #888; margin-top: 0.2rem; }}
 </style>
 </head>
 <body>
 
 <nav class="sticky-nav">
   <a class="nav-brand" href="#">conwrt</a>
-  <a href="#flash-methods">Flash Methods</a>
-  <a href="#testing-log">Testing Log</a>
+  <a href="#quick-start">Quick Start</a>
+  <a href="#features">Features</a>
+  <a href="#stories">User Stories</a>
+  <a href="wizard.html">Wizard</a>
+  <a href="#flash-methods">Devices</a>
   <a href="#use-cases">Use Cases</a>
+  <a href="#docs">Docs</a>
+  <a href="https://github.com/amperstrand/conwrt">GitHub</a>
 </nav>
 
-<h1>conwrt Device Support Matrix</h1>
-<p class="subtitle">Auto-generated from <code>models/*.json</code> — the authoritative single source of truth.</p>
+<section class="hero">
+  <h1>Flash OpenWrt onto any router.</h1>
+  <p class="subtitle">conwrt is a framework for flashing routers with OpenWrt — AI-assisted discovery for new devices, automated flashing for known ones. 21 devices supported across 7 vendors.</p>
+  <div class="hero-ctas">
+    <a class="btn btn-primary" href="wizard.html">Deployment Wizard &rarr;</a>
+    <a class="btn btn-secondary" href="#quick-start">Quick Start &darr;</a>
+    <a class="btn btn-ghost" href="https://github.com/amperstrand/conwrt">View on GitHub</a>
+  </div>
+</section>
+
+<section class="section" id="quick-start">
+  <div class="section-head">
+    <h2>Quick Start</h2>
+    <p class="subtitle">From clone to flash in three commands.</p>
+  </div>
+  <div class="steps-grid">
+    <div class="step-card">
+      <span class="step-num">1</span>
+      <h3>Install</h3>
+      <div class="code-block">git clone https://github.com/amperstrand/conwrt &amp;&amp; cd conwrt &amp;&amp; python3 -m venv .venv &amp;&amp; source .venv/bin/activate &amp;&amp; python -m pip install -e '.[dev]'</div>
+    </div>
+    <div class="step-card">
+      <span class="step-num">2</span>
+      <h3>Connect &amp; Detect</h3>
+      <div class="code-block"># Plug ethernet to your router, then:
+python3 scripts/conwrt.py probe
+# Or auto-detect:
+python3 scripts/conwrt.py auto</div>
+    </div>
+    <div class="step-card">
+      <span class="step-num">3</span>
+      <h3>Flash</h3>
+      <div class="code-block">python3 scripts/conwrt.py flash --model-id dlink-covr-x1860-a1 --request-image --wan-ssh</div>
+    </div>
+  </div>
+  <p class="step-note">Or use the interactive <a href="wizard.html">Wizard &rarr;</a> to pick your router and get the exact commands.</p>
+</section>
+
+<section class="section" id="features">
+  <div class="section-head">
+    <h2>What conwrt can do</h2>
+    <p class="subtitle">Six core capabilities that make router flashing reproducible.</p>
+  </div>
+  <div class="cards-grid">
+    <div class="card"><h3>Auto-Detect Devices</h3><p>Probe any ethernet interface to identify connected routers via SSH fingerprint, MAC OUI, or boot-state detection. No manual IP guessing.</p></div>
+    <div class="card"><h3>21 Supported Devices</h3><p>D-Link, GL.iNet, Linksys, Ubiquiti, ZyXEL, ASUS, Extreme Networks. Each with tested flash methods and boot signatures.</p></div>
+    <div class="card"><h3>One-Command Flash</h3><p>conwrt flash handles the full lifecycle: detect recovery mode &rarr; upload firmware &rarr; verify SHA-256 &rarr; confirm SSH &rarr; collect inventory.</p></div>
+    <div class="card"><h3>21 Pre-configured Presets</h3><p>USB tethering, SQM bufferbloat fix, WireGuard VPN, AdGuard, mesh networking, travelmate captive portal — all baked into the firmware image.</p></div>
+    <div class="card"><h3>Custom ASU Builds</h3><p>Request firmware from the OpenWrt ASU builder with your SSH key, password, WiFi config, and use cases baked in. Flash and forget.</p></div>
+    <div class="card"><h3>Router-to-Router</h3><p>Install conwrt on an OpenWrt router to flash other routers. Multicast flash (zycast) for provisioning many devices at once.</p></div>
+  </div>
+</section>
+
+<section class="section" id="stories">
+  <div class="section-head">
+    <h2>Who uses conwrt?</h2>
+    <p class="subtitle">Real-world deployment scenarios.</p>
+  </div>
+  <div class="cards-grid">
+    <div class="card"><h3>The Traveler</h3><p>USB tether + VPN + SQM on a pocket-sized GL.iNet Beryl AX.</p><a class="card-link" href="user-stories.html#traveler">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Homelab Operator</h3><p>AdGuard + guest WiFi + WireGuard remote access on a Linksys MX4200.</p><a class="card-link" href="user-stories.html#homelab">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Mesh Builder</h3><p>802.11s mesh network from repurposed consumer routers.</p><a class="card-link" href="user-stories.html#mesh">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Developer</h3><p>Python API, model definitions, CLI scripting for full infrastructure-as-code.</p><a class="card-link" href="user-stories.html#developer">Read full story &rarr;</a></div>
+    <div class="card"><h3>The Device Rescuer</h3><p>Recovery-mode flashing for bricked or stock-firmware-locked routers.</p><a class="card-link" href="user-stories.html#rescuer">Read full story &rarr;</a></div>
+  </div>
+</section>
 
 <div class="legend">
   <div class="legend-item"><span class="badge tested">tested</span> Verified on real hardware</div>
@@ -381,9 +488,26 @@ def generate_html(models: list[dict], use_cases: list[dict]) -> str:
 {uc_rows}  </tbody>
 </table>
 
+<section class="section" id="docs">
+  <div class="section-head">
+    <h2>Documentation</h2>
+    <p class="subtitle">Source files and design docs on GitHub.</p>
+  </div>
+  <div class="docs-grid">
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt#readme"><span class="doc-title">README</span><span class="doc-desc">Full feature reference, CLI options, use case docs</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/CONTRIBUTING.md"><span class="doc-title">Contributing</span><span class="doc-desc">PR-based workflow, device contribution guide</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/process.md"><span class="doc-title">AI Discovery Process</span><span class="doc-desc">Stage 1 onboarding for unknown routers</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/gotchas.md"><span class="doc-title">Device Gotchas</span><span class="doc-desc">Per-model quirks and known issues</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/testing-status.md"><span class="doc-title">Testing Status</span><span class="doc-desc">Hardware verification log and test matrix</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/docs/design-ops-pipeline.md"><span class="doc-title">Ops Pipeline Design</span><span class="doc-desc">Transport-agnostic operation rendering</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/tree/master/recipes"><span class="doc-title">Per-Device Recipes</span><span class="doc-desc">Step-by-step procedures and field notes</span></a>
+    <a class="doc-link" href="https://github.com/amperstrand/conwrt/blob/master/AGENTS.md"><span class="doc-title">Safety Rules (AGENTS.md)</span><span class="doc-desc">Hardware-safety constraints for automated agents</span></a>
+  </div>
+</section>
+
 <footer>
-Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a>.
-Last update: __TIMESTAMP__
+  Generated from <a href="https://github.com/amperstrand/conwrt/tree/master/models">models/*.json</a> — the authoritative single source of truth.<br>
+  Last update: __TIMESTAMP__ · <a href="wizard.html">Deployment Wizard</a> · <a href="https://github.com/amperstrand/conwrt">GitHub</a>
 </footer>
 
 {cmd_source_divs}<div id="cmd-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><span class="modal-title">Shell Commands</span><button class="modal-close">&times;</button></div><pre class="modal-code"><code id="modal-code-content"></code></pre><button class="modal-copy">Copy</button></div></div>

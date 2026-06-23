@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>conwrt — User Stories</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; padding: 2rem; padding-top: 70px; }
+  h1 { font-size: 1.7rem; margin-bottom: 0.25rem; }
+  .subtitle { color: #666; margin-bottom: 2rem; }
+  nav.sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 2rem; display: flex; gap: 1.5rem; align-items: center; }
+  nav.sticky a { color: #555; font-size: 0.85rem; text-decoration: none; }
+  nav.sticky a:hover { color: #0366d6; }
+  nav.sticky .brand { font-weight: 700; color: #1a1a1a; }
+  .story { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  .story h2 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+  .story h3 { font-size: 1rem; color: #555; margin: 1rem 0 0.4rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .story p { margin: 0.5rem 0; line-height: 1.6; }
+  .story .want { font-style: italic; color: #0366d6; margin-bottom: 1rem; display: block; }
+  pre { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 4px; padding: 12px; overflow-x: auto; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.82rem; line-height: 1.5; }
+  code { background: #eee; padding: 2px 5px; border-radius: 3px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.82rem; }
+  .note { background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; margin-top: 1rem; }
+  a { color: #0366d6; }
+  footer { margin-top: 2.5rem; color: #999; font-size: 0.78rem; }
+</style>
+</head>
+<body>
+
+<nav class="sticky">
+  <a class="brand" href="index.html">conwrt</a>
+  <a href="index.html#quick-start">Quick Start</a>
+  <a href="index.html#features">Features</a>
+  <a href="user-stories.html">User Stories</a>
+  <a href="wizard.html">Wizard</a>
+  <a href="index.html#flash-methods">Devices</a>
+  <a href="https://github.com/amperstrand/conwrt">GitHub</a>
+</nav>
+
+<h1>User Stories</h1>
+<p class="subtitle">Real-world deployments with conwrt.</p>
+
+<div class="story" id="traveler">
+  <h2>1. The Traveler</h2>
+  <span class="want">"I want reliable, secure WiFi when working from hotels and cafes."</span>
+
+  <h3>The Problem</h3>
+  <p>Hotel WiFi is unreliable, insecure, and often behind captive portals. Phone hotspot works but has limited range and no VPN. Public networks expose your traffic to snooping and man-in-the-middle attacks.</p>
+
+  <h3>The conwrt Solution</h3>
+  <p>Flash a pocket-sized GL.iNet Beryl AX (MT3000) with travelmate for auto-connecting to hotel WiFi, WireGuard VPN client for encrypted tunneling to your home server, and SQM to eliminate bufferbloat on slow hotel uplinks. Connect your laptop and phone to the router's private WiFi, and everything goes through your VPN.</p>
+
+  <h3>How to do it</h3>
+  <p>Create your <code>config.toml</code>:</p>
+  <pre>
+[ssh]
+keys = ["~/.ssh/id_ed25519.pub"]
+
+[password]
+mode = "random"
+
+[network]
+wan_ssh = false
+
+[use_cases]
+enabled = ["travelmate", "wireguard-client", "sqm"]
+
+[use_cases.travelmate]
+radio = "radio0"
+timeout = 60
+retry = 5
+captive = true
+
+[use_cases.wireguard-client]
+peer_public_key = "YOUR_SERVER_PUBLIC_KEY"
+endpoint_host = "vpn.example.com"
+endpoint_port = 51820
+address = "10.67.0.2/32"
+allowed_ips = "10.67.0.0/24"
+kill_switch = false
+
+[use_cases.sqm]
+download_kbps = 50000
+upload_kbps = 10000
+qdisc = "cake"
+
+[wireguard]
+registration_server = "my-vpn-server"
+wg_interface = "wg0"
+</pre>
+
+  <p>Flash the router:</p>
+  <pre>
+python3 scripts/conwrt.py --model-id glinet-mt3000 --request-image --no-password
+</pre>
+
+  <p>Plug in the router at your hotel. Connect your laptop to the router's default WiFi. The router automatically scans and connects to hotel WiFi through captive portal detection, establishes the WireGuard tunnel, and applies SQM to eliminate bufferbloat.</p>
+
+  <h3>Result</h3>
+  <p>Pocket-sized travel router that auto-connects to hotel WiFi, routes all traffic through your home VPN server, and eliminates bufferbloat on slow uplinks. Your devices are always protected, and you never touch captive portals again.</p>
+
+  <p class="note">Note: <code>travelmate</code>, <code>wireguard-client</code>, and <code>sqm</code> are untested presets. The uci commands and package lists are based on OpenWrt wiki documentation. They need real-device validation before production use. <code>wireguard-client</code> registration is tested on D-Link COVR-X1860 A1.</p>
+</div>
+
+<div class="story" id="homelab">
+  <h2>2. The Homelab Operator</h2>
+  <span class="want">"I want a home router with ad-blocking, guest WiFi, and remote access."</span>
+
+  <h3>The Problem</h3>
+  <p>Stock router firmware is limited. No ad-blocking across all devices. No VPN server for accessing your homelab when you're away. Guest WiFi is an afterthought and often not properly isolated from your main network. You want a router that does more than just route packets.</p>
+
+  <h3>The conwrt Solution</h3>
+  <p>Flash a Linksys MX4200 with AdGuard Home for network-wide ad blocking, guest WiFi for visitors with proper isolation, and a WireGuard server to access your homelab remotely. All configured from a single <code>config.toml</code> file and baked into the firmware image.</p>
+
+  <h3>How to do it</h3>
+  <p>Create your <code>config.toml</code>:</p>
+  <pre>
+[ssh]
+keys = ["~/.ssh/id_ed25519.pub"]
+
+[password]
+mode = "random"
+
+[network]
+lan_ip = "192.168.1.1"
+
+[use_cases]
+enabled = ["adguard", "guest-wifi", "wireguard-server"]
+
+[use_cases.adguard]
+listen_ip = "0.0.0.0"
+web_port = 3000
+dns_port = 5353
+bootstrap_dns = "1.1.1.1,8.8.8.8"
+
+[use_cases.guest-wifi]
+ssid = "Guest"
+key = ""
+encryption = "psk2"
+band = "2.4ghz"
+isolation = true
+network_name = "guest"
+
+[use_cases.wireguard-server]
+private_key = "YOUR_SERVER_PRIVATE_KEY"
+listen_port = 51820
+subnet = "10.1.99.1/24"
+peer1_public_key = "YOUR_LAPTOP_PUBLIC_KEY"
+peer1_allowed_ips = "10.1.99.2/32"
+</pre>
+
+  <p>Flash the router:</p>
+  <pre>
+python3 scripts/conwrt.py --model-id linksys-mx4200-v1 --request-image --ssh-key ~/.ssh/id_ed25519.pub --no-password
+</pre>
+
+  <p>After flashing, SSH to the router at <code>192.168.1.1</code> and run the AdGuard Home setup wizard at <code>http://192.168.1.1:3000</code>. Point your devices' DNS to <code>192.168.1.1:5353</code> for ad blocking. Configure WireGuard peers on your laptop and phone using the public key and subnet from the config.</p>
+
+  <h3>Result</h3>
+  <p>Full-featured home router with network-wide ad blocking via AdGuard Home, properly isolated guest WiFi for visitors, and WireGuard VPN server for secure remote access to your homelab. All configured declaratively and reproducibly from a single config file.</p>
+
+  <p class="note">Note: <code>adguard</code> and <code>guest-wifi</code> are untested presets. The uci commands and package lists are based on OpenWrt wiki documentation. They need real-device validation before production use. <code>wireguard-server</code> is tested on D-Link COVR-X1860 A1.</p>
+</div>
+
+<div class="story" id="mesh">
+  <h2>3. The Mesh Builder</h2>
+  <span class="want">"I want to repurpose old routers into a whole-house WiFi mesh."</span>
+
+  <h3>The Problem</h3>
+  <p>Single router can't cover your whole house. Buying a mesh system is expensive. You have 2-3 old consumer routers collecting dust in a closet. You want to turn them into a mesh network without vendor lock-in or proprietary apps.</p>
+
+  <h3>The conwrt Solution</h3>
+  <p>Flash each router with mesh11sd for 802.11s mesh networking. All nodes run the same firmware image with matching mesh credentials. They auto-discover and connect to each other, forming a seamless mesh network covering your entire house.</p>
+
+  <h3>How to do it</h3>
+  <p>Create your <code>config.toml</code> (same file for all nodes):</p>
+  <pre>
+[ssh]
+keys = ["~/.ssh/id_ed25519.pub"]
+
+[password]
+mode = "random"
+
+[use_cases]
+enabled = ["mesh11sd"]
+
+[use_cases.mesh11sd]
+mesh_id = "MyHomeMesh"
+ssid = "MeshNet"
+encryption = "1"
+key = "YourSecretPassword"
+auto_config = "2"
+</pre>
+
+  <p>Flash each router (same command, repeat for each device):</p>
+  <pre>
+python3 scripts/conwrt.py --model-id <your-model-id> --request-image --no-password
+</pre>
+
+  <p>Power on all routers. They auto-discover each other via the mesh ID and form a network. Connect your devices to <code>MeshNet</code> WiFi and roam seamlessly between nodes.</p>
+
+  <h3>Result</h3>
+  <p>Whole-house WiFi mesh built from repurposed routers. No vendor lock-in, no proprietary apps, no expensive hardware. All nodes run the same firmware and can be managed with conwrt's SSH-based inventory and configuration tools.</p>
+
+  <p class="note">Note: <code>mesh11sd</code> is an untested and experimental preset. The uci commands and package lists are based on OpenWrt wiki documentation and community guides. This feature needs real-device validation before production use. Do not deploy to production routers until tested.</p>
+</div>
+
+<div class="story" id="developer">
+  <h2>4. The Developer</h2>
+  <span class="want">"I want to manage routers as code, not click through web UIs."</span>
+
+  <h3>The Problem</h3>
+  <p>Manual router configuration via web UI is error-prone, not reproducible, and doesn't scale across many devices. You want to define network profiles once and deploy them to dozens of routers with a single command. Version control your router configs. Roll back changes when something breaks.</p>
+
+  <h3>The conwrt Solution</h3>
+  <p>Use conwrt's Python API and CLI to script device provisioning. Define profiles in <code>config.toml</code>, build firmware via ASU, flash and configure programmatically. The same config file drives both firmware builds and post-flash SSH configuration. No drift between what you defined and what's running.</p>
+
+  <h3>How to do it</h3>
+  <p>Create your <code>config.toml</code> profile:</p>
+  <pre>
+[ssh]
+keys = ["~/.ssh/id_ed25519.pub"]
+
+[password]
+mode = "key-only"
+
+[network]
+wan_ssh = true
+
+[use_cases]
+enabled = ["sqm", "wireguard-client"]
+
+[use_cases.sqm]
+download_kbps = 340000
+upload_kbps = 19000
+
+[use_cases.wireguard-client]
+peer_public_key = "YOUR_SERVER_PUBLIC_KEY"
+endpoint_host = "vpn.example.com"
+endpoint_port = 51820
+address = "10.67.0.2/32"
+kill_switch = true
+
+[wireguard]
+registration_server = "my-vpn-server"
+wg_interface = "wg0"
+</pre>
+
+  <p>Plan the profile (dry-run, no firmware build):</p>
+  <pre>
+python3 scripts/conwrt.py profile plan --model-id dlink-covr-x1860-a1
+</pre>
+
+  <p>Request firmware from ASU (dry-run first):</p>
+  <pre>
+python3 scripts/firmware-manager.py request --profile dlink_covr-x1860-a1 --dry-run
+</pre>
+
+  <p>Request and cache the real firmware:</p>
+  <pre>
+python3 scripts/firmware-manager.py request --profile dlink_covr-x1860-a1
+</pre>
+
+  <p>Flash all routers (same command per device):</p>
+  <pre>
+python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 --request-image --no-password --wan-ssh
+</pre>
+
+  <h3>Result</h3>
+  <p>Repeatable, scripted router provisioning. Define your network profile once in <code>config.toml</code>, version it in git, review changes with your team, then deploy to any number of routers with a single command. Roll back by reverting the config and flashing again. No manual uci editing, no web UI clicks, no drift.</p>
+</div>
+
+<div class="story" id="rescuer">
+  <h2>5. The Device Rescuer</h2>
+  <span class="want">"I want to unbrick a router stuck on vendor firmware."</span>
+
+  <h3>The Problem</h3>
+  <p>Your router won't boot, or stock firmware rejects third-party firmware. The web UI says "invalid image". You don't have a serial cable. The router is effectively bricked, but you know it's capable of running OpenWrt.</p>
+
+  <h3>The conwrt Solution</h3>
+  <p>Use conwrt's <code>probe</code> to detect the device boot state (offline, U-Boot, OpenWrt), then use recovery-http to flash via U-Boot's built-in HTTP server. No serial cable needed. Hold the reset button while powering on, and the router listens for firmware uploads on a known IP.</p>
+
+  <h3>How to do it</h3>
+  <p>Probe the device to check its state:</p>
+  <pre>
+python3 scripts/router-probe.py --ip 192.168.1.1
+</pre>
+
+  <p>Download the correct OpenWrt firmware for your model (from ASU or OpenWrt downloads). Verify the hardware matches the image target:</p>
+  <pre>
+# On the router (if accessible via SSH):
+cat /tmp/sysinfo/board_name
+# Compare with your model's openwrt.profile in models/*.json
+</pre>
+
+  <p>Dry-run the flash to test detection without uploading:</p>
+  <pre>
+python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 --image firmware.bin --no-upload
+</pre>
+
+  <p>Hold the reset button, power on the router, wait 5 seconds, release reset. Then flash:</p>
+  <pre>
+python3 scripts/conwrt.py --model-id dlink-covr-x1860-a1 --image firmware.bin
+</pre>
+
+  <h3>Result</h3>
+  <p>Unbricked router running OpenWrt. Recovered without serial cable, using only the reset button and ethernet. The firmware image is verified with SHA-256 before upload, and SSH inventory is collected after boot to confirm the flash succeeded.</p>
+
+  <p class="note">Important safety rule: Never use <code>sysupgrade -F</code> or <code>--force</code>. These flags bypass hardware validation and can brick devices by writing firmware for the wrong hardware. Always identify the device (<code>/tmp/sysinfo/board_name</code>), cross-check with the model definition, and verify that sysupgrade accepts the image before proceeding. If sysupgrade rejects an image with "Device X not supported", the image is wrong. Stop and download the correct firmware.</p>
+</div>
+
+<footer>
+  conwrt &mdash; OpenWrt flashing framework. See <a href="https://github.com/amperstrand/conwrt">GitHub</a> for source and documentation.
+</footer>
+
+</body>
+</html>
