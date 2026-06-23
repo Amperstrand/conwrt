@@ -61,3 +61,11 @@ def gateway_base_steps() -> list[Step]:
             artifact_urls=TOLLGATE_ALPHA3_URLS,
         ),
     ]
+
+
+def lan_finalize_step() -> Step:
+    return Step(
+        kind="set_lan_ip",
+        title="Move the LAN off 192.168.1.1",
+        detail="Sets the router LAN to this model's lan_subnet so it doesn't collide with neighbour devices that default to 192.168.1.1 (e.g. a peer router sitting in U-Boot recovery). Runs last; reconnect on the new subnet afterwards.",
+    )

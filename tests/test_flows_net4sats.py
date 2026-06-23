@@ -21,6 +21,7 @@ def test_net4sats_flow_registered_with_five_steps():
         "Install the tollgate payment backend (v0.5.0-alpha3)",
         "Install the net4sats portal (configurationwizzard)",
         "Brand the captive portal as net4sats",
+        "Move the LAN off 192.168.1.1",
     ]
 
 

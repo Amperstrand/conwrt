@@ -8,7 +8,7 @@ apk) uses the same steps with arch/package-manager picked from the target.
 from __future__ import annotations
 
 from . import Flow, Step, register
-from ._gateway import CONFIGURATIONWIZZARD_URL, gateway_base_steps, gateway_params
+from ._gateway import CONFIGURATIONWIZZARD_URL, gateway_base_steps, gateway_params, lan_finalize_step
 
 register(Flow(
     name="net4sats",
@@ -37,5 +37,6 @@ register(Flow(
                 "hotplug_interface": "wwan",
             },
         ),
+        lan_finalize_step(),
     ],
 ))
