@@ -775,9 +775,55 @@
       }
     }
   },
-  "password_snippet": {
-    "shell": "# --- Set a random root password ---\nssh root@$IP sh <<'CONWRT_EOF'\n# set a random root password (printed once)\nPW=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16) && echo \"root:$PW\" | chpasswd && echo \"root password: $PW\"\nCONWRT_EOF\n",
-    "markdown": "## Set a random root password\n\n### set a random root password (printed once)\n\n```sh\nPW=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16) && echo \"root:$PW\" | chpasswd && echo \"root password: $PW\"\n```\n"
-  },
-  "generated_at": "2026-06-23 14:38 UTC"
+  "addons": [
+    {
+      "name": "random-password",
+      "title": "Set a random root password",
+      "description": "Generate a random 16-char root password and print it once.",
+      "params": {},
+      "shell": "# --- Set a random root password ---\nssh root@$IP sh <<'CONWRT_EOF'\n# set a random root password (printed once)\nPW=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16) && echo \"root:$PW\" | chpasswd && echo \"root password: $PW\"\nCONWRT_EOF\n",
+      "markdown": "## Set a random root password\n\n### set a random root password (printed once)\n\n```sh\nPW=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16) && echo \"root:$PW\" | chpasswd && echo \"root password: $PW\"\n```\n"
+    },
+    {
+      "name": "set-password",
+      "title": "Set a specific root password",
+      "description": "Set the root password to a value you choose.",
+      "params": {
+        "root_password": {
+          "type": "string",
+          "required": true,
+          "description": "The root password to set",
+          "default": null,
+          "choices": []
+        }
+      },
+      "shell": "# --- Set root password ---\nssh root@$IP sh <<'CONWRT_EOF'\n# set root password\necho 'root:{{root_password}}' | chpasswd\nCONWRT_EOF\n",
+      "markdown": "## Set root password\n\n### set root password\n\n```sh\necho 'root:{{root_password}}' | chpasswd\n```\n"
+    },
+    {
+      "name": "hostname",
+      "title": "Set the router hostname",
+      "description": "Rename the router (e.g. to 'net4sats').",
+      "params": {
+        "hostname": {
+          "type": "string",
+          "required": true,
+          "description": "The hostname to set",
+          "default": null,
+          "choices": []
+        }
+      },
+      "shell": "# --- Set hostname ---\nssh root@$IP sh <<'CONWRT_EOF'\n# set hostname to {{hostname}}\nuci set system.@system[0].hostname='{{hostname}}'\nuci commit system\necho '{{hostname}}' > /proc/sys/kernel/hostname\nCONWRT_EOF\n",
+      "markdown": "## Set hostname\n\n### set hostname to {{hostname}}\n\n```sh\nuci set system.@system[0].hostname='{{hostname}}'\nuci commit system\necho '{{hostname}}' > /proc/sys/kernel/hostname\n```\n"
+    },
+    {
+      "name": "wan-ssh",
+      "title": "Enable SSH on the WAN port",
+      "description": "Open port 22 on the WAN firewall zone so the router is reachable from upstream.",
+      "params": {},
+      "shell": "# --- Enable SSH on WAN ---\nssh root@$IP sh <<'CONWRT_EOF'\n# enable SSH on the WAN port\nuci -q delete firewall.wan_ssh; uci set firewall.wan_ssh=rule\nuci set firewall.wan_ssh.src='wan'\nuci set firewall.wan_ssh.dest_port='22'\nuci set firewall.wan_ssh.proto='tcp'\nuci set firewall.wan_ssh.target='ACCEPT'\nuci commit firewall\n/etc/init.d/firewall restart\nCONWRT_EOF\n",
+      "markdown": "## Enable SSH on WAN\n\n### enable SSH on the WAN port\n\n```sh\nuci -q delete firewall.wan_ssh; uci set firewall.wan_ssh=rule\nuci set firewall.wan_ssh.src='wan'\nuci set firewall.wan_ssh.dest_port='22'\nuci set firewall.wan_ssh.proto='tcp'\nuci set firewall.wan_ssh.target='ACCEPT'\nuci commit firewall\n/etc/init.d/firewall restart\n```\n"
+    }
+  ],
+  "generated_at": "2026-06-23 15:02 UTC"
 }

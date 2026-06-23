@@ -8,30 +8,41 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; padding: 2rem; padding-top: 70px; }
   h1 { font-size: 1.7rem; margin-bottom: 0.25rem; }
-  h2 { font-size: 1rem; color: #555; margin: 1.5rem 0 0.5rem; }
-  .subtitle { color: #666; margin-bottom: 1.5rem; }
+  h2 { font-size: 0.95rem; color: #555; margin: 1.25rem 0 0.4rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .subtitle { color: #666; margin-bottom: 1.25rem; }
   nav.sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 2rem; display: flex; gap: 1.5rem; align-items: center; }
   nav.sticky a { color: #555; font-size: 0.85rem; text-decoration: none; }
   nav.sticky a:hover { color: #0366d6; }
   nav.sticky .brand { font-weight: 700; color: #1a1a1a; }
-  .panel { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+  .panel { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   label { display: block; font-size: 0.8rem; font-weight: 600; color: #444; margin: 0.6rem 0 0.2rem; }
   label .req { color: #c0392b; }
   label .desc { font-weight: 400; color: #888; font-size: 0.75rem; }
-  select, input[type=text], input[type=number] { width: 100%; max-width: 420px; padding: 6px 8px; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px; }
-  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
-  .row > div { flex: 1; min-width: 200px; }
-  .tabs { display: flex; gap: 0; margin-bottom: 0; }
+  select, input[type=text], input[type=number] { width: 100%; padding: 7px 9px; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .search-wrap { position: relative; }
+  .model-list { position: absolute; top: 100%; left: 0; right: 0; max-height: 280px; overflow: auto; background: #fff; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; display: none; z-index: 20; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+  .model-list .item { padding: 7px 10px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0; }
+  .model-list .item:last-child { border-bottom: none; }
+  .model-list .item:hover { background: #eef4fb; color: #0366d6; }
+  .model-list .item .id { color: #999; font-size: 0.78rem; }
+  .addon { display: flex; gap: 0.5rem; align-items: flex-start; padding: 6px 0; }
+  .addon input[type=checkbox] { margin-top: 3px; }
+  .addon-body { flex: 1; }
+  .addon-body .aparam { margin-top: 6px; }
+  .tabs { display: flex; gap: 0; }
   .tab { padding: 8px 16px; cursor: pointer; border: 1px solid #e0e0e0; border-bottom: none; background: #f5f5f5; font-size: 0.85rem; border-radius: 4px 4px 0 0; }
   .tab.active { background: #0366d6; color: #fff; }
   .out-wrap { border: 1px solid #e0e0e0; border-radius: 0 4px 4px 4px; position: relative; }
-  .out-wrap pre { margin: 0; padding: 14px; overflow: auto; max-height: 60vh; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; white-space: pre; background: #f8f9fa; }
+  .out-wrap pre { margin: 0; padding: 14px; overflow: auto; max-height: 62vh; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; white-space: pre; background: #f8f9fa; }
   .copy { position: absolute; top: 8px; right: 8px; padding: 4px 12px; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
   .copy:hover { background: #0257a5; }
   .meta { font-size: 0.8rem; color: #666; margin: 0.3rem 0 0.8rem; }
-  .meta code { background: #eee; padding: 1px 5px; border-radius: 3px; font-size: 0.78rem; }
-  .warn { background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 1rem; }
+  .meta code, .permalink code { background: #eee; padding: 1px 5px; border-radius: 3px; font-size: 0.78rem; }
+  .permalink { font-size: 0.78rem; color: #666; margin: 0.4rem 0 0.8rem; word-break: break-all; }
   .empty { color: #999; font-style: italic; padding: 14px; }
+  .warn { background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 1rem; }
   footer { margin-top: 2rem; color: #999; font-size: 0.78rem; }
   a { color: #0366d6; }
 </style>
@@ -46,16 +57,17 @@
 </nav>
 
 <h1>conwrt Deployment Wizard</h1>
-<p class="subtitle">Pick a router and a feature, fill in your options, and get the exact shell script or step-by-step instructions conwrt would run. Generated from the same source of truth as the CLI — no drift.</p>
+<p class="subtitle">Search your router, pick a feature, stack any add-ons, and copy the exact shell script or step-by-step instructions conwrt would run. Shareable via URL. Same source of truth as the CLI — no drift.</p>
 
-<div id="load-warn" class="warn" style="display:none">Loading bundle… if this persists, run <code>python3 scripts/generate_site.py</code> and commit <code>docs/wizard-bundle.json</code>.</div>
+<div id="load-warn" class="warn" style="display:none"></div>
 
 <div class="panel">
-  <div class="row">
-    <div>
-      <label>Router</label>
-      <select id="model"></select>
-    </div>
+  <label>Router</label>
+  <div class="search-wrap">
+    <input type="text" id="model-search" placeholder="Type a brand or model (e.g. mt3000, covr, flint)…" autocomplete="off">
+    <div id="model-list" class="model-list"></div>
+  </div>
+  <div class="grid" style="margin-top:0.6rem">
     <div>
       <label>Feature (flow)</label>
       <select id="flow"></select>
@@ -65,16 +77,14 @@
       <select id="version"></select>
     </div>
   </div>
-  <div id="params"></div>
-  <div style="margin-top:0.8rem">
-    <label style="display:inline-flex;align-items:center;gap:0.4rem;font-weight:400;cursor:pointer">
-      <input type="checkbox" id="opt-password" style="width:auto;max-width:none"> Set a random root password
-      <span class="desc">(composes with any flow)</span>
-    </label>
-  </div>
+  <h2>Options</h2>
+  <div id="flow-params"></div>
+  <h2>Add-ons <span style="font-weight:400;text-transform:none;color:#999">(stack on top of any flow)</span></h2>
+  <div id="addons"></div>
 </div>
 
 <div class="meta" id="target-meta"></div>
+<div class="permalink" id="permalink"></div>
 
 <div class="tabs">
   <div class="tab active" data-tab="shell">Shell script</div>
@@ -82,121 +92,112 @@
 </div>
 <div class="out-wrap">
   <button class="copy" id="copy-btn">Copy</button>
-  <pre id="output"><span class="empty">Select a router and a feature…</span></pre>
+  <pre id="output"><span class="empty">Search and select a router…</span></pre>
 </div>
 
 <footer>Generated from <code>models/*.json</code> + <code>scripts/flows/*.py</code>. Same data the <code>conwrt</code> CLI uses.</footer>
 
 <script>
 let BUNDLE = null;
-let currentTab = "shell";
+let state = { model: "", flow: "", version: "", output: "shell", addons: [] };
 
 async function init() {
   try {
-    const r = await fetch("wizard-bundle.json", {cache: "no-store"});
+    const r = await fetch("wizard-bundle.json", { cache: "no-store" });
     BUNDLE = await r.json();
   } catch (e) {
     document.getElementById("load-warn").style.display = "block";
     document.getElementById("load-warn").textContent = "Could not load wizard-bundle.json. Run: python3 scripts/generate_site.py";
     return;
   }
-  populateModels();
   populateFlows();
   populateVersions();
-  renderParams();
-  document.getElementById("opt-password").addEventListener("change", render);
-  onModelChange();
-}
-
-function populateModels() {
-  const sel = document.getElementById("model");
-  sel.innerHTML = "";
-  for (const m of BUNDLE.models) {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = `${m.description} (${m.id})`;
-    sel.appendChild(opt);
-  }
-  sel.addEventListener("change", onModelChange);
-}
-
-function populateVersions() {
-  const sel = document.getElementById("version");
-  sel.innerHTML = "";
-  for (const v of BUNDLE.versions) {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v;
-    sel.appendChild(opt);
-  }
-  sel.addEventListener("change", render);
-}
-
-function onModelChange() {
-  const m = BUNDLE.models.find(x => x.id === document.getElementById("model").value);
-  const vsel = document.getElementById("version");
-  if (m && m.version && [...vsel.options].some(o => o.value === m.version)) {
-    vsel.value = m.version;
-  }
-  render();
+  applyUrlState();
+  wireEvents();
 }
 
 function populateFlows() {
   const sel = document.getElementById("flow");
   sel.innerHTML = "";
   for (const f of BUNDLE.flows) {
-    const opt = document.createElement("option");
-    opt.value = f.name;
-    opt.textContent = `${f.name} — ${f.description.slice(0, 60)}`;
-    sel.appendChild(opt);
+    const o = document.createElement("option"); o.value = f.name;
+    o.textContent = `${f.name} — ${f.description.slice(0, 60)}`;
+    sel.appendChild(o);
   }
-  sel.addEventListener("change", () => { renderParams(); render(); });
 }
 
-function selectedFlow() {
-  const name = document.getElementById("flow").value;
-  return BUNDLE.flows.find(f => f.name === name);
+function populateVersions() {
+  const sel = document.getElementById("version");
+  sel.innerHTML = "";
+  for (const v of BUNDLE.versions) {
+    const o = document.createElement("option"); o.value = v; o.textContent = v;
+    sel.appendChild(o);
+  }
 }
 
-function renderParams() {
-  const flow = selectedFlow();
-  const box = document.getElementById("params");
+function renderAddons() {
+  const box = document.getElementById("addons");
+  box.innerHTML = "";
+  if (!BUNDLE.addons || !BUNDLE.addons.length) { box.innerHTML = '<span class="empty">none</span>'; return; }
+  for (const ad of BUNDLE.addons) {
+    const row = document.createElement("div"); row.className = "addon";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.id = "addon-" + ad.name;
+    cb.checked = state.addons.includes(ad.name);
+    cb.addEventListener("change", () => {
+      if (cb.checked && !state.addons.includes(ad.name)) state.addons.push(ad.name);
+      if (!cb.checked) state.addons = state.addons.filter(x => x !== ad.name);
+      renderAddons(); update();
+    });
+    const body = document.createElement("div"); body.className = "addon-body";
+    const lbl = document.createElement("label"); lbl.style.margin = "0"; lbl.style.fontWeight = "600";
+    lbl.htmlFor = "addon-" + ad.name; lbl.textContent = ad.title;
+    const desc = document.createElement("div"); desc.className = "desc"; desc.style.color = "#888"; desc.style.fontSize = "0.78rem"; desc.textContent = ad.description;
+    body.appendChild(lbl); body.appendChild(desc);
+    if (ad.params && Object.keys(ad.params).length) {
+      for (const [pn, pd] of Object.entries(ad.params)) {
+        const wrap = document.createElement("div"); wrap.className = "aparam";
+        const pl = document.createElement("label"); pl.style.fontSize = "0.75rem";
+        pl.innerHTML = `${pn}${pd.required ? ' <span class="req">*</span>' : ''} <span class="desc">${pd.description||""}</span>`;
+        const inp = document.createElement("input"); inp.type = "text"; inp.id = "param-" + pn; inp.dataset.param = pn;
+        inp.value = pd.default || ""; if (pd.required) inp.placeholder = "required";
+        inp.addEventListener("input", update);
+        wrap.appendChild(pl); wrap.appendChild(inp); body.appendChild(wrap);
+      }
+    }
+    row.appendChild(cb); row.appendChild(body); box.appendChild(row);
+  }
+}
+
+function renderFlowParams() {
+  const flow = currentFlowObj();
+  const box = document.getElementById("flow-params");
   box.innerHTML = "";
   if (!flow || !flow.params) return;
   for (const [name, p] of Object.entries(flow.params)) {
     const lbl = document.createElement("label");
-    const req = p.required ? ' <span class="req">*</span>' : "";
-    lbl.innerHTML = `${name}${req} <span class="desc">${p.description || ""}</span>`;
-    box.appendChild(lbl);
+    lbl.innerHTML = `${name}${p.required ? ' <span class="req">*</span>' : ''} <span class="desc">${p.description||""}</span>`;
     let inp;
     if (p.choices && p.choices.length) {
       inp = document.createElement("select");
       for (const c of p.choices) { const o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); }
       inp.value = p.default || p.choices[0];
-    } else if (p.type === "bool") {
-      inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!p.default;
-    } else if (p.type === "int") {
-      inp = document.createElement("input"); inp.type = "number"; inp.value = p.default ?? "";
     } else {
-      inp = document.createElement("input"); inp.type = "text";
-      inp.value = (p.default && p.default !== "") ? p.default : "";
+      inp = document.createElement("input"); inp.type = "text"; inp.value = p.default || "";
       if (p.required) inp.placeholder = "required";
     }
     inp.id = "param-" + name; inp.dataset.param = name;
-    inp.addEventListener("input", render); inp.addEventListener("change", render);
-    box.appendChild(inp);
+    inp.addEventListener("input", update); inp.addEventListener("change", update);
+    box.appendChild(lbl); box.appendChild(inp);
   }
 }
 
+function currentFlowObj() { return BUNDLE.flows.find(f => f.name === state.flow); }
+
 function paramValues() {
-  const flow = selectedFlow();
   const vals = {};
-  if (!flow) return vals;
-  for (const name of Object.keys(flow.params)) {
-    const el = document.getElementById("param-" + name);
-    if (!el) continue;
-    vals[name] = (el.type === "checkbox") ? (el.checked ? "true" : "false") : el.value;
-  }
+  document.querySelectorAll("[data-param]").forEach(el => {
+    vals[el.dataset.param] = el.type === "checkbox" ? (el.checked ? "true" : "false") : el.value;
+  });
   return vals;
 }
 
@@ -204,42 +205,135 @@ function substitute(text, vals) {
   return text.replace(/\{\{(\w+)\}\}/g, (_, k) => (vals[k] != null ? vals[k] : ""));
 }
 
-function render() {
-  const modelId = document.getElementById("model").value;
-  const flow = selectedFlow();
+function renderOutput() {
   const out = document.getElementById("output");
-  if (!modelId || !flow) { out.innerHTML = '<span class="empty">Select a router and a feature…</span>'; return; }
-  const version = document.getElementById("version").value;
-  const entry = ((BUNDLE.rendered[modelId] || {})[flow.name] || {})[version];
+  if (!state.model) { out.innerHTML = '<span class="empty">Search and select a router…</span>'; return; }
+  const flow = currentFlowObj();
+  const entry = ((BUNDLE.rendered[state.model] || {})[state.flow] || {})[state.version];
   if (!entry) { out.innerHTML = '<span class="empty">No rendered output for this combination.</span>'; return; }
   const vals = paramValues();
-  const missing = Object.entries(flow.params).filter(([n, p]) => p.required && !vals[n]);
-  let text = substitute(currentTab === "shell" ? entry.shell : entry.markdown, vals);
-  if (document.getElementById("opt-password").checked && BUNDLE.password_snippet) {
-    text = BUNDLE.password_snippet[currentTab] + "\n\n" + text;
+  const missing = flow ? Object.entries(flow.params).filter(([n, p]) => p.required && !vals[n]).map(x=>x[0]) : [];
+  let text = substitute(state.output === "shell" ? entry.shell : entry.markdown, vals);
+  for (const aname of state.addons) {
+    const ad = BUNDLE.addons.find(a => a.name === aname);
+    if (ad) text += "\n\n" + substitute(state.output === "shell" ? ad.shell : ad.markdown, vals);
   }
   out.textContent = text;
-  const m = BUNDLE.models.find(x => x.id === modelId);
+  const m = BUNDLE.models.find(x => x.id === state.model);
   const fm = text.match(/OpenWrt[^\n]*·[^\n]*·[^\n]*/);
-  document.getElementById("target-meta").innerHTML = m ? `Target: <code>${m.id}</code> · ${fm ? fm[0] : ""}` : "";
+  let meta = m ? `Target: <code>${m.id}</code>${fm ? " · " + fm[0] : ""}` : "";
+  if (missing.length) meta += ` — <span style="color:#c0392b">missing required: ${missing.join(", ")}</span>`;
+  document.getElementById("target-meta").innerHTML = meta;
   document.getElementById("copy-btn").textContent = "Copy";
-  if (missing.length) {
-    document.getElementById("target-meta").innerHTML += ` — <span style="color:#c0392b">missing required: ${missing.map(x=>x[0]).join(", ")}</span>`;
-  }
 }
 
-document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
-  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-  t.classList.add("active");
-  currentTab = t.dataset.tab;
-  render();
-}));
+function update() {
+  syncUrl();
+  renderOutput();
+}
 
-document.getElementById("copy-btn").addEventListener("click", () => {
-  navigator.clipboard.writeText(document.getElementById("output").textContent).then(() => {
-    const b = document.getElementById("copy-btn"); b.textContent = "Copied!"; setTimeout(() => b.textContent = "Copy", 1500);
+function syncUrl() {
+  const p = new URLSearchParams();
+  if (state.model) p.set("model", state.model);
+  if (state.flow) p.set("flow", state.flow);
+  if (state.version) p.set("version", state.version);
+  p.set("output", state.output === "markdown" ? "instructions" : "script");
+  for (const a of state.addons) p.append("addon", a);
+  for (const [k, v] of Object.entries(paramValues())) { if (v) p.set(k, v); }
+  const qs = p.toString();
+  history.replaceState(null, "", qs ? "?" + qs : location.pathname);
+  document.getElementById("permalink").innerHTML = 'Permalink: <a href="' + (qs?"?"+qs:location.pathname) + '">' + (qs ? "?" + qs : "(none)") + "</a>";
+}
+
+function applyUrlState() {
+  const p = new URLSearchParams(location.search);
+  state.flow = p.get("flow") && BUNDLE.flows.some(f=>f.name===p.get("flow")) ? p.get("flow") : BUNDLE.flows[0].name;
+  state.output = p.get("output") === "instructions" ? "markdown" : "shell";
+  state.addons = p.getAll("addon").filter(a => BUNDLE.addons.some(x=>x.name===a));
+  const urlVals = {};
+  for (const [k, v] of p.entries()) { if (!["model","flow","version","output","addon"].includes(k)) urlVals[k] = v; }
+  document.getElementById("flow").value = state.flow;
+  const setVersionFromModel = (mid) => {
+    const m = BUNDLE.models.find(x=>x.id===mid);
+    const vsel = document.getElementById("version");
+    const want = p.get("version") || (m && m.version) || BUNDLE.versions[0];
+    if ([...vsel.options].some(o=>o.value===want)) vsel.value = want;
+    state.version = vsel.value;
+  };
+  const mid = p.get("model");
+  if (mid && BUNDLE.models.some(x=>x.id===mid)) {
+    state.model = mid;
+    const m = BUNDLE.models.find(x=>x.id===mid);
+    document.getElementById("model-search").value = `${m.description} (${m.id})`;
+    setVersionFromModel(mid);
+  } else {
+    state.model = ""; state.version = BUNDLE.versions[0];
+    document.getElementById("version").value = state.version;
+  }
+  // pre-fill param values from URL after inputs are rendered
+  renderFlowParams(); renderAddons();
+  for (const [k, v] of Object.entries(urlVals)) {
+    const el = document.getElementById("param-" + k);
+    if (el) el.value = v;
+  }
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === state.output));
+  update();
+}
+
+function renderAll() { renderFlowParams(); renderAddons(); update(); }
+
+function wireEvents() {
+  const search = document.getElementById("model-search");
+  const list = document.getElementById("model-list");
+  function showList(q) {
+    const query = (q || "").toLowerCase().trim();
+    const matches = BUNDLE.models.filter(m =>
+      !query || m.description.toLowerCase().includes(query) || m.id.toLowerCase().includes(query) || m.vendor.toLowerCase().includes(query)
+    ).slice(0, 12);
+    list.innerHTML = "";
+    for (const m of matches) {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = `${m.description} <span class="id">(${m.id})</span>`;
+      d.addEventListener("mousedown", (e) => { e.preventDefault(); selectModel(m.id); });
+      list.appendChild(d);
+    }
+    list.style.display = matches.length ? "block" : "none";
+  }
+  search.addEventListener("focus", () => showList(search.value));
+  search.addEventListener("input", () => showList(search.value));
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const first = list.querySelector(".item");
+      if (first) { e.preventDefault(); selectModel(first.querySelector(".id").textContent.replace(/[()]/g, "")); }
+    }
+    if (e.key === "Escape") list.style.display = "none";
   });
-});
+  search.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 150));
+
+  function selectModel(id) {
+    state.model = id;
+    const m = BUNDLE.models.find(x=>x.id===id);
+    search.value = m ? `${m.description} (${m.id})` : id;
+    list.style.display = "none";
+    const vsel = document.getElementById("version");
+    const want = (m && m.version && [...vsel.options].some(o=>o.value===m.version)) ? m.version : BUNDLE.versions[0];
+    vsel.value = want; state.version = want;
+    update();
+  }
+  window.selectModel = selectModel;
+
+  document.getElementById("flow").addEventListener("change", (e) => { state.flow = e.target.value; renderFlowParams(); update(); });
+  document.getElementById("version").addEventListener("change", (e) => { state.version = e.target.value; update(); });
+  document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    t.classList.add("active"); state.output = t.dataset.tab; update();
+  }));
+  document.getElementById("copy-btn").addEventListener("click", () => {
+    navigator.clipboard.writeText(document.getElementById("output").textContent).then(() => {
+      const b = document.getElementById("copy-btn"); b.textContent = "Copied!"; setTimeout(() => b.textContent = "Copy", 1500);
+    });
+  });
+}
 
 init();
 </script>
