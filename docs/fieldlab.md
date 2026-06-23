@@ -39,6 +39,9 @@ conwrt runs on the field router, detects and flashes the unknown device through
 the probe port. The Mac supervises via artifacts and an opencode backchannel.
 
 - `discover` — probe the unknown device from the field router (ARP, ping, ports)
+- `fingerprint` — identify the target device via SSH ProxyJump through the field router
+- `serve dhcp` — run a temporary DHCP server on the probe port (UCI/dnsmasq)
+- `serve tftp` — run a temporary TFTP server for U-Boot netboot
 - `flash` (future) — router-to-router flashing through the probe port
 
 ## Topology assumptions
@@ -97,8 +100,22 @@ python3 scripts/fieldlab.py discover --host root@192.168.1.1 --target 192.168.1.
 ```
 
 Reads the ARP table on the probe interface, pings common router IPs, scans
-common ports with busybox `nc`, and optionally probes HTTP with `curl` if
-available. Writes findings to `runs/<session>/discover/findings.json`.
+common ports (using Python socket when available, busybox nc as fallback),
+and optionally probes HTTP with `curl` if available. Writes findings to
+`runs/<session>/discover/findings.json`.
+
+### fingerprint — identify the target via SSH ProxyJump
+
+```bash
+# Identify the AR300 through the field router
+python3 scripts/fieldlab.py fingerprint --host root@10.89.4.1 --target 192.168.1.1
+```
+
+SSHes to the target device through the field router (SSH ProxyJump `-J`) and
+collects full identity info: board, model, OpenWrt release, hostname, network
+config, packages, SSH keys, firewall rules, available tools. This is the
+Mac-driven discovery path — richer than `discover` (which probes from the
+field router) because it gets full SSH access to the target.
 
 ### forward — local SSH port-forward to the unknown device
 
@@ -128,6 +145,59 @@ Shows the current state of the probe interface and whether a stale `wan` UCI
 binding exists. With `--apply`, clears the binding at runtime (no `uci commit`)
 so the field router stops treating the unknown device as an ISP. Changes revert
 on reboot.
+
+### serve dhcp — temporary DHCP server on the probe port
+
+```bash
+# Start DHCP on a non-colliding subnet
+python3 scripts/fieldlab.py serve dhcp --host root@10.89.4.1 \
+  --probe-if internet --subnet 192.168.50.1/24
+
+# DHCP + TFTP for U-Boot netboot scenarios
+python3 scripts/fieldlab.py serve dhcp --host root@10.89.4.1 \
+  --probe-if internet --subnet 192.168.1.2/24 --tftp-root /tmp/firmware
+```
+
+Configures a temporary DHCP scope via UCI on the field router's existing
+dnsmasq (runtime only — no `uci commit`, reverts on reboot or cleanup).
+Watches `logread` for DHCP lease events and prints them in real-time.
+Press Ctrl-C to stop; cleanup removes all temporary UCI state.
+
+**Why UCI instead of standalone dnsmasq?** The primary dnsmasq binds to
+0.0.0.0:67, so a second instance can't bind port 67. Adding a scope to the
+existing dnsmasq via UCI avoids the conflict and is the OpenWrt-native pattern.
+
+### serve tftp — temporary TFTP server
+
+```bash
+python3 scripts/fieldlab.py serve tftp --host root@10.89.4.1 \
+  --probe-if internet --tftp-root /tmp/firmware
+```
+
+Uses the same UCI/dnsmasq approach with `enable_tftp=1`. Serves firmware
+files to devices in U-Boot netboot mode.
+
+## Operational notes
+
+### IP collision gotcha
+
+If the field router's br-lan and the unknown device are on the same subnet
+(e.g., both at 192.168.1.1), the Linux kernel routes local addresses to
+itself — making the unknown device unreachable via IP. L2 capture still
+works (tcpdump sees everything), but L3 interaction is blocked.
+
+**Solution**: Use `conwrt lan-migrate` to move the field router's br-lan
+to a different subnet (e.g., 10.89.4.1), freeing the original subnet for
+the probe network. Or use `serve dhcp` to give the unknown device an IP
+on a non-colliding subnet.
+
+### AR300 dual-mode behavior
+
+GL.iNet AR300M devices alternate between two modes with different MACs:
+- **U-Boot netboot** (MAC `00:03:7f:*`): ARP-only, looking for TFTP server.
+  Use `serve tftp` to provide firmware.
+- **OpenWrt** (MAC `e4:95:6e:*`): full network stack, SSH/HTTP available.
+  Use `fingerprint` to identify, `forward` to reach web UI.
 
 ## Manual lab setup
 
