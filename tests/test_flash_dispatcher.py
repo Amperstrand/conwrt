@@ -429,11 +429,17 @@ class TestResolveInitialState(TestCase):
         result = self.resolve("uboot", profile, "uboot")
         self.assertEqual(result, State.WAITING_FOR_POWER_OFF)
 
-    def test_uboot_mode_boot_not_uboot(self):
+    @patch("conwrt.flash_dispatcher.detect_uboot_http", return_value=(False, ""))
+    def test_uboot_mode_boot_not_uboot_http_not_found(self, mock_detect):
         profile = _make_profile()
-        # boot_state != "uboot" → skip detect_uboot_http entirely
         result = self.resolve("uboot", profile, "openwrt")
         self.assertEqual(result, State.WAITING_FOR_POWER_OFF)
+
+    @patch("conwrt.flash_dispatcher.detect_uboot_http", return_value=(True, "HTTP 200"))
+    def test_uboot_mode_already_in_recovery_even_when_boot_state_unknown(self, mock_detect):
+        profile = _make_profile()
+        result = self.resolve("uboot", profile, "unknown")
+        self.assertEqual(result, State.UBOOT_UPLOADING)
 
     def test_extreme_mode_boot_not_stock_extreme(self):
         profile = _make_profile()
@@ -460,11 +466,11 @@ class TestResolveInitialState(TestCase):
         result = self.resolve("edgeos", profile, "stock-edgeos")
         self.assertEqual(result, State.EDGEOS_STAGE1)
 
-    @patch("conwrt.flash_dispatcher.detect_uboot_http")
-    def test_uboot_does_not_call_detect_when_not_uboot_boot_state(self, mock_detect):
+    @patch("conwrt.flash_dispatcher.detect_uboot_http", return_value=(False, ""))
+    def test_uboot_probes_detect_even_when_boot_state_not_uboot(self, mock_detect):
         profile = _make_profile()
         self.resolve("uboot", profile, "openwrt")
-        mock_detect.assert_not_called()
+        mock_detect.assert_called_once()
 
 
 # ===================================================================

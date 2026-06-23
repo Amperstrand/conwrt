@@ -178,11 +178,10 @@ def _resolve_initial_state(mode: str, profile: object, boot_state: str) -> State
     config = FLASH_MODES[mode]
 
     if mode == "uboot":
-        if boot_state == "uboot":
-            found, detail = detect_uboot_http(profile.recovery_ip)
-            if found:
-                log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
-                return State.UBOOT_UPLOADING
+        found, detail = detect_uboot_http(profile.recovery_ip)
+        if found:
+            log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
+            return State.UBOOT_UPLOADING
         return State.WAITING_FOR_POWER_OFF
 
     if mode == "extreme" and boot_state != "stock-extreme":
