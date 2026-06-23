@@ -227,4 +227,23 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--quiet", action="store_true",
         help="Only print responding IPs")
 
+    flow_parser = subparsers.add_parser("flow",
+        help="Deploy or generate a composite flow (e.g. net4sats)")
+    flow_sub = flow_parser.add_subparsers(dest="flow_command")
+    flow_sub.add_parser("list", help="List available flows")
+    for _verb, _help in (("script", "Print a runnable shell script"),
+                         ("instructions", "Print Markdown instructions"),
+                         ("run", "Execute the flow against an already-flashed router at --ip")):
+        _p = flow_sub.add_parser(_verb, help=_help)
+        _p.add_argument("--flow", required=True, help="Flow name (e.g. net4sats)")
+        _p.add_argument("--model-id", required=True, help="Model ID (e.g. dlink-covr-x1860-a1)")
+        _p.add_argument("--version", default=None, help="OpenWrt version override (default: model's)")
+        _p.add_argument("--ip", default=DEFAULT_IP, help="Router IP (for 'run')")
+        _p.add_argument("--set", dest="overrides", action="append", default=[],
+                        metavar="KEY=VALUE",
+                        help="Flow param, repeatable (e.g. --set upstream_ssid=home)")
+        _p.add_argument("--set-password", dest="set_password", action="store_true",
+                        help="Prepend a step that sets a random root password (composes with any flow)")
+    flow_parser.set_defaults(flow_command="list")
+
     return parser
