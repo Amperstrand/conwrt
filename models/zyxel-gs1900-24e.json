@@ -8,7 +8,7 @@
     "device": "zyxel,gs1900-24e",
     "default_ip": "192.168.1.1",
     "profile": "zyxel_gs1900-24e",
-    "version": "25.12.1"
+    "version": "25.12.4"
   },
   "hardware": {
     "soc": "Realtek RTL8382M MIPS 4KEc @ 500MHz",

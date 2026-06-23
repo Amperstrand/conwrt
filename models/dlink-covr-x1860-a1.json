@@ -8,7 +8,7 @@
     "device": "dlink,covr-x1860-a1",
     "default_ip": "192.168.1.1",
     "profile": "dlink_covr-x1860-a1",
-    "version": "24.10.2"
+    "version": "24.10.7"
   },
   "hardware": {
     "soc": "MT7621AT",
