@@ -1,0 +1,74 @@
+{
+  "id": "comfast-cf-wr632ax",
+  "lan_subnet": "192.168.1.0/24",
+  "vendor": "COMFAST",
+  "description": "CF-WR632AX WiFi 6 travel router (MT7981B Filogic 830, 2.5G WAN)",
+  "openwrt": {
+    "target": "mediatek/filogic",
+    "device": "comfast,cf-wr632ax",
+    "default_ip": "192.168.1.1",
+    "profile": "comfast_cf-wr632ax",
+    "version": "25.12.2"
+  },
+  "hardware": {
+    "soc": "MT7981B (Filogic 830) dual-core Cortex-A53 @ 1.3GHz",
+    "flash": "SPI-NAND 128MB (Winbond W25N01GV)",
+    "ram": "512MB DDR3",
+    "ethernet_ports": "1x WAN 2.5G (MaxLinear GPY211C) + 1x LAN 1G",
+    "wifi": "2.4GHz + 5GHz WiFi 6 (MT7976CN, 4x4 MIMO)",
+    "usb": "1x USB 3.0",
+    "fan": "PWM 4-wire 5V/0.3A active cooling",
+    "power": "USB-C 5V/3A",
+    "uart": "3.3V 115200 8N1",
+    "dimensions": "123.4 x 88.7 x 34 mm"
+  },
+  "mac_oui": [
+    "40:A5:EF"
+  ],
+  "stock_default_ip": "192.168.1.1",
+  "flash_methods": {
+    "recovery-http": {
+      "description": "U-Boot HTTP recovery (hold reset 10s while powering on, release on 5 green LED flashes)",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.2",
+      "client_subnet": "255.255.255.0",
+      "upload_endpoint": "/upload",
+      "upload_field": "firmware",
+      "trigger_flash_endpoint": "/result",
+      "flash_time_seconds": 300,
+      "silence_timeout": 30,
+      "reset_instructions": "Unplug power. Hold reset button. Plug in USB-C power. Wait for green LED to flash 5 times, release reset. Do NOT hold past 7 flashes (triggers U-Boot netconsole instead).",
+      "led_pattern": "green LED flashes 5 times"
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246
+    },
+    "tftp": {
+      "description": "U-Boot TFTP recovery (hold reset >7s while powering on)",
+      "recovery_ip": "192.168.1.1",
+      "client_ip": "192.168.1.254",
+      "client_subnet": "255.255.255.0"
+    }
+  },
+  "signatures": {
+    "recovery": {
+      "source": "research (forum + device tree, not yet pcap-verified)",
+      "uboot_http_get_returns_html": true,
+      "led_pattern": "green flashes 5x"
+    }
+  },
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "usb"
+  ],
+  "tested_hardware": {},
+  "notes": {
+    "known_issue_bootloop": "Snapshot builds after r34488-059f801a2c (May 2026) cause bootloop due to U-Boot v2026.01 + TF-A 20260123 regression. Use stable release 25.12.x. See https://github.com/openwrt/openwrt/issues/23430",
+    "hardware_family": "Same MT7981B+MT7976CN platform as GL.iNet Beryl AX (GL-MT3000) and Cudy TR3000 v1",
+    "recovery_note": "Reset button timing matters: 5 green flashes = HTTP recovery, >7 flashes = U-Boot netconsole/TFTP",
+    "uart_recovery": "Advanced recovery via mtk_uartboot with bl2 + fip files (see github.com/andros-ua/owrt-misc/tree/main/cf-wr632ax)"
+  }
+}
