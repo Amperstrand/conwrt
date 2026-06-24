@@ -28,7 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 FORENSICS_DIR = REPO_ROOT / "backups" / "forensics"
 
 _MAC_RE = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
-_PROOF_RE = re.compile(r'\{"y":"[0-9a-f]+","amount":\d+,"id":"[0-9a-f]+","secret":"[0-9a-f]+".*?\}')
+_PROOF_RE = re.compile(r'\{"y".*?"quote_id":""?\}')
+_MNEMONIC_RE = re.compile(r'mnemonic([a-z][a-z ]+)seed')
 
 
 def _ssh_pass(ip: str, password: str, command: str, bind: str = "",
@@ -77,13 +78,12 @@ def _extract_ecash_from_walletdb(wallet_path: Path) -> dict:
 
     total_sats = sum(p.get("amount", 0) for p in proofs)
 
-    mnemonic_match = re.search(
-        r"([a-z]+(?: [a-z]+){11,23})",
-        text,
-    )
-    mnemonic = mnemonic_match.group(1) if mnemonic_match else ""
+    mnemonic_match = _MNEMONIC_RE.search(text)
+    mnemonic = mnemonic_match.group(1).strip() if mnemonic_match else ""
 
-    mint_urls = set(re.findall(r"https?://[^\s\"']+/?(?:Bitcoin)?", text))
+    mint_urls = set()
+    for url in re.findall(r"https?://[a-zA-Z0-9._/-]+", text):
+        mint_urls.add(url.rstrip("/"))
 
     return {
         "proofs_found": len(proofs),
