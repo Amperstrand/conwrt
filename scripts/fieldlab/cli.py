@@ -188,4 +188,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually remove aliases (default is dry-run for safety)",
     )
 
+    forensics_p = subparsers.add_parser(
+        "forensics",
+        help="Pre-flash backup: /etc backup, TollGate detection, ecash extraction",
+    )
+    forensics_p.add_argument(
+        "--target", required=True,
+        help="Target device IP (e.g. 192.168.1.1)",
+    )
+    forensics_p.add_argument(
+        "--password", required=True,
+        help="SSH password for the target device",
+    )
+    forensics_p.add_argument(
+        "--bind", default=None,
+        help="Source IP to bind (for subnet collision cases)",
+    )
+
     return parser

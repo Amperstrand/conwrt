@@ -51,6 +51,10 @@ def main() -> int:
             args.dry_run = False
         return cmd_net_cleanup(args)
 
+    if command == "forensics":
+        from fieldlab.forensics_cmd import cmd_forensics
+        return cmd_forensics(args)
+
     host = Host.parse(args.host)
 
     if command == "inspect":
