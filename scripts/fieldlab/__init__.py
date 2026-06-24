@@ -40,7 +40,17 @@ def main() -> int:
         parser.print_help(sys.stderr)
         return 1
 
-    # Validate SSH connectivity upfront (shared by all commands)
+    # Local-only commands that don't need a remote host
+    if command == "net-status":
+        from fieldlab.net_cmd import cmd_net_status
+        return cmd_net_status(args)
+
+    if command == "net-cleanup":
+        from fieldlab.net_cmd import cmd_net_cleanup
+        if getattr(args, "apply", False):
+            args.dry_run = False
+        return cmd_net_cleanup(args)
+
     host = Host.parse(args.host)
 
     if command == "inspect":

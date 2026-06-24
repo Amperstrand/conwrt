@@ -166,4 +166,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run session ID",
     )
 
+    net_status_p = subparsers.add_parser(
+        "net-status",
+        help="Show host network diagnostics (interfaces, routes, DNS, stale aliases)",
+    )
+
+    net_cleanup_p = subparsers.add_parser(
+        "net-cleanup",
+        help="Remove stale IP aliases left by conwrt operations",
+    )
+    net_cleanup_p.add_argument(
+        "--dry-run", action="store_true", default=True,
+        help="Preview only, don't remove (default: dry-run)",
+    )
+    net_cleanup_p.add_argument(
+        "--interface", default=None,
+        help="Only clean this interface (default: all)",
+    )
+    net_cleanup_p.add_argument(
+        "--apply", action="store_true",
+        help="Actually remove aliases (default is dry-run for safety)",
+    )
+
     return parser
