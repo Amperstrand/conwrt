@@ -26,7 +26,7 @@
       "qmi_device": "/dev/cdc-wdm0",
       "note": "AT commands via /dev/ttyUSB2 at 115200 baud. uqmi via /dev/cdc-wdm0. Modem firmware queryable via AT+GMR or sysfs /sys/bus/usb/devices/2-1/product."
     },
-    "serial": "UART, 115200 8N1, internal header",
+    "serial": "UART, 57600 8N1, internal header J5 (Pin1=GND, Pin2=key/empty, Pin3=RX, Pin4=TX, Pin5=3.3V). Source: OpenWrt patch by Bjørn Mork (2021-06). Note: NOT 115200 — confirmed from OpenWrt device tree.",
     "board_revision": "A1 (verified: board_name=zyxel,nr7101)",
     "enclosure": "IP68 outdoor, PoE powered",
     "note": "No WiFi — 5G modem only. Single PoE ethernet port."

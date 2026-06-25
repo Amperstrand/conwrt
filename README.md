@@ -298,6 +298,7 @@ These are the "flash and forget" cases — no wiki reading, no manual uci editin
 | `wireguard-server` | VPN server for remote access | Yes (QR codes, peers) |
 | `adguard` | Network-wide ad blocking | Yes (web setup wizard) |
 | `openclash` | Transparent proxy for censorship bypass | Yes (subscription import) |
+| `nodns` | Local DNS cache of nodns records via dnsmasq | No (auto-starts) |
 
 Presets requiring post-flash setup need SSH access after first boot to complete configuration (importing VPN configs, running setup wizards, etc.).
 

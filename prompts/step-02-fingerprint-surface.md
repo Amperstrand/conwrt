@@ -193,6 +193,24 @@ Look for source code availability for the device:
 
 All browser interaction is read-only. No downloads, no form submissions.
 
+### Step 6: Serial Console Fingerprinting (if serial port identified in step-01)
+
+If step-01 identified a serial port or UART header, document the serial console as an attack surface:
+
+1. **Connection requirements**: USB-serial adapter type (FTDI/CP2102/CH340), voltage (3.3V typical), wiring (TX→RX, RX→TX, GND→GND)
+2. **Boot output**: Connect serial, power on device, capture the full boot log
+3. **Bootloader identification**: Look for U-Boot ("U-Boot 20xx"), Z-Loader ("Z-LOADER Vx.xx"), ZyNOS BootBase, or other bootloader banners
+4. **Boot delay**: Note whether the bootloader has a boot delay (time window to interrupt autoboot)
+5. **Interrupt mechanism**: Record what key interrupts autoboot (Space, Escape, Ctrl-C, Enter, or specific key sequence)
+6. **Console access**: Record whether the bootloader drops to an interactive prompt after interrupt
+
+Use `scripts/serial-console.py` for capture:
+```bash
+python3 scripts/serial-console.py /dev/cu.usbserial-XXXX --monitor --session fingerprint-<model>
+```
+
+**Safety**: Serial observation is read-only. Do NOT send keystrokes during this step. Do NOT enter bootloader commands. Just capture the boot log.
+
 ---
 
 ## Output Contract

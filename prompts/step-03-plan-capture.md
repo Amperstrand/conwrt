@@ -117,6 +117,28 @@ Retrieve the ToH entry for the identified device.
 - **Risk**: None. Public wiki page.
 - **Operator instruction**: Navigate to the OpenWrt ToH page for the identified device. Save the page content (curl or browser save) to the artifacts directory.
 
+### 5. Serial Boot Log Capture
+
+If step-02 identified a serial console and bootloader, plan a full boot sequence capture.
+
+- **What to capture**: Complete serial output from power-on through userspace boot, including bootloader banner, memory test, partition table, kernel boot messages, and first userspace output
+- **How**: Use `scripts/serial-console.py` with `--monitor` mode for session logging
+- **Where to save**: `$STEP_DIR/raw/artifacts/serial-boot-log/` (console.log + console.raw)
+- **Risk**: Low — serial observation is read-only. No keystrokes sent during capture.
+- **Operator instruction**:
+  ```bash
+  # Start serial monitor BEFORE powering on the device
+  python3 scripts/serial-console.py /dev/cu.usbserial-XXXX --monitor --session boot-capture-<model>
+  # Then power on the device. The monitor captures everything automatically.
+  # After boot completes (~60s), stop the monitor (Ctrl-C)
+  ```
+- **Boot signature extraction**: From the captured log, identify:
+  - Bootloader name and version (e.g., "U-Boot 2019.07", "Z-LOADER V1.30")
+  - Boot delay duration and interrupt key
+  - Kernel boot parameters (bootargs)
+  - Partition layout (mtdparts or similar)
+  - Boot mode: normal boot vs recovery vs failsafe
+
 ---
 
 ## Method Taxonomy (Hard Constraint)

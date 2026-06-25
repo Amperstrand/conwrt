@@ -7,7 +7,7 @@
 - Ethernet: 1x GigE (PoE 802.3at, single port)
 - WiFi: none (5G/NR modem only)
 - Modem: Quectel RG502Q-EA (5G NR Sub-6, NSA/SA, integrated USB)
-- Serial: UART internal header, 115200 8N1
+- Serial: UART 57600 8N1, internal header J5 (Pin1=GND, Pin2=key, Pin3=RX, Pin4=TX, Pin5=3.3V)
 - Enclosure: IP68 outdoor, PoE powered
 - Board revision: A1 (board_name: `zyxel,nr7101`)
 - MAC OUI observed: `4C:C5:3E`

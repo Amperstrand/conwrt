@@ -131,6 +131,16 @@ Check `$STEP_DIR/raw/artifacts/` for any files the operator has placed there. Fo
 - Check for OpenWrt-compatible kernel configs
 - Note the build system and toolchain versions
 
+**Serial boot log** (if present):
+- Identify the bootloader type and version from the banner line
+- Extract the boot delay duration and interrupt key (for recovery mode entry)
+- Note the partition layout from boot messages (mtdparts, partition table)
+- Identify boot stage transitions: bootloader → kernel decompression → userspace
+- Look for error messages: bad CRC, missing partitions, kernel panic, boot loops
+- Record boot signatures for the model JSON: bootloader banner, console message patterns, boot timing milestones
+- Determine if the device enters recovery/zycast/TFTP mode automatically or requires serial interrupt
+- This data directly informs the `boot_signatures` and `flash_methods` sections of the model JSON
+
 ### Step 4: Cross-Reference Community Experience
 
 Search for community reports on running OpenWrt on this specific device:

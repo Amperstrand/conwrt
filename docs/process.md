@@ -142,6 +142,46 @@ The rationale and references (OpenWrt ToH URLs, forum threads, GitHub PRs) are i
 
 ---
 
+## 4.5 Post-Discovery: Inventory and Access Hardening
+
+The 4 discovery steps are **read-only by design**. Once discovery is complete and SSH access has been obtained (independently of the discovery workflow), the operator must immediately perform inventory and access hardening before proceeding to flashing.
+
+**This step is NOT part of the run directory.** It operates outside the read-only safety boundary because it writes to the device (SSH key installation). The operator performs it manually.
+
+**Mandatory checklist (learned from COMFAST CF-WR632AX lockout):**
+
+1. **Record inventory** — Append specimen-level data to `data/inventory.jsonl`:
+   ```bash
+   python3 scripts/inventory.py --add \
+     --model "COMFAST CF-WR632AX" \
+     --mac "40:a5:ef:9c:eb:67" \
+     --serial "<serial>" \
+     --firmware "OpenWrt 25.12.2" \
+     --notes "LAN IP: 192.168.x.x"
+   ```
+
+2. **Install SSH key** — Persist access across factory resets and password changes:
+   ```bash
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub root@<device-ip>
+   # Or on OpenWrt dropbear:
+   scp -O ~/.ssh/id_ed25519.pub root@<device-ip>:/etc/dropbear/authorized_keys
+   ```
+
+3. **Check for random-IP behavior** — Some firmwares randomize LAN IP after factory reset:
+   ```bash
+   ssh root@<device-ip> "ls /etc/config/95-random-lan-ip.done 2>/dev/null"
+   ```
+   If this marker exists, document it in the model JSON under `notes.random_lan_ip: true`.
+
+4. **Record recovery procedure** — Note how to find the device if IP changes:
+   - WiFi SSID to reconnect to (e.g., "TollGate-37C0")
+   - MAC OUI for ARP sweep (e.g., `40:a5:ef` → COMFAST)
+   - Physical recovery (reset button timing, serial console)
+
+**Why this matters:** The COMFAST CF-WR632AX was explored, model JSON committed, but never inventoried or SSH-keyed. A factory reset wiped the overlay (including the `95-random-lan-ip.done` marker), the device randomized its LAN IP, and the device became permanently inaccessible. The species-level model JSON told us what the device was, but we had no specimen-level record of where this specific unit was on the network.
+
+---
+
 ## 5. State Machine
 
 Run progress is tracked by `state.json` at the root of each run directory.

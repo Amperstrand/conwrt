@@ -4,7 +4,14 @@
 
 Zycast is ZyXEL's proprietary multicast protocol for flashing firmware to devices over Ethernet, used by the "Multiboot client" in ZyXEL bootloaders (Z-Loader). It sends firmware images as UDP multicast packets to `225.0.0.0:5631`, split into 1024-byte chunks with a 30-byte header per packet. No authentication whatsoever.
 
-The primary use case is flashing devices without serial access. Tested on NR7101 (MT7621AT, MIPS) connected through a Zyxel GS1900-8HP OpenWrt switch with PoE control. The bootloader accepts multicast on every boot, so the firmware gets written without any prior configuration on the target device.
+The primary use case is flashing devices where serial access is available to trigger Z-Loader mode. Tested on NR7101 (MT7621AT, MIPS) connected through a Zyxel GS1900-8HP OpenWrt switch with PoE control.
+
+> **⚠️ Critical**: The bootloader does NOT automatically enter multicast listen mode on every boot. Z-Loader (which contains the multicast receiver) must be activated first. This typically requires either:
+> - **Serial console**: Press Escape during boot delay to enter Z-Loader
+> - **Failed boot**: Corrupt firmware causes the bootloader to fall back to Z-Loader
+> - **Bootloader configuration**: Some devices can be configured to always enter Z-Loader
+>
+> Blindly sending multicast at a device that has booted normally will have no effect — the bootloader has already passed the listen window and the firmware OS is running. **Serial console access is strongly recommended** for reliable zycast flashing.
 
 The protocol was reverse-engineered by Bjorn Mork and published as `zycast.c` in OpenWrt's `firmware-utils` under GPL-2.0. Conwrt provides three implementations (Go, C, Python), all derived from this reference.
 
@@ -138,13 +145,15 @@ Image type bitmap:
 
 Timing: 10ms inter-packet delay, roughly 75 seconds per complete loop for a 7.6 MB image.
 
-The bootloader accepts multicast on every boot. If zycast keeps running, it will reflash the device on every power cycle. Stop zycast after a successful flash.
+The bootloader accepts multicast on every boot **while Z-Loader is active**. If zycast keeps running and the device is in Z-Loader mode, it will reflash. Stop zycast after a successful flash to prevent re-flashing on subsequent Z-Loader entries.
 
 On devices with dual-image layout (NR7101), zycast writes to both firmware slots. The stock firmware cannot be preserved.
 
 ## 7. Troubleshooting
 
 **Device does not respond after zycast**:
+- **Verify Z-Loader mode**: The bootloader only listens for multicast when Z-Loader is active. Use serial console to confirm Z-Loader is running (look for "Multiboot Listening..." or "Press any key" message).
+- **Serial trigger**: If the device boots normally without entering Z-Loader, connect serial and press Escape during boot delay to enter Z-Loader manually.
 - Monitor BOTH the old IP and 192.168.1.1. The IP changes after flashing to OpenWrt default.
 - Check if 192.168.1.0/24 conflicts with your local network. If it does, SSH through the switch instead.
 - Increase `--loops` (try 5 or more).
@@ -161,6 +170,6 @@ ip addr add 192.168.1.2/24 dev switch.1002
 ip link set switch.1002 up
 ```
 
-**Device reflashes on every boot**: Kill the zycast process after a successful flash. The bootloader listens for multicast packets on every boot, not just the first one.
+**Device reflashes on every boot**: Kill the zycast process after a successful flash. If the device is in Z-Loader mode and zycast is running, the bootloader will reflash on every power cycle.
 
 **Wrong port assignment**: Verify which physical port the target is connected to. On the GS1900-8HP, `lan2` is PoE port 2. Check with `ubus call poe info` to see which ports show "Delivering power".

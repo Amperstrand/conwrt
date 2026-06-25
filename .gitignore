@@ -6,6 +6,13 @@ dist/
 secrets/
 backups/
 
+# --- Serial session logs ---
+# serial/ contains per-session console logs, raw byte dumps, and boot analysis.
+# Never commit — may contain device-specific data (MAC addresses, serial numbers,
+# boot output with potential PII). Each session gets its own subdirectory.
+serial/
+!serial/.gitkeep
+
 # --- Runtime artifacts ---
 # runs/ contains per-device session data — all gitignored
 # (the .gitkeep is tracked via git add -f)
@@ -51,6 +58,10 @@ wireguard/
 device-identification-notes.md
 linksys-velop-*.png
 captures/
+openwrt-base-config.md
+openwrt-forum-port-isolation.md
+openwrt-networking-start.md
+openwrt-switch-doc.md
 
 # --- Firmware images at repo root (use images/ or data/) ---
 /*.bin

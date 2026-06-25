@@ -139,6 +139,20 @@ For generic probing, try common read-only discovery endpoints:
 
 Document which endpoint was used and why it is considered safe.
 
+### Step 8: Serial Console Identification (if physical access available)
+
+If the device can be opened or has an external serial port, identify the UART interface:
+
+1. **Check for external serial ports**: DB9, RJ45 console, mini-USB console port
+2. **Check for internal UART headers**: Open the case (if permitted) and look for:
+   - Labeled headers (UART, J1, JP1, CONSOLE)
+   - 3-4 pin headers near the SoC (typically VCC/TX/RX/GND or GND/TX/RX/VCC)
+3. **Record**: Pin count, pin labeling, header location on PCB
+4. **Do NOT connect yet** — just document what's present
+5. **Note the expected baud rate** from OpenWrt ToH or vendor docs (typically 115200 or 57600, 8N1)
+
+This step is observational only. Do not connect wires or power on with serial attached.
+
 ---
 
 ## Output Contract

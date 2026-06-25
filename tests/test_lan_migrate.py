@@ -58,13 +58,8 @@ def test_migrate_rolls_back_when_new_ip_never_comes_up(mock_run, mock_ssh, mock_
     assert rc == 1
 
 
-@patch.object(M, "_ssh")
-def test_migrate_fails_when_model_has_no_lan_subnet(mock_ssh):
-    import sys
-    sys.path.insert(0, "scripts")
-    import model_loader
-    model = model_loader.load_model("dlink-covr-x1860-a1")
-    model["lan_subnet"] = ""
-    with patch.object(model_loader, "load_model", return_value=model):
-        rc = M.cmd_lan_migrate(_args())
+@patch("conwrt.cmd_lan_migrate.load_model")
+def test_migrate_fails_when_model_has_no_lan_subnet(mock_load):
+    mock_load.return_value = {"id": "test", "openwrt": {"target": "ramips/mt7621", "version": "24.10.7"}, "lan_subnet": ""}
+    rc = M.cmd_lan_migrate(_args())
     assert rc == 1
