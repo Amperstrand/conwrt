@@ -126,20 +126,36 @@ Before connecting serial to any device:
 3. Update the model JSON if wrong
 4. Use `serial-console.py --auto-baud` to auto-detect if unsure
 
-## Zycast Requires Z-Loader (Serial Trigger)
+## Zycast: Bootloader Listens Automatically (Serial Verified)
 
-**Zycast multicast does NOT work on every boot.** The bootloader only listens for multicast when Z-Loader mode is active.
+**Z-Loader enters Multiboot Listening mode on EVERY boot — serial trigger is NOT required.**
 
-Z-Loader is entered via:
-1. Serial interrupt (press Escape during boot delay), OR
-2. Failed boot (firmware corrupt, bootloader falls back)
+Verified via serial console on NR7101 (2026-06-27). The boot sequence is:
 
-If the device is running healthy firmware, zycast multicast is useless — the bootloader boots straight through without listening. **Serial console access is required to trigger Z-Loader.**
+```
+Z-LOADER V1.30 | 06/03/2020 08:39:30
+Hit ESC key to stop autoboot:  1          ← 1-second ESC window
+ NetLoop,call eth_init !
+ ETH_STATE_ACTIVE!!
+Multiboot Listening...                      ← Multicast listen starts
+ 6 5 4 3 2 1                                ← 6-second countdown
+Starting application at 0x8402A800 ...      ← Boots firmware if no zycast received
+```
 
-Do NOT:
-- Blindly run zycast for extended periods hoping the device picks it up
-- Assume "the bootloader accepts multicast on every boot" (this was wrong in our docs — now corrected)
-- Skip serial when planning a zycast flash
+**Total multicast listen window: ~7 seconds** (1s ESC prompt + 6s Multiboot countdown).
+
+This means:
+- Start zycast BEFORE power cycle — the bootloader will pick it up during the listen window
+- Serial is NOT required to trigger Z-Loader — it enters multicast listen automatically
+- Serial IS useful for: watching the flash happen, timing zycast precisely, verifying boot
+- If nobody sends zycast during the ~7s window, the bootloader proceeds to firmware boot
+
+**Timing for zycast flash:**
+1. Start zycast sender (continuous loop)
+2. Power cycle the device
+3. Bootloader enters Multiboot Listening within ~10s of power-on
+4. Flash happens automatically during the listen window
+5. Device boots into new firmware (~20s after flash completes)
 
 ## Kill Zycast Immediately After Flash
 

@@ -45,7 +45,7 @@
       "flash_both_partitions": true,
       "flash_time_seconds": 180,
       "silence_timeout": 30,
-      "reset_instructions": "Power cycle the device into Z-Loader (press Escape during serial boot, or device enters multicast listen mode automatically on failed boot). No button press needed.",
+      "reset_instructions": "Power cycle the device. Z-Loader enters Multiboot Listening automatically on EVERY boot for ~7 seconds (1s ESC prompt + 6s countdown). Serial interrupt NOT required — just start zycast before power cycle and the bootloader picks it up. Serial-verified 2026-06-27.",
       "led_pattern": "no specific LED — watch console or multicast traffic",
       "firmware_type": "initramfs-recovery",
       "images": {
@@ -85,7 +85,7 @@
       "no_zycast_multicast": "does NOT send multicast to 225.0.0.0:5631 during normal boot"
     },
     "zycast_listening": {
-      "source": "bmork forum post, zycast.c source",
+      "source": "serial-verified on hardware 2026-06-27, also bmork forum post + zycast.c source",
       "protocol": "multicast UDP",
       "multicast_group": "225.0.0.0",
       "multicast_port": 5631,
@@ -94,7 +94,10 @@
       "chunk_size": 1024,
       "bootloader_banner": "Z-LOADER V1.30",
       "console_message": "Multiboot Listening...",
-      "note": "Device enters zycast listen mode when Z-Loader is active (serial interrupt or failed boot). NOT seen during normal OpenWrt boot."
+      "enters_automatically": true,
+      "listen_window_seconds": 7,
+      "boot_sequence": "DDR3 cal → U-Boot 1.1.3 → Ralink UBoot 5.0.0.0 → Z-Loader V1.30 → 'Hit ESC key' (1s) → 'Multiboot Listening...' (6s countdown) → firmware handoff",
+      "note": "SERIAL-VERIFIED: Z-Loader enters Multiboot Listening on EVERY boot automatically for ~7 seconds. Serial interrupt NOT required. Just start zycast before power cycle."
     },
     "openwrt_booting": {
       "source": "verified on hardware 2026-05-19, pcap capture",

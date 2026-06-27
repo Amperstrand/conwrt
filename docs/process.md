@@ -370,3 +370,72 @@ Before any flash, pull a full backup that includes:
 
 Store backups on the host machine, not on the device. The backup should be
 sufficient to restore the device to its exact pre-flash state.
+
+---
+
+## 11. Serial Console Troubleshooting Workflow
+
+When a router is inaccessible via network (broken firmware, unknown IP, no SSH),
+serial console is the primary recovery path. The serial workflow is a parallel
+to the network discovery steps (01-04) — it assumes physical access to the device.
+
+### Prompt Templates
+
+| Step | Prompt | Goal |
+|------|--------|------|
+| serial-01 | `serial-01-connect-and-identify.md` | Connect serial, capture boot, identify hardware/bootloader/firmware |
+| serial-02 | `serial-02-bootloader-explore.md` | Enter bootloader, enumerate commands, inspect env and partitions |
+| serial-03 | `serial-03-backup.md` | Dump critical partitions (Factory/calibration is IRREPLACEABLE) |
+| serial-04 | `serial-04-flash.md` | Flash via bootloader (zycast, TFTP, XMODEM, HTTP recovery) |
+
+### Tools
+
+- `scripts/serial-console.py` — interactive monitor, auto-baud, diagnose, loopback, command FIFO
+- `scripts/serial-boot-capture.py` — power-cycle-when-ready boot capture with timing analysis
+- `scripts/serial_baud.py` — baud rate detection from OpenWrt source
+
+### Boot Capture Workflow
+
+The boot sequence is the richest source of device information but only lasts
+~8-10 seconds after power-on. The `serial-boot-capture.py` tool handles timing:
+
+```bash
+# Start capture (waits indefinitely for first byte)
+python3 scripts/serial-boot-capture.py /dev/cu.usbserial-XXXX 57600 --session <model>
+
+# Power cycle the device whenever ready
+# Tool auto-detects boot start, captures everything, prints timing report
+```
+
+For ESC interrupt (to enter bootloader):
+
+```bash
+python3 scripts/serial-boot-capture.py /dev/cu.usbserial-XXXX 57600 --esc --session <model>-bootloader
+```
+
+### What Serial Reveals That Network Cannot
+
+| Information | Serial | Network |
+|------------|--------|---------|
+| Bootloader type and version | ✅ Banner output | ❌ |
+| DDR3/RAM health | ✅ Calibration output | ❌ |
+| Flash chip ID and bad blocks | ✅ NAND init output | ❌ |
+| Boot failure reason | ✅ Error messages | ❌ Device silent |
+| Firmware type (stock vs OpenWrt) | ✅ Kernel boot messages | ✅ HTTP/SSH probes |
+| Dual-partition boot flags | ✅ Bootloader env | ❌ |
+| Precise boot timing | ✅ Timestamped output | ❌ |
+| Recovery when firmware is broken | ✅ Bootloader access | ❌ Device unreachable |
+
+### Serial-Verified Boot Timing (NR7101, 2026-06-27)
+
+Captured from a live NR7101 with Z-Loader V1.30 at 57600 baud:
+
+```
+Power on → DDR3 calibration → U-Boot 1.1.3 → Ralink UBoot 5.0.0.0
+→ Z-Loader V1.30 → "Hit ESC key" (1s) → "Multiboot Listening" (6s)
+→ "Starting application" → firmware handoff
+```
+
+Key finding: Z-Loader enters Multiboot Listening **automatically on every boot**
+for ~7 seconds. Serial trigger is NOT required for zycast. This corrects earlier
+documentation that claimed serial was required.
