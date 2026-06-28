@@ -202,3 +202,41 @@ For example, FT232R serial BG02QAPG creates both:
 - `/dev/cu.usbserial-8` (shortened)
 
 These share one physical port. Use `serial-console.py --diagnose` to detect aliases. Never try to open both simultaneously.
+
+## UART Break Recovery (FT232R Power-Cycle Glitch)
+
+**The FT232R serial adapter gets stuck after a UART break condition during device power cycles.** When PoE power drops, the device's UART TX pin goes from 3.3V (idle-high) to 0V. The FT232R sees this as a break condition (sustained low = infinite 0x00 bytes with framing errors) and enters an error state. After power returns and the TX pin goes back to idle-high, the FT232R does NOT cleanly recover — the serial port stays "open" but delivers zero data.
+
+**Symptoms**: Serial reader gets a single 0x00 byte (the break), then nothing — even though the device is booting and producing serial output. The port opens and reads fine, but always returns 0 bytes.
+
+**Fix**: Close the serial port after detecting the break byte, wait for the device to start booting (2-3 seconds), then REOPEN the port fresh. This resets the FT232R's internal state:
+
+```python
+# Phase 1: Wait for break byte
+chunk = s.read(1)
+if chunk == b'\x00':
+    s.close()                    # Close port — resets FT232R
+    time.sleep(3)                # Wait for power return + early boot
+    s = serial.Serial(PORT, BAUD, timeout=0.5)  # Reopen fresh
+    s.reset_input_buffer()       # Clear any stale data
+    # Now capture boot data normally
+```
+
+The `serial-boot-capture.py` tool implements this automatically with `--recovery-wait` option.
+
+**Hardware fix**: A 10kΩ pull-up resistor between adapter RX and 3.3V keeps the line at idle-high during power-off, preventing the break condition entirely.
+
+## Serial Console as Configuration Interface
+
+**When network access is unavailable (wrong IP, IP conflict, no SSH), the serial console provides full root shell access to configure the device.** OpenWrt's serial console shows `root@OpenWrt:~#` after boot — you can run any command.
+
+**What you can do via serial:**
+- Change LAN IP: `uci set network.lan.ipaddr='192.168.5.1' && uci commit network`
+- Install SSH key: `echo 'ssh-...' > /etc/dropbear/authorized_keys`
+- Enable/disable password auth: `uci set dropbear.@dropbear[0].PasswordAuth='on'`
+- Check firmware: `cat /etc/openwrt_release`
+- Read partitions: `cat /proc/mtd`
+
+Use `scripts/serial-configure.py` for structured configuration. See `prompts/serial-05-configure.md` for the full workflow.
+
+**Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.

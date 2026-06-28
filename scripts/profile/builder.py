@@ -435,7 +435,7 @@ def build_plan(
                     label=f"use case: {uc.name}",
                     use_case_name=uc.name,
                     skipped_reason=f"missing capabilities: {', '.join(sorted(missing))}",
-                    include_in_asu=False,
+            include_in_asu=True,
                     include_in_post_install=False,
                 ))
                 continue
@@ -514,12 +514,14 @@ def build_plan(
                 ShellCommand("uci commit network"),
             ],
         ))
-    elif cfg.lan_ip and mode in ("post_install", "preview"):
+    elif cfg.lan_ip:
+        _lan_fb = f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)} && uci commit network"
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
             label=f"LAN IP → {cfg.lan_ip}",
+            firstboot_script=_lan_fb,
                 configure_script=f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}",
-            include_in_asu=False,
+            include_in_asu=True,
             ops=[
                 UciSet(config="network", section="lan", values={"ipaddr": cfg.lan_ip}),
             ],

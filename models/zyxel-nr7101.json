@@ -116,7 +116,7 @@
     }
   },
   "partition_layout": {
-    "source": "verified on hardware 2026-05-19 (cat /proc/mtd)",
+    "source": "verified on hardware 2026-05-19 and 2026-06-28 (cat /proc/mtd via serial)",
     "mtd0": {
       "name": "Bootloader",
       "size": "512KB",
@@ -318,6 +318,37 @@
   },
   "capabilities": [
     "ethernet",
-    "cellular"
-  ]
+    "cellular",
+    "serial"
+  ],
+  "serial_configuration": {
+    "verified": true,
+    "date": "2026-06-28",
+    "method": "Serial console after OpenWrt initramfs boot",
+    "operations": [
+      "uci set network.lan.ipaddr — change LAN IP via serial",
+      "uci set dropbear PasswordAuth — enable/disable password SSH",
+      "echo key > /etc/dropbear/authorized_keys — install SSH key",
+      "cat /proc/mtd — read partition layout",
+      "cat /etc/openwrt_release — verify firmware version"
+    ],
+    "note": "Serial console provides full root shell after OpenWrt boot. Essential when device IP conflicts with another router on the network. Use scripts/serial-configure.py for structured configuration."
+  },
+  "boot_sequence": {
+    "verified_serial": true,
+    "date": "2026-06-28",
+    "stages": [
+      {"name": "DDR3 calibration", "duration_approx_s": 3, "serial_output": true},
+      {"name": "U-Boot 1.1.3", "duration_approx_s": 2, "serial_output": true},
+      {"name": "Ralink UBoot 5.0.0.0", "duration_approx_s": 1, "serial_output": true},
+      {"name": "Z-Loader V1.30 + ESC prompt", "duration_approx_s": 1, "serial_output": true},
+      {"name": "Multiboot Listening", "duration_approx_s": 6, "serial_output": true},
+      {"name": "Firmware handoff", "serial_output": "Starting application at 0x8402A800"},
+      {"name": "Linux kernel boot (OpenWrt)", "duration_approx_s": 18, "serial_output": "Full kernel log"},
+      {"name": "procd init", "serial_output": "Please press Enter to activate this console"},
+      {"name": "SSH available", "delay_after_handoff_s": 60}
+    ],
+    "pcie_note": "PCIe init (Quectel modem) is timing-sensitive — may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
+    "uart_break_note": "FT232R serial adapter gets stuck after UART break during power cycle. Use serial-boot-capture.py with --recovery-wait to auto-recover."
+  }
 }

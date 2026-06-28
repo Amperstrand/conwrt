@@ -356,7 +356,7 @@ def list_ports():
         print("No serial ports found.", file=sys.stderr)
         return []
     print("Available serial ports:", file=sys.stderr)
-    for i, (port, desc, hwid) in enumerate(ports, 1):
+    for i, (port, desc, _hwid) in enumerate(ports, 1):
         print(f"  {i}. {port:30s} {desc}", file=sys.stderr)
     return [p[0] for p in ports]
 
@@ -495,10 +495,10 @@ def diagnose_adapter(port: str | None = None):
     # 2. Check for duplicate device nodes (same adapter, multiple /dev entries)
     print("Checking for device node aliases...", file=sys.stderr)
     port_paths = {}
-    for p, d, h in usb_serial_ports:
+    for p, d, _h in usb_serial_ports:
         # Group by description (same chip = same adapter)
         port_paths.setdefault(d, []).append(p)
-    for desc, p_list in port_paths.items():
+    for _desc, p_list in port_paths.items():
         if len(p_list) > 1:
             print(f"  ⚠️  Multiple device nodes for same adapter: {p_list}", file=sys.stderr)
             print("     These share one physical port — opening one locks the others.", file=sys.stderr)
