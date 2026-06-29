@@ -108,7 +108,7 @@ def test_mac_hash_ip_step_generated() -> None:
     assert len(mac_steps) == 1
     step = mac_steps[0]
     assert "10.$_o2.$_o3.1" in step.configure_script
-    assert "md5sum" in step.configure_script
+    assert "sha256sum" in step.configure_script
     assert step.include_in_post_install is True
 
 

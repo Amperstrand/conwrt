@@ -102,7 +102,7 @@ class TestBuilderInlineOps:
         step = steps[0]
         assert all(isinstance(op, ShellCommand) for op in step.ops)
         rendered = render_shell(step.ops)
-        assert "md5sum" in rendered
+        assert "sha256sum" in rendered
         assert "uci set network.lan.ipaddr" in rendered
 
 
