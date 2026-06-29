@@ -474,11 +474,11 @@ def build_plan(
             '_mac=$(cat /sys/class/net/br-lan/address 2>/dev/null)'
             '; [ -z "$_mac" ] && _mac=$(cat /sys/class/net/eth0/address 2>/dev/null)'
         )
-        # Derive two subnet octets from MAC md5 hash, last octet always 1.
+        # Derive two subnet octets from MAC sha256 hash, last octet always 1.
         # Matches Python: mac_to_subnet_octets() in mac_hash.py
         _hash_derive = (
             "_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"
-            "; _hash=$(printf '%s' \"$_mac_clean\" | md5sum)"
+            "; _hash=$(printf '%s' \"$_mac_clean\" | sha256sum)"
             "; _o2=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c1-8))"
             "; _o2=$((_o2 % 250 + 1))"
             "; _o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"
@@ -505,7 +505,7 @@ def build_plan(
             ops=[
                 ShellCommand(f"{_mac_src_fb}"),
                 ShellCommand("_mac_clean=$(printf '%s' \"$_mac\" | tr -d ':')"),
-                ShellCommand("_hash=$(printf '%s' \"$_mac_clean\" | md5sum)"),
+                ShellCommand("_hash=$(printf '%s' \"$_mac_clean\" | sha256sum)"),
                 ShellCommand("_o2=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c1-8))"),
                 ShellCommand("_o2=$((_o2 % 250 + 1))"),
                 ShellCommand("_o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"),

@@ -7,14 +7,14 @@ class TestMacHashShellParity:
     """Verify Python mac_hash produces the same result as the BusyBox shell pipeline.
 
     The shell script uses:
-        _hash=$(printf '%s' "$_mac_clean" | md5sum)
+        _hash=$(printf '%s' "$_mac_clean" | sha256sum)
         _o2=$(printf '%d' 0x$(printf '%s' "$_hash" | cut -c1-8))
         _o2=$((_o2 % 250 + 1))
         _o3=$(printf '%d' 0x$(printf '%s' "$_hash" | cut -c9-16))
         _o3=$((_o3 % 250 + 1))
 
     Python uses:
-        hashlib.md5(mac_clean.encode()).hexdigest()
+        hashlib.sha256(mac_clean.encode()).hexdigest()
         int(h[:8], 16) % 250 + 1
         int(h[8:16], 16) % 250 + 1
     """
@@ -23,7 +23,7 @@ class TestMacHashShellParity:
         mac = "aa:bb:cc:dd:ee:01"
         mac_clean = mac.lower().replace(":", "")
         py_o2, py_o3 = mac_to_subnet_octets(mac)
-        h = hashlib.md5(mac_clean.encode()).hexdigest()
+        h = hashlib.sha256(mac_clean.encode()).hexdigest()
         shell_o2 = int(h[:8], 16) % 250 + 1
         shell_o3 = int(h[8:16], 16) % 250 + 1
         assert (py_o2, py_o3) == (shell_o2, shell_o3)
@@ -32,7 +32,7 @@ class TestMacHashShellParity:
         mac = "AA:BB:CC:DD:EE:FF"
         mac_clean = mac.lower().replace(":", "")
         py_o2, py_o3 = mac_to_subnet_octets(mac)
-        h = hashlib.md5(mac_clean.encode()).hexdigest()
+        h = hashlib.sha256(mac_clean.encode()).hexdigest()
         shell_o2 = int(h[:8], 16) % 250 + 1
         shell_o3 = int(h[8:16], 16) % 250 + 1
         assert (py_o2, py_o3) == (shell_o2, shell_o3)
@@ -41,8 +41,8 @@ class TestMacHashShellParity:
         """Regression guard: printf '%s' produces no newline; echo does."""
         mac = "94:83:c4:aa:bb:cc"
         mac_clean = mac.lower().replace(":", "")
-        h_no_nl = hashlib.md5(mac_clean.encode()).hexdigest()
-        h_with_nl = hashlib.md5((mac_clean + "\n").encode()).hexdigest()
+        h_no_nl = hashlib.sha256(mac_clean.encode()).hexdigest()
+        h_with_nl = hashlib.sha256((mac_clean + "\n").encode()).hexdigest()
         assert h_no_nl != h_with_nl, "Hashes should differ when newline is added"
         py_o2, py_o3 = mac_to_subnet_octets(mac)
         assert py_o2 == int(h_no_nl[:8], 16) % 250 + 1

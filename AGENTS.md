@@ -54,8 +54,8 @@ Any shell script that modifies device state (uci set, network config, IP changes
 **Specific rules:**
 - Never `uci commit` a network IP change without verifying `uci get` returns the expected value first
 - Shell variables in uci commands MUST use double quotes (not single quotes) for expansion
-- On-device shell scripts use BusyBox tools only (`md5sum`, not `sha256sum`; no `chpasswd`, no `hostname`)
-- Python-side hash algorithms MUST match what BusyBox provides (md5, not sha256)
+- On-device shell scripts use BusyBox tools only (`sha256sum`, not `md5sum`; no `chpasswd`, no `hostname`). SHA-256 is universally available on OpenWrt (base-files depends on it since 2018)
+- Python-side hash algorithms MUST match what BusyBox provides (sha256, matching on-device `sha256sum`)
 - For UBIFS overlay devices: `uci commit` is permanent after reboot — there is no "undo" after reboot
 
 ## Inventory and Access Hardening After First Access
