@@ -53,6 +53,8 @@ Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or o
 | tftp | TFTP server for uboot network boot | Serial or uboot access | varies |
 | extreme-rdwr-tftp | SSH to stock → rdwr_boot_cfg → TFTP boot initramfs → sysupgrade | Stock Extreme firmware, SSH access | ~5 min |
 | zycast | Multicast to many devices simultaneously | Network broadcast domain | varies |
+| serial-base64 | Transfer firmware over serial via base64 encoding | Serial console + `scripts/serial-flash.py` | ~22 min |
+| serial-xmodem | XMODEM transfer from bootloader prompt | Serial console + bootloader XMODEM support | ~22 min |
 
 ### Device Support Matrix
 
@@ -80,6 +82,11 @@ conwrt/
 │   ├── model_loader.py        # Shared model registry reader
 │   ├── router-probe.py        # Device boot state detection (off/uboot/openwrt)
 │   ├── inventory.py           # Inventory utilities
+│   ├── serial-boot-capture.py # Serial boot capture with UART break recovery
+│   ├── serial-configure.py    # Configure devices via serial (IP, SSH key, auth)
+│   ├── serial-flash.py        # Transfer firmware over serial via base64
+│   ├── serial-backup.py       # Dump partitions via serial when SSH unavailable
+│   ├── serial-console.py      # Interactive serial monitor with command FIFO
 │   ├── extreme_ap391x_analyze.py  # Extreme AP391x firmware image analysis
 │   └── use_cases/             # Use case presets (auto-discovered plugins)
 ├── data/                # Runtime data (gitignored)
@@ -88,11 +95,17 @@ conwrt/
 ├── captures/            # Pcap captures (gitignored)
 ├── images/              # ASU firmware cache (gitignored)
 ├── recipes/             # Device-specific procedures and notes
-├── prompts/             # AI-assisted discovery step templates
+├── prompts/             # AI-assisted discovery and serial troubleshooting templates
 │   ├── step-01-identify-device.md
 │   ├── step-02-fingerprint-surface.md
 │   ├── step-03-plan-capture.md
-│   └── step-04-analyze-artifacts.md
+│   ├── step-04-analyze-artifacts.md
+│   ├── serial-01-connect-and-identify.md
+│   ├── serial-02-bootloader-explore.md
+│   ├── serial-03-backup.md
+│   ├── serial-04-flash.md
+│   ├── serial-05-configure.md
+│   └── serial-06-flash.md
 ├── docs/                # Process and documentation
 ├── examples/            # Example artifacts (redacted)
 └── README.md
@@ -112,6 +125,35 @@ When you encounter a router that isn't in the models directory, walk through the
 4. **Analyze artifacts** (`step-04-analyze-artifacts.md`) -- extract boot signatures, recovery mode patterns, and flash method from captures
 
 The output of this process is a model JSON for `models/` and recipe notes for `recipes/`. Once committed, that device model moves to Stage 2.
+
+### Stage 1.5: Serial Console Recovery
+
+When a device is inaccessible via network (broken firmware, wrong IP, no SSH), the serial console is the primary recovery path. Serial prompts (`prompts/serial-*.md`) guide the full workflow:
+
+1. **Connect & identify** (`serial-01`) — capture boot sequence, identify bootloader/hardware/firmware
+2. **Explore bootloader** (`serial-02`) — enter bootloader via ESC, enumerate commands, inspect env
+3. **Backup** (`serial-03`) — dump Factory/calibration partitions (IRREPLACEABLE — always do this first)
+4. **Flash via bootloader** (`serial-04`) — flash via zycast, TFTP, or XMODEM from the bootloader
+5. **Configure** (`serial-05`) — change IP, install SSH key, enable auth via serial when network is down
+6. **Flash via serial** (`serial-06`) — transfer firmware over the serial line itself (no network needed)
+
+**Serial tools:**
+
+```bash
+# Capture boot sequence (auto-recovers from UART break during power cycle)
+python3 scripts/serial-boot-capture.py /dev/cu.usbserial-XXXX 57600 --session <model>
+
+# Configure device via serial (change IP, SSH key, auth)
+python3 scripts/serial-configure.py /dev/cu.usbserial-XXXX 57600 --set-ip 192.168.5.1
+
+# Backup partitions via serial (when SSH unavailable)
+python3 scripts/serial-backup.py /dev/cu.usbserial-XXXX 57600 --partition Factory
+
+# Transfer firmware over serial (no network needed, ~22 min for 7.3MB)
+python3 scripts/serial-flash.py /dev/cu.usbserial-XXXX 57600 --base64 firmware.bin --verify --sysupgrade
+```
+
+**Serial is the MOST RELIABLE recovery method.** Try it FIRST, not last. See `docs/process.md` section 12 (Recovery Decision Tree) for guidance.
 
 ### Stage 2: Automated Flashing
 
@@ -530,7 +572,7 @@ disown %1
 | tftp | Untested | Uses bundled `scripts/tftp-server.py` (no dnsmasq dependency) |
 | extreme-rdwr-tftp | Untested | SSH to stock → rdwr_boot_cfg writes U-Boot vars → TFTP boot initramfs → backup → sysupgrade |
 | zycast (multicast) | Untested | Pure Python fallback when C binary unavailable (OpenWrt/MIPS) |
-| serial | Not yet | Requires USB-serial adapter |
+| serial | Tested (base64) | `scripts/serial-flash.py` + serial console |
 
 ### Monitoring Modes
 
