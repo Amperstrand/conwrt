@@ -21,7 +21,9 @@ import subprocess
 import sys
 import time
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -29,6 +31,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from probe_utils import curl_get, curl_head, ping_host
 from ssh_utils import ssh_cmd, run_ssh
+from oui import oui_lookup
 
 logger = logging.getLogger("conwrt.probe")
 
@@ -210,6 +213,130 @@ def probe_icmpv6_ra(interface: str, timeout: int = 5) -> ProbeResult:
     except OSError as exc:
         detail = str(exc)
     return ("icmpv6_ra", status, detail)
+
+
+# Regexes for DHCP option extraction from tcpdump -vv output.
+# tcpdump prints:   Hostname Option (12), length 14: "tollgate-37c0"
+# and:              Vendor-Class Option (60), length 7: "MSFT 5.0"
+_DHCP_HOSTNAME_RE = re.compile(r'Hostname Option \(12\)[^:]*:\s*"([^"]*)"')
+_DHCP_VENDOR_CLASS_RE = re.compile(r'Vendor-Class Option \(60\)[^:]*:\s*"([^"]*)"')
+# Client MAC appears as:  Client-Ethernet-Address d8:5d:84:aa:bb:cc
+# or in the summary line: Request from d8:5d:84:aa:bb:cc
+_DHCP_CLIENT_MAC_RE = re.compile(
+    r'(?:Client-Ethernet-Address\s+|Request from\s+)([\da-fA-F]{2}(?::[\da-fA-F]{2}){5})'
+)
+
+# TFTP RRQ: tcpdump prints "read request, filename vmlinux.gz.uImage.3912"
+_TFTP_FILENAME_RE = re.compile(r'read request,?\s*filename:?\s*(\S+)')
+
+
+def probe_dhcp(interface: str, timeout: int = 30) -> ProbeResult:
+    """Passive probe: capture a DHCP packet to extract client identification.
+
+    Runs tcpdump listening on ports 67/68 (DHCP server/client). When a
+    packet is seen, extracts:
+      - Client MAC address (for OUI vendor lookup)
+      - Option 12: Hostname (e.g., "tollgate-37c0")
+      - Option 60: Vendor class identifier (e.g., "MSFT 5.0")
+
+    Returns a ProbeResult tuple: ("dhcp", status, detail).
+    Status is "detected" on success, "timeout" if no packet arrives,
+    "unavailable" if tcpdump is missing, "permission_denied" if no sudo.
+    """
+    status = "not_seen"
+    detail = ""
+    try:
+        r = run_cmd(
+            ["tcpdump", "-i", interface, "-nn", "-s", "0", "-vv",
+             "port 67 or port 68", "-c", "1"],
+            timeout=timeout,
+            check=False,
+        )
+        output = r.stdout
+
+        client_mac = ""
+        mac_m = _DHCP_CLIENT_MAC_RE.search(output)
+        if mac_m:
+            client_mac = mac_m.group(1)
+
+        hostname = ""
+        host_m = _DHCP_HOSTNAME_RE.search(output)
+        if host_m:
+            hostname = host_m.group(1)
+
+        vendor_class = ""
+        vc_m = _DHCP_VENDOR_CLASS_RE.search(output)
+        if vc_m:
+            vendor_class = vc_m.group(1)
+
+        if client_mac or hostname or vendor_class:
+            status = "detected"
+            parts = []
+            if client_mac:
+                parts.append(f"mac={client_mac}")
+            if hostname:
+                parts.append(f"hostname={hostname}")
+            if vendor_class:
+                parts.append(f"vendor_class={vendor_class}")
+            detail = ", ".join(parts)
+        elif r.returncode != 0 and "Permission denied" in r.stderr:
+            status = "permission_denied"
+            detail = "tcpdump requires sudo for packet capture"
+        # else: packet captured but no recognizable DHCP fields → not_seen
+    except subprocess.TimeoutExpired:
+        status = "timeout"
+        detail = f"no DHCP packet within {timeout}s"
+    except FileNotFoundError:
+        status = "unavailable"
+        detail = "tcpdump not installed"
+    except OSError as exc:
+        detail = str(exc)
+    return ("dhcp", status, detail)
+
+
+def probe_tftp(interface: str, timeout: int = 30) -> ProbeResult:
+    """Passive probe: capture a TFTP read request (RRQ) to extract filename.
+
+    Bootloaders like U-Boot request specific filenames via TFTP when
+    booting from network (e.g., "vmlinux.gz.uImage.3912"). Capturing
+    this filename can identify the device model or boot configuration.
+
+    Returns a ProbeResult tuple: ("tftp", status, detail).
+    Status is "detected" with the filename in detail, "timeout" if no
+    packet arrives, "unavailable" if tcpdump is missing.
+    """
+    status = "not_seen"
+    detail = ""
+    try:
+        r = run_cmd(
+            ["tcpdump", "-i", interface, "-nn", "-s", "0", "-vv",
+             "port 69", "-c", "1"],
+            timeout=timeout,
+            check=False,
+        )
+        output = r.stdout
+
+        filename = ""
+        fn_m = _TFTP_FILENAME_RE.search(output)
+        if fn_m:
+            filename = fn_m.group(1).strip()
+
+        if filename:
+            status = "detected"
+            detail = f"filename={filename}"
+        elif r.returncode != 0 and "Permission denied" in r.stderr:
+            status = "permission_denied"
+            detail = "tcpdump requires sudo for packet capture"
+        # else: non-RRQ TFTP packet or no match → not_seen
+    except subprocess.TimeoutExpired:
+        status = "timeout"
+        detail = f"no TFTP packet within {timeout}s"
+    except FileNotFoundError:
+        status = "unavailable"
+        detail = "tcpdump not installed"
+    except OSError as exc:
+        detail = str(exc)
+    return ("tftp", status, detail)
 
 
 def start_pcap_capture(interface: str, state_label: str) -> Optional[subprocess.Popen[bytes]]:
@@ -466,8 +593,31 @@ def probe_router(
 
     state.evidence.append(probe_link_state(interface))
     state.evidence.append(probe_arp(mac, interface))
-    state.evidence.append(probe_failsafe_broadcast(interface, timeout=passive_timeout))
-    state.evidence.append(probe_icmpv6_ra(interface, timeout=min(passive_timeout, 5)))
+
+    # Time-limited capture probes run in parallel to minimize wall-clock time.
+    # Each blocks until a packet arrives or timeout expires; sequential would
+    # cost up to 4x the timeout in total.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            "failsafe": pool.submit(
+                partial(probe_failsafe_broadcast, interface, timeout=passive_timeout)),
+            "ra": pool.submit(
+                partial(probe_icmpv6_ra, interface, timeout=min(passive_timeout, 5))),
+            "dhcp": pool.submit(
+                partial(probe_dhcp, interface, timeout=passive_timeout)),
+            "tftp": pool.submit(
+                partial(probe_tftp, interface, timeout=passive_timeout)),
+        }
+        for key in ("failsafe", "ra", "dhcp", "tftp"):
+            state.evidence.append(futures[key].result())
+
+    # OUI-based hardware vendor identification from MAC address.
+    # This gives the hardware manufacturer (e.g., "D-Link"); if the device
+    # is running OpenWrt, probe_ssh_details will override with the OS vendor.
+    if mac:
+        vendor = oui_lookup(mac)
+        if vendor:
+            state.vendor = vendor
 
     state.evidence.append(probe_http_get(ip))
     state.evidence.append(probe_http_head(ip))
@@ -480,7 +630,8 @@ def probe_router(
     if state.state == "openwrt_running":
         model, vendor, fw_ver, key_count = probe_ssh_details(ip)
         state.model = model
-        state.vendor = vendor
+        if vendor:
+            state.vendor = vendor
         state.firmware_version = fw_ver
         state.ssh_key_count = key_count
 

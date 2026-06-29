@@ -950,6 +950,8 @@ class TestProbeRouter(unittest.TestCase):
                 return_value=("failsafe_broadcast", "not_detected", "")
             ),
             "probe_icmpv6_ra": MagicMock(return_value=("icmpv6_ra", "not_detected", "")),
+            "probe_dhcp": MagicMock(return_value=("dhcp", "not_seen", "")),
+            "probe_tftp": MagicMock(return_value=("tftp", "not_seen", "")),
             "probe_http_get": MagicMock(return_value=("http_get", "no_response", "")),
             "probe_http_head": MagicMock(return_value=("http_head", "no_response", "")),
             "probe_ping": MagicMock(return_value=("ping", "unreachable", "")),
@@ -978,7 +980,7 @@ class TestProbeRouter(unittest.TestCase):
             self._stop(patchers)
         self.assertEqual(result.state, "off")
         self.assertEqual(result.ip, "192.168.1.1")
-        self.assertEqual(len(result.evidence), 9)
+        self.assertEqual(len(result.evidence), 11)
         # ssh_details only called for openwrt_running
         mock_details.assert_not_called()
 
