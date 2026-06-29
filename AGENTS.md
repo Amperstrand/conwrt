@@ -240,3 +240,69 @@ The `serial-boot-capture.py` tool implements this automatically with `--recovery
 Use `scripts/serial-configure.py` for structured configuration. See `prompts/serial-05-configure.md` for the full workflow.
 
 **Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.
+
+## Serial-First Recovery Principle
+
+**When a device has serial console access, try serial-based methods BEFORE network-based methods.** We wasted hours trying zycast from macOS when the serial cable was working perfectly the entire time.
+
+**Recovery method priority (most reliable first):**
+1. **Serial configure** (instant) — change IP, enable SSH, install key via serial
+2. **Serial flash** (~22 min) — transfer firmware over serial (XMODEM/base64)
+3. **SSH sysupgrade** (~3 min) — once network is up
+4. **Zycast from switch** (~5 min) — from OpenWrt switch, NOT macOS
+5. **Zycast from macOS** (unreliable) — last resort only
+
+**Lesson (2026-06-28)**: We spent an entire session fighting zycast from macOS (IP removal, link flapping, process crashes). The serial cable worked the whole time. We should have tried serial flash FIRST.
+
+## macOS USB Ethernet Instability
+
+**macOS removes USB ethernet adapter IPs during device power cycles.** When PoE power drops, the ethernet link goes down, and macOS immediately removes the configured IP — even if set as "manual." This crashes any process using that interface (zycast, SSH, SCP).
+
+**Workarounds (in order of preference):**
+1. **Use serial instead** — no IP dependency, always works
+2. **Use an OpenWrt switch** (GS1900-8HP) — stable networking, software PoE control
+3. **Put a switch between Mac and device** — switch keeps Mac's link stable during device power cycle
+4. **IP-keeper daemon** — re-adds IP every 0.1s (fragile, races with macOS)
+
+**Never rely on macOS USB ethernet for time-critical operations during power cycles.** The IP WILL be removed.
+
+## PoE Injector Data Passthrough
+
+**Some PoE injectors pass power but NOT data.** Verify the data path before assuming ethernet connectivity:
+
+1. Check device packet counters: `cat /sys/class/net/eth0/statistics/rx_packets` — should be >0
+2. `tcpdump` on Mac's ethernet interface — any traffic from the device?
+3. Bypass PoE injector with direct cable (use separate PoE brick for power)
+4. Check cable pairs: PoE power uses pairs 4-5, 7-8; data uses pairs 1-2, 3-6. A cable with damaged data pairs can pass power but not data.
+
+**Symptom (2026-06-28)**: Both Mac en9 and NR7101 eth0 showed "active 1000baseT" but 0 packets received on either side. The link was up to the PoE injector/switch, but data wasn't passing through to the device.
+
+## Initramfs DSA Port Workaround
+
+**OpenWrt initramfs-recovery images may NOT create DSA switch ports (`lan`, `wan`).** Only raw `eth0` exists. The `br-lan` bridge never comes up. Network interfaces referencing `lan` or `wan` devices fail silently.
+
+**Symptom**: Device boots OpenWrt but is unreachable on any IP. `ip link show` shows only `eth0`, `lo`, `wwan0`. No `br-lan`, no `lan`, no `wan`.
+
+**Fix via serial**:
+```bash
+ip link set eth0 up
+ip addr add 192.168.X.1/24 dev eth0
+# Now accessible on 192.168.X.1 via eth0
+```
+
+**Note**: The permanent OpenWrt image (sysupgrade) should create DSA ports correctly. This is primarily an initramfs issue.
+
+## Serial Console as Configuration Interface
+
+**When network access is unavailable (wrong IP, IP conflict, no SSH), the serial console provides full root shell access to configure the device.** OpenWrt's serial console shows `root@OpenWrt:~#` after boot — you can run any command.
+
+**What you can do via serial:**
+- Change LAN IP: `uci set network.lan.ipaddr='192.168.5.1' && uci commit network`
+- Install SSH key: `echo 'ssh-...' > /etc/dropbear/authorized_keys`
+- Enable/disable password auth: `uci set dropbear.@dropbear[0].PasswordAuth='on'`
+- Check firmware: `cat /etc/openwrt_release`
+- Read partitions: `cat /proc/mtd`
+
+Use `scripts/serial-configure.py` for structured configuration. See `prompts/serial-05-configure.md` for the full workflow.
+
+**Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.

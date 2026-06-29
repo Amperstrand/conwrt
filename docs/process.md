@@ -439,3 +439,50 @@ Power on → DDR3 calibration → U-Boot 1.1.3 → Ralink UBoot 5.0.0.0
 Key finding: Z-Loader enters Multiboot Listening **automatically on every boot**
 for ~7 seconds. Serial trigger is NOT required for zycast. This corrects earlier
 documentation that claimed serial was required.
+
+---
+
+## 12. Recovery Decision Tree
+
+When a device is inaccessible, try methods in order of reliability:
+
+```
+Device inaccessible?
+│
+├─ Serial cable connected?
+│  ├─ YES → Serial methods (MOST RELIABLE):
+│  │   1. serial-boot-capture.py — capture boot, identify issue
+│  │   2. serial-configure.py — change IP, enable SSH via serial
+│  │   3. serial-backup.py — dump Factory partition (BEFORE flashing)
+│  │   4. serial-flash.py — transfer firmware over serial (~22 min)
+│  │   5. If SSH works now → sysupgrade to permanent image
+│  │
+│  └─ NO → Network methods:
+│     1. SSH to known IP → sysupgrade
+│     2. Zycast from OpenWrt switch (GS1900-8HP) — proven reliable
+│     3. Zycast from macOS — LAST RESORT (IP removal issues)
+│     4. TFTP from bootloader (if supported)
+│
+└─ Device won't boot at all?
+   ├─ Serial shows boot log → firmware issue, flash via serial
+   ├─ Serial shows nothing → check power, serial wiring, baud rate
+   └─ DDR3 calibration fails → hardware fault (RAM)
+```
+
+**Key lesson (2026-06-28)**: Serial is the most reliable path. Try it FIRST.
+We wasted hours on zycast from macOS when the serial cable was working perfectly.
+
+### macOS Networking Gotchas
+
+**macOS removes USB ethernet IPs during device power cycles.** This is the #1
+cause of zycast failures from macOS:
+
+1. PoE power drops → ethernet link down → macOS removes IP
+2. Zycast crashes (OSError: Can't assign requested address)
+3. IP-keeper daemon re-adds IP → zycast restarts → but bootloader may have
+   missed the Multiboot Listening window
+
+**Solutions (in order of reliability):**
+1. Use serial instead (no IP dependency)
+2. Use an OpenWrt switch for zycast (stable networking + PoE control)
+3. Put a switch between Mac and device (keeps Mac link stable)
