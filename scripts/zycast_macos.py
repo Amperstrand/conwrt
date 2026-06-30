@@ -8,7 +8,6 @@ import socket
 import struct
 import sys
 import time
-import threading
 
 _MAGIC = 0x7A797800  # "zyx\0" big-endian
 _HEADER_FMT = "!IHIIIHBB2sB5s"
