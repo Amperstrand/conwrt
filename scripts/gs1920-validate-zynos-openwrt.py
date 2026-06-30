@@ -5,8 +5,12 @@ import argparse
 import hashlib
 import struct
 import sys
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from checksum_utils import internet_checksum  # noqa: E402
 
 ROMBIN_HDR_SIZE = 48
 EXPECTED_SLOT_GAP = 0x800000
@@ -15,17 +19,6 @@ EXPECTED_MMAP_ADDR = 0xB40E0000
 EXPECTED_RASCODE_OFFSET = 0x0B2400
 EXPECTED_UIMAGE_LOAD = 0x80100000
 EXPECTED_UIMAGE_ENTRY = 0x80100000
-
-
-def internet_checksum(data: bytes) -> int:
-    if len(data) % 2:
-        data += b"\0"
-    total = 0
-    for i in range(0, len(data), 2):
-        total += (data[i] << 8) + data[i + 1]
-        if total > 0xFFFF:
-            total = (total & 0xFFFF) + 1
-    return total & 0xFFFF
 
 
 @dataclass(frozen=True)

@@ -44,26 +44,8 @@ import sys
 import os
 import lzma
 
-
-# --- Internet checksum (same as mkzynfw.c csum_buf) ---
-
-def internet_checksum(data: bytes) -> int:
-    """Compute 16-bit one's complement Internet checksum over data."""
-    if len(data) == 0:
-        return 0
-
-    # Pad to even length
-    if len(data) % 2 == 1:
-        data = data + b'\x00'
-
-    s = 0
-    for i in range(0, len(data), 2):
-        w = (data[i] << 8) + data[i + 1]
-        s += w
-        if s > 0xFFFF:
-            s = (s & 0xFFFF) + 1
-
-    return s & 0xFFFF
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from checksum_utils import internet_checksum  # noqa: E402
 
 
 # --- ROMBIN header (48 bytes, big-endian) ---
