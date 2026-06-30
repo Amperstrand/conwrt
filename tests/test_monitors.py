@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from flash.context import Event, PcapMonitorConfig
 
@@ -375,7 +375,7 @@ class TestCheckSilence(TestCase):
         mock_ts.return_value = now
         mon, q = _make_monitor(silence_timeout=30)
         mon._last_packet_time = now - 60  # 60s ago > 30s timeout
-        result = mon._check_silence(last_silence_check=now - 100, interval=5)
+        mon._check_silence(last_silence_check=now - 100, interval=5)
         events = _drain(q)
         assert len(events) == 1
         assert events[0][0] == Event.NO_PACKETS_FOR_N_SECONDS
@@ -720,6 +720,6 @@ class TestMonitorLifecycle(TestCase):
         args = argparse.Namespace(router_mac="", uboot_mac="", silence_timeout=30, no_pcap=False)
         profile = SimpleNamespace(recovery_ip="192.168.1.1", zycast_multicast_group="", zycast_multicast_port=0)
         with monitor_lifecycle("en6", q, "/tmp/capture.pcap", profile, args, pcap_enabled=True) as (pcap_mon, link_mon):
-            link_thr = link_mon._stop
+            pass
         # After context exit, stop event should be set
         assert link_mon._stop.is_set()

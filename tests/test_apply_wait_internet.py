@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from profile.apply import _scp_install_packages, _wait_for_internet
+from profile.apply import _wait_for_internet
 
 
 def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:

@@ -26,10 +26,6 @@ from config import load_config as _load_config
 from flash.context import sha256_file as _sha256_file_impl
 from profile.builder import build_plan
 from profile.render import print_plan
-from profile.wifi import (
-    wifi_ap_uci_lines,
-    wifi_sta_uci_lines,
-)
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -116,7 +116,6 @@ class TestConfigureParser:
         assert args.ubus_password == "secret"
 
     def test_transport_invalid_rejected(self):
-        import argparse
         import pytest
         with pytest.raises(SystemExit):
             self._parse("--ip", "192.168.1.1", "--transport", "telnet")

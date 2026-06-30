@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from flash.context import OemState, RecoveryContext, State, Timeline
+from flash.context import RecoveryContext, State, Timeline
 from conwrt.handlers_oem import (
     _handle_oem_login,
     _handle_oem_prepare,

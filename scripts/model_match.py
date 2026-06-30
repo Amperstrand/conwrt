@@ -85,7 +85,7 @@ def match_model_by_http(body: str, headers: str) -> list[dict]:
             continue
         vendor = model_def.get("vendor", "").lower()
         if vendor and vendor in combined.lower():
-            model_id = model_def.get("id", "")
+            model_def.get("id", "")
             if vendor in ("d-link", "dlink") and ("d-link" in combined.lower() or "dlink" in combined.lower()):
                 matches.append(model_def)
             elif vendor in ("gl-inet", "glinet") and ("gl-inet" in combined.lower() or "glinet" in combined.lower()):
@@ -103,7 +103,7 @@ def match_model_by_lldp(lldp_info: LLDPInfo) -> list[dict]:
 
     for model_def in list_models():
         desc = model_def.get("description", "").lower()
-        model_id = model_def.get("id", "").lower()
+        model_def.get("id", "").lower()
 
         # Extract model keywords from description (e.g. "GS1900-8HP")
         model_keywords = re.findall(r"[a-z]{2,}\d{3,}[\-]?\w*", desc)

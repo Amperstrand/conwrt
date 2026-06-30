@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 import subprocess
 from collections.abc import Sequence
 

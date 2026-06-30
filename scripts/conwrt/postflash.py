@@ -469,7 +469,7 @@ def _apply_lan_ip_post_flash(
         return ip
 
     log(f"  ⚠ LAN IP: rollback failed — router unreachable at both {new_ip} and {ip}")
-    log(f"  Recovery: connect via serial or reset button, or manually set client IP:")
+    log("  Recovery: connect via serial or reset button, or manually set client IP:")
     log(f"    sudo ifconfig <interface> inet {old_client_ip or _client_ip_for_subnet(ip)}/24 alias")
     return ""
 

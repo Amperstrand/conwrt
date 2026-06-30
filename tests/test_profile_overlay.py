@@ -1,7 +1,6 @@
 """Tests for profile.overlay — post-flash overlay generation."""
 import os
 import tarfile
-import tempfile
 import unittest
 
 

@@ -115,7 +115,7 @@ def dump_partition(s: serial.Serial, partition: dict, output_file: Path) -> bool
             time.sleep(0.1)
 
     if not b64_data:
-        print(f"  ✗ No data received")
+        print("  ✗ No data received")
         return False
 
     # Decode base64
@@ -129,7 +129,7 @@ def dump_partition(s: serial.Serial, partition: dict, output_file: Path) -> bool
     if len(raw_data) != size:
         print(f"  ⚠ Size mismatch: expected {size:,}, got {len(raw_data):,}")
         if len(raw_data) < size * 0.95:
-            print(f"  ✗ Dump appears incomplete (less than 95% of expected size)")
+            print("  ✗ Dump appears incomplete (less than 95% of expected size)")
             return False
 
     # Write to file

@@ -2,7 +2,6 @@ import sys
 from subprocess import CompletedProcess
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from pathlib import Path
 

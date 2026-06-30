@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from conwrt.cmd_info import cmd_list, cmd_cache, _cache_list, _cache_clean
 

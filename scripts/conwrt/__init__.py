@@ -27,10 +27,9 @@ _CONWRT_DIR = str(Path(__file__).resolve().parent.parent)  # scripts/ — siblin
 if _CONWRT_DIR not in sys.path:
     sys.path.insert(0, _CONWRT_DIR)
 
-from conwrt._version import __version__  # noqa: E402
+from conwrt._version import __version__ as __version__  # noqa: E402
 
-# Re-exports needed by tests that do `conwrt.check_ssh`
-from ssh_utils import check_ssh  # noqa: E402
+from ssh_utils import check_ssh as check_ssh  # noqa: E402
 from conwrt.cli import _build_parser  # noqa: E402
 
 

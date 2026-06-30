@@ -18,11 +18,9 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fieldlab.rundir import FieldLabRun
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 FORENSICS_DIR = REPO_ROOT / "backups" / "forensics"
@@ -139,11 +137,10 @@ def cmd_forensics(args: argparse.Namespace, host=None) -> int:
 
     is_tollgate = "TOLLGATE_FOUND" in tg_check.stdout
     tg_version = ""
-    tg_config = {}
     ecash_data = {}
 
     if is_tollgate:
-        print(f"[!] TOLLGATE DETECTED — this device has TollGate firmware installed!",
+        print("[!] TOLLGATE DETECTED — this device has TollGate firmware installed!",
               file=sys.stderr)
 
         try:
@@ -157,7 +154,7 @@ def cmd_forensics(args: argparse.Namespace, host=None) -> int:
 
         print(f"[+] TollGate version: {tg_version}", file=sys.stderr)
 
-        print(f"[+] Downloading TollGate wallet data...", file=sys.stderr)
+        print("[+] Downloading TollGate wallet data...", file=sys.stderr)
         for fname in ["wallet.db", "config.json", "identities.json", "install.json"]:
             result = _scp_pass(ip, password, f"/etc/tollgate/{fname}",
                                str(device_dir / fname), bind=bind)
@@ -187,11 +184,11 @@ def cmd_forensics(args: argparse.Namespace, host=None) -> int:
                 (device_dir / "ecash-tokens.json").write_text(
                     json.dumps(ecash_out, indent=2) + "\n")
             else:
-                print(f"[+] Wallet is empty (0 sats in ecash).", file=sys.stderr)
+                print("[+] Wallet is empty (0 sats in ecash).", file=sys.stderr)
     else:
-        print(f"[+] No TollGate detected.", file=sys.stderr)
+        print("[+] No TollGate detected.", file=sys.stderr)
 
-    print(f"[+] Backing up /etc...", file=sys.stderr)
+    print("[+] Backing up /etc...", file=sys.stderr)
     etc_result = _ssh_pass(ip, password, "tar czf /tmp/etc-backup.tar.gz /etc 2>/dev/null",
                            bind=bind, timeout=30)
     if etc_result.returncode == 0:
@@ -229,7 +226,7 @@ def cmd_forensics(args: argparse.Namespace, host=None) -> int:
 
     print(f"\n[+] Forensics complete. Artifacts in {device_dir}/", file=sys.stderr)
     if report["warnings"]:
-        print(f"\n[!] WARNINGS:", file=sys.stderr)
+        print("\n[!] WARNINGS:", file=sys.stderr)
         for w in report["warnings"]:
             print(f"    {w}", file=sys.stderr)
 

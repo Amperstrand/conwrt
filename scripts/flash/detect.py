@@ -3,9 +3,9 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 from typing import Optional
-from flash.context import DEFAULT_IP, log
+from flash.context import log
 from flash.upload import detect_uboot_http
-from ssh_utils import check_ssh, ssh_cmd
+from ssh_utils import check_ssh
 
 
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:

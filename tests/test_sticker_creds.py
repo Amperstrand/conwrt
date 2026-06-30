@@ -4,7 +4,6 @@ from D-Link COVR-X1860 config2 MTD partition dumps.
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from unittest import TestCase

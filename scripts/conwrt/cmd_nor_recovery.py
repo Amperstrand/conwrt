@@ -103,7 +103,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
     board_name = r.stdout.strip()
     expected_device = model.get("openwrt", {}).get("device", "")
     if expected_device and board_name != expected_device:
-        print(f"WARNING: Board name mismatch!", file=sys.stderr)
+        print("WARNING: Board name mismatch!", file=sys.stderr)
         print(f"  Expected: {expected_device}", file=sys.stderr)
         print(f"  Got:      {board_name}", file=sys.stderr)
         if not dry_run:
@@ -121,7 +121,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
             log(f"  4. Download U-Boot from: {uboot_cfg.get('url', '?')}")
             log(f"     Expected SHA256: {uboot_cfg.get('sha256', '?')}")
             log(f"     Flash: {uboot_cfg.get('flash_command', '?')}")
-            log(f"     (reboot after, ~60-90s wait)")
+            log("     (reboot after, ~60-90s wait)")
         if nor_fw_cfg:
             log(f"  10. Download NOR firmware from: {nor_fw_cfg.get('url', '?')}")
             log(f"      Expected SHA256: {nor_fw_cfg.get('sha256', '?')}")
@@ -144,9 +144,9 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
                 actual_sha256 = sha256_file(uboot_local)
                 expected_sha256 = uboot_cfg["sha256"]
                 if actual_sha256 == expected_sha256:
-                    log(f"  U-Boot SHA256 verified ✓")
+                    log("  U-Boot SHA256 verified ✓")
                 else:
-                    print(f"  WARNING: U-Boot SHA256 mismatch!", file=sys.stderr)
+                    print("  WARNING: U-Boot SHA256 mismatch!", file=sys.stderr)
                     print(f"    Expected: {expected_sha256}", file=sys.stderr)
                     print(f"    Got:      {actual_sha256}", file=sys.stderr)
             except OSError as exc:
@@ -161,9 +161,9 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
                 actual_sha256 = sha256_file(nor_local)
                 expected_sha256 = nor_fw_cfg["sha256"]
                 if actual_sha256 == expected_sha256:
-                    log(f"  NOR firmware SHA256 verified ✓")
+                    log("  NOR firmware SHA256 verified ✓")
                 else:
-                    print(f"  WARNING: NOR firmware SHA256 mismatch!", file=sys.stderr)
+                    print("  WARNING: NOR firmware SHA256 mismatch!", file=sys.stderr)
                     print(f"    Expected: {expected_sha256}", file=sys.stderr)
                     print(f"    Got:      {actual_sha256}", file=sys.stderr)
             except OSError as exc:
@@ -320,7 +320,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         print(f"  Expected: {expected_hash}", file=sys.stderr)
         print(f"  Got:      {actual_hash}", file=sys.stderr)
         return 1
-    log(f"  SHA256 verified ✓")
+    log("  SHA256 verified ✓")
 
     # Step 12: Flash NOR firmware (no -r, no reboot)
     _say("Flashing NOR recovery partition.")
@@ -421,12 +421,12 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
     if not skip_uboot and uboot_cfg:
         print(f"  U-Boot:   upgraded to {uboot_cfg.get('version', 'unknown')}")
     else:
-        print(f"  U-Boot:   skipped (--skip-uboot)")
+        print("  U-Boot:   skipped (--skip-uboot)")
     print(f"  NOR:      flashed {nor_fw_cfg.get('description', 'recovery firmware')}")
     if boot_env_cfg:
         print(f"  boot_dev: {boot_env_cfg.get('boot_dev', 'not set')}")
     if bootargs_fix:
-        print(f"  bootargs: fixed for dual-boot")
+        print("  bootargs: fixed for dual-boot")
     if boot_local_val:
         print(f"  boot_local: {boot_local_val}")
     print()
@@ -441,7 +441,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
     print("                   (switch position does NOT reliably control boot — use bootcount)")
     if recovery_hostname:
         print()
-        print(f"On first NOR boot, set the recovery hostname:")
+        print("On first NOR boot, set the recovery hostname:")
         print(f"  uci set system.@system[0].hostname='{recovery_hostname}' && uci commit system")
     print()
 

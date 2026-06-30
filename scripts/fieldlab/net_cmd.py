@@ -11,13 +11,12 @@ net-cleanup: removes conwrt-added IP aliases (--dry-run safe).
 from __future__ import annotations
 
 import argparse
-import platform
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-from fieldlab.network import detect_platform_local, MACOS, LINUX, OPENWRT
+from fieldlab.network import detect_platform_local, MACOS
 
 
 # Subnets conwrt commonly adds as aliases during operations
@@ -118,7 +117,7 @@ def cmd_net_status(args: argparse.Namespace, host=None) -> int:
 
     interfaces = _get_interfaces_macos() if pf == MACOS else _get_interfaces_linux()
 
-    print(f"\nInterfaces:", file=sys.stderr)
+    print("\nInterfaces:", file=sys.stderr)
     stale_found = []
     for iface in interfaces:
         name = iface["name"]
@@ -143,13 +142,13 @@ def cmd_net_status(args: argparse.Namespace, host=None) -> int:
                 marker = "  ← primary"
             print(f"    {inet}{marker}", file=sys.stderr)
 
-    print(f"\nDefault routes:", file=sys.stderr)
+    print("\nDefault routes:", file=sys.stderr)
     routes = _get_routes()
     for line in routes.split("\n"):
         if line.strip():
             print(f"  {line.strip()}", file=sys.stderr)
 
-    print(f"\nDNS resolvers:", file=sys.stderr)
+    print("\nDNS resolvers:", file=sys.stderr)
     dns = _get_dns()
     for ns in dns:
         print(f"  {ns}", file=sys.stderr)
@@ -158,9 +157,9 @@ def cmd_net_status(args: argparse.Namespace, host=None) -> int:
         print(f"\n[!] {len(stale_found)} likely-stale alias(es) detected:", file=sys.stderr)
         for name, ip, desc in stale_found:
             print(f"    {name}: {ip} — {desc}", file=sys.stderr)
-        print(f"    Run 'fieldlab net-cleanup --dry-run' to review.", file=sys.stderr)
+        print("    Run 'fieldlab net-cleanup --dry-run' to review.", file=sys.stderr)
     else:
-        print(f"\n[+] No stale aliases detected.", file=sys.stderr)
+        print("\n[+] No stale aliases detected.", file=sys.stderr)
 
     return 0
 
@@ -222,7 +221,7 @@ def cmd_net_cleanup(args: argparse.Namespace, host=None) -> int:
         print(f"    {name}: {ip} — {desc}", file=sys.stderr)
 
     if dry_run:
-        print(f"\n[DRY-RUN] No changes made. Re-run without --dry-run to remove.",
+        print("\n[DRY-RUN] No changes made. Re-run without --dry-run to remove.",
               file=sys.stderr)
         return 0
 

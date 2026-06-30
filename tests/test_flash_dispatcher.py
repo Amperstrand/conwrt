@@ -7,20 +7,17 @@ from __future__ import annotations
 
 import queue
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
 from unittest import TestCase
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from flash.context import (
     DEFAULT_IP,
     Event,
-    REBOOT_TIMEOUT,
     State,
     RecoveryContext,
     Timeline,
@@ -1152,7 +1149,6 @@ class TestRunStateMachine(TestCase):
         mock_apply.return_value = "10.0.0.1"
         mock_wg.return_value = ""
         ctx = _make_ctx(state=State.COMPLETE)
-        original_ip = ctx.profile.openwrt_ip
         eq = queue.Queue()
         result = self.runner(ctx, eq, None, None)
         self.assertEqual(result, 0)
@@ -1199,12 +1195,6 @@ class TestMultiStepTransitions(TestCase):
         mock_config.return_value = MagicMock()
         mock_apply.return_value = "192.168.1.1"
 
-        transitions = {
-            State.DETECTING: State.SYSUPGRADE_UPLOADING,
-            State.SYSUPGRADE_UPLOADING: State.SYSUPGRADE_REBOOTING,
-            State.SYSUPGRADE_REBOOTING: State.SYSUPGRADE_BOOTING,
-            State.SYSUPGRADE_BOOTING: State.COMPLETE,
-        }
 
         def make_transition(target_state):
             def handler(ctx, eq):

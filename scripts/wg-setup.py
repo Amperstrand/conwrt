@@ -90,7 +90,7 @@ def build_uci_commands(pc: PeerConfig) -> list[str]:
         f"uci del_list network.wg0_peer.allowed_ips='{pc.allowed_ips}' 2>/dev/null || true",
         f"uci add_list network.wg0_peer.allowed_ips='{pc.allowed_ips}'",
         f"uci set network.wg0_peer.persistent_keepalive='{pc.keepalive}'",
-        f"uci set network.wg0_peer.route_allowed_ips='1'",
+        "uci set network.wg0_peer.route_allowed_ips='1'",
         "",
         uci_add_to_wan_zone_sh("wg0"),
         "",

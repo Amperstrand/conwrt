@@ -8,9 +8,7 @@ to a pure-Python secp256k1 implementation using Python's native big integers.
 """
 from __future__ import annotations
 
-import hashlib
 import os
-import sys
 
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 

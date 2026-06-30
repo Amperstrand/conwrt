@@ -109,7 +109,7 @@ def _stream_to_output(proc, out_path: str, duration: int) -> int:
             out_file.close()  # type: ignore[union-attr]
 
     if user_interrupted:
-        print(f"[+] Capture interrupted by user", file=sys.stderr)
+        print("[+] Capture interrupted by user", file=sys.stderr)
     elif duration_reached:
         pass  # already printed above
     print(f"[+] Captured {bytes_written} bytes", file=sys.stderr)
@@ -165,18 +165,18 @@ def cmd_capture(args: argparse.Namespace, host: Host) -> int:
     filter_expr = args.filter
 
     if out_path == "-":
-        print(f"[+] Streaming to stdout (pipe to: tcpdump -r - -nn -e)", file=sys.stderr)
+        print("[+] Streaming to stdout (pipe to: tcpdump -r - -nn -e)", file=sys.stderr)
     else:
         print(f"[+] Output: {out_path}", file=sys.stderr)
     if duration > 0:
         print(f"[+] Duration: {duration}s", file=sys.stderr)
     else:
-        print(f"[+] Duration: indefinite (Ctrl-C to stop)", file=sys.stderr)
+        print("[+] Duration: indefinite (Ctrl-C to stop)", file=sys.stderr)
     if filter_expr:
         print(f"[+] Filter: {filter_expr}", file=sys.stderr)
 
     tcpdump_cmd = _build_tcpdump_command(probe_if, filter_expr)
-    print(f"[+] Starting capture...", file=sys.stderr)
+    print("[+] Starting capture...", file=sys.stderr)
 
     proc = stream_remote(host, tcpdump_cmd)
 
@@ -195,7 +195,7 @@ def cmd_capture(args: argparse.Namespace, host: Host) -> int:
     if out_path != "-":
         size = Path(out_path).stat().st_size
         if size == 0:
-            print(f"[!] Warning: 0-byte pcap — no packets captured.", file=sys.stderr)
+            print("[!] Warning: 0-byte pcap — no packets captured.", file=sys.stderr)
             print(f"    Check that the probe interface '{probe_if}' has a connected device.",
                   file=sys.stderr)
         else:

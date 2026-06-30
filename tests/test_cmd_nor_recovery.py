@@ -9,7 +9,6 @@ import argparse
 import subprocess
 from unittest.mock import patch
 
-import pytest
 
 from conwrt.cmd_nor_recovery import cmd_setup_nor_recovery
 
@@ -286,7 +285,7 @@ class TestIPResolution:
 class TestEmptyNorRecoveryDict:
     def test_empty_dict_is_falsy_returns_1(self):
         m = {"id": "x", "openwrt": {"default_ip": "192.168.1.1"}, "nor_recovery": {}}
-        with Patches(load_model=m) as p:
+        with Patches(load_model=m):
             assert cmd_setup_nor_recovery(_args(i_want_a_brick=True)) == 1
 
 
@@ -332,22 +331,22 @@ class TestModelIdPassthrough:
 
 class TestSshKeyNotFound:
     def test_returns_1_when_no_ssh_key(self):
-        with Patches(detect_key="") as p:
+        with Patches(detect_key=""):
             assert cmd_setup_nor_recovery(_args(i_want_a_brick=True)) == 1
 
     def test_stderr_mentions_ssh_key(self, capsys):
-        with Patches(detect_key="") as p:
+        with Patches(detect_key=""):
             cmd_setup_nor_recovery(_args(i_want_a_brick=True))
             assert "SSH private key" in capsys.readouterr().err
 
 
 class TestSshConnectionFailures:
     def test_returns_1_when_no_ssh_ok_in_stdout(self):
-        with Patches(subprocess_run=_cp(0, "WRONG", "")) as p:
+        with Patches(subprocess_run=_cp(0, "WRONG", "")):
             assert cmd_setup_nor_recovery(_args(i_want_a_brick=True)) == 1
 
     def test_stderr_printed_when_ssh_fails(self, capsys):
-        with Patches(subprocess_run=_cp(1, "", "Connection refused")) as p:
+        with Patches(subprocess_run=_cp(1, "", "Connection refused")):
             cmd_setup_nor_recovery(_args(i_want_a_brick=True))
             assert "Connection refused" in capsys.readouterr().err
 
@@ -1518,7 +1517,7 @@ class TestSequentialRunSshCalls:
             ])
             p["sha256_file"].side_effect = ["a" * 64, "b" * 64]
             cmd_setup_nor_recovery(_args(i_want_a_brick=True))
-            opkg_idx = next((i for i, c in enumerate(call_order) if "opkg" in c), -1)
+            next((i for i, c in enumerate(call_order) if "opkg" in c), -1)
             sha256_idx = next((i for i, c in enumerate(call_order) if "sha256sum" in c), -1)
             mtd_idx = next((i for i, c in enumerate(call_order) if "mtd write" in c), -1)
             assert sha256_idx < mtd_idx

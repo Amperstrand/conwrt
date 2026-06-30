@@ -200,12 +200,12 @@ def cmd_discover(args: argparse.Namespace, host: Host) -> int:
         if open_ports:
             print(f"[+] Open ports: {[p['port'] for p in open_ports]}", file=sys.stderr)
         else:
-            print(f"[+] No open ports found.", file=sys.stderr)
+            print("[+] No open ports found.", file=sys.stderr)
 
     # 5. HTTP probe
     http_result = {}
     if target_ip:
-        print(f"[+] Probing HTTP...", file=sys.stderr)
+        print("[+] Probing HTTP...", file=sys.stderr)
         http_result = _probe_http(host, target_ip)
 
     # Assemble findings

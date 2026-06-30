@@ -402,7 +402,7 @@ def apply_credentials_to_openwrt(
         # Detect actual radio for this band
         detect_cmd = (
             "for _r in radio0 radio1 radio2 radio3; do "
-            f'_band=$(uci -q get "wireless.$_r.band" 2>/dev/null); '
+            '_band=$(uci -q get "wireless.$_r.band" 2>/dev/null); '
             'case "$_band" in '
         )
         if band == "24g":

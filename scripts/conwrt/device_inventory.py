@@ -68,7 +68,7 @@ def _record_inventory(ctx: RecoveryContext) -> None:
     fw = fp.get("firmware", {})
     net = fp.get("network", {})
     sec = fp.get("security", {})
-    diag = fp.get("diagnostics", {})
+    fp.get("diagnostics", {})
     macs = net.get("macs", {})
 
     for key in ["hostname", "board", "serial"]:

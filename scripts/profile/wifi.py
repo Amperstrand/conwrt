@@ -6,7 +6,7 @@ from typing import Optional
 
 from profile.ops import Op, ShellCommand, UciSet, render_shell
 from profile.uci_helpers import uci_add_to_wan_zone_sh
-from shell_safe import interface_name, radio_ref, sh_quote, wifi_band, wifi_encryption
+from shell_safe import interface_name, radio_ref, wifi_band, wifi_encryption
 
 
 def band_to_uci(band: str) -> str:
@@ -158,7 +158,6 @@ def wifi_sta_firstboot_script(
     country_code: str = "DE",
 ) -> str:
     band_uci = band_to_uci(band)
-    wwan_setup = ""  # WWAN is added as a separate step by the builder
     frags = wifi_sta_uci_lines("$_r", ssid, encryption, key, network, country_code)
     script = (
         "for _r in radio0 radio1 radio2 radio3; do "

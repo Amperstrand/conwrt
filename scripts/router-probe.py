@@ -393,7 +393,7 @@ def probe_http_head(device_ip: str) -> ProbeResult:
     try:
         rc, headers, _err = curl_head(f"http://{device_ip}/", timeout=3)
         if "uIP" in headers:
-            return ("http_head", "uboot", f"Server header contains uIP")
+            return ("http_head", "uboot", "Server header contains uIP")
         if "HTTP/1.1 405" in headers:
             return ("http_head", "method_not_allowed", "HEAD rejected with 405 (MT3000 U-Boot behavior)")
         if rc == 0 and headers.strip():

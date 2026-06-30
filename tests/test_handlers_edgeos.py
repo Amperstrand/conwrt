@@ -1,4 +1,3 @@
-import os
 import queue
 import subprocess
 import sys

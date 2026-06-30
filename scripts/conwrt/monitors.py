@@ -9,9 +9,9 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Optional
 
-from flash.context import DEFAULT_IP, Event, PcapMonitorConfig, get_link_state, log, ts
+from flash.context import Event, PcapMonitorConfig, get_link_state, log, ts
 from platform_utils import is_root, has_scapy, has_tcpdump
-from ssh_utils import check_ssh, ssh_cmd
+from ssh_utils import check_ssh
 
 
 class PcapMonitor:
@@ -364,7 +364,7 @@ class PcapMonitor:
                     f"(need root or CAP_NET_RAW)"
                 ) from None
         except PermissionError:
-            log(f"scapy: permission denied — trying sudo tcpdump fallback")
+            log("scapy: permission denied — trying sudo tcpdump fallback")
             self._run_tcpdump_fallback()
             log("Pcap monitor stopped")
             return

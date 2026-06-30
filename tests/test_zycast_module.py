@@ -3,13 +3,12 @@ subprocess-mockable functions, and ZycastPythonSender Popen shim."""
 
 import os
 import struct
-import subprocess
 import sys
 import tempfile
 import threading
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
@@ -202,7 +201,7 @@ class TestRunZycast(TestCase):
     @patch("zycast.subprocess.Popen")
     def test_minimal_command(self, mock_popen):
         mock_popen.return_value = MagicMock()
-        proc = run_zycast(Path("/bin/zycast"), "/tmp/fw.bin")
+        run_zycast(Path("/bin/zycast"), "/tmp/fw.bin")
         cmd = mock_popen.call_args[0][0]
         self.assertEqual(cmd[0], "/bin/zycast")
         self.assertIn("/tmp/fw.bin", cmd)

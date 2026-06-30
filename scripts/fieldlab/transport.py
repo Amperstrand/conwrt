@@ -14,7 +14,7 @@ from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ssh_utils import ssh_cmd, run_ssh, DROPBEAR_SSH_OPTIONS
+from ssh_utils import DROPBEAR_SSH_OPTIONS
 
 # ---------------------------------------------------------------------------
 # Host parsing

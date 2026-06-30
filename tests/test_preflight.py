@@ -1,14 +1,12 @@
 """Tests for flash.preflight pre-flight check system."""
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import unittest
 
 from flash.preflight import (
-    PreflightResult,
     get_interface_ips,
     is_default_route,
     run_preflight_checks,

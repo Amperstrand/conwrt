@@ -1,5 +1,4 @@
 import queue
-import subprocess
 import sys
 from pathlib import Path
 from unittest import TestCase

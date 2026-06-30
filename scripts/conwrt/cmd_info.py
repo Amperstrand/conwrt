@@ -67,7 +67,7 @@ def cmd_list_use_cases(args: argparse.Namespace) -> int:
         if status == "INCOMPAT":
             line += f"  ** incompatible with {model_name} **"
         elif status == "ok":
-            line += f"  compatible"
+            line += "  compatible"
         print(line)
 
     if model_name:

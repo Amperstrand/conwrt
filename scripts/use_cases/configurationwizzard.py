@@ -16,7 +16,7 @@ import os
 import subprocess
 from typing import Any, Callable
 
-from profile.ops import Comment, Op, ShellCommand, ServiceAction, render_shell
+from profile.ops import Comment, Op, render_shell
 
 from . import ParamDef, UseCase, register
 

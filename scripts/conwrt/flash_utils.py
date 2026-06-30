@@ -5,7 +5,7 @@ import subprocess
 import time
 from typing import Optional
 
-from flash.context import log, sha256_file, ts
+from flash.context import log, ts
 from model_loader import find_model_by_board_name
 from ssh_utils import ssh_cmd, scp_cmd
 from platform_utils import detect_platform

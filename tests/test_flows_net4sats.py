@@ -1,13 +1,10 @@
 """Tests for the flows layer and the net4sats composite flow."""
 from __future__ import annotations
 
-import pytest
 
 from flows import get as get_flow
-from flows import registry as flow_registry
 from flows.render import render_flow_markdown, render_flow_shell
 from model_loader import load_model
-from profile.ops import render_shell
 
 _PARAMS = {"upstream_ssid": "home", "upstream_key": "secret", "upstream_band": "5ghz"}
 

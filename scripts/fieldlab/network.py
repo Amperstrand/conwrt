@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import platform
 import shlex
-import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------

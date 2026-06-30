@@ -1,7 +1,7 @@
 """Tests for flash.port_isolator — VLAN-based port isolation for rogue DHCP prevention."""
 import subprocess
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 from flash.port_isolator import PortIsolator
 
@@ -189,7 +189,7 @@ class TestIsolate(unittest.TestCase):
         self.assertGreaterEqual(len(calls), 9)  # 1 check + 7 UCI + 1 IP
 
         # Verify UCI command sequence
-        ssh_commands = [c.args[0][0] for c in calls]
+        [c.args[0][0] for c in calls]
         # All calls should be ssh commands
         self.assertTrue(all("ssh" in str(c) for c in calls))
 

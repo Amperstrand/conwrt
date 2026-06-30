@@ -1,9 +1,8 @@
 # pyright: reportMissingImports=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportCallIssue=false, reportAttributeAccessIssue=false
 import queue
 import subprocess
-import time
 
-from flash.context import Event, State, log, say, ts, sha256_file
+from flash.context import Event, State, log, ts, sha256_file
 from zycast import run_zycast_auto
 from conwrt.infrastructure import RecoveryContext
 from conwrt.handlers_uboot import _drain_events
@@ -14,8 +13,8 @@ def _handle_zycast_waiting(ctx: RecoveryContext, eq: queue.Queue) -> None:
     ctx._say_fn("Power cycle the router now. Multicast flash will start automatically.")
     log("Waiting for ZyXEL Multiboot multicast packets...")
 
-    multicast_group = getattr(profile, 'zycast_multicast_group', '225.0.0.0')
-    multicast_port = getattr(profile, 'zycast_multicast_port', 5631)
+    getattr(profile, 'zycast_multicast_group', '225.0.0.0')
+    getattr(profile, 'zycast_multicast_port', 5631)
     probe_timeout = 120
     probe_start = ts()
 

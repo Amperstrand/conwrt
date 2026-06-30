@@ -42,7 +42,7 @@ def _wifi_sta_ops(step: Step, params: dict[str, Any]) -> list[Op]:
     ops: list[Op] = [
         Comment(f"WiFi STA uplink ({band}) — join upstream SSID"),
         UciSet(config="wireless", section=radio, values={"disabled": "0"}),
-        ShellCommand(command=f"uci -q delete wireless.sta1; uci set wireless.sta1=wifi-iface"),
+        ShellCommand(command="uci -q delete wireless.sta1; uci set wireless.sta1=wifi-iface"),
         UciSet(config="wireless", section="sta1", values={
             "device": radio, "mode": "sta", "ssid": ssid,
             "encryption": step.encryption, "key": key, "network": "wwan",
@@ -183,7 +183,7 @@ def render_flow_shell(flow: Flow, model: dict[str, Any], params: dict[str, Any],
         host_cmds, router_ops = _step_parts(step, target, params)
         out.extend(host_cmds)
         if router_ops:
-            out.append(f"ssh root@$IP sh <<'CONWRT_EOF'")
+            out.append("ssh root@$IP sh <<'CONWRT_EOF'")
             out.append(render_shell(router_ops))
             out.append("CONWRT_EOF")
         out.append("")
@@ -198,7 +198,7 @@ def render_flow_markdown(flow: Flow, model: dict[str, Any], params: dict[str, An
         "",
         f"> OpenWrt **{target['version']}** · arch `{target['arch']}` · "
         f"package manager `{target['pkg_manager']}`",
-        f">",
+        ">",
         f"> Firmware: `{target['firmware_url']}`",
         "",
     ]

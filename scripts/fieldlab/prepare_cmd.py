@@ -16,7 +16,7 @@ import json
 import shlex
 import sys
 
-from fieldlab.transport import Host, check_ssh, run_remote, check_tool
+from fieldlab.transport import Host, check_ssh, run_remote
 from fieldlab.rundir import FieldLabRun
 
 
@@ -103,7 +103,7 @@ def cmd_prepare_probe(args: argparse.Namespace, host: Host) -> int:
     }
 
     print(f"\n{'='*60}", file=sys.stderr)
-    print(f"  Probe Port State Report", file=sys.stderr)
+    print("  Probe Port State Report", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
     print(f"  Interface:   {probe_if}", file=sys.stderr)
     print(f"  Operstate:   {iface_state['operstate']}", file=sys.stderr)
@@ -116,10 +116,10 @@ def cmd_prepare_probe(args: argparse.Namespace, host: Host) -> int:
 
     if wan_binding["is_wan_device"]:
         print(f"[!] Probe interface '{probe_if}' is still bound to UCI wan.", file=sys.stderr)
-        print(f"    The field router treats the unknown device as an ISP.", file=sys.stderr)
+        print("    The field router treats the unknown device as an ISP.", file=sys.stderr)
 
         if args.apply:
-            print(f"\n[+] Applying cleanup (--apply)...", file=sys.stderr)
+            print("\n[+] Applying cleanup (--apply)...", file=sys.stderr)
             print(f"    Removing {probe_if} from network.wan at runtime (no commit).",
                   file=sys.stderr)
             # Runtime change: uci set, but DON'T commit — reverts on reboot
@@ -132,7 +132,7 @@ def cmd_prepare_probe(args: argparse.Namespace, host: Host) -> int:
                     timeout=10,
                 )
                 print(f"    {section}: cleared ({result.stdout.strip()})", file=sys.stderr)
-            print(f"\n[+] Cleanup applied. Changes are runtime-only (revert on reboot).",
+            print("\n[+] Cleanup applied. Changes are runtime-only (revert on reboot).",
                   file=sys.stderr)
             print(f"    To make permanent: ssh {host} 'uci commit network'", file=sys.stderr)
             print(f"    To revert now:     ssh {host} 'uci revert network; ifup wan'",
@@ -140,14 +140,14 @@ def cmd_prepare_probe(args: argparse.Namespace, host: Host) -> int:
         else:
             print(f"\n[DRY-RUN] Would remove {probe_if} from network.wan UCI section.",
                   file=sys.stderr)
-            print(f"          Re-run with --apply to clean up.", file=sys.stderr)
+            print("          Re-run with --apply to clean up.", file=sys.stderr)
     else:
-        print(f"[+] Probe interface is not WAN-bound — ready for field-lab use.", file=sys.stderr)
+        print("[+] Probe interface is not WAN-bound — ready for field-lab use.", file=sys.stderr)
 
     if state["probe_is_default_route"] and not has_wifi_sta:
-        print(f"\n[!] WARNING: probe port is the default route and no WiFi STA detected.",
+        print("\n[!] WARNING: probe port is the default route and no WiFi STA detected.",
               file=sys.stderr)
-        print(f"    Cleaning up may cut internet access. Proceed with caution.", file=sys.stderr)
+        print("    Cleaning up may cut internet access. Proceed with caution.", file=sys.stderr)
 
     # Record
     session = args.session

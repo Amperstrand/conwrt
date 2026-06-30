@@ -1,7 +1,6 @@
 """Tests for config.py — TOML parsing, SSH key handling, WiFi config validation."""
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -10,10 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from config import (
     ConwrtConfig,
-    UseCaseConfig,
     WifiAPConfig,
-    WifiSTAConfig,
-    WireguardConfig,
     load_config,
     strip_key_comment,
     _is_inline_key,

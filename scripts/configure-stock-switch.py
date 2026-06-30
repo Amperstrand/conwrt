@@ -81,11 +81,11 @@ def main():
         dash_frame = _wait_for_frame_url(page, "1", timeout=3)
 
         if pw_frame:
-            print(f"\n[2/7] Mandatory password change (cmd=30)")
+            print("\n[2/7] Mandatory password change (cmd=30)")
             pw_frame.locator("#usrOldPass").fill(args.password)
             pw_frame.locator("#usrPass").fill(args.new_password)
             pw_frame.locator("#usrPass2").fill(args.new_password)
-            print(f"  Submitting password change...")
+            print("  Submitting password change...")
             try:
                 pw_frame.evaluate("submitForm()")
                 pw_frame.wait_for_load_state("networkidle", timeout=10000)
@@ -93,20 +93,20 @@ def main():
                 pass
             time.sleep(2)
             effective_password = args.new_password
-            print(f"  Password changed")
+            print("  Password changed")
 
             # Re-login — navigate fresh
-            print(f"\n[3/7] Re-logging in with new password...")
+            print("\n[3/7] Re-logging in with new password...")
             page.goto(f"http://{args.ip}/", timeout=10000)
             time.sleep(2)
             login_frame = page.main_frame
             _do_login(login_frame, effective_password)
             time.sleep(4)
         elif dash_frame:
-            print(f"\n[2/7] No password change needed")
-            print(f"[3/7] Skipping re-login")
+            print("\n[2/7] No password change needed")
+            print("[3/7] Skipping re-login")
         else:
-            print(f"\n[2/7] Checking current state...")
+            print("\n[2/7] Checking current state...")
             # Might already be on a content page
             for f in page.frames:
                 print(f"  Frame: {f.url}")
@@ -118,7 +118,7 @@ def main():
 
         # === FIND SAVE COMMAND ===
         # Navigate to the IP config page directly
-        print(f"\n[4/7] Navigating to IP config (cmd=516)...")
+        print("\n[4/7] Navigating to IP config (cmd=516)...")
         # We need to load cmd=516 in the content frame
         # The frameset structure means we navigate the content frame
         content_frame = _find_content_frame(page)
@@ -134,7 +134,7 @@ def main():
         page_content = content_frame.content()
 
         if "cmd=0" in content_frame.url or len(page_content) < 500:
-            print(f"  Session lost, trying direct page load...")
+            print("  Session lost, trying direct page load...")
             page.goto(f"http://{args.ip}/cgi-bin/dispatcher.cgi?cmd=516",
                        timeout=10000, wait_until="networkidle")
             time.sleep(2)
@@ -162,7 +162,7 @@ def main():
                 print(f"    {n} ({t}): {v[:60]}")
 
         # === FILL IP CONFIG ===
-        print(f"\n[5/7] Setting IP configuration...")
+        print("\n[5/7] Setting IP configuration...")
         ip_field = None
         for name in ["sysIpAddr", "ipAddr", "IPAddr", "sysIpAddress", "ipAddress",
                       "sysIp", "SystemIP", "sysIP"]:
@@ -212,7 +212,7 @@ def main():
 
         # === SUBMIT + SAVE ===
         # Find the submit mechanism on the IP config page
-        print(f"\n[6/7] Submitting and saving...")
+        print("\n[6/7] Submitting and saving...")
 
         # Look for the submit button/onclick
         submit_btn = content_frame.locator('input[name="sysSubmit"], input[value="Apply"]')
@@ -232,19 +232,19 @@ def main():
         if has_submit_form == "function":
             # submitForm() will encode and submit the form
             # After submit, we need to save separately
-            print(f"  Calling submitForm()...")
+            print("  Calling submitForm()...")
             try:
                 content_frame.evaluate("submitForm()")
                 content_frame.wait_for_load_state("networkidle", timeout=8000)
             except PlaywrightError:
                 pass
         elif submit_btn.count() > 0:
-            print(f"  Clicking Apply button...")
+            print("  Clicking Apply button...")
             try:
                 submit_btn.first.click(timeout=5000)
             except PlaywrightError as e:
                 if "timeout" in str(e).lower():
-                    print(f"  Clicked (timeout expected)")
+                    print("  Clicked (timeout expected)")
                 else:
                     raise
 
@@ -258,13 +258,13 @@ def main():
         # Try common save commands via the frame's JS
         for save_cmd in [28, 27, 26, 25, 24, 23, 22, 21, 20]:
             try:
-                result = content_frame.evaluate(f"""(cmd) => {{
+                result = content_frame.evaluate("""(cmd) => {
                     var xhr = new XMLHttpRequest();
                     xhr.open('POST', '/cgi-bin/dispatcher.cgi?cmd=' + cmd, false);
                     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
                     xhr.send('cmd=' + cmd);
-                    return {{status: xhr.status, len: xhr.responseText.length, text: xhr.responseText.substring(0, 200)}};
-                }}""", save_cmd)
+                    return {status: xhr.status, len: xhr.responseText.length, text: xhr.responseText.substring(0, 200)};
+                }""", save_cmd)
                 if result["len"] > 500:
                     print(f"  cmd={save_cmd}: {result['len']} bytes")
                     # Check if this looks like a save page
@@ -275,7 +275,7 @@ def main():
 
         browser.close()
 
-    print(f"\n[7/7] Done. Check switch reachability.")
+    print("\n[7/7] Done. Check switch reachability.")
     return True
 
 

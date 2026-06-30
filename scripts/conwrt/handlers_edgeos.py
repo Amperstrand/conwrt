@@ -4,7 +4,7 @@ import queue
 import subprocess
 import time
 
-from flash.context import Event, State, DEFAULT_IP, log, say, ts, sha256_file, poll_until
+from flash.context import Event, State, DEFAULT_IP, log, ts, sha256_file, poll_until
 from ssh_utils import ssh_cmd, scp_cmd
 from ssh_utils import check_ssh
 from conwrt.infrastructure import RecoveryContext

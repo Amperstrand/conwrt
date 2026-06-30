@@ -21,7 +21,6 @@ from profile.ops import (
     Op,
     ServiceAction,
     ShellCommand,
-    UciAddList,
     UciCommit,
     UciSet,
     render_shell,

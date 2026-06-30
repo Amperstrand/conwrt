@@ -8,7 +8,7 @@ try:
 except ImportError:
     _SerialException = OSError  # type: ignore[misc, assignment]
 
-from flash.context import Event, State, log, say, ts, sha256_file
+from flash.context import Event, State, log, ts, sha256_file
 from platform_utils import configure_interface_ip
 from conwrt.infrastructure import RecoveryContext, TFTPServerManager, SerialUBootDriver, _auto_detect_serial_port
 
@@ -46,7 +46,7 @@ def _handle_serial_waiting_for_bootmenu(ctx: RecoveryContext, eq: queue.Queue) -
             say_fn=ctx._say_fn,
         )
     except (_SerialException, OSError):
-        log(f"ERROR: Serial communication failed during bootmenu wait")
+        log("ERROR: Serial communication failed during bootmenu wait")
         driver.close()
         ctx.state = State.FAILED
         return

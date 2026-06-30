@@ -7,7 +7,6 @@ Gathers probe target IPs from model JSONs, configures the host interface for eac
 
 import argparse
 import importlib
-import ipaddress
 import json
 import subprocess
 import sys

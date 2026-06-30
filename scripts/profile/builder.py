@@ -7,7 +7,7 @@ from typing import Optional
 
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
-from profile.ops import Op, ShellCommand, UciAdd, UciCommit, UciSet
+from profile.ops import Op, ShellCommand, UciCommit, UciSet
 from profile.uci_helpers import uci_cleanup_sections
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
@@ -271,7 +271,7 @@ def build_plan(
             steps.append(ProfileStep(
                 kind=StepKind.HOSTNAME,
                 label=f"Hostname: {effective_hostname}",
-                skipped_reason=f"invalid hostname (must be alphanumeric + hyphens, max 63 chars)",
+                skipped_reason="invalid hostname (must be alphanumeric + hyphens, max 63 chars)",
                 include_in_asu=False,
                 include_in_post_install=False,
             ))

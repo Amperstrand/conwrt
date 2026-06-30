@@ -5,7 +5,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
 import time
@@ -13,15 +12,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-from flash.context import Event, State, DEFAULT_IP, log, say, ts
+from flash.context import Event, State, DEFAULT_IP, log, ts
 from flash.context import sha256_file
 from ssh_utils import ssh_cmd, scp_cmd
 from platform_utils import configure_interface_ip
 from conwrt.infrastructure import TFTPServerManager, RecoveryContext
 from conwrt.monitors import check_ssh
 from conwrt.extreme_helpers import (
-    _ssh_with_password, _scp_with_password, _generate_zyxel_password,
-    _parse_key_value_lines, _sanitize_filename_part,
+    _ssh_with_password, _parse_key_value_lines, _sanitize_filename_part,
 )
 
 
@@ -409,7 +407,7 @@ def _handle_extreme_stock_writing_uboot(ctx: RecoveryContext, event_queue: queue
     stock_ip = profile.stock_default_ip
     stock_user = profile.stock_default_user
     stock_password = profile.stock_default_password
-    tftp_ip = _extreme_tftp_server_ip(profile)
+    _extreme_tftp_server_ip(profile)
     ap_ip = profile.stock_default_ip
     stock_ssh_options = _extreme_stock_ssh_options(profile)
 

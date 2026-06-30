@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock, patch
 from subprocess import CompletedProcess
 
-import pytest
 
 from auto_detect import (
     DetectedRouter,

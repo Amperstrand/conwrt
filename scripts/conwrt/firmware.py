@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Optional
 
-from flash.context import log, sha256_file
+from flash.context import log
 from model_loader import load_model, openwrt_asu_profile
 
 import importlib

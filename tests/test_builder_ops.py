@@ -1,6 +1,6 @@
 from config import ConwrtConfig, UseCaseConfig
 from profile import build_plan
-from profile.ops import ShellCommand, UciAdd, UciCommit, UciSet, render_shell
+from profile.ops import ShellCommand, UciCommit, UciSet, render_shell
 from profile.plan import StepKind
 
 

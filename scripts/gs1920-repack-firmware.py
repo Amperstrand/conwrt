@@ -228,7 +228,7 @@ def main():
     print(f"OpenWrt initramfs: {len(initramfs):,} bytes ({len(initramfs)/1024/1024:.1f} MB)")
 
     # Parse sections from official firmware
-    print(f"\n=== Parsing official firmware sections ===")
+    print("\n=== Parsing official firmware sections ===")
     sections = find_sections(official)
 
     if len(sections) < 3:
@@ -252,7 +252,7 @@ def main():
 
     # Verify official firmware checksums
     if args.verify:
-        print(f"\n=== Verifying official firmware checksums ===")
+        print("\n=== Verifying official firmware checksums ===")
         # BootExt: ocsum should match internet checksum of all data after header
         all_data_after_hdr = official[ROMBIN_HDR_SIZE:]
         computed_ocsum = internet_checksum(all_data_after_hdr)
@@ -263,7 +263,7 @@ def main():
         # RasCode: ocsum = checksum of uncompressed data
         if rascode['header']['flags'] & 0x80:  # COMP
             # We can't easily verify the uncompressed checksum without decompressing
-            print(f"  RasCode: compressed, skipping uncompressed checksum verification")
+            print("  RasCode: compressed, skipping uncompressed checksum verification")
             # But we can verify compressed checksum
             computed_ccsum = internet_checksum(rascode['data'])
             expected_ccsum = rascode['header']['ccsum']
@@ -272,11 +272,11 @@ def main():
 
     # --- Build new firmware ---
 
-    print(f"\n=== Building repacked firmware ===")
+    print("\n=== Building repacked firmware ===")
 
     # Prepare new RasCode data
     if args.compress:
-        print(f"  Compressing initramfs with LZMA...")
+        print("  Compressing initramfs with LZMA...")
         compressed = lzma.compress(initramfs, format=lzma.FORMAT_ALONE,
                                     filters=[{'id': lzma.FILTER_LZMA1, 'preset': 6}])
         rascode_data = compressed
@@ -310,7 +310,7 @@ def main():
     new_rascode_hdr['ocsum'] = rascode_ocsum
     new_rascode_hdr['ccsum'] = rascode_ccsum
 
-    print(f"\n  New RasCode header:")
+    print("\n  New RasCode header:")
     dump_header("RasCode (new)", new_rascode_hdr)
 
     # Assemble the new firmware
@@ -335,7 +335,7 @@ def main():
     all_data = new_firmware[ROMBIN_HDR_SIZE:]
     new_ocsum = internet_checksum(all_data)
 
-    print(f"\n  New BootExt header update:")
+    print("\n  New BootExt header update:")
     print(f"    osize: 0x{bootext['header']['osize']:08x} -> 0x{new_osize:08x} ({new_osize:,} bytes)")
     print(f"    ocsum: 0x{bootext['header']['ocsum']:04x} -> 0x{new_ocsum:04x}")
 
@@ -390,21 +390,21 @@ def main():
         new_firmware = new_bootext_hdr_raw + new_firmware[ROMBIN_HDR_SIZE:]
         print(f"    BootExt ocsum recalculated: 0x{new_ocsum:04x}")
     else:
-        print(f"\n  WARNING: MemMapT header not found in firmware, skipping MMT csum update")
+        print("\n  WARNING: MemMapT header not found in firmware, skipping MMT csum update")
 
     # Write output
     with open(args.output, 'wb') as f:
         f.write(new_firmware)
 
     out_size = os.path.getsize(args.output)
-    print(f"\n=== Output ===")
+    print("\n=== Output ===")
     print(f"  File: {args.output}")
     print(f"  Size: {out_size:,} bytes ({out_size/1024/1024:.1f} MB)")
     print(f"  Original: {len(official):,} bytes ({len(official)/1024/1024:.1f} MB)")
     print(f"  Change: {out_size - len(official):+,} bytes")
 
     # Verify the output
-    print(f"\n=== Verification ===")
+    print("\n=== Verification ===")
     with open(args.output, 'rb') as f:
         verify_data = f.read()
 
@@ -437,7 +437,7 @@ def main():
             match = "OK" if v_ocsum_ras == v_rascode['header']['ocsum'] else "MISMATCH"
             print(f"  RasCode ocsum: computed=0x{v_ocsum_ras:04x}  stored=0x{v_rascode['header']['ocsum']:04x}  {match}")
 
-    print(f"\n=== Done! Upload via: http://admin:1234@192.168.1.1/fwUpgrade.html ===")
+    print("\n=== Done! Upload via: http://admin:1234@192.168.1.1/fwUpgrade.html ===")
 
 
 if __name__ == '__main__':

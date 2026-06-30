@@ -11,14 +11,12 @@ from __future__ import annotations
 
 import argparse
 import re
-import shlex
 import signal
 import sys
-from pathlib import Path
 
 from fieldlab.transport import Host, check_ssh, run_remote, stream_remote
 from fieldlab.rundir import FieldLabRun
-from fieldlab.network import OPENWRT, LINUX, MACOS
+from fieldlab.network import OPENWRT, LINUX
 
 
 def _parse_subnet(subnet: str) -> tuple[str, int]:
@@ -113,26 +111,26 @@ def cmd_serve_dhcp(args: argparse.Namespace, host: Host) -> int:
                        server_ip=server_ip, pool=f"{pool_start}-{pool_end}")
 
     if remote_platform == OPENWRT:
-        print(f"[+] Configuring dnsmasq via UCI (runtime, no commit)...", file=sys.stderr)
+        print("[+] Configuring dnsmasq via UCI (runtime, no commit)...", file=sys.stderr)
         _uci_setup_dhcp(host, probe_if, server_ip, pool_start, pool_end,
                         args.lease_time, args.tftp_root)
-        print(f"[+] DHCP server active. Press Ctrl-C to stop.", file=sys.stderr)
-        print(f"[+] Watching for DHCP leases...", file=sys.stderr)
+        print("[+] DHCP server active. Press Ctrl-C to stop.", file=sys.stderr)
+        print("[+] Watching for DHCP leases...", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
 
         watch_proc = stream_remote(host, "logread -f 2>&1")
     else:
         print(f"[!] DHCP serve not yet implemented for {remote_platform}", file=sys.stderr)
-        print(f"    Use OpenWrt field router, or run dnsmasq manually.", file=sys.stderr)
+        print("    Use OpenWrt field router, or run dnsmasq manually.", file=sys.stderr)
         return 1
 
     def _cleanup(_signum, _frame):
-        print(f"\n[+] Cleaning up...", file=sys.stderr)
+        print("\n[+] Cleaning up...", file=sys.stderr)
         if watch_proc.poll() is None:
             watch_proc.terminate()
         if remote_platform == OPENWRT:
             _uci_cleanup_dhcp(host)
-        print(f"[+] Cleanup complete. All temporary config removed.", file=sys.stderr)
+        print("[+] Cleanup complete. All temporary config removed.", file=sys.stderr)
 
     old_int = signal.signal(signal.SIGINT, _cleanup)
     old_term = signal.signal(signal.SIGTERM, _cleanup)
@@ -184,7 +182,7 @@ def cmd_serve_tftp(args: argparse.Namespace, host: Host) -> int:
         print(f"[!] Cannot SSH to {host}.", file=sys.stderr)
         return 1
 
-    remote_platform = _detect_remote_platform(host)
+    _detect_remote_platform(host)
     server_ip = args.server_ip or "192.168.1.2"
 
     print(f"[+] TFTP serve via UCI: scope fieldlab on {probe_if}", file=sys.stderr)
@@ -198,7 +196,7 @@ def cmd_serve_tftp(args: argparse.Namespace, host: Host) -> int:
     run = FieldLabRun(session) if session else FieldLabRun.create()
     run.record_command("serve-tftp", probe_interface=probe_if, tftp_root=args.tftp_root)
 
-    print(f"[+] TFTP active. Press Ctrl-C to stop.", file=sys.stderr)
+    print("[+] TFTP active. Press Ctrl-C to stop.", file=sys.stderr)
     watch_proc = stream_remote(host, "logread -f 2>&1")
 
     def _cleanup(_signum, _frame):

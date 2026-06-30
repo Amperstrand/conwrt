@@ -44,8 +44,8 @@ BOOT_MARKERS = [
 def wait_for_break(port, baud, max_wait=0):
     """Phase 1: Wait for the power-off break byte."""
     s = serial.Serial(port, baud, timeout=0.5)
-    print(f"Phase 1: Waiting for power cycle (break byte)...")
-    print(f">>> POWER CYCLE THE DEVICE NOW <<<")
+    print("Phase 1: Waiting for power cycle (break byte)...")
+    print(">>> POWER CYCLE THE DEVICE NOW <<<")
     start = time.time()
     while True:
         chunk = s.read(1)

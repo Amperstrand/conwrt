@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
-from pathlib import Path
 
 from fieldlab.transport import Host, check_ssh, _ssh_base
 from fieldlab.rundir import FieldLabRun
@@ -80,7 +79,7 @@ def cmd_forward(args: argparse.Namespace, host: Host) -> int:
         if not check_ssh(host):
             print(f"[!] Cannot SSH to {host}.", file=sys.stderr)
             return 1
-        print(f"[+] Opening forward. Ctrl-C to close.", file=sys.stderr)
+        print("[+] Opening forward. Ctrl-C to close.", file=sys.stderr)
         print(f"    Access the service at: http://{local_spec}" if target_port in (80, 443)
               else f"    Connect to: {local_spec}", file=sys.stderr)
         # Exec replaces this process — the user gets a foreground SSH session
@@ -92,5 +91,5 @@ def cmd_forward(args: argparse.Namespace, host: Host) -> int:
         print(f"\n  {cmd_str}\n", file=sys.stdout)
         print(f"  Then access: http://{local_spec}" if target_port in (80, 443, 8080)
               else f"  Then connect to: {local_spec}", file=sys.stdout)
-        print(f"\n  Or use --exec to run it directly.", file=sys.stdout)
+        print("\n  Or use --exec to run it directly.", file=sys.stdout)
         return 0

@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from router_classify import classify_http_response, classify_web_ui, assess_readiness
 

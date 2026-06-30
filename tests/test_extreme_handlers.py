@@ -6,7 +6,6 @@ import queue
 import shutil
 import sys
 import tempfile
-import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
@@ -14,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from flash.context import Event, State
+from flash.context import State
 from conwrt.extreme import (
     _resolve_extreme_uboot_value,
     _extreme_tftp_server_ip,

@@ -9,7 +9,6 @@ Tests skip automatically when CONWRT_DEVICE_IP is not set.
 from __future__ import annotations
 
 import os
-import subprocess
 from typing import Generator
 
 import pytest

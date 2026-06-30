@@ -17,7 +17,6 @@ from jsonschema import Draft7Validator
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from model_loader import load_model
-import conwrt
 from flash.context import Event, State
 from flash.detect import detect_boot_state
 from flash.device_profile import build_profile_from_model, find_recovery_flash_method

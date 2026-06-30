@@ -1,10 +1,9 @@
 # pyright: reportMissingImports=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportCallIssue=false, reportAttributeAccessIssue=false
-import os
 import queue
 import time
 from typing import Optional
 
-from flash.context import Event, State, log, say, ts, wait_for_event
+from flash.context import Event, State, log, ts, wait_for_event
 from flash.context import get_link_state, sha256_file
 from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
 from flash.hnap import _flash_via_dlink_hnap

@@ -14,17 +14,20 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lldp import LLDPInfo, lldp_probe, _parse_lldp_hex_block, _parse_zyxel_lldp
-from model_loader import list_models
+from lldp import (
+    LLDPInfo as LLDPInfo,
+    lldp_probe as lldp_probe,
+    _parse_lldp_hex_block as _parse_lldp_hex_block,
+    _parse_zyxel_lldp as _parse_zyxel_lldp,
+)
 from model_match import (
-    FIRMWARE_PATTERNS,
     lookup_mac_vendor,
     match_models_by_oui,
     match_model_by_board,
     match_model_by_http,
     match_model_by_lldp,
     _normalize_mac,
-    _mac_prefix,
+    _mac_prefix as _mac_prefix,  # re-export for tests
 )
 from platform_utils import configure_interface_ip, detect_platform, get_link_state, is_root
 from probe_utils import curl_get as _curl_get, curl_head as _curl_head, ping_host as _ping

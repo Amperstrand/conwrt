@@ -464,7 +464,7 @@ class TestMainWithExplicitIp(TestCase):
     @patch("router_fingerprint.run_ssh_command", return_value=(True, "===HOSTNAME===\nrouter\n"))
     @patch.object(sys, "argv", ["router-fingerprint.py", "--ip", "10.1.2.3", "--quiet"])
     def test_explicit_ip_used(self, mock_ssh):
-        with patch("sys.stdout") as mock_stdout:
+        with patch("sys.stdout"):
             with self.assertRaises(SystemExit) as cm:
                 rf.main()
             self.assertEqual(cm.exception.code, 0)

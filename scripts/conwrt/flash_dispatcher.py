@@ -672,7 +672,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     elif is_zycast and not use_sysupgrade:
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
     elif is_edgeos_ks and not use_sysupgrade:
-        log(f"Flash path: edgeos-kernel-swap (2-stage SSH)")
+        log("Flash path: edgeos-kernel-swap (2-stage SSH)")
     elif is_extreme_rdwr_tftp and not use_sysupgrade:
         log("Flash path: extreme-rdwr-tftp-initramfs (stock SSH + TFTP + initramfs sysupgrade)")
     else:

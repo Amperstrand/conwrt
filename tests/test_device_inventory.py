@@ -1,14 +1,7 @@
-import hashlib
-import os
-import subprocess
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from conwrt.device_inventory import (
     _print_timeline,

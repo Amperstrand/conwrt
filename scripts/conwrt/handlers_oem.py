@@ -3,12 +3,10 @@ import os
 import queue
 import shutil
 import subprocess
-import sys
 import tempfile
-import time
 
-from flash.context import Event, State, log, say, ts
-from flash.context import DEFAULT_IP, sha256_file, poll_until
+from flash.context import State, log, ts
+from flash.context import DEFAULT_IP
 from flash.oem_handlers import (
     oem_http_accept_reboot, oem_http_change_password, oem_http_login,
     oem_http_upload, oem_ftp_enable_service, oem_ftp_login, oem_ftp_upload,

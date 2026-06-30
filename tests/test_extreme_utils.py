@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
-import queue
 import shutil
 import subprocess
 import sys
@@ -11,11 +9,11 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from flash.context import Event, State, RecoveryContext, Timeline
+from flash.context import State, RecoveryContext
 from conwrt.extreme import (
     _setup_interface_ips,
     _extreme_tftp_server_ip,
@@ -323,7 +321,7 @@ class TestEnsureExtremeBackupDir(TestCase):
                 fake_backup_dir = Path(self._tmpdir) / "backup"
                 fake_backup_dir.mkdir(parents=True, exist_ok=True)
                 # Setup the chain: Path(__file__).resolve().parent.parent / "data" / ...
-                mock_base = MagicMock()
+                MagicMock()
                 mock_path_cls.return_value.resolve.return_value.parent.parent.__truediv__.return_value.__truediv__.return_value.__truediv__.return_value = fake_backup_dir
                 result = _ensure_extreme_backup_dir(ctx, {"serial": "ABC123"})
                 # Verify the dir was returned and cached
@@ -344,7 +342,7 @@ class TestEnsureExtremeBackupDir(TestCase):
         ctx._extreme_backup_dir = ""
         with patch("conwrt.extreme.Path") as mock_path_cls:
             fake_backup_dir = Path(self._tmpdir) / "serial-test"
-            mock_base = MagicMock()
+            MagicMock()
             # Path(__file__).resolve().parent.parent / "data" / "backups" / ctx.profile.name / device_id
             chain = mock_path_cls.return_value.resolve.return_value.parent.parent
             chain.__truediv__.return_value.__truediv__.return_value.__truediv__.return_value.__truediv__.return_value = fake_backup_dir

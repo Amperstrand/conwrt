@@ -39,7 +39,7 @@ def _assert_add_list_has_del_list(rendered: str, label: str) -> None:
             value = re.search(r"network='([^']*)'", line)
             if value:
                 iface = value.group(1)
-                del_pattern = f"del_list" in rendered and iface in rendered
+                del_pattern = "del_list" in rendered and iface in rendered
                 assert del_pattern, (
                     f"{label}: add_list for '{iface}' without del_list"
                 )

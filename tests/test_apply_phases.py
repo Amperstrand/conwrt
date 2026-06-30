@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 from config import ConwrtConfig, UseCaseConfig, WifiSTAConfig
 from profile.apply import apply_plan
-from profile.plan import StepKind
 
 
 def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -54,7 +53,7 @@ def test_apply_plan_phase_order_wifi_before_opkg_before_usecase() -> None:
     log = MagicMock()
 
     with patch("profile.apply.subprocess.run", side_effect=track_run), \
-         patch("profile.apply._wait_for_internet", return_value=True) as mock_wait, \
+         patch("profile.apply._wait_for_internet", return_value=True), \
          patch("profile.apply.time.sleep"):
         apply_plan(plan, ip="1.2.3.4", ssh_key="", log=log)
 

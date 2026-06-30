@@ -42,7 +42,7 @@ def _placeholder_params(flow) -> dict[str, str]:
 
 def build_bundle() -> dict[str, Any]:
     sys.path.insert(0, str(ROOT / "scripts"))
-    from flows import Flow, Step, registry as flow_registry
+    from flows import registry as flow_registry
     from flows.render import render_flow_markdown, render_flow_shell
     from model_loader import list_models
 

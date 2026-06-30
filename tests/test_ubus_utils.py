@@ -109,7 +109,7 @@ class TestUbusClientUci:
         mock_urlopen.return_value = _mock_response({"result": [0, {"section": "cfg01"}]})
         client = UbusClient("192.168.1.1")
         client.token = "tok"
-        result = client.uci_add("firewall", "rule", values={
+        client.uci_add("firewall", "rule", values={
             "name": "Allow-SSH",
             "target": "ACCEPT",
         })

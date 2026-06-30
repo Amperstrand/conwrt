@@ -6,12 +6,11 @@ No real SSH, SCP, or network connections are made.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

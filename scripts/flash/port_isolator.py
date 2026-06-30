@@ -94,7 +94,7 @@ class PortIsolator:
 
         uci_commands = [
             "uci add network bridge-vlan",
-            f"uci set network.@bridge-vlan[-1].device='br-lan'",
+            "uci set network.@bridge-vlan[-1].device='br-lan'",
             f"uci set network.@bridge-vlan[-1].vlan='{vlan_s}'",
             f"uci add_list network.@bridge-vlan[-1].ports='{port_spec}'",
             "uci set network.@bridge-vlan[-1].local='1'",

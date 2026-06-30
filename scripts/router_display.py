@@ -6,11 +6,9 @@ Extracted from auto_detect for modularity.
 from __future__ import annotations
 
 import sys
-from typing import Optional
 
 from model_loader import load_model
 from model_match import match_models_by_oui
-from lldp import LLDPInfo
 
 
 SEPARATOR = "=" * 45
@@ -175,12 +173,12 @@ def interactive_menu(routers: list) -> None:
             print(f"Confidence:     {router.confidence}")
             print(f"Flash methods:  {', '.join(router.flash_methods) if router.flash_methods else 'N/A'}")
             if router.http_response_preview:
-                print(f"\nHTTP preview (first 300 chars):")
+                print("\nHTTP preview (first 300 chars):")
                 print(router.http_response_preview[:300])
             if router.http_headers:
-                print(f"\nHTTP headers:")
+                print("\nHTTP headers:")
                 print(router.http_headers[:300])
-            print(f"\nEvidence chain:")
+            print("\nEvidence chain:")
             for ev in router.evidence:
                 print(f"  {ev}")
             input("\nPress Enter to continue...")

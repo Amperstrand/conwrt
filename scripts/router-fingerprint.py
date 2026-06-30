@@ -388,7 +388,7 @@ Examples:
         else:
             # Try common OpenWrt IPs
             common_ips = ['192.168.1.1', '192.168.8.1']
-            print(f'[!] No default gateway found, trying common IPs...', file=sys.stderr)
+            print('[!] No default gateway found, trying common IPs...', file=sys.stderr)
             for test_ip in common_ips:
                 try:
                     # Simple socket check

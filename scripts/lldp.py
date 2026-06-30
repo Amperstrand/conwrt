@@ -163,7 +163,7 @@ def _parse_lldp_hex_block(block: str) -> Optional[LLDPInfo]:
             if tlv_len >= 4:
                 oui = tlv_value[0:3]
                 sub = tlv_value[3]
-                oui_hex = oui.hex().upper()
+                oui.hex().upper()
                 oui_str = ":".join(f"{b:02X}" for b in oui)
                 payload = tlv_value[4:]
 

@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 
 # Ensure scripts/ on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))

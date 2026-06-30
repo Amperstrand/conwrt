@@ -15,7 +15,6 @@ from . import ParamDef, UseCase, register
 _REPO = "OpenTollGate/tollgate-module-basic-go"
 _WORKFLOW = "Build and Publish"
 
-from profile.target import arch_from_target  # canonical arch map lives in profile.target (DRY)
 
 
 def resolve_ipk_gh(
@@ -91,7 +90,7 @@ def resolve_ipk_gh(
 
     artifact_name = matching[0]
 
-    print(f"  [tollgate] Resolved via GitHub CI:")
+    print("  [tollgate] Resolved via GitHub CI:")
     print(f"    run:      #{run_number}")
     print(f"    commit:   {short_sha}")
     print(f"    artifact: {artifact_name}")
@@ -207,7 +206,7 @@ def resolve_ipk_nostr(
         local_name = f"tollgate-wrt_{arch}.ipk"
     local_path = os.path.join(dest, local_name)
 
-    print(f"  [tollgate] Resolved via nostr:")
+    print("  [tollgate] Resolved via nostr:")
     print(f"    version:  {event.get('version', '?')}")
     print(f"    pubkey:   {event_pubkey[:12]}...{event_pubkey[-8:]}")
     print(f"    sha256:   {release_sha[:16]}...")

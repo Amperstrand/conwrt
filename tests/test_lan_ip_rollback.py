@@ -1,8 +1,7 @@
 """Tests for LAN IP rollback (#17) and empty-IP abort (#20)."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call, DEFAULT
-from contextlib import ExitStack
+from unittest.mock import patch, call, DEFAULT
 
 import pytest
 

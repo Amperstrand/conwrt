@@ -6,7 +6,6 @@ Pure functions extracted from auto_detect for testability.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from model_match import FIRMWARE_PATTERNS
 from model_loader import load_model

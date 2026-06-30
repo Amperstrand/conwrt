@@ -18,7 +18,7 @@ from typing import Any
 
 from profile.ops import Comment, Op, ShellCommand, UciSet, UciCommit, render_shell
 
-from . import ParamDef, UseCase, register
+from . import UseCase, register
 
 
 def _build_security_ops(params: dict[str, Any]) -> list[Op]:

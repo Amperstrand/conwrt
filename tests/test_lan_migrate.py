@@ -4,7 +4,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 
 from conwrt import cmd_lan_migrate as M
 

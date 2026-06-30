@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 from unittest.mock import MagicMock
 
-from config import ConwrtConfig, UseCaseConfig, WifiAPConfig
+from config import ConwrtConfig, WifiAPConfig
 from profile import build_plan
 from profile.builder import (
     _VALID_HOSTNAME_RE,

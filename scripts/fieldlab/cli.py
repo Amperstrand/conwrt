@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run session ID",
     )
 
-    net_status_p = subparsers.add_parser(
+    subparsers.add_parser(
         "net-status",
         help="Show host network diagnostics (interfaces, routes, DNS, stale aliases)",
     )

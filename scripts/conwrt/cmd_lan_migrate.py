@@ -132,5 +132,5 @@ def cmd_lan_migrate(args: SimpleNamespace) -> int:
     if _port_open(cur):
         print(f"  router reverted to {cur} — migration aborted, router reachable", file=sys.stderr)
     else:
-        print(f"  router unreachable on both IPs — may need reflash", file=sys.stderr)
+        print("  router unreachable on both IPs — may need reflash", file=sys.stderr)
     return 1

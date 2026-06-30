@@ -6,11 +6,10 @@ import secrets
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Optional
 
-from flash.context import Event, OemState, RecoveryContext, State, Timeline, log, say, ts
+from flash.context import Event, log, ts
+from flash.context import RecoveryContext as RecoveryContext  # re-export for tests
 from platform_utils import detect_platform
 
 
