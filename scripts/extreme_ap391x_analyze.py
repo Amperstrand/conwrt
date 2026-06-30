@@ -69,11 +69,7 @@ UIMAGE_COMP = {
 }
 
 
-from flash.context import sha256_file as _sha256_file_impl
-
-
-def sha256_file(path: Path) -> str:
-    return _sha256_file_impl(str(path))
+from flash.context import sha256_file  # noqa: E402
 
 
 def run_command(command: list[str], timeout: int = 60) -> dict[str, Any]:

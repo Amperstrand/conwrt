@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from model_loader import load_model
 from config import load_config as _load_config
-from flash.context import sha256_file as _sha256_file_impl
+from flash.context import sha256_file
 from profile.builder import build_plan
 from profile.render import print_plan
 
@@ -77,12 +77,6 @@ def _http_post_json(url: str, data: dict[str, Any], timeout: int = 30) -> dict[s
 # ---------------------------------------------------------------------------
 # SHA-256 helpers
 # ---------------------------------------------------------------------------
-
-
-def _sha256_file(path: Path) -> str:
-    # Thin wrapper over the canonical flash.context.sha256_file (single hashing
-    # implementation). Kept as a named local so existing call sites/patches work.
-    return _sha256_file_impl(str(path))
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +379,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             dest_path.unlink(missing_ok=True)
             return 1
 
-        actual_sha = _sha256_file(dest_path)
+        actual_sha = sha256_file(dest_path)
         if expected_sha and actual_sha != expected_sha:
             logger.error(
                 "SHA-256 mismatch for %s: expected %s, got %s",

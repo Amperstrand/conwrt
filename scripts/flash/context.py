@@ -201,7 +201,7 @@ def get_link_state(interface: str) -> bool:
 
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with open(str(path), "rb") as f:
         while True:
             chunk = f.read(1 << 20)
             if not chunk:
