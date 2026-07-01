@@ -20,6 +20,21 @@ from ssh_utils import ssh_cmd
 LogFn = Callable[[str], None]
 
 
+def _check_missing_packages(
+    ip: str, ssh_key: str, log: LogFn, packages: list[str],
+) -> list[str]:
+    if not packages:
+        return []
+    r = subprocess.run(
+        ssh_cmd(ip, "opkg list-installed 2>/dev/null", key=ssh_key or None, connect_timeout=10),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if r.returncode != 0:
+        return list(packages)
+    installed = set(line.split()[0] for line in r.stdout.splitlines() if line.strip())
+    return [p for p in packages if p not in installed]
+
+
 def _wait_for_internet(ip: str, ssh_key: str, log: LogFn, timeout: int = 60) -> bool:
     start = time.time()
     log("  waiting for internet connectivity...")
@@ -284,15 +299,18 @@ def apply_plan(
     # Phase 2: Install packages (after WWAN_SETUP + WIFI_STA brought WAN up)
     packages_ok = True
     if opkg_pkgs or opkg_remove:
-        if _wait_for_internet(ip, ssh_key, _log, timeout=60):
-            _log(f"  opkg: installing {len(opkg_pkgs)} package(s)...")
-            script = opkg_install_script(opkg_pkgs, opkg_remove)
+        missing = _check_missing_packages(ip, ssh_key, _log, opkg_pkgs)
+        if not missing and not opkg_remove:
+            _log(f"  ✓ all {len(opkg_pkgs)} package(s) already installed")
+        elif _wait_for_internet(ip, ssh_key, _log, timeout=60):
+            _log(f"  opkg: installing {len(missing)} package(s)...")
+            script = opkg_install_script(missing, opkg_remove)
             if not _run_ssh(ip, script, ssh_key, _log, timeout=300):
                 _log("  ⚠ opkg install failed, trying SCP fallback...")
-                packages_ok = _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
+                packages_ok = _scp_install_packages(ip, missing, ssh_key, _log)
         else:
             _log("  ⚠ opkg: no internet after 60s — trying SCP fallback...")
-            packages_ok = _scp_install_packages(ip, opkg_pkgs, ssh_key, _log)
+            packages_ok = _scp_install_packages(ip, missing, ssh_key, _log)
 
     if not packages_ok and opkg_pkgs:
         affected = [s.use_case_name for s in plan.steps
