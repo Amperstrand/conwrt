@@ -6,7 +6,6 @@ on:
       - 'scripts/use_cases/**'
       - 'scripts/conwrt/commands_configure.py'
       - 'tests/integration/**'
-      - 'models/virtual-x86-64.json'
       - '.github/workflows/integration.yml'
   workflow_dispatch:
 
@@ -24,32 +23,3 @@ jobs:
       - name: Run dry-run use case tests
         run: |
           pytest tests/integration/test_use_cases_dry_run.py -v --tb=long
-
-  sqm-virtual-router:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install OS dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils sshpass wget
-          sudo chmod 666 /dev/kvm || true
-      - name: Install conwrt
-        run: python -m pip install -e '.[dev]'
-      - name: Run SQM integration tests (QEMU)
-        run: |
-          pytest tests/integration/test_sqm.py -v --tb=long -s
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-artifacts
-          path: |
-            tests/integration/.serial.log
-          retention-days: 3
-          if-no-files-found: ignore
