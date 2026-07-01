@@ -1,0 +1,30 @@
+{
+  "id": "virtual-x86-64",
+  "vendor": "QEMU",
+  "description": "Virtual x86_64 OpenWrt instance (QEMU/KVM) for CI testing",
+  "openwrt": {
+    "target": "x86/64",
+    "device": "generic",
+    "profile": "generic",
+    "version": "24.10.2",
+    "board_name": "generic"
+  },
+  "mac_oui": [],
+  "hardware": {
+    "soc": "virtual",
+    "ram_mb": 512,
+    "flash_mb": 1024,
+    "ethernet_ports": 1,
+    "wifi": false
+  },
+  "capabilities": ["ethernet", "ssh"],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade (for updating running OpenWrt VM)",
+      "command": "sysupgrade -n /tmp/firmware.bin"
+    }
+  },
+  "boot_signatures": {},
+  "lan_subnet": "192.168.1.0/24",
+  "default_ip": "192.168.1.1"
+}

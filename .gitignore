@@ -102,3 +102,8 @@ firmware/stock_v290/*.bix
 
 # --- PII redaction tools (local-only, not for repo) ---
 scripts/redact-pii.sh
+
+# --- Integration test VM artifacts ---
+tests/integration/.openwrt.img*
+tests/integration/.vm_ssh_key*
+tests/integration/.serial.log
