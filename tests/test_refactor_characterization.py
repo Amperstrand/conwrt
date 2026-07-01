@@ -80,11 +80,10 @@ def test_ssh_run_without_key_omits_identity_flag() -> None:
     assert "-i" not in argv
 
 
-# ── SHA-256 file hashing (3 implementations must agree) ──────────────────
+# ── SHA-256 file hashing (canonical implementation) ──────────────────────
 
 def test_sha256_file_implementations_agree(tmp_path: Path) -> None:
     from flash.context import sha256_file
-    fm = _load_firmware_manager()
 
     payload = b"conwrt-refactor-characterization\x00\x01\x02" * 4096
     f = tmp_path / "blob.bin"
@@ -92,7 +91,7 @@ def test_sha256_file_implementations_agree(tmp_path: Path) -> None:
 
     expected = hashlib.sha256(payload).hexdigest()
     assert sha256_file(str(f)) == expected
-    assert fm._sha256_file(f) == expected
+    assert sha256_file(f) == expected
 
 
 # ── SSH public-key comment stripping ─────────────────────────────────────

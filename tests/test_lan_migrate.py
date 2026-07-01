@@ -1,8 +1,9 @@
 """Tests for `conwrt lan-migrate` (host-side orchestration, mocked)."""
 from __future__ import annotations
 
+import itertools
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 from conwrt import cmd_lan_migrate as M
@@ -45,10 +46,13 @@ def test_migrate_applies_verifies_and_cancels_rollback(mock_run, mock_ssh, mock_
     assert "touch /tmp/lanrevert.cancel" in cancel
 
 
+@patch.object(M, "time")
 @patch.object(M, _port_open_name := "_port_open", return_value=False)
 @patch.object(M, "_ssh")
 @patch.object(M, "_run")
-def test_migrate_rolls_back_when_new_ip_never_comes_up(mock_run, mock_ssh, mock_port):
+def test_migrate_rolls_back_when_new_ip_never_comes_up(mock_run, mock_ssh, mock_port, mock_time):
+    mock_time.time.side_effect = itertools.count(start=1000, step=100)
+    mock_time.sleep = MagicMock()
     cur = SimpleNamespace(returncode=0, stdout="192.168.1.1\n", stderr="")
     mock_run.side_effect = [cur, SimpleNamespace(returncode=0, stdout="", stderr=""),
                             SimpleNamespace(returncode=0, stdout="", stderr="")]
@@ -59,6 +63,6 @@ def test_migrate_rolls_back_when_new_ip_never_comes_up(mock_run, mock_ssh, mock_
 
 @patch("conwrt.cmd_lan_migrate.load_model")
 def test_migrate_fails_when_model_has_no_lan_subnet(mock_load):
-    mock_load.return_value = {"id": "test", "openwrt": {"target": "ramips/mt7621", "version": "24.10.7"}, "lan_subnet": ""}
+    mock_load.return_value = {"id": "test", "openwrt": {"target": "ramips/mt7621", "version": "24.10.7", "profile": "test_profile"}, "lan_subnet": ""}
     rc = M.cmd_lan_migrate(_args())
     assert rc == 1
