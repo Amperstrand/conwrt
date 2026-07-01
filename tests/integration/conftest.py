@@ -20,8 +20,10 @@ SSH_PORT = 2222
 SSH_HOST = "127.0.0.1"
 OPENWRT_VERSION = "24.10.2"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
+PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
 SERIAL_LOG = REPO_ROOT / "tests" / "integration" / ".serial.log"
+PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libatomic1"]
 
 
 def _available(cmd: str) -> bool:
@@ -121,6 +123,25 @@ exit 0
 INSTALL
         sudo chmod +x /mnt/owrt/etc/uci-defaults/99-install-sqm
 
+        # Pre-bake: inject .ipk files into image — QEMU guest can't reach opkg repos
+        sudo mkdir -p /mnt/owrt/tmp/prebake
+        for pkg in {" ".join(PREBAKE_PACKAGES)}; do
+            ipk=$(ls /tmp/conwrt-prebake/$pkg*.ipk 2>/dev/null | head -1)
+            if [ -n "$ipk" ]; then
+                sudo cp "$ipk" /mnt/owrt/tmp/prebake/
+            fi
+        done
+        if sudo ls /mnt/owrt/tmp/prebake/*.ipk >/dev/null 2>&1; then
+            sudo tee /mnt/owrt/etc/uci-defaults/98-prebake-packages > /dev/null <<'PREBAKE'
+#!/bin/sh
+cd /tmp/prebake 2>/dev/null || exit 0
+opkg install *.ipk 2>/dev/null || true
+rm -rf /tmp/prebake
+exit 0
+PREBAKE
+            sudo chmod +x /mnt/owrt/etc/uci-defaults/98-prebake-packages
+        fi
+
         sudo umount /mnt/owrt
         sudo losetup -d $LOOP
         """],
@@ -128,6 +149,33 @@ INSTALL
     )
     if r.returncode != 0:
         pytest.fail(f"Image preparation failed: {r.stderr}")
+
+
+def _download_prebake_packages() -> None:
+    prebake_dir = Path("/tmp/conwrt-prebake")
+    prebake_dir.mkdir(parents=True, exist_ok=True)
+    if any(prebake_dir.glob("*.ipk")):
+        return
+    print("Downloading pre-bake packages...", flush=True)
+    listing = subprocess.run(
+        ["curl", "-sfL", PACKAGES_URL + "/"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if listing.returncode != 0:
+        print(f"  Warning: could not fetch package listing: {listing.stderr}")
+        return
+    import re
+    available = set(re.findall(r'href="([^"]+\.ipk)"', listing.stdout))
+    for pkg in PREBAKE_PACKAGES:
+        match = next((a for a in available if a.startswith(pkg + "_")), None)
+        if not match:
+            print(f"  Warning: {pkg} not found in package repo")
+            continue
+        subprocess.run(
+            ["curl", "-sfL", "-o", str(prebake_dir / match), f"{PACKAGES_URL}/{match}"],
+            capture_output=True, timeout=30,
+        )
+    print(f"  Pre-baked {len(list(prebake_dir.glob('*.ipk')))} packages", flush=True)
 
 
 @pytest.fixture(scope="session")
@@ -151,6 +199,7 @@ def openwrt_vm():
         if r.returncode not in (0, 2) or not VM_IMAGE.exists():
             pytest.fail(f"gunzip failed (exit {r.returncode}): {r.stderr}")
         print(f"OpenWrt image ready: {VM_IMAGE} ({VM_IMAGE.stat().st_size} bytes)", flush=True)
+        _download_prebake_packages()
         _prepare_image(VM_IMAGE)
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
