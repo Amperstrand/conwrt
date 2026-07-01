@@ -74,12 +74,20 @@ def openwrt_vm():
 
     if not VM_IMAGE.exists():
         print("Downloading OpenWrt x86_64 image...", flush=True)
-        subprocess.run(
+        VM_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
             ["bash", "-c",
-             f"wget -q -O {VM_IMAGE}.gz {IMAGE_URL} && "
+             f"curl -fL --retry 3 --retry-delay 2 -o {VM_IMAGE}.gz {IMAGE_URL} && "
              f"gunzip -f {VM_IMAGE}.gz"],
-            check=True,
+            capture_output=True, text=True,
         )
+        if r.returncode != 0:
+            pytest.fail(
+                f"OpenWrt image download failed (exit {r.returncode}):\n"
+                f"stdout: {r.stdout}\nstderr: {r.stderr}"
+            )
+        if not VM_IMAGE.exists():
+            pytest.fail(f"Image file not found after download: {VM_IMAGE}")
         _inject_ssh_key(VM_IMAGE)
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
