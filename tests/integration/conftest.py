@@ -112,6 +112,15 @@ config dropbear
         option Interface 'lan'
 DROPBEAR
 
+        sudo mkdir -p /mnt/owrt/etc/uci-defaults
+        sudo tee /mnt/owrt/etc/uci-defaults/99-install-sqm > /dev/null <<'INSTALL'
+#!/bin/sh
+opkg update >/dev/null 2>&1
+opkg install sqm-scripts luci-app-sqm >/dev/null 2>&1 || true
+exit 0
+INSTALL
+        sudo chmod +x /mnt/owrt/etc/uci-defaults/99-install-sqm
+
         sudo umount /mnt/owrt
         sudo losetup -d $LOOP
         """],
