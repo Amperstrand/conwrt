@@ -24,7 +24,7 @@ jobs:
       - name: Install OS dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-xium qemu-utils sshpass
+          sudo apt-get install -y qemu-system-x86 qemu-utils sshpass wget
           sudo chmod 666 /dev/kvm || true
 
       - name: Install conwrt
@@ -32,12 +32,15 @@ jobs:
 
       - name: Run SQM integration tests
         run: |
-          pytest tests/integration/ -v --tb=long -s
+          pytest tests/integration/test_sqm.py -v --tb=long -s
 
-      - name: Upload serial log on failure
-        if: failure()
+      - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: serial-log
-          path: tests/integration/.serial.log
-          retention-days: 7
+          name: integration-artifacts
+          path: |
+            tests/integration/.serial.log
+            tests/integration/.openwrt.img
+          retention-days: 3
+          if-no-files-found: ignore
