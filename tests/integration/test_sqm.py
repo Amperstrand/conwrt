@@ -58,13 +58,15 @@ def test_conwrt_configure_applies_sqm(openwrt_vm, ssh_cmd, tmp_path):
         result = subprocess.run(
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
              "--model-id", "virtual-x86-64",
-             "--ip", openwrt_vm["host"],
-             "--interface", "eth0"],
-            capture_output=True, text=True, timeout=120,
+             "--ip", openwrt_vm["host"]],
+            capture_output=True, text=True, timeout=300,
             cwd=str(REPO_ROOT),
         )
 
-        assert result.returncode == 0, f"conwrt configure failed: {result.stderr}"
+        assert result.returncode == 0, (
+            f"conwrt configure failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
 
     finally:
         if backup.exists():

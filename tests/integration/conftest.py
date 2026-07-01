@@ -179,6 +179,19 @@ def openwrt_vm():
             f"Serial log tail:\n{serial_tail}"
         )
 
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    ssh_config = ssh_dir / "config"
+    existing = ssh_config.read_text() if ssh_config.exists() else ""
+    if f"Host {SSH_HOST}" not in existing:
+        ssh_config.write_text(
+            existing
+            + f"\nHost {SSH_HOST}\n"
+            f"    Port {SSH_PORT}\n"
+            f"    StrictHostKeyChecking no\n"
+            f"    UserKnownHostsFile /dev/null\n"
+        )
+
     yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY)}
 
     subprocess.run(["pkill", "-f", "qemu-system-x86_64.*openwrt"],
