@@ -8,8 +8,6 @@ Requires: qemu-system-x86_64, losetup, mount
 from __future__ import annotations
 
 import os
-import shutil
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -23,6 +21,7 @@ SSH_HOST = "127.0.0.1"
 OPENWRT_VERSION = "24.10.2"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
+SERIAL_LOG = REPO_ROOT / "tests" / "integration" / ".serial.log"
 
 
 def _available(cmd: str) -> bool:
@@ -42,7 +41,15 @@ def _ssh(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
     )
 
 
-def _inject_ssh_key(image_path: Path) -> None:
+def _prepare_image(image_path: Path) -> None:
+    """Inject SSH key and configure eth0 as LAN DHCP so QEMU NAT can reach it.
+
+    OpenWrt's default config puts eth0 in the WAN zone (firewall blocks SSH)
+    and sets LAN to a static 192.168.1.1 bridge that QEMU user-mode NAT can't
+    route to. We rewrite the network config so the single eth0 acts as LAN
+    with DHCP (QEMU provides 10.0.2.15), and disable the firewall entirely
+    so dropbear is reachable on port 22 via the hostfwd port forward.
+    """
     if SSH_KEY.exists():
         return
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
@@ -55,16 +62,63 @@ def _inject_ssh_key(image_path: Path) -> None:
         LOOP=$(sudo losetup -fP --show {image_path})
         sudo mkdir -p /mnt/owrt
         sudo mount ${{LOOP}}p2 /mnt/owrt || sudo mount ${{LOOP}}p1 /mnt/owrt
+
         sudo mkdir -p /mnt/owrt/etc/dropbear
         echo '{pubkey}' | sudo tee -a /mnt/owrt/etc/dropbear/authorized_keys > /dev/null
         sudo chmod 600 /mnt/owrt/etc/dropbear/authorized_keys
+
+        # Replace network config: eth0 as LAN with DHCP
+        sudo tee /mnt/owrt/etc/config/network > /dev/null <<'NETCFG'
+config interface 'loopback'
+        option device 'lo'
+        option proto 'static'
+        option ipaddr '127.0.0.1'
+        option netmask '255.0.0.0'
+
+config interface 'lan'
+        option device 'eth0'
+        option proto 'dhcp'
+NETCFG
+
+        # Replace firewall: open zone accepting everything
+        sudo tee /mnt/owrt/etc/config/firewall > /dev/null <<'FWCFG'
+config defaults
+        option input 'ACCEPT'
+        option output 'ACCEPT'
+        option forward 'ACCEPT'
+
+config zone
+        option name 'lan'
+        option input 'ACCEPT'
+        option output 'ACCEPT'
+        option forward 'ACCEPT'
+        option device 'eth0'
+
+config zone
+        option name 'wan'
+        option input 'ACCEPT'
+        option output 'ACCEPT'
+        option forward 'ACCEPT'
+        option masq '1'
+        option mtu_fix '1'
+FWCFG
+
+        # Allow root login with password and keys in dropbear
+        sudo tee /mnt/owrt/etc/config/dropbear > /dev/null <<'DROPBEAR'
+config dropbear
+        option PasswordAuth 'on'
+        option RootPasswordAuth 'on'
+        option Port '22'
+        option Interface 'lan'
+DROPBEAR
+
         sudo umount /mnt/owrt
         sudo losetup -d $LOOP
         """],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=60,
     )
     if r.returncode != 0:
-        pytest.fail(f"SSH key injection failed: {r.stderr}")
+        pytest.fail(f"Image preparation failed: {r.stderr}")
 
 
 @pytest.fixture(scope="session")
@@ -88,7 +142,7 @@ def openwrt_vm():
         if r.returncode not in (0, 2) or not VM_IMAGE.exists():
             pytest.fail(f"gunzip failed (exit {r.returncode}): {r.stderr}")
         print(f"OpenWrt image ready: {VM_IMAGE} ({VM_IMAGE.stat().st_size} bytes)", flush=True)
-        _inject_ssh_key(VM_IMAGE)
+        _prepare_image(VM_IMAGE)
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
 
@@ -99,14 +153,17 @@ def openwrt_vm():
         "-netdev", f"user,id=net0,hostfwd=tcp::{SSH_PORT}-:22",
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
+        "-serial", f"file:{SERIAL_LOG}",
         "-daemonize",
         *kvm_args,
     ]
 
     print("Booting OpenWrt VM...", flush=True)
-    subprocess.run(qemu_cmd, capture_output=True, timeout=30)
+    r = subprocess.run(qemu_cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        pytest.fail(f"QEMU failed to start: {r.stderr}")
 
-    print("Waiting for SSH...", flush=True)
+    print("Waiting for SSH (up to 5 min)...", flush=True)
     for i in range(60):
         r = _ssh("true")
         if r.returncode == 0:
@@ -114,7 +171,13 @@ def openwrt_vm():
             break
         time.sleep(5)
     else:
-        pytest.fail("OpenWrt VM did not become reachable via SSH")
+        serial_tail = ""
+        if SERIAL_LOG.exists():
+            serial_tail = SERIAL_LOG.read_text()[-2000:]
+        pytest.fail(
+            f"OpenWrt VM did not become reachable via SSH after 5 minutes.\n"
+            f"Serial log tail:\n{serial_tail}"
+        )
 
     yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY)}
 
