@@ -75,19 +75,19 @@ def openwrt_vm():
     if not VM_IMAGE.exists():
         print("Downloading OpenWrt x86_64 image...", flush=True)
         VM_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+        gz_path = VM_IMAGE.with_suffix(".img.gz")
         r = subprocess.run(
-            ["bash", "-c",
-             f"curl -fL --retry 3 --retry-delay 2 -o {VM_IMAGE}.gz {IMAGE_URL} && "
-             f"gunzip -f {VM_IMAGE}.gz"],
+            ["curl", "-fL", "--retry", "3", "--retry-delay", "2",
+             "-o", str(gz_path), IMAGE_URL],
             capture_output=True, text=True,
         )
         if r.returncode != 0:
-            pytest.fail(
-                f"OpenWrt image download failed (exit {r.returncode}):\n"
-                f"stdout: {r.stdout}\nstderr: {r.stderr}"
-            )
-        if not VM_IMAGE.exists():
-            pytest.fail(f"Image file not found after download: {VM_IMAGE}")
+            pytest.fail(f"curl download failed: {r.stderr}")
+        # gunzip exit 2 = warning (e.g. "trailing garbage ignored"), not a real failure
+        r = subprocess.run(["gunzip", "-f", str(gz_path)], capture_output=True, text=True)
+        if r.returncode not in (0, 2) or not VM_IMAGE.exists():
+            pytest.fail(f"gunzip failed (exit {r.returncode}): {r.stderr}")
+        print(f"OpenWrt image ready: {VM_IMAGE} ({VM_IMAGE.stat().st_size} bytes)", flush=True)
         _inject_ssh_key(VM_IMAGE)
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
