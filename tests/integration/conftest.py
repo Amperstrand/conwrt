@@ -197,6 +197,7 @@ def openwrt_vm():
             existing
             + f"\nHost {SSH_HOST}\n"
             f"    Port {SSH_PORT}\n"
+            f"    IdentityFile {SSH_KEY}\n"
             f"    StrictHostKeyChecking no\n"
             f"    UserKnownHostsFile /dev/null\n"
         )
