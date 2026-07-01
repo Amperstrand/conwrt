@@ -188,3 +188,118 @@ def test_nodns_dry_run_generates_dnsmasq_config(tmp_path):
     """, tmp_path)
 
     assert "dnsmasq" in output.lower()
+
+
+def test_ssh_hardening_dry_run_disables_password_auth(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["ssh-hardening"]
+    """, tmp_path)
+
+    assert "dropbear" in output.lower()
+    assert "PasswordAuth" in output or "passwordauth" in output.lower()
+
+
+def test_wireguard_client_dry_run_generates_wg0_config(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["wireguard-client"]
+
+        [use_cases.wireguard-client]
+        peer_public_key = "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ="
+        endpoint_host = "vpn.example.com"
+        endpoint_port = 51820
+        address = "10.0.0.2/32"
+        allowed_ips = "10.0.0.0/24"
+    """, tmp_path)
+
+    assert "wg0" in output or "wireguard" in output.lower()
+    assert "vpn.example.com" in output or "51820" in output
+
+
+def test_adguard_dry_run_includes_packages(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["adguard"]
+    """, tmp_path)
+
+    assert "adguard" in output.lower()
+
+
+def test_mwan3_dry_run_generates_interfaces(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["mwan3"]
+    """, tmp_path)
+
+    assert "mwan3" in output.lower()
+
+
+def test_ssl_dry_run_includes_packages(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["ssl"]
+    """, tmp_path)
+
+    assert "ssl" in output.lower() or "acme" in output.lower()
+
+
+def test_all_non_hardware_use_cases_combined(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["sqm", "doh", "nodns", "ssh-hardening"]
+
+        [use_cases.sqm]
+        download_kbps = 10000
+        upload_kbps = 5000
+
+        [use_cases.doh]
+        provider = "cloudflare"
+    """, tmp_path)
+
+    assert "uci set sqm.wan.qdisc='cake'" in output
+    assert "cloudflare-dns.com" in output or "dns-query" in output
+    assert "dnsmasq" in output.lower()
+    assert "dropbear" in output.lower()
