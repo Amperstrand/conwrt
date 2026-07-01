@@ -11,7 +11,7 @@ from . import ParamDef, UseCase, register
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     return {
-        "private_key": str(params.get("private_key", "")),
+        "private_key": str(params.get("private_key", "generate")),
         "listen_port": int(params.get("listen_port", 51820)),
         "subnet": str(params.get("subnet", "10.1.99.1/24")),
         "peer1_public_key": str(params.get("peer1_public_key", "")),
@@ -39,6 +39,10 @@ def _build_wireguard_server_ops(params: dict[str, Any]) -> list[Op]:
         }),
         UciAddList(config="network", section="wg0", option="addresses", value=subnet),
     ]
+
+    ops.append(ShellCommand(
+        command='mkdir -p /etc/wireguard && '
+                'wg show wg0 public-key > /etc/wireguard/server_public_key 2>/dev/null || true'))
 
     if peer1_public_key:
         ops.append(ShellCommand(command="uci set network.wg0_peer1=wireguard_wg0"))
@@ -107,8 +111,8 @@ register(UseCase(
         "qrencode",
     ],
     params={
-        "private_key": ParamDef(type=str, required=True,
-                                description="WireGuard private key for the server"),
+        "private_key": ParamDef(type=str, default="generate",
+                                description="WireGuard private key (default: auto-generate on first boot)"),
         "listen_port": ParamDef(type=int, default=51820,
                                 description="UDP listen port"),
         "subnet": ParamDef(type=str, default="10.1.99.1/24",

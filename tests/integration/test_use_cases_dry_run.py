@@ -303,3 +303,99 @@ def test_all_non_hardware_use_cases_combined(tmp_path):
     assert "cloudflare-dns.com" in output or "dns-query" in output
     assert "dnsmasq" in output.lower()
     assert "dropbear" in output.lower()
+
+
+def test_wireguard_server_dry_run_auto_generates_key(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["wireguard-server"]
+
+        [use_cases.wireguard-server]
+        listen_port = 51820
+        subnet = "10.0.0.1/24"
+    """, tmp_path)
+
+    assert "uci set network.wg0=interface" in output
+    assert "wireguard" in output
+    assert "51820" in output
+    assert "10.0.0.1/24" in output
+    assert "private_key" in output
+    assert "generate" in output or "private_key='generate'" in output
+    assert "firewall" in output.lower()
+    assert "vpn" in output.lower()
+
+
+def test_wireguard_server_dry_run_with_peer(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["wireguard-server"]
+
+        [use_cases.wireguard-server]
+        listen_port = 51820
+        subnet = "10.0.0.1/24"
+        peer1_public_key = "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ="
+        peer1_allowed_ips = "10.0.0.2/32"
+    """, tmp_path)
+
+    assert "wg0_peer1" in output or "wireguard_wg0" in output
+    assert "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=" in output
+    assert "10.0.0.2/32" in output
+
+
+def test_wireguard_client_server_loop(tmp_path):
+    """Verify server and client configs are compatible — same port, compatible subnets."""
+    server_output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["wireguard-server"]
+
+        [use_cases.wireguard-server]
+        listen_port = 51820
+        subnet = "10.0.0.1/24"
+    """, tmp_path)
+
+    client_output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["wireguard-client"]
+
+        [use_cases.wireguard-client]
+        peer_public_key = "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ="
+        endpoint_host = "vpn.example.com"
+        endpoint_port = 51820
+        address = "10.0.0.2/32"
+        allowed_ips = "10.0.0.0/24"
+    """, tmp_path)
+
+    assert "51820" in server_output
+    assert "51820" in client_output
+    assert "10.0.0.1/24" in server_output
+    assert "10.0.0.2/32" in client_output
+    assert "wg0" in server_output
+    assert "wg0" in client_output
