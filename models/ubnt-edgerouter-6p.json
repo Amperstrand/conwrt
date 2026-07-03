@@ -8,7 +8,7 @@
     "device": "ubnt,edgerouter-6p",
     "default_ip": "192.168.1.1",
     "profile": "ubnt_edgerouter-6p",
-    "version": "25.12.4"
+    "version": "25"
   },
   "hardware": {
     "soc": "Cavium CN7130 (Octeon III)",

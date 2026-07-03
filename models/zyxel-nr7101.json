@@ -8,7 +8,7 @@
     "device": "zyxel,nr7101",
     "profile": "zyxel_nr7101",
     "default_ip": "192.168.1.1",
-    "version": "25.12.4"
+    "version": "25"
   },
   "hardware": {
     "soc": "MT7621A (MediaTek) dual-core MIPS 1004Kc @ 880MHz",
@@ -338,15 +338,48 @@
     "verified_serial": true,
     "date": "2026-06-28",
     "stages": [
-      {"name": "DDR3 calibration", "duration_approx_s": 3, "serial_output": true},
-      {"name": "U-Boot 1.1.3", "duration_approx_s": 2, "serial_output": true},
-      {"name": "Ralink UBoot 5.0.0.0", "duration_approx_s": 1, "serial_output": true},
-      {"name": "Z-Loader V1.30 + ESC prompt", "duration_approx_s": 1, "serial_output": true},
-      {"name": "Multiboot Listening", "duration_approx_s": 6, "serial_output": true},
-      {"name": "Firmware handoff", "serial_output": "Starting application at 0x8402A800"},
-      {"name": "Linux kernel boot (OpenWrt)", "duration_approx_s": 18, "serial_output": "Full kernel log"},
-      {"name": "procd init", "serial_output": "Please press Enter to activate this console"},
-      {"name": "SSH available", "delay_after_handoff_s": 60}
+      {
+        "name": "DDR3 calibration",
+        "duration_approx_s": 3,
+        "serial_output": true
+      },
+      {
+        "name": "U-Boot 1.1.3",
+        "duration_approx_s": 2,
+        "serial_output": true
+      },
+      {
+        "name": "Ralink UBoot 5.0.0.0",
+        "duration_approx_s": 1,
+        "serial_output": true
+      },
+      {
+        "name": "Z-Loader V1.30 + ESC prompt",
+        "duration_approx_s": 1,
+        "serial_output": true
+      },
+      {
+        "name": "Multiboot Listening",
+        "duration_approx_s": 6,
+        "serial_output": true
+      },
+      {
+        "name": "Firmware handoff",
+        "serial_output": "Starting application at 0x8402A800"
+      },
+      {
+        "name": "Linux kernel boot (OpenWrt)",
+        "duration_approx_s": 18,
+        "serial_output": "Full kernel log"
+      },
+      {
+        "name": "procd init",
+        "serial_output": "Please press Enter to activate this console"
+      },
+      {
+        "name": "SSH available",
+        "delay_after_handoff_s": 60
+      }
     ],
     "pcie_note": "PCIe init (Quectel modem) is timing-sensitive — may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
     "uart_break_note": "FT232R serial adapter gets stuck after UART break during power cycle. Use serial-boot-capture.py with --recovery-wait to auto-recover."

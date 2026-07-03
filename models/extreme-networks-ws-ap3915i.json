@@ -8,7 +8,7 @@
     "device": "extreme-networks,ws-ap3915i",
     "profile": "extreme-networks_ws-ap3915i",
     "board_name": "extreme-networks,ws-ap3915i",
-    "version": "24.10.7",
+    "version": "24",
     "default_ip": "192.168.1.1"
   },
   "hardware": {

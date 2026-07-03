@@ -7,7 +7,7 @@
     "target": "qualcommax/ipq807x",
     "device": "linksys,mx4200v1",
     "profile": "linksys_mx4200v1",
-    "version": "24.10.7",
+    "version": "24",
     "default_ip": "192.168.1.1"
   },
   "hardware": {

@@ -23,7 +23,8 @@ IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x
 PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
 SERIAL_LOG = REPO_ROOT / "tests" / "integration" / ".serial.log"
-PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libatomic1"]
+PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libatomic1",
+                    "wireguard-tools", "luci-proto-wireguard", "qrencode"]
 
 
 def _available(cmd: str) -> bool:

@@ -19,10 +19,10 @@ TOLLGATE_ALPHA3_URLS = {
     "aarch64_cortex-a53": "https://blossom.primal.net/1fcc1635a7d94a005ff270c4a44f49fb9c56b05a7fbfe01eabcba40e8d31571d.apk",
 }
 
-CONFIGURATIONWIZZARD_URL = (
-    "https://github.com/net4sats/configurationwizzard/releases/download/"
-    "net4sats-portal-3e05134/configurationwizzard.ipk"
-)
+CONFIGURATIONWIZZARD_URLS = {
+    "ipk": "https://blossom.primal.net/3bb8eae833f416f41b5dc33a1729cdd17c6303c6a936e28ece6614604334916f.ipk",
+    "apk": "https://blossom.primal.net/d1951ba93958f58ece612395010a91ccbe29758569c821c1ac723e05d04c0e7b.apk",
+}
 
 
 def gateway_params() -> dict[str, ParamDef]:

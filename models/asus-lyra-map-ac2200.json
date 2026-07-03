@@ -8,7 +8,7 @@
     "default_ip": "192.168.1.1",
     "profile": "asus_map-ac2200",
     "board_name": "asus,map-ac2200",
-    "version": "24.10.7"
+    "version": "24"
   },
   "lan_subnet": "10.231.9.0/24",
   "hostname_prefix": "lyra",
@@ -24,7 +24,10 @@
     "buttons": "WPS, Reset",
     "power": "12 VDC, 2.0A via barrel connector"
   },
-  "mac_oui": ["10:7b:44", "2c:fd:a1"],
+  "mac_oui": [
+    "10:7b:44",
+    "2c:fd:a1"
+  ],
   "signatures": {
     "stock_http_server": "httpd/2.0",
     "stock_http_title": "ASUS Wireless Router Lyra",
@@ -100,7 +103,7 @@
       "max_stations": 32
     }
   },
-   "tested_hardware": {
+  "tested_hardware": {
     "stock-ssh-mtd-batch1": {
       "tested": true,
       "date": "2026-05-26",

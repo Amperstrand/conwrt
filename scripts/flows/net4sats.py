@@ -8,7 +8,7 @@ apk) uses the same steps with arch/package-manager picked from the target.
 from __future__ import annotations
 
 from . import Flow, Step, register
-from ._gateway import CONFIGURATIONWIZZARD_URL, gateway_base_steps, gateway_params, lan_finalize_step
+from ._gateway import CONFIGURATIONWIZZARD_URLS, gateway_base_steps, gateway_params, lan_finalize_step
 
 register(Flow(
     name="net4sats",
@@ -20,10 +20,20 @@ register(Flow(
     params=gateway_params(),
     steps=gateway_base_steps() + [
         Step(
+            kind="install_repo_package",
+            title="Install umdns for .local mDNS resolution",
+            package="umdns",
+        ),
+        Step(
             kind="install_package",
             title="Install the net4sats portal (configurationwizzard)",
             package="configurationwizzard",
-            artifact_url=CONFIGURATIONWIZZARD_URL,
+            artifact_urls=CONFIGURATIONWIZZARD_URLS,
+        ),
+        Step(
+            kind="hostname",
+            title="Set the router hostname to net4sats",
+            hostname="net4sats",
         ),
         Step(
             kind="apply_use_case",
@@ -32,6 +42,7 @@ register(Flow(
             use_case="tollgate",
             use_case_params={
                 "gateway_name": "net4sats",
+                "gateway_domain": "net4sats.lan",
                 "clientid": "mac",
                 "install_hotplug": True,
                 "hotplug_interface": "wwan",

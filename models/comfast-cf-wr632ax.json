@@ -8,7 +8,7 @@
     "device": "comfast,cf-wr632ax",
     "default_ip": "192.168.1.1",
     "profile": "comfast_cf-wr632ax",
-    "version": "25.12.2"
+    "version": "25"
   },
   "hardware": {
     "soc": "MT7981B (Filogic 830) dual-core Cortex-A53 @ 1.3GHz",

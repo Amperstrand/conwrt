@@ -14,7 +14,47 @@ place instead of being scattered across use cases and renderers.
 """
 from __future__ import annotations
 
+import re
+import time
 from typing import Any
+
+_version_cache: dict[str, tuple[float, str]] = {}
+_VERSION_TTL = 3600
+
+
+def latest_openwrt_version(major: int) -> str:
+    """Return the latest stable OpenWrt release for a given major version.
+
+    Queries downloads.openwrt.org and caches the result for 1 hour.
+
+    Returns "" if the lookup fails, so callers can fall back to an explicit version.
+    """
+    import subprocess
+
+    cache_key = str(major)
+    now = time.time()
+    if cache_key in _version_cache:
+        ts, ver = _version_cache[cache_key]
+        if now - ts < _VERSION_TTL:
+            return ver
+
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "--max-time", "10", "https://downloads.openwrt.org/releases/"],
+            capture_output=True, text=True, timeout=15,
+        )
+        html = result.stdout
+    except Exception:
+        return ""
+
+    pattern = re.compile(rf'href="({major}\.\d+\.\d+)/"')
+    versions = sorted(pattern.findall(html), key=lambda v: [int(x) for x in v.split(".")])
+    if not versions:
+        return ""
+
+    latest = versions[-1]
+    _version_cache[cache_key] = (now, latest)
+    return latest
 
 # OpenWrt target → package architecture.
 # Canonical home; ``use_cases/tollgate`` re-exports ``arch_from_target`` for
@@ -109,6 +149,10 @@ def derive_target_profile(
 
     ow = model["openwrt"]
     ver = version or ow["version"]
+    if ver.isdigit():
+        resolved = latest_openwrt_version(int(ver))
+        if resolved:
+            ver = resolved
     lan_subnet = model.get("lan_subnet", "")
     lan_gateway = ""
     if lan_subnet:

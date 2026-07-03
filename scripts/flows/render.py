@@ -57,9 +57,27 @@ def _wifi_sta_ops(step: Step, params: dict[str, Any]) -> list[Op]:
     return ops
 
 
+def _install_repo_package_ops(step: Step, target: dict[str, Any]) -> list[Op]:
+    pm = target["pkg_manager"]
+    pkg = step.package
+    if pm == "apk":
+        update, install = "apk update", f"apk add {pkg}"
+    else:
+        update, install = "opkg update", f"opkg install {pkg}"
+    return [
+        Comment(f"install {pkg} from {pm} repo"),
+        ShellCommand(command=f"{update} >/dev/null 2>&1 || true"),
+        ShellCommand(command=install),
+        ShellCommand(command=f"[ -f /etc/init.d/{pkg} ] && /etc/init.d/{pkg} enable && /etc/init.d/{pkg} start || true"),
+    ]
+
+
 def _install_package(step: Step, target: dict[str, Any]) -> tuple[list[str], list[Op]]:
     if step.artifact_urls:
         url = step.artifact_urls.get(target["arch"], "")
+        if not url:
+            fmt = "apk" if target["pkg_manager"] == "apk" else "ipk"
+            url = step.artifact_urls.get(fmt, "")
     else:
         url = step.artifact_url
     if not url:
@@ -113,6 +131,7 @@ def _hostname_ops(step: Step) -> list[Op]:
         UciSet(config="system", section="@system[0]", values={"hostname": step.hostname}),
         UciCommit(config="system"),
         ShellCommand(command=f"echo {sh_quote(step.hostname)} > /proc/sys/kernel/hostname"),
+        ShellCommand(command="/etc/init.d/dnsmasq restart 2>/dev/null || true"),
     ]
 
 
@@ -145,6 +164,8 @@ def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> t
         return ([], _wifi_sta_ops(step, params))
     if step.kind == "install_package":
         return _install_package(step, target)
+    if step.kind == "install_repo_package":
+        return ([], _install_repo_package_ops(step, target))
     if step.kind == "apply_use_case":
         return ([], _apply_use_case_ops(step))
     if step.kind == "password":

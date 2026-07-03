@@ -8,7 +8,7 @@
     "device": "zyxel,ex5700-telenor",
     "default_ip": "192.168.1.1",
     "profile": "zyxel_ex5700-telenor",
-    "version": "24.10.7"
+    "version": "24"
   },
   "hardware": {
     "soc": "MT7986B (Filogic 830) quad-core Cortex-A53",

@@ -8,7 +8,7 @@
     "device": "glinet,gl-mt6000",
     "default_ip": "192.168.1.1",
     "profile": "glinet_gl-mt6000",
-    "version": "24.10.7"
+    "version": "24"
   },
   "hardware": {
     "soc": "MT7986A (Filogic 830) quad-core Cortex-A53 @ 1.8GHz",

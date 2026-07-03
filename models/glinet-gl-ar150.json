@@ -8,7 +8,7 @@
     "device": "glinet,gl-ar150",
     "default_ip": "192.168.8.1",
     "profile": "glinet_gl-ar150",
-    "version": "24.10.7"
+    "version": "24"
   },
   "hardware": {
     "soc": "AR9331 (MIPS 24Kc) @ 400MHz",
