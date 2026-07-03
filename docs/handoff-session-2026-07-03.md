@@ -58,7 +58,7 @@ Dry-run tests pass but never applied to a real OpenWrt instance against the VPN 
 
 ## Key Credentials/Locations
 - nodns.shop SSH: `ssh root@nodns.shop`
-- SHC VM 958 SSH: `sshpass -p lend-display-inform-bunker-wasp-blood debian@66.92.204.236`
+- SHC VM 958 SSH: **DESTROYED** — compromised via password leak in this doc (public GitHub). See forensics below.
 - NSEC: `~/.config/prta/nsec`
 - tollgate-auth JWT key: `/opt/cashu-tollgate/jwt-signing.key` on nodns.shop
 - wg-jwt-peer auth key: `/etc/wg-jwt-peer/tollgate-auth.pub` on 66.92.204.236
