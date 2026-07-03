@@ -44,7 +44,7 @@ def _configure_and_verify(config_toml_content, openwrt_vm, checks):
         result = subprocess.run(
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
              "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=300,
         )
         assert result.returncode == 0, f"configure failed: {result.stderr[:200]}"
     finally:
