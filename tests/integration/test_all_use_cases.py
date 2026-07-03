@@ -35,11 +35,13 @@ VM_SSH_BASE = [
 
 
 def run(cmd, timeout=30):
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if isinstance(cmd, list):
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
 
 
 def vm_ssh(cmd, timeout=15):
-    r = run(VM_SSH_BASE + [cmd], timeout=timeout)
+    r = subprocess.run(VM_SSH_BASE + [cmd], capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip(), r.returncode
 
 
@@ -52,10 +54,10 @@ def configure(config_toml_content, tmp_path):
         shutil.copy(original, backup)
     try:
         shutil.copy(config_toml, original)
-        result = run(
+        result = subprocess.run(
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
              "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
-            timeout=120, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=120,
         )
         return result
     finally:
