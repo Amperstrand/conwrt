@@ -3,302 +3,70 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>conwrt — Use Case Test Matrix</title>
+<title>conwrt — Use Case Test Results</title>
 <style>
-:root {
-  --bg: #0d1117; --surface: #161b22; --border: #30363d;
-  --text: #e6edf3; --muted: #8b949e; --green: #238636; --red: #da3633;
-  --yellow: #d29922; --blue: #388bfd; --link: #58a6ff;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg); color: var(--text); line-height: 1.5; padding: 2rem;
-}
-h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
-.subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 2rem; }
-.matrix { width: 100%; border-collapse: collapse; }
-.matrix th, .matrix td {
-  border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left;
-}
-.matrix th { background: var(--surface); font-weight: 600; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.matrix td { font-size: 0.875rem; }
-.status-pass { color: #3fb950; font-weight: 600; }
-.status-fail { color: #f85149; font-weight: 600; }
-.status-unknown { color: var(--muted); }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
-.badge-pass { background: rgba(35,134,54,0.2); color: #3fb950; }
-.badge-fail { background: rgba(218,54,51,0.2); color: #f85149; }
-.badge-pending { background: rgba(139,148,158,0.2); color: var(--muted); }
-.use-case-name { font-weight: 600; }
-.use-case-desc { color: var(--muted); font-size: 0.75rem; }
-.run-date { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
-.evidence-link { color: var(--link); cursor: pointer; text-decoration: underline; font-size: 0.75rem; }
-.detail-panel {
-  display: none; position: fixed; top: 0; right: 0; width: 600px; height: 100vh;
-  background: var(--surface); border-left: 1px solid var(--border); padding: 2rem;
-  overflow-y: auto; z-index: 100; box-shadow: -4px 0 20px rgba(0,0,0,0.5);
-}
-.detail-panel.active { display: block; }
-.detail-close { position: absolute; top: 1rem; right: 1rem; cursor: pointer; font-size: 1.5rem; color: var(--muted); }
-.detail-panel h2 { font-size: 1.25rem; margin-bottom: 0.5rem; }
-.detail-panel h3 { font-size: 0.875rem; color: var(--muted); margin: 1rem 0 0.5rem; text-transform: uppercase; letter-spacing: 0.5px; }
-.detail-panel pre { background: var(--bg); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto; max-height: 400px; overflow-y: auto; }
-.detail-panel .meta { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; font-size: 0.8rem; margin-bottom: 1rem; }
-.detail-panel .meta dt { color: var(--muted); }
-.loading { text-align: center; padding: 3rem; color: var(--muted); }
-.stats { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
-.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1.25rem; }
-.stat-value { font-size: 1.5rem; font-weight: 700; }
-.stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.empty { text-align: center; padding: 3rem; color: var(--muted); }
-.empty a { color: var(--link); }
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--red:#f85149;--link:#58a6ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.5;padding:2rem;max-width:1100px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:.25rem}
+.sub{color:var(--muted);font-size:.875rem;margin-bottom:2rem}
+.stats{display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.75rem 1.25rem;min-width:100px}
+.stat-v{font-size:1.5rem;font-weight:700}
+.stat-l{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+table{width:100%;border-collapse:collapse;margin-bottom:2rem}
+th,td{border:1px solid var(--border);padding:.5rem .75rem;text-align:left;font-size:.875rem}
+th{background:var(--surface);font-weight:600;font-size:.8rem;color:var(--muted);text-transform:uppercase}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600}
+.b-p{background:rgba(35,134,54,.2);color:var(--green)}
+.b-f{background:rgba(218,54,51,.2);color:var(--red)}
+.b-w{background:rgba(139,148,158,.2);color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;margin-bottom:1rem}
+.card h2{font-size:1.05rem;margin-bottom:.5rem}
+.meta{display:grid;grid-template-columns:auto 1fr;gap:.2rem 1rem;font-size:.8rem;margin-bottom:.75rem;color:var(--muted)}
+.meta b{color:var(--text);font-weight:600}
+.evi{list-style:none;margin-top:.5rem}
+.evi li{padding:.2rem 0;font-size:.78rem}
+.evi a{color:var(--link);text-decoration:none}
+.evi a:hover{text-decoration:underline}
+.loading{text-align:center;padding:3rem;color:var(--muted)}
+a{color:var(--link)}
 </style>
 </head>
 <body>
-<h1>conwrt Use Case Test Matrix</h1>
-<p class="subtitle">Live results from Nostr (kind 30078). Evidence from Blossom. Click any cell for full logs.</p>
-
-<div class="stats" id="stats"></div>
-<table class="matrix" id="matrix">
-  <thead>
-    <tr>
-      <th>Use Case</th>
-      <th>Status</th>
-      <th>Last Run</th>
-      <th>Evidence</th>
-    </tr>
-  </thead>
-  <tbody id="matrix-body">
-    <tr><td colspan="4" class="loading">Connecting to Nostr relays...</td></tr>
-  </tbody>
-</table>
-
-<div class="detail-panel" id="detail-panel">
-  <span class="detail-close" onclick="closeDetail()">&times;</span>
-  <div id="detail-content"></div>
-</div>
-
+<h1>conwrt Use Case Test Results</h1>
+<p class="sub">Live from Nostr (kind 30078) + Blossom evidence files. Click any evidence link to view raw test output.</p>
+<div id="c"><p class="loading">Connecting to Nostr relays...</p></div>
 <script>
-// === Config ===
-const RELAYS = ['wss://relay.cashu.email', 'wss://nos.lol'];
-const PUBLISHER_PUBKEY = '76c714199ad17278276d4cd51ddec7d0df0715a91b2f2f03f16c03925b3a0911';
-const BLOSSOM_SERVER = 'https://blossom.psbt.me';
-const USE_CASES = [
-  'sqm', 'doh', 'ssh-hardening', 'wireguard-client', 'wireguard-server',
-  'vpn-node', 'nodns', 'mwan3', 'adguard', 'guest-wifi', 'travelmate',
-  'openclash', 'auto-sqm', 'ssl', 'tollgate'
-];
-
-// === State ===
-let allEvents = [];
-
-// === Nostr relay connection ===
-function connectRelay(url) {
-  return new Promise((resolve) => {
-    const ws = new WebSocket(url);
-    const subId = 'matrix-' + Math.random().toString(36).substr(2, 8);
-    let resolved = false;
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify(['REQ', subId, {
-        kinds: [30078],
-        authors: [PUBLISHER_PUBKEY],
-        limit: 100,
-      }]));
-    };
-
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg[0] === 'EVENT' && msg[1] === subId) {
-        allEvents.push(msg[2]);
-      }
-      if (msg[0] === 'EOSE' && msg[1] === subId && !resolved) {
-        resolved = true;
-        resolve();
-      }
-    };
-
-    ws.onerror = () => { if (!resolved) { resolved = true; resolve(); } };
-    setTimeout(() => { if (!resolved) { resolved = true; resolve(); } }, 5000);
-  });
-}
-
-// === Parse events into use case results ===
-function parseResults() {
-  const results = {};
-
-  for (const event of allEvents) {
-    let content;
-    try { content = JSON.parse(event.content); } catch { continue; }
-
-    // Look for use_case or project=conwrt
-    const isConwrt = content.project === 'conwrt' ||
-      event.tags.some(t => t[0] === 'project' && t[1] === 'conwrt');
-    if (!isConwrt) continue;
-
-    // Handle both single-use-case and multi-use-case events
-    if (content.use_case) {
-      // Single use case event
-      const uc = content.use_case;
-      if (!results[uc] || event.created_at > results[uc].created_at) {
-        results[uc] = {
-          useCase: uc,
-          status: content.status || 'unknown',
-          timestamp: content.timestamp || new Date(event.created_at * 1000).toISOString(),
-          created_at: event.created_at,
-          evidence: content.evidence || {},
-          description: content.description || '',
-          eventId: event.id,
-          rawEvent: event,
-        };
-      }
-    } else if (content.results || content.use_cases) {
-      // Multi-use-case event with per-UC results
-      const items = content.results || content.use_cases || [];
-      for (const item of items) {
-        const uc = item.use_case || item.name;
-        if (!uc) continue;
-        if (!results[uc] || event.created_at > results[uc].created_at) {
-          results[uc] = {
-            useCase: uc,
-            status: item.status || 'unknown',
-            timestamp: item.timestamp || new Date(event.created_at * 1000).toISOString(),
-            created_at: event.created_at,
-            evidence: item.evidence || {},
-            description: item.description || '',
-            eventId: event.id,
-            rawEvent: event,
-          };
-        }
-      }
-    }
-  }
-
-  return results;
-}
-
-// === Render matrix ===
-function renderMatrix() {
-  const results = parseResults();
-  const tbody = document.getElementById('matrix-body');
-  tbody.innerHTML = '';
-
-  let passed = 0, failed = 0, pending = 0;
-
-  for (const uc of USE_CASES) {
-    const r = results[uc];
-    const tr = document.createElement('tr');
-
-    if (!r) {
-      pending++;
-      tr.innerHTML = `
-        <td><span class="use-case-name">${uc}</span></td>
-        <td><span class="badge badge-pending">PENDING</span></td>
-        <td class="run-date">—</td>
-        <td>—</td>
-      `;
-    } else {
-      if (r.status === 'pass') passed++;
-      else if (r.status === 'fail') failed++;
-
-      const statusClass = r.status === 'pass' ? 'badge-pass' : r.status === 'fail' ? 'badge-fail' : 'badge-pending';
-      const date = new Date(r.timestamp).toLocaleString();
-      const evidenceCount = Object.keys(r.evidence).length;
-      const evidenceHtml = evidenceCount > 0
-        ? `<span class="evidence-link" onclick='showDetail("${uc}")'>${evidenceCount} artifacts</span>`
-        : '—';
-
-      tr.innerHTML = `
-        <td>
-          <span class="use-case-name">${uc}</span><br>
-          <span class="use-case-desc">${r.description || ''}</span>
-        </td>
-        <td><span class="badge ${statusClass}">${r.status.toUpperCase()}</span></td>
-        <td class="run-date">${date}</td>
-        <td>${evidenceHtml}</td>
-      `;
-    }
-
-    tbody.appendChild(tr);
-  }
-
-  // Stats
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-value" style="color: #3fb950">${passed}</div><div class="stat-label">Passed</div></div>
-    <div class="stat"><div class="stat-value" style="color: #f85149">${failed}</div><div class="stat-label">Failed</div></div>
-    <div class="stat"><div class="stat-value" style="color: var(--muted)">${pending}</div><div class="stat-label">Untested</div></div>
-    <div class="stat"><div class="stat-value">${USE_CASES.length}</div><div class="stat-label">Total</div></div>
-  `;
-}
-
-// === Show evidence detail ===
-function showDetail(useCase) {
-  const results = parseResults();
-  const r = results[useCase];
-  if (!r) return;
-
-  let html = `<h2>${useCase}</h2>`;
-  html += `<div class="meta">
-    <dt>Status:</dt><dd><span class="badge ${r.status === 'pass' ? 'badge-pass' : 'badge-fail'}">${r.status.toUpperCase()}</span></dd>
-    <dt>Timestamp:</dt><dd>${new Date(r.timestamp).toLocaleString()}</dd>
-    <dt>Event ID:</dt><dd style="font-family: monospace; font-size: 0.75rem;">${r.eventId}</dd>
-    ${r.description ? `<dt>Description:</dt><dd>${r.description}</dd>` : ''}
-  </div>`;
-
-  // Evidence artifacts
-  if (Object.keys(r.evidence).length > 0) {
-    html += '<h3>Evidence Artifacts</h3>';
-    for (const [name, url] of Object.entries(r.evidence)) {
-      // If URL is a blossom hash, construct full URL
-      let fullUrl = url;
-      if (url.startsWith('sha256:')) {
-        fullUrl = `${BLOSSOM_SERVER}/${url}`;
-      } else if (!url.startsWith('http')) {
-        fullUrl = `${BLOSSOM_SERVER}/sha256:${url}`;
-      }
-      html += `<p><a href="${fullUrl}" target="_blank" style="color: var(--link)">${name}</a></p>`;
-    }
-  }
-
-  // Raw event
-  html += '<h3>Raw Nostr Event</h3>';
-  html += `<pre>${JSON.stringify(r.rawEvent, null, 2)}</pre>`;
-
-  document.getElementById('detail-content').innerHTML = html;
-  document.getElementById('detail-panel').classList.add('active');
-}
-
-function closeDetail() {
-  document.getElementById('detail-panel').classList.remove('active');
-}
-
-// === Main ===
-async function main() {
-  await Promise.all(RELAYS.map(r => connectRelay(r)));
-
-  if (allEvents.length === 0) {
-    document.getElementById('matrix-body').innerHTML =
-      `<tr><td colspan="4" class="empty">
-        <p>No test results published yet.</p>
-        <p style="margin-top: 1rem;">Run tests with:
-        <code style="background: var(--surface); padding: 2px 6px; border-radius: 3px;">
-        python3 scripts/run_use_case_tests.py
-        </code></p>
-        <p style="margin-top: 0.5rem;">Results will appear here automatically via Nostr/Blossom.</p>
-      </td></tr>`;
-    document.getElementById('stats').innerHTML = `
-      <div class="stat"><div class="stat-value">0</div><div class="stat-label">Passed</div></div>
-      <div class="stat"><div class="stat-value">0</div><div class="stat-label">Failed</div></div>
-      <div class="stat"><div class="stat-value">${USE_CASES.length}</div><div class="stat-label">Untested</div></div>
-      <div class="stat"><div class="stat-value">${USE_CASES.length}</div><div class="stat-label">Total</div></div>
-    `;
-    return;
-  }
-
-  renderMatrix();
-}
-
+const RELAYS=['wss://relay.cashu.email'];
+const PUBKEY='76c714199ad17278276d4cd51ddec7d0df0715a91b2f2f03f16c03925b3a0911';
+const UC=['ssh-hardening','sqm','doh','wireguard-client','nodns','wireguard-server','vpn-node','adguard','guest-wifi','auto-sqm','ssl','travelmate','openclash','tollgate','mwan3','pbr'];
+let EV=[];
+function conn(u){return new Promise(r=>{const w=new WebSocket(u);const s='c'+Math.random().toString(36).substr(2,8);let d=!1;w.onopen=()=>w.send(JSON.stringify(['REQ',s,{kinds:[30078],authors:[PUBKEY],limit:50}]));w.onmessage=e=>{const m=JSON.parse(e.data);if(m[0]==='EVENT'&&m[1]===s)EV.push(m[2]);if(m[0]==='EOSE'&&m[1]===s&&!d){d=!0;r();}};w.onerror=()=>{if(!d){d=!0;r();}};setTimeout(()=>{if(!d){d=!0;r();}},8000);});}
+function parse(){return EV.filter(e=>e.tags.some(t=>(t[0]==='t'||t[0]==='project')&&t[1]==='conwrt')).sort((a,b)=>b.created_at-a.created_at).map(e=>{let c;try{c=JSON.parse(e.content);}catch{return null;}return{id:e.id,ts:e.created_at,date:new Date(e.created_at*1000).toLocaleString(),iso:new Date(e.created_at*1000).toISOString(),run:c.run_id||e.tags.find(t=>t[0]==='d')?.[1]||'?',sum:c.metadata?.summary||'(no summary)',pass:c.passed??c.metadata?.passed??0,fail:c.failed??c.metadata?.failed??0,files:(c.files||[]).map(f=>({p:f.path,u:f.url,s:f.size})),};}).filter(Boolean);}
+function ucs(run){const f=new Set();for(const file of run.files){const parts=file.p.split('/');if(parts.length>=2)f.add(parts[0]);}return f;}
+function render(){const runs=parse();const el=document.getElementById('c');if(runs.length===0){el.innerHTML='<p class="loading">No conwrt results found.</p>';return;}
+const latest=runs[0];const allUC=new Set();runs.forEach(r=>ucs(r).forEach(u=>allUC.add(u)));
+let h='';
+h+='<div class="stats">';
+h+=`<div class="stat"><div class="stat-v" style="color:var(--green)">${latest.pass}</div><div class="stat-l">Latest Pass</div></div>`;
+h+=`<div class="stat"><div class="stat-v" style="color:var(--red)">${latest.fail}</div><div class="stat-l">Latest Fail</div></div>`;
+h+=`<div class="stat"><div class="stat-v">${allUC.size}</div><div class="stat-l">UCs Tested</div></div>`;
+h+=`<div class="stat"><div class="stat-v">${runs.length}</div><div class="stat-l">Total Runs</div></div>`;
+h+='</div>';
+h+='<h2 style="font-size:1.1rem;margin-bottom:.75rem">Use Case Matrix</h2>';
+h+='<table><thead><tr><th>Use Case</th><th>Status</th><th>Evidence Files (click to view)</th></tr></thead><tbody>';
+for(const uc of UC){let fr=null;let ff=[];for(const run of runs){const f=run.files.filter(x=>x.p.startsWith(uc+'/')||x.p===uc);if(f.length>0){fr=run;ff=f;break;}}
+if(fr){const d=new Date(fr.ts*1000).toLocaleDateString();const links=ff.map(f=>`<a href="${f.u}" target="_blank" style="display:inline-block;margin-right:.4rem">${f.p.split('/').pop()}</a>`).join('');
+h+=`<tr><td><b>${uc}</b></td><td><span class="badge b-p">PASS</span> <span style="color:var(--muted);font-size:.75rem">${d}</span></td><td>${links}</td></tr>`;}
+else{h+=`<tr><td style="color:var(--muted)">${uc}</td><td><span class="badge b-w">PENDING</span></td><td>—</td></tr>`;}}
+h+='</tbody></table>';
+h+='<h2 style="font-size:1.1rem;margin-bottom:.75rem">Run History</h2>';
+for(const run of runs.slice(0,10)){const sc=run.fail>0?'var(--red)':'var(--green)';
+h+=`<div class="card"><h2>${run.sum}</h2><div class="meta"><b>Date:</b><span>${run.date}</span><b>Run ID:</b><span style="font-family:monospace;font-size:.75rem">${run.run}</span><b>Result:</b><span style="color:${sc}">${run.pass} passed, ${run.fail} failed</span><b>Files:</b><span>${run.files.length} evidence artifacts</span><b>Event:</b><span style="font-family:monospace;font-size:.7rem">${run.id.substring(0,24)}...</span></div>`;
+h+=`<details><summary style="cursor:pointer;color:var(--link);font-size:.8rem">Show ${run.files.length} evidence files</summary><ul class="evi">${run.files.map(f=>`<li><a href="${f.u}" target="_blank">${f.p}</a> <span style="color:var(--muted)">(${f.s||'?'} bytes)</span></li>`).join('')}</ul></details></div>`;}
+el.innerHTML=h;}
+async function main(){await Promise.all(RELAYS.map(r=>conn(r)));render();}
 main();
 </script>
 </body>
