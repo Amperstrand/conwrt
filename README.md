@@ -1,6 +1,7 @@
 # conwrt
 
 **[→ Device Support Matrix](https://amperstrand.github.io/conwrt/)** — supported devices, flash methods, and tested hardware.
+**[→ Use Case Test Results](https://tests.tollgate.me/)** — live test evidence from Nostr/Blossom (select "conwrt" tab).
 
 A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
