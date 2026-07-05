@@ -1,4 +1,24 @@
-"""mwan3 — multi-WAN failover and load balancing."""
+"""mwan3 — multi-WAN failover and load balancing.
+
+OpenWrt 22.03+ uses fw4/nftables. mwan3 uses iptables MARK rules.
+To work on 24.10+, the iptables-nft and ip6tables-nft packages MUST be
+installed alongside mwan3 — they provide the iptables→nft compatibility
+layer that translates mwan3's rules into nftables.
+
+Verified working on:
+  - OpenWrt 23.05.x: native iptables (fw3), no compat needed
+  - OpenWrt 24.10.2: iptables-nft compat layer, verified in QEMU/KVM
+
+Community status (as of 2026-07):
+  - mwan3 nftables port: in development (forum thread #248270)
+  - mwan4: C implementation discussed on Nov 2025 mailing list
+  - pbr: nftables-native alternative with mwan4 integration
+    (https://docs.openwrt.melmac.ca/pbr/)
+  - When mwan4 is ready, pbr+mwan4 will be the recommended path for
+    nftables-native multi-WAN + policy routing.
+
+For new deployments on 24.10+, consider using the `pbr` use case instead.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -139,6 +159,9 @@ register(UseCase(
     description="Multi-WAN failover or load balancing via mwan3",
     packages=[
         "mwan3",
+        "iptables-nft",      # Required for fw4/nftables compat on 22.03+
+        "ip6tables-nft",     # Same for IPv6
+        "iptables-mod-conntrack-extra",  # conntrack MARK target
     ],
     params={
         "primary": ParamDef(type=str, default="wan",
@@ -151,7 +174,10 @@ register(UseCase(
                               description="IPs to ping for connectivity tracking"),
     },
     test_status="tested",
-    tested_notes="ops characterization + transport parity",
+    tested_notes="ops characterization + transport parity. "
+                 "Verified on OpenWrt 24.10.2 with iptables-nft compat in QEMU/KVM. "
+                 "mwan3 status shows 'online and tracking is active'. "
+                 "See pbr use case for nftables-native alternative.",
     build_configure=lambda p: render_shell(_build_mwan3_ops(p)),
     build_configure_ops=_build_mwan3_ops,
 ))
