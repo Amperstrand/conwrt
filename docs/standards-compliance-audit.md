@@ -129,7 +129,7 @@ Same issue as NIP-44. ContextVM spec requires gift wrapping.
 ### NIP-90: Data Vending Machines
 **Status**: N/A (deprecated)
 
-Per ADR-007 in hackathon-tooling, NIP-90 DVM is deprecated for our use case.
+Per ADR-007 in hackathon-tooling, ContextVM (kind 25910) is deprecated for our use case.
 ContextVM (kind 25910) is the replacement. The Firecracker daemon's DVM
 mode (`--dvm` flag) exists but is not enabled.
 
