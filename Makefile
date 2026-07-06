@@ -71,6 +71,7 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 
 test: ## Run Python unit tests plus existing safe shell smoke test
 	@pytest tests
+	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
 		bats tests/*.bats; \

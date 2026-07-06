@@ -357,7 +357,7 @@ def _client_ip_for_subnet(router_ip: str) -> str:
 def _interface_exists(interface: str) -> bool:
     """Check if a network interface exists on this system."""
     r = subprocess.run(
-        ["ifconfig", interface], capture_output=True, text=True, check=False,
+        ["ip", "link", "show", interface], capture_output=True, text=True, check=False,
     )
     return r.returncode == 0
 
