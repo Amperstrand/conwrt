@@ -23,7 +23,8 @@ Architecture:
   The VPS xray receives, deaggregates, and forwards to the real internet.
 
 Prerequisites:
-  - Custom OpenWrt kernel with CONFIG_MPTCP=y (stock OpenWrt has CONFIG_MPTCP=n)
+  - OpenWrt 25.12+ or SNAPSHOT (CONFIG_MPTCP=y enabled by default since Oct 2024)
+  - OpenWrt 24.10 does NOT have MPTCP (CONFIG_MPTCP=n)
   - BSBF firmware selector: https://firmware.bondingshouldbefree.org
   - A VPS with MPTCP-enabled kernel (Linux 5.6+ default has it)
 
@@ -123,14 +124,14 @@ def _build_mptcp_ops(params: dict[str, Any]) -> list[Op]:
 
 register(UseCase(
     name="mptcp-bonding",
-    description="MPTCP connection bonding via BondingShouldBeFree (true aggregation, needs custom kernel)",
+    description="MPTCP connection bonding via BondingShouldBeFree (true aggregation, needs OpenWrt 25.12+ or SNAPSHOT)",
     packages=[],
     params={
-        "server_ipv4": ParamDef(type=str, default="",
+        "server_ipv4": ParamDef(type=str, default="", required=True,
                                 description="VPS IP running BSBF server"),
-        "server_port": ParamDef(type=str, default="",
+        "server_port": ParamDef(type=str, default="", required=True,
                                description="Port (from 'sudo bsbf-add-client' on VPS)"),
-        "uuid": ParamDef(type=str, default="",
+        "uuid": ParamDef(type=str, default="", required=True,
                         description="Client UUID (from 'sudo bsbf-add-client' on VPS)"),
     },
     test_status="tested",
@@ -139,8 +140,9 @@ register(UseCase(
         "xray active on :16384, client UUID registered. "
         "VPS kernel 6.12.90 has CONFIG_MPTCP=y, subflows=8. "
         "iperf3 localhost baseline: 28.4 Gbps. "
-        "Client cannot be tested on stock OpenWrt (CONFIG_MPTCP=n). "
-        "Use BSBF firmware selector for MPTCP-enabled images."
+        "OpenWrt 25.12+ has CONFIG_MPTCP=y by default (kernel 6.12.71). "
+        "OpenWrt 24.10 does NOT have MPTCP (CONFIG_MPTCP=n, kernel 6.6). "
+        "Verified on SNAPSHOT r35226 (kernel 6.18.37)."
     ),
     build_configure=lambda p: render_shell(_build_mptcp_ops(p)),
     build_configure_ops=_build_mptcp_ops,

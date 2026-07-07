@@ -259,7 +259,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_auto_sqm_ops(p)),
     build_configure_ops=_build_auto_sqm_ops,
-    test_status="experimental",
-    tested_notes="not validated on hardware",
+    test_status="tested",
+    tested_notes="Verified on OpenWrt 24.10.2 QEMU (SHC). Config generation + hotplug script.",
     requires_capabilities=[],
 ))

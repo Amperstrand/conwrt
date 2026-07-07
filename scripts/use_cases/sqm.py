@@ -94,7 +94,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_sqm_ops(p)),
     build_configure_ops=_build_sqm_ops,
-    test_status="experimental",
-    tested_notes="uci from OpenWrt wiki",
+    test_status="tested",
+    tested_notes="Verified on OpenWrt 24.10.2 QEMU (SHC). CAKE qdisc confirmed via tc.",
     requires_capabilities=[],
 ))

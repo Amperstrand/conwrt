@@ -399,3 +399,168 @@ def test_wireguard_client_server_loop(tmp_path):
     assert "10.0.0.2/32" in client_output
     assert "wg0" in server_output
     assert "wg0" in client_output
+
+
+def test_pbr_dry_run_generates_config(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["pbr"]
+    """, tmp_path)
+
+    assert "uci set pbr.config=pbr" in output
+    assert "pbr.config.enabled" in output or "enabled='1'" in output
+    assert "pbr.config.nft_file_helper" in output or "nft_file_helper='1'" in output
+    assert "uci commit pbr" in output
+
+
+def test_tollgate_security_dry_run_recognizes_use_case(tmp_path):
+    """tollgate-security requires wifi — on virtual model it's correctly skipped."""
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["tollgate-security"]
+    """, tmp_path)
+
+    assert "tollgate-security" in output
+    assert "SKIPPED" in output or "SKIP" in output
+    assert "wifi" in output
+
+
+def test_travelmate_dry_run_recognizes_use_case(tmp_path):
+    """travelmate requires wifi — on virtual model it's correctly skipped."""
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["travelmate"]
+    """, tmp_path)
+
+    assert "travelmate" in output.lower()
+    assert "SKIPPED" in output or "SKIP" in output
+    assert "wifi" in output
+
+
+def test_openclash_dry_run_generates_config(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["openclash"]
+    """, tmp_path)
+
+    assert "openclash" in output.lower()
+    assert "uci set openclash" in output or "uci set openclash.config" in output
+    assert "Meta" in output
+    assert "uci commit openclash" in output
+
+
+def test_guest_wifi_dry_run_recognizes_use_case(tmp_path):
+    """guest-wifi requires wifi — on virtual model it's correctly skipped."""
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["guest-wifi"]
+    """, tmp_path)
+
+    assert "guest" in output.lower()
+    assert "SKIPPED" in output or "SKIP" in output
+    assert "wifi" in output
+
+
+def test_auto_sqm_dry_run_generates_config(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["auto-sqm"]
+
+        [use_cases.auto-sqm]
+        mode = "static"
+        download_kbps = 50000
+        upload_kbps = 10000
+    """, tmp_path)
+
+    assert "auto_sqm" in output
+    assert "uci set auto_sqm.config" in output
+    assert "uci commit auto_sqm" in output
+
+
+def test_vpn_node_dry_run_generates_listing_script(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["vpn-node"]
+
+        [use_cases.vpn-node]
+        nsec = "test-nsec-hex"
+        endpoint_host = "vpn.example.com"
+        endpoint_port = 51820
+    """, tmp_path)
+
+    assert "vpn-listing" in output or "vpn-node" in output
+    assert "nak" in output.lower() or "30402" in output
+    assert "vpn.example.com" in output
+
+
+def test_mptcp_bonding_dry_run_generates_install_commands(tmp_path):
+    output = _run_configure_dry_run("""\
+        [password]
+        mode = "none"
+
+        [network]
+        lan_ip_mode = "static"
+        lan_ip = "192.168.1.1"
+
+        [use_cases]
+        enabled = ["mptcp-bonding"]
+
+        [use_cases.mptcp-bonding]
+        server_ipv4 = "66.92.204.237"
+        server_port = "16384"
+        uuid = "test-uuid-1234"
+    """, tmp_path)
+
+    assert "bondingshouldbefree" in output
+    assert "66.92.204.237" in output
+    assert "16384" in output
+    assert "test-uuid-1234" in output

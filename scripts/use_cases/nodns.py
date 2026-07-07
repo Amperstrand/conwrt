@@ -212,7 +212,7 @@ register(UseCase(
     build_configure=lambda p: render_shell(_build_nodns_ops(p)),
     build_configure_ops=_build_nodns_ops,
     configure_via="ssh",
-    test_status="untested",
-    tested_notes="BusyBox shell only, needs on-device validation",
+    test_status="tested",
+    tested_notes="Verified on OpenWrt 24.10.2 QEMU (SHC). dnsmasq config + DNS resolution.",
     requires_capabilities=[],
 ))

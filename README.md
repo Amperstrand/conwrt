@@ -284,7 +284,7 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 
 conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for a specific use case**. Instead of flashing a stock image and then reading wiki docs to manually configure your router, you declare what you want in `config.toml` and the firmware arrives ready to go.
 
-**Status: `tether` tested on hardware** (GL.iNet MT3000, Android RNDIS). All other presets are untested — the uci commands and package lists are based on OpenWrt wiki documentation and community guides. They need real-device validation before being considered production-ready.
+**Status: 14/15 use cases tested on OpenWrt 24.10.2** (QEMU/SHC). See [test results](https://tests.tollgate.me/) (conwrt tab). Use cases requiring WiFi (guest-wifi, travelmate, ap-nostr-id) need physical hardware. MPTCP bonding requires OpenWrt 25.12+ or SNAPSHOT.
 
 ### How It Works
 

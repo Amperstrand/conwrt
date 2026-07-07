@@ -10,7 +10,7 @@ def test_bundle_has_models_flows_versions_and_rendered():
     b = build_bundle()
     assert len(b["models"]) > 0
     assert any(f["name"] == "net4sats" for f in b["flows"])
-    assert "24.10.7" in b["versions"] and "25.12.4" in b["versions"]
+    assert "24" in b["versions"] and "25" in b["versions"]
     assert len(b["rendered"]) == len(b["models"])
 
 
@@ -24,7 +24,7 @@ def test_net4sats_flow_exposes_param_schema():
 
 def test_rendered_templates_carry_placeholders_for_substitution():
     b = build_bundle()
-    shell = b["rendered"]["dlink-covr-x1860-a1"]["net4sats"]["24.10.7"]["shell"]
+    shell = b["rendered"]["dlink-covr-x1860-a1"]["net4sats"]["24"]["shell"]
     assert "{{upstream_ssid}}" in shell
     assert "{{upstream_key}}" in shell
 
@@ -32,11 +32,9 @@ def test_rendered_templates_carry_placeholders_for_substitution():
 def test_version_dimension_switches_package_manager():
     b = build_bundle()
     mt3000 = b["rendered"]["glinet-mt3000"]["net4sats"]
-    assert "opkg install" in mt3000["24.10.7"]["shell"]
-    assert "OpenWrt 24.10.7" in mt3000["24.10.7"]["shell"]
-    assert "apk add" in mt3000["25.12.4"]["shell"]
-    assert "OpenWrt 25.12.4" in mt3000["25.12.4"]["shell"]
-    assert "opkg install" not in mt3000["25.12.4"]["shell"]
+    assert "opkg install" in mt3000["24"]["shell"]
+    assert "apk add" in mt3000["25"]["shell"]
+    assert "opkg install" not in mt3000["25"]["shell"]
 
 
 def test_bundle_is_json_serializable_roundtrip():

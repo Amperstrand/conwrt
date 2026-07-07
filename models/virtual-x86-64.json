@@ -7,7 +7,8 @@
     "device": "generic",
     "profile": "generic",
     "version": "24",
-    "board_name": "generic"
+    "board_name": "generic",
+    "default_ip": "192.168.1.1"
   },
   "mac_oui": [],
   "hardware": {
@@ -28,6 +29,5 @@
     }
   },
   "boot_signatures": {},
-  "lan_subnet": "192.168.1.0/24",
-  "default_ip": "192.168.1.1"
+  "lan_subnet": "192.168.1.0/24"
 }

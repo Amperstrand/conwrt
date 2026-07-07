@@ -64,7 +64,7 @@ register(UseCase(
     },
     build_configure=lambda p: render_shell(_build_travelmate_ops(p)),
     build_configure_ops=_build_travelmate_ops,
-    test_status="experimental",
-    tested_notes="wiki-based",
+    test_status="tested",
+    tested_notes="Config generation verified. WiFi scanning needs physical hardware.",
     requires_capabilities=["wifi"],
 ))

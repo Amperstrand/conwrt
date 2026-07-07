@@ -273,8 +273,8 @@ register(UseCase(
     },
     build_configure_ops=_build_ssl_ops,
     build_configure=lambda p: render_shell(_build_ssl_ops(p)),
-    test_status="experimental",
-    tested_notes="cert download + uhttpd config verified on COVR-X1860",
+    test_status="tested",
+    tested_notes="Cert download + uhttpd config verified on COVR-X1860. Lancert/qip providers tested.",
     configure_via="ssh",
     post_install_notes=(
         "SSL certs are installed at /etc/tollgate/ssl/. "

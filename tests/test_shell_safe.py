@@ -39,8 +39,8 @@ def test_sh_quote_rejects_control_characters(bad: str) -> None:
 
 
 def test_wifi_uci_lines_quote_injection_payloads() -> None:
-    fm = load_firmware_manager()
-    lines = fm.wifi_ap_uci_lines(
+    from profile.wifi import wifi_ap_uci_lines
+    lines = wifi_ap_uci_lines(
         "radio0",
         "Cafe'; reboot; echo '",
         "psk2",
@@ -54,9 +54,9 @@ def test_wifi_uci_lines_quote_injection_payloads() -> None:
 
 
 def test_wifi_uci_lines_reject_newlines() -> None:
-    fm = load_firmware_manager()
+    from profile.wifi import wifi_sta_uci_lines
     with pytest.raises(ValidationError):
-        fm.wifi_sta_uci_lines("radio0", "bad\nssid", "psk2")
+        wifi_sta_uci_lines("radio0", "bad\nssid", "psk2")
 
 
 # ── validate_host ──────────────────────────────────────────────────

@@ -9,14 +9,16 @@ from model_loader import load_model
 _PARAMS = {"upstream_ssid": "home", "upstream_key": "secret", "upstream_band": "5ghz"}
 
 
-def test_net4sats_flow_registered_with_five_steps():
+def test_net4sats_flow_registered_with_eight_steps():
     flow = get_flow("net4sats")
     assert flow is not None
     assert [s.title for s in flow.steps] == [
         "Flash stock OpenWrt",
         "Connect the router to upstream WiFi",
         "Install the tollgate payment backend (v0.5.0-alpha3)",
+        "Install umdns for .local mDNS resolution",
         "Install the net4sats portal (configurationwizzard)",
+        "Set the router hostname to net4sats",
         "Brand the captive portal as net4sats",
         "Move the LAN off 192.168.1.1",
     ]

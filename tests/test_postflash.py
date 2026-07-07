@@ -294,12 +294,12 @@ class TestInterfaceExists:
             _interface_exists("en0")
 
     @patch("conwrt.postflash.subprocess.run")
-    def test_calls_ifconfig_with_interface(self, mock_run):
+    def test_calls_ip_link_show_with_interface(self, mock_run):
         from conwrt.postflash import _interface_exists
         mock_run.return_value = _mock_result(0)
         _interface_exists("en7")
         mock_run.assert_called_once_with(
-            ["ifconfig", "en7"], capture_output=True, text=True, check=False,
+            ["ip", "link", "show", "en7"], capture_output=True, text=True, check=False,
         )
 
 
