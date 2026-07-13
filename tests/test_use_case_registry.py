@@ -19,6 +19,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "adguard": ("ssh", "auto"),
     "ap-nostr-id": ("ssh", "auto"),
     "auto-sqm": ("both", "auto"),
+    "cashu-vpn-client": ("both", "auto"),
     "configurationwizzard": ("ssh", "auto"),
     "doh": ("ssh", "auto"),
     "fips-bluetooth-rfcomm": ("ssh", "opkg"),
