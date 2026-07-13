@@ -1006,3 +1006,90 @@ If bricked: spam "u" key during RAM test for XMODEM upload at 115200 baud.
 - The GS1920-24 (non-PoE) is not explicitly supported upstream — only GS1920-24HPv1 has official OpenWrt support
 - Same RTL8392M SoC, DTS may need adjustment for missing PoE/fan/SFP hardware
 - BootBase dual-slot fallback still works — if initramfs fails, falls back to stock slot
+
+---
+
+## Post-Mortem: What Went Wrong (2026-05-25)
+
+### Summary
+
+We spent significant effort attempting to flash OpenWrt onto the GS1920-24 without a serial cable. The FTP and web upload paths turned out to be dead ends — the ZyNOS firmware handler performs additional validation beyond SIG+checksum that rejects non-stock images. During Playwright automation sessions (toggling services on/off, attempting uploads), we disabled all management services (HTTP, FTP, Telnet) on the switch. We then misdiagnosed the switch state for an extended period, believing OpenWrt might be running with a broken DSA driver. A 90-second full-boot packet capture finally revealed the truth: **the switch is running stock ZyNOS V4.50 with all management services disabled.**
+
+### Timeline of Events
+
+1. **Research and tooling phase** (2026-05-21 to 2026-05-22): Reverse-engineered the ZyNOS firmware format, built a custom repacker, validated the image (25/25 checks pass), documented the chain of reasoning (Links 1-6). Everything looked solid.
+
+2. **Rebuild #5** (2026-05-23): Official initramfs was too large (5.4MB) for a ZyNOS slot (3.7MB budget). Built a minimal custom image from source (2.9MB, LZMA compressed to 3.67MB). Added safety features: telnetd, static IP fallback, LED indicators, fixed auto-sysupgrade timing.
+
+3. **Upload attempts** (2026-05-24): Six upload attempts — 4 via FTP (ras-0 and ras-1, padded and unpadded), 2 via web POST. All failed. FTP accepted the data transfer (150 response) but never confirmed the write (no 226 response). Web returned ERR_EMPTY_RESPONSE.
+
+4. **Post-upload confusion** (2026-05-24 to 2026-05-25): After the failed uploads, the switch stopped responding to HTTP, FTP, and Telnet. We assumed OpenWrt might have partially booted (FTP write might have succeeded despite no 226). ARP responded at 192.168.1.1 but zero TCP services were reachable.
+
+5. **Diagnosis attempts**: We explored multiple hypotheses:
+   - OpenWrt booted but DSA driver misconfigured (no bridge, ports isolated)
+   - OpenWrt booted but telnetd failed to start
+   - BootBase fell back to stock but stock services were broken
+   - ARP cache staleness
+
+6. **Definitive diagnosis** (2026-05-25): User power-cycled the switch. We ran a 90-second packet capture during the full boot sequence. **Only LLDP packets were observed** — three LLDP frames at 30-second intervals from MAC `4c:9e:ff:77:5c:93` (port 2), chassis MAC `4c:9e:ff:77:5c:91`. Zero IPv4, zero ARP, zero DHCP, zero TCP/UDP.
+
+### How We Know It's Stock ZyNOS (Not OpenWrt)
+
+The LLDP-only traffic pattern is the definitive evidence:
+
+| Traffic Type | Stock ZyNOS | Our OpenWrt Build | Observed |
+|---|---|---|---|
+| LLDP every 30s | Yes (built-in) | No (not included) | **Yes** |
+| DHCP DISCOVER | No (static IP) | Yes (hostname `openwrt-stage1`) | **No** |
+| TCP SYN (telnetd) | No (port 23 disabled) | Yes (port 23 always on) | **No** |
+| ARP requests | Only in response | Only in response | Only in response |
+| HTTP (port 80) | Yes (when enabled) | No (not in minimal build) | **No** |
+
+- **LLDP is a ZyNOS stock feature** — our minimal OpenWrt build does not include `lldpd` or any LLDP package. If OpenWrt were running, there would be zero LLDP traffic.
+- **DHCP DISCOVER would be sent** — our build includes `98-setup-network` which runs `udhcpc` with hostname `openwrt-stage1`. Zero DHCP packets were observed.
+- **Telnetd on port 23** — our build starts `telnetd -l /bin/sh -p 23` unconditionally. Zero TCP SYN packets were observed.
+
+### What Actually Happened
+
+1. During Playwright automation sessions, we toggled services (FTP, HTTP, Telnet) on and off via the stock web UI's Access Service page (`/rpaccessservice.html`).
+2. At some point, all three services were left in the **disabled** state.
+3. The FTP/web upload attempts failed (ZyNOS handler rejects non-stock firmware), so the flash never succeeded.
+4. The switch rebooted after upload attempts, but stock ZyNOS V4.50 remained running from slot 2 — with all management services disabled.
+5. The L2 fabric is alive (LLDP runs at L2, port forwarding works), but no L3/L4 services are accessible.
+
+### What We Did Wrong
+
+1. **Assumed FTP would work without testing the handler's validation depth.** The chain of reasoning (Links 1-6) was logically sound but had a gap: Link 1 assumed the FTP handler only validates SIG+checksum because that's all BootBase checks. The FTP handler does *additional* validation beyond BootBase — model ID whitelist, version string format, possibly decompressed size bounds. We should have tested with a trivially modified stock image first (e.g., change version string) to probe the handler's validation boundaries.
+
+2. **Left services disabled after automation sessions.** The Playwright scripts toggled services as needed but didn't ensure a clean state after each session. We should have had a cleanup step that re-enabled all services after every automation run.
+
+3. **Misinterpreted ARP response as evidence of OpenWrt.** The switch responded to ARP at 192.168.1.1 (its default IP), and we assumed this meant something was running. But ARP is a L2 protocol — the switch's L2 fabric responds to ARP regardless of whether any services are running. ARP response ≠ working OS.
+
+4. **Didn't capture full boot traffic early enough.** We spent time exploring hypotheses (DSA driver, bridge config, telnetd failure) when a simple packet capture during boot would have resolved everything immediately. The 90-second pcap was the single most informative diagnostic step.
+
+5. **Over-invested in the FTP path.** The research phase confirmed that no one has ever successfully flashed a GS1920 via FTP or web with OpenWrt. We should have recognized this earlier — the forum posts and PR #20439 all say "serial + XMODEM only." We let the logical chain of reasoning override the empirical evidence.
+
+### Corrected Diagnosis
+
+- **Switch state**: Stock ZyNOS V4.50(AAOB.3) running from slot 2, all management services disabled, L2 fabric alive.
+- **Slot 1**: V4.50(AAOB.3) — unchanged (FTP/web uploads were rejected by the handler).
+- **Slot 2**: V4.50(AAOB.3) — running (this is the active boot slot).
+- **OpenWrt was never flashed** — all upload attempts were rejected at the handler level. No firmware was written to flash.
+
+### Recovery Path
+
+1. **Factory reset** (immediate, no hardware required): Hold reset button 15+ seconds after LEDs begin boot sequence. ZyNOS handles factory reset via the running firmware — since stock IS running, this should work. Our earlier 10-second hold may have been too short. After reset: IP returns to 192.168.1.1, HTTP on port 80, credentials admin/1234.
+
+2. **Serial + XMODEM** (if factory reset fails): Obtain USB-RS232 adapter. Connect at 9600 baud. Enter BootBase debug mode. Upload initramfs via XMODEM. This is the only proven method for GS1920 OpenWrt installation.
+
+### Lessons for conwrt
+
+1. **Always capture boot traffic first** — a 60-second pcap during boot reveals more than hours of hypothesis exploration. LLDP vs DHCP vs silence is immediately diagnostic.
+
+2. **Test upload handlers with modified stock images** — before attempting a full custom firmware upload, probe the handler by uploading a stock image with a single byte changed (version string). This reveals whether the handler does content validation beyond header checksums.
+
+3. **Ensure automation cleanup** — every Playwright/HTTP automation session must end with a cleanup step that restores the device to a known-good state (all services enabled, default credentials).
+
+4. **Trust empirical evidence over logical reasoning** — the chain of reasoning (Links 1-6) was internally consistent but had an untested assumption at Link 1 (FTP handler validates the same way as BootBase). When forum posts say "serial only," believe them.
+
+5. **LLDP is the definitive stock-vs-OpenWrt discriminator** — our minimal OpenWrt build doesn't include LLDP. Stock ZyNOS sends LLDP every 30 seconds. This is the simplest possible test: capture 60 seconds of traffic. If you see LLDP, it's stock.

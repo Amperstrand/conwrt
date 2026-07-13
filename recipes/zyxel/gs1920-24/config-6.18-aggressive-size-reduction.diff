@@ -1,0 +1,179 @@
+diff --git a/target/linux/realtek/rtl839x/config-6.18 b/target/linux/realtek/rtl839x/config-6.18
+index c0912804..310fbd45 100644
+--- a/target/linux/realtek/rtl839x/config-6.18
++++ b/target/linux/realtek/rtl839x/config-6.18
+@@ -12,7 +12,7 @@ CONFIG_COMMON_CLK_REALTEK=y
+ CONFIG_COMMON_CLK_RTL83XX=y
+ CONFIG_COMPACT_UNEVICTABLE_DEFAULT=1
+ CONFIG_COMPAT_32BIT_TIME=y
+-CONFIG_CONSOLE_LOGLEVEL_DEFAULT=15
++CONFIG_CONSOLE_LOGLEVEL_DEFAULT=3
+ CONFIG_CONTEXT_TRACKING=y
+ CONFIG_CONTEXT_TRACKING_IDLE=y
+ CONFIG_CPUFREQ_DT=y
+@@ -52,8 +52,8 @@ CONFIG_CRYPTO_ECB=y
+ CONFIG_CRYPTO_LIB_GF128MUL=y
+ CONFIG_CRYPTO_LIB_POLY1305_RSIZE=2
+ CONFIG_CRYPTO_LIB_UTILS=y
+-CONFIG_DEBUG_INFO=y
+-CONFIG_DEBUG_SECTION_MISMATCH=y
++# CONFIG_DEBUG_INFO is not set
++# CONFIG_DEBUG_SECTION_MISMATCH is not set
+ CONFIG_DMA_NEED_SYNC=y
+ CONFIG_DMA_NONCOHERENT=y
+ CONFIG_DTC=y
+@@ -278,3 +278,154 @@ CONFIG_WATCHDOG_CORE=y
+ CONFIG_XPS=y
+ CONFIG_ZLIB_DEFLATE=y
+ CONFIG_ZLIB_INFLATE=y
++
++# === AGGRESSIVE SIZE REDUCTION OVERRIDES ===
++# Disable debug completely - must use DEBUG_INFO_NONE to prevent select chain
++CONFIG_DEBUG_INFO_NONE=y
++# CONFIG_DEBUG_INFO is not set
++# CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT is not set
++# CONFIG_DEBUG_INFO_DWARF4 is not set
++# CONFIG_DEBUG_INFO_DWARF5 is not set
++# CONFIG_DEBUG_INFO_REDUCED is not set
++# CONFIG_DEBUG_INFO_COMPRESSED_NONE is not set
++# CONFIG_DEBUG_INFO_COMPRESSED_ZLIB is not set
++# CONFIG_DEBUG_INFO_COMPRESSED_ZSTD is not set
++# CONFIG_DEBUG_INFO_SPLIT is not set
++# CONFIG_DEBUG_INFO_BTF is not set
++# CONFIG_DEBUG_SECTION_MISMATCH is not set
++# CONFIG_DEBUG_KERNEL is not set
++# CONFIG_DEBUG_FS is not set
++# CONFIG_DEBUG_VM is not set
++
++# Disable MPTCP (saves ~200KB+ compressed)
++# CONFIG_MPTCP is not set
++# CONFIG_MPTCP_IPV6 is not set
++
++# Disable swap (not needed on this switch)
++# CONFIG_SWAP is not set
++
++# Disable fanotify
++# CONFIG_FANOTIFY is not set
++
++# Disable INOTIFY (use dnotify or polling instead)
++# CONFIG_INOTIFY_USER is not set
++
++# Disable IKCONFIG
++# CONFIG_IKCONFIG is not set
++# CONFIG_IKCONFIG_PROC is not set
++
++# Disable IO_URING
++# CONFIG_IO_URING is not set
++
++# Disable KALLSYMS  
++# CONFIG_KALLSYMS is not set
++# CONFIG_KALLSYMS_ALL is not set
++
++# Disable Magic SysRq
++# CONFIG_MAGIC_SYSRQ is not set
++
++# Disable unused filesystems
++# CONFIG_OVERLAY_FS is not set
++# CONFIG_TMPFS_XATTR is not set
++# CONFIG_MISC_FILESYSTEMS is not set
++
++# Disable unused crypto
++# CONFIG_CRYPTO_MANAGER is not set
++
++# Disable unused net features
++# CONFIG_WIRELESS is not set
++# CONFIG_CFG80211 is not set
++# CONFIG_MAC80211 is not set
++# CONFIG_NETFILTER is not set
++# CONFIG_NF_CONNTRACK is not set
++
++# Disable USB
++# CONFIG_USB_SUPPORT is not set
++# CONFIG_USB is not set
++
++# Disable sound
++# CONFIG_SOUND is not set
++
++# Reduce console log
++CONFIG_CONSOLE_LOGLEVEL_DEFAULT=2
++
++# Additional aggressive stripping for size
++# Disable CGROUPS (huge savings)
++# CONFIG_CGROUPS is not set
++
++# Disable NAMESPACES
++# CONFIG_NAMESPACES is not set
++
++# Disable SECCOMP
++# CONFIG_SECCOMP is not set
++# CONFIG_SECCOMP_FILTER is not set
++
++# Disable IPv6
++# CONFIG_IPV6 is not set
++
++# Disable keys
++# CONFIG_KEYS is not set
++
++# Disable core dump
++# CONFIG_COREDUMP is not set
++# CONFIG_ELF_CORE is not set
++
++# Disable POSIX MQ
++# CONFIG_POSIX_MQUEUE is not set
++
++# Disable FANOTIFY/INOTIFY  
++# CONFIG_FANOTIFY is not set
++
++# Disable stack protector
++# CONFIG_STACKPROTECTOR is not set
++
++# Disable WERROR
++# CONFIG_WERROR is not set
++
++# Disable unused crypto
++# CONFIG_CRYPTO_MANAGER is not set
++# CONFIG_CRYPTO_ECB is not set
++
++# Disable SMP if single core (but RTL8392M has 2 cores, might need SMP)
++# Actually keep SMP - RTL8392M is dual core
++
++# Disable page pool stats
++# CONFIG_PAGE_POOL_STATS is not set
++
++# Disable NET_SELFTESTS
++# CONFIG_NET_SELFTESTS is not set
++
++# Disable XPS/RPS (network performance features, not needed for initramfs)
++# CONFIG_XPS is not set
++# CONFIG_RPS is not set
++# CONFIG_RFS_ACCEL is not set
++
++# Disable GRO_CELLS
++# CONFIG_GRO_CELLS is not set
++
++# Disable NET_FLOW_LIMIT
++# CONFIG_NET_FLOW_LIMIT is not set
++
++# Disable CPU_FREQ (we don't need frequency scaling for initramfs)
++# CONFIG_CPU_FREQ is not set
++# CONFIG_CPU_FREQ_STAT is not set
++# CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE is not set
++# CONFIG_CPU_FREQ_GOV_COMMON is not set
++# CONFIG_CPU_FREQ_GOV_ONDEMAND is not set
++# CONFIG_CPU_FREQ_GOV_PERFORMANCE is not set
++# CONFIG_CPU_FREQ_GOV_POWERSAVE is not set
++# CONFIG_CPU_FREQ_GOV_USERSPACE is not set
++# CONFIG_CPUFREQ_DT is not set
++# CONFIG_CPUFREQ_DT_PLATDEV is not set
++
++# Disable CPU_RMAP (only needed for RFS)
++# CONFIG_CPU_RMAP is not set
++
++# Disable THERMAL/HWMON (not needed for initramfs stage 1)
++# CONFIG_THERMAL is not set
++# CONFIG_HWMON is not set
++# CONFIG_REALTEK_THERMAL is not set
++# CONFIG_REALTEK_PHY_HWMON is not set
++
++# Disable PM_OPP (not needed without cpufreq)
++# CONFIG_PM_OPP is not set
