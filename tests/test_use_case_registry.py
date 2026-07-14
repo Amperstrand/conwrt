@@ -37,6 +37,13 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "tollgate": ("ssh", "auto"),
     "tollgate-security": ("both", "auto"),
     "travelmate": ("both", "auto"),
+    "vpn-node": ("ssh", "auto"),
+    "vpn-pia": ("both", "auto"),
+    "vpn-mullvad": ("both", "auto"),
+    "vpn-nordvpn": ("both", "auto"),
+    "vpn-ivpn": ("both", "auto"),
+    "vpn-surfshark": ("both", "auto"),
+    "vpn-openvpn": ("both", "auto"),
     "wireguard-client": ("both", "auto"),
     "wireguard-server": ("ssh", "auto"),
 }
