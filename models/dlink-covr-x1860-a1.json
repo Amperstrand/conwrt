@@ -22,7 +22,11 @@
   ],
   "flash_methods": {
     "recovery-http": {
+<<<<<<< Updated upstream
       "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery. ASU produces recovery.bin with custom settings baked in — works in single step. Stock recovery.bin also works but requires sysupgrade afterward for custom config. First NAND boot after U-Boot recovery flash takes 5+ minutes (stock) or ~80s (ASU with uci-defaults).",
+=======
+      "description": "D-Link recovery mode (hold reset pin under device while powering on via WAN port)",
+>>>>>>> Stashed changes
       "recovery_ip": "192.168.0.1",
       "client_ip": "192.168.0.10",
       "client_subnet": "255.255.255.0",
@@ -30,9 +34,15 @@
       "upload_endpoint": "/upload",
       "upload_field": "firmware",
       "trigger_flash_endpoint": "",
+<<<<<<< Updated upstream
       "flash_time_seconds": 300,
       "silence_timeout": 180,
       "reset_instructions": "Connect ethernet to any port (WAN or LAN). Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
+=======
+      "flash_time_seconds": 120,
+      "silence_timeout": 30,
+      "reset_instructions": "Connect ethernet to WAN port. Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
+>>>>>>> Stashed changes
       "led_pattern": "status LED blinks red"
     },
     "sysupgrade": {

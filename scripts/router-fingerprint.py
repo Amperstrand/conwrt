@@ -21,6 +21,7 @@ from ssh_utils import run_ssh
 
 def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
     """Get default gateway IP address."""
+    import platform
     try:
         if platform.system() == "Linux" or os.path.exists('/sbin/ip'):
             cmd = ['ip', 'route', 'show', 'default']
@@ -40,12 +41,20 @@ def get_default_gateway(interface: Optional[str] = None) -> Optional[str]:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
+<<<<<<< Updated upstream
                     stripped = line.strip()
                     if stripped.startswith('gateway:'):
                         value = stripped.split(':', 1)[1].strip()
                         if value:
                             return value
     except subprocess.SubprocessError:
+=======
+                    if 'gateway' in line:
+                        parts = line.split()
+                        if 'gateway' in parts:
+                            return parts[parts.index('gateway') + 1]
+    except Exception:
+>>>>>>> Stashed changes
         pass
     return None
 

@@ -16,6 +16,7 @@
 - Arch: mipsel_24kc
 - Default OpenWrt IP: 192.168.1.1
 
+<<<<<<< Updated upstream
 ## Known Good State (validated 2026-05-16, updated 2026-05-24)
 
 ### Image format is critical
@@ -64,6 +65,11 @@
 ## Recovery Mode (Validated 2026-05-07, 2026-05-12, 2026-05-16)
 - Procedure:
   1. Power off router, connect ethernet to **any port** (WAN and LAN both validated)
+=======
+## Recovery Mode (Validated on hardware 2026-05-07, retested 2026-05-12)
+- Procedure:
+  1. Power off router, connect ethernet to **WAN port** (validated; LAN port not tested)
+>>>>>>> Stashed changes
   2. Use a pin to press and hold the reset button UNDER the device
   3. Plug in power WHILE holding reset
   4. Hold for ~10-12 seconds until status LED blinks red
@@ -85,7 +91,11 @@
 
 ## Network Signatures (from pcap analysis 2026-05-07, retested 2026-05-12)
 - Recovery mode MAC prefix: 3e:85:be (temporary/derived, not hardware MAC)
+<<<<<<< Updated upstream
 - OpenWrt WAN MAC: a8:63:7d:xx:xx:xx (observed post-flash on WAN port; different from recovery MAC)
+=======
+- OpenWrt WAN MAC: a8:63:7d:91:f8:94 (observed post-flash on WAN port; different from recovery MAC)
+>>>>>>> Stashed changes
 - Recovery mode: HTTP at 192.168.0.1:80, responds to ARP
 - Upload: POST /upload, 4 seconds for 13MB over 1Gbps
 - Flash: ~30 seconds silence from recovery MAC after upload ACK
@@ -148,10 +158,14 @@
 - Future: U-Boot env or unused MTD partition (e.g. `private` mtd8, 20MB) for persistence across full recovery reflash
 
 ## Gotchas
+<<<<<<< Updated upstream
 - **Use recovery.bin (NOT factory.bin) for U-Boot recovery mode** — factory.bin uploads OK but causes red LED boot failure. recovery.bin is the correct format per official OpenWrt commit.
 - **ASU builds with USB use cases cause boot failure on X1860** — the device has no USB port. If `tether-android-adb` or similar USB-dependent use cases are enabled in config.toml, the ASU uci-defaults script includes a 45-second USB device detection loop and hotplug script that prevents boot. The device falls back to U-Boot recovery (not bricked). **Solution**: flash stock recovery.bin first, then configure via SSH. Or ensure config.toml only enables use cases matching device capabilities (`["ethernet", "wifi"]`).
 - **Device falls back to U-Boot recovery after failed flash** — if OpenWrt fails to boot after a flash, the device returns to U-Boot recovery mode at 192.168.0.1. Not bricked. Can re-flash immediately.
 - **Recovery mode works on both WAN and LAN ports** — validated on both 2026-05-12. Recovery IP is 192.168.0.1 regardless of which port is used.
+=======
+- **Recovery mode requires WAN port** — tested and validated on WAN port. LAN port recovery NOT tested. After flash, move cable to a LAN port to reach OpenWrt at 192.168.1.1.
+>>>>>>> Stashed changes
 - Recovery mode is at 192.168.0.1, OpenWrt boots at 192.168.1.1 — different subnets!
 - Client needs IPs on both subnets (192.168.0.10 + 192.168.1.254) if flashing from the same interface
 - If device is already in recovery mode (recovery HTTP live), conwrt skips the power cycle and uploads directly
@@ -160,6 +174,9 @@
 - "Upgrade successfully!" response comes BEFORE flash is done — device flashes in background
 - No browser restriction (unlike GL.iNet which warns about Firefox)
 - Post-flash WAN port: OpenWrt configures WAN as DHCP client. If still on WAN port after flash, device sends DHCP requests — need to move cable to LAN for SSH access.
+<<<<<<< Updated upstream
 - **HNAP firmware upload returns OK but stock v1.02 rejects OpenWrt during validation — NO successful flash ever recorded. Use recovery-http instead**
 - **Stock firmware wizard is aggressive**: session times out after ~170s of inactivity, redirects to Login.html
 - **GetFirmwareSettings confirms `UpdateMethods: HNAP_UPLOAD`** — the device claims to support it, but validation blocks non-OEM firmware
+=======
+>>>>>>> Stashed changes
