@@ -23,12 +23,7 @@ import time
 import importlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-<<<<<<< Updated upstream
 from functools import partial
-=======
-from pathlib import Path
-from datetime import datetime
->>>>>>> Stashed changes
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -132,11 +127,7 @@ def probe_link_state(interface: str) -> ProbeResult:
                 m = re.search(r"media:\s*(.+)", output)
                 if m:
                     detail = m.group(1).strip()
-<<<<<<< Updated upstream
     except (subprocess.SubprocessError, OSError) as exc:
-=======
-    except Exception as exc:
->>>>>>> Stashed changes
         detail = str(exc)
     return ("link_state", status, detail)
 
@@ -166,11 +157,7 @@ def probe_arp(mac_prefix: str, interface: str) -> ProbeResult:
                 ether_m = re.search(r"ether\s+([\da-fA-F:]{17})", r2.stdout)
                 if ether_m:
                     detail = f"local_mac={ether_m.group(1)}"
-<<<<<<< Updated upstream
     except (subprocess.SubprocessError, OSError) as exc:
-=======
-    except Exception as exc:
->>>>>>> Stashed changes
         detail = str(exc)
     return ("arp_from_router", status, detail)
 
