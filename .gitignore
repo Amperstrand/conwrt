@@ -1,109 +1,24 @@
-# --- Personal / device-specific data (never commit) ---
-config.toml
-data/
-dist/
-.env
-secrets/
-backups/
+# OpenWrt build trees and image builders (multi-GB)
+openwrt-minimal/
+openwrt-imagebuilder-*/
 
-# --- Serial session logs ---
-# serial/ contains per-session console logs, raw byte dumps, and boot analysis.
-# Never commit — may contain device-specific data (MAC addresses, serial numbers,
-# boot output with potential PII). Each session gets its own subdirectory.
-serial/
-!serial/.gitkeep
-
-# --- Runtime artifacts ---
-# runs/ contains per-device session data — all gitignored
-# (the .gitkeep is tracked via git add -f)
-runs/
-!runs/.gitkeep
-
-# captures/ contains pcap files for boot sequence analysis — never commit
-captures/
-!captures/.gitkeep
-
-# --- Node modules ---
-node_modules/
-
-# --- macOS ---
-.DS_Store
-
-# --- Certificates and keys ---
-*.pem
-*.key
-wireguard/
-*.wg*.conf
-
-# --- IDE ---
-.cursor/
-
-# --- OpenCode / tooling workspaces ---
-.opencode/
-.playwright-mcp/
-.sisyphus/
-.omo/
-
-# --- Images (never commit — use look_at or read tool instead) ---
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.webp
-*.tif
-*.tiff
-
-# --- Stray files ---
-device-identification-notes.md
-linksys-velop-*.png
-captures/
-openwrt-base-config.md
-openwrt-forum-port-isolation.md
-openwrt-networking-start.md
-openwrt-switch-doc.md
-
-# --- Firmware images at repo root (use images/ or data/) ---
-/*.bin
-/*.img
-/*.trx
-/*.fit
-
-# --- Python ---
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-
-# --- Firmware binaries (never commit) ---
-# ASU/download cache and custom builds live under images/ (operator-local).
+# Binary firmware images
+*.bin
 images/
 
-# Vendor stock archives and downloaded OpenWrt images under firmware/.
-# Tracked in-repo: firmware/*.py, firmware/*.sh, firmware/**/RE_ANALYSIS.md (tools + notes).
-# Re-extract ZyXEL stock blobs with firmware/extract.sh after placing the vendor .zip locally.
-# Do not commit proprietary vendor firmware or generic upstream OpenWrt sysupgrade/initramfs
-# files. Only use `git add -f` for a custom-built image when it is an documented, unavoidable
-# workaround — and prefer hosting it outside the repo (images/ cache) instead.
-firmware/*.zip
-firmware/*.bin
-firmware/*.itb
-firmware/*.trx
-firmware/*.img
-firmware/*.fit
-firmware/openwrt-*
+# Screenshots
+*.png
 
-# Extracted stock V2.90 artifacts (from GS1900-8HP zip via firmware/extract.sh)
-firmware/stock_v290/*.ko
-firmware/stock_v290/*.so*
-firmware/stock_v290/cli
-firmware/stock_v290/*.bin
-firmware/stock_v290/*.bix
+# Build output / dist artifacts
+dist/
+runs/
 
-# --- PII redaction tools (local-only, not for repo) ---
-scripts/redact-pii.sh
+# OpenCode / Playwright internal
+.omo/
+.playwright-mcp/
 
-# --- Integration test VM artifacts ---
-tests/integration/.openwrt.img*
-tests/integration/.vm_ssh_key*
-tests/integration/.serial.log
+# OS junk
+.DS_Store
+*~
+*.swp
+*.swo
