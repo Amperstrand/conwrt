@@ -146,14 +146,81 @@ def _wan_ssh_ops() -> list[Op]:
     ]
 
 
-def _set_lan_ip_ops(target: dict[str, Any]) -> list[Op]:
+def _identity_lan_ops(lan_ip: str, default_ip: str) -> list[Op]:
+    """LAN move to the device's identity-derived CGNAT address.
+
+    Two render modes, one safety invariant: an unfilled or invalid address
+    must never reach ``uci set network.lan.ipaddr``.
+
+    - ``lan_ip`` still a ``{{placeholder}}`` (web-bundle render, filled
+      client-side by the wizard): emit a self-guarding script — it assigns
+      the template value to ``LAN_IP``, refuses to continue if the value is
+      empty or still contains a brace, and only then applies it (double
+      quotes, per the uci expansion rule).
+    - ``lan_ip`` a concrete address (CLI render): validate it parses as an
+      IPv4 address up front, then set the literal.
+
+    Both paths read the value back with ``uci get`` before committing, per
+    the verification discipline in AGENTS.md.
+    """
+    if "{{" in lan_ip:
+        return [
+            Comment(f"move LAN off {default_ip} → identity-derived CGNAT address (100.64.0.0/10)"),
+            ShellCommand(command=f"LAN_IP={sh_quote(lan_ip)}"),
+            ShellCommand(
+                command='case "$LAN_IP" in ""|*"{"*) '
+                        'echo "ERROR: lan_ip was not filled in. Derive this device\'s CGNAT LAN address:" ; '
+                        'echo "  python3 scripts/derive_device_secret.py --mnemonic <fleet> --mac <mac>   (ipv4 field)" >&2 ; '
+                        'exit 1;; esac'
+            ),
+            ShellCommand(command='uci set network.lan.ipaddr="$LAN_IP"'),
+            UciSet(config="network", section="lan", values={"netmask": "255.255.255.0"}),
+            ShellCommand(
+                command='uci get network.lan.ipaddr | grep -qxF "$LAN_IP" || '
+                        "{ echo 'ERROR: uci read-back mismatch for network.lan.ipaddr' >&2 ; exit 1 ; }"
+            ),
+            UciCommit(config="network"),
+            ShellCommand(command='(/etc/init.d/network restart &) ; echo "LAN moving to $LAN_IP — reconnect on that subnet"'),
+        ]
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(lan_ip)
+    except ValueError:
+        raise ValueError(f"lan_ip must be an IPv4 address, got {lan_ip!r}") from None
+    return [
+        Comment(f"move LAN off {default_ip} → {lan_ip} (identity-derived CGNAT)"),
+        UciSet(config="network", section="lan", values={"ipaddr": lan_ip, "netmask": "255.255.255.0"}),
+        ShellCommand(
+            command=f"uci get network.lan.ipaddr | grep -qxF {sh_quote(lan_ip)} || "
+                    "{ echo 'ERROR: uci read-back mismatch for network.lan.ipaddr' >&2 ; exit 1 ; }"
+        ),
+        UciCommit(config="network"),
+        ShellCommand(command=f"(/etc/init.d/network restart &) ; echo 'LAN moving to {lan_ip} — reconnect on that subnet'"),
+    ]
+
+
+def _set_lan_ip_ops(step: Step, target: dict[str, Any], params: dict[str, Any]) -> list[Op]:
+    default_ip = target.get("default_ip", "192.168.1.1")
+    lan_ip = str(params.get("lan_ip") or "").strip()
+    if lan_ip:
+        return _identity_lan_ops(lan_ip, default_ip)
     gw = target.get("lan_gateway", "")
     subnet = target.get("lan_subnet", "")
-    if not gw:
-        return [Comment("skip LAN move — model has no lan_subnet defined")]
+    if not gw or gw == default_ip:
+        return [Comment(
+            "skip LAN move — no lan_ip given and the model's lan_subnet does not differ from "
+            f"the OpenWrt default ({default_ip}). Derive this device's identity CGNAT address "
+            "with `python3 scripts/derive_device_secret.py --mnemonic <fleet> --mac <mac>` "
+            "and pass it as the lan_ip param"
+        )]
     return [
-        Comment(f"move LAN off 192.168.1.1 → {gw} ({subnet})"),
+        Comment(f"move LAN off {default_ip} → {gw} ({subnet})"),
         UciSet(config="network", section="lan", values={"ipaddr": gw, "netmask": "255.255.255.0"}),
+        ShellCommand(
+            command=f"uci get network.lan.ipaddr | grep -qxF {sh_quote(gw)} || "
+                    "{ echo 'ERROR: uci read-back mismatch for network.lan.ipaddr' >&2 ; exit 1 ; }"
+        ),
         UciCommit(config="network"),
         ShellCommand(command=f"(/etc/init.d/network restart &) ; echo 'LAN moving to {gw} — reconnect on that subnet'"),
     ]
@@ -177,7 +244,7 @@ def _step_parts(step: Step, target: dict[str, Any], params: dict[str, Any]) -> t
     if step.kind == "wan_ssh":
         return ([], _wan_ssh_ops())
     if step.kind == "set_lan_ip":
-        return ([], _set_lan_ip_ops(target))
+        return ([], _set_lan_ip_ops(step, target, params))
     return ([], [])  # "flash" and unknowns are documentation-only
 
 

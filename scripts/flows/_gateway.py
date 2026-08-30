@@ -33,6 +33,15 @@ def gateway_params() -> dict[str, ParamDef]:
                                  description="Upstream WiFi password"),
         "upstream_band": ParamDef(type=str, default="5ghz", choices=("2.4ghz", "5ghz"),
                                   description="Upstream WiFi band"),
+        "lan_ip": ParamDef(type=str, required=False, allow_empty=True,
+                           description=(
+                               "Identity-derived CGNAT LAN address for this device "
+                               "(100.64.0.0/10). Run `python3 scripts/derive_device_secret.py "
+                               "--mnemonic <fleet> --mac <mac>` and use its `ipv4` field "
+                               "(tollgate identity DeriveIPv4). Moves the LAN off the OpenWrt "
+                               "default 192.168.1.1; when unset, falls back to the model's "
+                               "lan_subnet if it differs from the default."
+                           )),
     }
 
 
@@ -67,5 +76,5 @@ def lan_finalize_step() -> Step:
     return Step(
         kind="set_lan_ip",
         title="Move the LAN off 192.168.1.1",
-        detail="Sets the router LAN to this model's lan_subnet so it doesn't collide with neighbour devices that default to 192.168.1.1 (e.g. a peer router sitting in U-Boot recovery). Runs last; reconnect on the new subnet afterwards.",
+        detail="Moves the router LAN off the OpenWrt default so it doesn't collide with neighbour devices that default to 192.168.1.1 (e.g. a peer router sitting in U-Boot recovery). Uses the device's identity-derived CGNAT address (lan_ip, from scripts/derive_device_secret.py — tollgate identity DeriveIPv4) when given, otherwise the model's lan_subnet. Runs last; reconnect on the new subnet afterwards.",
     )
