@@ -48,7 +48,7 @@ record_history() {  # $1=name $2=dir $3=status $4=summary
     if [ ! -f "$RESULTS_ROOT/history.md" ]; then
         printf '| when (UTC) | suite | status | detail |\n|---|---|---|---|\n' > "$RESULTS_ROOT/history.md"
     fi
-    printf '| %s | %s | %s | %s |\n' "$(date -u +%FT%TZ)" "$1" "$3" "[$4]($2)" >> "$RESULTS_ROOT/history.md"
+    printf '| %s | %s | %s | %s |\n' "$(date -u +%FT%TZ)" "$1" "$3" "[$4]($(basename "$2"))" >> "$RESULTS_ROOT/history.md"
 }
 
 write_index() {  # $1=dir $2=name $3=status $4=summary
