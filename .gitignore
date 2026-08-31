@@ -18,6 +18,8 @@ test-results/
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub
+tests/integration/.openwrt-base.qcow2
+tests/integration/.openwrt-session.qcow2
 
 # OpenCode / Playwright internal
 .omo/

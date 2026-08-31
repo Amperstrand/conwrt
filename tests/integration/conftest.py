@@ -8,6 +8,7 @@ Requires: qemu-system-x86_64, losetup, mount
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
+VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
+VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 SSH_PORT = 2222
 SSH_HOST = "127.0.0.1"
 OPENWRT_VERSION = "24.10.2"
@@ -181,8 +184,8 @@ def _download_prebake_packages() -> None:
 
 @pytest.fixture(scope="session")
 def openwrt_vm():
-    if not _available("qemu-system-x86_64"):
-        pytest.skip("qemu-system-x86_64 not installed")
+    if not _available("qemu-system-x86_64") or not _available("qemu-img"):
+        pytest.skip("qemu-system-x86_64 / qemu-img not installed")
 
     if not VM_IMAGE.exists():
         print("Downloading OpenWrt x86_64 image...", flush=True)
@@ -205,9 +208,27 @@ def openwrt_vm():
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
 
+    # Pristine raw image → one-time qcow2 base → fresh per-session overlay.
+    # The overlay (deleted at teardown) absorbs all mutations, so every session
+    # boots a clean VM and the base is never dirtied (pattern proven in PRTA).
+    if not VM_BASE.exists():
+        print("Converting pristine image to qcow2 base (one-time)...", flush=True)
+        r = subprocess.run(
+            ["qemu-img", "convert", "-f", "raw", "-O", "qcow2", str(VM_IMAGE), str(VM_BASE)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode != 0:
+            pytest.fail(f"qemu-img convert failed: {r.stderr}")
+    if VM_OVERLAY.exists():
+        VM_OVERLAY.unlink()
+    subprocess.run(
+        ["qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(VM_BASE), str(VM_OVERLAY)],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+
     qemu_cmd = [
         "qemu-system-x86_64",
-        "-drive", f"file={VM_IMAGE},format=raw,if=virtio",
+        "-drive", f"file={VM_OVERLAY},format=qcow2,if=virtio",
         "-m", "512M",
         "-netdev", f"user,id=net0,hostfwd=tcp::{SSH_PORT}-:22",
         "-device", "virtio-net-pci,netdev=net0",
@@ -254,8 +275,32 @@ def openwrt_vm():
 
     yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY)}
 
+    _capture_evidence()
     subprocess.run(["pkill", "-f", "qemu-system-x86_64.*openwrt"],
                    capture_output=True)
+    if VM_OVERLAY.exists():
+        VM_OVERLAY.unlink()
+
+
+def _capture_evidence() -> None:
+    """Snapshot VM state into $CONWRT_EVIDENCE_DIR (set by scripts/local-tests.sh).
+
+    Local-only debugging aid: serial log, UCI state, and firmware identity for
+    every run — written before the VM is killed at session teardown."""
+    ev = os.environ.get("CONWRT_EVIDENCE_DIR")
+    if not ev:
+        return
+    try:
+        ev_dir = Path(ev)
+        ev_dir.mkdir(parents=True, exist_ok=True)
+        if SERIAL_LOG.exists():
+            shutil.copy(SERIAL_LOG, ev_dir / "serial.log")
+        r = _ssh("uci show 2>/dev/null", timeout=20)
+        (ev_dir / "uci-show.txt").write_text(r.stdout or "")
+        r = _ssh("cat /etc/openwrt_release 2>/dev/null", timeout=10)
+        (ev_dir / "openwrt-release.txt").write_text(r.stdout or "")
+    except Exception as exc:  # noqa: BLE001 — evidence capture must never fail a run
+        print(f"Evidence capture failed (non-fatal): {exc}", flush=True)
 
 
 @pytest.fixture(scope="session")

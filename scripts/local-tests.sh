@@ -60,6 +60,21 @@ write_index() {  # $1=dir $2=name $3=status $4=summary
     } > "$1/index.md"
 }
 
+seed_notes() {  # $1=suite $2=dir $3=summary
+    local notes_dir="$RESULTS_ROOT/notes"
+    mkdir -p "$notes_dir"
+    local notes="$notes_dir/run-$STAMP-$1.md"
+    if [ ! -f "$notes_dir/README.md" ]; then
+        printf '# Test run notes (gitignored — local study material)\n\nOne journal file per run. Fill in observations while/after running.\n' > "$notes_dir/README.md"
+    fi
+    {
+        printf '# %s run — %s\n\n' "$1" "$STAMP"
+        printf -- '- dir: %s\n- summary: %s\n- host: %s\n- git: %s\n\n' "$2" "$3" "$(hostname)" "$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        printf '## Observations\n\n(tbd)\n\n## Surprises / unknown-unknowns\n\n(tbd)\n\n## Follow-ups\n\n(tbd)\n'
+    } > "$notes"
+    log "notes journal seeded: $notes"
+}
+
 kill_stale_vm() {
     local pids
     pids="$(pgrep -f "qemu-system-x86_64.*hostfwd=tcp::${SSH_PORT}-:22" || true)"
@@ -85,14 +100,7 @@ require_ssh_config_entry() {
     if ssh -G root@127.0.0.1 2>/dev/null | grep -qE '^port 2222$'; then
         return 0
     fi
-    die "conwrt reaches the VM via 'ssh root@127.0.0.1' — add this to ~/.ssh/config first:
-
-    Host 127.0.0.1
-        Port 2222
-        IdentityFile ${REPO_ROOT}/${VM_KEY}
-        StrictHostKeyChecking no
-        UserKnownHostsFile /dev/null
-"
+    log "NOTE: ~/.ssh/config has no 127.0.0.1:2222 entry — the pytest fixture will add one automatically"
 }
 
 boot_vm() {
@@ -155,9 +163,10 @@ run_integration() {
     local dir status summary
     dir="$(new_run_dir integration)"
     log "running tests/integration (QEMU OpenWrt VM suite) → $dir"
+    seed_notes integration "$dir" "full VM suite, overlay-isolated"
 
     status=FAIL
-    if python3 -m pytest tests/integration -v --junitxml="$dir/junit.xml" 2>&1 | tee "$dir/pytest.log"; then
+    if CONWRT_EVIDENCE_DIR="$dir/evidence" python3 -m pytest tests/integration -v --junitxml="$dir/junit.xml" 2>&1 | tee "$dir/pytest.log"; then
         status=PASS
     fi
     summary="$(junit_summary "$dir/junit.xml" 2>/dev/null || echo 'see pytest.log')"
