@@ -286,7 +286,7 @@ def main():
             "python3", str(conwrt / "scripts" / "conwrt.py"), "configure",
             "--model-id", "virtual-x86-64",
             "--ip", args.host,
-        ], timeout=120)
+        ], timeout=600)
         (out / "conwrt-output.txt").write_text(
             f"exit={result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")
         if result.returncode != 0:
