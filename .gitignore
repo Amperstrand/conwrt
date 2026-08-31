@@ -13,6 +13,12 @@ images/
 dist/
 runs/
 
+# Local test results — never published, may contain network details
+test-results/
+tests/integration/.serial.log
+tests/integration/.vm_ssh_key
+tests/integration/.vm_ssh_key.pub
+
 # OpenCode / Playwright internal
 .omo/
 .playwright-mcp/

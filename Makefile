@@ -2,13 +2,13 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
 	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 lint: ## Run ruff and shell script syntax checks
@@ -78,6 +78,15 @@ test: ## Run Python unit tests plus existing safe shell smoke test
 	else \
 		echo "bats-core is not installed; skipping bats tests (smoke still ran)"; \
 	fi
+
+integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
+	@bash scripts/local-tests.sh integration
+
+bench: ## Run bufferbloat benchmark against local QEMU VM (results in test-results/)
+	@bash scripts/local-tests.sh bench
+
+e2e: ## Run hardware e2e tests (requires CONWRT_DEVICE_IP; results in test-results/)
+	@bash scripts/local-tests.sh e2e
 smoke: ## End-to-end smoke test
 	@if [ ! -f tests/smoke.sh ]; then \
 		echo "smoke test not yet created"; \
