@@ -1,6 +1,5 @@
 {
   "id": "comfast-cf-wr632ax",
-  "lan_subnet": "10.230.238.0/24",
   "vendor": "COMFAST",
   "description": "CF-WR632AX WiFi 6 travel router (MT7981B Filogic 830, 2.5G WAN)",
   "openwrt": {
