@@ -259,6 +259,30 @@ class TestRunStepScript:
             assert _run_step_script("1.2.3.4", script, "", log) is True
         assert "sh -s" in " ".join(mock_run.call_args[0][0])
 
+    def test_line_contained_control_flow_is_and_joined_without_set_e(self):
+        """sqm-style scripts: single-line `for` loops and assignments with
+        `;`-separated fallbacks must keep chain-member semantics. Running them
+        under `set -e` aborted the script when `uci get network.wan.device`
+        failed, even though the trailing `; if...fi` was designed to absorb it."""
+        from profile.apply import _run_step_script
+
+        log = MagicMock()
+        script = (
+            "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true\n"
+            '_sqm_dev=$(uci get network.wan.device 2>/dev/null); '
+            'if [ -z "$_sqm_dev" ]; then _sqm_dev=$(ip route show default 0.0.0.0/0 2>/dev/null | awk \'{print $5}\' | head -1); fi; '
+            'if [ -z "$_sqm_dev" ]; then _sqm_dev=wan; fi\n'
+            "uci set sqm.wan=queue\n"
+            'uci set sqm.wan.interface="$_sqm_dev"\n'
+        )
+        with patch("profile.apply.subprocess.run", return_value=self._completed()) as mock_run:
+            assert _run_step_script("1.2.3.4", script, "", log) is True
+        payload = mock_run.call_args.kwargs.get("input", "")
+        assert "sh -s" in " ".join(mock_run.call_args[0][0])
+        assert "set -e" not in payload
+        assert "done; true && _sqm_dev=$(uci get network.wan.device" in payload
+        assert "_sqm_dev=wan; fi && uci set sqm.wan=queue" in payload
+
     def test_heredoc_failure_returns_false_and_logs_stderr(self):
         from profile.apply import _run_step_script
 

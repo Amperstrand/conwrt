@@ -82,8 +82,14 @@ def _run_ssh(
 
 # Scripts containing heredocs, control structures, or line continuations
 # cannot be joined with " && " — the result is an ash syntax error on the router.
-_MULTILINE_RE = re.compile(
-    r"<<|^\s*(case|for|while|until|if|function)\b|\\$", re.MULTILINE
+_HEREDOC_RE = re.compile(r"<<")
+# Line-contained control flow (for/if/... on a single line, `;`-separated
+# fallbacks) must NOT run under `set -e` — a failing command substitution in
+# an assignment aborts the script even when a trailing `; if...fi` fallback
+# was designed to absorb it. Such scripts are joined with " && " over stdin,
+# which reproduces the member-level fail-fast of the original chain exactly.
+_CONTROL_FLOW_RE = re.compile(
+    r"^\s*(case|for|while|until|if|function)\b|\\$", re.MULTILINE
 )
 
 
@@ -98,20 +104,23 @@ def _run_step_script(
              if ln.strip() and not ln.strip().startswith("#")]
     if not lines:
         return True
-    if _MULTILINE_RE.search(script):
+    if _HEREDOC_RE.search(script):
         payload = "set -e\n" + "\n".join(lines) + "\n"
-        r = subprocess.run(
-            ssh_cmd(ip, "sh -s", key=ssh_key or None, connect_timeout=10),
-            input=payload, capture_output=True, text=True,
-            timeout=timeout, check=False,
-        )
-        if r.returncode != 0:
-            if r.stderr:
-                log(f"    stderr: {r.stderr.strip()[:200]}")
-            return False
-        return True
-    chain = " && ".join(lines)
-    return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)
+    elif _CONTROL_FLOW_RE.search(script):
+        payload = " && ".join(lines) + "\n"
+    else:
+        chain = " && ".join(lines)
+        return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)
+    r = subprocess.run(
+        ssh_cmd(ip, "sh -s", key=ssh_key or None, connect_timeout=10),
+        input=payload, capture_output=True, text=True,
+        timeout=timeout, check=False,
+    )
+    if r.returncode != 0:
+        if r.stderr:
+            log(f"    stderr: {r.stderr.strip()[:200]}")
+        return False
+    return True
 
 
 def _scp_install_packages(
