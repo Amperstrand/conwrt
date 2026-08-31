@@ -32,16 +32,18 @@ def test_apply_plan_phase_order_wifi_before_opkg_before_usecase() -> None:
             cmd_str = " ".join(cmd)
         else:
             cmd_str = str(cmd)
+        # multi-line step scripts travel via stdin ("sh -s") — classify by payload
+        stdin_payload = kwargs.get("input", "") or ""
 
         if "hostname" in cmd_str:
             calls.append("hostname")
-        elif "wwan" in cmd_str.lower():
+        elif "wwan" in cmd_str.lower() or "wwan" in stdin_payload:
             calls.append("wwan_setup")
         elif "wireless" in cmd_str or "wifi" in cmd_str:
             calls.append("wifi")
         elif "opkg" in cmd_str:
             calls.append("opkg")
-        elif "sqm" in cmd_str.lower() or "cake" in cmd_str.lower():
+        elif "sqm" in cmd_str.lower() or "cake" in cmd_str.lower() or "sqm" in stdin_payload:
             calls.append("use_case_sqm")
         elif "ping" in cmd_str:
             calls.append("internet_check")
@@ -204,3 +206,63 @@ def test_package_failure_logs_affected_use_cases() -> None:
     mock_scp.assert_called_once()
     affected_msgs = [str(c) for c in log.call_args_list if "may be broken" in str(c)]
     assert affected_msgs, "Expected warning about affected use cases"
+
+
+class TestRunStepScript:
+    """_run_step_script must send heredoc/multi-line scripts via stdin (sh -s)
+    and only chain simple one-command-per-line scripts with && (joining a
+    heredoc with && is an ash syntax error on the router)."""
+
+    def _completed(self, returncode=0):
+        m = MagicMock()
+        m.returncode = returncode
+        m.stderr = ""
+        return m
+
+    def test_plain_script_is_chained_with_and(self):
+        from profile.apply import _run_step_script
+
+        log = MagicMock()
+        script = "# comment\nuci set x=1\nuci commit\n"
+        with patch("profile.apply.subprocess.run", return_value=self._completed()) as mock_run:
+            assert _run_step_script("1.2.3.4", script, "", log) is True
+        cmd = " ".join(mock_run.call_args[0][0])
+        assert "sh -s" not in cmd
+        assert "uci set x=1 && uci commit" in cmd
+        assert "input" not in mock_run.call_args.kwargs
+
+    def test_heredoc_script_runs_via_stdin_sh_s(self):
+        from profile.apply import _run_step_script
+
+        log = MagicMock()
+        script = (
+            "cat > /etc/vpn-listing.sh << 'SCRIPT'\n"
+            "#!/bin/sh\necho hi\n"
+            "SCRIPT\n"
+            "chmod +x /etc/vpn-listing.sh\n"
+        )
+        with patch("profile.apply.subprocess.run", return_value=self._completed()) as mock_run:
+            assert _run_step_script("1.2.3.4", script, "", log) is True
+        cmd = " ".join(mock_run.call_args[0][0])
+        assert "sh -s" in cmd
+        assert "&&" not in cmd
+        payload = mock_run.call_args.kwargs.get("input", "")
+        assert payload.startswith("set -e\n")
+        assert "<< 'SCRIPT'" in payload
+
+    def test_control_structure_script_runs_via_stdin(self):
+        from profile.apply import _run_step_script
+
+        log = MagicMock()
+        script = "for i in 1 2 3; do\necho $i\ndone\n"
+        with patch("profile.apply.subprocess.run", return_value=self._completed()) as mock_run:
+            assert _run_step_script("1.2.3.4", script, "", log) is True
+        assert "sh -s" in " ".join(mock_run.call_args[0][0])
+
+    def test_heredoc_failure_returns_false_and_logs_stderr(self):
+        from profile.apply import _run_step_script
+
+        log = MagicMock()
+        script = "cat > /x << 'EOF'\nbody\nEOF\n"
+        with patch("profile.apply.subprocess.run", return_value=self._completed(1)):
+            assert _run_step_script("1.2.3.4", script, "", log) is False

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -38,10 +39,13 @@ def _check_missing_packages(
 def _wait_for_internet(ip: str, ssh_key: str, log: LogFn, timeout: int = 60) -> bool:
     start = time.time()
     log("  waiting for internet connectivity...")
+    # BusyBox wget over TCP: ICMP is not forwarded by QEMU slirp (user-mode
+    # NAT), so a ping probe would be a permanent false negative on VM targets.
+    probe = "wget -q -T 5 -O /dev/null http://downloads.openwrt.org/"
     while time.time() - start < timeout:
         try:
             r = subprocess.run(
-                ssh_cmd(ip, "ping -c 1 -W 3 1.1.1.1", key=ssh_key or None, connect_timeout=5),
+                ssh_cmd(ip, probe, key=ssh_key or None, connect_timeout=5),
                 capture_output=True, text=True, timeout=10, check=False,
             )
         except (subprocess.TimeoutExpired, OSError):
@@ -74,6 +78,40 @@ def _run_ssh(
             log(f"    stderr: {r.stderr.strip()[:200]}")
         return False
     return True
+
+
+# Scripts containing heredocs, control structures, or line continuations
+# cannot be joined with " && " — the result is an ash syntax error on the router.
+_MULTILINE_RE = re.compile(
+    r"<<|^\s*(case|for|while|until|if|function)\b|\\$", re.MULTILINE
+)
+
+
+def _run_step_script(
+    ip: str,
+    script: str,
+    ssh_key: str,
+    log: LogFn,
+    timeout: int = 300,
+) -> bool:
+    lines = [ln for ln in script.strip().splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    if not lines:
+        return True
+    if _MULTILINE_RE.search(script):
+        payload = "set -e\n" + "\n".join(lines) + "\n"
+        r = subprocess.run(
+            ssh_cmd(ip, "sh -s", key=ssh_key or None, connect_timeout=10),
+            input=payload, capture_output=True, text=True,
+            timeout=timeout, check=False,
+        )
+        if r.returncode != 0:
+            if r.stderr:
+                log(f"    stderr: {r.stderr.strip()[:200]}")
+            return False
+        return True
+    chain = " && ".join(lines)
+    return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)
 
 
 def _scp_install_packages(
@@ -287,14 +325,9 @@ def apply_plan(
 
         script = render_shell(step.ops) if step.ops else step.configure_script
         if script:
-            chain = " && ".join(
-                ln for ln in script.strip().splitlines()
-                if ln.strip() and not ln.strip().startswith("#")
-            )
-            if chain:
-                _log(f"  {step.label}...")
-                if _run_ssh(ip, chain, ssh_key, _log):
-                    _log(f"  ✓ {step.label}")
+            _log(f"  {step.label}...")
+            if _run_step_script(ip, script, ssh_key, _log):
+                _log(f"  ✓ {step.label}")
 
     # Phase 2: Install packages (after WWAN_SETUP + WIFI_STA brought WAN up)
     packages_ok = True
@@ -328,13 +361,9 @@ def apply_plan(
         script = render_shell(step.ops) if step.ops else step.configure_script
         if script:
             _log(f"  use case '{step.use_case_name}': applying...")
-            chain = " && ".join(
-                ln for ln in script.strip().splitlines()
-                if ln.strip() and not ln.strip().startswith("#")
-            )
-            if chain and _run_ssh(ip, chain, ssh_key, _log):
+            if _run_step_script(ip, script, ssh_key, _log):
                 _log(f"  ✓ use case '{step.use_case_name}': applied")
-            elif chain:
+            else:
                 _log(f"  ⚠ use case '{step.use_case_name}': failed")
 
     return ip
