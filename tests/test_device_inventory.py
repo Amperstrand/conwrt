@@ -36,6 +36,15 @@ def _make_ctx(**overrides):
 
 
 class TestAutoDetectInterfaceMacOS:
+    def setup_method(self):
+        # auto_detect_interface() branches on platform.system() at call time;
+        # force the Darwin branch so the macOS path is tested on any host OS.
+        self._platform_patcher = patch("platform.system", return_value="Darwin")
+        self._platform_patcher.start()
+
+    def teardown_method(self):
+        self._platform_patcher.stop()
+
     @patch("conwrt.device_inventory.subprocess.run")
     def test_single_active_en_interface(self, mock_run):
         def _mock_run(cmd, **kwargs):
