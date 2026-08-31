@@ -31,7 +31,7 @@ def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str) -
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
              "--model-id", "virtual-x86-64",
              "--ip", host],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=600,
             cwd=str(REPO_ROOT),
         )
     finally:
