@@ -63,3 +63,19 @@ def test_wait_for_internet_oserror_treated_as_failure() -> None:
         log = MagicMock()
 
         assert _wait_for_internet("1.2.3.4", "", log, timeout=60) is False
+
+
+def test_wait_for_internet_probe_is_tcp_not_icmp() -> None:
+    """ICMP is not forwarded by QEMU slirp (user-mode NAT), so a ping probe is
+    a permanent false negative on VM targets with fully working TCP internet.
+    The probe must be a BusyBox-safe TCP fetch."""
+    with patch("profile.apply.time") as mock_time, \
+         patch("profile.apply.subprocess.run", return_value=_mock_run(0)) as mock_run, \
+         patch("profile.apply.time.sleep"):
+        mock_time.time.side_effect = [0, 1, 1]
+        log = MagicMock()
+
+        assert _wait_for_internet("1.2.3.4", "", log, timeout=60) is True
+        cmd = " ".join(mock_run.call_args[0][0])
+        assert "wget" in cmd, f"probe should use a TCP fetch, got: {cmd}"
+        assert "ping" not in cmd, f"probe must not rely on ICMP, got: {cmd}"
