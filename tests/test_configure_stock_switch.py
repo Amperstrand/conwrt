@@ -4,9 +4,12 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
+
+pytest.importorskip("playwright.sync_api")
 
 
 def _load_module():
