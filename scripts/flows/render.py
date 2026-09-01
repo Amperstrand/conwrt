@@ -89,7 +89,7 @@ def _install_package(step: Step, target: dict[str, Any]) -> tuple[list[str], lis
     install = f"apk add --allow-untrusted {remote}" if pm == "apk" else f"opkg install {remote}"
     host = [
         f"curl -L -o {sh_quote(filename)} {sh_quote(url)}",
-        f"scp -O {sh_quote(filename)} root@{target['default_ip']}:{remote}",
+        f"scp -O {sh_quote(filename)} root@$IP:{remote}",
     ]
     native_ext = ".apk" if pm == "apk" else ".ipk"
     router: list[Op] = [Comment(f"install {step.package} ({pm})")]
@@ -113,15 +113,17 @@ def _password_ops() -> list[Op]:
         Comment("set a random root password (printed once)"),
         ShellCommand(
             command="PW=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16) "
-            "&& echo \"root:$PW\" | chpasswd && echo \"root password: $PW\""
+            "&& printf '%s\\n%s\\n' \"$PW\" \"$PW\" | passwd root "
+            "&& echo \"root password: $PW\""
         ),
     ]
 
 
 def _set_password_ops(step: Step) -> list[Op]:
+    pw = sh_quote(step.password)
     return [
         Comment("set root password"),
-        ShellCommand(command=f"echo 'root:{step.password}' | chpasswd"),
+        ShellCommand(command=f"printf '%s\\n%s\\n' {pw} {pw} | passwd root"),
     ]
 
 
