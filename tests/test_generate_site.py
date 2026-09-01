@@ -49,6 +49,7 @@ def test_bundle_includes_addons():
     assert "random-password" in names
     assert "hostname" in names
     rp = next(a for a in b["addons"] if a["name"] == "random-password")
-    assert "chpasswd" in rp["shell"]
+    assert "passwd root" in rp["shell"]
+    assert "chpasswd" not in rp["shell"]
     hn = next(a for a in b["addons"] if a["name"] == "hostname")
     assert "{{hostname}}" in hn["shell"]

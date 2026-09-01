@@ -68,7 +68,8 @@ def test_flow_script_with_set_password_injects_password_step(capsys):
     ))
     out = capsys.readouterr().out
     assert rc == 0
-    assert "chpasswd" in out
+    assert "passwd root" in out
+    assert "chpasswd" not in out
     assert "root password: $PW" in out
 
 
