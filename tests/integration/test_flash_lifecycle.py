@@ -68,10 +68,17 @@ def _ensure_ssh_config_entry() -> None:
     )
 
 
+def _qemu_available() -> bool:
+    for tool in ("qemu-system-x86_64", "qemu-img"):
+        if subprocess.run(["which", tool], capture_output=True).returncode != 0:
+            return False
+    return True
+
+
 @pytest.fixture(scope="module")
 def flash_vm():
-    if not VM_BASE.exists():
-        pytest.skip("pristine VM base not prepared — run the integration suite once first")
+    if not VM_BASE.exists() or not _qemu_available():
+        pytest.skip("pristine VM base not prepared or QEMU missing — run the integration suite once first")
     _ensure_ssh_config_entry()
 
     # 127.0.0.2 must be explicitly assigned on lo before bind(2) works on this
