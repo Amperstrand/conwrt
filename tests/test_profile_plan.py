@@ -205,3 +205,44 @@ def test_cli_hostname_pattern_overrides_config() -> None:
     host_steps = [s for s in plan.steps if s.kind == StepKind.HOSTNAME]
     assert len(host_steps) == 1
     assert "lyra_" in host_steps[0].configure_script
+
+
+LAN_STEP_KINDS = {StepKind.LAN_IP, StepKind.LAN_IP_MAC_HASH}
+
+
+def _lan_steps(plan):
+    return [s for s in plan.steps if s.kind in LAN_STEP_KINDS]
+
+
+def test_lan_ip_mode_keep_adds_no_lan_step() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="keep", lan_ip="192.168.1.99")
+    plan = build_plan(cfg, mode="post_install")
+    assert _lan_steps(plan) == [], "keep mode must not move the LAN even when lan_ip is set"
+
+
+def test_lan_ip_mode_keep_wins_over_builder_arg_default() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="keep")
+    plan = build_plan(cfg, mode="post_install", lan_ip_mode="keep")
+    assert _lan_steps(plan) == []
+
+
+def test_lan_ip_mode_static_with_lan_ip_adds_static_step() -> None:
+    cfg = ConwrtConfig(lan_ip_mode="static", lan_ip="192.168.1.50")
+    plan = build_plan(cfg, mode="post_install")
+    kinds = [s.kind for s in _lan_steps(plan)]
+    assert StepKind.LAN_IP in kinds
+
+
+def test_lan_ip_mode_static_without_lan_ip_adds_no_step() -> None:
+    """Preserved historical behavior: static mode without lan_ip skips the LAN
+    step entirely (nothing to set)."""
+    cfg = ConwrtConfig(lan_ip_mode="static", lan_ip="")
+    plan = build_plan(cfg, mode="post_install")
+    assert _lan_steps(plan) == []
+
+
+def test_default_mode_is_mac_hash() -> None:
+    cfg = ConwrtConfig()
+    plan = build_plan(cfg, mode="post_install")
+    kinds = [s.kind for s in _lan_steps(plan)]
+    assert StepKind.LAN_IP_MAC_HASH in kinds

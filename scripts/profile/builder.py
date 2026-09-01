@@ -463,7 +463,9 @@ def build_plan(
             include_in_post_install=bool(cfg_script or pkgs),
         ))
 
-    if effective_lan_ip_mode == "mac-hash":
+    if effective_lan_ip_mode == "keep":
+        pass
+    elif effective_lan_ip_mode == "mac-hash":
         # On DSA devices (most modern OpenWrt hardware), eth0 is the CPU-facing
         # port with an unstable MAC.  br-lan always carries the factory base MAC.
         _mac_src_fb = (

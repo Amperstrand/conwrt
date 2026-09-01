@@ -36,8 +36,7 @@ def test_conwrt_configure_applies_sqm(openwrt_vm, ssh_cmd, tmp_path):
         mode = "none"
 
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
 
         [use_cases]
         enabled = ["sqm"]
@@ -47,30 +46,20 @@ def test_conwrt_configure_applies_sqm(openwrt_vm, ssh_cmd, tmp_path):
         upload_kbps = 5000
     """))
 
-    import shutil
-    original = REPO_ROOT / "config.toml"
-    backup = REPO_ROOT / "config.toml.bak"
-    if original.exists():
-        shutil.copy(original, backup)
-    try:
-        shutil.copy(config_toml, original)
+    import os as _os
+    env = {**_os.environ, "CONWRT_CONFIG": str(config_toml)}
+    result = subprocess.run(
+        ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
+         "--model-id", "virtual-x86-64",
+         "--ip", openwrt_vm["host"]],
+        capture_output=True, text=True, timeout=300,
+        cwd=str(REPO_ROOT), env=env,
+    )
 
-        result = subprocess.run(
-            ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-             "--model-id", "virtual-x86-64",
-             "--ip", openwrt_vm["host"]],
-            capture_output=True, text=True, timeout=300,
-            cwd=str(REPO_ROOT),
-        )
-
-        assert result.returncode == 0, (
-            f"conwrt configure failed (exit {result.returncode}):\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    finally:
-        if backup.exists():
-            shutil.move(backup, original)
+    assert result.returncode == 0, (
+        f"conwrt configure failed (exit {result.returncode}):\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
 
     uci_output = ssh_cmd("uci show sqm")
     assert "sqm" in uci_output

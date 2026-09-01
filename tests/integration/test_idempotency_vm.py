@@ -7,8 +7,8 @@ UCI implementation, i.e. on the VM.
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
+import os
 import tempfile
 import textwrap
 from pathlib import Path
@@ -30,8 +30,7 @@ CONFIG = """\
     [password]
     mode = "none"
     [network]
-    lan_ip_mode = "static"
-    lan_ip = "192.168.1.1"
+    lan_ip_mode = "keep"
     [use_cases]
     enabled = ["sqm", "doh", "ssh-hardening"]
     [use_cases.sqm]
@@ -56,20 +55,12 @@ def _snapshot() -> str:
 def _run_configure() -> subprocess.CompletedProcess:
     tmpdir = Path(tempfile.mkdtemp())
     (tmpdir / "config.toml").write_text(textwrap.dedent(CONFIG))
-    original = REPO_ROOT / "config.toml"
-    backup = REPO_ROOT / "config.toml.bak"
-    if original.exists():
-        shutil.copy(original, backup)
-    try:
-        shutil.copy(tmpdir / "config.toml", original)
-        return subprocess.run(
-            ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-             "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
-            capture_output=True, text=True, timeout=600, cwd=str(REPO_ROOT),
-        )
-    finally:
-        if backup.exists():
-            shutil.move(backup, original)
+    env = {**os.environ, "CONWRT_CONFIG": str(tmpdir / "config.toml")}
+    return subprocess.run(
+        ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
+         "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
+        capture_output=True, text=True, timeout=600, cwd=str(REPO_ROOT), env=env,
+    )
 
 
 def test_configure_twice_converges_identical_uci(openwrt_vm):

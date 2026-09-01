@@ -5,6 +5,7 @@ Each test verifies that conwrt configure applies the correct UCI state.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import textwrap
@@ -21,22 +22,14 @@ def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str) -
     config_toml = tmp_path / "config.toml"
     config_toml.write_text(textwrap.dedent(config_toml_content))
 
-    original = REPO_ROOT / "config.toml"
-    backup = REPO_ROOT / "config.toml.bak"
-    if original.exists():
-        shutil.copy(original, backup)
-    try:
-        shutil.copy(config_toml, original)
-        return subprocess.run(
-            ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-             "--model-id", "virtual-x86-64",
-             "--ip", host],
-            capture_output=True, text=True, timeout=600,
-            cwd=str(REPO_ROOT),
-        )
-    finally:
-        if backup.exists():
-            shutil.move(backup, original)
+    env = {**os.environ, "CONWRT_CONFIG": str(config_toml)}
+    return subprocess.run(
+        ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
+         "--model-id", "virtual-x86-64",
+         "--ip", host],
+        capture_output=True, text=True, timeout=600,
+        cwd=str(REPO_ROOT), env=env,
+    )
 
 
 def test_doh_configures_https_dns_proxy(openwrt_vm, ssh_cmd, tmp_path):
@@ -47,8 +40,7 @@ def test_doh_configures_https_dns_proxy(openwrt_vm, ssh_cmd, tmp_path):
         mode = "none"
 
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
 
         [use_cases]
         enabled = ["doh"]
@@ -73,8 +65,7 @@ def test_guest_wifi_creates_isolated_network(openwrt_vm, ssh_cmd, tmp_path):
         mode = "none"
 
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
 
         [use_cases]
         enabled = ["guest-wifi"]
@@ -99,8 +90,7 @@ def test_nodns_configures_local_cache(openwrt_vm, ssh_cmd, tmp_path):
         mode = "none"
 
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
 
         [use_cases]
         enabled = ["nodns"]
@@ -120,8 +110,7 @@ def test_multiple_use_cases_combined(openwrt_vm, ssh_cmd, tmp_path):
         mode = "none"
 
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
 
         [use_cases]
         enabled = ["sqm", "doh"]

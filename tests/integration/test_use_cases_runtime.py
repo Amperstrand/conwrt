@@ -5,6 +5,7 @@ one VM and test all use cases against it.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import textwrap
@@ -35,21 +36,13 @@ def _configure_and_verify(config_toml_content, openwrt_vm, checks):
     config_toml = tmpdir / "config.toml"
     config_toml.write_text(textwrap.dedent(config_toml_content))
 
-    original = REPO_ROOT / "config.toml"
-    backup = REPO_ROOT / "config.toml.bak"
-    if original.exists():
-        shutil.copy(original, backup)
-    try:
-        shutil.copy(config_toml, original)
-        result = subprocess.run(
-            ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-             "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
-            capture_output=True, text=True, timeout=600,
-        )
-        assert result.returncode == 0, f"configure failed: {result.stderr[:200]}"
-    finally:
-        if backup.exists():
-            shutil.move(backup, original)
+    env = {**os.environ, "CONWRT_CONFIG": str(config_toml)}
+    result = subprocess.run(
+        ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
+         "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
+        capture_output=True, text=True, timeout=600, env=env,
+    )
+    assert result.returncode == 0, f"configure failed: {result.stderr[:200]}"
 
     for check_name, check_cmd, expected in checks:
         out = _ssh(ssh_cmd, openwrt_vm, check_cmd)
@@ -61,8 +54,7 @@ def test_doh_configures_resolver(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["doh"]
         [use_cases.doh]
@@ -77,8 +69,7 @@ def test_ssh_hardening_disables_passwords(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["ssh-hardening"]
     """, openwrt_vm, [
@@ -91,8 +82,7 @@ def test_wireguard_client_configures_peer(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["wireguard-client"]
         [use_cases.wireguard-client]
@@ -112,8 +102,7 @@ def test_wireguard_server_auto_generates_key(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["wireguard-server"]
         [use_cases.wireguard-server]
@@ -131,8 +120,7 @@ def test_vpn_node_generates_listing_script(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["vpn-node"]
         [use_cases.vpn-node]
@@ -151,8 +139,7 @@ def test_nodns_configures_dnsmasq(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["nodns"]
     """, openwrt_vm, [
@@ -165,8 +152,7 @@ def test_combined_sqm_doh_hardening(openwrt_vm):
         [password]
         mode = "none"
         [network]
-        lan_ip_mode = "static"
-        lan_ip = "192.168.1.1"
+        lan_ip_mode = "keep"
         [use_cases]
         enabled = ["sqm", "doh", "nodns", "ssh-hardening"]
         [use_cases.sqm]

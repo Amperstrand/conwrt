@@ -13,6 +13,7 @@ Usage:
         print(cfg.wifi_sta.ssid)
 """
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -235,7 +236,7 @@ def _resolve_all_keys(raw_values: list[str]) -> list[str]:
 
 def load_config(path: Optional[Path] = None) -> ConwrtConfig:
     """Load and validate config.toml. Returns defaults when file is missing."""
-    config_path = path or _CONFIG_PATH
+    config_path = path or Path(os.environ.get("CONWRT_CONFIG") or _CONFIG_PATH)
 
     if not config_path.is_file():
         return ConwrtConfig(
@@ -324,6 +325,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         use_cases=use_cases_list,
         hostname=raw.get("device", {}).get("hostname", ""),
         wifi_disable=raw.get("device", {}).get("wifi_disable", False),
-        lan_ip_mode=raw.get("device", {}).get("lan_ip_mode", "mac-hash"),
+        lan_ip_mode=network_section.get("lan_ip_mode")
+                     or raw.get("device", {}).get("lan_ip_mode", "mac-hash"),
         hostname_pattern=raw.get("device", {}).get("hostname_pattern", "static"),
     )
