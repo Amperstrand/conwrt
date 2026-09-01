@@ -39,6 +39,34 @@ Useful targets:
 | `make test` | Python unit tests plus the existing smoke test | Yes |
 | `make ci` | lint + typecheck + schemas + models + tests | Yes |
 | `make ipk` | Build conwrt as an arch-independent OpenWrt ipk package | Yes |
+| `make integration` | Full QEMU OpenWrt VM suite incl. a real `conwrt flash` sysupgrade lifecycle | Yes (local VM) |
+| `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
+| `make e2e` | Tests against a physical router (needs `CONWRT_DEVICE_IP`) | No — real device |
+
+### Local test layers (nothing leaves your machine)
+
+`make integration` / `make bench` / `make e2e` wrap `scripts/local-tests.sh`
+and run the layers GitHub CI cannot (they need KVM or real hardware). They run
+on demand — no scheduling, no publishing. All results land in the gitignored
+`test-results/` folder: junit reports, per-run `index.md`, captured evidence
+(serial log, `uci show`, firmware release), a `notes/` journal per run, and
+`history.md` across runs.
+
+Requirements for the VM layers: Linux with KVM (`/dev/kvm`),
+`qemu-system-x86_64` + `qemu-img`, and (first run only) sudo for image
+preparation. The VM fixture boots a per-session qcow2 overlay over a pristine
+base, so every run starts from clean state. A full integration run including
+the flash lifecycle takes ~7 minutes.
+
+Related knobs:
+
+- `CONWRT_CONFIG=/path/to/config.toml` — override the repo-root config for any
+  conwrt invocation (the tests use this to avoid touching your config).
+- `lan_ip_mode = "keep"` (in `[network]` or `[device]`) — leave the LAN IP
+  untouched; useful when the address is managed externally.
+- `conwrt flash --keep-config` — sysupgrade without `-n`: settings and SSH
+  keys survive the upgrade. `conwrt flash --ip <addr>` targets a device at a
+  non-default address (e.g. after a LAN move).
 
 Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or other network-mutating commands from tests. Use mocks/stubs only. Commands such as `python3 scripts/conwrt.py ...`, `scripts/tftp-server.py`, and router SSH/SCP helpers can mutate real devices and should only be run intentionally against hardware you control.
 

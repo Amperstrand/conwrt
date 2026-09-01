@@ -30,6 +30,7 @@ tests/integration/.openwrt-session.qcow2
 *~
 *.swp
 *.swo
+.coverage
 tests/integration/.openwrt-flash-session.qcow2
 tests/integration/.openwrt-flash-vm.pid
 tests/integration/.openwrt-flash-serial.log
