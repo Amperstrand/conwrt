@@ -45,15 +45,19 @@ def _scp_upload(device_ip: str, firmware_path: str, ssh_key: Optional[str] = Non
     return True, remote_path
 
 
-def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None) -> bool:
-    """Upload firmware via SCP and run sysupgrade -n with optional post-flash overlay."""
+def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None,
+                          keep_config: bool = False) -> bool:
+    """Upload firmware via SCP and run sysupgrade; resets config (-n) unless keep_config."""
     ok, remote_path = _scp_upload(device_ip, firmware_path, ssh_key)
     if not ok:
         return False
 
-    on_openwrt = detect_platform() == "openwrt"
     overlay_path = None
-    if on_openwrt:
+    on_openwrt = (not keep_config) and detect_platform() == "openwrt"
+    if keep_config:
+        log(f"Firmware uploaded. Running sysupgrade (keeping settings) {remote_path}...")
+        cmd = f"sysupgrade {remote_path}"
+    elif on_openwrt:
         from profile.overlay import build_overlay_tarball
         overlay_path = build_overlay_tarball(disable_dhcp=True)
         try:

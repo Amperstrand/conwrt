@@ -129,6 +129,7 @@ class RecoveryContext:
     sha256_after: str = ""
     generated_password: str = ""
     password_set: bool = False
+    keep_config: bool = False
     auth_type: str = ""
     wireguard_pubkey: str = ""
     wan_ssh_enabled: bool = False
