@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -61,8 +62,8 @@ def ssh(host: str, port: int, key: str | None, command: str, timeout: int = 30) 
     return r.stdout.strip()
 
 
-def run_local(command: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+def run_local(command: list[str], timeout: int = 60, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
 
 
 def measure_phase(
@@ -271,30 +272,23 @@ def main():
     save_artifacts(out, "baseline", baseline)
 
     print("\n=== PHASE 2: CONFIGURE SQM VIA CONWRT ===")
-    config = conwrt / "config.toml"
-    backup = conwrt / "config.toml.bak"
-    if config.exists():
-        backup.write_text(config.read_text())
-    try:
-        config.write_text(
-            f"[password]\nmode = \"none\"\n\n"
-            f"[network]\nlan_ip_mode = \"static\"\nlan_ip = \"{args.host}\"\n\n"
-            f"[use_cases]\nenabled = [\"sqm\"]\n\n"
-            f"[use_cases.sqm]\ndownload_kbps = {args.download_kbps}\nupload_kbps = {args.upload_kbps}\n"
-        )
-        result = run_local([
-            "python3", str(conwrt / "scripts" / "conwrt.py"), "configure",
-            "--model-id", "virtual-x86-64",
-            "--ip", args.host,
-        ], timeout=600)
-        (out / "conwrt-output.txt").write_text(
-            f"exit={result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")
-        if result.returncode != 0:
-            print(f"conwrt configure FAILED: {result.stderr[:200]}", file=sys.stderr)
-    finally:
-        if backup.exists():
-            config.write_text(backup.read_text())
-            backup.unlink()
+    tmp_cfg = out / "config.toml"
+    tmp_cfg.write_text(
+        f"[password]\nmode = \"none\"\n\n"
+        f"[device]\nlan_ip_mode = \"keep\"\n\n"
+        f"[use_cases]\nenabled = [\"sqm\"]\n\n"
+        f"[use_cases.sqm]\ndownload_kbps = {args.download_kbps}\nupload_kbps = {args.upload_kbps}\n"
+    )
+    env = dict(os.environ, CONWRT_CONFIG=str(tmp_cfg))
+    result = run_local([
+        "python3", str(conwrt / "scripts" / "conwrt.py"), "configure",
+        "--model-id", "virtual-x86-64",
+        "--ip", args.host,
+    ], timeout=600, env=env)
+    (out / "conwrt-output.txt").write_text(
+        f"exit={result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")
+    if result.returncode != 0:
+        print(f"conwrt configure FAILED: {result.stderr[:200]}", file=sys.stderr)
 
     uci_dump = ssh(args.host, args.port, args.key, "uci show sqm 2>/dev/null || echo 'no sqm config'")
     (out / "uci-dump.txt").write_text(uci_dump)

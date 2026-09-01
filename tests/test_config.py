@@ -213,6 +213,24 @@ class TestLoadConfigToml:
         assert cfg.wifi_disable is True
         assert cfg.lan_ip_mode == "mac-hash"
 
+    def test_lan_ip_mode_accepted_in_network_section(self, tmp_path):
+        """[network] must be accepted for lan_ip_mode (co-located with lan_ip);
+        silently ignoring it there makes operators believe they set static mode."""
+        p = self._write(tmp_path, '[network]\nlan_ip = "192.168.1.50"\nlan_ip_mode = "static"')
+        cfg = load_config(p)
+        assert cfg.lan_ip_mode == "static"
+        assert cfg.lan_ip == "192.168.1.50"
+
+    def test_lan_ip_mode_network_section_overrides_device(self, tmp_path):
+        p = self._write(tmp_path, '[network]\nlan_ip_mode = "keep"\n[device]\nlan_ip_mode = "mac-hash"')
+        cfg = load_config(p)
+        assert cfg.lan_ip_mode == "keep"
+
+    def test_lan_ip_mode_keep_in_device_section(self, tmp_path):
+        p = self._write(tmp_path, '[device]\nlan_ip_mode = "keep"')
+        cfg = load_config(p)
+        assert cfg.lan_ip_mode == "keep"
+
     def test_inline_ssh_key(self, tmp_path):
         p = self._write(tmp_path, '[ssh]\nkeys = ["ssh-ed25519 AAAAB3Nz user@host"]')
         cfg = load_config(p)
@@ -248,3 +266,21 @@ class TestConwrtConfigProperties:
     def test_wifi_ap_property_returns_none_when_empty(self):
         cfg = ConwrtConfig()
         assert cfg.wifi_ap is None
+
+
+class TestConwrtConfigEnvOverride:
+    def test_env_var_selects_config_file(self, tmp_path, monkeypatch):
+        p = tmp_path / "custom.toml"
+        p.write_text('[device]\nhostname = "env-host"\n')
+        monkeypatch.setenv("CONWRT_CONFIG", str(p))
+        cfg = load_config()
+        assert cfg.hostname == "env-host"
+
+    def test_explicit_path_beats_env_var(self, tmp_path, monkeypatch):
+        env_p = tmp_path / "from-env.toml"
+        env_p.write_text('[device]\nhostname = "env-host"\n')
+        path_p = tmp_path / "explicit.toml"
+        path_p.write_text('[device]\nhostname = "explicit-host"\n')
+        monkeypatch.setenv("CONWRT_CONFIG", str(env_p))
+        cfg = load_config(path_p)
+        assert cfg.hostname == "explicit-host"

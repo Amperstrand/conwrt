@@ -343,7 +343,8 @@ def _handle_sysupgrade_uploading(ctx: RecoveryContext, event_queue: queue.Queue)
         success = _flash_via_mtd_write(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None,
                                        mtd_command=mtd_command)
     else:
-        success = _flash_via_sysupgrade(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None)
+        success = _flash_via_sysupgrade(openwrt_ip, ctx.image_path, ctx.ssh_key_path or None,
+                                        keep_config=ctx.keep_config)
     if success:
         ctx.sha256_before = sha256_file(ctx.image_path)
         ctx.state = State.SYSUPGRADE_REBOOTING
@@ -537,6 +538,10 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print(f"ERROR: Multiple serial methods available: {serial_methods}. "
                   f"Use --serial-method to select one.", file=sys.stderr)
             return 1
+
+    if getattr(args, "ip", None):
+        profile = SimpleNamespace(**{**vars(profile), "openwrt_ip": args.ip, "recovery_ip": args.ip})
+        log(f"Router IP overridden via --ip: {args.ip}")
 
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
 
@@ -733,6 +738,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         router_mac_uboot=args.uboot_mac,
         generated_password=generated_password,
         password_set=password_set,
+        keep_config=bool(getattr(args, "keep_config", False)),
         auth_type=auth_type,
         wan_ssh_enabled=wan_ssh_enabled,
         force_uboot=args.force_uboot,

@@ -119,3 +119,26 @@ class TestConfigureParser:
         import pytest
         with pytest.raises(SystemExit):
             self._parse("--ip", "192.168.1.1", "--transport", "telnet")
+
+
+class TestFlashIpAndKeepConfig:
+    def _parse(self, *args: str):
+        import conwrt
+        with patch("sys.argv", ["conwrt", "flash", *args]):
+            return conwrt._build_parser().parse_args()
+
+    def test_ip_flag(self):
+        args = self._parse("--ip", "10.0.0.5")
+        assert args.ip == "10.0.0.5"
+
+    def test_ip_defaults_to_none(self):
+        args = self._parse("--image", "/tmp/fw.bin")
+        assert args.ip is None
+
+    def test_keep_config_flag(self):
+        args = self._parse("--keep-config")
+        assert args.keep_config is True
+
+    def test_keep_config_defaults_false(self):
+        args = self._parse("--image", "/tmp/fw.bin")
+        assert args.keep_config is False

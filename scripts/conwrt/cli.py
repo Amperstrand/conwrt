@@ -30,6 +30,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                 help="Path to firmware image (vanilla or custom)")
     firmware_group.add_argument("--request-image", action="store_true",
                                 help="Request custom image from ASU with baked-in settings")
+    flash_parser.add_argument("--keep-config", action="store_true",
+                              help="sysupgrade without -n: keep settings (config, SSH keys) "
+                                   "across the flash instead of resetting")
 
     flash_parser.add_argument("--ssh-key", default=None,
                         help="Path to SSH public key (default: [ssh].key from config.toml)")
@@ -46,6 +49,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Stop after detecting U-Boot (dry run)")
     flash_parser.add_argument("--yes", action="store_true",
                         help="Skip destructive-operation confirmations")
+    flash_parser.add_argument("--ip", default=None,
+                        help="Router IP override (default: model's default IP) — use for "
+                             "devices at non-default addresses, e.g. after a LAN move")
     flash_parser.add_argument("--no-pcap", action="store_true",
                         help="Disable pcap monitoring (polling-only mode, no scapy needed)")
     flash_parser.add_argument("--force-uboot", action="store_true",
@@ -175,8 +181,9 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg_parser.add_argument("--verify", action="store_true",
         help="After applying config, reboot and verify persistence")
     cfg_parser.add_argument("--lan-ip-mode", default=None,
-        choices=["static", "mac-hash"],
-        help="LAN IP mode: 'static' (use [network] lan_ip) or 'mac-hash' (derive from MAC)")
+        choices=["static", "mac-hash", "keep"],
+        help="LAN IP mode: 'static' (use [network] lan_ip), 'mac-hash' (derive from MAC), "
+             "or 'keep' (leave the LAN IP untouched)")
     cfg_parser.add_argument("--hostname-pattern", default=None,
         choices=["static", "model_mac", "model_seq"],
         help="Hostname pattern: 'static', 'model_mac' (e.g. lyra_aabbcc), 'model_seq'")

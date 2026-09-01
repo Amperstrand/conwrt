@@ -249,3 +249,29 @@ class TestDetectSshKeyPath:
         mock_cfg.ssh_private_key_path = "/home/user/.ssh/id_ed25519"
         mock_load.return_value = mock_cfg
         assert _detect_ssh_key_path() == "/home/user/.ssh/id_ed25519"
+
+
+class TestFlashViaSysupgradeKeepConfig:
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="darwin")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_keep_config_runs_sysupgrade_without_reset(self, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.return_value = _mock_result(0, stdout="Commencing upgrade")
+        assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin", keep_config=True) is True
+        remote_cmd = mock_ssh_cmd.call_args[0][1]
+        assert remote_cmd == "sysupgrade /tmp/fw.bin", remote_cmd
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="darwin")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_default_resets_config(self, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.return_value = _mock_result(0, stdout="Commencing upgrade")
+        assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
+        remote_cmd = mock_ssh_cmd.call_args[0][1]
+        assert remote_cmd == "sysupgrade -n /tmp/fw.bin", remote_cmd
