@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
 
@@ -196,11 +198,103 @@ class TestFlashViaMtdWrite:
         from conwrt.flash_utils import _flash_via_mtd_write
         assert _flash_via_mtd_write("1.2.3.4", "/fw.bin") is True
 
+    @patch("conwrt.flash_utils.subprocess.run", side_effect=OSError("ssh binary missing"))
     @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
-    @patch("conwrt.flash_utils._scp_upload", return_value=(False, "/tmp/fw.bin"))
-    def test_upload_failure_returns_false(self, mock_upload, mock_ssh_cmd):
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_oserror_returns_false(self, mock_upload, mock_ssh_cmd, mock_run):
         from conwrt.flash_utils import _flash_via_mtd_write
         assert _flash_via_mtd_write("1.2.3.4", "/fw.bin") is False
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_generic_failure_with_output_returns_false(self, mock_upload, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_mtd_write
+        mock_run.return_value = _mock_result(1, stderr="mtd: write failure")
+        assert _flash_via_mtd_write("1.2.3.4", "/fw.bin") is False
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_connection_timed_out_returns_false(self, mock_upload, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_mtd_write
+        mock_run.return_value = _mock_result(1, stderr="Connection timed out")
+        assert _flash_via_mtd_write("1.2.3.4", "/fw.bin") is False
+
+
+class TestFlashViaSysupgradeOverlay:
+    """Router-to-router flashing (platform=openwrt) uploads a DHCP-disabled
+    overlay tarball alongside the firmware and runs sysupgrade -n -f."""
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="openwrt")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    @patch("profile.overlay.build_overlay_tarball", return_value="/tmp/overlay.tar.gz")
+    def test_overlay_uploaded_runs_sysupgrade_with_f(
+            self, mock_overlay, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.side_effect = [
+            _mock_result(0),
+            _mock_result(0, stdout="Commencing upgrade"),
+        ]
+        assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
+        remote_cmd = mock_ssh_cmd.call_args[0][1]
+        assert remote_cmd == "sysupgrade -n -f /tmp/overlay.tar.gz /tmp/fw.bin", remote_cmd
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="openwrt")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    @patch("profile.overlay.build_overlay_tarball", return_value="/tmp/overlay.tar.gz")
+    def test_overlay_scp_failure_falls_back_to_plain_n(
+            self, mock_overlay, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.side_effect = [
+            _mock_result(1, stderr="scp failed"),
+            _mock_result(0, stdout="Commencing upgrade"),
+        ]
+        assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
+        remote_cmd = mock_ssh_cmd.call_args[0][1]
+        assert remote_cmd == "sysupgrade -n /tmp/fw.bin", remote_cmd
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="openwrt")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    @patch("profile.overlay.build_overlay_tarball", return_value="/tmp/overlay.tar.gz")
+    def test_overlay_scp_oserror_falls_back_to_plain_n(
+            self, mock_overlay, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.side_effect = [
+            OSError("scp not found"),
+            _mock_result(0, stdout="Commencing upgrade"),
+        ]
+        assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
+        remote_cmd = mock_ssh_cmd.call_args[0][1]
+        assert remote_cmd == "sysupgrade -n /tmp/fw.bin", remote_cmd
+
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd")
+    @patch("conwrt.flash_utils.detect_platform", return_value="openwrt")
+    @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))
+    def test_overlay_tarball_removed_after_use(
+            self, mock_upload, mock_platform, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_sysupgrade
+        fd, overlay_path = tempfile.mkstemp(suffix=".tar.gz")
+        os.write(fd, b"overlay")
+        os.close(fd)
+        mock_ssh_cmd.side_effect = lambda ip, cmd, **kw: ["ssh", cmd]
+        mock_run.side_effect = [
+            _mock_result(0),
+            _mock_result(0, stdout="Commencing upgrade"),
+        ]
+        with patch("profile.overlay.build_overlay_tarball", return_value=overlay_path):
+            assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
+        assert not os.path.exists(overlay_path)
 
     @patch("conwrt.flash_utils.subprocess.run")
     @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])

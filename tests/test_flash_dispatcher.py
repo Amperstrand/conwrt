@@ -846,6 +846,30 @@ class TestHandleRebooting(TestCase):
         self.handler(ctx, eq)
         mock_verify.assert_called_once()
 
+    @patch("conwrt.flash_dispatcher.check_ssh", return_value=False)
+    @patch("conwrt.flash_dispatcher._wait_for_event_or_timeout", return_value=Event.LINK_UP)
+    def test_phase2_link_up_ignored_while_rebooting(self, mock_wait, mock_ssh):
+        """LINK_UP during phase 2 is a no-op; a later ICMPv6 still breaks out."""
+        ctx = _make_ctx(state=State.REBOOTING)
+        eq = queue.Queue()
+        eq.put((Event.LINK_UP, time.time(), ""))
+        eq.put((Event.ICMPV6_FROM_ROUTER, time.time(), ""))
+        self.handler(ctx, eq)
+        self.assertEqual(ctx.state, State.OPENWRT_BOOTING)
+
+    @patch("conwrt.flash_dispatcher.check_ssh", return_value=False)
+    @patch("conwrt.flash_dispatcher.ts", side_effect=[100.0, 701.0])
+    @patch("conwrt.flash_dispatcher._wait_for_event_or_timeout", return_value=Event.LINK_UP)
+    def test_phase2_timeout_sets_failed(self, mock_wait, mock_ts, mock_ssh):
+        """No ICMPv6/SSH within 600s after link up → FAILED."""
+        ctx = _make_ctx(state=State.REBOOTING)
+        eq = queue.Queue()
+        eq.put((Event.LINK_UP, time.time(), ""))
+        self.handler(ctx, eq)
+        self.assertEqual(ctx.state, State.FAILED)
+        say_messages = [c[0][0] for c in ctx._say_fn.call_args_list]
+        self.assertTrue(any("longer than expected" in m for m in say_messages))
+
 
 # ===================================================================
 # _handle_openwrt_booting
@@ -1095,6 +1119,44 @@ class TestRunStateMachine(TestCase):
         eq = queue.Queue()
         self.runner(ctx, eq, None, None)
         self.assertIsNotNone(ctx.timeline.recovery_start)
+
+    @patch("conwrt.flash_dispatcher._handle_waiting_for_uboot")
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    def test_waiting_for_uboot_wrapper_passes_link_monitor(
+            self, mock_restore, mock_timeline, mock_uboot):
+        """State.WAITING_FOR_UBOOT routes through the link-monitor wrapper."""
+        mock_link = MagicMock()
+        mock_uboot.side_effect = lambda c, eq, link: c.__dict__.update(state=State.FAILED)
+        ctx = _make_ctx(state=State.WAITING_FOR_UBOOT)
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, None, mock_link)
+        self.assertEqual(result, 1)
+        mock_uboot.assert_called_once_with(ctx, eq, mock_link)
+
+    @patch("conwrt.flash_dispatcher._handle_uboot_flashing")
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    def test_uboot_flashing_wrapper_passes_pcap_monitor(
+            self, mock_restore, mock_timeline, mock_flashing):
+        """State.UBOOT_FLASHING routes through the pcap-monitor wrapper."""
+        mock_pcap = MagicMock()
+        mock_flashing.side_effect = lambda c, eq, pcap: c.__dict__.update(state=State.FAILED)
+        ctx = _make_ctx(state=State.UBOOT_FLASHING)
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, mock_pcap, None)
+        self.assertEqual(result, 1)
+        mock_flashing.assert_called_once_with(ctx, eq, mock_pcap)
+
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    def test_unhandled_state_fails_cleanly(self, mock_restore, mock_timeline):
+        """A state with no registered handler logs and fails instead of looping."""
+        ctx = _make_ctx(state=State.DETECTING)
+        ctx.__dict__["state"] = "not-a-real-state"
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, None, None)
+        self.assertEqual(result, 1)
 
     @patch("conwrt.flash_dispatcher._restore_port_isolation")
     @patch("conwrt.flash_dispatcher._load_config")

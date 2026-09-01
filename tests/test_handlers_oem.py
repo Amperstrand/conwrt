@@ -125,6 +125,24 @@ class TestHandleOemLoginPasswordChange(TestCase):
         self.assertEqual(mock_login.call_count, 2)
 
 
+class TestHandleOemLoginPasswordChangeReloginFailure(TestCase):
+    @patch("conwrt.handlers_oem.oem_has_prepare_step", return_value=False)
+    @patch("conwrt.handlers_oem.oem_http_login", side_effect=[
+        (True, "XSSID=old"),
+        (False, "session expired"),
+    ])
+    @patch("conwrt.handlers_oem.oem_http_change_password", return_value=(True, "Password changed"))
+    @patch("conwrt.handlers_oem.subprocess.run")
+    @patch("conwrt.handlers_oem.os.path.isfile", return_value=True)
+    def test_relogin_failure_after_password_change_sets_failed(
+            self, mock_isfile, mock_run, mock_chpw, mock_login, mock_prep):
+        mock_run.return_value = _mock_run(stdout="cmd=30")
+        ctx = _make_ctx(flash_method="oem-http", stock_default_password="1234")
+        eq = queue.Queue()
+        _handle_oem_login(ctx, eq)
+        self.assertEqual(ctx.state, State.FAILED)
+
+
 class TestHandleOemLoginPasswordChangeFailure(TestCase):
     @patch("conwrt.handlers_oem.oem_has_prepare_step", return_value=False)
     @patch("conwrt.handlers_oem.oem_http_login", return_value=(True, "XSSID=old"))
@@ -240,6 +258,28 @@ class TestHandleOemUploadingLongFilename(TestCase):
             _handle_oem_uploading(ctx, eq)
         self.assertEqual(ctx.state, State.OEM_REBOOTING)
         mock_copy2.assert_called_once()
+
+
+class TestHandleOemUploadingLongFilenameCleanup(TestCase):
+    @patch("conwrt.handlers_oem.oem_http_accept_reboot")
+    @patch("conwrt.handlers_oem.oem_http_upload", return_value=(True, "OK"))
+    def test_temp_copy_removed_after_upload(self, mock_upload, mock_accept):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            long_path = os.path.join(td, "a" * 65 + ".bin")
+            with open(long_path, "wb") as f:
+                f.write(b"fw")
+            ctx = _make_ctx(
+                flash_method="oem-http",
+                state=State.OEM_UPLOADING,
+                oem_state={"cookie": "XSSID=abc"},
+                initramfs_path=long_path,
+            )
+            _handle_oem_uploading(ctx, queue.Queue())
+            self.assertEqual(ctx.state, State.OEM_REBOOTING)
+            upload_path = mock_upload.call_args[0][2]
+            self.assertEqual(os.path.basename(upload_path), "openwrt-initramfs.bin")
+            self.assertFalse(os.path.exists(upload_path))
 
 
 class TestHandleOemUploadingFtpSuccess(TestCase):

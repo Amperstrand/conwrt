@@ -134,6 +134,60 @@ class TestCmdConfigureDryRun:
             cmd_configure(_make_configure_args(dry_run=True))
             mock_ssh.assert_not_called()
 
+    @patch("pathlib.Path.exists", return_value=True)
+    @patch("conwrt.commands_configure._record_configure_inventory")
+    @patch("conwrt.commands_configure._verify_persistence")
+    @patch("conwrt.commands_configure._cfg_install_ssh_key")
+    @patch("conwrt.commands_configure._apply_profile_post_flash")
+    @patch("conwrt.commands_configure._client_ip_for_subnet", return_value="192.168.1.2")
+    @patch("conwrt.commands_configure._resolve_configure_options")
+    @patch("conwrt.commands_configure._load_config")
+    @patch("conwrt.commands_configure.auto_detect_interface")
+    @patch("conwrt.commands_configure.log")
+    def test_real_run_looks_up_current_lan_ip(
+        self, _log, mock_iface, mock_load, mock_resolve, mock_client_ip,
+        mock_apply, mock_install, mock_verify, mock_record, _path_exists,
+    ):
+        """Non-dry-run with a local interface queries the router's LAN IP to
+        derive old_client_ip for the profile apply."""
+        from conwrt.commands_configure import cmd_configure
+        mock_load.return_value = _make_cfg()
+        mock_resolve.return_value = ("", "/k", "", "", False)
+        mock_iface.return_value = "en0"
+        mock_apply.return_value = "192.168.1.1"
+
+        with patch("conwrt.commands_configure.run_ssh") as mock_ssh:
+            mock_ssh.return_value = _mock_result(0, stdout="192.168.5.1/24\n")
+            result = cmd_configure(_make_configure_args())
+
+        assert result == 0
+        mock_client_ip.assert_called_once_with("192.168.5.1")
+        assert mock_apply.call_args.kwargs["old_client_ip"] == "192.168.1.2"
+
+    @patch("conwrt.commands_configure._record_configure_inventory")
+    @patch("conwrt.commands_configure._cfg_install_ssh_key")
+    @patch("conwrt.commands_configure._apply_profile_post_flash")
+    @patch("conwrt.commands_configure._resolve_configure_options")
+    @patch("conwrt.commands_configure._load_config")
+    @patch("conwrt.commands_configure.auto_detect_interface")
+    @patch("conwrt.commands_configure.log")
+    def test_dry_run_with_ssh_key_prints_install_note(
+        self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
+        mock_install, mock_record,
+    ):
+        from conwrt.commands_configure import cmd_configure
+        mock_load.return_value = _make_cfg()
+        mock_resolve.return_value = ("", "/k", "/k.pub", "", False)
+        mock_iface.return_value = "en0"
+        mock_apply.return_value = "192.168.1.1"
+
+        with patch("builtins.print") as mock_print:
+            result = cmd_configure(_make_configure_args(dry_run=True))
+
+        assert result == 0
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
+        assert "SSH key" in printed
+
 
 class TestCmdConfigureRealRun:
     """Real-run path: install SSH key, apply profile, record inventory."""

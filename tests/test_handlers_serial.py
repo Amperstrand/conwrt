@@ -1,3 +1,4 @@
+import os
 import queue
 import sys
 from pathlib import Path
@@ -310,3 +311,98 @@ class TestUbootInteractingTftpStartFails(TestCase):
         _handle_serial_uboot_interacting(ctx, eq)
 
         self.assertEqual(ctx.state, State.REBOOTING)
+
+
+class TestUbootInteractingCommandsFalse(TestCase):
+    """run_commands returning False (not raising) takes the explicit failure branch."""
+    @patch("conwrt.handlers_serial.sha256_file", return_value="abc")
+    @patch("conwrt.handlers_serial.setup_interface_for_serial")
+    @patch("conwrt.handlers_serial.TFTPServerManager")
+    def test_run_commands_false_sets_failed(self, mock_tftp_cls, mock_setup, mock_sha):
+        ctx = _make_ctx(
+            state=State.SERIAL_UBOOT_INTERACTING,
+            serial_port="/dev/cu.usbserial-110",
+        )
+        mock_driver = MagicMock()
+        mock_driver.run_commands.return_value = False
+        ctx._serial_driver = mock_driver
+
+        mock_tftp = MagicMock()
+        mock_tftp.start.return_value = True
+        mock_tftp_cls.return_value = mock_tftp
+
+        _handle_serial_uboot_interacting(ctx, queue.Queue())
+
+        self.assertEqual(ctx.state, State.FAILED)
+        mock_driver.close.assert_called_once()
+        say_messages = [c[0][0] for c in ctx._say_fn.call_args_list]
+        self.assertTrue(any("Flash failed" in m for m in say_messages))
+
+
+class TestUbootInteractingTftpRootDefault(TestCase):
+    @patch("conwrt.handlers_serial.sha256_file", return_value="abc")
+    @patch("conwrt.handlers_serial.setup_interface_for_serial")
+    @patch("conwrt.handlers_serial.TFTPServerManager")
+    def test_empty_tftp_root_uses_image_dir(self, mock_tftp_cls, mock_setup, mock_sha):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            image = os.path.join(td, "fw.bin")
+            with open(image, "wb") as f:
+                f.write(b"fw")
+            ctx = _make_ctx(
+                state=State.SERIAL_UBOOT_INTERACTING,
+                image_path=image,
+                tftp_root="",
+            )
+            mock_driver = MagicMock()
+            mock_driver.run_commands.return_value = True
+            ctx._serial_driver = mock_driver
+            mock_tftp_cls.return_value = MagicMock()
+
+            _handle_serial_uboot_interacting(ctx, queue.Queue())
+
+            mock_tftp_cls.assert_called_once_with(td)
+            self.assertEqual(ctx.state, State.REBOOTING)
+
+    @patch("conwrt.handlers_serial.sha256_file", return_value="abc")
+    @patch("conwrt.handlers_serial.setup_interface_for_serial")
+    @patch("conwrt.handlers_serial.TFTPServerManager")
+    def test_empty_tftp_root_prefers_tftpboot_sibling(self, mock_tftp_cls, mock_setup, mock_sha):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            tftpboot = os.path.join(td, "tftpboot")
+            os.makedirs(tftpboot)
+            image = os.path.join(td, "fw.bin")
+            with open(image, "wb") as f:
+                f.write(b"fw")
+            ctx = _make_ctx(
+                state=State.SERIAL_UBOOT_INTERACTING,
+                image_path=image,
+                tftp_root="",
+            )
+            mock_driver = MagicMock()
+            mock_driver.run_commands.return_value = True
+            ctx._serial_driver = mock_driver
+            mock_tftp_cls.return_value = MagicMock()
+
+            _handle_serial_uboot_interacting(ctx, queue.Queue())
+
+            mock_tftp_cls.assert_called_once_with(tftpboot)
+
+
+class TestPyserialImportFallback(TestCase):
+    def test_missing_pyserial_falls_back_to_oserror(self):
+        import importlib
+        import conwrt.handlers_serial as hs
+        saved = sys.modules.get("serial")
+        try:
+            # None in sys.modules makes `from serial import ...` raise ImportError
+            with patch.dict(sys.modules, {"serial": None}):
+                importlib.reload(hs)
+                self.assertIs(hs._SerialException, OSError)
+        finally:
+            sys.modules.pop("serial", None)
+            if saved is not None:
+                sys.modules["serial"] = saved
+            importlib.reload(hs)
+            self.assertIsNot(hs._SerialException, OSError)
