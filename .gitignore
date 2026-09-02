@@ -35,3 +35,4 @@ tests/integration/.openwrt-flash-session.qcow2
 tests/integration/.openwrt-flash-vm.pid
 tests/integration/.openwrt-flash-serial.log
 tests/integration/.flash-test-config.toml
+tests/integration/.venv-cashu/

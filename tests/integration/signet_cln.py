@@ -10,14 +10,16 @@ Credentials NEVER live in this repo. Resolution order:
   2. ~/.config/conwrt/signet-cln.json  {"url": ..., "rune": ...}
 
 Rune hygiene (signet funds are worthless but not free to replace):
-create a dedicated, restricted, rate-limited rune on the operator's node::
+create a dedicated, restricted, rate-limited rune on the operator's node.
+Alternatives inside one restriction are separate strings (OR); restrictions
+are AND-ed; a bare ``rate=N`` means N calls/second::
 
-    lightning-cli createrune null \
-        '[["method/xpay"],["method/listpays"],["method/getinfo"],
-          ["rate",3,"once"]]'
+    lightning-cli createrune null \\
+        '[[ "method=xpay", "method=listpays", "method=getinfo" ], [ "rate=3" ]]'
 
-That rune can only call xpay/listpays/getinfo, max 3 calls per second.
-Do NOT use an unrestricted master rune for testing.
+That rune can only call xpay/listpays/getinfo, max 3 calls per second
+(verified: getinfo passes, invoice returns 1502 "Not permitted", burst calls
+return 1502 "too soon"). Do NOT use an unrestricted master rune for testing.
 """
 from __future__ import annotations
 
@@ -75,14 +77,22 @@ def _rpc(method: str, params: dict[str, Any] | None = None,
         headers={"Content-Type": "application/json", "Rune": rune},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            body = res.read().decode()
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        raise _clnrest_error(body, e.code) from None
-    except (urllib.error.URLError, OSError) as e:
-        raise ClnRestError(None, f"transport error: {e}") from None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as res:
+                body = res.read().decode()
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            parsed_error = _maybe_json(body)
+            if "too soon" in (parsed_error or {}).get("message", "") and attempt < 2:
+                time.sleep(1.0)
+                continue
+            raise _clnrest_error(body, e.code) from None
+        except (urllib.error.URLError, OSError) as e:
+            raise ClnRestError(None, f"transport error: {e}") from None
+    else:  # pragma: no cover — loop always breaks or raises
+        raise ClnRestError(None, "exhausted retries")
     try:
         parsed = json.loads(body)
     except ValueError:
@@ -92,6 +102,13 @@ def _rpc(method: str, params: dict[str, Any] | None = None,
             and parsed.get("message"):
         raise ClnRestError(parsed.get("code"), parsed["message"], body)
     return parsed.get("data", parsed)
+
+
+def _maybe_json(body: str) -> dict[str, Any]:
+    try:
+        return json.loads(body)
+    except ValueError:
+        return {}
 
 
 def _clnrest_error(body: str, http_code: int) -> ClnRestError:
