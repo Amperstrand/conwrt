@@ -769,8 +769,9 @@ class TestHandleRebooting(TestCase):
         from conwrt.flash_dispatcher import _handle_rebooting
         self.handler = _handle_rebooting
 
+    @patch("conwrt.flash_dispatcher.verify_router")
     @patch("conwrt.flash_dispatcher._wait_for_event_or_timeout", return_value=Event.LINK_UP)
-    def test_phase1_link_up_proceeds(self, mock_wait):
+    def test_phase1_link_up_proceeds(self, mock_wait, mock_verify):
         """LINK_UP in phase 1 proceeds to phase 2."""
         ctx = _make_ctx(state=State.REBOOTING)
         eq = queue.Queue()
@@ -796,8 +797,9 @@ class TestHandleRebooting(TestCase):
         self.handler(ctx, eq)
         self.assertEqual(ctx.state, State.OPENWRT_BOOTING)
 
+    @patch("conwrt.flash_dispatcher.verify_router")
     @patch("conwrt.flash_dispatcher._wait_for_event_or_timeout", return_value=Event.LINK_UP)
-    def test_phase2_ssh_up_sets_complete(self, mock_wait):
+    def test_phase2_ssh_up_sets_complete(self, mock_wait, mock_verify):
         """SSH_UP in phase 2 → COMPLETE."""
         ctx = _make_ctx(state=State.REBOOTING)
         eq = queue.Queue()
@@ -809,10 +811,13 @@ class TestHandleRebooting(TestCase):
     @patch("conwrt.flash_dispatcher.check_ssh", return_value=True)
     @patch("conwrt.flash_dispatcher._wait_for_event_or_timeout", return_value=Event.LINK_UP)
     def test_phase2_ssh_poll_success(self, mock_wait, mock_ssh, mock_verify):
-        """check_ssh succeeds during phase 2 polling → COMPLETE."""
+        """check_ssh succeeds during phase 2 polling → COMPLETE.
+
+        A LINK_UP event is pre-seeded so eq.get returns instantly; phase 2
+        ignores LINK_UP while still in REBOOTING state."""
         ctx = _make_ctx(state=State.REBOOTING)
         eq = queue.Queue()
-        # The event queue will be empty → queue.Empty → check_ssh called
+        eq.put((Event.LINK_UP, time.time(), ""))
         self.handler(ctx, eq)
         self.assertEqual(ctx.state, State.COMPLETE)
 
