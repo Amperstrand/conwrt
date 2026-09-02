@@ -144,6 +144,36 @@ class TestNoHardcodedRouterIps:
 
 
 class TestPinnedArtifacts:
+    def test_artifact_installs_verify_hash_before_shipping(self):
+        """Every curl-pinned artifact must be sha256-checked on the host
+        before it is scp'd to the device (regression guard for #32's
+        'no sha256 pinning' defect)."""
+        for model, flow, version, shell in _all_renders(_load_bundle()):
+            if "curl -L -o" not in shell:
+                continue
+            assert "sha256sum -c" in shell, (
+                f"{model}/{flow}@{version}: artifact download without "
+                "sha256 verification"
+            )
+            # the check must run BEFORE the scp, not after
+            curl_pos = shell.index("curl -L -o")
+            scp_pos = shell.index("scp -O ")
+            check_pos = shell.index("sha256sum -c")
+            assert curl_pos < check_pos < scp_pos
+
+    def test_gateway_flows_install_nodogsplash(self):
+        """The captive portal is the product — the flows must install
+        nodogsplash, not assume it (regression guard for #32's
+        'nodogsplash dep' defect)."""
+        for model, flow, version, shell in _all_renders(_load_bundle()):
+            if flow not in ("net4sats", "tollgate"):
+                continue
+            header = shell.splitlines()[2] if len(shell.splitlines()) > 2 else ""
+            expected = "apk add nodogsplash" if "apk" in header else "opkg install nodogsplash"
+            assert expected in shell, (
+                f"{model}/{flow}@{version}: gateway flow does not install nodogsplash"
+            )
+
     def test_blossom_artifacts_download_and_hash_match(self, tmp_path):
         urls: set[str] = set()
         bundle = _load_bundle()
