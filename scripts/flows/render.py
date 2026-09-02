@@ -89,8 +89,16 @@ def _install_package(step: Step, target: dict[str, Any]) -> tuple[list[str], lis
     install = f"apk add --allow-untrusted {remote}" if pm == "apk" else f"opkg install {remote}"
     host = [
         f"curl -L -o {sh_quote(filename)} {sh_quote(url)}",
-        f"scp -O {sh_quote(filename)} root@$IP:{remote}",
     ]
+    # Blossom artifacts carry their sha256 in the filename — verify the
+    # download before shipping it to the device.
+    import re as _re
+    if _re.fullmatch(r"[0-9a-f]{64}", filename.rsplit(".", 1)[0]):
+        expected = filename.rsplit(".", 1)[0]
+        host.append(
+            f"echo {sh_quote(expected + '  ' + filename)} | sha256sum -c - || "
+            f"{{ echo 'ERROR: {filename} failed sha256 verification — refusing to flash' >&2 ; exit 1 ; }}")
+    host.append(f"scp -O {sh_quote(filename)} root@$IP:{remote}")
     native_ext = ".apk" if pm == "apk" else ".ipk"
     router: list[Op] = [Comment(f"install {step.package} ({pm})")]
     if ext != native_ext:

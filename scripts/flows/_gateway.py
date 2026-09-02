@@ -69,6 +69,11 @@ def gateway_base_steps() -> list[Step]:
             channel="alpha",
             artifact_urls=TOLLGATE_ALPHA3_URLS,
         ),
+        Step(
+            kind="install_repo_package",
+            title="Install the nodogsplash captive portal",
+            package="nodogsplash",
+        ),
     ]
 
 
