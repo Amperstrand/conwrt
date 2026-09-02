@@ -71,6 +71,29 @@ MINT_LAB_PORT = os.environ.get("CONWRT_TOLLGATE_MINT_PORT", "8190")
 CLNREST_LAB_PORT = os.environ.get("CONWRT_TOLLGATE_CLNREST_PORT", "3011")
 
 
+def _restore_vm(vm):
+    """Undo every mutation so later tests in the session see a pristine VM:
+    network back to eth0-as-LAN, bridge/netns/veth/tollgate/NDS removed."""
+    _ssh(vm, (
+        "kill $(pidof tollgate-wrt) 2>/dev/null; "
+        "/etc/init.d/nodogsplash stop 2>/dev/null; "
+        "ip netns del client 2>/dev/null; "
+        "for i in $(seq 0 9); do "
+        "n=$(uci -q get network.@device[$i].name 2>/dev/null) || break; "
+        "[ \"$n\" = 'br-lan' ] && { uci del network.@device[$i]; break; }; done; "
+        "uci set network.lan.device='eth0'; "
+        "uci -q delete nodogsplash.@nodogsplash[0].gatewayname; "
+        "uci commit network; uci commit nodogsplash 2>/dev/null; "
+        "rm -rf /etc/tollgate /usr/bin/tollgate-wrt /tmp/token.txt; "
+        "(/etc/init.d/network restart >/dev/null 2>&1 &)"
+    ), timeout=60)
+    for _ in range(15):
+        if _ssh(vm, "ip -4 addr show dev eth0 | grep -q inet && echo ok",
+                timeout=10).stdout.strip() == "ok":
+            return
+        time.sleep(3)
+
+
 @pytest.fixture(scope="module")
 def lab_tunnel():
     """Reach the loopback-only signet services: reuse a working tunnel or
@@ -344,11 +367,16 @@ def _session_event(response: str) -> bool:
 
 class TestTollgatePaymentSignet:
     def test_pay_token_grants_access(self, openwrt_vm, lab_tunnel):
-        _setup_router(openwrt_vm)
-        _setup_client(openwrt_vm)
-        token = _mint_token()
-        response = _pay(openwrt_vm, token)
+        try:
+            _setup_router(openwrt_vm)
+            _setup_client(openwrt_vm)
+            token = _mint_token()
+            response = _pay(openwrt_vm, token)
+        except BaseException:
+            _restore_vm(openwrt_vm)
+            raise
         assert _session_event(response), f"expected a session event: {response[-400:]}"
         state = _ssh(openwrt_vm, "ndsctl clients", timeout=30).stdout
+        _restore_vm(openwrt_vm)
         assert CLIENT_MAC in state, f"client missing after payment: {state[:200]}"
         assert "Authenticated" in state, f"client not Authenticated: {state[:200]}"

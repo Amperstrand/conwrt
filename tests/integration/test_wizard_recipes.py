@@ -262,9 +262,15 @@ def _wait_vm_back(vm, seconds=60):
 
 
 def _vm_lan_ip(vm):
-    """The VM's LAN runs proto=dhcp (no static ipaddr option) — read the
-    live address instead of uci."""
-    out = _vm_ssh(vm, "ip -4 addr show dev eth0 | grep -oE 'inet [0-9.]+' | head -1").stdout
+    """The VM's LAN runs proto=dhcp (no static ipaddr option) — read the live
+    address. The device may be eth0 or a br-lan bridge (tollgate test creates
+    one), so ask ubus rather than naming a device."""
+    out = _vm_ssh(
+        vm,
+        "ubus call network.interface.lan status 2>/dev/null | "
+        "jsonfilter -e '@.ipv4-address[0]' 2>/dev/null || "
+        "ip -4 addr show 2>/dev/null | grep -oE 'inet 10\\.0\\.2\\.[0-9]+' | head -1",
+    ).stdout
     ip = out.replace("inet", "").strip()
     assert ip, "could not read the VM's current LAN IP"
     return ip
