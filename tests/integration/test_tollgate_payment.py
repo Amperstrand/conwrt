@@ -1,48 +1,48 @@
 """Tollgate payment E2E — pay → access on the conwrt VM (issue #41).
 
-Upgraded from the original fakewallet blueprint to SIGNET: we now have a
-signet Cashu mint (cashu-cf `cashu-mint-signet`, CoreLightning backend via
-clnrest+rune) and a signet CLN node. Signet carries no monetary value but is
-a real Lightning network — more realistic than FakeWallet, and drained-test-
-funds are merely annoying, not costly.
+Signet edition: a REAL Cashu mint (cdk-signet-pilot on inr2.cashu.exchange,
+CoreLightning backend) and a REAL signet Lightning payment via ``xpay`` — no
+fakewallet, no monetary value. The full loop proven by this test:
 
-Two-layer design (mirrors test_wizard_recipes.py):
+    NUT-04 mint quote → bolt11 → CLN xpay (restricted rune, tunnel to inr2)
+    → ecash token → POST to tollgate-wrt on the VM → proofs swapped at the
+    mint → nodogsplash gate opens → client Authenticated (session event 1022)
 
-  Router side (session VM): build tollgate-wrt for linux/amd64, install +
-  configure nodogsplash + tollgate pointing at the mint, start the backend.
-  Host side: mint real signet ecash (NUT-04 quote → bolt11 → CLN ``xpay`` via
-  signet_cln.py → tokens via the ``cashu`` CLI), then pay the router and
-  assert access is granted.
+Router side (session VM): tollgate-wrt built from source for linux/amd64
+(CGO_ENABLED=0 — OpenWrt is musl), nodogsplash via opkg, a br-lan bridge, and
+a synthetic client (veth pair in a netns) that hits the portal so NDS has a
+client session to authorize — the same preauth state a real phone would have.
 
-Everything is env-gated so the default suite (and CI) skips cleanly:
+Host side: nutshell CLI mints the token (fresh wallet per run — the mint
+rotates keysets and a stale cached keyset makes the mint reject blind
+signatures with 12001); the token's embedded mint URL is rewritten from the
+host's view (127.0.0.1:8190, via SSH tunnel) to the router's view
+(10.0.2.2:8190, via slirp) — the URL is unsigned metadata.
 
-  CONWRT_TOLLGATE_MINT_URL   mint the router accepts (signet mint URL)
-  CONWRT_CLNREST_URL         signet CLN clnrest endpoint (https://host:port)
-  CONWRT_CLNREST_RUNE        restricted rune (see signet_cln.py docstring:
-                             method/xpay + method/listpays + method/getinfo,
-                             rate-limited — NEVER the master rune)
-  CONWRT_CASHU_BIN           nutshell CLI path (default: `cashu` on PATH)
+Everything is env-gated; without credentials the module skips in milliseconds:
 
-Operator checklist to enable (see also signet_cln.py):
-  1. cashu-mint-signet URL (cashu-cf repo, wrangler signet env)
-  2. On the signet CLN node:
-       lightning-cli createrune null \\
-         '[["method/xpay"],["method/listpays"],["method/getinfo"],
-           ["rate",3,"once"]]'
-  3. Store creds in ~/.config/conwrt/signet-cln.json (gitignored location,
-     outside the repo) or export the env vars.
-  4. pip install cashu (nutshell) somewhere on PATH as `cashu`
-
-Done when: one green test proving pay → access on the VM against the signet
-mint, with the CLN leg settled by xpay (issue #41, signet upgrade).
+  CONWRT_TOLLGATE_ENABLED=1  master switch
+  CONWRT_CLNREST_URL/RUNE    or ~/.config/conwrt/signet-cln.json (see
+                             signet_cln.py for the restricted-rune recipe:
+                             xpay/listpays/getinfo only, rate-limited)
+  CONWRT_TOLLGATE_SSH_HOST   SSH to the signet lab (default
+                             root@inr2.cashu.exchange) — tunnels mint :8190
+                             and clnrest :3011 to host loopback
+  CONWRT_CASHU_BIN           nutshell CLI (default:
+                             tests/integration/.venv-cashu/bin/cashu)
+  CONWRT_TOLLGATE_REF        tollgate-module-basic-go git ref (default main)
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -56,218 +56,299 @@ TOLLGATE_DIR = REPO_ROOT / "tests" / "integration" / ".tollgate"
 TOLLGATE_REPO = os.environ.get(
     "CONWRT_TOLLGATE_REPO", "https://github.com/OpenTollGate/tollgate-module-basic-go.git")
 TOLLGATE_REF = os.environ.get("CONWRT_TOLLGATE_REF", "main")
+CDK_GO_PIN = os.environ.get("CONWRT_CDK_GO_PIN", "v0.18.0-rc.3")
 
-MINT_URL = os.environ.get("CONWRT_TOLLGATE_MINT_URL", "")
-CASHU_BIN = os.environ.get("CONWRT_CASHU_BIN", "cashu")
+MINT_HOST_VIEW = os.environ.get("CONWRT_TOLLGATE_MINT_URL", "http://127.0.0.1:8190")
+MINT_ROUTER_VIEW = os.environ.get("CONWRT_TOLLGATE_MINT_URL_VM", "http://10.0.2.2:8190")
+CASHU_BIN = os.environ.get(
+    "CONWRT_CASHU_BIN", str(REPO_ROOT / "tests/integration/.venv-cashu/bin/cashu"))
 
-PAYMENT_SATS = 21
+CLIENT_MAC = "52:54:00:aa:bb:cc"
+CLIENT_IP = "10.0.2.99"
+PAYMENT_SATS = 4
+LAB_SSH = os.environ.get("CONWRT_TOLLGATE_SSH_HOST", "root@inr2.cashu.exchange")
+MINT_LAB_PORT = os.environ.get("CONWRT_TOLLGATE_MINT_PORT", "8190")
+CLNREST_LAB_PORT = os.environ.get("CONWRT_TOLLGATE_CLNREST_PORT", "3011")
 
-if not MINT_URL:
-    pytest.skip("CONWRT_TOLLGATE_MINT_URL not set — see module docstring for the "
-                "signet mint + CLN rune checklist", allow_module_level=True)
+
+@pytest.fixture(scope="module")
+def lab_tunnel():
+    """Reach the loopback-only signet services: reuse a working tunnel or
+    open our own SSH port-forward to the lab (mint :8190, clnrest :3011)."""
+    def reachable():
+        try:
+            with urllib.request.urlopen(MINT_HOST_VIEW + "/v1/info", timeout=3) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    if reachable():
+        yield None
+        return
+    proc = subprocess.Popen(
+        ["ssh", "-N", "-o", "StrictHostKeyChecking=accept-new",
+         "-o", "ServerAliveInterval=15", "-o", "ExitOnForwardFailure=yes",
+         "-L", f"127.0.0.1:{MINT_LAB_PORT}:127.0.0.1:{MINT_LAB_PORT}",
+         "-L", f"127.0.0.1:{CLNREST_LAB_PORT}:127.0.0.1:{CLNREST_LAB_PORT}",
+         LAB_SSH],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(10):
+        if reachable():
+            break
+        time.sleep(1)
+    if not reachable():
+        proc.terminate()
+        pytest.skip("could not reach the signet lab through an SSH tunnel")
+    yield proc
+    proc.terminate()
+
+
+def _env_ready() -> bool:
+    if not os.environ.get("CONWRT_TOLLGATE_ENABLED"):
+        return False
+    if not credentials_available():
+        return False
+    return Path(CASHU_BIN).exists()
+
+
+if not _env_ready():
+    pytest.skip(
+        "tollgate signet E2E not enabled: set CONWRT_TOLLGATE_ENABLED=1 plus "
+        "signet CLN credentials (see signet_cln.py) and a nutshell install "
+        "(tests/integration/.venv-cashu)", allow_module_level=True)
 
 
 def _ssh(vm, command, timeout=60):
-    r = subprocess.run(
-        ["ssh",
-         "-o", "StrictHostKeyChecking=no",
-         "-o", "UserKnownHostsFile=/dev/null",
-         "-o", "ConnectTimeout=5",
-         "-i", vm["key"],
-         "-p", str(vm["port"]),
+    return subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+         "-o", "ConnectTimeout=5", "-i", vm["key"], "-p", str(vm["port"]),
          f"root@{vm['host']}", command],
         capture_output=True, text=True, timeout=timeout,
     )
-    return r
-
-
-def _router_ip(vm):
-    return _ssh(vm, "ip -4 addr show dev eth0 | grep -oE 'inet [0-9.]+' | head -1"
-                ).stdout.replace("inet", "").strip()
-
-
-def _router_port_reachable(vm, port, seconds=30):
-    ip = _router_ip(vm)
-    for _ in range(seconds // 2):
-        r = _ssh(vm, f"netstat -tln 2>/dev/null | grep -q ':{port} ' && echo up || echo down")
-        if "up" in r.stdout:
-            return ip
-        time.sleep(2)
-    return None
 
 
 def _build_tollgate_wrt() -> Path:
-    """Cross-compile tollgate-wrt for linux/amd64 (cached by repo+ref)."""
-    binary = TOLLGATE_DIR / TOLLGATE_REF / "tollgate-wrt"
-    if binary.exists():
-        return binary
+    """Clone (cached) + pin cdk-go + static musl-safe amd64 build."""
     go = shutil.which("go") or "/usr/local/go/bin/go"
     if not Path(go).exists():
         pytest.skip("Go toolchain not available to build tollgate-wrt")
+    binary = TOLLGATE_DIR / TOLLGATE_REF / "tollgate-wrt"
+    if binary.exists():
+        return binary
     src = TOLLGATE_DIR / f"src-{TOLLGATE_REF}"
     if not (src / ".git").exists():
-        subprocess.run(["git", "clone", "--depth", "1", "--branch", TOLLGATE_REF,
+        subprocess.run(["git", "clone", "--depth", "5", "--branch", TOLLGATE_REF,
                         TOLLGATE_REPO, str(src)], check=True, capture_output=True)
+    env = {**os.environ, "PATH": f"{Path(go).parent}:{os.environ['PATH']}",
+           "CGO_ENABLED": "0"}
+    subprocess.run([go, "get", "-C", str(src / "src"),
+                    f"github.com/cashubtc/cdk-go@{CDK_GO_PIN}"],
+                   check=True, capture_output=True, timeout=300, env=env)
     binary.parent.mkdir(parents=True, exist_ok=True)
-    ldflags = (f"-s -w -X 'github.com/OpenTollGate/tollgate-module-basic-go/"
-               f"src/cli.Version=conwrt-e2e'")
     subprocess.run(
-        [go, "build", "-C", str(src / "src"), "-o", str(binary),
-         "-trimpath", f"-ldflags={ldflags}", "main.go"],
-        check=True, capture_output=True, timeout=600,
+        [go, "build", "-C", str(src / "src"),
+         "-o", str(binary), "-trimpath", "main.go"],
+        check=True, capture_output=True, timeout=900, env=env,
     )
+    assert "statically linked" in subprocess.run(
+        ["file", str(binary)], capture_output=True, text=True).stdout, (
+        "tollgate-wrt must be statically linked (OpenWrt is musl)")
     return binary
 
 
-def _install_router_side(vm):
-    """nodogsplash + tollgate-wrt + config.json on the VM."""
-    r = _ssh(vm, "opkg update >/dev/null 2>&1 && opkg install nodogsplash >/dev/null 2>&1 "
-                 "&& echo ok || echo no-opkg", timeout=120)
-    if "no-opkg" in r.stdout:
-        pytest.skip("VM cannot reach opkg repos — extend PREBAKE_PACKAGES with "
-                    "nodogsplash and re-prepare the image (see conftest.py)")
+def _setup_router(vm):
+    """nodogsplash + br-lan bridge + tollgate-wrt on the session VM."""
     binary = _build_tollgate_wrt()
-    subprocess.run(
-        ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-         "-i", vm["key"], "-P", str(vm["port"]), str(binary),
-         f"root@{vm['host']}:/usr/bin/tollgate-wrt"],
-        check=True, capture_output=True, timeout=120,
-    )
-    config = {
-        "config_version": "v0.0.7",
-        "log_level": "info",
-        "accepted_mints": [{
-            "url": MINT_URL,
-            "min_balance": 0,
-            "balance_tolerance_percent": 0,
-            "payout_interval_seconds": 999999,
-            "min_payout_amount": 999999,
-            "price_per_step": 1,
-            "price_unit": "sats",
-            "purchase_min_steps": 0,
-        }],
-        "profit_share": [
-            {"factor": 0.79, "identity": "owner"},
-            {"factor": 0.21, "identity": "developer"},
-        ],
-        "step_size": 22020096,
-        "margin": 0.1,
-        "metric": "bytes",
-        "show_setup": True,
-        "reseller_mode": False,
-        "auth_delay_seconds": 0,
-    }
-    _ssh(vm, "mkdir -p /etc/tollgate")
-    subprocess.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-         "-i", vm["key"], "-p", str(vm["port"]), f"root@{vm['host']}",
-         "cat > /etc/tollgate/config.json"],
-        input=json.dumps(config), text=True, capture_output=True, timeout=30, check=True,
-    )
+    r = _ssh(vm, (
+        "opkg update >/dev/null 2>&1; "
+        "opkg install nodogsplash kmod-veth ip-full >/dev/null 2>&1; "
+        "opkg list-installed | grep -q nodogsplash && "
+        "opkg list-installed | grep -q ip-full && "
+        "opkg list-installed | grep -q kmod-veth && echo nds-ok || echo nds-missing"
+    ), timeout=300)
+    if "nds-ok" not in r.stdout:
+        pytest.skip("VM cannot install nodogsplash via opkg — add it to "
+                    "PREBAKE_PACKAGES and re-prepare the image (conftest.py)")
+
+    # Bridge eth0 into br-lan (NDS needs a gateway interface). The DHCP lease
+    # moves with the MAC, so the SSH session recovers after the restart.
+    _ssh(vm, (
+        "uci -q get network.lan.device >/dev/null 2>&1 && "
+        "[ \"$(uci -q get network.lan.device)\" = 'br-lan' ] || { "
+        "uci add network device; uci set network.@device[-1].name='br-lan'; "
+        "uci set network.@device[-1].type='bridge'; "
+        "uci add_list network.@device[-1].ports='eth0'; "
+        "uci set network.lan.device='br-lan'; uci commit network; "
+        "(/etc/init.d/network restart >/dev/null 2>&1 &); }; "
+        "sleep 8; ip link show br-lan >/dev/null 2>&1 && echo br-lan-ok || echo br-lan-missing"
+    ), timeout=120)
+    for _ in range(10):
+        if "br-lan-ok" in _ssh(vm, "ip link show br-lan >/dev/null 2>&1 && echo br-lan-ok").stdout:
+            break
+        time.sleep(3)
+    else:
+        pytest.fail("br-lan did not come up after the bridge migration")
+
     _ssh(vm, (
         "uci set nodogsplash.@nodogsplash[0].enabled='1'; "
         "uci set nodogsplash.@nodogsplash[0].gatewayname='TollGate E2E'; "
+        "uci set nodogsplash.@nodogsplash[0].gatewayinterface='br-lan'; "
+        "uci set nodogsplash.@nodogsplash[0].gatewayport='2050'; "
         "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 2121'; "
         "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 2050'; "
-        "uci commit nodogsplash; "
-        "/etc/init.d/nodogsplash restart 2>/dev/null; "
-        "pkill -f tollgate-wrt 2>/dev/null; "
-        "(/usr/bin/tollgate-wrt --config /etc/tollgate/config.json "
-        "> /tmp/tollgate.log 2>&1 &) ; sleep 3"
+        "uci commit nodogsplash; /etc/init.d/nodogsplash restart; sleep 2"
     ), timeout=60)
-    ip = _router_port_reachable(vm, 2121)
-    assert ip, f"tollgate-wrt did not listen on :2121 — /tmp/tollgate.log says: " \
-               f"{_ssh(vm, 'tail -5 /tmp/tollgate.log').stdout}"
-    return ip
+    if "nds-listening" not in _ssh(
+            vm, "netstat -tln | grep ':2050 ' && echo nds-listening").stdout:
+        pytest.fail("nodogsplash not listening on :2050")
 
-
-def _mint_signet_tokens(amount_sats: int) -> str:
-    """NUT-04 quote → pay bolt11 via signet CLN xpay → mint tokens.
-
-    Returns a Cashu token string ready to hand to the router.
-    """
-    env = {**os.environ}
-    r = subprocess.run(
-        [CASHU_BIN, "-h", MINT_URL, "--json", "invoice", str(amount_sats)],
-        capture_output=True, text=True, timeout=60, env=env,
+    subprocess.run(
+        ["scp", "-O", "-q", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+         "-i", vm["key"], "-P", str(vm["port"]), str(binary),
+         f"root@{vm['host']}:/usr/bin/tollgate-wrt"],
+        check=True, capture_output=True, timeout=180,
     )
-    if r.returncode != 0:
-        pytest.fail(f"cashu invoice failed (is the mint reachable?): {r.stderr[:300]}")
-    out = _parse_jsonish(r.stdout)
-    bolt11 = out.get("bolt11") or out.get("payment_request") or out.get("invoice")
-    quote_id = out.get("quote") or out.get("quote_id") or out.get("id")
-    assert bolt11 and quote_id, f"unexpected cashu invoice output: {r.stdout[:300]}"
+    config = {
+        "config_version": "v0.0.7", "log_level": "info",
+        "accepted_mints": [{
+            "url": MINT_ROUTER_VIEW, "min_balance": 0,
+            "balance_tolerance_percent": 0, "payout_interval_seconds": 999999,
+            "min_payout_amount": 999999, "price_per_step": 1,
+            "price_unit": "sats", "purchase_min_steps": 0,
+        }],
+        "profit_share": [{"factor": 0.79, "identity": "owner"},
+                         {"factor": 0.21, "identity": "developer"}],
+        "step_size": 22020096, "margin": 0.1, "metric": "bytes",
+        "show_setup": True, "reseller_mode": False, "auth_delay_seconds": 0,
+    }
+    write = subprocess.Popen(
+        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+         "-i", vm["key"], "-p", str(vm["port"]), f"root@{vm['host']}",
+         "mkdir -p /etc/tollgate && cat > /etc/tollgate/config.json"],
+        stdin=subprocess.PIPE, text=True)
+    write.communicate(json.dumps(config))
+    assert write.returncode == 0, "failed to write /etc/tollgate/config.json"
 
-    result = xpay(bolt11, maxfee_msat=2100)
-    assert result.get("ok"), f"CLN xpay failed: {result}"
+    _ssh(vm, (
+        "kill $(pidof tollgate-wrt) 2>/dev/null; sleep 1; "
+        "(/usr/bin/tollgate-wrt --config /etc/tollgate/config.json "
+        "> /tmp/tollgate.log 2>&1 &); sleep 4"
+    ), timeout=60)
+    if "tg-listening" not in _ssh(
+            vm, "netstat -tln | grep ':2121 ' && echo tg-listening").stdout:
+        pytest.fail("tollgate-wrt not listening on :2121 — see /tmp/tollgate.log")
 
-    r = subprocess.run(
-        [CASHU_BIN, "-h", MINT_URL, "--json", "invoice", str(quote_id)],
-        capture_output=True, text=True, timeout=120, env=env,
+
+def _setup_client(vm):
+    """Synthetic captive-portal client: veth into a netns with our test MAC,
+    then one portal hit so NDS registers the preauthenticated client."""
+    r = _ssh(vm, (
+        "ip link del veth-a 2>/dev/null; "
+        "ip netns add client 2>/dev/null; "
+        "ip link add veth-a type veth peer name veth-b && "
+        "ip link set veth-a master br-lan && ip link set veth-a up && "
+        "ip link set veth-b netns client && "
+        "ip netns exec client ip link set veth-b address " + CLIENT_MAC + " && "
+        "ip netns exec client ip addr add " + CLIENT_IP + "/24 dev veth-b && "
+        "ip netns exec client ip link set veth-b up && "
+        "ip netns exec client ip route add default via 10.0.2.15 && echo client-ok"
+    ), timeout=60)
+    if "client-ok" not in r.stdout:
+        pytest.skip(f"could not create the netns client: "
+                    f"{(r.stdout + r.stderr)[-300:]}")
+    r = _ssh(vm, "ip netns exec client wget -q -O- --timeout=5 "
+                 "'http://10.0.2.15:2050/' >/dev/null 2>&1; sleep 2; "
+                 f"ndsctl clients | grep -q '{CLIENT_MAC}' && echo nds-client || echo no-client",
+             timeout=60)
+    if "nds-client" not in r.stdout:
+        pytest.fail(f"NDS did not register the synthetic client: {r.stdout[:200]}")
+
+
+def _mint_token() -> str:
+    """NUT-04 quote → xpay → nutshell mint+send, fresh wallet, router-view URL."""
+    wallet = tempfile.mkdtemp(prefix="conwrt-cashu-")
+    env = {**os.environ, "CASHU_DIR": wallet}
+    proc = subprocess.Popen(
+        [CASHU_BIN, "-h", MINT_HOST_VIEW, "invoice", str(PAYMENT_SATS)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=env, bufsize=1,
     )
-    assert r.returncode == 0, f"cashu mint (invoice poll) failed: {r.stderr[:300]}"
-    token = _extract_token(r.stdout) or _extract_token(_wallet_balance_token())
-    assert token, f"no token after minting: {r.stdout[:300]}"
-    return token
+    bolt = quote_id = None
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        if bolt is None and "lntbs" in line:
+            bolt = re.search(r"lntbs[a-z0-9]+", line).group(0)
+        m = re.search(r"--id ([0-9a-f-]{36})", line)
+        if m:
+            quote_id = m.group(1)
+        if bolt and quote_id:
+            break
+    assert bolt and quote_id, "could not parse nutshell invoice output"
+
+    pay = xpay(bolt, maxfee_msat=1000)
+    assert pay.get("ok"), f"CLN xpay failed: {pay}"
+
+    try:
+        proc.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail("nutshell never settled the paid invoice")
+
+    r = subprocess.run([CASHU_BIN, "-h", MINT_HOST_VIEW, "send", str(PAYMENT_SATS),
+                        "--legacy"], capture_output=True, text=True, timeout=60, env=env)
+    lines = [l for l in r.stdout.strip().splitlines() if l.startswith("cashu")]
+    assert lines, f"nutshell send produced no token: {r.stderr[:200]}"
+    raw = lines[-1]
+
+    assert raw.startswith("cashuA"), "expected a v3 (cashuA) token"
+    payload = raw[len("cashuA"):]
+    payload += "=" * (-len(payload) % 4)
+    data = json.loads(base64.urlsafe_b64decode(payload))
+    for t in data.get("token", []):
+        if isinstance(t, dict) and "mint" in t:
+            t["mint"] = MINT_ROUTER_VIEW
+    return "cashuA" + base64.urlsafe_b64encode(
+        json.dumps(data).encode()).rstrip(b"=").decode()
 
 
-def _wallet_balance_token() -> str:
-    r = subprocess.run(
-        [CASHU_BIN, "-h", MINT_URL, "--json", "balance"],
-        capture_output=True, text=True, timeout=60,
-    )
+def _pay(vm, token: str):
+    """POST the token to tollgate-wrt via nc (busybox wget hides error bodies)."""
+    write = subprocess.Popen(
+        ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+         "-i", vm["key"], "-p", str(vm["port"]), f"root@{vm['host']}",
+         "cat > /tmp/token.txt"],
+        stdin=subprocess.PIPE, text=True)
+    write.communicate(token)
+    assert write.returncode == 0
+    request = (f"POST /?mac={CLIENT_MAC} HTTP/1.0\r\nHost: router\r\n"
+               f"Content-Type: text/plain\r\nContent-Length: {len(token)}\r\n"
+               f"Connection: close\r\n\r\n")
+    r = _ssh(vm,
+             "{ printf '" + request + "'; cat /tmp/token.txt; } "
+             "| nc 127.0.0.1 2121 | tail -c 1500", timeout=90)
     return r.stdout
 
 
-def _parse_jsonish(text: str) -> dict:
+def _session_event(response: str) -> bool:
     try:
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        return json.loads(text[start:end])
+        body = response[response.index("{"):]
+        event = json.loads(body)
     except (ValueError, json.JSONDecodeError):
-        return {}
-
-
-def _extract_token(text: str) -> str:
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("cashuA") or line.startswith("cashuB"):
-            return line
-    if '"token"' in text:
-        parsed = _parse_jsonish(text)
-        return parsed.get("token", "")
-    return ""
+        return False
+    tags = event.get("tags", [])
+    return event.get("kind") == 1022 or any(
+        isinstance(t, list) and t and t[0] == "allotment" for t in tags)
 
 
 class TestTollgatePaymentSignet:
-    def test_pay_token_grants_access(self, openwrt_vm):
-        if not MINT_URL:
-            pytest.skip("CONWRT_TOLLGATE_MINT_URL not set (signet mint URL)")
-        if not credentials_available():
-            pytest.skip("signet CLN credentials not configured (see signet_cln.py)")
-        if shutil.which(CASHU_BIN) is None:
-            pytest.skip(f"nutshell CLI ({CASHU_BIN}) not on PATH — pip install cashu")
-
-        router_ip = _install_router_side(openwrt_vm)
-        token = _mint_signet_tokens(PAYMENT_SATS)
-
-        r = subprocess.run(
-            ["curl", "-sf", "--max-time", "20",
-             "-X", "POST", f"http://{router_ip}:2121/pay",
-             "-H", "Content-Type: application/json",
-             "-d", json.dumps({"token": token})],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert r.returncode == 0, f"tollgate /pay rejected the token: {r.stderr[:200]}"
-
-        for _ in range(15):
-            nds = _ssh(openwrt_vm, "ndsctl json 2>/dev/null").stdout
-            try:
-                clients = json.loads(nds).get("clients", {})
-            except ValueError:
-                clients = {}
-            if any(c.get("state") in ("Authenticated", "authed")
-                   for c in clients.values()):
-                return
-            time.sleep(2)
-        pytest.fail(f"no authenticated NDS client after payment — ndsctl: {nds[:300]}")
+    def test_pay_token_grants_access(self, openwrt_vm, lab_tunnel):
+        _setup_router(openwrt_vm)
+        _setup_client(openwrt_vm)
+        token = _mint_token()
+        response = _pay(openwrt_vm, token)
+        assert _session_event(response), f"expected a session event: {response[-400:]}"
+        state = _ssh(openwrt_vm, "ndsctl clients", timeout=30).stdout
+        assert CLIENT_MAC in state, f"client missing after payment: {state[:200]}"
+        assert "Authenticated" in state, f"client not Authenticated: {state[:200]}"
