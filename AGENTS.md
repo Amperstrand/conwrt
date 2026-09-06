@@ -306,3 +306,14 @@ ip addr add 192.168.X.1/24 dev eth0
 Use `scripts/serial-configure.py` for structured configuration. See `prompts/serial-05-configure.md` for the full workflow.
 
 **Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.
+
+## External posting (owner directive 2026-09-06 — CHANNEL rule)
+
+Agents never post on non-member repos — no `gh` writes (issues, PRs,
+comments, reviews, gists), not even with per-text owner sign-off; the
+owner does the copy-paste into GitHub themselves. Member orgs (verify:
+`gh api user/orgs`; 2026-09-06: Amperstrand, OpenTollGate, net4sats,
+FreedomTechFeed) keep the existing owner-gate flow. Read the target
+repo CONTRIBUTING/AI policy before drafting anything upstream.
+Canonical text: lightning-playground AGENTS.md (standing rule UPDATE
+2026-09-06).
