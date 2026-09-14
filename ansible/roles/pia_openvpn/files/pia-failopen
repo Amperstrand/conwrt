@@ -1,0 +1,16 @@
+#!/bin/sh
+# Validation-phase fail-open: restore WAN fallback + normal DNS. OpenVPN keeps
+# running/retrying; the watchdog re-enforces once the tunnel is healthy again.
+mkdir -p /tmp/pia
+uci -q set firewall.wan_fallback=forwarding
+uci -q set firewall.wan_fallback.src=lan
+uci -q set firewall.wan_fallback.dest=wan
+uci -q set dhcp.@dnsmasq[0].noresolv=0
+uci -q delete dhcp.@dnsmasq[0].server
+uci -q commit firewall
+uci -q commit dhcp
+/etc/init.d/firewall reload 2>/dev/null
+/etc/init.d/dnsmasq restart 2>/dev/null
+date +%s > /tmp/pia/failopen
+logger -t pia-watchdog "FAIL-OPEN: WAN fallback + normal DNS restored"
+echo "fail-open applied"

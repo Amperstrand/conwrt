@@ -1,0 +1,45 @@
+#!/bin/sh
+# PIA VPN functional health check.
+# exit 0 = HEALTHY, 2 = DEGRADED, 1 = DOWN
+IFACE=tun0
+TARGET=1.1.1.1
+PIA_DNS="10.0.0.241 10.0.0.242 10.0.0.243"
+PROBE_HOST=privateinternetaccess.com
+
+proc_ok=0
+pgrep -f '/usr/sbin/openvpn' >/dev/null 2>&1 && proc_ok=1
+
+route_line=$(ip route get "$TARGET" 2>/dev/null)
+route_ok=0
+echo "$route_line" | grep -q "dev $IFACE" && route_ok=1
+gw=$(echo "$route_line" | awk '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}')
+
+ping_ok=0
+[ -n "$gw" ] && ping -c1 -W3 "$gw" >/dev/null 2>&1 && ping_ok=1
+
+bounded_ns() {
+	nslookup "$1" "$2" >/dev/null 2>&1 &
+	_p=$!
+	( sleep 4; kill -9 "$_p" 2>/dev/null ) >/dev/null 2>&1 &
+	_k=$!
+	wait "$_p" 2>/dev/null
+	_rc=$?
+	kill "$_k" 2>/dev/null
+	return $_rc
+}
+
+dns_ok=0
+for ns in $PIA_DNS; do
+	if bounded_ns "$PROBE_HOST" "$ns"; then dns_ok=1; break; fi
+done
+
+if [ "$proc_ok" = 1 ] && [ "$route_ok" = 1 ] && { [ "$ping_ok" = 1 ] || [ "$dns_ok" = 1 ]; }; then
+	echo "HEALTHY proc=$proc_ok route=$route_ok ping=$ping_ok dns=$dns_ok gw=${gw:-?}"
+	exit 0
+fi
+if [ "$proc_ok" = 1 ] && [ "$route_ok" = 1 ]; then
+	echo "DEGRADED proc=$proc_ok route=$route_ok ping=$ping_ok dns=$dns_ok gw=${gw:-?}"
+	exit 2
+fi
+echo "DOWN proc=$proc_ok route=$route_ok ping=$ping_ok dns=$dns_ok"
+exit 1
