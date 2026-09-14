@@ -29,6 +29,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "mwan3": ("both", "auto"),
     "nodns": ("ssh", "auto"),
     "openclash": ("ssh", "auto"),
+    "openvpn-pia": ("both", "auto"),
     "pbr": ("both", "auto"),
     "sqm": ("both", "auto"),
     "ssh-hardening": ("both", "auto"),

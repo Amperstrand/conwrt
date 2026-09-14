@@ -94,3 +94,25 @@ Exit code 246 is expected (connection dropped by router rebooting).
 
 ### MAC OUI 94:83:C4 is shared
 All GL.iNet devices share this OUI. Cannot distinguish models by MAC alone.
+
+## PIA OpenVPN client (validated 2026-09-14, OpenWrt 25.12.5)
+
+- Device identity: `cat /tmp/sysinfo/board_name` → `glinet,gl-mt3000`.
+- Package manager is **apk** (`apk add`), not opkg, on OpenWrt 25.12.
+- PIA OpenVPN uses **UDP 8080** (not 1198) and the **RSA-4096** CA
+  (`ca.rsa.4096.crt` from `pia-foss/manual-connections`); the old
+  `ca.rsa.2048.crt` / `us-east.privacy.network:1198` profile no longer works.
+- Credentials are the **p-number + password** via `auth-user-pass`. Validation via
+  `POST https://www.privateinternetaccess.com/api/client/v2/token`.
+- PIA does not support IPv6: it pushes `route-ipv6 2000::/3`, which OpenVPN installs
+  on a v4-only `tun0` and blackholes IPv6 (broke Signal). Add
+  `pull-filter ignore "route-ipv6"` + `"ifconfig-ipv6"` and disable IPv6.
+- OpenVPN 2.7 ignores `--cipher`; use `data-ciphers`.
+- Drop `persist-tun`: if the tunnel dies it must tear routes down, not blackhole LAN.
+- This build has **no OpenVPN management interface** (compiled out) and BusyBox
+  `nc [IP PORT]` (no `-z/-w/-s`) — health detection must use ping/DNS:
+  `ping -c1 -W3 <tunnel-gateway>` or `nslookup <host> 10.0.0.241` (tunnel-only).
+- The WAN here is a **WiFi STA** (`phy1-sta0` → upstream AP). A channel switch on
+  the upstream AP (CSA) dropped the tunnel and, with `persist-tun` + a locked
+  resolver, blackholed the LAN. Use a remote pool + `remote-random` and a watchdog.
+

@@ -9,6 +9,7 @@ render HOW to send it.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Union
 
@@ -86,6 +87,22 @@ class UciCommit:
 
 
 @dataclass
+class WriteFile:
+    """Write a file on the target with the given content.
+
+    Shell: heredoc (``cat > 'path' <<'OPENWRT_EOF'``) followed by ``chmod``.
+    ubus:  not natively representable — mapped to a ``sys.exec`` fallback call.
+
+    Used for artifacts that are not UCI (credentials files, ``.ovpn`` profiles,
+    or on-device helper scripts). ``mode`` is an octal string (default ``600``).
+    """
+
+    path: str
+    content: str
+    mode: str = "600"
+
+
+@dataclass
 class ServiceAction:
     """Start, stop, restart, reload, enable, or disable an init.d service.
 
@@ -127,7 +144,56 @@ class BlankLine:
 
 
 # Union of all operation types.
-Op = Union[UciSet, UciAdd, UciDelete, UciAddList, UciCommit, ServiceAction, ShellCommand, Comment, BlankLine]
+Op = Union[
+    UciSet, UciAdd, UciDelete, UciAddList, UciCommit,
+    ServiceAction, WriteFile, ShellCommand, Comment, BlankLine,
+]
+
+
+# -- WriteFile helpers ---------------------------------------------------------
+
+_MODE_RE = re.compile(r"^[0-7]{3,4}$")
+
+
+def _writefile_path(path: str) -> str:
+    if not path.startswith("/"):
+        raise ValueError(f"WriteFile path must be absolute, got: {path!r}")
+    if "'" in path or any(c in path for c in "\n\r\x00"):
+        raise ValueError(f"WriteFile path contains unsafe characters: {path!r}")
+    return path
+
+
+def _writefile_mode(mode: str) -> str:
+    if not _MODE_RE.fullmatch(mode):
+        raise ValueError(f"WriteFile mode must be octal (e.g. '600'), got: {mode!r}")
+    return mode
+
+
+def _heredoc_delimiter(content: str) -> str:
+    base = "OPENWRT_EOF"
+    delim = base
+    existing = set(content.splitlines())
+    i = 0
+    while delim in existing:
+        i += 1
+        delim = f"{base}_{i}"
+    return delim
+
+
+def render_writefile(op: "WriteFile") -> str:
+    """Render a WriteFile op to a shell heredoc + chmod snippet."""
+    from shell_safe import sh_quote
+
+    path = _writefile_path(op.path)
+    mode = _writefile_mode(op.mode)
+    delim = _heredoc_delimiter(op.content)
+    body = op.content if op.content.endswith("\n") else op.content + "\n"
+    return (
+        f"cat > {sh_quote(path)} <<'{delim}'\n"
+        f"{body}{delim}\n"
+        f"chmod {mode} {path}"
+    )
+
 
 
 # -- Shell renderer ------------------------------------------------------------
@@ -179,6 +245,9 @@ def render_shell(ops: list[Op]) -> str:
 
         elif isinstance(op, ServiceAction):
             lines.append(f"/etc/init.d/{op.name} {op.action}")
+
+        elif isinstance(op, WriteFile):
+            lines.append(render_writefile(op))
 
         elif isinstance(op, ShellCommand):
             lines.append(op.command)
@@ -257,6 +326,13 @@ def render_ubus(ops: list[Op]) -> list[RpcCall]:
                 object_name="rc",
                 method=op.action,
                 params={"name": op.name},
+            ))
+
+        elif isinstance(op, WriteFile):
+            calls.append(RpcCall(
+                object_name="exec",
+                method="command",
+                params={"command": render_writefile(op), "fallback": True},
             ))
 
         elif isinstance(op, ShellCommand):

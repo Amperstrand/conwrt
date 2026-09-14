@@ -1,0 +1,22 @@
+#!/bin/sh
+# Re-enforce tunnel preference: DNS lock through PIA resolvers. In the enforced
+# phase also remove the WAN fallback (strict kill switch).
+mkdir -p /tmp/pia
+uci -q set openvpn.pia.enabled=1
+uci -q set dhcp.@dnsmasq[0].noresolv=1
+uci -q delete dhcp.@dnsmasq[0].server
+uci -q add_list dhcp.@dnsmasq[0].server=10.0.0.241
+uci -q add_list dhcp.@dnsmasq[0].server=10.0.0.242
+uci -q add_list dhcp.@dnsmasq[0].server=10.0.0.243
+phase=$(uci -q get pia.settings.phase 2>/dev/null || echo validation)
+if [ "$phase" = enforced ]; then
+	uci -q delete firewall.wan_fallback
+	uci -q commit firewall
+	/etc/init.d/firewall reload 2>/dev/null
+fi
+uci -q commit dhcp
+uci -q commit openvpn
+/etc/init.d/dnsmasq restart 2>/dev/null
+rm -f /tmp/pia/failopen
+logger -t pia-watchdog "ENFORCE: DNS lock on (phase=$phase)"
+echo "enforce applied (phase=$phase)"
