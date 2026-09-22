@@ -18,7 +18,10 @@
     "ethernet_ports": "1x GbE (GE1 only, PoE+ data — single cable carries power and data)",
     "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
   },
-  "mac_oui": [],
+  "mac_oui": [
+    "dc:b8:08",
+    "b4:2d:56"
+  ],
   "flash_methods": {
     "extreme-rdwr-tftp-initramfs": {
       "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
@@ -280,6 +283,16 @@
       "tested": true,
       "date": "2026-05-23",
       "notes": "Switch-initiated flash via GS1900-8HP (OpenWrt 25.12.1). No laptop needed during flash. AP on switch port lan5 via PoE. rdwr_boot_cfg broken — used raw MTD write via kmod-mtd-rw + mtd_raw_write from initramfs. CFG blocks corrected with boot_openwrt command. Flash boot verified, overlay persisted through reboot. IP changed to 192.168.13.253 post-flash."
+    },
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-09-21",
+      "notes": "Validated no-serial on two units (lan4 complete success, lan3 permanent-on-flash). 24.10.2 flash-boots self-sufficiently with bootcmd=run boot_openwrt; run boot_net. 25.12.2 (kernel 6.12) boots via tftpboot+bootm but sf read+bootm FAILS on this U-Boot family - flash-boot 24.10.x only. Full recipe: recipes/extreme-networks/ws-ap3915i/NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
+    },
+    "tftp": {
+      "tested": true,
+      "date": "2026-09-21",
+      "notes": "boot_net TFTP boot validated for both 24.10.2 and 25.12.2 initramfs + sysupgrade-FIT-as-bootfile (kernel-from-TFTP + flash-rootfs works on 25.12.2). Prerequisites: nft rule for unzoned bench VLANs (inbound UDP), per-port tftproot, 192.168.1.2 helper IP, file named vmlinux.gz.uImage.3912"
     }
   },
   "warnings": [
@@ -298,6 +311,15 @@
     "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only.",
     "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
     "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
-    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot."
-  ]
+    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot.",
+    "CORRECTED (2026-09-21 late, matrix-cell test): flash-boot via boot_openwrt (sf read+bootm) is a property of the UNIT'S BOOTLOADER BUILD, not the OpenWrt/kernel version. lan3 (U-Boot primary 2012.07.20 Aug-2017 build) fails sf-read flash-boot for BOTH 24.10.2 and 25.12.2 (tftpboot+bootm works for both; unit parks silently at U-Boot prompt when TFTP is down - no watchdog involved in the boot_openwrt path). lan4/lan5 (Oct-2017/2022 builds) flash-boot 24.10.2 fine. Earlier 'kernel 6.12 regression' theory was WRONG. Consequences: (1) 25.12.x flash-boot on healthy-bootloader units is UNTESTED, not known-bad; (2) some units are inherently TFTP-fallback-dependent - keep the '; run boot_net' tail and a per-port TFTP server for them; (3) per-unit bootloader build (env CURR_VER/ver) should be recorded in inventory."
+  ],
+  "serial_console": {
+    "baud": 115200,
+    "console_device": "ttyMSM0",
+    "parity": "n81",
+    "bootloader": "U-Boot 2012.07.19-r00020.1 (Jul 17 2017, stock Extreme)",
+    "verified_from": "live unit kernel cmdline (console=ttyMSM0,115200n81), OpenWrt 24.10.2, 2026-09-21",
+    "note": "stdout-path empty in chosen node; cmdline is authoritative. UART pads on board, 3.3V - verify pinout before use; never connect VCC to the adapter."
+  }
 }
