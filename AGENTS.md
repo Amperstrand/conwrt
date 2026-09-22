@@ -324,6 +324,46 @@ Motivating incident (AP3915i bench, found 2026-09-21): three Extreme AP3915i uni
 7. **Strip known-bad args during env review**: e.g. `ubi.mtd=0` left in bootargs causes kernel UBI attach failure on OpenWrt. Review the full bootargs, not just bootcmd.
 8. **Testbed ports must reflect reality**: a unit parked on a port with PoE disabled and no VLAN membership (lan8 was in both states) is invisible to every remote check. When shelving hardware on bench switches, verify the port would let you SEE the device if it spoke (PoE on, VLAN with L3, port map recorded).
 
+## Dark-Device Discovery Discipline (before verdicting "network-dead")
+
+Motivating incident (2026-09-22): two AP3915i units sat FOUR MONTHS as
+"stuck, serial-gated" while fully alive at operator-chosen static IPv4s and
+EUI-64 IPv6 link-locals. The earlier session had every datum needed (source
+MACs on the wire) and lacked only the methodology.
+
+Rules:
+
+1. **No negative without a positive control** (extends rule 11 above): prove
+   the probe against a known-good host through the same path/interface in the
+   same session before believing any "no answer".
+2. **IPv6 before death**: derive `fe80::<EUI-64>` from ANY observed source
+   MAC (split MAC, insert FFFE, XOR first byte 0x02) and ping6 it on the
+   access VLAN. Linux/OpenWrt/network gear default to EUI-64 link-locals; a
+   broken IPv4 config does not take these down. NDP `STALE` ≠ dead; the
+   `router` flag means odhcpd is alive.
+3. **v4 sweep order**: inventory archaeology for this MAC → the probe host's
+   OWN interface subnets (the switch knew about 192.168.13.0/24 all along) →
+   operator extras → RFC1918/common defaults.
+4. **Passive patience**: listen 2-5 minutes on the VLAN interface (never
+   `-i any` with VLAN filters). RAs/MLD/beacons repeat forever; the ~10s
+   boot window is the loudest signal, not the only one.
+5. **The only genuine serial-gated class**: zero frames EVER including the
+   bootloader phase across a fresh PoE cycle. Anything that has emitted one
+   frame has an IP-level attack surface.
+6. **Zone-scoped v6 transport**: must be dialed FROM the on-link host —
+   `DROPBEAR_PASSWORD=<pw> dbclient -y -y root@fe80::...%switch.100X`, with
+   scripts piped via `sh -s` stdin (beats quoting through multi-hop SSH;
+   `ssh -J` cannot dial zone-scoped targets; probe hosts may have broken
+   openssh clients — dbclient is the reliable one).
+7. **Password works but pubkey never does** → check `ls -ld /etc/dropbear`:
+   non-root-owned or group-writable makes dropbear silently refuse ALL keys
+   (image-build artifact, seen in the wild).
+
+Tooling: `scripts/bench_discover.py` (ladder generator + control gate),
+methodology: `docs/DARK-DEVICE-PLAYBOOK.md`,
+session prompt: `prompts/bench-forensics-01-dark-device.md`,
+history mining: `prompts/bench-forensics-02-session-archaeology.md`.
+
 ## AP3915i No-Serial Flash: The Proven Recipe and Its Traps
 
 **The proven tuple (validated end-to-end 2026-09-21, lan4 unit, zero serial)**: OpenWrt **24.10.2** + `bootcmd=run boot_openwrt; run boot_net` + `WATCHDOG_COUNT=0`/`WATCHDOG_LIMIT=0` + `ubi.mtd=0` stripped from bootargs/static_bootargs + CFG1-only writes (CFG2 stays pristine stock as the last resort) + a per-port TFTP server on the switch for the fallback tail.

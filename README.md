@@ -117,6 +117,7 @@ conwrt/
 │   ├── serial-backup.py       # Dump partitions via serial when SSH unavailable
 │   ├── serial-console.py      # Interactive serial monitor with command FIFO
 │   ├── extreme_ap391x_analyze.py  # Extreme AP391x firmware image analysis
+│   ├── bench_discover.py     # Hypothesis-driven dark-device discovery ladder (EUI-64 v6, subnet archaeology, cred ladder)
 │   └── use_cases/             # Use case presets (auto-discovered plugins)
 ├── data/                # Runtime data (gitignored)
 │   ├── inventory.jsonl         # Append-only device inventory (specimen-level)
@@ -134,7 +135,9 @@ conwrt/
 │   ├── serial-03-backup.md
 │   ├── serial-04-flash.md
 │   ├── serial-05-configure.md
-│   └── serial-06-flash.md
+│   ├── serial-06-flash.md
+│   ├── bench-forensics-01-dark-device.md
+│   └── bench-forensics-02-session-archaeology.md
 ├── docs/                # Process and documentation
 ├── examples/            # Example artifacts (redacted)
 └── README.md
