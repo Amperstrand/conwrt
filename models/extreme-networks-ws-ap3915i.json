@@ -286,8 +286,8 @@
     },
     "sysupgrade": {
       "tested": true,
-      "date": "2026-09-21",
-      "notes": "Validated no-serial on two units (lan4 complete success, lan3 permanent-on-flash). 24.10.2 flash-boots self-sufficiently with bootcmd=run boot_openwrt; run boot_net. 25.12.2 (kernel 6.12) boots via tftpboot+bootm but sf read+bootm FAILS on this U-Boot family - flash-boot 24.10.x only. Full recipe: recipes/extreme-networks/ws-ap3915i/NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
+      "date": "2026-09-22",
+      "notes": "VALIDATED ON 25.12.5 AND 24.10.2 (lan5 + lan4). lan5 flash-boots 25.12.5 self-sufficiently (TFTP-down verified, 105s to HTTP). Healthy-slot units flash-boot BOTH release lines. lan3-class units (slot/hardware question) are run boot_net-dependent on any version. Full recipe: NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
     },
     "tftp": {
       "tested": true,
@@ -312,7 +312,7 @@
     "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
     "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
     "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot.",
-    "CORRECTED (2026-09-21 late, matrix-cell test): flash-boot via boot_openwrt (sf read+bootm) is a property of the UNIT'S BOOTLOADER BUILD, not the OpenWrt/kernel version. lan3 (U-Boot primary 2012.07.20 Aug-2017 build) fails sf-read flash-boot for BOTH 24.10.2 and 25.12.2 (tftpboot+bootm works for both; unit parks silently at U-Boot prompt when TFTP is down - no watchdog involved in the boot_openwrt path). lan4/lan5 (Oct-2017/2022 builds) flash-boot 24.10.2 fine. Earlier 'kernel 6.12 regression' theory was WRONG. Consequences: (1) 25.12.x flash-boot on healthy-bootloader units is UNTESTED, not known-bad; (2) some units are inherently TFTP-fallback-dependent - keep the '; run boot_net' tail and a per-port TFTP server for them; (3) per-unit bootloader build (env CURR_VER/ver) should be recorded in inventory."
+    "CORRECTED x2 (2026-09-22, comparative dump): all bench units carry BYTE-IDENTICAL BootPRI (2022 build) + BootBAK (Jul-2017) pairs, yet flash-boot differs per unit - the bootloader bytes are NOT the variable. Which slot executes is decided upstream (SBL1/selector, likely low-flash 0x0-0xe0000) or is unit hardware. Units that cannot sf-read-flash-boot any image are permanently run boot_net-dependent (keep per-port TFTP armed, 40s recovery). Env CURR_VER/ver/BOOT_BOOTROM are stale journals referencing builds absent from both slots."
   ],
   "serial_console": {
     "baud": 115200,
