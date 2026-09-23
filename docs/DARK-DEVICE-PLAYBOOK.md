@@ -69,7 +69,7 @@ private key explicitly.
 ## Credential ladder (ordered priors)
 
 1. Fleet history: every password/pattern in inventory notes, recipes, and
-   past sessions (e.g. `conwrt`, `Conwrt2026!`, vendor `new2day`).
+   past sessions (e.g. `conwrt`, `<bench-password>`, vendor `new2day`).
 2. Defaults: root/empty (OpenWrt), admin/admin, admin/password,
    vendor-sticker words.
 3. Fleet keys: try every trusted key holder on the bench (switch's, build

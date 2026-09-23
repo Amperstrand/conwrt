@@ -1,0 +1,56 @@
+# conwrt-serial-bridge@.service — supervised TCP->serial bridge (template instance).
+#
+# One instance per serial pair. Instance name = the labgrid place / TCP purpose,
+# e.g. `conwrt-serial-bridge@ap-lan2` listens on 127.0.0.1:4002 and exposes
+# ap-lan2's console (heard by the lan4 listener AP) to labgrid NetworkSerialPort.
+#
+# The bridge dials the LISTENER AP over SSH (ProxyJump through the bench switch),
+# frees its console tty from the getty, and streams /dev/ttyMSM0 <-> the TCP port.
+# See recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md for the wiring and
+# the manual flow this supervises.
+#
+# INSTALL (on the exporter host, e.g. ai-legion):
+#   1. cp scripts/conwrt_serial_bridge.py ~/conwrt-labgrid/conwrt_serial_bridge.py
+#   2. Adjust the four env values below (place -> listener/jump/tty/port), then:
+#      install -Dm644 conwrt-serial-bridge@.service \
+#          ~/.config/systemd/user/conwrt-serial-bridge@.service
+#      systemctl --user daemon-reload
+#      systemctl --user enable --now conwrt-serial-bridge@ap-lan2
+#   3. linger is already required for the exporter; same user covers this.
+#   4. Then uncomment the place's NetworkSerialPort stanza in exporter.yaml,
+#      `systemctl --user restart conwrt-exporter`, and
+#      `labgrid-client -p <place> add-match '*/<place>/NetworkSerialPort'`.
+#
+# %i expands to the instance name (the place). Map place -> coords in the
+# Environment lines; keep one EnvironmentFile or drop-in per place if preferred.
+
+[Unit]
+Description=conwrt serial bridge (%i) — router UART over SSH to TCP
+Documentation=file://~/../conwrt/recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+## Per-place coordinates. %i = place name. Edit to match the serial pair:
+##   CONWRT_SERIAL_TARGET = SSH target of the LISTENER AP (holds the tty)
+##   CONWRT_SERIAL_JUMP   = ProxyJump bastion (bench switch); empty if direct
+##   CONWRT_SERIAL_TTY    = console device on the listener
+##   CONWRT_SERIAL_PORT   = local TCP port for labgrid NetworkSerialPort
+Environment=CONWRT_SERIAL_TARGET=root@192.168.104.51
+Environment=CONWRT_SERIAL_JUMP=root@192.168.13.2
+Environment=CONWRT_SERIAL_TTY=/dev/ttyMSM0
+Environment=CONWRT_SERIAL_PORT=4002
+ExecStart=/usr/bin/python3 %h/conwrt-labgrid/conwrt_serial_bridge.py \
+    --target ${CONWRT_SERIAL_TARGET} \
+    --jump ${CONWRT_SERIAL_JUMP} \
+    --tty ${CONWRT_SERIAL_TTY} \
+    --listen-host 127.0.0.1 \
+    --listen-port ${CONWRT_SERIAL_PORT}
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Install]
+WantedBy=default.target

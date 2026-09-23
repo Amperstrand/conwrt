@@ -1,0 +1,40 @@
+# conwrt-exporter.service — supervisor pattern for the bench labgrid exporter.
+#
+# Closes the "exporter is unsupervised and dies on coordinator ping-timeouts"
+# gap (labgrid/README.md). This is the user-service variant: no root needed on
+# the exporter host, matches upstream labgrid's contrib/systemd approach.
+#
+# INSTALL (on the exporter host, e.g. ai-legion) — replace the two
+# PLACEHOLDER tokens first; real coordinates live in local bench records
+# (data/sessions/), never in git:
+#
+#   sed -e 's/COORDINATOR_HOST/<real-coordinator-host>/g' \
+#       -e 's|~/conwrt-labdir|'"$HOME"'|g' conwrt-exporter.service \
+#       > ~/.config/systemd/user/conwrt-exporter.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now conwrt-exporter
+#   sudo loginctl enable-linger "$USER"   # survive logout — required
+#
+# Then the manual pkill/setsid restart dance in labgrid/README.md is only
+# needed after exporter.yaml EDITS (systemctl --user restart conwrt-exporter).
+
+[Unit]
+Description=labgrid exporter for the conwrt bench (conwrt_poe power backend)
+Documentation=file://~/conwrt-labdir/../conwrt/labgrid/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+## ExecStart runs on the exporter host; -x points at the shared coordinator.
+## Adjust the labgrid-exporter path if it is not on ~/.local/bin there.
+ExecStart=%h/.local/bin/labgrid-exporter -x COORDINATOR_HOST:20408 %h/conwrt-labdir/exporter.yaml
+Restart=on-failure
+RestartSec=5
+## Ping-timeout deaths are transient by definition: retry aggressively but
+## cap the storm so a hard config error stays visible in systemctl status.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Install]
+WantedBy=default.target

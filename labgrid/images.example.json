@@ -1,0 +1,11 @@
+{
+  "images": {
+    "24.10.2-stock-sysupgrade": {
+      "path": "/absolute/local/path/openwrt-24.10.2-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",
+      "sha256": "sha256-from-downloads.openwrt.org-sha256sums",
+      "version": "24.10.2",
+      "profile": "extreme-networks_ws-ap3915i",
+      "url": "https://downloads.openwrt.org/releases/24.10.2/targets/ipq40xx/generic/"
+    }
+  }
+}
