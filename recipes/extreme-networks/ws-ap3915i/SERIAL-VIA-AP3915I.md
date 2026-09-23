@@ -17,12 +17,15 @@ already racked on the PoE bay.
 
 ## Wiring (validated)
 
-Both ends are **3.3V TTL UART, 115200 8N1** (AP3915i console = `ttyMSM0`,
-`console=ttyMSM0,115200n81`). The "RJ45 console port" is only the form factor —
-the levels on the pads/pins are logic-level, **NOT RS-232**. Do not feed it
-RS-232 (±12V) and **never connect VCC**.
+Both ends speak **RS-232 over the RJ45 console jack**, 115200 8N1 (AP3915i
+console = `ttyMSM0` behind an RS-232 transceiver, `console=ttyMSM0,115200n81`).
+CORRECTED 2026-09-23: this jack previously documented as "3.3V TTL" — wrong.
+A **standard Cisco console cable works on it** (per the OpenWrt forum thread
+that added AP3915i support and Extreme's published Cisco-style pinout:
+pin3=TXD, pin6=RXD, pins4/5=GND). The 3.3V TTL header is a separate 4-pin
+header INSIDE the case (T8 Torx). There is no VCC pin on the RJ45 jack.
 
-Cross TX/RX, common the ground:
+Cross TX/RX, common the ground (this is an RS-232 null-modem):
 
 | Listener (host AP) |        | Target (DUT AP) |
 |---|---|---|
@@ -161,3 +164,27 @@ the session.
   listener's own port off-limits.
 - This is a *read/heal* door. It does not by itself make `firstboot` or env
   writes safe — those still follow AGENTS.md escape-hatch and U-Boot-env rules.
+
+## Repointing the bridge (lan6 recovery plan)
+
+One bridge host (lan4) has ONE UART — it serves whichever target its 3-wire
+splice is physically connected to. To bring console to a new target (e.g.
+the dark lan6 unit, the last serial-gated device on the bench):
+
+1. **At the bench** (operator hands): move the splice from the current
+   target's console pads to the new target's TX/RX/GND. Photo the old
+   wiring first. The bridge host's own port must stay powered throughout.
+2. Update the per-place coordinates in `conwrt-serial-bridge@.service` (or
+   the instance env) to the new target, then
+   `systemctl --user restart conwrt-serial-bridge@<place>`.
+3. Export/refresh the `NetworkSerialPort` on the TARGET's place (not the
+   old one) and `add-match` it.
+4. **Positive control first** (AGENTS rule 11): power-cycle a KNOWN-good
+   boot on the new target and watch for PBL/U-Boot bytes before trusting
+   any silence. lan6 has never emitted frames — its splice is exactly where
+   a miswire would masquerade as "still dead".
+5. With console proven, lan6 diagnosis follows the standard serial ladder
+   (SERIAL-RESCUE doc): capture boot, decide U-Boot vs kernel vs power.
+
+Until someone is physically at the bench, the bridge stays on its current
+target — repointing is a 5-minute physical job, not a remote one.
