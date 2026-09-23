@@ -68,9 +68,12 @@ class WireguardConfig:
 class LabgridConfig:
     """Optional [labgrid] section — the persistent form of the bench-backend
     switch (scripts/bench_session.py). Absent section = no labgrid anywhere;
-    labgrid is only selected when enabled=true."""
+    labgrid is only selected when enabled=true. exporter_host is the ssh alias
+    of the labgrid exporter (where loopback-bound serial bridges live) — used
+    by bench_doctor's bridge probes, not by the session backends."""
     coordinator: str = ""
     enabled: bool = False
+    exporter_host: str = ""
 
 
 @dataclass
@@ -323,6 +326,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         lg_cfg = LabgridConfig(
             coordinator=str(lg_section.get("coordinator", "")),
             enabled=bool(lg_section.get("enabled", False)),
+            exporter_host=str(lg_section.get("exporter_host", "")),
         )
 
     return ConwrtConfig(

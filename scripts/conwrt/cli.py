@@ -3,6 +3,7 @@ import argparse
 from model_loader import list_models
 from conwrt._version import __version__
 from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
+from bench_doctor import add_doctor_arguments
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -274,6 +275,10 @@ def _build_parser() -> argparse.ArgumentParser:
     mig_parser.add_argument("--interface", default=None,
                         help="Host ethernet interface (auto-detected if omitted)")
     mig_parser.add_argument("--rollback-secs", type=int, default=60,
-                        help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+                         help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+
+    doctor_parser = subparsers.add_parser("bench-doctor",
+        help="Validate the optional labgrid bench stack (read-only; ABSENT=healthy standalone)")
+    add_doctor_arguments(doctor_parser)
 
     return parser

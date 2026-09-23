@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e labgrid-check
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -100,6 +100,9 @@ ci: ## Run all hardware-safe CI checks
 	@$(MAKE) validate-schemas
 	@$(MAKE) validate-models
 	@$(MAKE) test
+
+labgrid-check: ## Offline labgrid cross-check: exporter.yaml vs places.json (no network; CI-safe; NOT part of ci)
+	@python3 scripts/bench_doctor.py crosscheck
 
 ipk: ## Build conwrt ipk for OpenWrt
 	@$(SCRIPTS_DIR)/build_ipk.sh --output dist $(ARGS)
