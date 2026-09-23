@@ -23,11 +23,19 @@ frozen snapshot or a timeout. Never restart the poe service from tooling to
 "fix" a wedge — that power-blips every PD on the switch; take the bench lock
 and coordinate first.
 
+Poll-lag tolerance (T23, 2026-09-23): a HEALTHY manage's status readback can
+lag by up to ~30s (MCU settle under load) — during that settling window a
+frozen-looking digest is NOT wedge evidence. Wedge judgment (DROPPED) only
+starts after SETTLING_S; a state that never matches raises UNVERIFIED at
+VERIFY_TIMEOUT_S.
+
 SSH sessions are multiplexed through a ControlMaster socket (30s persist)
 so repeated polls reuse one authenticated connection.
 
 Install: copy this file into the labgrid install on the driver host:
     ~/.local/lib/python3.12/site-packages/labgrid/driver/power/conwrt_poe.py
+(the exporter host also keeps a staging copy at ~/conwrt-labgrid/conwrt_poe.py
+— refresh or remove it so it cannot drift back in).
 Source of truth: conwrt repo, labgrid/conwrt_poe.py
 (reinstall after labgrid upgrades AND after editing this file)
 """
@@ -47,9 +55,10 @@ SSH_OPTS = [
 ]
 OFF_STATES = {"disabled", "off", "", "fault"}
 TRANSIENT_STATES = {"initializing", "unknown"}
-VERIFY_TIMEOUT_S = 20.0
-POLL_INTERVAL_S = 0.8
+SETTLING_S = 35.0
+VERIFY_TIMEOUT_S = 60.0
 FROZEN_GRACE_S = 6.0
+POLL_INTERVAL_S = 0.8
 
 
 def _ssh(host: str, command: str) -> str:
@@ -87,7 +96,8 @@ def _port_snapshot(host: str, index: int) -> tuple[str, float]:
 
 
 def _verify_manage(host: str, index: int, want_disabled: bool) -> None:
-    deadline = time.monotonic() + VERIFY_TIMEOUT_S
+    started = time.monotonic()
+    deadline = started + VERIFY_TIMEOUT_S
     frozen_since: float | None = None
     last_digest: str | None = None
     last_state = ""
@@ -98,17 +108,23 @@ def _verify_manage(host: str, index: int, want_disabled: bool) -> None:
             return
         digest = f"{last_state}:{watts:.3f}"
         now = time.monotonic()
-        if digest == last_digest:
+        if now - started < SETTLING_S:
+            # T23: a healthy readback lags up to ~30s — a frozen digest
+            # inside the settling window is not evidence of a wedge.
+            frozen_since = None
+        elif digest == last_digest:
             if frozen_since is None:
                 frozen_since = now
             elif now - frozen_since > FROZEN_GRACE_S:
                 raise RuntimeError(
                     f"poe manage DROPPED: lan{index} snapshot frozen at "
-                    f"'{last_state}' ({watts:.1f}W) for >{FROZEN_GRACE_S:.0f}s "
-                    "after a successful manage call — wedged daemon (daemon<->"
-                    "MCU link). Do NOT restart the poe service from tooling: "
-                    "it power-blips every PD; take the bench lock and "
-                    "coordinate, then restart /etc/init.d/poe manually.")
+                    f"'{last_state}' ({watts:.1f}W) for "
+                    f">{FROZEN_GRACE_S:.0f}s past the {SETTLING_S:.0f}s "
+                    "readback-lag window after a successful manage call — "
+                    "wedged daemon (daemon<->MCU link). Do NOT restart the "
+                    "poe service from tooling: it power-blips every PD; take "
+                    "the bench lock and coordinate, then restart "
+                    "/etc/init.d/poe manually.")
         else:
             frozen_since = None
         last_digest = digest
@@ -124,6 +140,9 @@ def power_set(host: str, port: str | None, index: int, value: int) -> None:
     action = "enable" if value else "disable"
     _ssh(host, f"ubus call poe manage '{{\"port\":\"lan{index}\","
                f"\"action\":\"{action}\"}}'")
+    # The fork's manage is silently successful even when dropped — verify.
+    # _verify_manage tolerates the ~30s status-readback lag (SETTLING_S)
+    # before judging a frozen snapshot a wedge.
     _verify_manage(host, index, want_disabled=not value)
 
 

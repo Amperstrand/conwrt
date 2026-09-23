@@ -1,7 +1,9 @@
 """conwrt_poe verified-manage semantics: a wedged realtek-poe daemon answers
 `poe info` with a frozen per-port snapshot while silently dropping manage
 calls (observed live 2026-09-22 and 2026-09-23). power_set must verify the
-port actually changed and fail loudly on a frozen snapshot."""
+port actually changed and fail loudly on a frozen snapshot — but a frozen
+snapshot inside the settling window is a HEALTHY readback lag (T23: MCU
+status readback lags up to ~30s) and must not fail."""
 import json
 import sys
 import time
@@ -55,15 +57,27 @@ def test_enable_verifies_on_searching(monkeypatch):
 
 def test_frozen_snapshot_raises_wedge(monkeypatch):
     _no_sleep(monkeypatch)
-    frozen = [_info("Delivering power", 5.6)] * 40
+    # Frozen far past the settling window: wedge. (Fake clock advances
+    # 0.5s/iteration, so the DROPPED raise lands ~84 snapshots in.)
+    frozen = [_info("Delivering power", 5.6)] * 90
     with _patch_ssh(frozen), pytest.raises(RuntimeError, match="DROPPED.*frozen"):
         conwrt_poe.power_set("switch", None, 4, 0)
 
 
 def test_timeout_raises_unverified(monkeypatch):
     _no_sleep(monkeypatch)
-    jitter = [_info("Disabled", 5.0), _info("Disabled", 4.9)] * 40
+    jitter = [_info("Disabled", 5.0), _info("Disabled", 4.9)] * 62
     with _patch_ssh(jitter), pytest.raises(RuntimeError, match="UNVERIFIED"):
+        conwrt_poe.power_set("switch", None, 4, 1)
+
+
+def test_readback_lag_inside_settling_window_is_tolerated(monkeypatch):
+    _no_sleep(monkeypatch)
+    # T23: a healthy manage's status readback lags up to ~30s — the digest
+    # stays frozen at the OLD state well beyond the 6s wedge grace before
+    # flipping. This must verify, not raise DROPPED.
+    lagging = [_info("Disabled", 0.0)] * 65 + [_info("Searching")]
+    with _patch_ssh(lagging):
         conwrt_poe.power_set("switch", None, 4, 1)
 
 
