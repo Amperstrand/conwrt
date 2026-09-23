@@ -9,12 +9,7 @@
 > the Amperstrand organization. The only acceptable automated action on this
 > file is editing it in place.
 >
-> **Fork tracking:** this finding is queued as a research issue on
-> Amperstrand/openwrt (the lab-notebook fork). At draft time that issue had
-> **not** been filed yet (`gh issue list -R Amperstrand/openwrt` returned empty
-> on 2026-09-23) — **fork issue pending**. The human who files it should link
-> it here; the human who submits upstream should reference it as their own
-> lab notes if useful.
+> **Reference:** https://github.com/Amperstrand/openwrt/issues/3
 >
 > **Sanitization status:** no passwords, password-hash fragments, public keys,
 > MAC addresses, or link-local addresses appear below. Devices are referred to

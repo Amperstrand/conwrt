@@ -67,6 +67,9 @@ Related knobs:
 - `conwrt flash --keep-config` — sysupgrade without `-n`: settings and SSH
   keys survive the upgrade. `conwrt flash --ip <addr>` targets a device at a
   non-default address (e.g. after a LAN move).
+- `CONWRT_BENCH=direct|labgrid` — one-shot bench-backend override for the
+  `scripts/bench_*.py` tools (direct is the default; see
+  [Optional labgrid integration](#optional-labgrid-integration)).
 
 Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or other network-mutating commands from tests. Use mocks/stubs only. Commands such as `python3 scripts/conwrt.py ...`, `scripts/tftp-server.py`, and router SSH/SCP helpers can mutate real devices and should only be run intentionally against hardware you control.
 
@@ -120,6 +123,10 @@ conwrt/
 │   ├── bench_discover.py     # Hypothesis-driven dark-device discovery ladder (EUI-64 v6, subnet archaeology, cred ladder)
 │   ├── bench_inventory.py    # Read-only port scan + registry reconciliation (moved routers, exporter.yaml regen)
 │   ├── bench_switch.py       # Bench/PoE switch lifecycle: backup/deploy/install-poe/verify/reset (see docs/BENCH-SWITCH-PATTERN.md)
+│   ├── bench_session.py      # BenchSession: one bench, two backends (direct SSH/ubus default, optional labgrid) — powers the bench_* tools
+│   ├── bench_doctor.py       # Read-only health check of the optional labgrid bench stack (offline mode: make labgrid-check)
+│   ├── gs1900-bench-arm.sh   # Re-arm bench failsafes on the switch (TFTP lifelines, fw4 accept, watchers; deployed as /etc/bench-arm.sh)
+│   ├── conwrt_serial_bridge.py  # Serve a listener router's UART as tcp://HOST:PORT (labgrid NetworkSerialPort / flash --serial)
 │   ├── serial_transport.py   # Serial console driver: linted line-chunked delivery, FT232R break recovery
 │   └── use_cases/             # Use case presets (auto-discovered plugins)
 ├── labgrid/               # Bench rig: PoE power backend (conwrt_poe), exporter config, tests
@@ -287,6 +294,7 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--no-upload` | Dry run, detect only |
 | `--interface IFACE` | Ethernet interface (auto-detected) |
 | `--capture PATH` | Save pcap capture |
+| `--serial SPEC` | Optional serial boot-milestone monitor: `tcp://HOST:PORT[,baud]` (serial bridge, baud ignored) or `/dev/path[,baud]` — milestones detected from the serial stream alongside pcap; serial wins conflicts |
 | `--transport ssh\|ubus` | Transport for `configure` command: SSH shell or ubus HTTP |
 | `--version` | Print version and exit |
 
@@ -620,6 +628,35 @@ disown %1
 
 On OpenWrt, tcpdump event monitoring is recommended — install via `opkg install tcpdump`.
 Use `--no-pcap` for polling-only mode (no tcpdump needed).
+
+## Optional labgrid integration
+
+conwrt is fully standalone by default — flashing, serial recovery, and the bench scripts need nothing but SSH and a cable. For racked benches there is an **optional** [labgrid](https://labgrid.readthedocs.io/) integration; nothing changes unless you enable it:
+
+- **Power, console, and SSH via labgrid places** — bench DUTs on a PoE switch become labgrid places: `NetworkPowerPort` (PoE), `NetworkSerialPort` (console over a serial bridge), `NetworkService` (SSH).
+- **Serial-watched flashing** — `conwrt flash --serial tcp://HOST:PORT` streams boot milestones (U-Boot banner, kernel start, procd init, login prompt) from a serial bridge into the flash timeline; when serial and the pcap monitor disagree, serial wins (ground truth).
+- **Boot tripwires** — a watched boot shows the dirty-overlay signature (`jffs2 ... unchecked/orphan`), wedged overlay replays, and failsafe prompts in-band instead of inferring them from network silence.
+
+Enable it per run or persistently — the direct backend (plain SSH + ubus PoE) stays the default:
+
+```bash
+CONWRT_BENCH=labgrid python3 scripts/bench_inventory.py scan --host <switch>   # one-shot override
+```
+
+```toml
+[labgrid]                    # config.toml — see config.example.toml
+enabled = true               # false/absent = direct backend (default)
+coordinator = "host:port"    # labgrid coordinator address
+```
+
+Health checks — both read-only, never a power action:
+
+```bash
+python3 scripts/conwrt.py bench-doctor    # L1 coordinator / L2 exporter / L3 serial bridges / L4 registry
+make labgrid-check                        # offline exporter-vs-registry cross-check (CI-safe)
+```
+
+**Everything stays standalone**: without the env var and without a `[labgrid]` section, behavior is identical to a labgrid-free install — labgrid is never required, and `bench-doctor` reporting `ABSENT` levels is a healthy standalone checkout. Bench wiring, serial-bridge instances, and the place registry live in [`labgrid/README.md`](labgrid/README.md); the AP3915i-to-AP3915i serial bridge that feeds `NetworkSerialPort` and `--serial tcp://` is documented in [`recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md`](recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md).
 
 ## Privacy
 

@@ -44,8 +44,15 @@ ap-lan4:
     host: SWITCH_MGMT_IP
     index: 4
 
-## ap-lan5: NO NetworkPowerPort — deliberately absent (one-way-trip unit;
-## see rule 1 above and labgrid/README.md). Do NOT re-add it here.
+## ap-lan5: power withheld 2026-09-22..2026-09-23 (one-way-trip unit, rule 1)
+## and re-exported after the unit was fixed (issue #61: flash-boots again).
+## Rule 1 stays the guard for any unit still marked "power_export": false.
+
+ap-lan5:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 5
 
 ap-lan6:
   NetworkPowerPort:

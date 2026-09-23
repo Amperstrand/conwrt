@@ -76,8 +76,12 @@ ssh -J $SWITCH $LISTENER 'ps | grep "cat /dev/ttyMSM0" | grep -v grep; wc -c /tm
 
 PoE port indices on the GS1900-8HP fork: `lan2`→index 1 … `lan8`→index 7 (verify
 with `for i in 0 1 2 3 4 5 6 7; do echo $i $(uci get poe.@port[$i].name); done`).
-Cycle only the target port — **never the listener's port, and never lan5**
-(TFTP-fallback-dependent, one-way trip until the lifeline is re-armed).
+Cycle only the target port — **never the listener's own port**. (lan5's old
+"never cycle" rule was lifted 2026-09-23: issue #61 resolved — the unit
+flash-boots after the CFG1 env-identity fix, its power is re-exported, and the
+VLAN-1005 TFTP lifeline stays armed as insurance. Check
+`data/bench/places.json` for per-place `reset_allowed`/lifeline state before
+cycling anything.)
 
 ```bash
 # zero the log for a clean boot, then cycle the TARGET (example: lan2)
@@ -128,31 +132,61 @@ From the validated 2026-09-23 capture of ap-lan2
 ## labgrid integration
 
 **Live on ap-lan2 since 2026-09-23.** The bridge (`scripts/conwrt_serial_bridge.py`)
-runs as `conwrt-serial-bridge@ap-lan2.service` on the exporter host (ai-legion),
-SSH-jumping via the bench switch to the lan4 listener AP and serving its
-`/dev/ttyMSM0` on `127.0.0.1:4002`. The exporter (`conwrt-exporter.service`,
-systemd user, coordinator `192.168.13.221:20408`) exports it as
+runs as a `conwrt-serial-bridge@ap-lan2.service` instance (systemd user unit;
+template `labgrid/conwrt-serial-bridge@.service`) on the exporter host
+(ai-legion), SSH-jumping via the bench switch to the lan4 listener AP and
+serving its `/dev/ttyMSM0` on `127.0.0.1:4002`. The exporter
+(`conwrt-exporter.service`, systemd user) exports it as
 `NetworkSerialPort { host: 127.0.0.1, port: 4002, speed: 115200 }`; the place
 matches `*/ap-lan2/{NetworkPowerPort,NetworkSerialPort,NetworkService}`. A
 `SerialDriver` on an acquired ap-lan2 place now gets the console — enabling
-`UBootTFTPStrategy`-class flows and boot-log assertions with no USB adapter.
+`UBootTFTPStrategy`-class flows and boot-log assertions with no USB adapter —
+and conwrt itself can watch the same stream: `conwrt flash --serial
+tcp://<exporter-host>:4002` turns it into boot-milestone tripwires. The
+**source of truth** for the unit files, the bridge script, and the
+per-instance `Environment` values (`CONWRT_SERIAL_TARGET/JUMP/TTY/PORT`) is
+this repo (`labgrid/`, `scripts/conwrt_serial_bridge.py`); live copies live
+in `~/conwrt-labgrid/` + `~/.config/systemd/user/` on the exporter host.
 
-To add another serial pair (e.g. the lan6 dark unit):
+### Listener layout (current + planned)
+
+One listener AP has ONE UART — it serves whichever target its 3-wire splice
+is physically connected to:
+
+- **Today**: lan4 (reference unit) listens to **lan2's** console — exported
+  as `conwrt-serial-bridge@ap-lan2` on `127.0.0.1:4002`.
+- **Planned (the "HA" splice move)**: the splice moves to the lan6 dark unit
+  — pair becomes lan4 → **lan6**, a fresh `conwrt-serial-bridge@ap-lan6`
+  instance on a new port (see "Repointing the bridge" below).
+- **lan5 pair: moot.** The planned second splice (lan2 listening to lan5,
+  "HB" in the serial-fleet plan) is no longer needed: issue #61 resolved
+  2026-09-23 — lan5 flash-boots after the CFG1 env-identity fix, its power
+  is re-exported, and the VLAN-1005 lifeline stays armed as insurance
+  (evidence: `data/bench/ap-lan5/20260923-issue61/`).
+
+### Adding another serial pair
 
 1. Splice the target's UART to a listener AP's console (3-wire, above).
-2. Add an instance: copy `labgrid/conwrt-serial-bridge@.service` to the exporter
-   host, set its `Environment` (target = listener IP, jump = switch, tty, and a
-   fresh `CONWRT_SERIAL_PORT`), `systemctl --user enable --now
-   conwrt-serial-bridge@<place>`.
-3. Export `NetworkSerialPort { host: 127.0.0.1, port: <port>, speed: 115200 }` on
-   that place in `exporter.yaml`, `systemctl --user restart conwrt-exporter`, then
-   `labgrid-client -x 192.168.13.221:20408 -p <place> add-match '*/<place>/NetworkSerialPort'`.
+2. Stand up a bridge **instance** of the template: install
+   `labgrid/conwrt-serial-bridge@.service` in `~/.config/systemd/user/` on
+   the exporter host, set the per-place `Environment` (target = listener AP
+   IP, jump = switch, tty, and a fresh `CONWRT_SERIAL_PORT`), then
+   `systemctl --user enable --now conwrt-serial-bridge@<place>`.
+3. Export `NetworkSerialPort { host: 127.0.0.1, port: <port>, speed: 115200 }`
+   on that place in `labgrid/exporter.yaml`, `systemctl --user restart
+   conwrt-exporter`, then `labgrid-client -x <coordinator> -p <place>
+   add-match '*/<place>/NetworkSerialPort'`.
 
-Gotchas proven during bring-up: kill any *stale* `cat $TTY` on the listener (two
-readers race for the bytes — `free_tty` in the bridge handles it); a chatty
-console (echo loop) makes the stream flap — send Ctrl-C to quiet it; the exporter
-must run under its systemd unit, not `nohup`/`setsid` over SSH, or it dies with
-the session.
+Gotchas proven during bring-up (the bridge script handles all of these —
+know them before debugging one by hand): a *stale* `cat $TTY` on the listener
+races the new reader for the bytes (`free_tty` kills it); the console getty
+must be matched in `/etc/inittab` by device **basename** (`ttyMSM0`, never a
+`/dev/` path) — a wrong pattern silently frees nothing and the respawned
+getty eats the stream; the getty is restored only on intentional termination
+(never on stream drops — the reconnect would race the respawn and wedge the
+console silent); a chatty console (echo loop) makes the stream flap — send
+Ctrl-C to quiet it; exporter and bridges must run under their systemd user
+units, not `nohup`/`setsid` over SSH, or they die with the session.
 
 ## Safety
 
@@ -160,16 +194,18 @@ the session.
   contact (AGENTS.md "Verify Serial Baud Rate From Source").
 - Positive-control the wiring against a known-good boot before believing any
   "target is silent" result.
-- PoE-cycle by port *name* after confirming the index map; keep lan5 and the
-  listener's own port off-limits.
+- PoE-cycle by port *name* after confirming the index map; keep the
+  listener's own port off-limits, and re-check `data/bench/places.json`
+  (`reset_allowed`, lifeline state) before cycling any unit — per-place
+  verdicts change as issues resolve (lan5's lifted with #61, 2026-09-23).
 - This is a *read/heal* door. It does not by itself make `firstboot` or env
   writes safe — those still follow AGENTS.md escape-hatch and U-Boot-env rules.
 
-## Repointing the bridge (lan6 recovery plan)
+## Repointing the bridge (the HA splice move)
 
-One bridge host (lan4) has ONE UART — it serves whichever target its 3-wire
-splice is physically connected to. To bring console to a new target (e.g.
-the dark lan6 unit, the last serial-gated device on the bench):
+One listener AP has ONE UART (see "Listener layout" above) — repointing means
+physically moving its 3-wire splice. This is the planned "HA" move: bring
+console to the dark lan6 unit, the last serial-gated device on the bench:
 
 1. **At the bench** (operator hands): move the splice from the current
    target's console pads to the new target's TX/RX/GND. Photo the old

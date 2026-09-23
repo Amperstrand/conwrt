@@ -30,23 +30,24 @@ Real hostnames/IPs/credentials live in local bench records only
   so power polls reuse one session.
 - **Switch**: bench/PoE switch per docs/BENCH-SWITCH-PATTERN.md
 - **Places**: `ap-lan2..ap-lan8` matched to `*/<place>/*` resources.
-  **ap-lan5 deliberately has NO power resource** — the unit is
-  TFTP-fallback-dependent (one-way trip until #61 / lifeline re-arm; PRTA
-  ask 1, 2026-09-22).
+  ap-lan5's power was deliberately withheld until issue #61 resolved
+  (2026-09-23: the CFG1 env-identity fix made the unit flash-boot — power
+  re-exported, VLAN-1005 lifeline stays armed as insurance; evidence
+  `data/bench/ap-lan5/20260923-issue61/`).
 - **DUT addressing**: per-VLAN statics `192.168.10N.51` (gateway `.10N.1` on
   the switch). There is NO DHCP on the bench (dnsmasq exists on the switch but
   serves only the TFTP lifelines) — adoption assigns statics via
   `bench_adopt.py`.
 
-## Resources per place (2026-09-22)
+## Resources per place (2026-09-23)
 
 | Place | NetworkPowerPort | NetworkService | NetworkSerialPort | Notes |
 |---|---|---|---|---|
-| ap-lan2 | ✓ | ✓ 192.168.10N.51 | queued (via lan4 bridge) | PRTA SUT; recovered 2026-09-22 evening; pw + keys; serial door proven 2026-09-23 |
-| ap-lan3 | ✓ | — | — | recovered unit; adopt to statics, then export |
+| ap-lan2 | ✓ | ✓ 192.168.10N.51 | ✓ 127.0.0.1:4002 (lan4 bridge) | PRTA SUT; recovered 2026-09-22 evening; pw + keys; serial door live since 2026-09-23 |
+| ap-lan3 | ✓ | ✓ 192.168.10N.51 | — | recovered + adopted 2026-09-23 (bench statics, key auth, reboot-verified) |
 | ap-lan4 | ✓ | ✓ 192.168.10N.51 | (is the console host) | reference unit, adopted |
-| ap-lan5 | **absent by design** | — | — | lifeline ARMED since 2026-09-23 (recoverable), still avoid cycling until #61 |
-| ap-lan6 | ✓ | — | candidate | dark unit (serial-gated #62) — bridge gives it a console |
+| ap-lan5 | ✓ (re-exported 2026-09-23) | — | — | #61 resolved: flash-boots after env-identity fix; reset_allowed=true; lifeline stays armed as insurance |
+| ap-lan6 | ✓ | — | planned (HA splice) | dark unit (serial-gated #62) — lan4 bridge will move here |
 | ap-lan7 | ✓ | — | — | empty port |
 | ap-lan8 | ✓ | ✓ 192.168.10N.51 | — | NR7101 SNAPSHOT, ADOPTED 2026-09-23 (reboot-verified; modem/SIM, no APN yet) |
 
@@ -101,8 +102,9 @@ Safety properties: no DUT writes, no power toggles, `--update-places`
 preserves unknown keys (passwords, notes) verbatim and never deletes
 fields (vacated places get `mac: ""` + dated note), and
 `--emit-exporter` NEVER emits a NetworkPowerPort for places marked
-`"power_export": false` in places.json (the ap-lan5 one-way-trip rule is
-now machine-enforced, not just documented).
+`"power_export": false` in places.json (the one-way-trip rule,
+machine-enforced — ap-lan5 used it until #61 resolved; no place
+currently carries the flag).
 
 Exit code 1 on drift — cron-friendly:
 
@@ -206,16 +208,59 @@ bootcmd we control instead:
   ap-lan2 incident. If a factory state is truly required, prefer
   `sysupgrade -n` with the release image (rewrites overlay wholesale) or the
   net-first initramfs (never touches state).
-- Keep `reset_allowed=false` gating in places.json; respect `ap-lan5` absence.
+- Keep `reset_allowed` gating in places.json (`false` = protected: never
+  power-probed, never flashed — enforced by bench_doctor, bench_flash, and
+  the smoke tests). All bench places are currently `true`, ap-lan5 included
+  since #61 resolved.
+
+## conwrt-side consumers (BenchSession, bench-doctor)
+
+The conwrt bench scripts do not talk to the coordinator directly — they go
+through **BenchSession** (`scripts/bench_session.py`): one interface over
+the bench primitives (power / console / ssh_target / tftp_arm /
+switch_exec), two backends. The **direct** backend (switch SSH + ubus PoE +
+dbclient jumps) is the default and needs none of this directory; the
+**labgrid** backend maps the same primitives onto the places exported here —
+power via `NetworkPowerPort`, console via `NetworkSerialPort` (the serial
+bridges above), SSH via `NetworkService`, with the place acquired for the
+session. All labgrid imports are lazy: conwrt imports and behaves
+identically without the package, and requesting labgrid without it fails
+with a clean typed error (`LabgridNotInstalledError`) — never an
+ImportError, never a silent fallback.
+
+Selection: `CONWRT_BENCH=direct|labgrid` env wins; else a config.toml
+`[labgrid]` section with `enabled=true`; else direct. Config keys:
+`enabled`, `coordinator`, `exporter_host` (ssh alias of this exporter host —
+used by bench_doctor to probe loopback-bound bridges; see
+config.example.toml).
+
+Health check: `python3 scripts/bench_doctor.py` (or
+`python3 scripts/conwrt.py bench-doctor`) probes the stack level by level —
+L1 coordinator, L2 exporter-vs-registry crosscheck, L3 serial-bridge TCP
+probes, L4 places.json sanity — read-only (TCP connects plus one console
+newline; never a power action), reporting PASS / DEGRADED / ABSENT per
+level, where ABSENT = healthy standalone conwrt. `make labgrid-check` runs
+just the offline L2 crosscheck (CI-safe, no network). And any exported
+bridge doubles as a flash tripwire: `conwrt flash --serial
+tcp://<exporter-host>:<port>` streams boot milestones into the flash
+timeline (see the main README's "Optional labgrid integration" section).
 
 ## Smoke test (opt-in, hardware-mutating)
 
     BENCH_POWER_TEST=1 LG_COORDINATOR=<host:port> BENCH_SWITCH_HOST=<ip> \
         BENCH_PLACE=ap-lan4 pytest labgrid/test_bench_power.py
 
-Required env: `LG_COORDINATOR`, `BENCH_SWITCH_HOST` (real coordinates live
-in local bench records, not in git). Optional: `BENCH_PLACE`. VM tier
-pattern: `qemu-x86-64.yaml.example` (QEMUDriver runs on the labgrid CLIENT
-host, snapshot=on pristine boots). Follow-up hardening (pattern doc): fork
-patch for enable-bools + uhttpd-mod-ubus -> stock labgrid ubus backend, no
-SSH in the power path.
+    BENCH_SERIAL_TEST=1 LG_COORDINATOR=<host:port> \
+        BENCH_PLACE=ap-lan2 pytest labgrid/test_bench_serial.py
+
+The power test power-cycles a place and asserts PoE state; the serial test
+power-cycles the place (gated on `reset_allowed=true` in places.json),
+captures the boot through the serial bridge, and asserts three AP3915i boot
+markers (`U-Boot 2012`, `Starting kernel`, `jffs2_build_xattr_subsystem`),
+archiving the stream under `data/bench/<place>/`. Required env:
+`LG_COORDINATOR` (+ `BENCH_SWITCH_HOST` for the power test); optional:
+`BENCH_PLACE` (real coordinates live in local bench records, not in git).
+VM tier pattern: `qemu-x86-64.yaml.example` (QEMUDriver runs on the labgrid
+CLIENT host, snapshot=on pristine boots). Follow-up hardening (pattern
+doc): fork patch for enable-bools + uhttpd-mod-ubus -> stock labgrid ubus
+backend, no SSH in the power path.
