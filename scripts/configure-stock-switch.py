@@ -46,11 +46,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", default="192.168.1.1")
     parser.add_argument("--password", default="1234")
-    parser.add_argument("--new-password", default="Conwrt2026!")
+    parser.add_argument("--new-password", default=None, help="required: new admin password (no default; keep secrets out of the repo)")
     parser.add_argument("--new-ip", default="192.168.13.3")
     parser.add_argument("--mask", default="255.255.255.0")
     parser.add_argument("--gateway", default="")
     args = parser.parse_args()
+    if not args.new_password and not args.dry_run:
+        parser.error("--new-password is required (kept out of defaults so secrets stay local)")
 
     effective_password = args.password
 

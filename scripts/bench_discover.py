@@ -139,7 +139,7 @@ def credential_ladder(
             add(user, pw, "fleet-history")
     add("root", "", "OpenWrt default (empty)")
     add("root", "conwrt", "conwrt May-2026 flash lineage")
-    add("root", "Conwrt2026!", "conwrt no-serial flow")
+    add("root", None, "conwrt no-serial flow (password from local bench records)")
     add("admin", "new2day", "Extreme WiNG stock service shell")
     add("admin", "admin", "vendor default")
     add("root", "openwrt", "common community default")
