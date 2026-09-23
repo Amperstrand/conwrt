@@ -289,3 +289,27 @@ class TestCliGate:
         reg = tmp_path / "places.json"
         reg.write_text('{"places": []}')
         assert ba.main(["--place", "ghost", "--places", str(reg)]) == 2
+
+
+class TestKeyAuthProof:
+    def test_key_proof_poisons_password_fallback(self, tmp_path: Path) -> None:
+        # dbclient silently falls back pubkey -> password auth; the -i proof
+        # must set a bogus password so KEY-AUTH-OK can only mean pubkey.
+        scripts: list[str] = []
+        canned = iter([
+            "extreme-networks,ws-ap3915i",
+            "KEYS-PUSHED\nKEY-AUTH-OK\n3",
+            "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
+            "COMMITTED",
+        ])
+
+        def capture(script: str) -> str:
+            scripts.append(script)
+            return next(canned)
+
+        ba.stage_adopt(ba.Runner(capture, PLACE, tmp_path / "ev"))
+        keys_script = next(s for s in scripts if "KEY-AUTH-OK" in s)
+        proof_line = [ln for ln in keys_script.splitlines() if "-i /root/.ssh/id_ed25519" in ln][0]
+        assert "DROPBEAR_PASSWORD=" in proof_line, (
+            "key proof must poison password fallback (bare -i passes on the "
+            "blank/known password — NR7101 2026-09-23 lesson)")

@@ -289,7 +289,12 @@ def stage_adopt(r: Runner) -> None:
     keys_script = [
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{p.linklocal}%switch.{p.vlan} "
         f"\"{payload}\" </dev/null",
-        f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.linklocal}%switch.{p.vlan} "
+        # Wrong password on purpose: dbclient silently falls back from pubkey
+        # to password auth, so a bare -i proof can pass on the blank/known
+        # password instead of the key (2026-09-23 NR7101 lesson). With a
+        # bogus password, KEY-AUTH-OK can only come from the key.
+        f"DROPBEAR_PASSWORD='pubkey-proof-only' dbclient -y -y -i /root/.ssh/id_ed25519 "
+        f"root@{p.linklocal}%switch.{p.vlan} "
         "'echo KEY-AUTH-OK; wc -l /etc/dropbear/authorized_keys' </dev/null",
     ]
     out = r.sh("adopt-keys", keys_script)
@@ -325,7 +330,7 @@ def stage_verify(r: Runner) -> None:
     p = r.place
     time.sleep(15)
     out = r.sh("verify", [
-        f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
+        f"DROPBEAR_PASSWORD='pubkey-proof-only' dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
         "'echo SSH-OK-NEW-IP; uci get network.lan.proto; ip -4 addr show br-lan | grep inet; "
         "grep DISTRIB_RELEASE /etc/openwrt_release' </dev/null || echo NEW-IP-SSH-FAIL",
         f"ip neigh | grep 'switch.{p.vlan}'",
