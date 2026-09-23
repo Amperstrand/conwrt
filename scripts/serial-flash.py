@@ -23,17 +23,27 @@ Examples:
     # Transfer, verify, and flash
     python3 scripts/serial-flash.py /dev/cu.usbserial-XXXX 57600 \
         --base64 images/firmware.bin --verify --sysupgrade
+
+PORT may also be a remote serial-console bridge of the form tcp://HOST:PORT
+(baud is a property of the remote line and is ignored). From a Mac, forward
+the bridge port first: ssh -N -L 4002:127.0.0.1:4002 ai-legion, then use
+tcp://127.0.0.1:4002 as PORT.
 """
 import argparse
 import base64
 import math
-import serial
 import sys
 import time
 from pathlib import Path
 
+from serial_transport import (
+    SerialConnectionError,
+    SerialLike,
+    open_serial,
+)
 
-def send_and_wait(s: serial.Serial, command: str, wait: float = 1.0) -> str:
+
+def send_and_wait(s: SerialLike, command: str, wait: float = 1.0) -> str:
     """Send command and read response."""
     s.write((command + "\r\n").encode())
     time.sleep(wait)
@@ -48,7 +58,7 @@ def send_and_wait(s: serial.Serial, command: str, wait: float = 1.0) -> str:
     return resp.decode("ascii", errors="replace")
 
 
-def transfer_base64(s: serial.Serial, image_path: str, chunk_size: int,
+def transfer_base64(s: SerialLike, image_path: str, chunk_size: int,
                     delay: float, dry_run: bool = False) -> bool:
     """Transfer firmware image via base64 encoding over serial."""
     with open(image_path, "rb") as f:
@@ -113,7 +123,7 @@ def transfer_base64(s: serial.Serial, image_path: str, chunk_size: int,
     return True
 
 
-def verify_size(s: serial.Serial, expected_size: int) -> bool:
+def verify_size(s: SerialLike, expected_size: int) -> bool:
     """Verify the transferred file size matches."""
     print("Verifying file size...")
     resp = send_and_wait(s, "wc -c /tmp/fw.bin", wait=2)
@@ -138,7 +148,7 @@ def verify_size(s: serial.Serial, expected_size: int) -> bool:
     return False
 
 
-def run_sysupgrade(s: serial.Serial) -> None:
+def run_sysupgrade(s: SerialLike) -> None:
     """Run sysupgrade on the device."""
     print("Running sysupgrade -n /tmp/fw.bin...")
     print("  (device will reboot after flashing — watch serial for boot log)")
@@ -150,8 +160,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Transfer firmware to device over serial via base64"
     )
-    parser.add_argument("port", help="Serial port (e.g., /dev/cu.usbserial-XXXX)")
-    parser.add_argument("baud", type=int, help="Baud rate (e.g., 57600)")
+    parser.add_argument("port", help="serial port (local /dev path or tcp://HOST:PORT)")
+    parser.add_argument("baud", type=int, help="baud rate (e.g. 57600; ignored for tcp://)")
     parser.add_argument("--base64", metavar="IMAGE",
                         help="Transfer image via base64 encoding")
     parser.add_argument("--chunk-size", type=int, default=512,
@@ -179,7 +189,11 @@ def main():
     if args.dry_run:
         s = None
     else:
-        s = serial.Serial(args.port, args.baud, timeout=1)
+        try:
+            s = open_serial(args.port, args.baud, timeout=1)
+        except SerialConnectionError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
 
     try:
         # Transfer
