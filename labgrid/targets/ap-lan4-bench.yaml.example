@@ -1,0 +1,28 @@
+## Reference rig: BENCH place with PoE power + adopted-unit SSH (P1 pattern).
+## Extreme WS-AP3915i reference unit on ap-lan4 — the fully-mechanical rig:
+## every resource is machine-controlled, no human steps, safe unattended.
+##
+## The POWER resource is the shared exporter's NetworkPowerPort (conwrt_poe
+## backend, place ap-lan4 on the coordinator); the NETWORK resource is the
+## NetworkService exported with it. Acquire the remote place, then drive
+## transitions: power cycle (cold-boot tests), SSH (deploys/config), or a
+## net-first image-per-run campaign (labgrid/README.md).
+##
+## Coordinator/exporter addresses live in local bench records (gitignored);
+## placeholders below.
+targets:
+  main:
+    resources:
+      RemotePlace:
+        name: ap-lan4
+    drivers:
+      SSHDriver:
+        connection_timeout: 120.0
+        explicit_scp_mode: True
+      # PowerDriver comes from the exporter's NetworkPowerPort via the place.
+## Method gating (docs/DEVICE-TRANSITIONS.md transition table):
+##   sysupgrade  [ssh-service]                -> board-name-match first
+##   adopt/firstboot [ssh-service]            -> rom-audit + keys-and-password
+##                                               + tftp-lifeline-armed (AGENTS.md R1)
+##   tftp-boot   [power,tftp-server,...]      -> only when flash boot FAILS
+##                                               (boot_net never runs otherwise)

@@ -34,12 +34,27 @@
       "flash_time_seconds": 360,
       "silence_timeout": 30,
       "reset_instructions": "Press and hold the reset button on the side, under the antenna.",
-      "led_pattern": "blue LED flashes 6 times then solid white"
+      "led_pattern": "blue LED flashes 6 times then solid white",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "signatures": {

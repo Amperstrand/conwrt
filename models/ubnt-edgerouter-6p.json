@@ -35,12 +35,25 @@
       "silence_timeout": 90,
       "port_swap_required": true,
       "port_swap_note": "After initramfs boots, move cable from physical eth0 to physical eth1+. OpenWrt maps eth0 as WAN.",
-      "reset_instructions": "For recovery: connect to physical eth0, set laptop to 192.168.1.10/24, hold reset button while powering on for 30s until all LEDs light up, TFTP signed EdgeOS recovery image (.img.signed) to 192.168.1.20. Unsigned files rejected."
+      "reset_instructions": "For recovery: connect to physical eth0, set laptop to 192.168.1.10/24, hold reset button while powering on for 30s until all LEDs light up, TFTP signed EdgeOS recovery image (.img.signed) to 192.168.1.20. Unsigned files rejected.",
+      "resources_required": [
+        "stock-ssh"
+      ],
+      "envelope": [
+        "partition-backup",
+        "board-name-match"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt on this device",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 255
+      "exit_code": 255,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "tftp": {
       "description": "U-Boot TFTP recovery (requires serial console or reset button + bootloader v003+)",
@@ -48,7 +61,16 @@
       "client_ip": "192.168.1.10",
       "client_subnet": "255.255.255.0",
       "flash_time_seconds": 300,
-      "notes": "Reset button TFTP: hold reset while powering on ~30s, router becomes TFTP server at 192.168.1.20 on physical eth0. ONLY accepts .img.signed files (cryptographic signature required). Recovery image: dl.ubnt.com/firmwares/edgemax/v2.0.x/ER-e300.recovery.v2.0.6.*.img.signed (~112MB). Manual TFTP via serial uses .vmlinux.64 files instead."
+      "notes": "Reset button TFTP: hold reset while powering on ~30s, router becomes TFTP server at 192.168.1.20 on physical eth0. ONLY accepts .img.signed files (cryptographic signature required). Recovery image: dl.ubnt.com/firmwares/edgemax/v2.0.x/ER-e300.recovery.v2.0.6.*.img.signed (~112MB). Manual TFTP via serial uses .vmlinux.64 files instead.",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "tftp-server"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     }
   },
   "signatures": {
