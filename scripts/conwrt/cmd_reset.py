@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from ssh_utils import check_ssh, run_ssh
-from flash.context import log, say, poll_until, get_link_state, DEFAULT_CLIENT_IP
+from flash.context import log, say, manual_step, poll_until, get_link_state, DEFAULT_CLIENT_IP
 from platform_utils import configure_interface_ip, remove_interface_ip
 from conwrt.flash_utils import _detect_ssh_key_path
 from conwrt.device_inventory import auto_detect_interface
@@ -46,15 +46,17 @@ def cmd_reset(args: argparse.Namespace) -> int:
     log(f"SSH not available at {ip}. Entering failsafe mode.")
     if not args.no_voice:
         say("Cannot reach the router via SSH. We will use OpenWrt failsafe mode.")
-        say("I need you to power cycle the router. Unplug the power cable now.")
+    if not manual_step("I need you to power cycle the router. Unplug the power cable now.",
+                       voice=not args.no_voice, confirm="event"):
+        return 1
 
     log("Waiting for link down...")
     link_was_up = get_link_state(interface)
     if link_was_up:
         poll_until(lambda: not get_link_state(interface), timeout=30, interval=0.5)
 
-    if not args.no_voice:
-        say("Power disconnected. Now plug in the power cable.")
+    manual_step("Power disconnected. Now plug in the power cable.",
+                voice=not args.no_voice, confirm="event")
 
     # --- start tcpdump monitoring ---
     local_mac = ""
@@ -92,8 +94,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
                     continue
                 if not boot_detected and "Please press button" in line:
                     log("FAILSAFE PROMPT DETECTED")
-                    if not args.no_voice:
-                        say("PRESS AND HOLD THE RESET BUTTON NOW. Hold for 2 seconds then release.")
+                    manual_step("PRESS AND HOLD THE RESET BUTTON NOW. Hold for 2 seconds then release.",
+                                voice=not args.no_voice, confirm="event")
                     boot_detected = True
                     failsafe_deadline = time.time() + 5
                     continue
