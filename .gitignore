@@ -24,6 +24,21 @@ tests/integration/.openwrt-session.qcow2
 # OpenCode / Playwright internal
 .omo/
 .playwright-mcp/
+.sisyphus/
+.cursor/
+
+# Local-only operational artifacts — never publish (operator rule 2026-09-22)
+# Session records, inventory, backups, captures, running rig configs.
+data/*
+!data/.gitkeep
+captures/*
+!captures/.gitkeep
+backups/
+config.toml
+labgrid/exporter.yaml
+serial/
+conwrt.egg-info/
+__pycache__/
 
 # OS junk
 .DS_Store
@@ -40,3 +55,11 @@ tests/integration/.tollgate/
 tests/integration/.openwrt.img
 tests/integration/.openwrt-flash-session.qcow2
 tests/integration/.venv-cashu/
+
+# Vendor firmware blobs — too big / licensing-unclear for git (keep local)
+firmware/
+# Runtime artifacts misplaced under scripts/ (tool path bug — top-level dirs are canonical)
+scripts/captures/
+scripts/data/
+# Real labgrid console config carries live credentials (header rule: local-only)
+labgrid/console.yaml
