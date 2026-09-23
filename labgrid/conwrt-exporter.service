@@ -28,7 +28,7 @@ Wants=network-online.target
 Type=simple
 ## ExecStart runs on the exporter host; -x points at the shared coordinator.
 ## Adjust the labgrid-exporter path if it is not on ~/.local/bin there.
-ExecStart=%h/.local/bin/labgrid-exporter -x COORDINATOR_HOST:20408 %h/conwrt-labdir/exporter.yaml
+ExecStart=%h/.local/bin/labgrid-exporter -c COORDINATOR_HOST:20408 %h/conwrt-labdir/exporter.yaml
 Restart=on-failure
 RestartSec=5
 ## Ping-timeout deaths are transient by definition: retry aggressively but
