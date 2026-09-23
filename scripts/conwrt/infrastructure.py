@@ -259,6 +259,18 @@ def _validate_args(args: argparse.Namespace) -> Optional[str]:
     if args.image and args.request_image:
         return "--image and --request-image are mutually exclusive."
 
+    serial_monitor_spec = getattr(args, "serial", None)
+    if serial_monitor_spec:
+        try:
+            from serial_transport import SerialConnectionError
+            from flash.serial_monitor import parse_serial_spec
+        except ImportError:
+            return "--serial requires pyserial (pip install pyserial)."
+        try:
+            parse_serial_spec(serial_monitor_spec)
+        except SerialConnectionError as e:
+            return f"invalid --serial spec: {e}"
+
     if args.image:
         image_only_flags = []
         if args.ssh_key:

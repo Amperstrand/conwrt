@@ -509,6 +509,49 @@ def test_collect_script_covers_all_dut_vlans() -> None:
     assert "1001" not in script  # lan1/uplink never scanned
 
 
+# --------------------------------------------- session transport parity
+
+COLLECT_OUT = ("===POE===\n" + json.dumps({"ports": {"lan2": "Delivering power"}})
+               + "\n===FDB===\n===NEIGH===\n")
+
+
+def test_collect_pins_ssh_argv_and_remote_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct-path parity after the BenchSession rewire: collect emits the
+    same remote script (byte-for-byte) over the same ssh argv form."""
+    import bench_session as bs
+    calls: list = []
+
+    def fake_run(cmd: list[str], **kwargs: object):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout=COLLECT_OUT)
+
+    monkeypatch.setattr(bi.subprocess, "run", fake_run)
+    monkeypatch.setenv("CONWRT_BENCH", "direct")
+    obs = bi.collect("192.168.13.2", ("lan2", "lan4"))
+    argv, kwargs = calls[0]
+    assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2",
+                    bi.collect_script(("lan2", "lan4"))]
+    assert kwargs["capture_output"] is True and kwargs["text"] is True
+    assert obs["lan2"].poe == "Delivering power"
+
+
+def test_collect_labgrid_without_lib_fails_typed_before_hardware(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONWRT_BENCH=labgrid must fail with the typed error before any
+    hardware call — never an ImportError traceback, never silent direct."""
+    import sys as _sys
+
+    monkeypatch.setenv("CONWRT_BENCH", "labgrid")
+    monkeypatch.setitem(_sys.modules, "labgrid", None)
+
+    def no_hardware(*_: object, **__: object) -> None:
+        raise AssertionError("hardware call attempted before backend validation")
+
+    monkeypatch.setattr(bi.subprocess, "run", no_hardware)
+    with pytest.raises(bi.ScanError, match="pip install labgrid"):
+        bi.collect("192.168.13.2", ("lan2",))
+
+
 def test_no_committed_coordinates() -> None:
     """Policy: no real bench IPs in the scan tool (AGENTS privacy rule)."""
     source = Path(bi.__file__).read_text()

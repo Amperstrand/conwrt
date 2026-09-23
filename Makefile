@@ -29,7 +29,7 @@ lint: ## Run ruff and shell script syntax checks
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
 
 typecheck: ## Run Python static type checking
-	@pyright scripts tests
+	@python3 -m pyright scripts tests
 
 validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 	@echo "Validating schemas..."
@@ -70,8 +70,8 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
 
 test: ## Run Python unit tests plus existing safe shell smoke test
-	@pytest tests
-	@pytest tests/integration/test_use_cases_dry_run.py -q
+	@python3 -m pytest tests
+	@python3 -m pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
 		bats tests/*.bats; \

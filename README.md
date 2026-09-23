@@ -118,7 +118,11 @@ conwrt/
 │   ├── serial-console.py      # Interactive serial monitor with command FIFO
 │   ├── extreme_ap391x_analyze.py  # Extreme AP391x firmware image analysis
 │   ├── bench_discover.py     # Hypothesis-driven dark-device discovery ladder (EUI-64 v6, subnet archaeology, cred ladder)
+│   ├── bench_inventory.py    # Read-only port scan + registry reconciliation (moved routers, exporter.yaml regen)
+│   ├── bench_switch.py       # Bench/PoE switch lifecycle: backup/deploy/install-poe/verify/reset (see docs/BENCH-SWITCH-PATTERN.md)
+│   ├── serial_transport.py   # Serial console driver: linted line-chunked delivery, FT232R break recovery
 │   └── use_cases/             # Use case presets (auto-discovered plugins)
+├── labgrid/               # Bench rig: PoE power backend (conwrt_poe), exporter config, tests
 ├── data/                # Runtime data (gitignored)
 │   ├── inventory.jsonl         # Append-only device inventory (specimen-level)
 │   └── *.bin                   # Cached firmware images

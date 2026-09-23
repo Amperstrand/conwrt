@@ -24,7 +24,10 @@ from flash.context import (
     Event,
     PROBE_IPS,
     REBOOT_TIMEOUT,
+    SERIAL_MILESTONES,
     State,
+    apply_serial_milestone,
+    drain_serial_milestones,
     log,
     say,
     sha256_file,
@@ -363,7 +366,9 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
-    if _wait_for_sysupgrade_reboot(openwrt_ip):
+    reboot_seen = _wait_for_sysupgrade_reboot(openwrt_ip)
+    drain_serial_milestones(event_queue, ctx)
+    if reboot_seen:
         ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)
     else:
         ctx._say_fn("Device did not come back after flash.")
@@ -404,6 +409,12 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
                 ctx._say_fn("OpenWrt is booting.")
                 log("ICMPv6 from router MAC detected — OpenWrt is booting")
                 break
+            elif event == Event.SERIAL_KERNEL_START:
+                apply_serial_milestone(ctx, event, event_ts)
+                log("Serial milestone: kernel starting — OpenWrt is booting")
+                break
+            elif event in SERIAL_MILESTONES:
+                apply_serial_milestone(ctx, event, event_ts)
             elif event == Event.SSH_UP:
                 ctx.timeline.ssh_available = event_ts
                 ctx._say_fn("Recovery complete! Router is back online.")

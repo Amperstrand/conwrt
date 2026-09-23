@@ -1,5 +1,15 @@
 # Serial Rescue Runbook — Three Stuck AP3915i Units (2026-09-21)
 
+> **2026-09-23 update:** a serial adapter is no longer required. A healthy
+> AP3915i can listen on its own `/dev/ttyMSM0` to a second AP3915i's console
+> over a 3-wire 3.3V splice (TX/RX crossed, GND common, no VCC) — proven
+> end-to-end capturing ap-lan2's full boot from the lan4 reference unit.
+> See **SERIAL-VIA-AP3915I.md** (same directory) for the method, wiring, and
+> labgrid `NetworkSerialPort` integration path. lan7/lan8 were recovered
+> 2026-09-22 without serial (IPv6 link-local); ap-lan2's console was reached
+> 2026-09-23 via this bridge. The lan6 dark unit remains the open case this
+> bridge now addresses.
+
 Three WS-AP3915i units (labels confirmed) sit on the home GS1900-8HP (192.168.13.2)
 with network-dead states. This is the pilot-first rescue plan: prove the flow on one
 unit, then batch the rest. Prepared 2026-09-21; all remote diagnosis already done.

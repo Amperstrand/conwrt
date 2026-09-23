@@ -523,6 +523,36 @@ def _teardown_monitors(
     link_thread.join(timeout=5)
 
 
+def _setup_serial_monitor(
+    serial_spec: str,
+    event_queue: queue.Queue,
+    args: argparse.Namespace,
+) -> tuple[Optional[object], Optional[threading.Thread]]:
+    """Create and start the optional --serial boot-milestone monitor.
+
+    Imports lazily so flash runs without the flag never require pyserial.
+    Any spec/open problem degrades to pcap-only with a logged warning —
+    the monitor must never abort a flash.
+    """
+    try:
+        from serial_transport import SerialConnectionError
+        from flash.serial_monitor import SerialBootMonitor, parse_serial_spec
+    except ImportError as e:
+        log(f"WARNING: --serial given but pyserial unavailable ({e}) — "
+            f"continuing pcap-only")
+        return None, None
+    try:
+        port, spec_baud = parse_serial_spec(serial_spec)
+    except SerialConnectionError as e:
+        log(f"WARNING: ignoring --serial ({e}) — continuing pcap-only")
+        return None, None
+    baud = spec_baud or getattr(args, "serial_baud", None) or 115200
+    monitor = SerialBootMonitor(port, baud, event_queue)
+    thread = threading.Thread(target=monitor.run, daemon=True)
+    thread.start()
+    return monitor, thread
+
+
 @contextmanager
 def monitor_lifecycle(
     interface: str,
@@ -534,12 +564,25 @@ def monitor_lifecycle(
 ):
     """Context manager for monitor setup/teardown.
 
-    Yields (pcap_monitor, link_monitor) tuple.
+    Yields (pcap_monitor, link_monitor) tuple. When args.serial (the flash
+    --serial flag) names a stream, a SerialBootMonitor runs alongside the
+    pcap/link monitors and feeds the same event queue; serial milestones
+    are ground truth over pcap signals.
     """
     pcap_mon, pcap_thr, link_mon, link_thr = _setup_monitors(
         interface, event_queue, pcap_path, profile, args, pcap_enabled=pcap_enabled)
 
+    serial_mon = None
+    serial_thr = None
+    serial_spec = (getattr(args, "serial", None) or "").strip()
+    if serial_spec:
+        serial_mon, serial_thr = _setup_serial_monitor(serial_spec, event_queue, args)
+
     try:
         yield pcap_mon, link_mon
     finally:
+        if serial_mon is not None:
+            serial_mon.stop()
+        if serial_thr is not None:
+            serial_thr.join(timeout=5)
         _teardown_monitors(pcap_mon, pcap_thr, link_mon, link_thr)

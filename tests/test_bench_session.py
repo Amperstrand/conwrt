@@ -254,6 +254,74 @@ class TestDirectTftpArm:
             bs.DirectBench().tftp_arm(1005, "img.bin")
 
 
+# ------------------------------------------------ DirectBench switch access
+
+class TestDirectSwitchAccess:
+    """The three switch-infrastructure primitives the bench_* scripts were
+    rewired onto (plan task 11) — argv pinned to today's wire forms:
+    switch_exec = bench_inventory's collect/probe ssh form, switch_sh =
+    bench_adopt's make_ssh_transport form, switch_put = bench_flash's
+    push_to_switch scp -O form."""
+
+    def test_switch_exec_sends_exact_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list = []
+        monkeypatch.setattr(bs.subprocess, "run", _run_recorder("ubus-out", calls))
+        out = bs.DirectBench().switch_exec("ubus call poe info")
+        assert out == "ubus-out", "command form returns stdout only (inventory parse shape)"
+        argv, kwargs = calls[0]
+        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2", "ubus call poe info"]
+        assert kwargs["capture_output"] is True and kwargs["text"] is True
+        assert kwargs["timeout"] == 60
+
+    def test_switch_exec_timeout_is_caller_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list = []
+        monkeypatch.setattr(bs.subprocess, "run", _run_recorder("", calls))
+        bs.DirectBench(switch_host="10.9.9.9").switch_exec("ip neigh show dev switch.1004",
+                                                           timeout_s=15)
+        argv, kwargs = calls[0]
+        assert argv[-2] == "root@10.9.9.9" and argv[-1] == "ip neigh show dev switch.1004"
+        assert kwargs["timeout"] == 15
+
+    def test_switch_exec_failure_is_typed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(bs.subprocess, "run",
+                            _run_recorder("", [], rc=255))
+        with pytest.raises(bs.BenchError, match="switch command failed"):
+            bs.DirectBench().switch_exec("ubus call poe info")
+
+    def test_switch_sh_feeds_script_and_returns_combined(self,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout="LIFELINE-OK\n", stderr="warn\n")
+
+        monkeypatch.setattr(bs.subprocess, "run", fake_run)
+        out = bs.DirectBench().switch_sh("echo LIFELINE-OK\n")
+        assert out == "LIFELINE-OK\nwarn\n", "script form returns stdout+stderr ungated"
+        argv, kwargs = calls[0]
+        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2", "sh -s"]
+        assert kwargs["input"] == "echo LIFELINE-OK\n"
+        assert kwargs["timeout"] == 90, "bench_adopt's Mac-side hang guard"
+
+    def test_switch_put_sends_exact_scp_argv(self, monkeypatch: pytest.MonkeyPatch,
+                                             tmp_path: Path) -> None:
+        calls: list = []
+        monkeypatch.setattr(bs.subprocess, "run", _run_recorder("", calls))
+        img = tmp_path / "img.bin"
+        img.write_bytes(b"x")
+        bs.DirectBench(switch_host="10.9.9.9").switch_put(img, "/tmp/bench-tftp/img.bin")
+        argv, kwargs = calls[0]
+        assert argv == ["scp", "-O", *bs.SSH_OPTS, str(img), "root@10.9.9.9:/tmp/bench-tftp/img.bin"]
+        assert kwargs["timeout"] == 300
+
+    def test_switch_put_failure_is_typed(self, monkeypatch: pytest.MonkeyPatch,
+                                         tmp_path: Path) -> None:
+        monkeypatch.setattr(bs.subprocess, "run", _run_recorder("", [], rc=1))
+        with pytest.raises(bs.BenchError, match="switch file push failed"):
+            bs.DirectBench().switch_put(tmp_path / "img.bin", "/tmp/x")
+
+
 # ---------------------------------------------------------- LabgridBench
 
 def _labgrid_bench(events: list, resources: dict | None = None) -> bs.LabgridBench:
@@ -322,6 +390,17 @@ class TestLabgridBench:
         handle = _labgrid_bench([]).tftp_arm(1002, "img.bin")
         assert handle.vlan == 1002 and handle.switch == "192.168.13.2"
         assert calls[0][0][-1] == "sh -s"
+
+    def test_switch_infra_primitives_are_typed_unsupported(self, labgrid_stub) -> None:
+        """switch_exec/sh/put are bench-switch infrastructure: labgrid models
+        per-place DUT resources only — typed refusal, never a silent direct
+        fallback (task 11 rule)."""
+        lb = _labgrid_bench([])
+        for call in (lambda: lb.switch_exec("ubus call poe info"),
+                     lambda: lb.switch_sh("echo hi\n"),
+                     lambda: lb.switch_put(Path("/tmp/img"), "/tmp/x")):
+            with pytest.raises(bs.UnsupportedOperationError, match="bench-switch infrastructure"):
+                call()
 
     def test_unknown_action_typed_error(self, labgrid_stub) -> None:
         with pytest.raises(bs.BenchError, match="unknown power action"):

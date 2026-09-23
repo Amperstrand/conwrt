@@ -14,6 +14,20 @@ Primitives:
   ssh_target(place)                  (host, user, jump) coordinates for the DUT
   tftp_arm(vlan, image_name)         stage + verify the dnsmasq TFTP lifeline
                                      on the switch, return the handle
+  switch_exec(cmd)                   run ONE command on the bench switch
+                                     (stdout, exit-code gated)
+  switch_sh(script)                  feed a shell script via ssh sh -s
+                                     (combined output, content gated by the
+                                     caller — bench_adopt evidence style)
+  switch_put(local, remote)          scp -O a file onto the bench switch
+
+The switch_* primitives are bench-switch infrastructure, not DUT control:
+DirectBench implements them over ssh/scp to the switch (today's wire forms
+from bench_inventory / bench_adopt / bench_flash); LabgridBench raises
+UnsupportedOperationError — the coordinator models per-place DUT resources
+(power/console/NetworkService), not the switch's own shell. tftp_arm is the
+one documented switch-infrastructure exception that still runs on the direct
+path under labgrid (landed in task 9; the lifeline is switch-local either way).
 
 Backends:
   DirectBench  (default) — today's exact command paths, zero new deps:
@@ -79,6 +93,11 @@ class ConsoleUnavailableError(BenchError):
     """No serial console endpoint exists for the place."""
 
 
+class UnsupportedOperationError(BenchError):
+    """This backend does not implement the primitive (e.g. switch_exec on
+    the labgrid backend, which models per-place DUT resources only)."""
+
+
 PowerAction = str  # validated against POWER_ACTIONS at runtime
 
 
@@ -121,6 +140,9 @@ class BenchSession(Protocol):
     def ssh_target(self, place: Place | str) -> SshTarget: ...
     def tftp_arm(self, vlan: int, image_name: str,
                  tftproot: str = DEFAULT_TFTPROOT) -> TftpLifeline: ...
+    def switch_exec(self, cmd: str, timeout_s: int = 60) -> str: ...
+    def switch_sh(self, script: str, timeout_s: int = 90) -> str: ...
+    def switch_put(self, local: Path, remote: str) -> None: ...
 
 
 def _name(place: Place | str) -> str:
@@ -158,30 +180,43 @@ class DirectBench:
         self.serial_endpoints = dict(serial_endpoints or {})
         self.cycle_off_s = cycle_off_s
 
-    def _switch_cmd(self, cmd: str, timeout_s: int = 60) -> str:
+    def switch_exec(self, cmd: str, timeout_s: int = 60) -> str:
+        """Run ONE command on the switch; return stdout. Nonzero exit
+        raises (switch ssh failure, remote command failure)."""
         proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{self.switch_host}", cmd],
                               capture_output=True, text=True, timeout=timeout_s)
         if proc.returncode != 0:
             raise BenchError(f"switch command failed ({proc.returncode}): "
                              f"{(proc.stderr or proc.stdout)[-300:]}")
-        return proc.stdout + proc.stderr
+        return proc.stdout
 
-    def _switch_sh(self, script: str, timeout_s: int = 60) -> str:
+    def switch_sh(self, script: str, timeout_s: int = 90) -> str:
+        """Feed a shell script via `ssh sh -s`; return combined stdout+stderr
+        with NO exit-code gate — callers gate on content markers (the
+        bench_adopt evidence-file pattern)."""
         proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{self.switch_host}", "sh -s"],
                               input=script, capture_output=True, text=True, timeout=timeout_s)
         return proc.stdout + proc.stderr
+
+    def switch_put(self, local: Path, remote: str) -> None:
+        """scp -O (dropbear has no sftp-server) a file onto the switch."""
+        proc = subprocess.run(["scp", "-O", *SSH_OPTS, str(local),
+                               f"root@{self.switch_host}:{remote}"],
+                              capture_output=True, text=True, timeout=300)
+        if proc.returncode != 0:
+            raise BenchError(f"switch file push failed: {proc.stderr[-200:]}")
 
     def power(self, place: Place | str, action: PowerAction) -> None:
         _check_action(action)
         port = _name(place).removeprefix("ap-")
         if action in ("on", "off"):
             ubus_action = "enable" if action == "on" else "disable"
-            self._switch_cmd(f"ubus call poe manage "
+            self.switch_exec(f"ubus call poe manage "
                              f"'{{\"port\":\"{port}\",\"action\":\"{ubus_action}\"}}'")
         else:
             # one SSH round-trip: off -> settle -> on (bench_flash's proven 8s;
             # never split a cycle across connections — AGENTS macOS eth rule)
-            self._switch_cmd(f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"disable\"}}'; "
+            self.switch_exec(f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"disable\"}}'; "
                              f"sleep {self.cycle_off_s}; "
                              f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"enable\"}}'")
 
@@ -213,7 +248,7 @@ class DirectBench:
         # lifeline_lines reads only place.vlan; the image must already be in
         # tftproot (caller pushes it — bench_flash push_to_switch order).
         staging = Place(name=f"ap-lan{vlan - 1000}", mac="00:00:00:00:00:00", dut_ip="")
-        out = self._switch_sh("\n".join(lifeline_lines(staging, image_name, tftproot)) + "\n")
+        out = self.switch_sh("\n".join(lifeline_lines(staging, image_name, tftproot)) + "\n")
         if "LIFELINE-OK" not in out:
             raise BenchError(f"TFTP lifeline not verifiably serving on switch.{vlan} "
                              f"({tftproot}):\n{out[:300]}")
@@ -328,6 +363,21 @@ class LabgridBench:
         # labgrid has no TFTP resource — the lifeline is switch infrastructure
         # either way (labgrid/README image-per-run pattern, cost note 5).
         return self._direct.tftp_arm(vlan, image_name, tftproot)
+
+    def _switch_infra_unsupported(self, primitive: str) -> UnsupportedOperationError:
+        return UnsupportedOperationError(
+            f"{primitive} is bench-switch infrastructure: the labgrid backend models "
+            f"per-place DUT resources (power/console/ssh_target) only — use the "
+            f"direct backend (CONWRT_BENCH=direct) for switch-side operations")
+
+    def switch_exec(self, cmd: str, timeout_s: int = 60) -> str:
+        raise self._switch_infra_unsupported("switch_exec")
+
+    def switch_sh(self, script: str, timeout_s: int = 90) -> str:
+        raise self._switch_infra_unsupported("switch_sh")
+
+    def switch_put(self, local: Path, remote: str) -> None:
+        raise self._switch_infra_unsupported("switch_put")
 
     def close(self) -> None:
         if self._session is None:

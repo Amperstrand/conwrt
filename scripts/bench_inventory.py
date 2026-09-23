@@ -12,7 +12,9 @@ never a login, never a config write) and optional dbclient identity probes.
 It NEVER power-toggles a port to "discover" it (owner directive 2026-09-22)
 and never writes to a DUT.
 
-Data sources (single SSH round-trip to the switch):
+Data sources (one SSH round-trip to the switch through BenchSession —
+get_session(); CONWRT_BENCH / config.toml select the backend, direct by
+default):
   1. ubus call poe info            -> per-port PoE status
   2. bridge fdb show               -> learned MACs per port (dynamic only;
                                         static/local/permanent self-entries
@@ -86,13 +88,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from bench_adopt import eui64_linklocal  # noqa: E402
+from bench_session import BenchError, get_session  # noqa: E402
 from inventory import append_to_inventory, read_inventory  # noqa: E402
-
-SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPath=/tmp/conwrt-bench-%r@%h:%p",
-            "-o", "ControlPersist=60s"]
 
 DEFAULT_PLACES = REPO_ROOT / "data" / "bench" / "places.json"
 DEFAULT_INVENTORY = str(REPO_ROOT / "data" / "inventory.jsonl")
@@ -102,6 +99,12 @@ FDB_SKIP_TOKENS = ("static", "local", "permanent", "added_by_user")
 
 class ScanError(Exception):
     """Switch unreachable or returned unusable data."""
+
+
+def _session(switch_host: str):
+    """Bench transport for this scan (BenchSession via get_session —
+    CONWRT_BENCH / config.toml select the backend; direct by default)."""
+    return get_session(switch_host=switch_host)
 
 
 # ----------------------------------------------------------------- parsing
@@ -359,12 +362,10 @@ def collect_script(ports: tuple[str, ...]) -> str:
 
 
 def collect(switch_host: str, ports: tuple[str, ...]) -> dict[str, PortObservation]:
-    proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{switch_host}",
-                           collect_script(ports)],
-                          capture_output=True, text=True, timeout=60)
-    if proc.returncode != 0:
-        raise ScanError(f"switch ssh failed: {(proc.stderr or proc.stdout).strip()[:300]}")
-    out = proc.stdout
+    try:
+        out = _session(switch_host).switch_exec(collect_script(ports))
+    except BenchError as e:
+        raise ScanError(f"switch ssh failed: {e}") from e
     try:
         poe = parse_poe_info(out.split("===POE===", 1)[1].split("===FDB===", 1)[0])
         fdb = parse_fdb(out.split("===FDB===", 1)[1].split("===NEIGH===", 1)[0])
@@ -486,24 +487,19 @@ def refresh_liveness(switch_host: str, registry: Registry,
             continue
         before = set(o.macs)
         try:
-            proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{switch_host}", script],
-                                  capture_output=True, text=True, timeout=40)
-        except subprocess.TimeoutExpired:
+            out = _session(switch_host).switch_exec(script, timeout_s=40)
+        except (BenchError, subprocess.TimeoutExpired):
             continue
-        if proc.returncode != 0:
-            continue
-        lv = parse_liveness(proc.stdout, probe_markers(dut_ip, mac))
+        lv = parse_liveness(out, probe_markers(dut_ip, mac))
         if lv is None:
             continue
         try:
-            neigh_proc = subprocess.run(
-                ["ssh", *SSH_OPTS, f"root@{switch_host}",
-                 f"ip neigh show dev switch.{o.vlan}"],
-                capture_output=True, text=True, timeout=15)
-        except subprocess.TimeoutExpired:
-            neigh_proc = None
-        if neigh_proc is not None and neigh_proc.returncode == 0:
-            fresh = parse_neigh(f"--vlan {o.vlan}\n{neigh_proc.stdout}").get(o.vlan, [])
+            neigh_out = _session(switch_host).switch_exec(
+                f"ip neigh show dev switch.{o.vlan}", timeout_s=15)
+        except (BenchError, subprocess.TimeoutExpired):
+            neigh_out = None
+        if neigh_out is not None:
+            fresh = parse_neigh(f"--vlan {o.vlan}\n{neigh_out}").get(o.vlan, [])
             for ip, mac in fresh:
                 o.macs.add(mac)
                 o.ips.setdefault(mac, []).append(ip)
@@ -524,9 +520,11 @@ def probe_identities(switch_host: str, obs: dict[str, PortObservation]) -> None:
                    "'cat /tmp/sysinfo/board_name; "
                    "ubus call system board | jsonfilter -e \"@.model\" -e \"@.hostname\"; "
                    ". /etc/openwrt_release; echo $DISTRIB_RELEASE' </dev/null")
-            proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{switch_host}", cmd],
-                                  capture_output=True, text=True, timeout=25)
-            ident = parse_identity(proc.stdout) if proc.returncode == 0 else {}
+            try:
+                out = _session(switch_host).switch_exec(cmd, timeout_s=25)
+            except BenchError:
+                continue
+            ident = parse_identity(out)
             if ident:
                 o.identity = ident
                 break

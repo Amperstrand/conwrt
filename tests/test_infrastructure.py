@@ -59,6 +59,27 @@ class TestValidateArgs(TestCase):
         result = _validate_args(args)
         assert result is None
 
+    def test_valid_serial_spec_returns_none(self):
+        args = self._ns(image="fw.bin", serial="tcp://127.0.0.1:4002,57600")
+        assert _validate_args(args) is None
+
+    def test_invalid_serial_spec_returns_error(self):
+        args = self._ns(image="fw.bin", serial="tcp://host-only")
+        result = _validate_args(args)
+        assert result is not None
+        assert "--serial" in result
+
+    def test_invalid_serial_baud_returns_error(self):
+        args = self._ns(image="fw.bin", serial="tcp://127.0.0.1:4002,fast")
+        result = _validate_args(args)
+        assert result is not None
+        assert "baud" in result
+
+    def test_namespace_without_serial_attr_is_fine(self):
+        args = self._ns(image="fw.bin")
+        assert not hasattr(args, "serial")
+        assert _validate_args(args) is None
+
     def test_request_image_only_returns_none(self):
         args = self._ns(request_image=True)
         result = _validate_args(args)
