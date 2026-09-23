@@ -56,7 +56,7 @@ EOF
   drift — the LAST sighting before the device went quiet is the one to try,
   but try them all).
 - Credential history: grep for `passwd`, `DROPBEAR_PASSWORD`, "password"
-  near the device MAC/model. Fleet password patterns (conwrt, Conwrt2026!,
+  near the device MAC/model. Fleet password patterns (conwrt, <bench-password-2026>,
   vendor defaults) belong in the `bench_discover.py` credential ladder.
 - Distrust your memory of "what we did back then" — trust the transcript.
   The May bench being flat VLAN 1 on 192.168.13.0/24 was ONLY recoverable

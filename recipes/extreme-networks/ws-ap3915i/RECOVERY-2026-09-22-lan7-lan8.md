@@ -22,7 +22,7 @@ in `scripts/bench_discover.py`.
 4. **Access**: `ProxyJump`+zone-scoped v6 FAILS (jump sshd can't dial it);
    the switch's `/usr/bin/ssh` (openssh) is silently broken. The door:
    `DROPBEAR_PASSWORD=<pw> dbclient -y -y root@fe80::...%switch.1008`.
-5. **Credentials**: lan7=`Conwrt2026!` (no-serial flow), lan8=`conwrt`
+5. **Credentials**: lan7=`<bench-password-2026>` (no-serial flow), lan8=`conwrt`
    (May AP#2 lineage — matched HARDWARE-DISCOVERY.md exactly).
 6. **lan8 pubkey bonus bug**: password worked, keys never did → syslog said
    it: `/etc/dropbear must be owned by user or root...` — directory was
@@ -44,7 +44,7 @@ after ~10s. From that data alone:
 | **EUI-64 link-local derivation** | **YES — the killer move** | `fe80::<MAC with FFFE + XOR 0x02>` — b4:2d:56:25:47:a2 → fe80::b62d:56ff:fe25:47a2. Linux/OpenWrt default link-locals are EUI-64. ping6 on the access VLAN → alive → banner → dbclient. Zero history needed. |
 | **Long passive listen** | YES | Both units RA every ~16s forever (odhcpd ULA). September's ~90s races treated boot-window as the only signal period. |
 | **Sweep the probe host's own subnets** | YES | The switch LIVED in 192.168.13.0/24. A .13 sweep on the access VLANs would have found lan7 in minutes. |
-| **Credential brute force** | YES | Dropbear has no lockout. A ~10-entry ladder (empty/conwrt/Conwrt2026!/new2day/admin/admin...) cracks both units. |
+| **Credential brute force** | YES | Dropbear has no lockout. A ~10-entry ladder (empty/conwrt/<bench-password-2026>/new2day/admin/admin...) cracks both units. |
 | **Fleet key reuse** | YES (lan8) | ai-legion's key was already authorized on lan8; ssh from ai-legion via the switch would have landed a shell. |
 | **LFP stack probes** | identifies, doesn't access | iTTL/IPID from RSTs would have confirmed "Linux 4.x/OpenWrt" → informs cred ladder. |
 | DHCP bait server | NO | Units are static (zero DISCOVERs — itself a useful negative: "operator-configured"). |
@@ -71,7 +71,7 @@ that omitted the subnet our own infrastructure lived in.
 
 ## Current state (end of session)
 
-- lan7: 192.168.1.1 @ VLAN 1007, pw Conwrt2026!, keys (switch + Mac id_rsa),
+- lan7: 192.168.1.1 @ VLAN 1007, pw <bench-password-2026>, keys (switch + Mac id_rsa),
   alias `lan7-ap`. IPv4 ICMP echo intermittently filtered (ARP/SSH fine) —
   cosmetic, unfixed by choice.
 - lan8: 192.168.1.1 @ VLAN 1008, pw conwrt, keys (ai-legion + switch + Mac),
