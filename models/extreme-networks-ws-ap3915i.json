@@ -160,7 +160,7 @@
       "client_ip": "192.168.1.2",
       "client_subnet": "255.255.255.0",
       "flash_time_seconds": 300,
-      "notes": "No reset-button TFTP recovery. Use rdwr_boot_cfg to set bootcmd=run boot_net for TFTP boot, or use serial console to interrupt U-Boot."
+      "notes": "ESCAPE-HATCH INVENTORY (verified 2026-09-22): NO reset button (no GPIO buttons in DTS — OpenWrt failsafe unreachable), NO LuCI in stock downloads.openwrt.org images (:80 dead), TFTP fallback (boot_net) only runs when flash-boot FAILS (0 RRQs verified against a serving TFTP server on a flash-booting unit), no boot-counter/recovery logic in the 2012-era U-Boot. Serial console (115200, 3.3V, TX-RX-GND, no VCC) is the ONLY escape hatch: keep an adapter on the bench before any destructive operation (AGENTS.md Escape-Hatch Discipline). For TFTP boot on units whose flash-boot fails: arm serverip 192.168.1.2 serving vmlinux.gz.uImage.3912 on the unit's VLAN, then PoE-cycle."
     }
   },
   "signatures": {},
@@ -293,6 +293,11 @@
       "tested": true,
       "date": "2026-09-21",
       "notes": "boot_net TFTP boot validated for both 24.10.2 and 25.12.2 initramfs + sysupgrade-FIT-as-bootfile (kernel-from-TFTP + flash-rootfs works on 25.12.2). Prerequisites: nft rule for unzoned bench VLANs (inbound UDP), per-port tftproot, 192.168.1.2 helper IP, file named vmlinux.gz.uImage.3912"
+    },
+    "serial-bridge": {
+      "tested": true,
+      "date": "2026-09-23",
+      "notes": "AP3915i-to-AP3915i 3-wire serial bridge, full boot captured via lan4 listener"
     }
   },
   "warnings": [
@@ -321,6 +326,6 @@
     "parity": "n81",
     "bootloader": "U-Boot 2012.07.19-r00020.1 (Jul 17 2017, stock Extreme)",
     "verified_from": "live unit kernel cmdline (console=ttyMSM0,115200n81), OpenWrt 24.10.2, 2026-09-21",
-    "note": "stdout-path empty in chosen node; cmdline is authoritative. UART pads on board, 3.3V - verify pinout before use; never connect VCC to the adapter."
+    "note": "stdout-path empty in chosen node; cmdline is authoritative. Console is RJ45 form factor carrying 3.3V TTL UART levels, NOT RS-232: never feed +/-12V and never wire VCC. Validated 2026-09-23: two units bridge console-to-console with a 3-wire splice (blue pair straight = GND, green pair crossed = TX<->RX); either unit works as listener or target end. Full method: recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md"
   }
 }
