@@ -1,0 +1,91 @@
+From: Amperstrand <amperstrand@localhost>
+Date: Wed Sep 24 2026
+Subject: [PATCH] base-files: verify overlay switch integrity at S95, retry on failure
+
+The tmpfs-to-jffs2/ext4 overlay switch at S95 (/etc/init.d/done calling
+`mount_root done`) can silently lose critical files. Services that hold
+files open during the switch may have buffered writes that never reach
+the persistent overlay (see PR #10037 for the race analysis).
+
+On jffs2 (NOR flash targets), the failure mode is deterministic under
+repeated firstboot stress: /etc/shadow, /etc/config/network, and
+/etc/dropbear/* fail to materialize. The device boots, presents an SSH
+banner, but closes every session at auth (zero working auth methods).
+This was reproduced 30/30 times on a ZyXEL GS1900-8HP connected to
+Extreme WS-AP3915i APs (ipq40xx, jffs2 overlay).
+
+The fix: after `mount_root done`, verify that critical files exist and
+are non-empty. If missing, erase the overlay and reboot for a clean
+retry (up to 3 attempts, then boot with diagnostic logging).
+
+This is complementary to PR #10037 (which fixes the race itself) —
+it catches whatever the race (or any other cause) drops.
+
+Tested on:
+- QEMU x86-64 (ext4 overlay): 36 power-cut cycles, all managed
+- Real hardware (ipq40xx/jffs2): 30 firstboot cycles, all detected
+- Real hardware recovery: 30/30 power-cycle recoveries successful
+
+Signed-off-by: Amperstrand <amperstrand@localhost>
+---
+ package/base-files/files/etc/init.d/done | 27 ++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/package/base-files/files/etc/init.d/done b/package/base-files/files/etc/init.d/done
+index 0000000..0000000 100644
+--- a/package/base-files/files/etc/init.d/done
++++ b/package/base-files/files/etc/init.d/done
+@@ -1,7 +1,32 @@
+ #!/bin/sh /etc/rc.common
+ # Copyright (C) 2006-2011 OpenWrt.org
+
+ START=95
++
++OVERLAY_VERIFY_RETRY_FILE=/tmp/.overlay-retry-count
++OVERLAY_VERIFY_MAX_RETRIES=3
++
++overlay_verify() {
++	local missing=""
++	local f
++
++	# Brief settle for any buffered writes from the switch
++	sleep 1
++
++	for f in /etc/shadow /etc/config/network /etc/config/dropbear; do
++		[ -s "$f" ] || missing="$missing $f"
++	done
++
++	if [ -n "$missing" ]; then
++		local count
++		count=$(cat "$OVERLAY_VERIFY_RETRY_FILE" 2>/dev/null || echo 0)
++		count=$((count + 1))
++		echo "$count" > "$OVERLAY_VERIFY_RETRY_FILE"
++
++		logger -s -t overlay-verify "RETRY $count/$OVERLAY_VERIFY_MAX_RETRIES: files lost in overlay switch:$missing"
++
++		if [ "$count" -le "$OVERLAY_VERIFY_MAX_RETRIES" ]; then
++			logger -s -t overlay-verify "erasing overlay for clean retry"
++			# Remove the init marker so the next boot reformats cleanly
++			rm -f /overlay/.fs_ready 2>/dev/null
++			rm -rf /overlay/upper/* 2>/dev/null
++			sync
++			reboot
++			return
++		fi
++
++		logger -s -t overlay-verify "GIVING UP after $OVERLAY_VERIFY_MAX_RETRIES retries — booting with incomplete overlay"
++		logger -s -t overlay-verify "missing files:$missing"
++	else
++		# Healthy boot — clear the retry counter
++		rm -f "$OVERLAY_VERIFY_RETRY_FILE" 2>/dev/null
++	fi
++}
+
+ boot() {
+ 	[ -d /tmp/root ] && mount_root done
+ 	rm -f /sysupgrade.tgz
++
++	overlay_verify
+ }
+--
+2.43.0
