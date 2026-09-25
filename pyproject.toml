@@ -28,6 +28,12 @@ markers = [
   "flash: full flash lifecycle: recovery-http, sysupgrade (~10min)",
   "destructive: mutates device state (sysupgrade, firstboot)",
   "hardware: requires physical router connected via ethernet",
+  "integration: QEMU-backed tests under tests/integration (deselect with -m \"not integration\")",
+]
+filterwarnings = [
+  # Third-party scapy imports cryptography's FFDH; nothing for us to act on.
+  # (CryptographyDeprecationWarning subclasses UserWarning, not DeprecationWarning.)
+  "ignore:Diffie-Hellman over finite fields:UserWarning",
 ]
 
 [tool.ruff]

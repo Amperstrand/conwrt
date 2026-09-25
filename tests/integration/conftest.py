@@ -30,6 +30,28 @@ PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libat
                     "wireguard-tools", "luci-proto-wireguard", "qrencode"]
 
 
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark every test under tests/integration as `integration`.
+
+    Lets `pytest tests -m "not integration"` run the fast unit tier without
+    the QEMU-backed tests sneaking in on KVM-capable hosts (they only skip
+    on machines without qemu — see _available checks below).
+
+    Path-scoped: when the whole `tests` tree is collected in one session,
+    this hook also receives items from outside tests/integration, and
+    marking those would deselect the entire unit tier (verified: 3778
+    deselected with pytest 7.4.4 before the guard).
+    """
+    integration_root = Path(__file__).resolve().parent
+    for item in items:
+        try:
+            item_path = Path(str(item.path))
+        except (AttributeError, TypeError):
+            continue
+        if integration_root in item_path.parents:
+            item.add_marker(pytest.mark.integration)
+
+
 def _available(cmd: str) -> bool:
     return subprocess.run(["which", cmd], capture_output=True).returncode == 0
 
