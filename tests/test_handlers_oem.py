@@ -52,7 +52,8 @@ class TestHandleOemLoginHttpSuccess(TestCase):
     @patch("conwrt.handlers_oem.oem_has_prepare_step", return_value=False)
     @patch("conwrt.handlers_oem.oem_http_login", return_value=(True, "XSSID=abc"))
     @patch("conwrt.handlers_oem.os.path.isfile", return_value=True)
-    def test_http_login_success_goes_to_uploading(self, mock_isfile, mock_login, mock_prep):
+    @patch("conwrt.handlers_oem.subprocess.run", return_value=_mock_run(stdout=""))
+    def test_http_login_success_goes_to_uploading(self, mock_run, mock_isfile, mock_login, mock_prep):
         ctx = _make_ctx(flash_method="oem-http", stock_default_password="1234")
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
@@ -65,7 +66,8 @@ class TestHandleOemLoginHttpPrepare(TestCase):
     @patch("conwrt.handlers_oem.oem_has_prepare_step", return_value=True)
     @patch("conwrt.handlers_oem.oem_http_login", return_value=(True, "XSSID=abc"))
     @patch("conwrt.handlers_oem.os.path.isfile", return_value=True)
-    def test_http_login_with_prepare_step_goes_to_prepare(self, mock_isfile, mock_login, mock_prep):
+    @patch("conwrt.handlers_oem.subprocess.run", return_value=_mock_run(stdout=""))
+    def test_http_login_with_prepare_step_goes_to_prepare(self, mock_run, mock_isfile, mock_login, mock_prep):
         ctx = _make_ctx(flash_method="oem-http", stock_default_password="1234")
         eq = queue.Queue()
         _handle_oem_login(ctx, eq)
@@ -96,7 +98,8 @@ class TestHandleOemLoginNoPassword(TestCase):
     @patch("conwrt.handlers_oem.oem_http_login", return_value=(True, "XSSID=abc"))
     @patch("conwrt.handlers_oem.load_model")
     @patch("conwrt.handlers_oem.os.path.isfile", return_value=True)
-    def test_loads_model_creds_when_no_password(self, mock_isfile, mock_load, mock_login, mock_prep):
+    @patch("conwrt.handlers_oem.subprocess.run", return_value=_mock_run(stdout=""))
+    def test_loads_model_creds_when_no_password(self, mock_run, mock_isfile, mock_load, mock_login, mock_prep):
         mock_load.return_value = {"stock_default_creds": {"username": "zyxel", "password": "admin"}}
         ctx = _make_ctx(flash_method="oem-http", stock_default_password="")
         eq = queue.Queue()
