@@ -63,3 +63,6 @@ scripts/captures/
 scripts/data/
 # Real labgrid console config carries live credentials (header rule: local-only)
 labgrid/console.yaml
+
+# local operator-profile backup (same rule as config.toml)
+config.toml.bak
