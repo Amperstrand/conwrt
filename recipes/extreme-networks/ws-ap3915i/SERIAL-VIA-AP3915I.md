@@ -153,16 +153,22 @@ in `~/conwrt-labgrid/` + `~/.config/systemd/user/` on the exporter host.
 One listener AP has ONE UART — it serves whichever target its 3-wire splice
 is physically connected to:
 
-- **Today**: lan4 (reference unit) listens to **lan2's** console — exported
-  as `conwrt-serial-bridge@ap-lan2` on `127.0.0.1:4002`.
-- **Planned (the "HA" splice move)**: the splice moves to the lan6 dark unit
-  — pair becomes lan4 → **lan6**, a fresh `conwrt-serial-bridge@ap-lan6`
-  instance on a new port (see "Repointing the bridge" below).
-- **lan5 pair: moot.** The planned second splice (lan2 listening to lan5,
-  "HB" in the serial-fleet plan) is no longer needed: issue #61 resolved
-  2026-09-23 — lan5 flash-boots after the CFG1 env-identity fix, its power
-  is re-exported, and the VLAN-1005 lifeline stays armed as insurance
-  (evidence: `data/bench/ap-lan5/20260923-issue61/`).
+- **Since 2026-09-24**: lan2 (**the reference unit**, 25.12.5) listens to
+  **lan3's** console — exported as `conwrt-serial-bridge@ap-lan3` on
+  `127.0.0.1:4003` (per-instance systemd drop-in carries the coordinates;
+  the shared template's built-in env is the retired lan4/:4002 layout).
+  Verified end-to-end 2026-09-24: labgrid power-cycle + full boot capture
+  (`data/bench/ap-lan3/20260924-labgrid-serial-enrollment/`). ap-lan2 itself
+  has NO serial of its own (old lan4→lan2 splice removed; the
+  `@ap-lan2` bridge instance is disabled).
+- **lan4's listener role ended 2026-09-24**: the unit went network-dark
+  after a switch-reboot PoE cycle (link + 3.4W, no MAC/v4/v6) and was
+  demoted from reference; serial/physical recovery pending.
+- **lan6 splice move**: still the planned dark-unit diagnosis path — pair a
+  listener's splice to lan6 when someone is at the bench (see
+  "Repointing the bridge" below).
+- **lan5 pair: moot.** Issue #61 resolved 2026-09-23 — lan5 flash-boots,
+  power re-exported, VLAN-1005 lifeline armed as insurance.
 
 ### Adding another serial pair
 
