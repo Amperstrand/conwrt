@@ -1,0 +1,414 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic "Skip navigation links":
+      - generic:
+        - link "Skip to last reply" [ref=e4] [cursor=pointer]:
+          - /url: /t/mac-override-does-not-work/27976/10
+        - link "Skip to top" [ref=e5] [cursor=pointer]:
+          - /url: /t/mac-override-does-not-work/27976/1
+      - link "Skip to main content" [ref=e6] [cursor=pointer]:
+        - /url: "#main-container"
+    - generic [ref=e11]:
+      - button "Sidebar" [expanded] [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+      - link "OpenWrt Forum" [ref=e17] [cursor=pointer]:
+        - /url: /
+        - img "OpenWrt Forum" [ref=e19]
+      - navigation "Header" [ref=e20]:
+        - generic [ref=e22]:
+          - button "Sign Up" [ref=e23] [cursor=pointer]:
+            - generic [ref=e24]: Sign Up
+          - button "Log In" [ref=e25] [cursor=pointer]:
+            - img [ref=e26]
+            - generic [ref=e27]: Log In
+        - list [ref=e28]:
+          - listitem [ref=e29]:
+            - 'button "Color mode, currently [missing %{mode} value]" [ref=e30] [cursor=pointer]':
+              - img [ref=e31]
+          - listitem [ref=e32]:
+            - button "Search" [ref=e33] [cursor=pointer]:
+              - img [ref=e34]
+    - main [ref=e35]:
+      - navigation "Sidebar" [ref=e37]:
+        - generic [ref=e38]:
+          - list [ref=e41]:
+            - listitem [ref=e42]:
+              - link "Topics" [ref=e43] [cursor=pointer]:
+                - /url: /latest
+                - img [ref=e45]
+                - generic [ref=e46]: Topics
+            - listitem [ref=e47]:
+              - link "My Topics" [ref=e48] [cursor=pointer]:
+                - /url: /my/activity/topics
+                - img [ref=e50]
+                - generic [ref=e51]: My Topics
+            - listitem [ref=e52]:
+              - button "More" [ref=e53] [cursor=pointer]:
+                - img [ref=e55]
+                - generic [ref=e56]: More
+          - generic [ref=e57]:
+            - button "Categories" [expanded] [ref=e59] [cursor=pointer]:
+              - img [ref=e61]
+              - generic [ref=e62]: Categories
+            - list [ref=e63]:
+              - listitem [ref=e64]:
+                - link "Release and security announcements" [ref=e65] [cursor=pointer]:
+                  - /url: /c/announcements/14
+                  - generic [ref=e68]: Release and security announcements
+              - listitem [ref=e69]:
+                - link "Installing and Using OpenWrt" [ref=e70] [cursor=pointer]:
+                  - /url: /c/general/6
+                  - generic [ref=e73]: Installing and Using OpenWrt
+              - listitem [ref=e74]:
+                - link "Hardware Questions and Recommendations" [ref=e75] [cursor=pointer]:
+                  - /url: /c/hardware-questions-and-recommendations/13
+                  - generic [ref=e78]: Hardware Questions and Recommendations
+              - listitem [ref=e79]:
+                - link "For Developers" [ref=e80] [cursor=pointer]:
+                  - /url: /c/devel/8
+                  - generic [ref=e83]: For Developers
+              - listitem [ref=e84]:
+                - link "Talk about Documentation" [ref=e85] [cursor=pointer]:
+                  - /url: /c/documentation/10
+                  - generic [ref=e88]: Talk about Documentation
+              - listitem [ref=e89]:
+                - link "All categories" [ref=e90] [cursor=pointer]:
+                  - /url: /categories
+                  - img [ref=e92]
+                  - generic [ref=e93]: All categories
+        - button "Keyboard Shortcuts" [ref=e97] [cursor=pointer]:
+          - img [ref=e98]
+      - generic [ref=e99]:
+        - generic [ref=e100]:
+          - generic [ref=e102]:
+            - heading "MAC override does not work" [level=1] [ref=e103]:
+              - generic "This topic is closed; it no longer accepts new replies" [ref=e105]:
+                - img [ref=e106]
+              - link "MAC override does not work" [ref=e107] [cursor=pointer]:
+                - /url: /t/mac-override-does-not-work/27976
+            - link "Installing and Using OpenWrt" [ref=e109] [cursor=pointer]:
+              - /url: /c/general/6
+              - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e110]:
+                - generic [ref=e111]: Installing and Using OpenWrt
+          - generic [ref=e112]:
+            - generic [ref=e115]:
+              - button "7.1k views" [ref=e116] [cursor=pointer]:
+                - generic [ref=e117]: 7.1k
+                - generic [ref=e118]: views
+              - button "7 links" [ref=e119] [cursor=pointer]:
+                - generic [ref=e120]: "7"
+                - generic [ref=e121]: links
+              - generic [ref=e122]:
+                - generic "anon20279570's profile" [ref=e124]:
+                  - img "anon20279570" [ref=e125]
+                - generic "anon50098793's profile" [ref=e127]:
+                  - img "anon50098793" [ref=e128]
+                - generic "lleachii's profile" [ref=e130]:
+                  - img "LLEACHII" [ref=e131]
+                - generic "ptipti23's profile" [ref=e133]:
+                  - img "ptipti23" [ref=e134]
+            - generic [ref=e138]:
+              - link "Dec 2018" [ref=e140] [cursor=pointer]:
+                - /url: /t/mac-override-does-not-work/27976/1
+                - generic [ref=e141]: Dec 2018
+              - generic [ref=e145]:
+                - generic [ref=e146]: 1 / 10
+                - generic [ref=e147]: Dec 2018
+              - link "Feb 2019" [ref=e150] [cursor=pointer]:
+                - /url: /t/mac-override-does-not-work/27976/10
+                - generic [ref=e151]: Feb 2019
+            - generic [ref=e155]:
+              - generic [ref=e156]:
+                - heading "post by anon20279570 on Dec 30, 2018" [level=2] [ref=e157]
+                - article "post by anon20279570 on Dec 30, 2018" [ref=e158]:
+                  - generic [ref=e159]:
+                    - generic "anon20279570's profile" [ref=e162]
+                    - generic [ref=e163]:
+                      - generic [ref=e164]:
+                        - generic "anon20279570's profile" [ref=e167]: anon20279570
+                        - link "Dec 2018" [ref=e170] [cursor=pointer]:
+                          - /url: /t/mac-override-does-not-work/27976
+                      - generic [ref=e171]:
+                        - paragraph [ref=e173]: I have a problem with my WNDR 3700v4 router. Last night i build openwrt for it. I usualy just save settings and do upgrade, but this time i had problem. It did not connect to the internet. I reseted settings but still it did not work. My WAN interface is etc0.2 I tracked down the problem. It does not override mac address which needs to be as my old PCs. My 7$ Tenda router can clone/override mac with JUST one click and this fancy super powerfull router compared to that tenda, with this superpowerfull software like openwrt can't do as little thing as overriding mac address? Can you help me with this problem. For now i have disabled DHCP on openwrt router and connected it's lan port to tendas lan port to have WIFI. I removed wifi cable and antenna from tenda and attached it to my drones remote controll. I just want to have this openwrt because i use many services. Openvpn network, VPNbypass, DNScrypt proxy, transmission and so on. I really need this openwrt router.
+                        - complementary [ref=e174]:
+                          - generic [ref=e175]:
+                            - heading "Solved" [level=3] [ref=e177]:
+                              - img [ref=e178]
+                              - text: Solved
+                            - generic [ref=e180]:
+                              - generic [ref=e181]:
+                                - generic [ref=e182]:
+                                  - generic "anon50098793's profile" [ref=e183]:
+                                    - generic [ref=e184]: anon50098793
+                                  - link "Jan 2019" [ref=e186] [cursor=pointer]:
+                                    - /url: /t/mac-override-does-not-work/27976/5
+                                - button "collapse" [expanded] [ref=e188] [cursor=pointer]:
+                                  - img [ref=e189]
+                              - generic [ref=e190]:
+                                - blockquote [ref=e191]:
+                                  - generic [ref=e192]:
+                                    - paragraph [ref=e193]: so i came across the gotcha ( gotme ) from last time;
+                                    - paragraph [ref=e194]: "-make sure that the parameter is applied to the \"correct\" section in /etc/config/network"
+                                    - paragraph [ref=e195]: there is some variance in this between releases and builds but more recent ones seem to apply it under;
+                                    - code [ref=e198]: config interface 'wan' option ifname 'eth0.2' option proto 'dhcp' option delegate '0' **HERE**
+                                    - paragraph [ref=e199]: when it should be;
+                                    - code [ref=e202]: config device 'wan_dev' < **HERE** option name 'eth0.2' option macaddr '00:80:6E:77:77:7X'
+                                - link "read more" [ref=e204] [cursor=pointer]:
+                                  - /url: /t/mac-override-does-not-work/27976/5
+                        - group "Post actions" [ref=e205]:
+                          - generic [ref=e206]:
+                            - button "like this post" [ref=e208] [cursor=pointer]:
+                              - img [ref=e209]
+                            - button "copy a link to this post to clipboard" [ref=e210] [cursor=pointer]:
+                              - img [ref=e211]
+                          - generic:
+                            - list
+                      - list [ref=e213]:
+                        - listitem [ref=e214]:
+                          - link "Is the Wan Mac address override working in 19 with Luci? 3" [ref=e215] [cursor=pointer]:
+                            - /url: https://forum.openwrt.org/t/is-the-wan-mac-address-override-working-in-19-with-luci/42117/4
+                            - img [ref=e216]
+                            - generic [ref=e217]: Is the Wan Mac address override working in 19 with Luci?
+                            - text: "3"
+                        - listitem [ref=e218]:
+                          - link "Kong pro firmware for IPQ806x (R7500, R7800, EA8500, ...)" [ref=e219] [cursor=pointer]:
+                            - /url: https://forum.openwrt.org/t/kong-pro-firmware-for-ipq806x-r7500-r7800-ea8500/55694/5
+                            - img [ref=e220]
+                            - generic [ref=e221]: Kong pro firmware for IPQ806x (R7500, R7800, EA8500, ...)
+                  - generic [ref=e224]:
+                    - button "7.1k views" [ref=e225] [cursor=pointer]:
+                      - generic [ref=e226]: 7.1k
+                      - generic [ref=e227]: views
+                    - button "7 links" [ref=e228] [cursor=pointer]:
+                      - generic [ref=e229]: "7"
+                      - generic [ref=e230]: links
+                    - generic [ref=e231]:
+                      - generic "anon20279570's profile" [ref=e233]:
+                        - img "anon20279570" [ref=e234]
+                      - generic "anon50098793's profile" [ref=e236]:
+                        - img "anon50098793" [ref=e237]
+                      - generic "lleachii's profile" [ref=e239]:
+                        - img "LLEACHII" [ref=e240]
+                      - generic "ptipti23's profile" [ref=e242]:
+                        - img "ptipti23" [ref=e243]
+              - generic [ref=e244]:
+                - heading "post by anon50098793 on Dec 30, 2018" [level=2] [ref=e245]
+                - article "post by anon50098793 on Dec 30, 2018" [ref=e246]:
+                  - generic [ref=e247]:
+                    - generic "anon50098793's profile" [ref=e250]
+                    - generic [ref=e251]:
+                      - generic [ref=e252]:
+                        - generic "anon50098793's profile" [ref=e255]: anon50098793
+                        - link "Dec 2018" [ref=e258] [cursor=pointer]:
+                          - /url: /t/mac-override-does-not-work/27976/2
+                      - generic [ref=e259]:
+                        - generic [ref=e260]:
+                          - paragraph [ref=e261]:
+                            - text: "i believe a simple hand edit can fix as per:"
+                            - link "https://oldwiki.archive.openwrt.org/doc/uci/network link clicked 381 times" [ref=e262] [cursor=pointer]:
+                              - /url: https://oldwiki.archive.openwrt.org/doc/uci/network
+                              - text: https://oldwiki.archive.openwrt.org/doc/uci/network 381
+                          - paragraph [ref=e263]: also try releasing ip prior to powering down old router and wait 10 mins before powering up new one.
+                          - paragraph [ref=e264]: isp's dont like to issue two addresses at the same time!
+                        - group "Post actions" [ref=e265]:
+                          - generic [ref=e266]:
+                            - button "like this post" [ref=e268] [cursor=pointer]:
+                              - img [ref=e269]
+                            - button "copy a link to this post to clipboard" [ref=e270] [cursor=pointer]:
+                              - img [ref=e271]
+                          - generic:
+                            - list
+              - generic [ref=e272]:
+                - heading "post by anon20279570 on Dec 30, 2018" [level=2] [ref=e273]
+                - article "post by anon20279570 on Dec 30, 2018" [ref=e274]:
+                  - generic [ref=e275]:
+                    - generic "anon20279570's profile" [ref=e278]
+                    - generic [ref=e279]:
+                      - generic [ref=e280]:
+                        - generic "anon20279570's profile" [ref=e283]: anon20279570
+                        - generic [ref=e284]:
+                          - button "anon50098793 anon50098793" [ref=e285] [cursor=pointer]:
+                            - img [ref=e286]
+                            - img "anon50098793" [ref=e287]
+                            - generic [ref=e288]: anon50098793
+                          - link "Dec 2018" [ref=e290] [cursor=pointer]:
+                            - /url: /t/mac-override-does-not-work/27976/3
+                      - generic [ref=e291]:
+                        - paragraph [ref=e293]: I tried editing by hand. In fact i did it in first place. option macaddr 'XX:XX:XX:XX:XX:XX' did not work. Then i tried from LUCI and it did not work either.
+                        - group "Post actions" [ref=e294]:
+                          - generic [ref=e295]:
+                            - button "like this post" [ref=e297] [cursor=pointer]:
+                              - img [ref=e298]
+                            - button "copy a link to this post to clipboard" [ref=e299] [cursor=pointer]:
+                              - img [ref=e300]
+                          - generic:
+                            - list
+              - generic [ref=e301]:
+                - heading "post by anon50098793 on Dec 31, 2018" [level=2] [ref=e302]
+                - article "post by anon50098793 on Dec 31, 2018" [ref=e303]:
+                  - generic [ref=e304]:
+                    - generic "anon50098793's profile" [ref=e307]
+                    - generic [ref=e308]:
+                      - generic [ref=e309]:
+                        - generic "anon50098793's profile" [ref=e312]: anon50098793
+                        - generic [ref=e313]:
+                          - button "anon20279570 anon20279570" [ref=e314] [cursor=pointer]:
+                            - img [ref=e315]
+                            - img "anon20279570" [ref=e316]
+                            - generic [ref=e317]: anon20279570
+                          - link "Dec 2018" [ref=e319] [cursor=pointer]:
+                            - /url: /t/mac-override-does-not-work/27976/4
+                      - generic [ref=e320]:
+                        - generic [ref=e321]:
+                          - paragraph [ref=e322]: Try this method in the interim maybe?
+                          - complementary [ref=e323]:
+                            - generic [ref=e324]:
+                              - img [ref=e325]
+                              - link "Pearls in Life – 19 Jan 15" [ref=e326] [cursor=pointer]:
+                                - /url: http://jhshi.me/2015/01/19/fix-mac-address-clone-in-openwrt/index.html#.XCngAC5fiV4
+                            - article [ref=e327]:
+                              - heading "Fix MAC Address Clone in OpenWRT link clicked 231 times" [level=3] [ref=e328]:
+                                - link "Fix MAC Address Clone in OpenWRT link clicked 231 times" [ref=e329] [cursor=pointer]:
+                                  - /url: http://jhshi.me/2015/01/19/fix-mac-address-clone-in-openwrt/index.html#.XCngAC5fiV4
+                                  - text: Fix MAC Address Clone in OpenWRT 231
+                              - paragraph [ref=e330]: I used to be able to change the MAC address of WAN interface by specifying macaddr option in /etc/config/network. However, due to unknown reason, this no longer works in snapshot builds. Here is how to achieve the same effect using init scripts.
+                        - group "Post actions" [ref=e331]:
+                          - generic [ref=e332]:
+                            - button "like this post" [ref=e334] [cursor=pointer]:
+                              - img [ref=e335]
+                            - button "copy a link to this post to clipboard" [ref=e336] [cursor=pointer]:
+                              - img [ref=e337]
+                          - generic:
+                            - list
+              - generic [ref=e340]: 14 days later
+              - heading "post by anon50098793 on Jan 14, 2019" [level=2] [ref=e342]
+              - generic [ref=e411]: 1 month later
+              - heading "post by ptipti23 on Feb 16, 2019" [level=2] [ref=e413]
+              - heading "post by lleachii on Feb 17, 2019" [level=2] [ref=e439]
+              - heading "post by anon20279570 on Feb 24, 2019" [level=2] [ref=e470]
+              - heading "post by anon20279570 on Feb 25, 2019" [level=2] [ref=e499]
+              - generic [ref=e529]: 2 years later
+              - heading "Closed on Jan 18, 2021" [level=2] [ref=e531]
+          - region [ref=e545]:
+            - button "Reply" [ref=e547] [cursor=pointer]:
+              - img [ref=e548]
+              - generic [ref=e549]: Reply
+          - generic [ref=e550]:
+            - complementary "New & Unread Topics" [ref=e552]:
+              - heading "New & Unread Topics" [level=3] [ref=e553]
+              - table "Topic list, column headers with buttons are sortable." [ref=e557]:
+                - caption [ref=e558]: Topic list, column headers with buttons are sortable.
+                - rowgroup [ref=e559]:
+                  - row "Topic Replies Views Activity" [ref=e560]:
+                    - columnheader "Topic" [ref=e561]:
+                      - generic [ref=e562]: Topic
+                    - columnheader "Replies" [ref=e563]:
+                      - generic [ref=e564]: Replies
+                    - columnheader "Views" [ref=e565]:
+                      - generic [ref=e566]: Views
+                    - columnheader "Activity" [ref=e567]:
+                      - generic [ref=e568]: Activity
+                - rowgroup [ref=e569]:
+                  - row "Mesh configuration Installing and Using OpenWrt 2 replies, jump to first post 115 Apr 5" [ref=e570]:
+                    - cell "Mesh configuration Installing and Using OpenWrt" [ref=e571]:
+                      - heading "Mesh configuration" [level=2] [ref=e572]:
+                        - link "Mesh configuration" [ref=e573] [cursor=pointer]:
+                          - /url: /t/mesh-configuration/248680
+                      - link "Installing and Using OpenWrt" [ref=e575] [cursor=pointer]:
+                        - /url: /c/general/6
+                        - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e576]:
+                          - generic [ref=e577]: Installing and Using OpenWrt
+                    - cell "2 replies, jump to first post" [ref=e578]:
+                      - link "2 replies, jump to first post" [ref=e579] [cursor=pointer]:
+                        - /url: /t/mesh-configuration/248680/1
+                        - text: "2"
+                    - cell "115" [ref=e580]
+                    - cell "Apr 5" [ref=e581]:
+                      - link "Apr 5" [ref=e582] [cursor=pointer]:
+                        - /url: /t/mesh-configuration/248680/3
+                  - row "Disks appear, but switch to extroot lates Installing and Using OpenWrt 6 replies, jump to first post 83 Apr 11" [ref=e583]:
+                    - cell "Disks appear, but switch to extroot lates Installing and Using OpenWrt" [ref=e584]:
+                      - heading "Disks appear, but switch to extroot lates" [level=2] [ref=e585]:
+                        - link "Disks appear, but switch to extroot lates" [ref=e586] [cursor=pointer]:
+                          - /url: /t/disks-appear-but-switch-to-extroot-lates/248968
+                      - link "Installing and Using OpenWrt" [ref=e588] [cursor=pointer]:
+                        - /url: /c/general/6
+                        - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e589]:
+                          - generic [ref=e590]: Installing and Using OpenWrt
+                    - cell "6 replies, jump to first post" [ref=e591]:
+                      - link "6 replies, jump to first post" [ref=e592] [cursor=pointer]:
+                        - /url: /t/disks-appear-but-switch-to-extroot-lates/248968/1
+                        - text: "6"
+                    - cell "83" [ref=e593]
+                    - cell "Apr 11" [ref=e594]:
+                      - link "Apr 11" [ref=e595] [cursor=pointer]:
+                        - /url: /t/disks-appear-but-switch-to-extroot-lates/248968/7
+                  - row "Ruckus r500 + QCA8337 chip bridges physical interfaces briefly on boot Installing and Using OpenWrt 0 replies, jump to first post 42 Apr 14" [ref=e596]:
+                    - cell "Ruckus r500 + QCA8337 chip bridges physical interfaces briefly on boot Installing and Using OpenWrt" [ref=e597]:
+                      - heading "Ruckus r500 + QCA8337 chip bridges physical interfaces briefly on boot" [level=2] [ref=e598]:
+                        - link "Ruckus r500 + QCA8337 chip bridges physical interfaces briefly on boot" [ref=e599] [cursor=pointer]:
+                          - /url: /t/ruckus-r500-qca8337-chip-bridges-physical-interfaces-briefly-on-boot/249041
+                      - link "Installing and Using OpenWrt" [ref=e601] [cursor=pointer]:
+                        - /url: /c/general/6
+                        - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e602]:
+                          - generic [ref=e603]: Installing and Using OpenWrt
+                    - cell "0 replies, jump to first post" [ref=e604]:
+                      - link "0 replies, jump to first post" [ref=e605] [cursor=pointer]:
+                        - /url: /t/ruckus-r500-qca8337-chip-bridges-physical-interfaces-briefly-on-boot/249041/1
+                        - text: "0"
+                    - cell "42" [ref=e606]
+                    - cell "Apr 14" [ref=e607]:
+                      - link "Apr 14" [ref=e608] [cursor=pointer]:
+                        - /url: /t/ruckus-r500-qca8337-chip-bridges-physical-interfaces-briefly-on-boot/249041/1
+                  - row "Possible to configurate fallback dhcp server? Installing and Using OpenWrt 1 reply, jump to first post 64 Apr 16" [ref=e609]:
+                    - cell "Possible to configurate fallback dhcp server? Installing and Using OpenWrt" [ref=e610]:
+                      - heading "Possible to configurate fallback dhcp server?" [level=2] [ref=e611]:
+                        - link "Possible to configurate fallback dhcp server?" [ref=e612] [cursor=pointer]:
+                          - /url: /t/possible-to-configurate-fallback-dhcp-server/249122
+                      - link "Installing and Using OpenWrt" [ref=e614] [cursor=pointer]:
+                        - /url: /c/general/6
+                        - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e615]:
+                          - generic [ref=e616]: Installing and Using OpenWrt
+                    - cell "1 reply, jump to first post" [ref=e617]:
+                      - link "1 reply, jump to first post" [ref=e618] [cursor=pointer]:
+                        - /url: /t/possible-to-configurate-fallback-dhcp-server/249122/1
+                        - text: "1"
+                    - cell "64" [ref=e619]
+                    - cell "Apr 16" [ref=e620]:
+                      - link "Apr 16" [ref=e621] [cursor=pointer]:
+                        - /url: /t/possible-to-configurate-fallback-dhcp-server/249122/2
+                  - row "Slow wifi and ssh for Xiaomi Mi Router 4C on latest openwrt firmware(25.12.2) but not on 23.05.6? Installing and Using OpenWrt 3 replies, jump to first post 109 May 6" [ref=e622]:
+                    - cell "Slow wifi and ssh for Xiaomi Mi Router 4C on latest openwrt firmware(25.12.2) but not on 23.05.6? Installing and Using OpenWrt" [ref=e623]:
+                      - heading "Slow wifi and ssh for Xiaomi Mi Router 4C on latest openwrt firmware(25.12.2) but not on 23.05.6?" [level=2] [ref=e624]:
+                        - link "Slow wifi and ssh for Xiaomi Mi Router 4C on latest openwrt firmware(25.12.2) but not on 23.05.6?" [ref=e625] [cursor=pointer]:
+                          - /url: /t/slow-wifi-and-ssh-for-xiaomi-mi-router-4c-on-latest-openwrt-firmware-25-12-2-but-not-on-23-05-6/249694
+                      - link "Installing and Using OpenWrt" [ref=e627] [cursor=pointer]:
+                        - /url: /c/general/6
+                        - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e628]:
+                          - generic [ref=e629]: Installing and Using OpenWrt
+                    - cell "3 replies, jump to first post" [ref=e630]:
+                      - link "3 replies, jump to first post" [ref=e631] [cursor=pointer]:
+                        - /url: /t/slow-wifi-and-ssh-for-xiaomi-mi-router-4c-on-latest-openwrt-firmware-25-12-2-but-not-on-23-05-6/249694/1
+                        - text: "3"
+                    - cell "109" [ref=e632]
+                    - cell "May 6" [ref=e633]:
+                      - link "May 6" [ref=e634] [cursor=pointer]:
+                        - /url: /t/slow-wifi-and-ssh-for-xiaomi-mi-router-4c-on-latest-openwrt-firmware-25-12-2-but-not-on-23-05-6/249694/4
+            - heading "Want to read more? Browse other topics in Installing and Using OpenWrt or view latest topics." [level=3] [ref=e635]:
+              - text: Want to read more? Browse other topics in
+              - link "Installing and Using OpenWrt" [ref=e636] [cursor=pointer]:
+                - /url: /c/general/6
+                - generic "Ask questions about installing, using, configuring, and troubleshooting already-built OpenWrt firmware and packages on your device." [ref=e637]:
+                  - generic [ref=e638]: Installing and Using OpenWrt
+              - text: or
+              - link "view latest topics" [ref=e639] [cursor=pointer]:
+                - /url: /latest
+              - text: .
+        - dialog "User card"
+      - link "Powered by Discourse" [ref=e640] [cursor=pointer]:
+        - /url: https://discourse.org/powered-by
+        - generic [ref=e641]:
+          - img [ref=e643]
+          - generic [ref=e644]: Powered by Discourse
+  - status [ref=e645]
+  - alert [ref=e646]
