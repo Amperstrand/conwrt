@@ -506,3 +506,7 @@ Motivating incident: a bench adoption ran `firstboot` on ap-lan2 (AP3915i UNIT2 
 6. **Know which auth channels are config-independent**: v6 link-local + dbclient from the switch works no matter what `network.lan` says; `ip neigh` on the VLAN reveals the unit's actual v4; uhttpd/LuCI (:80) is a third door on images that include it. Verify at least two channels before declaring access lost.
 7. **uci staging debris**: uncommitted changes live in `/tmp/.uci` (RAM: survives SSH sessions, dies at reboot) and `uci show` displays the MERGED (staged+committed) view. After any aborted uci flow, check `uci changes` and revert debris before staging again — or exact-diff guards will refuse legitimate commits.
 8. **Detached daemons on BusyBox**: `nohup cmd &` over ssh DIES when the session closes — use `setsid cmd &`. There is no `timeout` applet; guard hangs from the Mac side. Anything staged in `/tmp` (recorders, TFTP roots, nft rules) is runtime-only and dies on switch reboot — re-arm and say so in the notes.
+
+## Bench operations rules (2026-09-25)
+
+Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network.
