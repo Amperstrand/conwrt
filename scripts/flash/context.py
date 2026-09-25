@@ -220,6 +220,11 @@ def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 
     return False
 
 
+# Empty-queue poll cadence inside wait_for_event. Module constant so tests
+# can shrink it (real 1s polls dominate unit-test wall time otherwise).
+EVENT_POLL_INTERVAL = 1.0
+
+
 def wait_for_event(
     eq: queue.Queue,
     timeout: int,
@@ -232,7 +237,7 @@ def wait_for_event(
     start = ts()
     while ts() - start < timeout:
         try:
-            event, event_ts, detail = eq.get(timeout=1.0)
+            event, event_ts, detail = eq.get(timeout=EVENT_POLL_INTERVAL)
 
             if event in target_events:
                 if success_state is not None:
