@@ -18,7 +18,10 @@
     "ethernet_ports": "1x GbE (GE1 only, PoE+ data — single cable carries power and data)",
     "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
   },
-  "mac_oui": [],
+  "mac_oui": [
+    "dc:b8:08",
+    "b4:2d:56"
+  ],
   "flash_methods": {
     "extreme-rdwr-tftp-initramfs": {
       "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
@@ -144,12 +147,29 @@
         ],
         "firmware_size_kb": 30080,
         "ap391x_warning": "AP391x uses SPLIT firmware layout (firmware + firmware2, ~15MB each, IMAGE_SIZE=15040k). AP3915i uses MERGED layout (single firmware ~30MB, IMAGE_SIZE=30080k). Verify /proc/mtd firmware size from initramfs before sysupgrade."
-      }
+      },
+      "resources_required": [
+        "stock-ssh",
+        "bootenv-write",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup",
+        "cfg2-pristine",
+        "tftp-lifeline-armed"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt on this device",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 255
+      "exit_code": 255,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "tftp": {
       "description": "U-Boot TFTP recovery (requires serial console or rdwr_boot_cfg for network boot setup)",
@@ -157,7 +177,17 @@
       "client_ip": "192.168.1.2",
       "client_subnet": "255.255.255.0",
       "flash_time_seconds": 300,
-      "notes": "No reset-button TFTP recovery. Use rdwr_boot_cfg to set bootcmd=run boot_net for TFTP boot, or use serial console to interrupt U-Boot."
+      "notes": "ESCAPE-HATCH INVENTORY (verified 2026-09-22): NO reset button (no GPIO buttons in DTS — OpenWrt failsafe unreachable), NO LuCI in stock downloads.openwrt.org images (:80 dead), TFTP fallback (boot_net) only runs when flash-boot FAILS (0 RRQs verified against a serving TFTP server on a flash-booting unit), no boot-counter/recovery logic in the 2012-era U-Boot. Serial console (RJ45, RS-232 levels, Cisco console cable compatible, 115200 8N1) is the ONLY escape hatch: keep a Cisco-style console cable on the bench before any destructive operation (AGENTS.md Escape-Hatch Discipline). For TFTP boot on units whose flash-boot fails: arm serverip 192.168.1.2 serving vmlinux.gz.uImage.3912 on the unit's VLAN, then PoE-cycle.",
+      "resources_required": [
+        "power",
+        "serial-console",
+        "recovery-subnet",
+        "tftp-server"
+      ],
+      "envelope": [
+        "image-type-factory",
+        "tftp-lifeline-armed"
+      ]
     }
   },
   "signatures": {},
@@ -280,6 +310,21 @@
       "tested": true,
       "date": "2026-05-23",
       "notes": "Switch-initiated flash via GS1900-8HP (OpenWrt 25.12.1). No laptop needed during flash. AP on switch port lan5 via PoE. rdwr_boot_cfg broken — used raw MTD write via kmod-mtd-rw + mtd_raw_write from initramfs. CFG blocks corrected with boot_openwrt command. Flash boot verified, overlay persisted through reboot. IP changed to 192.168.13.253 post-flash."
+    },
+    "sysupgrade": {
+      "tested": true,
+      "date": "2026-09-22",
+      "notes": "VALIDATED ON 25.12.5 AND 24.10.2 (lan5 + lan4). lan5 flash-boots 25.12.5 self-sufficiently (TFTP-down verified, 105s to HTTP). Healthy-slot units flash-boot BOTH release lines. lan3-class units (slot/hardware question) are run boot_net-dependent on any version. Full recipe: NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
+    },
+    "tftp": {
+      "tested": true,
+      "date": "2026-09-21",
+      "notes": "boot_net TFTP boot validated for both 24.10.2 and 25.12.2 initramfs + sysupgrade-FIT-as-bootfile (kernel-from-TFTP + flash-rootfs works on 25.12.2). Prerequisites: nft rule for unzoned bench VLANs (inbound UDP), per-port tftproot, 192.168.1.2 helper IP, file named vmlinux.gz.uImage.3912"
+    },
+    "serial-bridge": {
+      "tested": true,
+      "date": "2026-09-23",
+      "notes": "AP3915i-to-AP3915i 3-wire serial bridge, full boot captured via lan4 listener"
     }
   },
   "warnings": [
@@ -298,6 +343,17 @@
     "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only.",
     "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
     "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
-    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot."
-  ]
+    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot.",
+    "CORRECTED x2 (2026-09-22, comparative dump): all bench units carry BYTE-IDENTICAL BootPRI (2022 build) + BootBAK (Jul-2017) pairs, yet flash-boot differs per unit - the bootloader bytes are NOT the variable. Which slot executes is decided upstream (SBL1/selector, likely low-flash 0x0-0xe0000) or is unit hardware. Units that cannot sf-read-flash-boot any image are permanently run boot_net-dependent (keep per-port TFTP armed, 40s recovery). Env CURR_VER/ver/BOOT_BOOTROM are stale journals referencing builds absent from both slots.",
+    "WRONG-SUBNET VERDICT (2026-09-22, lan7/lan8 recovered zero-serial 4 months after 'network-dead' verdict): units carried operator static IPv4s (192.168.13.0/24) that September sweeps never covered, and were reachable via IPv6 link-local (EUI-64 from MAC) the whole time - both units send RAs (odhcpd ULA) continuously. Recovery door: DROPBEAR_PASSWORD + dbclient from the on-link switch to fe80::<EUI-64>%switch.100X. lan8's pubkey auth was dead since the May flash: /etc/dropbear was 1000:1000 group-writable and dropbear silently refuses keys - chown root:root fixes. Methodology: docs/DARK-DEVICE-PLAYBOOK.md, scripts/bench_discover.py.",
+    "Flash-boot capability is ENV-IDENTITY-DEPENDENT (issue #61 proven 2026-09-23; mechanism refined 2026-09-23 later from BootPRI embedded-env + boot-script extraction): a boot_net-dependent unit became flash-boot-capable after only CFG1 ver/CURR_VER were changed to the running bootloader's 2022-primary build identity. The boot script itself does NOT branch on these keys (CURR_VER is write-only, set when DEFAULT_SETTING=1) — the leading mechanism is bootloader env-ACCEPTANCE gating: a CFG1 ver that mismatches the running bootloader's identity appears to make it fall back to the embedded default env (bootcmd=bootx -> stock script -> the documented watchdog wedges), while a matching identity honors CFG1 (custom bootcmd runs). Multiple ARM32 literal-pool refs to the identity string support runtime use as a comparison constant. Definitive proof needs one serial session (env-import debug) or disasm xrefs. Either way the FIELD REPAIR is proven: 2-key CFG edit aligning ver/CURR_VER with the BootPRI-2022 identity; keep CFG2 pristine."
+  ],
+  "serial_console": {
+    "baud": 115200,
+    "console_device": "ttyMSM0",
+    "parity": "n81",
+    "bootloader": "U-Boot 2012.07.19-r00020.1 (Jul 17 2017, stock Extreme)",
+    "verified_from": "live unit kernel cmdline (console=ttyMSM0,115200n81), OpenWrt 24.10.2, 2026-09-21",
+    "note": "stdout-path empty in chosen node; cmdline is authoritative. Console is an RJ45 jack carrying RS-232 levels (NOT 3.3V TTL -- corrected 2026-09-23 after review): works with a standard Cisco USB/serial console cable (proven by the OpenWrt forum thread that added support; Extreme's published pinout is Cisco-style: pin3=TXD, pin6=RXD, pins4/5=GND, rest NC). The SoC UART (ttyMSM0) is TTL internally, but the external jack sits behind an RS-232 transceiver; the 4-pin TTL header is INSIDE the case. Validated 2026-09-23: two units bridge console-to-console with a 3-wire splice (blue pair straight = GND, green pair crossed = TX<->RX -- this is an RS-232 null-modem, which is why it works); either unit works as listener or target end. Never connect VCC (no VCC pin exists on the jack). Full method: recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md"
+  }
 }

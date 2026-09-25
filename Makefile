@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e labgrid-check labgrid-test
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -29,7 +29,7 @@ lint: ## Run ruff and shell script syntax checks
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
 
 typecheck: ## Run Python static type checking
-	@pyright scripts tests
+	@python3 -m pyright scripts tests
 
 validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 	@echo "Validating schemas..."
@@ -70,8 +70,8 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
 
 test: ## Run Python unit tests plus existing safe shell smoke test
-	@pytest tests
-	@pytest tests/integration/test_use_cases_dry_run.py -q
+	@python3 -m pytest tests
+	@python3 -m pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
 		bats tests/*.bats; \
@@ -100,6 +100,12 @@ ci: ## Run all hardware-safe CI checks
 	@$(MAKE) validate-schemas
 	@$(MAKE) validate-models
 	@$(MAKE) test
+
+labgrid-check: ## Offline labgrid cross-check: exporter.yaml vs places.json (no network; CI-safe; NOT part of ci)
+	@python3 scripts/bench_doctor.py crosscheck
+
+labgrid-test: ## Run a labgrid pytest with a full evidence bundle (usage: make labgrid-test T=<pytest args> [DH=<dut-host>])
+	@python3 scripts/bench_run.py --name bench $(if $(DH),--device-host $(DH),) -- $(T)
 
 ipk: ## Build conwrt ipk for OpenWrt
 	@$(SCRIPTS_DIR)/build_ipk.sh --output dist $(ARGS)

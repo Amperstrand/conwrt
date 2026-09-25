@@ -25,7 +25,13 @@
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "capabilities": [

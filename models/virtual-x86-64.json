@@ -25,7 +25,13 @@
   "flash_methods": {
     "sysupgrade": {
       "description": "SSH sysupgrade (for updating running OpenWrt VM)",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "boot_signatures": {},

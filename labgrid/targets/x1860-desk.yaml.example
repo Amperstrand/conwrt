@@ -1,0 +1,29 @@
+## Reference rig: DESK flash with the OPERATOR as infrastructure (P1 pattern).
+## D-Link COVR-X1860 A1 — no PoE, no serial: the human IS the power/button resource.
+## Local labgrid target: NO coordinator/exporter needed (labgrid can build a
+## Target in-process from YAML). Copy to a local (gitignored) file and run with
+## the labgrid pytest plugin or a small driver script.
+##
+## Pattern: docs/DEVICE-TRANSITIONS.md. Token vocabulary: models/*.json
+## flash_methods.<method>.resources_required — recovery-http on this model
+## declares [power, button, recovery-subnet, packet-observer], and this rig
+## satisfies each: Manual* = human, NetworkService = the Mac's subnet attach,
+## the pcap monitor rides in the test harness.
+targets:
+  main:
+    resources:
+      ManualPowerPort: {}
+      ManualSwitchPort: {}
+      NetworkService:
+        address: 192.168.0.1     ## recovery subnet (192.168.0.10/24 alias on the Mac)
+        username: root           ## only meaningful AFTER first boot (recovery mode is HTTP-only)
+    drivers:
+      ManualPowerDriver:
+        message: "Power the X1860 OFF now, then press Enter"
+      ManualSwitchDriver:
+        message: "HOLD the reset pin, power ON, release when the LED blinks rapidly, then press Enter"
+      SSHDriver:
+        connection_timeout: 120.0
+        explicit_scp_mode: True   ## OpenWrt dropbear has no sftp-server
+images:
+  root: null                       ## filled per-run: path to the factory image

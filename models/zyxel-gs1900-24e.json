@@ -39,11 +39,25 @@
       "silence_timeout": 30,
       "two_stage": true,
       "stage1_image": "initramfs",
-      "stage2_method": "sysupgrade"
+      "stage2_method": "sysupgrade",
+      "resources_required": [
+        "stock-web-admin",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "image-type-factory",
+        "partition-backup"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades. Crosses partition layout boundaries (e.g. 22.03 dual to 25.12.1 merged) requires mtd-write instead.",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "mtd-write": {
       "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions. Writes initramfs to firmware partition (mtd5), reboots into new initramfs, then sysupgrade for permanent install.",
@@ -51,7 +65,14 @@
       "partition": "firmware",
       "requires_initramfs": true,
       "flash_time_seconds": 120,
-      "silence_timeout": 30
+      "silence_timeout": 30,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match",
+        "partition-backup"
+      ]
     },
     "serial-tftp-openwrt": {
       "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to JP2 header. Two-stage: boot initramfs via TFTP, then sysupgrade. U-Boot bootdelay=1 (already enabled by OEM). serverip should be set to your TFTP host via fw_setenv before relying on this.",
@@ -78,7 +99,16 @@
         "ipaddr": "192.168.1.1",
         "baudrate": 115200,
         "note": "bootdelay=1 set by OEM (not modified by us). serverip changed from 192.168.1.X to 192.168.1.2 via fw_setenv. UNTESTED: serial TFTP recovery not actually performed, only env values verified."
-      }
+      },
+      "resources_required": [
+        "power",
+        "serial-console",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup"
+      ]
     }
   },
   "partition_layout": {

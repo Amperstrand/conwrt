@@ -3,6 +3,7 @@ import argparse
 from model_loader import list_models
 from conwrt._version import __version__
 from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
+from bench_doctor import add_doctor_arguments
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -77,7 +78,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Serial flash method variant (e.g. openwrt-flash, stock-restore). "
                              "Selects the serial-tftp-{method} flash_method from model JSON.")
     flash_parser.add_argument("--serial-baud", type=int, default=115200,
-                        help="Serial baud rate (default: 115200)")
+                         help="Serial baud rate (default: 115200)")
+    flash_parser.add_argument("--serial", default=None,
+                         help="Optional serial boot-milestone monitor: tcp://HOST:PORT[,baud] "
+                              "(serial bridge, baud ignored) or /dev/path[,baud]. Boot "
+                              "milestones (U-Boot banner, kernel start, procd init, login "
+                              "prompt) are detected from the serial stream alongside the pcap "
+                              "monitor; serial wins conflicts (ground truth). If the stream "
+                              "dies mid-flash, a warning is logged and the flow continues "
+                              "pcap-only. Inert for the serial-tftp flash method (it owns the "
+                              "console). The flash itself is unchanged.")
     flash_parser.add_argument("--tftp-root", default=None,
                         help="TFTP server root directory. Defaults to image directory.")
     flash_parser.add_argument("--isolate-port", default="",
@@ -265,6 +275,10 @@ def _build_parser() -> argparse.ArgumentParser:
     mig_parser.add_argument("--interface", default=None,
                         help="Host ethernet interface (auto-detected if omitted)")
     mig_parser.add_argument("--rollback-secs", type=int, default=60,
-                        help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+                         help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+
+    doctor_parser = subparsers.add_parser("bench-doctor",
+        help="Validate the optional labgrid bench stack (read-only; ABSENT=healthy standalone)")
+    add_doctor_arguments(doctor_parser)
 
     return parser

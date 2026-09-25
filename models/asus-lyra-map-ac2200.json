@@ -50,12 +50,25 @@
       "flash_time_seconds": 180,
       "silence_timeout": 60,
       "led_pattern_boot": "LED breathes multiple colors, then blinks blue, then steady blue when ready",
-      "reset_instructions": "Factory reset: hold reset button 5 seconds until orange flashing, then release. Do NOT hold 10+ seconds (enters rescue mode). On factory default (white LED), SSH is enabled automatically via CVE chain (CVE-2021-32030 null-byte auth bypass + CVE-2018-5999 apply.cgi). No wizard needed. Works from macOS or OpenWrt (router-to-router). WiFi flash: use --wifi flag from OpenWrt host to auto-scan for ASUS_* SSID and flash wirelessly (no ethernet cable needed). PORT WARNING: Stock LAN port varies by hardware batch — try both ports if device not found. After initramfs flash, cable MUST be on middle port (LAN in OpenWrt)."
+      "reset_instructions": "Factory reset: hold reset button 5 seconds until orange flashing, then release. Do NOT hold 10+ seconds (enters rescue mode). On factory default (white LED), SSH is enabled automatically via CVE chain (CVE-2021-32030 null-byte auth bypass + CVE-2018-5999 apply.cgi). No wizard needed. Works from macOS or OpenWrt (router-to-router). WiFi flash: use --wifi flag from OpenWrt host to auto-scan for ASUS_* SSID and flash wirelessly (no ethernet cable needed). PORT WARNING: Stock LAN port varies by hardware batch — try both ports if device not found. After initramfs flash, cable MUST be on middle port (LAN in OpenWrt).",
+      "resources_required": [
+        "stock-ssh"
+      ],
+      "envelope": [
+        "partition-backup",
+        "board-name-match"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "wifi-sta-flash": {
       "description": "WiFi STA flash from OpenWrt host: scan for ASUS_* SSID (open/no encryption on 2.4GHz), connect STA interface, CVE chain SSH enable over WiFi, SCP initramfs, mtd-write. No ethernet cable needed. Requires OpenWrt host with 2.4GHz STA-capable radio.",
@@ -65,7 +78,14 @@
       "stock_wifi_channel": "auto",
       "host_sta_radio": "radio1",
       "host_sta_band": "2g",
-      "flash_time_seconds": 180
+      "flash_time_seconds": 180,
+      "resources_required": [
+        "ssh-service",
+        "wifi-sta-link"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "capabilities": [

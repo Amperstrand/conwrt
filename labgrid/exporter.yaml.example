@@ -1,0 +1,73 @@
+## conwrt bench-switch exporter — PoE power + network resources for DUT ports.
+## Copy to exporter.yaml (gitignored, local-only) and fill real hosts.
+## NOTE: "#" lines are Jinja statements in labgrid configs — comment with "##" only.
+## Backend: conwrt_poe (labgrid/conwrt_poe.py installed into the labgrid
+## package on the driver host). NetworkPowerPort params are wire-safe.
+## host = switch management IP (bench topology: docs/BENCH-SWITCH-PATTERN.md).
+##
+## TWO RULES learned 2026-09-22 (see labgrid/README.md "Resources per place"):
+## 1. NEVER export a power place for a unit where a power cycle is a one-way
+##    trip (TFTP-fallback-dependent units) — the labgrid path bypasses the
+##    controllers that would refuse it.
+## 2. Exporting a resource is half the work: the coordinator place also needs
+##    `labgrid-client -p <place> add-match '*/<place>/<ResourceClass>'`.
+##
+## NetworkService pattern (add per adopted unit, enables SSHDriver):
+##   ap-lanN:
+##     NetworkPowerPort:
+##       model: conwrt_poe
+##       host: SWITCH_MGMT_IP
+##       index: N
+##     NetworkService:
+##       address: 192.168.10N.51
+##       username: root
+##
+## Keep this file in sync with reality with:
+##   python3 scripts/bench_inventory.py scan --host SWITCH_MGMT_IP --emit-exporter -
+## (regenerates stanzas from what is actually connected, honoring
+## "power_export": false in data/bench/places.json).
+ap-lan2:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 2
+
+ap-lan3:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 3
+
+ap-lan4:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 4
+
+## ap-lan5: power withheld 2026-09-22..2026-09-23 (one-way-trip unit, rule 1)
+## and re-exported after the unit was fixed (issue #61: flash-boots again).
+## Rule 1 stays the guard for any unit still marked "power_export": false.
+
+ap-lan5:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 5
+
+ap-lan6:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 6
+
+ap-lan7:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 7
+
+ap-lan8:
+  NetworkPowerPort:
+    model: conwrt_poe
+    host: SWITCH_MGMT_IP
+    index: 8

@@ -46,6 +46,20 @@ class Event(Enum):
     EXTREME_TFTP_INITRAMFS_READY = auto()
     EXTREME_BACKUP_COMPLETE = auto()
     EXTREME_BOOTCMD_RESTORED = auto()
+    SERIAL_UBOOT_BANNER = auto()
+    SERIAL_KERNEL_START = auto()
+    SERIAL_PROCD_PREINIT = auto()
+    SERIAL_PROCD_INIT = auto()
+    SERIAL_LOGIN_PROMPT = auto()
+
+
+SERIAL_MILESTONES: frozenset[Event] = frozenset({
+    Event.SERIAL_UBOOT_BANNER,
+    Event.SERIAL_KERNEL_START,
+    Event.SERIAL_PROCD_PREINIT,
+    Event.SERIAL_PROCD_INIT,
+    Event.SERIAL_LOGIN_PROMPT,
+})
 
 
 class State(Enum):
@@ -97,6 +111,11 @@ class Timeline:
     first_openwrt_packet: Optional[float] = None
     ssh_available: Optional[float] = None
     recovery_start: Optional[float] = None
+    serial_uboot_banner: Optional[float] = None
+    serial_kernel_start: Optional[float] = None
+    serial_procd_preinit: Optional[float] = None
+    serial_procd_init: Optional[float] = None
+    serial_login_prompt: Optional[float] = None
 
 
 @dataclass
@@ -156,6 +175,13 @@ class RecoveryContext:
         if self._say_fn is None:
             self._say_fn = say
 
+    def manual(self, msg: str) -> bool:
+        """Announce an operator physical-action step (labgrid
+        ManualPowerDriver/ManualSwitchDriver semantics); the caller confirms
+        via the physical event (link state, recovery HTTP) that follows.
+        Visible even with voice disabled — action steps are never silent."""
+        return manual_step(msg, voice=self._say_fn is say, confirm="event")
+
     def mark_success(self, message: str, verify_fn: object = None) -> None:
         """Mark recovery as complete with a success message."""
         self.timeline.ssh_available = ts()
@@ -190,6 +216,44 @@ def say(msg: str) -> None:
         sys.stdout.flush()
 
 
+def manual_step(msg: str, *, voice: bool = True, confirm: str = "enter",
+                assume_confirmed: bool = False) -> bool:
+    """Announce a physical step for the operator to perform — the desk-rig
+    equivalent of labgrid's ManualPowerDriver/ManualSwitchDriver
+    (docs/DEVICE-TRANSITIONS.md): a transition whose resources include
+    'power' or 'button' satisfied by a human.
+
+    confirm="enter" — block until the operator presses Enter (interactive
+                      sessions only; refuses rather than blocking invisibly).
+    confirm="event" — announce only; the caller polls the physical
+                      confirmation (link state, boot packet) right after.
+    assume_confirmed=True — explicit non-interactive opt-in (e.g. --yes),
+                      for scripted runs where the operator pre-confirmed.
+
+    Returns True when the step may proceed. A False return means the step
+    was refused (no operator available) — callers must abort, not continue.
+    """
+    if voice:
+        say(msg)
+    else:
+        print(f"    [manual] {msg}")
+        sys.stdout.flush()
+    if confirm == "event" or assume_confirmed:
+        return True
+    if confirm == "enter":
+        if not sys.stdin.isatty():
+            log("REFUSED: manual step requires an operator, but stdin is not "
+                "interactive. Re-run interactively, or pass the explicit "
+                "assume-confirmed flag for scripted flows.")
+            return False
+        try:
+            input("    [manual] press Enter when done: ")
+        except EOFError:
+            return False
+        return True
+    raise ValueError(f"unknown confirm mode: {confirm!r}")
+
+
 def log(msg: str) -> None:
     t = time.strftime("%H:%M:%S")
     print(f"  [{t}] {msg}")
@@ -218,6 +282,47 @@ def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 
             return True
         time.sleep(interval)
     return False
+
+
+def apply_serial_milestone(ctx: RecoveryContext, event: Event, event_ts: float) -> None:
+    """Record a --serial boot milestone on the timeline.
+
+    Serial is ground truth: where a milestone covers the same ground as a
+    pcap signal (kernel start ≈ first OpenWrt evidence), the serial
+    observation OVERWRITES the pcap-derived timestamp; the pcap path only
+    ever writes first_openwrt_packet when it is still None, so a serial
+    value always survives the conflict.
+    """
+    timeline = ctx.timeline
+    if event == Event.SERIAL_UBOOT_BANNER:
+        timeline.serial_uboot_banner = event_ts
+    elif event == Event.SERIAL_KERNEL_START:
+        timeline.serial_kernel_start = event_ts
+        if timeline.first_openwrt_packet is None:
+            ctx._say_fn("OpenWrt is booting.")
+        timeline.first_openwrt_packet = event_ts
+    elif event == Event.SERIAL_PROCD_PREINIT:
+        timeline.serial_procd_preinit = event_ts
+    elif event == Event.SERIAL_PROCD_INIT:
+        timeline.serial_procd_init = event_ts
+    elif event == Event.SERIAL_LOGIN_PROMPT:
+        timeline.serial_login_prompt = event_ts
+
+
+def drain_serial_milestones(eq: queue.Queue, ctx: RecoveryContext) -> None:
+    """Apply queued serial milestones to the timeline (non-blocking).
+
+    For paths that wait on polling instead of the event queue (sysupgrade
+    SSH wait): drains the queue — nothing else reads it after those points,
+    so dropped non-serial events are already-consumed evidence.
+    """
+    while True:
+        try:
+            event, event_ts, _detail = eq.get_nowait()
+        except queue.Empty:
+            return
+        if event in SERIAL_MILESTONES:
+            apply_serial_milestone(ctx, event, event_ts)
 
 
 def wait_for_event(
@@ -255,6 +360,8 @@ def wait_for_event(
                 return event
             elif event == Event.UBOOT_HTTP and ctx.timeline.uboot_http_first is None:
                 ctx.timeline.uboot_http_first = event_ts
+            elif event in SERIAL_MILESTONES:
+                apply_serial_milestone(ctx, event, event_ts)
 
         except queue.Empty:
             pass

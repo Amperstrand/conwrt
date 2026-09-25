@@ -276,3 +276,167 @@ From string: `power budget: %u mW, allocated: %u mW, consumed: %u mW`
 From string: `PoE chip 0x%x is %s` / `found` / `unsupported`
 - Stock detects chip type at init
 - BCM59111, BCM59121, RTL8238B, BCM59011 all supported
+
+---
+
+# Part 2: Timeout / Retry / Recovery Analysis (2026-09-23)
+
+Full disassembly pass over `board_poe.ko` with capstone (MIPS32 BE) +
+SHT_REL relocation resolution. All addresses are `.text` section-relative
+(symbol table has size-0 entries; static helpers located by call-target
+analysis). Companion scripts and raw findings live in the analysis session;
+every value below was read directly from instruction immediates.
+
+## Q1 — Stock MCU response timeout
+
+**Per-byte RX timeouts** (RX helper at `0xf820`, called from
+`rtl8238b_uart_xmit` at `0xf944` with `$a3 = 0x32`):
+
+| Stage | Budget | Evidence |
+|---|---|---|
+| First response byte | **150 ms** | `0xf850: addiu $a2, $a3, 0x64` (0x32 + 0x64 = 0x96 = 150) |
+| Each subsequent byte (up to 12) | **50 ms** | `0xf83c..0xf88c` loop, `$a3 = 0x32` |
+| Absolute worst RX window per attempt | 150 + 11×50 = **700 ms** | |
+| Wire time per 12-byte frame @19200/8N1 | ~6.25 ms | |
+
+TX is blocking byte-by-byte `drv_uart_putc` (helper at `0xf8cc`), no timeout.
+
+**Command retry budget** (`rtl8238b_cmd_set` `0xe86c` tail at `0xf268`,
+identical in `rtl8238b_cmd_get` `0xf2f8` tail at `0xf624`):
+
+- Max attempts: **16** — `0xf268: sltiu $v0, $s4, 0x10`
+- Sleep between attempts: **50 ms** — `0xf27c: ori $a0, $zero, 0xc350` (50000 µs) via `osal_time_usleep`
+- Fresh sequence number per attempt (regenerated from `0xe610`)
+- Final failure: `sys_log(0, 9, "Retry counts: %u / %u")`, return −1
+
+So a single synchronous `cmd_set`/`cmd_get` ioctl blocks for:
+- Typical (healthy MCU): **< 100 ms**
+- Absolute worst case: 16 × (700 ms + 50 ms) ≈ **12 s**
+
+**There is no 30-second constant anywhere in the stock module.**
+
+**State-change visibility** (`_poe_portStatusState_thread`, entry `0x17d4`):
+- Base tick: `osal_time_sleep(1)` — 1 s
+- `poe_allPortStatus_get` on `tick & 3 == 0` → **every 4 s**, diffed against
+  cache, changes fire the registered event callback + `sys_dbg` (line 0x9b)
+- `poe_allPortStats_get` on `tick % 0x14 == 0` → every 20 s
+- `_poe_threshold_thread` (entry `0x1b10`): `board_poe_ctrl_thread()` every
+  tick, power/threshold check every 5 s (`tick % 5`)
+
+Stock "port disabled → status shows it" latency: **typically < 1 s, worst
+~5 s** (4 s poll period + 1 s phase). Threads created by `poe_ctrl_init`
+(`0x2504`) via `osal_thread_create(name, 0x8000 stack, 0x42 prio, entry, 0)`.
+
+## Q2 — Host↔MCU protocol (RTL8238B / STM32F100 path)
+
+- **Transport**: UART, `drv_uart_baudrate_set(0, 4)` in `rtl8238b_uart_init`
+  (`0xfc8c`). Baud index 4 = **19200** (cross-checked: our fork's default on
+  this exact hardware is 19200, `src/main.c:2133`; BCM59111 boards use index
+  1 = different rate). Kernel console is separately 115200
+  (`console=ttyS0,115200` in .bix vmlinux).
+- **Dispatch**: `rtl8238b_smi_init` (`0xf690`) reads
+  `board_poe_smiConf_get()`; when the board config selects UART it installs
+  the ops table at `.data+0x330` = {`rtl8238b_uart_init`,
+  `rtl8238b_uart_xmit`, `rtl8238b_uart_xmit_timeout`, `rtl8238b_uart_exchange`}
+  into global `0x1190`. `cmd_set`/`cmd_get` frame builders → `0xe67c` →
+  `rtl8238b_smi_exchange` (`0xf7ec`) → `uart_exchange` → `uart_xmit`.
+- **Frame** (12 bytes, matches our fork exactly):
+  - `[0]` command byte
+  - `[1]` sequence: rolling counter at `.data+0x320`, wraps 0xFE→0 (gen at `0xe610`)
+  - `[2..10]` args
+  - `[11]` checksum = low byte of sum of bytes 0..10 (checksum slot zeroed
+    first; calc at `0xe63c`, append in `cmd_set` at `0xefd4`)
+- **Exchange sequence** (`rtl8238b_uart_xmit` `0xf944`):
+  `mutex_lock(&g_rtl8238b_uart_mutex @ .data+0x11a4)` →
+  `drv_uart_clearfifo(0)` → TX 12 bytes → RX 12 bytes (timeouts above) →
+  `mutex_unlock`.
+- **Validation** of the reply (cmd_set lines 0x1cf–0x21a): checksum recompute,
+  command-echo match, per-record parsing for multi-port formats; failures log
+  `Host <-> PoE: communication failed`, `PoE -> Host: checksum validation
+  failed`, `controller is in BOOTROM, requesting image`, `not ready to
+  response`, `negative Acknowledgement (%d)`, etc. and trigger the retry.
+- Debug hexdump helper at `0xe6a4` prints `H->M: %s` / `M->H: %s` frames —
+  only at retry 0 or retry 16 (final).
+
+## Q3 — Retry/recovery mechanisms vs our fork
+
+| Mechanism | Stock | Fork (ai-experiments) |
+|---|---|---|
+| Command retry | 16 attempts, 50 ms apart, fresh seq each, synchronous | Single attempt, 2 s async response timeout |
+| On no response | Retry 15 more times; command still returns error only after ~12 s | `mcu_no_response`: **drops entire pending queue** + software reset (cmd `0x02`) |
+| Hardware MCU reset | `board_poe_reset_set` (`0x40e0`): GPIO assert `period_ms`, release, wait `restart_ms` (values from board config, ms×1000 → µs), then `poe_init_status_check()` re-handshake; `sys_log` "PoE has been reset" | none (GPIO line unused) |
+| Errdisable recovery | Userspace `sal_port_errDisableRecovery_set` / `errDisableTime_set` / `errDisable_recover` (libsal/cli) — auto re-enable of faulted ports | none |
+| Port status events | 4 s poll diff → event callback + ksi msg (0x401/0x402/0x18/0x24 params) | 1 s poll diff → ubus `poe.port_status` event (fork is FASTER here) |
+| Threshold monitor | every 5 s, ksi events, hysteresis flag | every poll (~1 s), ubus event (equivalent) |
+| Serialization | mutex per UART | single-command queue (equivalent) |
+
+The "wedged daemon" failure mode documented in `labgrid/conwrt_poe.py`'s
+docstring (manage rc=0 but command silently dropped) maps exactly to the
+fork's `mcu_no_response` dropping the queue — stock never drops a command
+without 16 delivery attempts, and can always fall back to the GPIO reset.
+
+## Q4 — Maximum expected latency for port enable/disable
+
+- Stock SET ack round trip: typical < 150 ms, worst ~12 s (16 × 700 ms + 15 × 50 ms)
+- Status reflecting the change: +0–5 s (4 s poll cadence)
+- **Practical worst-case confirmed state change: ~5 s typical-path, ~17 s pathological**
+- A 30 s confirmation delay is NOT stock behavior. If the STM32 takes 30 s,
+  stock would have long since (a) retried 16×, (b) logged
+  `Retry counts: 16 / 16`, (c) returned −1 to the CLI, and (d) left the
+  state to be discovered by the next 4 s poll.
+
+## Recommended backend/fork changes
+
+1. **`labgrid/conwrt_poe.py` is currently broken (local uncommitted edit)**:
+   `def power_set` got re-indented inside `_verify_manage` — module-level
+   `power_set` no longer exists (`hasattr(conwrt_poe, 'power_set') == False`),
+   so every labgrid power op fails regardless of MCU speed. Revert to
+   `bf32cf9` or fix the indentation before tuning any timeouts.
+2. **VERIFY_TIMEOUT_S = 20 is already generous** vs stock's ~5 s worst-case
+   visibility; keep 20 s (or drop to ~10 s once the fork is healthy) with the
+   existing FROZEN_GRACE_S = 6 wedge detector — that detector is the right
+   analog of stock's "Retry counts exhausted" signal.
+3. Fork improvements worth porting from stock (priority order):
+   - Retry N× with fresh sequence before declaring no-response (stock: 16×/
+     50 ms; even 3×/500 ms would eliminate most wedge-triggered resets).
+   - Never drop the whole pending queue on one timeout — retry the head.
+   - Consider the hardware reset GPIO as the escalation after retries fail
+     (stock: `board_poe_reset_set`), instead of the software chicken-reset
+     which the MCU may ignore when wedged.
+
+## Key address map (board_poe.ko `.text`)
+
+| Addr | Function |
+|---|---|
+| 0x1494 | poe_init_status_check (checks init flag @ .bss+0x284) |
+| 0x17d4 | _poe_portStatusState_thread |
+| 0x1b10 | _poe_threshold_thread |
+| 0x2504 | poe_ctrl_init (thread creation) |
+| 0x40e0 | board_poe_reset_set (GPIO MCU reset) |
+| 0xe610 | seq number generator (counter @ .data+0x320) |
+| 0xe63c | frame checksum (12-byte additive sum) |
+| 0xe67c | exchange dispatch → smi_exchange |
+| 0xe6a4 | H->M/M->H hexdump (retry 0/16 only) |
+| 0xe86c | rtl8238b_cmd_set (16×50 ms retry) |
+| 0xf2f8 | rtl8238b_cmd_get (16×50 ms retry) |
+| 0xf690 | rtl8238b_smi_init (installs UART ops @ .data+0x330 → global 0x1190) |
+| 0xf820 | uart RX helper (150 ms first byte / 50 ms per byte) |
+| 0xf8cc | uart TX helper (blocking putc loop) |
+| 0xf944 | rtl8238b_uart_xmit (cmd transport, timeout 0x32=50) |
+| 0xfad0 | rtl8238b_uart_xmit_timeout (explicit-timeout variant, ops slot 2) |
+| 0xfc5c | rtl8238b_uart_exchange |
+| 0xfc8c | rtl8238b_uart_init (baud idx 4 = 19200) |
+
+Magic numbers: `0x32`=50 ms per-byte timeout, `0x64`=+100 ms first-byte grace,
+`0xC350`=50000 µs retry sleep, `0x10`=16 max retries, `0x254`=596 module
+error code, poll divisors 4 (status) / 5 (threshold) / 20 (stats), `0x3E8`
+ms→µs multiplier in reset timing.
+
+## .bix image note
+
+`data/runtime-GS1900-8HPv2.1-V2.90(AAHI.0).bix` = 0x40-byte header +
+gzip(vmlinux, 7.68 MB) + ASCII version table at 0x5cd6a7. **No rootfs and no
+STM32 firmware image inside** — kernel cmdline `console=ttyS0,115200
+mem=64M`. The STM32 firmware and rtcore.ko (baud table) live in the
+rootfs partition, which is not present in the .zip; the binaries in this
+directory (board_poe.ko, cli, libsal.so.0.0) remain the analysis surface.

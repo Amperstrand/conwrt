@@ -25,7 +25,13 @@
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "linksys-jnap-cve": {
       "description": "CVE-2019-16340 auth bypass: use JNAP SetAdminPassword with 5-digit recovery pin from sticker to set admin password, then upload factory image via /jcgi/ endpoint (port 80 or 52000). Recovery pin is required — empty/missing resetCode returns ErrorInvalidResetCode. Dual partitions — must flash both.",
@@ -40,7 +46,15 @@
         "tested": true,
         "date": "2026-05-30",
         "notes": "Flashed 2 units. Partition 1 via port 80 or 52000 /jcgi/ upload, partition 2 via SSH mtd write to alt_kernel. Recovery pin required on both."
-      }
+      },
+      "resources_required": [
+        "stock-web-admin",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "image-type-factory",
+        "partition-backup"
+      ]
     }
   },
   "capabilities": [

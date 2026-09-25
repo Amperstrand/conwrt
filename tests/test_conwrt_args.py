@@ -142,3 +142,48 @@ class TestFlashIpAndKeepConfig:
     def test_keep_config_defaults_false(self):
         args = self._parse("--image", "/tmp/fw.bin")
         assert args.keep_config is False
+
+
+class TestFlashSerialMonitorFlag:
+    """--serial (boot-milestone monitor spec) — distinct from --serial-port."""
+
+    def _parse(self, *args: str):
+        import conwrt
+        with patch("sys.argv", ["conwrt", "flash", *args]):
+            return conwrt._build_parser().parse_args()
+
+    def test_serial_tcp_with_baud(self):
+        args = self._parse("--image", "/tmp/fw.bin",
+                           "--serial", "tcp://127.0.0.1:4002,57600")
+        assert args.serial == "tcp://127.0.0.1:4002,57600"
+
+    def test_serial_tcp_plain(self):
+        args = self._parse("--image", "/tmp/fw.bin", "--serial", "tcp://127.0.0.1:4002")
+        assert args.serial == "tcp://127.0.0.1:4002"
+
+    def test_serial_dev_path(self):
+        args = self._parse("--image", "/tmp/fw.bin",
+                           "--serial", "/dev/cu.usbserial-BG02QAPG,57600")
+        assert args.serial == "/dev/cu.usbserial-BG02QAPG,57600"
+
+    def test_serial_defaults_none(self):
+        args = self._parse("--image", "/tmp/fw.bin")
+        assert args.serial is None
+
+    def test_serial_distinct_from_serial_port(self):
+        args = self._parse("--image", "/tmp/fw.bin",
+                           "--serial", "tcp://127.0.0.1:4002",
+                           "--serial-port", "/dev/cu.usbserial-A50285BI")
+        assert args.serial == "tcp://127.0.0.1:4002"
+        assert args.serial_port == "/dev/cu.usbserial-A50285BI"
+
+    def test_flash_help_documents_serial_flag(self, capsys):
+        import pytest
+        import conwrt
+        parser = conwrt._build_parser()
+        with patch("sys.argv", ["conwrt", "flash", "--help"]):
+            with pytest.raises(SystemExit):
+                parser.parse_args()
+        out = capsys.readouterr().out
+        assert "--serial" in out
+        assert "tcp://HOST:PORT" in out

@@ -34,12 +34,27 @@
       "flash_time_seconds": 360,
       "silence_timeout": 30,
       "reset_instructions": "Press and hold the reset button on the side of the device, then plug in power. Hold until the LED signals recovery mode.",
-      "led_pattern": "unverified — assume blue LED flashes then solid (per MT3000); confirm via pcap before relying on it"
+      "led_pattern": "unverified — assume blue LED flashes then solid (per MT3000); confirm via pcap before relying on it",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt, or GL.iNet web UI (More Settings → Advanced → Upload Firmware, untick Keep settings)",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "capabilities": [

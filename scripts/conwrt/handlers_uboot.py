@@ -31,7 +31,7 @@ def _drain_events(eq: queue.Queue, ctx: RecoveryContext) -> None:
 def _handle_waiting_for_power_off(ctx: RecoveryContext, eq: queue.Queue) -> None:
     link_up = get_link_state(ctx.interface)
     if link_up:
-        ctx._say_fn("Ready. Please unplug the power cable from the router now.")
+        ctx.manual("Ready. Please unplug the power cable from the router now.")
         log("STEP 1: Unplug power (keep ethernet in LAN port)")
 
         _wait_for_event_or_timeout(
@@ -55,15 +55,15 @@ def _handle_waiting_for_power_off(ctx: RecoveryContext, eq: queue.Queue) -> None
 def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monitor: LinkMonitor) -> None:
     print()
     profile = ctx.profile
-    ctx._say_fn(profile.reset_instructions)
+    ctx.manual(profile.reset_instructions)
     log(f"STEP 2: {profile.reset_instructions}")
     time.sleep(4)
 
-    ctx._say_fn("While still holding reset, plug in the power cable.")
+    ctx.manual("While still holding reset, plug in the power cable.")
     log("STEP 3: Plug in power WHILE STILL HOLDING reset")
     time.sleep(2)
 
-    ctx._say_fn(
+    ctx.manual(
         f"Watch the LED. {profile.led_pattern}. "
         "Release reset when the LED shows the recovery pattern."
     )
@@ -97,7 +97,7 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
         if found:
             log(f"Recovery mode detected: {detail}")
             ctx.timeline.uboot_http_first = ts()
-            ctx._say_fn("Recovery mode detected. You can release the button now.")
+            ctx.manual("Recovery mode detected. You can release the button now.")
             ctx.state = State.UBOOT_UPLOADING
             uboot_found = True
             break

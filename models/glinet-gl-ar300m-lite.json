@@ -76,12 +76,27 @@
       "flash_time_seconds": 60,
       "silence_timeout": 30,
       "reset_instructions": "Hold reset button while connecting power. Hold for ~5 seconds until LEDs flash.",
-      "led_pattern": "LEDs flash 5 times during U-Boot entry"
+      "led_pattern": "LEDs flash 5 times during U-Boot entry",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "signatures": {

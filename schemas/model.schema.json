@@ -4,7 +4,14 @@
   "title": "conwrt device model",
   "type": "object",
   "additionalProperties": true,
-  "required": ["id", "vendor", "description", "openwrt", "flash_methods", "capabilities"],
+  "required": [
+    "id",
+    "vendor",
+    "description",
+    "openwrt",
+    "flash_methods",
+    "capabilities"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -12,14 +19,29 @@
       "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
       "description": "conwrt slug; must match models/{id}.json filename (hyphenated)"
     },
-    "vendor": {"type": "string", "minLength": 1},
-    "description": {"type": "string", "minLength": 1},
+    "vendor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
     "openwrt": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["target", "device", "profile", "version"],
+      "required": [
+        "target",
+        "device",
+        "profile",
+        "version"
+      ],
       "properties": {
-        "target": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$"},
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$"
+        },
         "device": {
           "type": "string",
           "minLength": 1,
@@ -34,13 +56,32 @@
           "type": "string",
           "description": "Optional /tmp/sysinfo/board_name for auto-detect"
         },
-        "version": {"type": "string", "minLength": 1},
-        "default_ip": {"type": "string", "minLength": 1}
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default_ip": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "capabilities": {
       "type": "array",
-      "items": {"type": "string", "enum": ["ethernet", "wifi", "bluetooth", "usb", "lte", "cellular", "serial", "ssh", "tftp"]},
+      "items": {
+        "type": "string",
+        "enum": [
+          "ethernet",
+          "wifi",
+          "bluetooth",
+          "usb",
+          "lte",
+          "cellular",
+          "serial",
+          "ssh",
+          "tftp"
+        ]
+      },
       "uniqueItems": true
     },
     "flash_methods": {
@@ -49,27 +90,114 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["description"],
+        "required": [
+          "description"
+        ],
         "properties": {
-          "description": {"type": "string", "minLength": 1},
-          "recovery_ip": {"type": "string"},
-          "client_ip": {"type": "string"},
-          "upload_endpoint": {"type": "string"},
-          "command": {"type": "string"},
-          "flash_time_seconds": {"type": "integer", "minimum": 0},
-          "silence_timeout": {"type": "integer", "minimum": 0},
-          "ftp_target": {"type": "string", "description": "FTP upload target file (e.g. ras-0, ras-1)"},
-          "ftp_active_mode": {"type": "boolean", "description": "Use FTP active mode (PASV unsupported on some ZyNOS devices)"},
-          "stock_default_ip": {"type": "string", "description": "Default IP of stock firmware for OEM access"},
-          "stock_default_user": {"type": "string"},
-          "stock_default_password": {"type": "string"},
-          "tested_hardware": {"type": "object"}
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recovery_ip": {
+            "type": "string"
+          },
+          "client_ip": {
+            "type": "string"
+          },
+          "upload_endpoint": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "flash_time_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "silence_timeout": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ftp_target": {
+            "type": "string",
+            "description": "FTP upload target file (e.g. ras-0, ras-1)"
+          },
+          "ftp_active_mode": {
+            "type": "boolean",
+            "description": "Use FTP active mode (PASV unsupported on some ZyNOS devices)"
+          },
+          "stock_default_ip": {
+            "type": "string",
+            "description": "Default IP of stock firmware for OEM access"
+          },
+          "stock_default_user": {
+            "type": "string"
+          },
+          "stock_default_password": {
+            "type": "string"
+          },
+          "tested_hardware": {
+            "type": "object"
+          },
+          "resources_required": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "power",
+                "button",
+                "serial-console",
+                "ssh-service",
+                "stock-ssh",
+                "stock-web-admin",
+                "stock-ftp",
+                "recovery-subnet",
+                "tftp-server",
+                "multicast-l2",
+                "bootenv-write",
+                "packet-observer",
+                "wifi-sta-link"
+              ]
+            },
+            "uniqueItems": true,
+            "description": "Abstract resources the rig must provide to run this method (see docs/DEVICE-TRANSITIONS.md). 'power' = PoE control OR an operator; the place decides the flavor."
+          },
+          "envelope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "board-name-match",
+                "image-type-factory",
+                "partition-backup",
+                "cfg2-pristine",
+                "tftp-lifeline-armed",
+                "zycast-kill-plan",
+                "rom-audit",
+                "keys-and-password",
+                "known-broken"
+              ]
+            },
+            "uniqueItems": true,
+            "description": "Safety preconditions that must hold BEFORE the risky step (AGENTS.md discipline, machine-checkable). A transition without its envelope refuses to run."
+          }
         }
       }
     },
-    "tested_hardware": {"type": "object"},
-    "signatures": {"type": "object"},
-    "hardware": {"type": "object"},
-    "mac_oui": {"type": "array", "items": {"type": "string"}}
+    "tested_hardware": {
+      "type": "object"
+    },
+    "signatures": {
+      "type": "object"
+    },
+    "hardware": {
+      "type": "object"
+    },
+    "mac_oui": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
   }
 }

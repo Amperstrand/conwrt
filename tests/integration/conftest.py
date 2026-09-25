@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -182,8 +183,19 @@ def _download_prebake_packages() -> None:
     print(f"  Pre-baked {len(list(prebake_dir.glob('*.ipk')))} packages", flush=True)
 
 
+def _vm_layer_supported() -> bool:
+    """README contract for the VM layers: Linux with KVM (/dev/kvm).
+
+    qemu being installed (e.g. homebrew on macOS) is not enough — the image
+    preparation path needs losetup/mount and the boot path assumes KVM.
+    """
+    return sys.platform.startswith("linux") and os.path.exists("/dev/kvm")
+
+
 @pytest.fixture(scope="session")
 def openwrt_vm():
+    if not _vm_layer_supported():
+        pytest.skip("VM integration layer needs Linux with KVM (/dev/kvm) — run via `make integration`")
     if not _available("qemu-system-x86_64") or not _available("qemu-img"):
         pytest.skip("qemu-system-x86_64 / qemu-img not installed")
 

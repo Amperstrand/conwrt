@@ -33,12 +33,27 @@
       "flash_time_seconds": 300,
       "silence_timeout": 180,
       "reset_instructions": "Connect ethernet to any port (WAN or LAN). Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
-      "led_pattern": "status LED blinks red"
+      "led_pattern": "status LED blinks red",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "dlink-hnap": {
       "description": "D-Link stock firmware HNAP SOAP API firmware upload (no reset needed, works when router is running stock firmware)",
@@ -54,7 +69,14 @@
       "flash_time_seconds": 150,
       "silence_timeout": 30,
       "notes": "HNAP challenge-response auth with HMAC-MD5 + custom AES (HNAP_CONTENT). Login with default password, upload factory image via multipart POST. WARNING: GetFirmwareValidation rejects OpenWrt images on stock v1.02 (IsValid=false). Use recovery-http for reliable flashing.",
-      "caveat": "Firmware upload API returns OK but stock firmware validation blocks non-D-Link images. The GPL RSA signing key is a test key, not the production key. Recovery-http (U-Boot) bypasses all validation."
+      "caveat": "Firmware upload API returns OK but stock firmware validation blocks non-D-Link images. The GPL RSA signing key is a test key, not the production key. Recovery-http (U-Boot) bypasses all validation.",
+      "resources_required": [
+        "stock-web-admin",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "known-broken"
+      ]
     }
   },
   "signatures": {
