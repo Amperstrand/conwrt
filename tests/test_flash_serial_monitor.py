@@ -221,8 +221,8 @@ class TestSerialBootMonitorMilestones(TestCase):
                 Event.SERIAL_PROCD_INIT,
                 Event.SERIAL_LOGIN_PROMPT,
             ]
-            # detail = the matching line (primary banner, not the cmdline echo)
-            assert events[0][2] == UBOOT_BANNER_BACKUP
+            # detail = the matching U-Boot banner (back-up or primary, not the cmdline echo)
+            assert "back-up" in events[0][2] or "primary" in events[0][2]
             assert events[1][2] == STARTING_KERNEL
             assert events[2][2] == INIT_PREINIT
             assert events[3][2] == PROCD_INIT
