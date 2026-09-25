@@ -169,9 +169,13 @@ def stage_rom_audit(r: Runner) -> None:
     RootPasswordAuth on + EMPTY shadow field. Verified against openwrt-24.10
     and openwrt-25.12 branch defaults and lan4's live ROM (2026-09-22)."""
     p = r.place
+    # Quote-free by design: dut() wraps remote_cmd in single quotes, so any
+    # embedded quote or pipe breaks through the Mac->ssh->switch->dbclient
+    # shell nesting (seen live 2026-09-24: 'PasswordAuth|RootPasswordAuth'
+    # executed as a pipeline -> false-negative rom-audit on ap-lan5).
     out = r.dut("rom-audit",
-                "grep '^root' /rom/etc/shadow; grep -E 'PasswordAuth|RootPasswordAuth' "
-                "/rom/etc/config/dropbear")
+                "grep ^root /rom/etc/shadow; grep PasswordAuth /rom/etc/config/dropbear; "
+                "grep RootPasswordAuth /rom/etc/config/dropbear")
     shadow_ok = any(line.startswith("root::") for line in out.splitlines())
     if not shadow_ok:
         raise AdoptError(f"rom-audit: root password is not blank in ROM — a reset "
@@ -210,20 +214,56 @@ def stage_backup(r: Runner) -> None:
     print(f"[PASS] backup {r.place.name}: md5 {digest} verified end-to-end")
 
 
+def stage_overlay(r: Runner) -> None:
+    """Gate: refuse firstboot on a dirty jffs2 overlay — unchecked/orphan
+    xattrs are the documented precondition for nondeterministic auth-dead
+    boots (ap-lan2 2026-09-22, ap-lan5 2026-09-24; AGENTS.md reset-failsafe
+    rule 2). sysupgrade -n (--method flash) formats a fresh overlay and is
+    the safe alternative."""
+    out = dut_with_fallback(r, "overlay-health", "dmesg | grep jffs2_build_xattr")
+    if "unchecked" not in out and "orphan" not in out:
+        print(f"[PASS] overlay {r.place.name}: no jffs2 xattr debris in dmesg")
+        return
+    if "0 unchecked, 0 orphan" in out:
+        print(f"[PASS] overlay {r.place.name}: clean overlay (0 unchecked, 0 orphan)")
+        return
+    raise AdoptError(
+        f"overlay {r.place.name}: DIRTY jffs2 overlay — firstboot from this state "
+        f"is the known auth-dead trigger. Boot to health or use --method flash "
+        f"(sysupgrade -n formats a fresh overlay deterministically). dmesg:\n{out[:300]}")
+
+
 def stage_reset(r: Runner) -> None:
     p = r.place
     if not p.reset_allowed:
         raise AdoptError(f"reset refused: {p.name} is reset_allowed=false "
                          "(TFTP-dependent unit — re-arm lifeline or run #61 first)")
-    out = dut_with_fallback(r, "reset-firstboot", "firstboot -y; echo FIRSTBOOT-RC=$?")
-    if "FIRSTBOOT-RC=0" not in out:
+    try:
+        out = dut_with_fallback(r, "reset-firstboot", "firstboot -y; echo FIRSTBOOT-RC=$?")
+    except AdoptError as exc:
+        out = str(exc)
+    if "FIRSTBOOT-RC=0" in out:
+        try:
+            r.dut("reset-reboot", "reboot")
+        except AdoptError:
+            pass
+        print(f"[ARMED] reset {p.name}: firstboot RC=0, reboot issued")
+    elif "FIRSTBOOT-RC" not in out:
+        # Channel closed before the RC echo (usually the reboot racing the
+        # wrapper's return). firstboot is a RAM-staged overlay wipe that
+        # still takes effect — ap-lan5 2026-09-24 ran exactly this path and
+        # the post-condition poll confirmed a factory-state boot. Do not
+        # abort on the unseen RC; let the post-conditions decide.
+        print(f"[WARN] reset {p.name}: firstboot RC unseen "
+              f"({out.strip()[:120]}) — channel closed mid-command; "
+              "post-conditions will verify")
+    else:
         raise AdoptError(f"reset: firstboot returned nonzero (25.x kills backgrounded "
                          f"chains, so we run it synchronously — 2026-09-22 lesson):\n{out[:300]}")
-    r.dut("reset-reboot", "reboot")
-    print(f"[ARMED] reset {p.name}: firstboot RC=0, reboot issued")
     deadline = time.monotonic() + 240
     last = ""
     consecutive_auth_dead = 0
+    poe_cycles = 0
     while time.monotonic() < deadline:
         time.sleep(20)
         try:
@@ -238,10 +278,26 @@ def stage_reset(r: Runner) -> None:
             if _auth_dead(out):
                 consecutive_auth_dead += 1
                 if consecutive_auth_dead >= 4:
-                    raise AdoptError(
-                        f"reset: {p.name} boots but dropbear closes every session "
-                        "(zero auth methods: locked root or broken overlay write). "
-                        "FAIL FAST — console required; do not power-cycle blindly.")
+                    if poe_cycles < 2:
+                        # Documented cure for the jffs2 replay race: the boot
+                        # is nondeterministic and one deliberate PoE cycle
+                        # re-runs the replay (ap-lan2 + ap-lan5 both cured
+                        # by exactly one cycle). Bounded at 2 per AGENTS.md.
+                        port = p.name.removeprefix("ap-")
+                        print(f"[HEAL] reset {p.name}: auth-dead (jffs2 replay race) — "
+                              f"deliberate PoE cycle {poe_cycles + 1}/2 on {port}")
+                        r.sh("reset-poecycle", [
+                            f'ubus call poe manage "{{\"port\":\"{port}\",\"action\":\"disable\"}}"; sleep 8; '
+                            f'ubus call poe manage "{{\"port\":\"{port}\",\"action\":\"enable\"}}"',
+                        ], timeout_s=60)
+                        poe_cycles += 1
+                        consecutive_auth_dead = 0
+                        time.sleep(100)
+                    else:
+                        raise AdoptError(
+                            f"reset: {p.name} still auth-dead after {poe_cycles} deliberate "
+                            "PoE cycles — overlay replay is hard-stuck. CONSOLE REQUIRED: "
+                            "move the serial splice to this unit (see SERIAL-VIA-AP3915I.md).")
             continue
         if "No such file" not in out:
             raise AdoptError("reset: authorized_keys still present — overlay was NOT wiped")
@@ -342,8 +398,8 @@ def stage_verify(r: Runner) -> None:
 
 
 STAGES = {"rom-audit": stage_rom_audit, "preflight": stage_preflight, "backup": stage_backup,
-          "reset": stage_reset, "adopt": stage_adopt, "verify": stage_verify}
-ORDER = ["rom-audit", "preflight", "backup", "reset", "adopt", "verify"]
+          "overlay": stage_overlay, "reset": stage_reset, "adopt": stage_adopt, "verify": stage_verify}
+ORDER = ["rom-audit", "preflight", "backup", "overlay", "reset", "adopt", "verify"]
 
 
 def main(argv: list[str] | None = None) -> int:
