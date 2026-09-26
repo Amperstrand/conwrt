@@ -62,6 +62,26 @@ def wg_cleanup_sh(iface: str = "wg0") -> str:
     )
 
 
+def transport_sh(body: str, script_path: str = "/tmp/vpn_setup.sh") -> str:
+    """Transport a multiline provider script intact through the SSH executor.
+
+    ``scripts/profile/apply.py::_run_step_script`` joins control-flow scripts
+    line-by-line with `` && ``, which turns multiline ``if``/``while`` blocks
+    and function definitions into ash syntax errors (``then && apk ...``) —
+    breaking SSH configuration mode for every WireGuard provider. Wrapping the
+    body in a single-quoted heredoc routes the step through the executor's
+    stdin transport instead (``set -e`` + newline-preserved payload), and the
+    body then runs verbatim via ``sh``. The quoted delimiter keeps shell
+    variables literal at write time so they expand when the inner script runs.
+    """
+    return (
+        f"cat > {script_path} << 'VPN_SETUP_EOF'\n"
+        f"{body.strip()}\n"
+        f"VPN_SETUP_EOF\n"
+        f"sh {script_path}"
+    )
+
+
 def static_route_sh(
     server_var: str,
     gateway: str,
