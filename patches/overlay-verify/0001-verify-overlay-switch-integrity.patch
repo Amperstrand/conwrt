@@ -18,6 +18,14 @@ The fix: after `mount_root done`, verify that critical files exist and
 are non-empty. If missing, erase the overlay and reboot for a clean
 retry (up to 3 attempts, then boot with diagnostic logging).
 
+The retry counter MUST survive the recovery reboot it schedules: /tmp
+is tmpfs and is recreated on every boot, so a counter there reads zero
+forever and the 3-attempt guard becomes an unbounded destructive reboot
+loop. The counter therefore lives in the U-Boot environment
+(uboot-envtools fw_setenv — a raw-flash partition unaffected by overlay
+erasure), with the /tmp file kept only as a fallback for targets without
+fw_printenv/fw_setenv.
+
 This is complementary to PR #10037 (which fixes the race itself) —
 it catches whatever the race (or any other cause) drops.
 
@@ -28,21 +36,37 @@ Tested on:
 
 Signed-off-by: Amperstrand <amperstrand@localhost>
 ---
- package/base-files/files/etc/init.d/done | 27 ++++++++++++++++++++++++-
- 1 file changed, 26 insertions(+), 1 deletion(-)
+ 1 file changed, 65 insertions(+)
 
-diff --git a/package/base-files/files/etc/init.d/done b/package/base-files/files/etc/init.d/done
-index 0000000..0000000 100644
+index 67eaa7e..6cc39d9 100644
 --- a/package/base-files/files/etc/init.d/done
 +++ b/package/base-files/files/etc/init.d/done
-@@ -1,7 +1,32 @@
- #!/bin/sh /etc/rc.common
- # Copyright (C) 2006-2011 OpenWrt.org
-
+@@ -3,7 +3,72 @@
+ 
  START=95
-+
-+OVERLAY_VERIFY_RETRY_FILE=/tmp/.overlay-retry-count
+ 
++OVERLAY_VERIFY_RETRY_TMP=/tmp/.overlay-retry-count
++OVERLAY_VERIFY_RETRY_ENV=overlay_verify_retries
 +OVERLAY_VERIFY_MAX_RETRIES=3
++
++# The retry counter must survive the recovery reboot this script schedules
++# (and the overlay erase that precedes it). /tmp is recreated every boot, so
++# the authoritative counter is the U-Boot env (raw flash, untouched by the
++# overlay erase); the tmpfs file is only a fallback where fw tools are absent.
++overlay_retry_count() {
++	if command -v fw_printenv >/dev/null 2>&1; then
++		count=$(fw_printenv -n "$OVERLAY_VERIFY_RETRY_ENV" 2>/dev/null) && \
++			[ -n "$count" ] && echo "$count" && return
++	fi
++	cat "$OVERLAY_VERIFY_RETRY_TMP" 2>/dev/null || echo 0
++}
++
++overlay_retry_store() {
++	echo "$1" > "$OVERLAY_VERIFY_RETRY_TMP"
++	if command -v fw_setenv >/dev/null 2>&1; then
++		fw_setenv "$OVERLAY_VERIFY_RETRY_ENV" "$1" 2>/dev/null
++	fi
++}
 +
 +overlay_verify() {
 +	local missing=""
@@ -57,9 +81,9 @@ index 0000000..0000000 100644
 +
 +	if [ -n "$missing" ]; then
 +		local count
-+		count=$(cat "$OVERLAY_VERIFY_RETRY_FILE" 2>/dev/null || echo 0)
++		count=$(overlay_retry_count)
 +		count=$((count + 1))
-+		echo "$count" > "$OVERLAY_VERIFY_RETRY_FILE"
++		overlay_retry_store "$count"
 +
 +		logger -s -t overlay-verify "RETRY $count/$OVERLAY_VERIFY_MAX_RETRIES: files lost in overlay switch:$missing"
 +
@@ -77,15 +101,18 @@ index 0000000..0000000 100644
 +		logger -s -t overlay-verify "missing files:$missing"
 +	else
 +		# Healthy boot — clear the retry counter
-+		rm -f "$OVERLAY_VERIFY_RETRY_FILE" 2>/dev/null
++		rm -f "$OVERLAY_VERIFY_RETRY_TMP" 2>/dev/null
++		if command -v fw_setenv >/dev/null 2>&1; then
++			fw_setenv "$OVERLAY_VERIFY_RETRY_ENV" 0 2>/dev/null
++		fi
 +	fi
 +}
-
++
  boot() {
  	[ -d /tmp/root ] && mount_root done
  	rm -f /sysupgrade.tgz
 +
 +	overlay_verify
  }
---
+-- 
 2.43.0
