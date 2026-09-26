@@ -276,6 +276,16 @@ class TestOpenvpnOps:
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
         assert "/etc/init.d/openvpn restart" in r
 
+    def test_firewall_zone_attaches_to_logical_interface(self):
+        # Codex #81 4107888569: zone.network references a UCI network section
+        # (vpn_if), not the raw tun0 device.
+        from profile.ops import UciSet
+
+        zone_sets = [o for o in _build_openvpn_ops(OVPN_PARAMS)
+                     if isinstance(o, UciSet) and o.section == "vpn_zone"]
+        assert zone_sets, "openvpn ops must configure firewall.vpn_zone"
+        assert zone_sets[0].values["network"] == "vpn_if"
+
 
 # -- Static route (shared) -----------------------------------------------------
 
