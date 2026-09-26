@@ -48,12 +48,15 @@ class BenchProfile:
     dut_subnet_tpl: str = "192.168.10{v}.1"
 
 
-def ssh(host: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
+def ssh(host: str, cmd: str, timeout: int = 60, stdin_data: str | None = None) -> tuple[int, str]:
+    """One ssh command; stdin_data feeds `sh -s`-style script payloads so
+    quoting inside the script (deadman's single quotes, nested uci values)
+    never has to survive an outer `sh -c '...'` wrapper."""
     proc = subprocess.run(
         ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
          "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
          f"root@{host}", cmd],
-        capture_output=True, text=True, timeout=timeout,
+        input=stdin_data, capture_output=True, text=True, timeout=timeout,
     )
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
@@ -73,10 +76,52 @@ def vlan_name(profile: BenchProfile, port: str) -> str:
     return f"vlan{profile.vlan_base + int(port.removeprefix('lan'))}"
 
 
+def readback_gate_lines(profile: BenchProfile) -> list[str]:
+    """On-device value verification between staging and commit (AGENTS:
+    one-change-one-verify; never commit a management/VLAN value unread).
+
+    Gates on scalar options — `uci get` quoting of list options differs
+    across uci versions, so list values are read back into the evidence
+    stream but not gated in shell."""
+    g = [f'[ "$(uci -q get network.lan.proto)" = "static" ] || RB=0',
+         f'[ "$(uci -q get network.lan.ipaddr)" = "{profile.mgmt_ip}/24" ] || RB=0',
+         f'[ "$(uci -q get network.lan.gateway)" = "{profile.mgmt_gateway}" ] || RB=0',
+         f'[ "$(uci -q get network.lan.dns)" = "{profile.mgmt_gateway}" ] || RB=0',
+         '[ "$(uci -q get dhcp.lan.ignore)" = "1" ] || RB=0',
+         '[ "$(uci -q get network.vlan1.device)" = "switch" ] || RB=0']
+    for port in profile.dut_ports:
+        n = port.removeprefix("lan")
+        vlan = f"{profile.vlan_base + int(n)}"
+        subnet_ip = profile.dut_subnet_tpl.format(v=n)
+        g += [f'[ "$(uci -q get network.vlan{vlan}.device)" = "switch" ] || RB=0',
+              f'[ "$(uci -q get network.dut{vlan}.ipaddr)" = "{subnet_ip}" ] || RB=0',
+              f'[ "$(uci -q get network.dut{vlan}.netmask)" = "255.255.255.0" ] || RB=0']
+    return g
+
+
+def readback_evidence_lines(profile: BenchProfile) -> list[str]:
+    lines = ["echo ---READBACK---",
+             "uci get network.lan.proto; uci get network.lan.ipaddr",
+             "uci get network.vlan1.ports"]
+    for port in profile.dut_ports:
+        n = port.removeprefix("lan")
+        vlan = f"{profile.vlan_base + int(n)}"
+        lines.append(f"uci get network.vlan{vlan}.ports; uci get network.dut{vlan}.ipaddr")
+    return lines
+
+
 def deploy_lines(profile: BenchProfile, pubkey: str | None) -> list[str]:
-    """Literal-only shell lines applying the whole bench pattern."""
+    """Literal-only shell lines applying the whole bench pattern.
+
+    Order: deadman -> clean staging baseline (revert stale /tmp/.uci
+    debris from aborted runs) -> stage -> on-device readback gate ->
+    commit ONLY when every gated value read back exactly; a mismatch
+    reverts everything and cancels the deadman instead of persisting a
+    config that could reboot the switch unreachable."""
     lines = [
         "nohup sh -c 'sleep 600 && reboot' >/dev/null 2>&1 &",
+        "uci revert network 2>/dev/null; uci revert dhcp 2>/dev/null",
+        "uci revert poe 2>/dev/null; uci revert firewall 2>/dev/null",
         "uci set network.@device[0].name='switch'",
         "uci -q delete network.lan_vlan",
         "uci set network.lan=interface",
@@ -147,9 +192,17 @@ def deploy_lines(profile: BenchProfile, pubkey: str | None) -> list[str]:
             "}",
             "chmod 600 /etc/dropbear/authorized_keys",
         ]
-    lines += ["uci commit network", "uci commit dhcp", "uci commit poe",
-              "uci commit firewall", "/etc/init.d/firewall restart >/dev/null 2>&1",
-              "echo DEPLOY-COMMITTED"]
+    lines += ["RB=1"] + readback_gate_lines(profile) + readback_evidence_lines(profile) + [
+        'if [ "$RB" = "1" ]; then',
+        "  uci commit network; uci commit dhcp; uci commit poe; uci commit firewall",
+        "  /etc/init.d/firewall restart >/dev/null 2>&1",
+        "  echo DEPLOY-COMMITTED",
+        "else",
+        "  uci revert network; uci revert dhcp; uci revert poe; uci revert firewall",
+        "  killall sleep 2>/dev/null",
+        "  echo READBACK-MISMATCH — nothing committed, staging reverted, deadman cancelled",
+        "fi",
+    ]
     return lines
 
 
@@ -171,7 +224,7 @@ def cmd_backup(host: str, out: Path) -> int:
         return 1
     rc, _ = ssh(host, (
         "for s in network dhcp poe dropbear firewall system; do "
-        "uci export $s > /tmp/uci-$s.txt; done; md5sum /tmp/conwrt-backup.tar.gz "
+        "uci export $s > /tmp/uci-$s.txt; done; sha256sum /tmp/conwrt-backup.tar.gz "
         "/tmp/overlay-upper.tar.gz > /tmp/backup-manifest.txt"))
     for name in ("conwrt-backup.tar.gz", "overlay-upper.tar.gz", "backup-manifest.txt"):
         if scp_from(host, f"/tmp/{name}", str(out / name)) != 0:
@@ -183,11 +236,11 @@ def cmd_backup(host: str, out: Path) -> int:
     with tarfile.open(fork) as tf:
         names = tf.getnames()
     has_fork = any("usr/bin/realtek-poe" in n for n in names)
-    md5 = hashlib.md5(fork.read_bytes()).hexdigest()
+    sha256 = hashlib.sha256(fork.read_bytes()).hexdigest()
     print(f"backup OK -> {out}")
-    print(f"  overlay tar: {len(names)} files, md5 {md5}, poe-fork={'YES' if has_fork else 'MISSING!'}")
+    print(f"  overlay tar: {len(names)} files, sha256 {sha256}, poe-fork={'YES' if has_fork else 'MISSING!'}")
     (out / "backup.json").write_text(json.dumps({
-        "host": host, "overlay_md5": md5, "poe_fork_included": has_fork,
+        "host": host, "overlay_sha256": sha256, "poe_fork_included": has_fork,
         "files": sorted(p.name for p in out.iterdir()),
     }, indent=1))
     return 0 if has_fork else 2
@@ -203,15 +256,18 @@ def cmd_deploy(host: str, serial_port: str | None, profile: BenchProfile,
         rc, out = console.send_script(lines, timeout=120)
         console.close()
         print(out[-800:])
-        if rc != 0:
-            print(f"FAIL: deploy script rc={rc}")
+        if rc != 0 or "DEPLOY-COMMITTED" not in out:
+            print(f"FAIL: deploy script rc={rc} "
+                  f"(readback gate refused: {'READBACK-MISMATCH' in out})")
             return 1
     else:
-        script = "\n".join(lines)
-        rc, out = ssh(host, f"sh -c '{script}'", timeout=180)
+        # Script fed via stdin: it contains single quotes (the deadman) that
+        # would terminate an `sh -c '...'` wrapper mid-script.
+        rc, out = ssh(host, "sh -s", timeout=180, stdin_data="\n".join(lines) + "\n")
         print(out[-400:])
         if rc != 0 or "DEPLOY-COMMITTED" not in out:
-            print("FAIL: deploy over ssh")
+            print(f"FAIL: deploy over ssh rc={rc} "
+                  f"(readback gate refused: {'READBACK-MISMATCH' in out})")
             return 1
     print("deploy committed; reload + verify with `bench_switch.py verify` "
           "then reboot-verify, then cancel the deadman with `reset --cancel-deadman`")
@@ -324,11 +380,17 @@ def cmd_install_poe(host: str, artifacts: Path) -> int:
                 capture_output=True, timeout=120)
             if proc.returncode != 0:
                 print(f"FAIL: scp {m.name} -> {dest}"); return 1
-            rc, out = ssh(host, f"chmod +x {dest} 2>/dev/null; md5sum {dest}")
-            local_md5 = hashlib.md5(local.read_bytes()).hexdigest()
-            if local_md5 not in out:
-                print(f"FAIL: md5 mismatch for {dest}"); return 1
-            print(f"  installed {dest} (md5 verified)")
+            # sha256sum: the BusyBox baseline guarantees sha256sum, not
+            # md5sum (AGENTS on-device hash rule) — md5 here yields an
+            # empty digest and quarantines good artifacts.
+            rc, out = ssh(host, f"chmod +x {dest} 2>/dev/null; sha256sum {dest}")
+            local_sha = hashlib.sha256(local.read_bytes()).hexdigest()
+            if local_sha not in out:
+                print(f"FAIL: sha256 mismatch for {dest} — restarting poe "
+                      "(it was stopped above; devices must not stay dark)")
+                ssh(host, "/etc/init.d/poe restart")
+                return 1
+            print(f"  installed {dest} (sha256 verified)")
     rc, out = ssh(host, "/etc/init.d/poe restart; sleep 3; ubus call poe info | head -4")
     print(out)
     return 0 if rc == 0 else 1

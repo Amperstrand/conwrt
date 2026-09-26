@@ -105,3 +105,47 @@ def test_deadman_cancel() -> None:
 
 def test_vlan_name() -> None:
     assert bs.vlan_name(bs.BenchProfile(), "lan7") == "vlan1007"
+
+
+class TestDeployReadbackGate:
+    def test_reverts_stale_staging_before_staging(self) -> None:
+        lines = bs.deploy_lines(bs.BenchProfile(), None)
+        joined = "\n".join(lines)
+        assert "uci revert network" in joined and "uci revert poe" in joined, \
+            "aborted-run staging debris must be reverted before staging"
+        assert joined.index("uci revert network") < joined.index("uci set network.lan.proto")
+
+    def test_commit_is_gated_on_value_readbacks(self) -> None:
+        lines = bs.deploy_lines(bs.BenchProfile(), None)
+        gate_idx = next(i for i, l in enumerate(lines) if l.startswith("RB=1"))
+        commit_idx = next(i for i, l in enumerate(lines) if "uci commit network" in l)
+        readback_idx = next(i for i, l in enumerate(lines) if "---READBACK---" in l)
+        assert gate_idx < commit_idx, "the readback gate must precede any commit"
+        assert gate_idx < readback_idx < commit_idx
+        mgmt = bs.BenchProfile().mgmt_ip
+        assert any(f'= "{mgmt}/24" ]' in l for l in lines[gate_idx:readback_idx]), \
+            "the management address must be read back before commit"
+
+    def test_mismatch_reverts_and_cancels_deadman(self) -> None:
+        lines = bs.deploy_lines(bs.BenchProfile(), None)
+        else_idx = next(i for i, l in enumerate(lines) if l.startswith("else"))
+        tail = "\n".join(lines[else_idx:])
+        assert "uci revert network" in tail and "killall sleep" in tail
+        assert "READBACK-MISMATCH" in tail
+
+
+class TestSshStdinDeploy:
+    def test_deploy_script_travels_via_stdin_not_wrapped_sh_c(self,
+                                                              monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_ssh(host, cmd, timeout=60, stdin_data=None):
+            captured.update(host=host, cmd=cmd, stdin=stdin_data)
+            return 0, "DEPLOY-COMMITTED"
+
+        monkeypatch.setattr(bs, "ssh", fake_ssh)
+        rc = bs.cmd_deploy("10.9.9.9", None, bs.BenchProfile(), None)
+        assert rc == 0
+        assert captured["cmd"] == "sh -s", "script must be fed via stdin"
+        assert captured["stdin"] and "nohup sh -c 'sleep 600 && reboot'" in captured["stdin"], \
+            "the deadman's single quotes must survive untouched"
