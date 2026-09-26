@@ -163,7 +163,7 @@ class RecoveryContext:
         log(f"SUCCESS — {message}")
         if verify_fn is not None:
             verify_fn(
-                self.profile.openwrt_ip or self.profile.recovery_ip,
+                getattr(self.profile, "post_flash_ip", "") or self.profile.openwrt_ip or self.profile.recovery_ip,
                 wan_ssh_expected=self.wan_ssh_enabled,
                 mgmt_wifi_expected=bool(self.defaults_script),
             )

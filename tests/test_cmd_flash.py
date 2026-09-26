@@ -132,6 +132,9 @@ class CmdFlashTestCase(TestCase):
             "load_model": patch("conwrt.flash_dispatcher.load_model", return_value={}),
             "_detect_boot_state": patch(
                 "conwrt.flash_dispatcher._detect_boot_state", return_value="openwrt"),
+            "_verify_device_identity": patch(
+                "conwrt.flash_dispatcher._verify_device_identity",
+                return_value=(True, "device identity 'board' matches model test-model")),
             "_request_custom_image": patch(
                 "conwrt.flash_dispatcher._request_custom_image", return_value=("", {})),
             "run_preflight_checks": patch(
@@ -245,6 +248,40 @@ class TestCmdFlashModelAutoDetect(CmdFlashTestCase):
     def test_no_autodetect_errors(self):
         with self.assertRaises(SystemExit):
             self.run_cmd_flash(_make_args(model_id=None))
+
+    def test_ip_override_probed_first_in_board_autodetect(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "10.0.0.9" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["fingerprint_router"].call_args_list[0][0][0], "10.0.0.9")
+        self.mocks["_build_profile_from_model"].assert_called_once_with(
+            "detected-model", serial_method="", flash_method="")
+
+    def test_ip_override_probed_first_in_active_fingerprint(self):
+        self.mocks["fingerprint_router"].return_value = None
+        self.mocks["_active_fingerprint"].side_effect = (
+            lambda ip, timeout=5.0: SimpleNamespace(
+                candidates=["c"] if ip == "10.0.0.9" else []))
+        self.mocks["_match_models"].return_value = [
+            SimpleNamespace(model_id="active-model", confidence=0.9, evidence=["mac"])]
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["_active_fingerprint"].call_args_list[0][0][0], "10.0.0.9")
+        build_args = self.mocks["_build_profile_from_model"].call_args[0]
+        self.assertEqual(build_args[0], "active-model")
+
+    def test_autodetect_without_ip_still_probes_defaults(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "192.168.0.1" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None))
+        self.assertEqual(rc, 0)
+        # Probe loop covers PROBE_IPS in order (the trailing call is the
+        # post-detection fingerprint block, not part of the loop).
+        probed = [c[0][0] for c in self.mocks["fingerprint_router"].call_args_list]
+        self.assertEqual(probed[:2], ["192.168.1.1", "192.168.0.1"])
 
 
 class TestCmdFlashRequestImage(CmdFlashTestCase):
@@ -413,6 +450,65 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
         self.assertEqual(ctx.profile.recovery_ip, "10.0.0.9")
+
+    def test_ip_override_identity_mismatch_aborts_before_flash(self):
+        self.mocks["_verify_device_identity"].return_value = (
+            False, "device at 10.0.0.9 reports board 'other,device' which does not "
+            "match selected model 'test-model' — refusing to flash")
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 1)
+        self.mocks["_verify_device_identity"].assert_called_once_with(
+            "10.0.0.9", "test-model", "/tmp/key")
+        self.mocks["_run_state_machine"].assert_not_called()
+
+    def test_ip_override_identity_match_proceeds(self):
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_called_once()
+        self.mocks["_run_state_machine"].assert_called_once()
+
+    def test_identity_check_skipped_without_ip_override(self):
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
+
+    def test_identity_check_skipped_when_not_sysupgrade(self):
+        """--ip + --force-uboot: no live sysupgrade path ⇒ no identity gate."""
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", force_uboot=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
+
+    def test_ip_override_reset_mode_expects_model_default_after_flash(self):
+        """--ip + sysupgrade -n: override for the flash, model default after."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_ip_override_keep_config_expects_override_after_flash(self):
+        """--ip + --keep-config sysupgrade: device retains the override address."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "10.0.0.9")
+
+    def test_ip_override_mtd_write_resets_even_with_keep_config(self):
+        """mtd write ignores keep_config — post-flash address is the model default."""
+        self.mocks["_build_profile_from_model"].return_value = _make_profile(
+            flash_method="mtd-write")
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_no_ip_override_sets_no_post_flash_ip(self):
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.assertFalse(hasattr(ctx.profile, "post_flash_ip"))
 
     def test_state_machine_keyboard_interrupt_returns_1(self):
         self.mocks["_run_state_machine"].side_effect = KeyboardInterrupt

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,13 @@ def _mock_result(returncode: int = 0, stdout: str = "", stderr: str = "") -> Mag
     m.stdout = stdout
     m.stderr = stderr
     return m
+
+
+def _identity_stdout(board_json: str = "", board_name: str = "",
+                     board_json_raw: str | None = None) -> str:
+    if board_json_raw is None:
+        board_json_raw = json.dumps({"model": {"id": board_json}}) if board_json else ""
+    return f"===BOARD_JSON===\n{board_json_raw}\n===BOARD_NAME===\n{board_name}\n"
 
 
 class TestScpUpload:
@@ -369,3 +377,117 @@ class TestFlashViaSysupgradeKeepConfig:
         assert _flash_via_sysupgrade("1.2.3.4", "/fw.bin") is True
         remote_cmd = mock_ssh_cmd.call_args[0][1]
         assert remote_cmd == "sysupgrade -n /tmp/fw.bin", remote_cmd
+
+
+class TestVerifyDeviceIdentity:
+    """AGENTS.md 'Always Identify Before Flashing' gate for the --ip override."""
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_matching_identity_passes(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout("vendor,board", "vendor,board"))
+        mock_find.return_value = {"id": "vendor-board"}
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is True
+        assert "matches model vendor-board" in detail
+        mock_find.assert_called_once_with("vendor,board")
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_board_name_only_match_passes(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(0, stdout=_identity_stdout(board_name="vendor,board"))
+        mock_find.return_value = {"id": "vendor-board"}
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is True
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_board_json_only_match_passes(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout(board_json="vendor,board"))
+        mock_find.return_value = {"id": "vendor-board"}
+        ok, _detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is True
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_wrong_device_refuses_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout("other,device", "other,device"))
+        mock_find.return_value = {"id": "other-device"}
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "does not match selected model 'vendor-board'" in detail
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_unknown_board_refuses_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout("mystery,board", "mystery,board"))
+        mock_find.return_value = None
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "does not match selected model" in detail
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_disagreeing_identity_sources_refuse_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout("vendor,board", "other,board"))
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "identity sources disagree" in detail
+        mock_find.assert_not_called()
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_unreadable_identity_refuses_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(0, stdout=_identity_stdout())
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "could not read device identity" in detail
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_malformed_board_json_falls_back_to_board_name(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(
+            0, stdout=_identity_stdout(board_json_raw="<truncated>", board_name="vendor,board"))
+        mock_find.return_value = {"id": "vendor-board"}
+        ok, _detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is True
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_ssh_failure_refuses_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        mock_run.return_value = _mock_result(255, stderr="Permission denied")
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "rc=255" in detail
+
+    @patch("conwrt.flash_utils.find_model_by_board_name")
+    @patch("conwrt.flash_utils.subprocess.run", side_effect=OSError("network down"))
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    def test_ssh_exception_refuses_flash(self, mock_ssh_cmd, mock_run, mock_find):
+        from conwrt.flash_utils import _verify_device_identity
+        ok, detail = _verify_device_identity("1.2.3.4", "vendor-board")
+        assert ok is False
+        assert "SSH identity probe failed" in detail

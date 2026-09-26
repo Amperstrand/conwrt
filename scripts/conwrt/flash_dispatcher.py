@@ -57,6 +57,7 @@ from conwrt.extreme import (
 from conwrt.flash_utils import (
     _flash_via_sysupgrade, _flash_via_mtd_write,
     _wait_for_sysupgrade_reboot, _find_model_id_by_board, _detect_ssh_key_path,
+    _verify_device_identity,
 )
 
 from conwrt.handlers_uboot import (
@@ -252,9 +253,9 @@ def _run_state_machine(
         if ctx.no_upload:
             return 0
         cfg = _load_config()
-        openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+        device_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         openwrt_ip = _apply_profile_post_flash(
-            openwrt_ip,
+            device_ip,
             ssh_key=ctx.ssh_key_path,
             cfg=cfg,
             model_id=ctx.profile.name,
@@ -265,8 +266,10 @@ def _run_state_machine(
             log("  ⚠ Post-flash profile application failed (no IP). Aborting post-flash chain.")
             _restore_port_isolation(ctx)
             return 1
-        if openwrt_ip != (ctx.profile.openwrt_ip or ctx.profile.recovery_ip):
-            ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
+        # Always sync the profile to the address the device answers at now —
+        # with --ip + sysupgrade -n the pre-flash override is stale, and
+        # _record_inventory fingerprints profile.openwrt_ip.
+        ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
             model_id=ctx.profile.name, cfg=cfg,
@@ -361,7 +364,7 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 
 
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
+    openwrt_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     if _wait_for_sysupgrade_reboot(openwrt_ip):
         ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)
@@ -484,7 +487,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
     ssh_key_path = _detect_ssh_key_path()
 
     if not args.model_id:
-        for probe_ip in PROBE_IPS:
+        probe_targets = ([args.ip] if getattr(args, "ip", None) else []) + PROBE_IPS
+        for probe_ip in probe_targets:
             fp = fingerprint_router(probe_ip)
             if fp:
                 board = fp.get("identity", {}).get("board", "")
@@ -496,7 +500,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                         break
 
         if not args.model_id:
-            for probe_ip in PROBE_IPS:
+            for probe_ip in probe_targets:
                 log(f"Active fingerprinting {probe_ip}...")
                 fp_result = _active_fingerprint(probe_ip, timeout=5.0)
                 if fp_result.candidates:
@@ -539,6 +543,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                   f"Use --serial-method to select one.", file=sys.stderr)
             return 1
 
+    model_default_ip = profile.openwrt_ip
     if getattr(args, "ip", None):
         profile = SimpleNamespace(**{**vars(profile), "openwrt_ip": args.ip, "recovery_ip": args.ip})
         log(f"Router IP overridden via --ip: {args.ip}")
@@ -551,6 +556,19 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         boot_state = _detect_boot_state("", profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
+
+    if getattr(args, "ip", None) and use_sysupgrade:
+        # sysupgrade -n (and mtd write) wipe the configured LAN address: the
+        # device comes back at the model default, not at --ip. Only a
+        # --keep-config sysupgrade retains the override address across reboot.
+        keeps_settings = bool(getattr(args, "keep_config", False)) and profile.flash_method != "mtd-write"
+        post_flash_ip = args.ip if keeps_settings else model_default_ip
+        profile = SimpleNamespace(**{**vars(profile), "post_flash_ip": post_flash_ip})
+        if keeps_settings:
+            log(f"Post-flash address: {post_flash_ip} (settings kept)")
+        else:
+            log(f"Post-flash address: {post_flash_ip} (sysupgrade resets config — "
+                f"--ip {args.ip} applies to this flash only)")
 
     generated_password = ""
     password_set = False
@@ -717,6 +735,22 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         log("No running router detected at this IP (expected — device needs recovery)")
         print()
+
+    # AGENTS.md "Always Identify Before Flashing": with an --ip override we are
+    # about to sysupgrade whatever device answers there — verify its board
+    # identity (board.json + /tmp/sysinfo/board_name) matches the selected
+    # model first, and abort on any mismatch or unreadable identity.
+    if use_sysupgrade and getattr(args, "ip", None):
+        ok, detail = _verify_device_identity(openwrt_ip, args.model_id,
+                                             ssh_key_path or None)
+        if not ok:
+            print(f"ERROR: device identity check failed at {openwrt_ip}: {detail}",
+                  file=sys.stderr)
+            print("Refusing to flash — --model-id does not match the device at "
+                  "the overridden --ip address (AGENTS.md: Always Identify "
+                  "Before Flashing).", file=sys.stderr)
+            return 1
+        log(f"  ✓ identity: {detail}")
 
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
