@@ -21,13 +21,11 @@ Primitives:
                                      caller — bench_adopt evidence style)
   switch_put(local, remote)          scp -O a file onto the bench switch
 
-The switch_* primitives are bench-switch infrastructure, not DUT control:
-DirectBench implements them over ssh/scp to the switch (today's wire forms
-from bench_inventory / bench_adopt / bench_flash); LabgridBench raises
-UnsupportedOperationError — the coordinator models per-place DUT resources
-(power/console/NetworkService), not the switch's own shell. tftp_arm is the
-one documented switch-infrastructure exception that still runs on the direct
-path under labgrid (landed in task 9; the lifeline is switch-local either way).
+The switch_* primitives are bench-switch plumbing, not DUT control: they
+run over the direct ssh/scp path under BOTH backends (DirectBench natively;
+LabgridBench delegates to an internal DirectBench — the coordinator models
+per-place DUT resources, never the switch's own shell, so there is nothing
+to route through labgrid for them).
 
 Backends:
   DirectBench  (default) — today's exact command paths, zero new deps:
@@ -214,11 +212,32 @@ class DirectBench:
             self.switch_exec(f"ubus call poe manage "
                              f"'{{\"port\":\"{port}\",\"action\":\"{ubus_action}\"}}'")
         else:
-            # one SSH round-trip: off -> settle -> on (bench_flash's proven 8s;
-            # never split a cycle across connections — AGENTS macOS eth rule)
-            self.switch_exec(f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"disable\"}}'; "
-                             f"sleep {self.cycle_off_s}; "
-                             f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"enable\"}}'")
+            # One SSH round-trip (a cycle must never span connections), but
+            # each phase readback-verifies via `poe info` before the next
+            # runs: the realtek-poe daemon can silently drop a manage call
+            # while answering rc=0 (conwrt_poe.py wedge note), and a bare
+            # disable;sleep;enable chain reports a completed cold cycle
+            # even when power never dropped. Status readback lags a healthy
+            # manage by up to ~30s (MCU settle), so each phase polls that
+            # long before declaring the manage dropped.
+            self.switch_exec(
+                f"port={port}; st() {{ ubus call poe info 2>/dev/null | "
+                f"jsonfilter -e \"@.ports.$port.status\" 2>/dev/null; }}; "
+                f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"disable\"}}' "
+                "|| { echo CYCLE-OFF-FAILED; exit 1; }; "
+                "n=0; while [ $n -lt 35 ]; do "
+                "  case \"$(st)\" in *Delivering*) sleep 1; n=$((n+1));; *) break;; esac; "
+                "done; "
+                "case \"$(st)\" in *Delivering*) echo CYCLE-OFF-UNVERIFIED; exit 1;; esac; "
+                f"sleep {self.cycle_off_s}; "
+                f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"enable\"}}' "
+                "|| { echo CYCLE-ON-FAILED; exit 1; }; "
+                "n=0; while [ $n -lt 35 ]; do "
+                "  case \"$(st)\" in *Delivering*) break;; *) sleep 1; n=$((n+1));; esac; "
+                "done; "
+                "case \"$(st)\" in *Delivering*) echo CYCLE-OK;; "
+                "*) echo CYCLE-ON-UNVERIFIED; exit 1;; esac",
+                timeout_s=150)
 
     @contextmanager
     def console(self, place: Place | str) -> Iterator[ConsoleStream]:
@@ -364,20 +383,18 @@ class LabgridBench:
         # either way (labgrid/README image-per-run pattern, cost note 5).
         return self._direct.tftp_arm(vlan, image_name, tftproot)
 
-    def _switch_infra_unsupported(self, primitive: str) -> UnsupportedOperationError:
-        return UnsupportedOperationError(
-            f"{primitive} is bench-switch infrastructure: the labgrid backend models "
-            f"per-place DUT resources (power/console/ssh_target) only — use the "
-            f"direct backend (CONWRT_BENCH=direct) for switch-side operations")
-
     def switch_exec(self, cmd: str, timeout_s: int = 60) -> str:
-        raise self._switch_infra_unsupported("switch_exec")
+        # switch-side plumbing is not a labgrid resource, but the bench
+        # tools (bench_inventory, bench_adopt) need it regardless of the
+        # selected backend — delegate to the direct SSH path (same seam
+        # tftp_arm already uses).
+        return self._direct.switch_exec(cmd, timeout_s)
 
     def switch_sh(self, script: str, timeout_s: int = 90) -> str:
-        raise self._switch_infra_unsupported("switch_sh")
+        return self._direct.switch_sh(script, timeout_s)
 
     def switch_put(self, local: Path, remote: str) -> None:
-        raise self._switch_infra_unsupported("switch_put")
+        self._direct.switch_put(local, remote)
 
     def close(self) -> None:
         if self._session is None:

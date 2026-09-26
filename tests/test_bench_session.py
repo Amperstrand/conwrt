@@ -168,15 +168,22 @@ class TestDirectPower:
         assert calls[0][0] == ["ssh", *bs.SSH_OPTS, "root@10.9.9.9",
                                'ubus call poe manage \'{"port":"lan7","action":"disable"}\'']
 
-    def test_cycle_is_one_ssh_round_trip_off_settle_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cycle_is_one_ssh_round_trip_verified_phases(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list = []
         monkeypatch.setattr(bs.subprocess, "run", _run_recorder("", calls))
         bs.DirectBench().power("ap-lan4", "cycle")
         assert len(calls) == 1, "a cycle must never span multiple connections"
-        assert calls[0][0][-1] == (
-            'ubus call poe manage \'{"port":"lan4","action":"disable"}\'; '
-            'sleep 8; '
-            'ubus call poe manage \'{"port":"lan4","action":"enable"}\'')
+        script = calls[0][0][-1]
+        assert '{"port":"lan4","action":"disable"}' in script
+        assert '{"port":"lan4","action":"enable"}' in script
+        assert script.index("disable") < script.index("sleep 8") < script.index("enable")
+        # the wedged-daemon hazard: each phase must readback-verify via poe
+        # info and fail loudly instead of reporting a completed cold cycle
+        assert "poe info" in script and "jsonfilter" in script
+        assert "CYCLE-OFF-UNVERIFIED" in script and "CYCLE-ON-UNVERIFIED" in script
+        assert "CYCLE-OFF-FAILED" in script and "CYCLE-ON-FAILED" in script
+        # cycle must NOT be fire-and-forget rc: the disable failure path exits nonzero
+        assert "CYCLE-OFF-FAILED; exit 1" in script
 
     def test_ssh_failure_raises_despite_stdout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # misleading-success guard: ubus output on stdout must not fake success
@@ -391,16 +398,22 @@ class TestLabgridBench:
         assert handle.vlan == 1002 and handle.switch == "192.168.13.2"
         assert calls[0][0][-1] == "sh -s"
 
-    def test_switch_infra_primitives_are_typed_unsupported(self, labgrid_stub) -> None:
-        """switch_exec/sh/put are bench-switch infrastructure: labgrid models
-        per-place DUT resources only — typed refusal, never a silent direct
-        fallback (task 11 rule)."""
+    def test_switch_infra_primitives_delegate_to_direct(self, labgrid_stub) -> None:
+        """switch_exec/sh/put are bench-switch plumbing labgrid has no
+        resource for — they delegate to the internal DirectBench so the
+        documented CONWRT_BENCH=labgrid invocations of bench_inventory /
+        bench_adopt keep working instead of raising."""
         lb = _labgrid_bench([])
-        for call in (lambda: lb.switch_exec("ubus call poe info"),
-                     lambda: lb.switch_sh("echo hi\n"),
-                     lambda: lb.switch_put(Path("/tmp/img"), "/tmp/x")):
-            with pytest.raises(bs.UnsupportedOperationError, match="bench-switch infrastructure"):
-                call()
+        direct_calls: list = []
+        orig_exec, orig_sh, orig_put = lb._direct.switch_exec, lb._direct.switch_sh, lb._direct.switch_put
+        lb._direct.switch_exec = lambda cmd, timeout_s=60: direct_calls.append(("exec", cmd)) or ""
+        lb._direct.switch_sh = lambda script, timeout_s=90: direct_calls.append(("sh", script)) or ""
+        lb._direct.switch_put = lambda local, remote: direct_calls.append(("put", local))
+        lb.switch_exec("ubus call poe info")
+        lb.switch_sh("echo hi\n")
+        lb.switch_put(Path("/tmp/img"), "/tmp/x")
+        assert [c[0] for c in direct_calls] == ["exec", "sh", "put"]
+        assert direct_calls[0][1] == "ubus call poe info"
 
     def test_unknown_action_typed_error(self, labgrid_stub) -> None:
         with pytest.raises(bs.BenchError, match="unknown power action"):
