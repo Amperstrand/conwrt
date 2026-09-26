@@ -69,8 +69,8 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@echo "Committing run artifacts..."
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
 
-test: ## Run Python unit tests plus existing safe shell smoke test
-	@pytest tests
+test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
+	@pytest tests -m "not integration"
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
@@ -78,6 +78,20 @@ test: ## Run Python unit tests plus existing safe shell smoke test
 	else \
 		echo "bats-core is not installed; skipping bats tests (smoke still ran)"; \
 	fi
+
+test-all: ## Everything `test` runs plus QEMU integration tests inline (KVM hosts only)
+	@pytest tests
+	@$(MAKE) smoke
+
+bg-integration: ## Fire-and-forget: launch the VM suite detached; verdict lands in test-results/history.md
+	@mkdir -p test-results
+	@setsid bash -c 'make integration >> test-results/bg-integration.log 2>&1; echo "bg-integration exit=$$? $$(date -Is)" >> test-results/bg-integration.log' < /dev/null > /dev/null 2>&1 &
+	@echo "integration launched detached — log: test-results/bg-integration.log, verdicts: test-results/history.md"
+
+stability5: ## Fire-and-forget: 5 consecutive integration runs for stability banking
+	@mkdir -p test-results
+	@setsid bash -c 'for i in 1 2 3 4 5; do echo "=== stability5 RUN $$i $$(date -Is) ===" >> test-results/stability5.log; make integration >> test-results/stability5.log 2>&1 && echo "RUN $$i: PASS" >> test-results/stability5.log || echo "RUN $$i: FAIL" >> test-results/stability5.log; done; echo "stability5 DONE $$(date -Is)" >> test-results/stability5.log' < /dev/null > /dev/null 2>&1 &
+	@echo "5× integration launched detached — log: test-results/stability5.log, verdicts: test-results/history.md"
 
 integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
 	@bash scripts/local-tests.sh integration

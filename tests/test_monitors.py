@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from flash.context import Event, PcapMonitorConfig
 
@@ -583,7 +583,10 @@ class TestSetupMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
-    def test_pcap_enabled_creates_pcap_monitor(self, _mock_scapy, _mock_tcpdump):
+    @patch("conwrt.monitors.time.sleep")
+    @patch("conwrt.monitors.subprocess.Popen")
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
+    def test_pcap_enabled_creates_pcap_monitor(self, _mock_popen, _mock_sleep, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = self._make_args()
         profile = self._make_profile()
@@ -601,6 +604,7 @@ class TestSetupMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_pcap_disabled_no_pcap_monitor(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = self._make_args()
@@ -617,6 +621,7 @@ class TestSetupMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_no_pcap_flag_skips_pcap(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = self._make_args(no_pcap=True)
@@ -632,6 +637,7 @@ class TestSetupMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=False)
     @patch("conwrt.monitors.has_scapy", return_value=False)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_no_scapy_no_tcpdump_no_pcap(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = self._make_args()
@@ -647,6 +653,7 @@ class TestSetupMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_link_monitor_always_created(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = self._make_args(no_pcap=True)
@@ -675,7 +682,9 @@ class TestTeardownMonitors(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
-    def test_teardown_stops_both_monitors(self, _mock_scapy, _mock_tcpdump):
+    @patch("conwrt.monitors.time.sleep")
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
+    def test_teardown_stops_both_monitors(self, _mock_sleep, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = argparse.Namespace(router_mac="", uboot_mac="", silence_timeout=30, no_pcap=False)
         profile = SimpleNamespace(recovery_ip="192.168.1.1", zycast_multicast_group="", zycast_multicast_port=0)
@@ -695,7 +704,9 @@ class TestMonitorLifecycle(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
-    def test_context_manager_yields_monitors(self, _mock_scapy, _mock_tcpdump):
+    @patch("conwrt.monitors.time.sleep")
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
+    def test_context_manager_yields_monitors(self, _mock_sleep, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = argparse.Namespace(router_mac="", uboot_mac="", silence_timeout=30, no_pcap=False)
         profile = SimpleNamespace(recovery_ip="192.168.1.1", zycast_multicast_group="", zycast_multicast_port=0)
@@ -705,6 +716,7 @@ class TestMonitorLifecycle(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_context_manager_pcap_disabled(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = argparse.Namespace(router_mac="", uboot_mac="", silence_timeout=30, no_pcap=True)
@@ -715,6 +727,7 @@ class TestMonitorLifecycle(TestCase):
 
     @patch("conwrt.monitors.has_tcpdump", return_value=True)
     @patch("conwrt.monitors.has_scapy", return_value=True)
+    @patch("conwrt.monitors.get_link_state", MagicMock(return_value=True))
     def test_context_manager_teardown_on_exit(self, _mock_scapy, _mock_tcpdump):
         q: queue.Queue = queue.Queue()
         args = argparse.Namespace(router_mac="", uboot_mac="", silence_timeout=30, no_pcap=False)
