@@ -136,3 +136,151 @@ def test_plan_mode_cli_no_network(tmp_path: Path, capsys: pytest.CaptureFixture[
     payload = json.loads(out.read_text())
     assert payload["linklocal"] == "fe80::b62d:56ff:fe25:47a2"
     assert payload["steps"][0]["layer"] == "0-control"
+
+
+# ---------------------------------------------------- run-mode gate logic
+
+class _FakeProbe:
+    """ssh_probe_host double: routes by command text to canned results."""
+
+    def __init__(self, routing: list[tuple[str, tuple[int, str]]]) -> None:
+        self.routing = routing
+        self.calls: list[str] = []
+
+    def __call__(self, probe_host: str, command: str, timeout: int = 120):
+        self.calls.append(command)
+        for needle, result in self.routing:
+            if needle in command:
+                return result
+        return (1, "")
+
+
+def _run_ctx():
+    return bd.DiscoverContext(
+        mac="b4:2d:56:25:47:a2", iface="switch.1007",
+        probe_host="switch", control_ip="192.168.13.1",
+        subnets=["192.168.13.0/24"],
+    )
+
+
+def _control_routing() -> list[tuple[str, tuple[int, str]]]:
+    return [
+        ("ping -c2 -W2 -I switch.1007 192.168.13.1", (0, "ok")),
+        ("ping -c2 -W2 -I switch.1007 ff02::1", (0, "ok")),
+        ("ip neigh show dev switch.1007 >/dev/null", (0, "NDP-OK")),
+        ("command -v nc", (0, "/usr/bin/nc")),
+    ]
+
+
+def test_multicast_and_ndp_hits_do_not_skip_the_v4_ladder(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the target's own EUI-64 answer may suppress IPv4 sweeps."""
+    ctx = _run_ctx()
+    routing = _control_routing() + [
+        ("ping -c3 -W2 -I switch.1007 " + ctx.v6_linklocal, (1, "")),  # target: no v6 answer
+        ("ping -c3 -W2 -I switch.1007 ff02::1", (0, "from fe80::x")),  # someone ELSE answers
+        ("ip neigh show dev switch.1007 | grep", (0, "stale entry")),  # NDP cache hit
+        ("for ip in 192.168.13.1", (0, "")),              # v4 sweep runs
+        ("| nc ", (1, "")),
+        ("nc -w2 ", (1, "")),
+    ]
+    fake = _FakeProbe(routing)
+    monkeypatch.setattr(bd, "ssh_probe_host", fake)
+    bd.run_ladder(ctx, bd.build_ladder(ctx))
+    v4_sweeps = [c for c in fake.calls if c.startswith("for ip in 192.168.13.1")]
+    assert v4_sweeps, "unrelated multicast/NDP liveness must NOT skip the v4 sweep"
+
+
+def test_target_v6_answer_skips_v4_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _run_ctx()
+    routing = _control_routing() + [
+        ("ping -c3 -W2 -I switch.1007 " + ctx.v6_linklocal, (0, "3 packets received")),
+        ("| nc ", (1, "")),
+        ("nc -w2 ", (1, "")),
+    ]
+    fake = _FakeProbe(routing)
+    monkeypatch.setattr(bd, "ssh_probe_host", fake)
+    steps = bd.run_ladder(ctx, bd.build_ladder(ctx))
+    assert all(s.status != "positive" or s.layer != "2-v4" for s in steps)
+    assert not [c for c in fake.calls if c.startswith("for ip in")]
+
+
+def test_primary_control_failure_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _run_ctx()
+    fake = _FakeProbe([("ping -c2 -W2 -I switch.1007 192.168.13.1", (1, "no answer"))])
+    monkeypatch.setattr(bd, "ssh_probe_host", fake)
+    steps = bd.run_ladder(ctx, bd.build_ladder(ctx))
+    assert steps[0].status == "control-failed"
+    control_cmds = {c for c in fake.calls
+                    if c.startswith("ping -c2") or "ip neigh show dev" in c or "command -v" in c}
+    assert set(fake.calls) == control_cmds, \
+        "only controls may run after a primary-control failure"
+    assert not [c for c in fake.calls if "for ip in" in c or "| nc" in c]
+
+
+def test_failed_class_control_marks_probes_control_failed(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _run_ctx()
+    routing = [
+        ("command -v nc", (1, "")),                       # nc control FAILS
+    ] + _control_routing() + [
+        ("ping -c3 -W2 -I switch.1007 " + ctx.v6_linklocal, (1, "")),
+        ("for ip in 192.168.13.1", (1, "")),
+    ]
+    fake = _FakeProbe(routing)
+    monkeypatch.setattr(bd, "ssh_probe_host", fake)
+    steps = bd.run_ladder(ctx, bd.build_ladder(ctx))
+    service = [s for s in steps if s.layer == "3-service"]
+    assert service and all(s.status == "control-failed" for s in service)
+
+
+def test_swept_ipv4_addresses_reach_the_service_probes(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _run_ctx()
+    sweep_out = ("192.168.13.233 lladdr b4:2d:56:25:47:a2 used 0/0/0 probes 1 REACHABLE\n"
+                 "192.168.13.1  lladdr 00:11:22:33:44:55 REACHABLE\n")
+    routing = [
+        ("for ip in 192.168.13.1", (0, sweep_out)),       # ARP sweep finds .233
+        ("nc -w2 192.168.13.233 33533", (1, "")),         # LFP against v4 addr
+        ("nc -w2 " + ctx.v6_linklocal, (1, "")),
+        ("| nc 192.168.13.233", (0, "SSH-2.0-dropbear\n")),  # banner ON the v4 address
+    ] + _control_routing() + [
+        ("ping -c3 -W2 -I switch.1007 " + ctx.v6_linklocal, (1, "")),
+        ("| nc " + ctx.v6_linklocal, (0, "")),
+    ]
+    monkeypatch.setattr(bd, "ssh_probe_host", _FakeProbe(routing))
+    steps = bd.run_ladder(ctx, bd.build_ladder(ctx))
+    banner_steps = [s for s in steps if s.layer == "3-service" and "banner" in s.statement]
+    assert banner_steps and banner_steps[0].status == "positive"
+    assert "192.168.13.233" in ctx.v4_addrs
+
+
+def test_banner_probe_requires_content_not_just_rc_zero(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closed ports: `nc ... | head` pipelines exit 0 with no output."""
+    ctx = _run_ctx()
+    routing = _control_routing() + [
+        ("ping -c3 -W2 -I switch.1007 " + ctx.v6_linklocal, (0, "alive")),
+        ("| nc ", (0, "")),                               # rc 0, empty: NOT positive
+        ("nc -w2 ", (0, "")),
+    ]
+    monkeypatch.setattr(bd, "ssh_probe_host", _FakeProbe(routing))
+    steps = bd.run_ladder(ctx, bd.build_ladder(ctx))
+    banner = [s for s in steps if s.layer == "3-service" and "banner" in s.statement][0]
+    assert banner.status == "negative"
+
+
+def test_sweep_hosts_enumerates_exact_cidr_range() -> None:
+    assert bd.sweep_hosts("192.168.13.0/24")[0] == "192.168.13.1"
+    assert bd.sweep_hosts("192.168.13.0/24")[-1] == "192.168.13.254"
+    assert len(bd.sweep_hosts("192.168.13.0/24")) == 254
+    assert bd.sweep_hosts("10.47.0.0/25") == [f"10.47.0.{i}" for i in range(1, 127)]
+
+
+def test_cli_rejects_oversized_subnet(tmp_path: Path, capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        bd.main(["plan", "--mac", "b4:2d:56:25:47:a2", "--iface", "switch.1007",
+                 "--control-ip", "192.168.13.1",
+                 "--probe-subnets", "10.47.0.0/16"])
+    assert exc.value.code == 2
+    assert "split it into /24" in capsys.readouterr().err

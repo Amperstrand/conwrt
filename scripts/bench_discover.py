@@ -3,8 +3,10 @@
 
 Generalizes the 2026-09-22 lan7/lan8 recovery into a repeatable methodology:
 
-  Layer 0  positive control   probe a KNOWN-good host first; refuse to report
-                             negatives if the control fails (AGENTS.md rule 11)
+  Layer 0  positive controls  prove EACH probe class (v4 ping, v6 ping,
+                              ip-neigh, nc) against something known-good
+                              first; a class that fails its control emits
+                              no trusted negatives (AGENTS.md rule 11)
   Layer 1  v6 link-local      derive fe80::<EUI-64> from any observed source MAC
                              (Linux/OpenWrt/network gear still default to EUI-64
                              link-locals) and ping6 it on the access VLAN
@@ -157,6 +159,23 @@ class Hypothesis:
     positive_means: str
     negative_next: str
     status: str = "planned"  # planned | positive | negative | skipped | control-failed
+    # Which probe methodology this step uses; a step only runs after its
+    # class passed a layer-0 positive control (AGENTS rule 11: no trusted
+    # negative without a proven probe).
+    probe_class: str = "v4-ping"
+    # True only for the ping of the TARGET's derived EUI-64 link-local.
+    # Multicast all-nodes answers and NDP-cache hits prove on-link life,
+    # never that THIS target answers v6 — only this flag may suppress the
+    # IPv4 sweep ladder.
+    target_specific: bool = False
+    # "content": rc==0 alone proves nothing for banner grabs — `nc | head`
+    # pipelines exit 0 on closed ports — so require non-empty output too.
+    positive_gate: str = "rc"
+    # False for documentation-only steps (credential ladder) that must
+    # never be shipped to the probe host as a command.
+    executable: bool = True
+    # True for the primary control whose failure aborts the whole run.
+    primary_control: bool = False
 
     def render(self) -> str:
         return (f"[{self.layer}] {self.statement}\n"
@@ -173,37 +192,78 @@ class DiscoverContext:
     control_ip: str
     subnets: list[str] = field(default_factory=list)
     v6_linklocal: str = ""
+    # IPv4 addresses harvested from layer-2 ARP sweeps; layer-3 service
+    # probes run against every one of them (an IPv4-only target must still
+    # get its banner/stack probes — not just the derived v6 address).
+    v4_addrs: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.v6_linklocal = mac_to_eui64_linklocal(self.mac)
 
 
+def sweep_hosts(net: str) -> list[str]:
+    """Exact usable-host list for the sweep loop — never a /24 assumption.
+
+    The CLI accepts any CIDR; reducing every network to its first three
+    octets silently probed the wrong range (a /16 request swept only its
+    first /24, a /25 swept outside it). Callers must reject inputs whose
+    host count exceeds MAX_SWEEP_HOSTS.
+    """
+    return [str(h) for h in ipaddress.ip_network(net).hosts()]
+
+
+MAX_SWEEP_HOSTS = 254
+
+
 def build_ladder(ctx: DiscoverContext) -> list[Hypothesis]:
-    """The ordered probe ladder. Layer 0 is ALWAYS the positive control."""
+    """The ordered probe ladder. Layer 0 is ALWAYS the positive controls —
+    one per probe class, so no methodology emits trusted negatives without
+    first proving itself against something known-good."""
     steps: list[Hypothesis] = [
         Hypothesis(
-            layer="0-control",
+            layer="0-control", probe_class="v4-ping", primary_control=True,
             statement=f"Probe methodology works: control host {ctx.control_ip} answers",
             command=f"ping -c2 -W2 -I {ctx.iface} {ctx.control_ip}",
             positive_means="methodology validated; trust negatives below",
             negative_next="ABORT: negatives below would be meaningless (AGENTS rule 11)",
         ),
         Hypothesis(
-            layer="1-v6",
+            layer="0-control", probe_class="v6-ping",
+            statement="v6 probe path works: an on-link node answers all-nodes multicast",
+            command=f"ping -c2 -W2 -I {ctx.iface} ff02::1",
+            positive_means="ping6 negatives below are trustworthy",
+            negative_next="v6 negatives untrusted — fix the v6 probe path first",
+        ),
+        Hypothesis(
+            layer="0-control", probe_class="ndp",
+            statement="Neighbor-table probe works on the probe host",
+            command=f"ip neigh show dev {ctx.iface} >/dev/null && echo NDP-OK",
+            positive_means="NDP-cache negatives below are trustworthy",
+            negative_next="ndp negatives untrusted (applet missing or fails)",
+        ),
+        Hypothesis(
+            layer="0-control", probe_class="nc",
+            statement="nc is present on the probe host (banner/stack probes need it)",
+            command="command -v nc >/dev/null && echo NC-OK",
+            positive_means="service-probe negatives below are trustworthy",
+            negative_next="banner/LFP probes untrusted (applet missing)",
+        ),
+        Hypothesis(
+            layer="1-v6", probe_class="v6-ping", target_specific=True,
             statement=f"Device is IPv6-alive at derived EUI-64 link-local {ctx.v6_linklocal}",
             command=f"ping -c3 -W2 -I {ctx.iface} {ctx.v6_linklocal}",
             positive_means="kernel up; go straight to banner+SSH over v6",
             negative_next="v6 stack down or not EUI-64; continue to v4 sweep",
         ),
         Hypothesis(
-            layer="1-v6",
+            layer="1-v6", probe_class="v6-ping",
             statement="Anything on-segment answers all-nodes multicast",
             command=f"ping -c3 -W2 -I {ctx.iface} ff02::1",
             positive_means="compare responder MACs; on-link liveness independent of v4",
             negative_next="segment silent; passive re-listen during PoE cycle",
         ),
         Hypothesis(
-            layer="1-v6",
+            layer="1-v6", probe_class="ndp",
             statement="Neighbor entry exists for derived link-local (NDP cache)",
             command=f"ip neigh show dev {ctx.iface} | grep {ctx.v6_linklocal.split('::')[-1]}",
             positive_means="device previously communicated; STALE != dead",
@@ -211,19 +271,20 @@ def build_ladder(ctx: DiscoverContext) -> list[Hypothesis]:
         ),
     ]
     for net in ctx.subnets:
-        prefix = str(ipaddress.ip_network(net).network_address).rsplit(".", 1)[0]
+        hosts = sweep_hosts(net)
         steps.append(Hypothesis(
             layer="2-v4",
-            statement=f"Device holds a static address inside {net} (ARP sweep)",
-            command=(f"for i in $(seq 1 254); do ping -c1 -W1 -I {ctx.iface} "
-                     f"{prefix}.$i & done; wait; "
+            statement=f"Device holds a static address inside {net} (ARP sweep of "
+                      f"{len(hosts)} usable hosts)",
+            command=(f"for ip in {' '.join(hosts)}; do ping -c1 -W1 -I {ctx.iface} "
+                     "$ip & done; wait; "
                      f"ip neigh show dev {ctx.iface} | grep -v FAILED"),
             positive_means="REACHABLE/STALE entry reveals the address; banner-grab it",
             negative_next="next candidate subnet",
         ))
     steps.extend([
         Hypothesis(
-            layer="3-service",
+            layer="3-service", probe_class="nc", positive_gate="content",
             statement="SSH banner on port 22 at any discovered address (v4 or v6)",
             command=f"for p in {' '.join(map(str, SERVICE_PORTS))}; do "
                     f"(sleep 2; echo '') | nc <ADDR> $p | head -c 60; done",
@@ -231,7 +292,7 @@ def build_ladder(ctx: DiscoverContext) -> list[Hypothesis]:
             negative_next="no listeners; try PoE-cycle boot-window banner race",
         ),
         Hypothesis(
-            layer="3-service",
+            layer="3-service", probe_class="nc",
             statement="LFP-style stack probe: SYN to closed port elicits RST with iTTL/IPID",
             command="nc -w2 <ADDR> 33533 </dev/null; then compare response TTL",
             positive_means=f"iTTL guess + IPID pattern classify the stack family "
@@ -239,7 +300,7 @@ def build_ladder(ctx: DiscoverContext) -> list[Hypothesis]:
             negative_next="host filters closed ports; rely on open-port banners",
         ),
         Hypothesis(
-            layer="4-creds",
+            layer="4-creds", executable=False,
             statement="Credential ladder (PRINTED ONLY — never auto-executed)",
             command="see credential_ladder(); run via: "
                     "ssh <probe-host> 'DROPBEAR_PASSWORD=<pw> dbclient -y -y "
@@ -261,26 +322,90 @@ def ssh_probe_host(probe_host: str, command: str, timeout: int = 120) -> tuple[i
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+def _harvest_ipv4(ctx: DiscoverContext, sweep_output: str) -> None:
+    """Collect usable neighbor addresses out of an `ip neigh` sweep output."""
+    for line in sweep_output.splitlines():
+        if "FAILED" in line or " lladdr " not in line:
+            continue
+        for addr in IPv4_RE.findall(line):
+            first, *rest = addr.split(".")
+            is_multicast_or_broadcast = first in ("0", "224", "225", "239", "255") \
+                or rest[-1] in ("0", "255")
+            if not is_multicast_or_broadcast and addr not in ctx.v4_addrs:
+                ctx.v4_addrs.append(addr)
+
+
+def _run_service_step(ctx: DiscoverContext, step: Hypothesis) -> None:
+    """Probe EVERY discovered address — v4 finds first, v6 fallback last.
+
+    Replacing <ADDR> with only the derived link-local would skip the very
+    IPv4 address a layer-2 sweep just discovered, breaking the
+    wrong-subnet recovery flow for IPv4-only targets."""
+    addrs = list(ctx.v4_addrs) + [ctx.v6_linklocal]
+    evidence: list[tuple[str, int, str]] = []
+    for addr in addrs:
+        cmd = step.command.replace("<ADDR>", addr).replace("<IFACE>", ctx.iface)
+        rc, out = ssh_probe_host(ctx.probe_host, cmd)
+        positive = rc == 0 and (out.strip() != "" if step.positive_gate == "content" else True)
+        if positive:
+            step.status = "positive"
+            print(step.render())
+            print(f"    => POSITIVE at {addr}: {out[:200]}")
+            return
+        evidence.append((addr, rc, out[:120]))
+    step.status = "negative"
+    print(step.render())
+    for addr, rc, out in evidence:
+        print(f"    => negative at {addr} (rc={rc}): {out}")
+
+
 def run_ladder(ctx: DiscoverContext, steps: list[Hypothesis]) -> list[Hypothesis]:
-    control = steps[0]
-    rc, out = ssh_probe_host(ctx.probe_host, control.command)
-    control.status = "positive" if rc == 0 else "control-failed"
-    print(control.render())
-    print(f"    => {control.status.upper()}: {out[:120]}")
-    if control.status != "positive":
+    controls = [s for s in steps if s.layer == "0-control"]
+    probes = [s for s in steps if s.layer != "0-control"]
+
+    passed_classes: set[str] = set()
+    for control in controls:
+        rc, out = ssh_probe_host(ctx.probe_host,
+                                 control.command.replace("<IFACE>", ctx.iface))
+        control.status = "positive" if rc == 0 else "control-failed"
+        if control.status == "positive":
+            passed_classes.add(control.probe_class)
+        print(control.render())
+        print(f"    => {control.status.upper()}: {out[:120]}")
+
+    primary = next((c for c in controls if c.primary_control), None)
+    if primary is not None and primary.status != "positive":
         print("\nREFUSING to run discovery probes: positive control failed.")
         print("Fix the probe path before trusting any negative result (AGENTS rule 11).")
         return steps
-    v6_alive = False
-    for step in steps[1:]:
-        if step.layer == "2-v4" and v6_alive:
+
+    v6_target_alive = False
+    for step in probes:
+        if not step.executable:
+            print(step.render())
+            print("    => OPERATOR-ONLY: printed, never executed")
+            continue
+        if step.probe_class not in passed_classes:
+            step.status = "control-failed"
+            print(step.render())
+            print(f"    => CONTROL-FAILED: {step.probe_class} control did not pass — "
+                  "a negative here would be meaningless")
+            continue
+        if step.layer == "2-v4" and v6_target_alive:
             step.status = "skipped"
+            continue
+        if step.layer == "3-service":
+            _run_service_step(ctx, step)
             continue
         addr_cmd = step.command.replace("<ADDR>", ctx.v6_linklocal).replace("<IFACE>", ctx.iface)
         rc, out = ssh_probe_host(ctx.probe_host, addr_cmd)
         step.status = "positive" if rc == 0 else "negative"
-        if step.layer == "1-v6" and rc == 0:
-            v6_alive = True
+        if step.layer == "1-v6" and step.target_specific and rc == 0:
+            # ONLY the target's own EUI-64 answer may suppress the v4
+            # ladder — multicast/NDP hits prove other hosts or stale state.
+            v6_target_alive = True
+        if step.layer == "2-v4" and rc == 0:
+            _harvest_ipv4(ctx, out)
         print(step.render())
         print(f"    => {step.status.upper()}: {out[:200]}")
     return steps
@@ -303,6 +428,11 @@ def main(argv: list[str] | None = None) -> int:
         [s.strip() for s in args.probe_subnets.split(",") if s.strip()],
         inventory_history=history,
     )
+    for net in subnets:
+        if len(sweep_hosts(net)) > MAX_SWEEP_HOSTS:
+            parser.error(
+                f"subnet {net} has more than {MAX_SWEEP_HOSTS} usable hosts — the ARP "
+                "sweep runs one parallel ping per host; split it into /24 blocks")
     ctx = DiscoverContext(
         mac=args.mac, iface=args.iface,
         probe_host=args.probe_host or "", control_ip=args.control_ip, subnets=subnets,
