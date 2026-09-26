@@ -9,6 +9,7 @@ sends must be valid shell syntax with multiline control flow intact.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -115,3 +116,59 @@ class TestProviderStepTransport:
         script = render_shell(builder(dict(params)))
         r = subprocess.run(["sh", "-n"], input=script, capture_output=True, text=True)
         assert r.returncode == 0, f"{name}: rendered script is not valid shell: {r.stderr}"
+
+
+class TestPiaAbortsBeforeDestructiveCleanup:
+    """Codex PR #81 comment 4107888573: a PIA auth/API error must abort the
+    script BEFORE wg_cleanup_sh deletes the working wg0 tunnel. The step runs
+    locally in a PATH sandbox with stubbed curl/jq/uci/wg — no device, no
+    network (AGENTS.md: never run state-mutating commands from tests)."""
+
+    def _write_stub(self, path, body):
+        path.write_text(body)
+        path.chmod(0o755)
+
+    def _payload(self) -> str:
+        script = render_shell(_build_pia_ops(dict(PIA_PARAMS)))
+        _, payload = _captured_payload(script)
+        return payload
+
+    def test_error_response_exits_before_wg0_cleanup(self, tmp_path):
+        stub_bin = tmp_path / "bin"
+        stub_bin.mkdir()
+        uci_log = tmp_path / "uci.log"
+        self._write_stub(stub_bin / "curl", "#!/bin/sh\necho '{\"status\":\"ERROR\",\"reason\":\"AUTH_FAILED\"}'\nexit 0\n")
+        self._write_stub(stub_bin / "jq", "#!/bin/sh\nexit 0\n")
+        self._write_stub(stub_bin / "apk", "#!/bin/sh\nexit 1\n")
+        self._write_stub(stub_bin / "opkg", "#!/bin/sh\nexit 1\n")
+        self._write_stub(stub_bin / "uci", f"#!/bin/sh\necho \"$@\" >> {uci_log}\nexit 0\n")
+        self._write_stub(stub_bin / "wg", "#!/bin/sh\ncase \"$1\" in genkey) echo TESTPRIV;; pubkey) cat;; esac\nexit 0\n")
+
+        scratch = ["/tmp/vpn_setup.sh", "/tmp/vpn_private.key", "/tmp/vpn_public.key",
+                   "/tmp/vpn_token.json", "/tmp/vpn_addkey.json"]
+        try:
+            r = subprocess.run(
+                ["sh", "-s"], input=self._payload(), capture_output=True, text=True,
+                env={**os.environ, "PATH": f"{stub_bin}:{os.environ['PATH']}"},
+            )
+            assert r.returncode != 0, "must fail when the PIA API returns an error payload"
+            assert "pia:" in r.stdout.lower(), f"expected a PIA abort diagnostic, got: {r.stdout!r}"
+            if uci_log.exists():
+                assert "delete" not in uci_log.read_text(), (
+                    f"destructive cleanup ran despite abort: {uci_log.read_text()!r}"
+                )
+        finally:
+            for p in scratch:
+                try:
+                    os.unlink(p)
+                except FileNotFoundError:
+                    pass
+
+    def test_curl_uses_fail_fast_flag_on_both_requests(self):
+        script = render_shell(_build_pia_ops(dict(PIA_PARAMS)))
+        assert script.count("curl -fs") == 2
+        assert "curl -s -m" not in script
+
+    def test_field_validation_precedes_cleanup_in_script(self):
+        script = render_shell(_build_pia_ops(dict(PIA_PARAMS)))
+        assert script.index('[ -n "$SERVER_KEY" ]') < script.index("uci -q delete network.wg0")

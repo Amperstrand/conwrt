@@ -38,10 +38,11 @@ def _build_pia_ops(params: dict[str, Any]) -> list[Op]:
 {keypair_sh()}
 
 # Authenticate with PIA — get auth token
-curl -s -m 15 -u "{username}:{password}" \\
+curl -fs -m 15 -u "{username}:{password}" \\
     "https://www.privateinternetaccess.com/gtoken/generateToken" \\
     -o /tmp/vpn_token.json
 PIA_TOKEN=$(cat /tmp/vpn_token.json | json_get token)
+[ -n "$PIA_TOKEN" ] || {{ echo 'PIA: auth failed — no token in API response'; exit 1; }}
 
 # URL-encode token: PIA tokens contain +, /, = that break curl
 ENC_TOKEN=$(echo "$PIA_TOKEN" | sed 's/+/%2B/g; s/=/%3D/g; s|/|%2F|g')
@@ -49,7 +50,7 @@ ENC_TOKEN=$(echo "$PIA_TOKEN" | sed 's/+/%2B/g; s/=/%3D/g; s|/|%2F|g')
 WG_PUB=$(cat /tmp/vpn_public.key)
 
 # Register WG key with regional server
-curl -s -m 15 -k \\
+curl -fs -m 15 -k \\
     "https://{region}.privacy.network:1337/addKey?pt=${{ENC_TOKEN}}&pubkey=${{WG_PUB}}" \\
     -o /tmp/vpn_addkey.json
 
@@ -58,6 +59,9 @@ SERVER_KEY=$(cat /tmp/vpn_addkey.json | json_get server_key)
 SERVER_IP=$(cat /tmp/vpn_addkey.json | json_get server_ip)
 SERVER_PORT=$(cat /tmp/vpn_addkey.json | json_get server_port)
 PEER_IP=$(cat /tmp/vpn_addkey.json | json_get peer_ip)
+# Abort BEFORE the destructive wg0 cleanup unless the response is complete
+[ -n "$SERVER_KEY" ] && [ -n "$SERVER_IP" ] && [ -n "$SERVER_PORT" ] && [ -n "$PEER_IP" ] \\
+    || {{ echo 'PIA: addKey response incomplete — aborting before wg0 cleanup'; exit 1; }}
 
 {wg_cleanup_sh()}
 
