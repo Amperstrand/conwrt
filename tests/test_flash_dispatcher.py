@@ -1265,6 +1265,30 @@ class TestRunStateMachine(TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(mock_apply.call_args[0][0], "192.168.1.1")
 
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    @patch("conwrt.flash_dispatcher._record_inventory")
+    @patch("conwrt.flash_dispatcher._deploy_tollgate_post_flash")
+    @patch("conwrt.flash_dispatcher._register_wireguard_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_sticker_credentials_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_profile_post_flash")
+    @patch("conwrt.flash_dispatcher._load_config")
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    def test_postflash_inventory_targets_actual_address(self, mock_timeline, mock_config,
+                                                        mock_apply, mock_sticker,
+                                                        mock_wg, mock_tollgate,
+                                                        mock_inv, mock_restore):
+        """sysupgrade -n + --ip: even when profile application keeps the address,
+        profile.openwrt_ip is synced so _record_inventory fingerprints where the
+        device actually is, not the stale pre-flash override."""
+        mock_config.return_value = MagicMock()
+        mock_apply.return_value = "192.168.1.1"  # unchanged from device_ip
+        profile = _make_profile(openwrt_ip="10.0.0.5", post_flash_ip="192.168.1.1")
+        ctx = _make_ctx(state=State.COMPLETE, profile=profile)
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, None, None)
+        self.assertEqual(result, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "192.168.1.1")
+
 
 # ===================================================================
 # _wait_for_event_or_timeout (alias)

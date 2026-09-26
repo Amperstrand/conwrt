@@ -66,7 +66,10 @@ Related knobs:
   untouched; useful when the address is managed externally.
 - `conwrt flash --keep-config` — sysupgrade without `-n`: settings and SSH
   keys survive the upgrade. `conwrt flash --ip <addr>` targets a device at a
-  non-default address (e.g. after a LAN move).
+  non-default address (e.g. after a LAN move). Without `--keep-config` the
+  override applies to the pre-flash connection only: `sysupgrade -n` resets
+  the device to the model's default address, which is where conwrt polls,
+  verifies, and records inventory after the flash.
 
 Do not run real flashing, sysupgrade, SSH, SCP, TFTP, tcpdump, serial, ASU, or other network-mutating commands from tests. Use mocks/stubs only. Commands such as `python3 scripts/conwrt.py ...`, `scripts/tftp-server.py`, and router SSH/SCP helpers can mutate real devices and should only be run intentionally against hardware you control.
 

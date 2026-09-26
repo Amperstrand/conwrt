@@ -266,8 +266,10 @@ def _run_state_machine(
             log("  ⚠ Post-flash profile application failed (no IP). Aborting post-flash chain.")
             _restore_port_isolation(ctx)
             return 1
-        if openwrt_ip != device_ip:
-            ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
+        # Always sync the profile to the address the device answers at now —
+        # with --ip + sysupgrade -n the pre-flash override is stale, and
+        # _record_inventory fingerprints profile.openwrt_ip.
+        ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
             model_id=ctx.profile.name, cfg=cfg,
