@@ -83,7 +83,7 @@ class TestAdoptFullFlow:
             "extreme-networks,ws-ap3915i",                          # adopt-ready
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",  # adopt-keys
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED\nRESTARTED",
+            "DEADMAN-ARMED\nCOMMITTED\nRESTARTED",
         ]
         ba.stage_adopt(_runner(canned, tmp_path))
 
@@ -102,7 +102,7 @@ class TestAdoptFullFlow:
             "extreme-networks,ws-ap3915i",
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED",
+            "DEADMAN-ARMED\nCOMMITTED\nRESTARTED",
         ])
 
         def capture(script: str) -> str:
@@ -114,7 +114,8 @@ class TestAdoptFullFlow:
             "staging must start from a clean baseline"
 
 
-def _runner(canned: str | list[str], tmp_path: Path, place: ba.Place = PLACE) -> ba.Runner:
+def _runner(canned: str | list[str], tmp_path: Path, place: ba.Place = PLACE,
+            stages_done: set[str] | None = None) -> ba.Runner:
     remaining = list(canned) if isinstance(canned, list) else None
 
     def serve(_script: str) -> str:
@@ -124,7 +125,16 @@ def _runner(canned: str | list[str], tmp_path: Path, place: ba.Place = PLACE) ->
             return remaining.pop(0)
         return canned  # type: ignore[return-value]
 
-    return ba.Runner(serve, place, tmp_path / "ev")
+    return ba.Runner(serve, place, tmp_path / "ev", stages_done=stages_done)
+
+
+ENVELOPE = {"rom-audit", "preflight", "backup", "overlay"}
+
+
+def _armed_runner(canned: str | list[str], tmp_path: Path,
+                  place: ba.Place = PLACE) -> ba.Runner:
+    """Runner whose session already established the reset envelope."""
+    return _runner(canned, tmp_path, place, stages_done=set(ENVELOPE))
 
 
 class TestPreflightAssertions:
@@ -180,42 +190,71 @@ class TestRomAudit:
 
 
 class TestResetPostconditions:
-    ARM = ["FIRSTBOOT-RC=0", "FIRSTBOOT-RC=0", ""]
+    # dut_with_fallback consumes one output per auth attempt; the reboot
+    # now rides inside the firstboot command, so no third output exists.
+    ARM = ["FIRSTBOOT-RC=0", "FIRSTBOOT-RC=0"]
 
     def _no_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ba.time, "sleep", lambda s: None)
-        ticks = iter([0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220, 240, 999])
+        # 10s steps: the auth-death path needs 12+ in-window poll iterations
+        # (4 per deliberate PoE cycle, 2 cycles, 4 to raise) under one
+        # 240s deadline.
+        ticks = iter([0] + [10 * i for i in range(1, 60)] + [9999])
         monkeypatch.setattr(ba.time, "monotonic", lambda: next(ticks))
 
     def test_keys_surviving_means_not_wiped(self, tmp_path: Path,
                                             monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
         with pytest.raises(ba.AdoptError, match="overlay was NOT wiped"):
-            ba.stage_reset(_runner(self.ARM + [RESET_NOT_WIPED], tmp_path))
+            ba.stage_reset(_armed_runner(self.ARM + [RESET_NOT_WIPED], tmp_path))
 
     def test_nonzero_firstboot_rc_fails_fast(self, tmp_path: Path) -> None:
         with pytest.raises(ba.AdoptError, match="nonzero"):
-            ba.stage_reset(_runner(["FIRSTBOOT-RC=1", "FIRSTBOOT-RC=1"], tmp_path))
+            ba.stage_reset(_armed_runner(["FIRSTBOOT-RC=1", "FIRSTBOOT-RC=1"], tmp_path))
 
     def test_factory_state_passes(self, tmp_path: Path,
                                   monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
-        ba.stage_reset(_runner(self.ARM + [RESET_FACTORY], tmp_path))
+        ba.stage_reset(_armed_runner(self.ARM + [RESET_FACTORY], tmp_path))
 
     def test_mid_reboot_noise_then_factory(self, tmp_path: Path,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
         noise = ("dbclient: Connection to root@fe80::...%switch.1003:22 exited: "
                  "Remote closed the connection\n")
-        ba.stage_reset(_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path))
+        ba.stage_reset(_armed_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path))
 
     def test_persistent_auth_death_fails_fast(self, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
         noise = ("dbclient: Connection to root@fe80::...%switch.1002:22 exited: "
                  "Remote closed the connection\n")
-        with pytest.raises(ba.AdoptError, match="console required"):
-            ba.stage_reset(_runner(self.ARM + [noise] * 4, tmp_path))
+        # 4 auth-dead reset-checks per deliberate PoE cycle + the poe-cycle
+        # script itself consumes one canned output; 2 cycles, then 4 more
+        # for the console-required abort: 14 canned outputs after firstboot.
+        with pytest.raises(ba.AdoptError, match="(?i)console required"):
+            ba.stage_reset(_armed_runner(self.ARM + [noise] * 14, tmp_path))
+
+
+    def test_reboot_rides_in_the_firstboot_command(self, tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+        self._no_sleep(monkeypatch)
+        scripts: list[str] = []
+        canned = iter(self.ARM + [RESET_FACTORY])
+
+        def capture(script: str) -> str:
+            scripts.append(script)
+            return next(canned)
+
+        ba.stage_reset(ba.Runner(capture, PLACE, tmp_path / "ev", stages_done=set(ENVELOPE)))
+        firstboot = next(s for s in scripts if "firstboot" in s)
+        assert "reboot" in firstboot, \
+            "reboot must be issued in the SAME command — no key-auth channel " \
+            "exists after the overlay wipe"
+
+    def test_reset_refused_without_session_envelope(self, tmp_path: Path) -> None:
+        with pytest.raises(ba.AdoptError, match="recovery envelope"):
+            ba.stage_reset(_runner(self.ARM + [RESET_FACTORY], tmp_path))
 
     def test_reset_refused_for_tftp_dependent_unit(self, tmp_path: Path) -> None:
         lan5 = ba.Place("ap-lan5", "b4:2d:56:24:ad:97", "192.168.105.51",
@@ -300,7 +339,7 @@ class TestKeyAuthProof:
             "extreme-networks,ws-ap3915i",
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED",
+            "DEADMAN-ARMED\nCOMMITTED\nRESTARTED",
         ])
 
         def capture(script: str) -> str:

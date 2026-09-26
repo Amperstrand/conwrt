@@ -106,10 +106,15 @@ def load_labgrid_host(path: Path) -> str:
 
 
 class Runner:
-    def __init__(self, transport: Transport, place: Place, evidence: Path) -> None:
+    def __init__(self, transport: Transport, place: Place, evidence: Path,
+                 stages_done: set[str] | None = None) -> None:
         self.transport = transport
         self.place = place
         self.evidence = evidence
+        # Stages completed earlier in THIS session (shared across the
+        # per-stage Runner instances main() creates) — destructive stages
+        # assert their recovery envelope against it.
+        self.stages_done: set[str] = stages_done if stages_done is not None else set()
         self.evidence.mkdir(parents=True, exist_ok=True)
 
     def sh(self, name: str, lines: list[str], timeout_s: int = 60) -> str:
@@ -200,18 +205,20 @@ def stage_preflight(r: Runner) -> None:
 
 
 def stage_backup(r: Runner) -> None:
+    # sha256sum: the documented BusyBox baseline has no md5sum applet
+    # (AGENTS.md on-device hash rule) — md5 would yield no digest at all.
     out = r.dut("backup", "sysupgrade -b /tmp/bench-adopt-backup.tar.gz >/dev/null 2>&1; "
-                          "md5sum /tmp/bench-adopt-backup.tar.gz")
+                          "sha256sum /tmp/bench-adopt-backup.tar.gz")
     digest = parse_field(out, "bench-adopt-backup.tar.gz").split()[0]
-    if len(digest) != 32:
-        raise AdoptError(f"backup: no md5 in output:\n{out[:300]}")
+    if len(digest) != 64:
+        raise AdoptError(f"backup: no sha256 in output:\n{out[:300]}")
     pulled = r.sh("backup-pull", [
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{r.place.linklocal}%switch.{r.place.vlan} "
         f"'cat /tmp/bench-adopt-backup.tar.gz' </dev/null > /tmp/bench-adopt-backup.tar.gz 2>/dev/null",
-        "md5sum /tmp/bench-adopt-backup.tar.gz"])
+        "sha256sum /tmp/bench-adopt-backup.tar.gz"])
     if digest not in pulled:
-        raise AdoptError("backup: md5 mismatch DUT vs switch — refusing to continue")
-    print(f"[PASS] backup {r.place.name}: md5 {digest} verified end-to-end")
+        raise AdoptError("backup: sha256 mismatch DUT vs switch — refusing to continue")
+    print(f"[PASS] backup {r.place.name}: sha256 {digest} verified end-to-end")
 
 
 def stage_overlay(r: Runner) -> None:
@@ -233,21 +240,35 @@ def stage_overlay(r: Runner) -> None:
         f"(sysupgrade -n formats a fresh overlay deterministically). dmesg:\n{out[:300]}")
 
 
+RESET_ENVELOPE = ("rom-audit", "preflight", "backup", "overlay")
+
+
 def stage_reset(r: Runner) -> None:
     p = r.place
     if not p.reset_allowed:
         raise AdoptError(f"reset refused: {p.name} is reset_allowed=false "
                          "(TFTP-dependent unit — re-arm lifeline or run #61 first)")
+    missing = [s for s in RESET_ENVELOPE if s not in r.stages_done]
+    if missing:
+        # --stages reset must not bypass the destructive-operation
+        # preconditions: a firstboot without ROM manageability proof,
+        # backup, and an overlay-health check is the documented auth-dead
+        # recipe (AGENTS.md escape-hatch + reset-failsafe rules).
+        raise AdoptError(
+            f"reset refused: recovery envelope not established in this session "
+            f"(missing {', '.join(missing)}). Run the full ladder, or at least "
+            f"--stages {','.join(RESET_ENVELOPE)},reset")
     try:
-        out = dut_with_fallback(r, "reset-firstboot", "firstboot -y; echo FIRSTBOOT-RC=$?")
+        # Reboot rides in the SAME remote command: after firstboot erases
+        # the overlay, no key-authenticated connection can be opened to
+        # issue it separately, and firstboot itself does not reboot.
+        out = dut_with_fallback(r, "reset-firstboot",
+                                "firstboot -y; rc=$?; echo FIRSTBOOT-RC=$rc; "
+                                "sleep 2; [ $rc -eq 0 ] && reboot")
     except AdoptError as exc:
         out = str(exc)
     if "FIRSTBOOT-RC=0" in out:
-        try:
-            r.dut("reset-reboot", "reboot")
-        except AdoptError:
-            pass
-        print(f"[ARMED] reset {p.name}: firstboot RC=0, reboot issued")
+        print(f"[ARMED] reset {p.name}: firstboot RC=0, reboot issued in-command")
     elif "FIRSTBOOT-RC" not in out:
         # Channel closed before the RC echo (usually the reboot racing the
         # wrapper's return). firstboot is a RAM-staged overlay wipe that
@@ -333,9 +354,12 @@ def stage_adopt(r: Runner) -> None:
     for pub in (Path.home() / ".ssh" / "id_ed25519.pub", Path.home() / ".ssh" / "id_rsa.pub"):
         if pub.exists():
             mac_keys += [line.strip() for line in pub.read_text().splitlines() if line.strip()]
+    # The switch's public key is read ON THE SWITCH (command substitution
+    # happens there) and its CONTENT is what gets sent to the DUT: a clean
+    # post-firstboot DUT has no /root/.ssh/id_ed25519.pub to read.
     payload = ("mkdir -p /etc/dropbear; "
-               "grep -q '$(head -c 24 /root/.ssh/id_ed25519.pub)' /etc/dropbear/authorized_keys 2>/dev/null "
-               "|| cat /root/.ssh/id_ed25519.pub >> /etc/dropbear/authorized_keys")
+               "grep -q \"$SWITCH_KEY_MARK\" /etc/dropbear/authorized_keys 2>/dev/null "
+               "|| echo \"$SWITCH_KEY\" >> /etc/dropbear/authorized_keys")
     for key in mac_keys:
         marker = key.split()[1][:24]
         payload += (f"; grep -q '{marker}' /etc/dropbear/authorized_keys 2>/dev/null "
@@ -343,6 +367,8 @@ def stage_adopt(r: Runner) -> None:
     payload += ("; chmod 700 /etc/dropbear; chmod 600 /etc/dropbear/authorized_keys; "
                 "echo KEYS-PUSHED")
     keys_script = [
+        "SWITCH_KEY=$(cat /root/.ssh/id_ed25519.pub)",
+        "SWITCH_KEY_MARK=$(head -c 24 /root/.ssh/id_ed25519.pub)",
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{p.linklocal}%switch.{p.vlan} "
         f"\"{payload}\" </dev/null",
         # Wrong password on purpose: dbclient silently falls back from pubkey
@@ -375,11 +401,21 @@ def stage_adopt(r: Runner) -> None:
     if readback != expected_values:
         raise AdoptError(f"adopt: value readback mismatch — got {readback}, "
                          f"expected {expected_values} (raw: {out[-200:]})")
-    out = r.dut("adopt-commit", "uci commit network; echo COMMITTED; "
-                                "/etc/init.d/network restart >/dev/null 2>&1; echo RESTARTED")
-    if "COMMITTED" not in out:
-        raise AdoptError(f"adopt: commit did not confirm:\n{out[:300]}")
-    print(f"[PASS] adopt {p.name}: keys (idempotent) + clean-baseline static config committed")
+    out = r.dut("adopt-commit",
+                # Deadman FIRST (AGENTS network-gear rule 1): commit + network
+                # restart in the same breath can strand the DUT with no
+                # recovery path — a scheduled reboot heals a wedged box.
+                # setsid: nohup-over-ssh dies when the session closes
+                # (BusyBox detached-daemon rule). No single quotes — the
+                # remote command travels inside dut()'s single quotes.
+                "setsid sh -c \"sleep 600 && reboot\" >/dev/null 2>&1 & echo DEADMAN-ARMED; "
+                "uci commit network && echo COMMITTED || echo COMMIT-FAIL; "
+                "/etc/init.d/network restart >/dev/null 2>&1; echo RESTARTED")
+    for marker in ("DEADMAN-ARMED", "COMMITTED", "RESTARTED"):
+        if marker not in out:
+            raise AdoptError(f"adopt: commit did not confirm {marker}:\n{out[:300]}")
+    print(f"[PASS] adopt {p.name}: keys (idempotent) + clean-baseline static config "
+          "committed behind a 600s deadman")
 
 
 def stage_verify(r: Runner) -> None:
@@ -395,6 +431,17 @@ def stage_verify(r: Runner) -> None:
         if required not in out:
             raise AdoptError(f"verify: missing {required!r} in evidence:\n{out[:400]}")
     print(f"[PASS] verify {p.name}: key-auth SSH at {p.dut_ip}, proto=static, release kept")
+    # Reachability survived the restart — stand down the recovery reboot.
+    # Best-effort: a failed cancel still reboots the unit in 600s, which is
+    # the safe direction, so it warns instead of failing the stage.
+    try:
+        cancel = r.dut("verify-deadman-cancel",
+                       "kill $(pgrep -f \"sleep 600 && reboot\") 2>/dev/null; "
+                       "echo DEADMAN-CANCELLED")
+        if "DEADMAN-CANCELLED" not in cancel:
+            print("[WARN] verify: deadman cancel unconfirmed — unit may reboot in 600s")
+    except AdoptError:
+        print("[WARN] verify: deadman cancel unreachable — unit may reboot in 600s")
 
 
 STAGES = {"rom-audit": stage_rom_audit, "preflight": stage_preflight, "backup": stage_backup,
@@ -454,20 +501,31 @@ def main(argv: list[str] | None = None) -> int:
     wanted = [s for s, _, _ in plan] if args.stages == "all" else args.stages.split(",")
     if any(s not in {s for s, _, _ in plan} for s in wanted):
         print(f"unknown stage in {wanted}; this method offers: {[s for s, _, _ in plan]}"); return 2
+    if "reset" in wanted:
+        # `--stages reset` alone must never reach firstboot without the
+        # destructive-operation envelope; auto-include it (stage_reset
+        # asserts the same thing in-session as defense in depth).
+        missing_envelope = [s for s in RESET_ENVELOPE if s not in wanted]
+        if missing_envelope:
+            print(f"[GATE] reset requires the recovery envelope — "
+                  f"auto-including {','.join(missing_envelope)}")
+            wanted = [s for s, _, _ in plan if s in wanted or s in missing_envelope]
     mutating = any(s in ("reset", "adopt", "flash") for s in wanted)
     if mutating and not args.i_know:
         print("refusing DUT mutation without --i-know"); return 2
 
     evidence = REPO_ROOT / "data" / "bench" / place.name / time.strftime("%Y%m%d-%H%M%S")
+    stages_done: set[str] = set()
     for stage, stage_place, fn in plan:
         if stage not in wanted:
             continue
-        r = Runner(session.switch_sh, stage_place, evidence)
+        r = Runner(session.switch_sh, stage_place, evidence, stages_done=stages_done)
         try:
             fn(r)
         except AdoptError as err:
             print(f"[FAIL] {stage}: {err}\n  evidence: {evidence}")
             return 1
+        stages_done.add(stage)
     print(f"done. evidence: {evidence}")
     return 0
 
