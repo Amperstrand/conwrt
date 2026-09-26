@@ -17,6 +17,7 @@ from .base import (
     build_verify_ops,
     keypair_sh,
     static_route_sh,
+    transport_sh,
     wg_cleanup_sh,
 )
 
@@ -93,7 +94,7 @@ uci set network.@wireguard_wg0[0].persistent_keepalive='25'
 
     ops: list[Op] = [
         Comment(text=f"--- Surfshark WireGuard VPN ---"),
-        ShellCommand(command=surfshark_script),
+        ShellCommand(command=transport_sh(surfshark_script)),
     ]
     ops.extend(build_firewall_ops(kill_switch=kill_switch))
     ops.extend(build_dns_ops(["162.252.172.57", "149.154.159.92"]))
