@@ -84,15 +84,31 @@ def _dut_scp(place: Place, local: str, remote: str) -> list[str]:
 
 
 def lifeline_command(place: Place, cfg: Config, tftproot: Path) -> list[str]:
-    """dnsmasq TFTP lifeline on the switch for this place's VLAN (runtime-only).
+    """dnsmasq TFTP lifeline on the switch for this place's VLAN.
 
     Serves the baseline FIT + env images so `run boot_net` (the bootcmd
     fallback tail) can recover the DUT if the flash write goes wrong.
-    """
+
+    The daemon must OUTLIVE the SSH session that arms it: `nohup ... &`
+    dies with the session on BusyBox (AGENTS detached-daemon rule), so
+    dnsmasq self-daemonizes instead (no --no-daemon) and the arming
+    command only echoes LIFELINE-ARMED after pgrep proves the server is
+    actually alive."""
     return _switch_ssh(cfg, (
         f"ifname=switch.{place.vlan}; ip link show $ifname >/dev/null 2>&1 || ip link add $ifname link switch type vlan id {place.vlan}; "
-        f"nohup dnsmasq --no-daemon --interface=$ifname --bind-dynamic "
-        f"--tftp-root={tftproot} >/tmp/tftp-{place.vlan}.log 2>&1 & echo LIFELINE-ARMED"))
+        f"kill $(pgrep -f 'dnsmasq.*{tftproot}') 2>/dev/null; sleep 1; "
+        f"dnsmasq --log-facility=/tmp/tftp-{place.vlan}.log --port=0 --enable-tftp "
+        f"--tftp-root={tftproot} --interface=$ifname --bind-dynamic; "
+        f"sleep 1; pgrep -f 'dnsmasq.*{tftproot}' >/dev/null && echo LIFELINE-ARMED "
+        "|| echo LIFELINE-BROKEN"))
+
+
+def arm_lifeline(place: Place, cfg: Config, tftproot: Path) -> bool:
+    """Arm AND verify the lifeline; the marker is content-gated, not just
+    exit-code gated (a plain `echo LIFELINE-ARMED` proves nothing)."""
+    proc = subprocess.run(lifeline_command(place, cfg, tftproot),
+                          capture_output=True, text=True, timeout=30)
+    return "LIFELINE-ARMED" in (proc.stdout + proc.stderr)
 
 
 def _switch_ssh(cfg: Config, cmd: str) -> list[str]:
@@ -239,16 +255,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "flash-baseline":
         if not args.i_know:
             print("refusing sysupgrade without --i-know"); return 2
+        if not args.tftproot:
+            # The AP3915i's only flash-failure recovery door is the bootcmd
+            # `run boot_net` tail — flashing without an armed, verified
+            # lifeline removes that door (AGENTS escape-hatch rule 1).
+            print("FAIL: flash-baseline requires --tftproot (TFTP lifeline) — "
+                  "refusing to flash without a verified recovery path")
+            return 2
         if not args.image.exists():
             print(f"FAIL: {args.image} missing"); return 1
         digest = sha256_of(args.image)
         if args.sha256 and digest != args.sha256:
             print(f"FAIL: sha256 mismatch {digest} != {args.sha256}"); return 1
         print(f"image sha256 {digest}")
-        if args.tftproot:
-            if run_cmds([lifeline_command(place, cfg, args.tftproot)]) != 0:
-                print("FAIL: could not arm TFTP lifeline — aborting flash")
-                return 1
+        if not arm_lifeline(place, cfg, args.tftproot):
+            print("FAIL: could not arm TFTP lifeline — aborting flash")
+            return 1
         print("power-cycling to a clean pre-flash state")
         run_cmds([_labgrid(cfg, place.name, "power", "off")], timeout=60)
         time.sleep(5)
@@ -261,10 +283,18 @@ def main(argv: list[str] | None = None) -> int:
             if run_cmds([cmd]) != 0:
                 return 1
         try:
-            subprocess.run(flash_sequence(place, args.image)[-1], capture_output=True,
-                           text=True, timeout=30)
+            proc = subprocess.run(flash_sequence(place, args.image)[-1], capture_output=True,
+                                  text=True, timeout=30)
         except subprocess.TimeoutExpired:
-            pass  # expected: sysupgrade drops the connection
+            proc = None  # expected: sysupgrade drops the connection mid-upgrade
+        if proc is not None and wait_for_dut(place, cfg, 15):
+            # A synchronous sysupgrade failure (image validation rejected,
+            # bad metadata) leaves the DUT SSH-reachable — reporting success
+            # here would hide the authoritative stop signal.
+            print(f"FAIL: sysupgrade exited rc={proc.returncode} but the DUT is "
+                  f"still reachable — upgrade never started:\n"
+                  f"{(proc.stdout + proc.stderr)[-300:]}")
+            return 1
         print(f"flash started; polling SSH up to {RECOVERY_WAIT_S}s")
         if not wait_for_dut(place, cfg, RECOVERY_WAIT_S):
             print("FAIL: DUT did not return after sysupgrade — check lifeline log")
