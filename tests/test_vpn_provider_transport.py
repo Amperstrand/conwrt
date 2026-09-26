@@ -17,6 +17,7 @@ import pytest
 
 from profile.apply import _run_step_script
 from profile.ops import render_shell
+from shell_safe import sh_quote
 from use_cases.vpn_providers.base import transport_sh
 from use_cases.vpn_providers.ivpn import _build_ivpn_ops
 from use_cases.vpn_providers.mullvad import _build_mullvad_ops
@@ -172,3 +173,17 @@ class TestPiaAbortsBeforeDestructiveCleanup:
     def test_field_validation_precedes_cleanup_in_script(self):
         script = render_shell(_build_pia_ops(dict(PIA_PARAMS)))
         assert script.index('[ -n "$SERVER_KEY" ]') < script.index("uci -q delete network.wg0")
+
+    def test_credentials_are_shell_quoted(self):
+        # Codex PR #81 comment 4107888582: $, backtick, quote, backslash in a
+        # password must survive the router shell verbatim.
+        params = {**PIA_PARAMS, "password": "p$a\"b'c`d\\e"}
+        script = render_shell(_build_pia_ops(params))
+        assert sh_quote("testuser:p$a\"b'c`d\\e") in script
+        assert '-u "testuser:' not in script
+
+    def test_newline_in_password_is_rejected_at_build_time(self):
+        from shell_safe import ValidationError
+
+        with pytest.raises(ValidationError):
+            _build_pia_ops({**PIA_PARAMS, "password": "line1\nline2"})

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from profile.ops import Comment, Op, ShellCommand
+from shell_safe import sh_quote
 
 from .. import ParamDef, UseCase, register
 from .base import (
@@ -38,7 +39,7 @@ def _build_pia_ops(params: dict[str, Any]) -> list[Op]:
 {keypair_sh()}
 
 # Authenticate with PIA — get auth token
-curl -fs -m 15 -u "{username}:{password}" \\
+curl -fs -m 15 -u {sh_quote(f"{username}:{password}")} \\
     "https://www.privateinternetaccess.com/gtoken/generateToken" \\
     -o /tmp/vpn_token.json
 PIA_TOKEN=$(cat /tmp/vpn_token.json | json_get token)
