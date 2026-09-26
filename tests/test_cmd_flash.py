@@ -472,6 +472,13 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         self.mocks["_verify_device_identity"].assert_not_called()
 
+    def test_identity_check_skipped_when_not_sysupgrade(self):
+        """--ip + --force-uboot: no live sysupgrade path ⇒ no identity gate."""
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", force_uboot=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
+
     def test_ip_override_reset_mode_expects_model_default_after_flash(self):
         """--ip + sysupgrade -n: override for the flash, model default after."""
         ctx = self.captured_ctx()
