@@ -54,13 +54,20 @@ ping_v() { # ping_v <vlan-dev> <ip>
 
 # ---- identity probe: switch ssh-key may not be trusted by every router ----
 identity() { # identity <vlan-dev> <ip>
-    local out
-    out=$(ssh -y -y -i /root/.ssh/id_ed25519 -o ConnectTimeout=4 root@"$2" \
+    local out d="$1" ip="$2"
+    # Pin the probe to THIS VLAN: every isolated VLAN carries an identical
+    # connected route to 192.168.1.0/24 (each holds a device at 192.168.1.1),
+    # so an unpinned ssh can leave via the wrong port and attach a healthy
+    # unit's identity to the wrong physical entry in the port map.
+    ip route add "$ip/32" dev "$d" 2>/dev/null
+    out=$(ssh -y -y -i /root/.ssh/id_ed25519 -o ConnectTimeout=4 root@"$ip" \
         'printf "%s|%s|%s|%s\n" "$(cat /tmp/sysinfo/board_name 2>/dev/null)" \
          "$(cat /tmp/sysinfo/model 2>/dev/null)" \
          "$(grep DISTRIB_DESCRIPTION /etc/openwrt_release 2>/dev/null | cut -d"'"'"' -f2)" \
          "$(cut -d. -f1 /proc/uptime 2>/dev/null)s"' </dev/null 2>/dev/null)
-    [ -n "$out" ] && echo "$out" || echo "no-key-trust"
+    rc=$?
+    ip route del "$ip/32" dev "$d" 2>/dev/null
+    [ "$rc" -eq 0 ] && [ -n "$out" ] && echo "$out" || echo "no-key-trust"
 }
 
 # ---- passive map of one port ----
@@ -166,7 +173,23 @@ probe_port() {
 
 case "$1" in
     --poe)  [ $# -eq 3 ] || die "usage: $0 --poe PORT on|off|reset"
-            poe_manage "lan$2" "$3" >/dev/null && echo "lan$2 -> $3 (info may lag 30s)" ;;
+            # documented states -> ubus actions (the fork's API takes
+            # enable/disable; "reset" is a bounded off/on cycle)
+            case "$3" in
+                on)    act=enable ;;
+                off)   act=disable ;;
+                reset) act=cycle ;;
+                *)     die "unknown poe state '$3' (expected on|off|reset)" ;;
+            esac
+            if [ "$act" = "cycle" ]; then
+                poe_manage "lan$2" disable >/dev/null || die "poe manage disable failed"
+                sleep 4
+                poe_manage "lan$2" enable >/dev/null || die "poe manage enable failed"
+                echo "lan$2 -> cycled (4s off, on; info may lag 30s)"
+            else
+                poe_manage "lan$2" "$act" >/dev/null && echo "lan$2 -> $3 (info may lag 30s)" \
+                    || die "poe manage $act failed"
+            fi ;;
     --scan) scan_port "lan$2" ;;
     --cycle) cycle_port "lan$2" ;;
     --probe) probe_port "lan$2" ;;

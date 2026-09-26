@@ -18,7 +18,7 @@
 #   alias-1002/1005     192.168.1.2/24 recovery aliases (U-Boot serverip on
 #                       boot_net units)
 #   fit                 TFTP bait in /tmp/bench-tftp + /tmp/tftproot1003:
-#                       the 24.10.2 sysupgrade FIT (md5 2242e9b7...) under
+#                       the 24.10.2 sysupgrade FIT (sha256 38ca3856...) under
 #                       vmlinux.gz.uImage.3912 AND the full .itb name, as
 #                       hardlinks of one validated inode; unknown files are
 #                       quarantined, never served, never deleted
@@ -50,7 +50,10 @@
 SWITCH=root@192.168.13.2
 STAGE_DST=/tmp/bench-arm-fit.stage
 FIT_FILE=openwrt-24.10.2-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin
-FIT_MD5=2242e9b7b31eec6251d8c168474a919d
+# sha256 of the FIT above (md5 2242e9b7b31eec6251d8c168474a919d for
+# cross-checking against older notes): the BusyBox baseline guarantees
+# sha256sum, NOT md5sum — an md5 gate quarantines a perfectly good FIT.
+FIT_SHA256=38ca385660e46aa084017b80e620ab07fb30716a07bcaab8f3d5435bc88bf848
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 FIT_PATH="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)/data/images/$FIT_FILE"
@@ -58,23 +61,23 @@ FIT_PATH="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)/data/images/$FIT_FILE"
 die() { echo "ERROR: $*" >&2; exit 1; }
 note() { echo "== $*"; }
 
-mac_md5() { md5 -q "$1" 2>/dev/null || md5sum "$1" 2>/dev/null | awk '{print $1}'; }
+mac_sha256() { shasum -a 256 "$1" 2>/dev/null | awk '{print $1}' || sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 
 stage_fit() {
     [ -f "$FIT_PATH" ] || die "FIT not found locally: $FIT_PATH"
-    GOT=$(mac_md5 "$FIT_PATH")
-    [ "$GOT" = "$FIT_MD5" ] || die "local FIT md5 mismatch: $GOT != $FIT_MD5"
-    note "staging FIT from the Mac ($FIT_FILE, md5 $FIT_MD5)"
+    GOT=$(mac_sha256 "$FIT_PATH")
+    [ "$GOT" = "$FIT_SHA256" ] || die "local FIT sha256 mismatch: $GOT != $FIT_SHA256"
+    note "staging FIT from the Mac ($FIT_FILE, sha256 $FIT_SHA256)"
     scp -O -q "$FIT_PATH" "$SWITCH:$STAGE_DST" || die "scp of FIT failed (dropbear needs -O)"
 }
 
 # ---- switch-side payload: stdin-fed (`ssh sh -s`), so ps/pgrep never
 # ---- self-match the caller's command line. The FIT_* constants below must
-# ---- stay in sync with the Mac-side block above (both are md5-gated on
+# ---- stay in sync with the Mac-side block above (both are sha256-gated on
 # ---- every run, so drift fails loudly).
 payload() {
 cat <<'__REMOTE__'
-FIT_MD5=2242e9b7b31eec6251d8c168474a919d
+FIT_SHA256=38ca385660e46aa084017b80e620ab07fb30716a07bcaab8f3d5435bc88bf848
 FIT_ALIAS=vmlinux.gz.uImage.3912
 FIT_ITB=openwrt-24.10.2-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb
 SHARED_DIR=/tmp/bench-tftp
@@ -89,7 +92,7 @@ armed=""; disarmed=""
 ok()  { armed="$armed $1";         echo "ARMED    $1: $2"; }
 bad() { disarmed="$disarmed $1";   echo "DISARMED $1: $2"; }
 
-md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
+sha256of() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 cmdline_has() { tr '\0' ' ' </proc/$1/cmdline 2>/dev/null | grep -q "$2"; }
 
 # ---- 1. fw4 input accepts (unzoned DUT VLANs drop UDP/TCP otherwise) ----
@@ -121,10 +124,10 @@ done
 # ---- 3. TFTP bait: one validated FIT inode, hardlinked under all names ----
 fit_src=""
 for CAND in "$SHARED_DIR/$FIT_ALIAS" "$L1003_DIR/$FIT_ALIAS" "$L1003_DIR/$FIT_ITB" "$STAGE"; do
-    [ -f "$CAND" ] && [ "$(md5of "$CAND")" = "$FIT_MD5" ] && { fit_src="$CAND"; break; }
+    [ -f "$CAND" ] && [ "$(sha256of "$CAND")" = "$FIT_SHA256" ] && { fit_src="$CAND"; break; }
 done
 if [ -z "$fit_src" ]; then
-    echo "NEED-STAGE: no file with md5 $FIT_MD5 on the switch — Mac must scp the FIT"
+    echo "NEED-STAGE: no file with sha256 $FIT_SHA256 on the switch — Mac must scp the FIT"
     exit 2
 fi
 quarantine_unknowns() { # quarantine_unknowns <dir> <known-name>...
@@ -134,26 +137,26 @@ quarantine_unknowns() { # quarantine_unknowns <dir> <known-name>...
         b=$(basename "$f"); keep=0
         for k in "$@"; do [ "$b" = "$k" ] && keep=1; done
         [ "$keep" = 1 ] && continue
-        m=$(md5of "$f")
+        m=$(sha256of "$f")
         mkdir -p "$d/quarantine"
         if mv "$f" "$d/quarantine/$b.$(date +%H%M%S)" 2>/dev/null; then
-            echo "NOTE     quarantine: $d/$b (md5 $m) — boot_net serves whatever sits in a root"
+            echo "NOTE     quarantine: $d/$b (sha256 $m) — boot_net serves whatever sits in a root"
         fi
     done
 }
-ensure_bait() { # ensure_bait <dir> <name> — hardlink fit_src, md5-gated
+ensure_bait() { # ensure_bait <dir> <name> — hardlink fit_src, sha256-gated
     p="$1/$2"
-    [ -f "$p" ] && [ "$(md5of "$p")" = "$FIT_MD5" ] && return 0
+    [ -f "$p" ] && [ "$(sha256of "$p")" = "$FIT_SHA256" ] && return 0
     rm -f "$p"
     ln "$fit_src" "$p" 2>/dev/null
-    [ "$(md5of "$p")" = "$FIT_MD5" ]
+    [ "$(sha256of "$p")" = "$FIT_SHA256" ]
 }
 mkdir -p "$SHARED_DIR" "$L1003_DIR"
 quarantine_unknowns "$SHARED_DIR" "$FIT_ALIAS"
 quarantine_unknowns "$L1003_DIR" "$FIT_ALIAS" "$FIT_ITB"
 if ensure_bait "$SHARED_DIR" "$FIT_ALIAS" && \
    ensure_bait "$L1003_DIR" "$FIT_ALIAS" && ensure_bait "$L1003_DIR" "$FIT_ITB"; then
-    ok "fit" "md5 $FIT_MD5 under $FIT_ALIAS + $FIT_ITB (hardlinked, both roots)"
+    ok "fit" "sha256 $FIT_SHA256 under $FIT_ALIAS + $FIT_ITB (hardlinked, both roots)"
     rm -f "$STAGE"
 else
     bad "fit" "could not stage bait from $fit_src"

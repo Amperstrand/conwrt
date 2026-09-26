@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--mask", default="255.255.255.0")
     parser.add_argument("--gateway", default="")
     args = parser.parse_args()
-    if not args.new_password and not args.dry_run:
+    if not args.new_password:
         parser.error("--new-password is required (kept out of defaults so secrets stay local)")
 
     effective_password = args.password
