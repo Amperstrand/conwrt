@@ -352,3 +352,23 @@ ip addr add 192.168.X.1/24 dev eth0
 Use `scripts/serial-configure.py` for structured configuration. See `prompts/serial-05-configure.md` for the full workflow.
 
 **Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.
+
+## Review Feedback Must Be Dispositioned, Never Dropped
+
+A PR is not done when it merges — it is done when every reviewer finding on it
+(Codex, Copilot, or human) has a disposition: fixed in code, replied-to with
+evidence, or tracked in an issue. Merging with unreplied findings creates
+silent review debt (PR #36 shipped three unaddressed Codex P1/P2 findings this
+way; PRs #67/#81/#36 were later audited to clean it up).
+
+- Before merging, answer every inline review thread; react 👍 to findings you
+  are addressing so reviewers can see acknowledgment.
+- Findings that cannot be fixed in code (hardware-gated, needs research) get a
+  tracking issue with the thread permalink, current file:line, severity, and
+  next action — a deferral with no destination is a blocker, not a pass.
+- Body-only review findings (no inline thread) count too — parse review bodies
+  for P0/P1/P2 markers.
+- Unaddressed feedback on already-merged PRs is audited with the
+  `pr-review-audit` skill (runbook + fleet scan + kanban in the private repo
+  `Amperstrand/pr-review-audit`). Never re-litigate from memory: re-locate
+  each finding at current HEAD before classifying it.
