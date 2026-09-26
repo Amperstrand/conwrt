@@ -99,7 +99,7 @@ def static_route_sh(
         f"uci -q delete network.{route_name}\n"
         f"uci set network.{route_name}=route\n"
         f"uci set network.{route_name}.interface='{upstream_iface}'\n"
-        f"uci set network.{route_name}.target='${{{server_var}}}'\n"
+        f"uci set network.{route_name}.target=\"${{{server_var}}}\"\n"
         f"uci set network.{route_name}.netmask='255.255.255.255'\n"
         f"uci set network.{route_name}.gateway='{gateway}'\n"
     )

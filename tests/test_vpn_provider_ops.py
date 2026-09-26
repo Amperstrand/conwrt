@@ -277,6 +277,33 @@ class TestOpenvpnOps:
         assert "/etc/init.d/openvpn restart" in r
 
 
+# -- Static route (shared) -----------------------------------------------------
+
+class TestStaticRouteExpansion:
+    """Route target is a runtime shell variable — single quotes stored the
+    literal '${SERVER_IP}' text (Codex #81 4107888562; AGENTS.md double-quote
+    rule for shell variables in uci commands)."""
+
+    def test_route_target_expands_the_server_variable(self):
+        from use_cases.vpn_providers.base import static_route_sh
+
+        frag = static_route_sh("SERVER_IP", "192.168.1.1")
+        assert 'target="$SERVER_IP"' in frag
+        assert "target='${SERVER_IP}'" not in frag
+
+    def test_pia_render_uses_double_quoted_target(self):
+        r = render_shell(_build_pia_ops(PIA_PARAMS))
+        assert 'target="$SERVER_IP"' in r
+
+    def test_literal_values_keep_single_quotes(self):
+        from use_cases.vpn_providers.base import static_route_sh
+
+        frag = static_route_sh("SERVER_IP", "192.168.1.1")
+        assert "interface='wwan'" in frag
+        assert "gateway='192.168.1.1'" in frag
+        assert "netmask='255.255.255.255'" in frag
+
+
 # -- Registry ------------------------------------------------------------------
 
 class TestVpnProviderRegistry:
