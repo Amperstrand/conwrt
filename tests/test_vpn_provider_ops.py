@@ -276,6 +276,67 @@ class TestOpenvpnOps:
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
         assert "/etc/init.d/openvpn restart" in r
 
+    def test_firewall_zone_attaches_to_logical_interface(self):
+        # Codex #81 4107888569: zone.network references a UCI network section
+        # (vpn_if), not the raw tun0 device.
+        from profile.ops import UciSet
+
+        zone_sets = [o for o in _build_openvpn_ops(OVPN_PARAMS)
+                     if isinstance(o, UciSet) and o.section == "vpn_zone"]
+        assert zone_sets, "openvpn ops must configure firewall.vpn_zone"
+        assert zone_sets[0].values["network"] == "vpn_if"
+
+
+# -- Static route (shared) -----------------------------------------------------
+
+class TestStaticRouteExpansion:
+    """Route target is a runtime shell variable — single quotes stored the
+    literal '${SERVER_IP}' text (Codex #81 4107888562; AGENTS.md double-quote
+    rule for shell variables in uci commands)."""
+
+    def test_route_target_expands_the_server_variable(self):
+        from use_cases.vpn_providers.base import static_route_sh
+
+        frag = static_route_sh("SERVER_IP", "192.168.1.1")
+        assert 'target="${SERVER_IP}"' in frag
+        assert "target='${SERVER_IP}'" not in frag
+
+    def test_pia_render_uses_double_quoted_target(self):
+        r = render_shell(_build_pia_ops(PIA_PARAMS))
+        assert 'target="${SERVER_IP}"' in r
+
+    def test_literal_values_keep_single_quotes(self):
+        from use_cases.vpn_providers.base import static_route_sh
+
+        frag = static_route_sh("SERVER_IP", "192.168.1.1")
+        assert "interface='wwan'" in frag
+        assert "gateway='192.168.1.1'" in frag
+        assert "netmask='255.255.255.255'" in frag
+
+
+# -- Shared verify/finalization ops --------------------------------------------
+
+class TestDnsCommitAndReload:
+    """Codex #81 4107888589: build_dns_ops mutates dhcp.@dnsmasq[0], so the
+    shared finalization must commit dhcp and restart dnsmasq — otherwise the
+    provider DNS + noresolv never reach the running resolver and vanish on
+    reboot."""
+
+    def test_verify_ops_commit_dhcp_and_restart_dnsmasq(self):
+        from profile.ops import ServiceAction, UciCommit
+        from use_cases.vpn_providers.base import build_verify_ops
+
+        ops = build_verify_ops()
+        assert UciCommit(config="dhcp") in ops
+        assert ServiceAction(name="dnsmasq", action="restart") in ops
+
+    def test_pia_render_commits_dhcp_and_reloads_dnsmasq(self):
+        r = render_shell(_build_pia_ops(PIA_PARAMS))
+        assert "uci commit dhcp" in r
+        assert r.index("uci commit dhcp") > r.index("uci commit firewall")
+        assert "/etc/init.d/dnsmasq restart" in r
+        assert r.index("/etc/init.d/dnsmasq restart") > r.index("/etc/init.d/network restart")
+
 
 # -- Registry ------------------------------------------------------------------
 

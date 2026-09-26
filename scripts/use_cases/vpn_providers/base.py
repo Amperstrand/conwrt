@@ -62,6 +62,26 @@ def wg_cleanup_sh(iface: str = "wg0") -> str:
     )
 
 
+def transport_sh(body: str, script_path: str = "/tmp/vpn_setup.sh") -> str:
+    """Transport a multiline provider script intact through the SSH executor.
+
+    ``scripts/profile/apply.py::_run_step_script`` joins control-flow scripts
+    line-by-line with `` && ``, which turns multiline ``if``/``while`` blocks
+    and function definitions into ash syntax errors (``then && apk ...``) —
+    breaking SSH configuration mode for every WireGuard provider. Wrapping the
+    body in a single-quoted heredoc routes the step through the executor's
+    stdin transport instead (``set -e`` + newline-preserved payload), and the
+    body then runs verbatim via ``sh``. The quoted delimiter keeps shell
+    variables literal at write time so they expand when the inner script runs.
+    """
+    return (
+        f"cat > {script_path} << 'VPN_SETUP_EOF'\n"
+        f"{body.strip()}\n"
+        f"VPN_SETUP_EOF\n"
+        f"sh {script_path}"
+    )
+
+
 def static_route_sh(
     server_var: str,
     gateway: str,
@@ -79,7 +99,7 @@ def static_route_sh(
         f"uci -q delete network.{route_name}\n"
         f"uci set network.{route_name}=route\n"
         f"uci set network.{route_name}.interface='{upstream_iface}'\n"
-        f"uci set network.{route_name}.target='${{{server_var}}}'\n"
+        f"uci set network.{route_name}.target=\"${{{server_var}}}\"\n"
         f"uci set network.{route_name}.netmask='255.255.255.255'\n"
         f"uci set network.{route_name}.gateway='{gateway}'\n"
     )
@@ -154,7 +174,9 @@ def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
     ops: list[Op] = [
         UciCommit(config="network"),
         UciCommit(config="firewall"),
+        UciCommit(config="dhcp"),
         ServiceAction(name="network", action="restart"),
+        ServiceAction(name="dnsmasq", action="restart"),
     ]
     if kill_switch:
         ops.append(ShellCommand(

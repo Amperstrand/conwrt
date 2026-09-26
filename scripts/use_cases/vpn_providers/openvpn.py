@@ -79,8 +79,9 @@ OVPNEOF
         UciCommit(config="network"),
     ])
 
-    # Firewall uses the OpenVPN interface (tun0 by default)
-    ops.extend(build_firewall_ops(iface="tun0", kill_switch=kill_switch))
+    # Firewall zone attaches to the logical UCI interface (network.vpn_if),
+    # not the raw tun0 device — zone.network references network sections
+    ops.extend(build_firewall_ops(iface="vpn_if", kill_switch=kill_switch))
 
     ops.extend([
         UciCommit(config="firewall"),

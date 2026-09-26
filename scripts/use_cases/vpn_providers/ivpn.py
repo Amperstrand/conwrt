@@ -17,6 +17,7 @@ from .base import (
     build_verify_ops,
     keypair_sh,
     static_route_sh,
+    transport_sh,
     wg_cleanup_sh,
 )
 
@@ -77,7 +78,7 @@ uci set network.@wireguard_wg0[0].persistent_keepalive='25'
 
     ops: list[Op] = [
         Comment(text="--- IVPN WireGuard VPN ---"),
-        ShellCommand(command=ivpn_script),
+        ShellCommand(command=transport_sh(ivpn_script)),
     ]
     ops.extend(build_firewall_ops(kill_switch=kill_switch))
     ops.extend(build_dns_ops(["10.0.0.53"]))
