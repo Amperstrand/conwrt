@@ -26,6 +26,31 @@ Instead:
 3. If there's a mismatch, STOP and report it to the operator
 4. Never assume the operator's claim is correct if the device says otherwise
 
+## Verify the SPECIMEN, Not Just the Model (MAC/Serial Gate)
+
+Model identity (`board_name`, board.json) is not enough on a bench with
+several identical units. "Flash the AP3915i" is ambiguous when there are
+four of them. Before ANY flash command, confirm you are talking to the
+exact unit you intend to flash:
+
+1. **Read the unit's identity live**: MAC (`cat /sys/class/net/eth0/address`
+   or `ip link`), plus serial where available (label, `AT+GSN` for modems,
+   stock web UI)
+2. **Match it against your specimen record** (your private inventory
+   project — see below): full MAC or serial, never "the one on the bench"
+3. **If the MAC/serial is unknown, ambiguous, or does not match the record:
+   STOP.** Resolve the identity before flashing anything.
+4. **Multicast/bootloader methods hit every listening unit, not a chosen
+   one.** Zycast flashes EVERY device in the L2 domain whose bootloader is
+   in the listen window. Power-cycle only the intended unit into the window,
+   or physically isolate the other candidates, so a multicast cannot reflash
+   a unit you did not mean to touch.
+
+**Why this matters**: one wrong-unit flash on a shared bench destroys
+another lane's work (and with bootloader methods, possibly several units at
+once). The MAC/serial check takes seconds; recovering a mis-flashed unit
+takes hours.
+
 ## Trust Hardware Checks Over Firmware State
 
 - `board.json` = what firmware was flashed (can be wrong)
@@ -64,7 +89,7 @@ Any shell script that modifies device state (uci set, network config, IP changes
 
 **Mandatory post-first-access checklist:**
 
-1. **Record inventory** — Append to `data/inventory.jsonl` via `python3 scripts/inventory.py --add` with MAC address, model, serial, firmware version, and current LAN IP
+1. **Record inventory** — Append to `data/inventory.jsonl` via `python3 scripts/inventory.py --add` with MAC address, model, serial, firmware version, and current LAN IP. This file is a **local, gitignored working cache only** — the authoritative specimen inventory lives in your own private project (see next section)
 2. **Install SSH key** — `ssh-copy-id` or manually append your public key to `/etc/dropbear/authorized_keys`. This survives factory resets on some firmwares and survives normal reboots on all firmwares
 3. **Check for random-IP behavior** — Look for `/etc/config/95-random-lan-ip.done` or similar markers. If the firmware randomizes LAN IP after factory reset, document this in the model JSON and recipe notes
 4. **Record current LAN IP and recovery procedure** — Note the current IP, how to find the device if IP changes (WiFi SSID, MAC OUI scan, ARP sweep), and how to recover access
@@ -75,6 +100,27 @@ Any shell script that modifies device state (uci set, network config, IP changes
 - Model JSON = you know what species of device it is, but not where THIS specific unit is
 
 **The discovery prompts (steps 01-04) are read-only by design.** Inventory and SSH key installation happen AFTER discovery, when you have access and are preparing for flashing. This is the gap between "I found and identified a device" and "I can flash and manage this device."
+
+## Specimen Inventory and Network Details Belong in a Private Project, Not conwrt
+
+conwrt is **species-level by design**: `models/*.json`, recipes, and docs
+describe what a KIND of device is and how to flash that kind. Anything about
+YOUR network is operator-private and belongs in your own separate private
+project (each conwrt user maintains one; it must never be a public or shared
+repo):
+
+- **Belongs in your private project**: unit-level inventory (full MAC,
+  serial, current IP), bench/lab topology, port maps, IP plans, credentials,
+  SSH key lists, recovery procedures tied to a specific unit.
+- **Belongs in conwrt**: model definitions, flash methods, OUI *prefix
+  ranges* (species-level), validated procedures that apply to any unit of a
+  model.
+- Never put full unit MACs, serials, bench IPs, or network diagrams into
+  conwrt recipes, docs, model JSONs, commits, or issues. When a recipe
+  example would reveal your network, use placeholders (`<unit MAC>`,
+  `<bench subnet>`).
+- `data/inventory.jsonl` stays local and gitignored — treat it as a cache of
+  your private project's data, never as the system of record.
 
 ## Related Projects
 

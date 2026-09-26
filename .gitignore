@@ -40,3 +40,7 @@ tests/integration/.tollgate/
 tests/integration/.openwrt.img
 tests/integration/.openwrt-flash-session.qcow2
 tests/integration/.venv-cashu/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
