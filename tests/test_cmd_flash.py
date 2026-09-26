@@ -132,6 +132,9 @@ class CmdFlashTestCase(TestCase):
             "load_model": patch("conwrt.flash_dispatcher.load_model", return_value={}),
             "_detect_boot_state": patch(
                 "conwrt.flash_dispatcher._detect_boot_state", return_value="openwrt"),
+            "_verify_device_identity": patch(
+                "conwrt.flash_dispatcher._verify_device_identity",
+                return_value=(True, "device identity 'board' matches model test-model")),
             "_request_custom_image": patch(
                 "conwrt.flash_dispatcher._request_custom_image", return_value=("", {})),
             "run_preflight_checks": patch(
@@ -413,6 +416,27 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
         self.assertEqual(ctx.profile.recovery_ip, "10.0.0.9")
+
+    def test_ip_override_identity_mismatch_aborts_before_flash(self):
+        self.mocks["_verify_device_identity"].return_value = (
+            False, "device at 10.0.0.9 reports board 'other,device' which does not "
+            "match selected model 'test-model' — refusing to flash")
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 1)
+        self.mocks["_verify_device_identity"].assert_called_once_with(
+            "10.0.0.9", "test-model", "/tmp/key")
+        self.mocks["_run_state_machine"].assert_not_called()
+
+    def test_ip_override_identity_match_proceeds(self):
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_called_once()
+        self.mocks["_run_state_machine"].assert_called_once()
+
+    def test_identity_check_skipped_without_ip_override(self):
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
 
     def test_state_machine_keyboard_interrupt_returns_1(self):
         self.mocks["_run_state_machine"].side_effect = KeyboardInterrupt

@@ -57,6 +57,7 @@ from conwrt.extreme import (
 from conwrt.flash_utils import (
     _flash_via_sysupgrade, _flash_via_mtd_write,
     _wait_for_sysupgrade_reboot, _find_model_id_by_board, _detect_ssh_key_path,
+    _verify_device_identity,
 )
 
 from conwrt.handlers_uboot import (
@@ -717,6 +718,22 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         log("No running router detected at this IP (expected — device needs recovery)")
         print()
+
+    # AGENTS.md "Always Identify Before Flashing": with an --ip override we are
+    # about to sysupgrade whatever device answers there — verify its board
+    # identity (board.json + /tmp/sysinfo/board_name) matches the selected
+    # model first, and abort on any mismatch or unreadable identity.
+    if use_sysupgrade and getattr(args, "ip", None):
+        ok, detail = _verify_device_identity(openwrt_ip, args.model_id,
+                                             ssh_key_path or None)
+        if not ok:
+            print(f"ERROR: device identity check failed at {openwrt_ip}: {detail}",
+                  file=sys.stderr)
+            print("Refusing to flash — --model-id does not match the device at "
+                  "the overridden --ip address (AGENTS.md: Always Identify "
+                  "Before Flashing).", file=sys.stderr)
+            return 1
+        log(f"  ✓ identity: {detail}")
 
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
