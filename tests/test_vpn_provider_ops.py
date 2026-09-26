@@ -314,6 +314,30 @@ class TestStaticRouteExpansion:
         assert "netmask='255.255.255.255'" in frag
 
 
+# -- Shared verify/finalization ops --------------------------------------------
+
+class TestDnsCommitAndReload:
+    """Codex #81 4107888589: build_dns_ops mutates dhcp.@dnsmasq[0], so the
+    shared finalization must commit dhcp and restart dnsmasq — otherwise the
+    provider DNS + noresolv never reach the running resolver and vanish on
+    reboot."""
+
+    def test_verify_ops_commit_dhcp_and_restart_dnsmasq(self):
+        from profile.ops import ServiceAction, UciCommit
+        from use_cases.vpn_providers.base import build_verify_ops
+
+        ops = build_verify_ops()
+        assert UciCommit(config="dhcp") in ops
+        assert ServiceAction(name="dnsmasq", action="restart") in ops
+
+    def test_pia_render_commits_dhcp_and_reloads_dnsmasq(self):
+        r = render_shell(_build_pia_ops(PIA_PARAMS))
+        assert "uci commit dhcp" in r
+        assert r.index("uci commit dhcp") > r.index("uci commit firewall")
+        assert "/etc/init.d/dnsmasq restart" in r
+        assert r.index("/etc/init.d/dnsmasq restart") > r.index("/etc/init.d/network restart")
+
+
 # -- Registry ------------------------------------------------------------------
 
 class TestVpnProviderRegistry:

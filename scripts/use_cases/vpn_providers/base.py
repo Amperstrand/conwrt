@@ -174,7 +174,9 @@ def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
     ops: list[Op] = [
         UciCommit(config="network"),
         UciCommit(config="firewall"),
+        UciCommit(config="dhcp"),
         ServiceAction(name="network", action="restart"),
+        ServiceAction(name="dnsmasq", action="restart"),
     ]
     if kill_switch:
         ops.append(ShellCommand(
