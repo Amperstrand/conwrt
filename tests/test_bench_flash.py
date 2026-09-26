@@ -112,7 +112,7 @@ class TestFlashHappyPath:
         _no_time(monkeypatch, [0, 20, 40])
         fake = FakeSession()
         spy = _Spy([
-            f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}",   # flash-target
+            f"FLASH-TARGET-OK\n{PLACE.board}",   # flash-target
             "LIFELINE-OK",                               # flash-lifeline
             digest,                                      # flash-push readback
             "",                                          # flash-go
@@ -141,7 +141,7 @@ class TestFlashRecoveryPolicy:
     def test_broken_lifeline_never_flashes(self, tmp_path: Path) -> None:
         entry, img = _image_entry(tmp_path)
         fake = FakeSession()
-        spy = _Spy(["FLASH-TARGET-OK\n" + bf.EXPECTED_PROFILE, "LIFELINE-BROKEN"])
+        spy = _Spy([f"FLASH-TARGET-OK\n{PLACE.board}", "LIFELINE-BROKEN"])
         r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
         with pytest.raises(ba.AdoptError, match="lifeline"):
             bf.stage_flash(r, entry, img, "/tmp/t", fake)
@@ -157,7 +157,7 @@ class TestFlashRecoveryPolicy:
         digest = entry["sha256"]
         fake = FakeSession()
         _no_time(monkeypatch, [0, 200, 220, 240, 260, 280, 300, 320, 340])
-        preamble = [f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}", "LIFELINE-OK", digest, ""]
+        preamble = [f"FLASH-TARGET-OK\n{PLACE.board}", "LIFELINE-OK", digest, ""]
 
         def sequenced() -> str:
             if preamble:
@@ -198,3 +198,47 @@ class TestMethodPlumbing:
                       "--images", str(tmp_path / "nope.json"),
                       "--method", "flash", "--image", "any", "--i-know"])
         assert rc == 2
+
+
+class TestBoardGate:
+    def test_board_name_comma_form_is_the_gate(self, tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+        """/tmp/sysinfo/board_name prints the DT compatible string (commas),
+        not the ImageBuilder profile (underscores) — the gate must match the
+        wire form a real AP3915i emits."""
+        entry, img = _image_entry(tmp_path)
+        fake = FakeSession()
+        spy = _Spy([f"FLASH-TARGET-OK\n{PLACE.board}", "LIFELINE-BROKEN"])
+        r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
+        with pytest.raises(ba.AdoptError, match="lifeline"):  # passes board gate, stops later
+            bf.stage_flash(r, entry, img, "/tmp/t", fake)
+
+    def test_underscore_profile_form_alone_fails_the_gate(self, tmp_path: Path) -> None:
+        entry, img = _image_entry(tmp_path)
+        fake = FakeSession()
+        spy = _Spy([f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}"])
+        r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
+        with pytest.raises(ba.AdoptError, match="not reachable/verified"):
+            bf.stage_flash(r, entry, img, "/tmp/t", fake)
+
+
+class TestFirmwareStdin:
+    def test_image_push_keeps_firmware_as_dbclient_stdin(self, tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+        """The push line must carry exactly ONE stdin redirect — the firmware
+        file. A trailing </dev/null (stdin-eats-script guard) overrides it
+        left-to-right and streams an empty image."""
+        entry, img = _image_entry(tmp_path)
+        digest = entry["sha256"]
+        fake = FakeSession()
+        spy = _Spy([f"FLASH-TARGET-OK\n{PLACE.board}", "LIFELINE-OK", digest, "",
+                    f"No such file\\n{digest[:8]}\\nVERSION-MATCH"])
+        _no_time(monkeypatch, [0, 20, 40])
+        r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
+        bf.stage_flash(r, entry, img, "/tmp/t", fake)
+        push = spy.scripts[2]
+        push_lines = [l for l in push.splitlines() if "cat > " in l]
+        assert push_lines, "push script must contain the cat transfer line"
+        line = push_lines[0]
+        assert f"< /tmp/t/{img.name}" in line and "dev/null" not in line, \
+            "the firmware redirect must be the final stdin redirect"

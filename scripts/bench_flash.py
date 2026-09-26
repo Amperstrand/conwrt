@@ -98,7 +98,10 @@ def stage_flash(r: Runner, entry: dict[str, str], image_path: Path, tftproot: st
     target = r.sh("flash-target", [
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
         "'echo FLASH-TARGET-OK; cat /tmp/sysinfo/board_name' </dev/null || echo TARGET-FAIL"])
-    for required in ("FLASH-TARGET-OK", EXPECTED_PROFILE.split(",")[-1]):
+    # /tmp/sysinfo/board_name reports the device tree compatible string with
+    # COMMAS (e.g. extreme-networks,ws-ap3915i); the image registry profile
+    # uses the underscore ImageBuilder form. Gate on the board form.
+    for required in ("FLASH-TARGET-OK", p.board):
         if required not in target:
             raise AdoptError(f"flash target not reachable/verified at {p.dut_ip}:\n{target[:300]}")
 
@@ -111,8 +114,11 @@ def stage_flash(r: Runner, entry: dict[str, str], image_path: Path, tftproot: st
 
     out = r.sh("flash-push", [
         f"sha256sum {tftproot}/{image_path.name} | grep -q {digest} || echo SWITCH-SHA-FAIL",
+        # Redirections apply left-to-right: the firmware file MUST be the
+        # last stdin redirect or dbclient sends an empty stream and the
+        # readback gate aborts every flash.
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
-        f"'cat > {remote_img}' < {tftproot}/{image_path.name} </dev/null",
+        f"'cat > {remote_img}' < {tftproot}/{image_path.name}",
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
         f"'sha256sum {remote_img}' </dev/null"])
     if digest not in out or "SWITCH-SHA-FAIL" in out:
