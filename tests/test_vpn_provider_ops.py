@@ -288,12 +288,12 @@ class TestStaticRouteExpansion:
         from use_cases.vpn_providers.base import static_route_sh
 
         frag = static_route_sh("SERVER_IP", "192.168.1.1")
-        assert 'target="$SERVER_IP"' in frag
+        assert 'target="${SERVER_IP}"' in frag
         assert "target='${SERVER_IP}'" not in frag
 
     def test_pia_render_uses_double_quoted_target(self):
         r = render_shell(_build_pia_ops(PIA_PARAMS))
-        assert 'target="$SERVER_IP"' in r
+        assert 'target="${SERVER_IP}"' in r
 
     def test_literal_values_keep_single_quotes(self):
         from use_cases.vpn_providers.base import static_route_sh
