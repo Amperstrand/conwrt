@@ -170,15 +170,19 @@ def track_hardware(max_cycles: int, dut_ip: str, mac: str, vlan: int) -> None:
     for cycle in range(1, max_cycles + 1):
         row = {"track": "hardware", "cycle": cycle}
 
-        # Step 1: firstboot via SSH — connection drop = reboot started (expected)
-        rc, out = dut_ssh(dut_ip, "firstboot -y; echo FB-RC=$?")
+        # Step 1: firstboot + reboot in ONE command — after firstboot wipes
+        # the overlay no key-auth session exists to issue the reboot, and
+        # firstboot alone does not reboot: without it the next cycle just
+        # re-firstboots a running system (dirty-overlay auth-dead risk).
+        fb_cmd = "firstboot -y; rc=$?; echo FB-RC=$rc; sleep 2; [ $rc -eq 0 ] && reboot"
+        rc, out = dut_ssh(dut_ip, fb_cmd)
         fb_issued = ("FB-RC=0" in out or
                      "losed" in out.lower() or
                      "closed" in out.lower())
 
         if not fb_issued:
             # Try via v6 link-local (unit might already be at factory state)
-            rc, out = dut_v6_shell(mac, vlan, "firstboot -y; echo FB-RC=$?")
+            rc, out = dut_v6_shell(mac, vlan, fb_cmd)
             fb_issued = ("FB-RC=0" in out or
                          "losed" in out.lower() or
                          "closed" in out.lower())
@@ -186,17 +190,24 @@ def track_hardware(max_cycles: int, dut_ip: str, mac: str, vlan: int) -> None:
         if not fb_issued:
             # Unit completely unresponsive — real failure
             row.update({"outcome": "firstboot-unreachable",
-                       "detail": out[-100:]})
+                        "detail": out[-100:]})
             log(row)
             failures += 1
             time.sleep(15)
             continue
 
-        # Step 2: wait for jffs2 overlay reformat (60-75 seconds)
-        time.sleep(90)  # jffs2 overlay format: 60-90s on ipq40xx
+        # Step 2: wait for the reboot + jffs2 overlay reformat to COMPLETE
+        # and the unit to answer again (up to 240s) — classification on a
+        # still-rebooting unit fakes outcomes.
+        deadline = time.monotonic() + 240
+        classification = {"outcome": "network-dead"}
+        while time.monotonic() < deadline:
+            time.sleep(15)
+            classification = classify_hardware(dut_ip, mac, vlan)
+            if classification.get("outcome") != "network-dead":
+                break
 
-        # Step 3: classify
-        classification = classify_hardware(dut_ip, mac, vlan)
+        # Step 3: classify the RETURNED unit
         row.update(classification)
 
         if classification["outcome"] == "factory":
@@ -216,9 +227,10 @@ def track_hardware(max_cycles: int, dut_ip: str, mac: str, vlan: int) -> None:
                 row["outcome"] = "ADOPT-ERROR"
                 failures += 1
         elif classification["outcome"] == "managed":
-            # Unit didn't reset (adoption survived) — unexpected but not a failure
-            row["outcome"] = "PASS (no-reset-needed)"
-            passes += 1
+            # Key auth SURVIVED a firstboot+reboot: the overlay was not
+            # wiped — count it, do not bless it as a pass.
+            row["outcome"] = "UNEXPECTED (managed after firstboot — overlay NOT wiped?)"
+            failures += 1
         elif classification["outcome"] in ("auth-dead", "no-dropbear"):
             # THE ROULETTE — log prominently and STOP
             row["outcome"] = f"*** AUTH-DEAD at cycle {cycle} ***"
