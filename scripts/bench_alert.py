@@ -201,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
     alerts_path = events_path.parent / "alerts.jsonl"
     cooldowns: dict[tuple[str, str], float] = {}
     history: list[dict] = []
-    last_switch_snap: dict | None = None
+    # Previous snap PER DEVICE: a single-slot baseline gets overwritten by
+    # every generic OpenWrt DUT snapshot, so poe_rss_growth() then rejects
+    # the next switch comparison (device names differ) and the realtek-poe
+    # leak alert goes silent on multi-device watches.
+    last_snaps: dict[str, dict] = {}
 
     if args.test:
         payload = {"ts": "test", "device": "bench-alert", "rule": "synthetic",
@@ -211,13 +215,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if results["file"] else 1
 
     def _handle(event: dict) -> None:
-        nonlocal last_switch_snap
         event.setdefault("ts_epoch", time.time())
         history.append(event)
-        growth = poe_rss_growth(last_switch_snap if last_switch_snap and
-                                str(last_switch_snap.get("event")) == "snap" else None,
-                                event) if str(event.get("event")) == "snap" else None
-        last_switch_snap = event if str(event.get("event")) == "snap" else last_switch_snap
+        device = str(event.get("device", ""))
+        growth = None
+        if str(event.get("event")) == "snap":
+            growth = poe_rss_growth(last_snaps.get(device), event)
+            last_snaps[device] = event
         fired = process_event(event, history, cooldowns, alerts_path, cfg)
         if growth:
             growth["ts"] = event.get("ts", "")

@@ -222,21 +222,32 @@ def test_liveness_script_skips_absent_or_malformed_candidates() -> None:
     assert "P6" not in bi.liveness_script("192.168.1.1", "zz:zz", 1006)
 
 
+CONTROLS_OK = "C4:0\nCT:0\nC6:0\n"
+
+
 def test_parse_liveness_full_batch_yields_liveness_partial_yields_none() -> None:
-    expected = ("P4", "T22", "T80", "P6")
-    full = bi.parse_liveness("P4:1\nT22:0\nT80:1\nP6:0\n", expected)
+    expected = ("C4", "CT", "C6", "P4", "T22", "T80", "P6")
+    full = bi.parse_liveness(CONTROLS_OK + "P4:1\nT22:0\nT80:1\nP6:0\n", expected)
     assert full is not None
     assert (full.ping4, full.tcp22, full.tcp80, full.ping6) == (False, True, False, True)
     assert full.ok and full.channels == "tcp:22,ping6"
+    assert full.controls_ok
     # partial batch (P6 line lost): missing expected marker => unprobed, never
     # an all-False "probed-dead" verdict fabricated from the gaps
-    assert bi.parse_liveness("P4:1\nT22:1\nT80:1\n", expected) is None
-    assert bi.parse_liveness("T22:0\n", expected) is None
+    assert bi.parse_liveness(CONTROLS_OK + "P4:1\nT22:1\nT80:1\n", expected) is None
+    assert bi.parse_liveness(CONTROLS_OK + "T22:0\n", expected) is None
+    # a LOST control line is just as partial as a lost probe line
+    assert bi.parse_liveness("C4:0\nCT:0\nP4:1\nT22:0\nT80:1\nP6:0\n", expected) is None
     # garbage output and empty expectation are equally unprobed
     assert bi.parse_liveness("ssh: connect timeout", expected) is None
-    assert bi.parse_liveness("P4:1\nT22:0\nT80:1\nP6:1\n", ()) is None
-    dead = bi.parse_liveness("P4:1\nT22:1\nT80:1\nP6:1\n", expected)
+    assert bi.parse_liveness(CONTROLS_OK + "P4:1\nT22:0\nT80:1\nP6:1\n", ()) is None
+    dead = bi.parse_liveness(CONTROLS_OK + "P4:1\nT22:1\nT80:1\nP6:1\n", expected)
     assert dead is not None and not dead.ok and dead.channels == "none"
+    # FAILED control: the negatives are untrusted — controls_ok=False, and
+    # the verdict must classify unprobed, never dark
+    broken = bi.parse_liveness("C4:1\nCT:0\nC6:1\nP4:1\nT22:1\nT80:1\nP6:1\n",
+                               expected)
+    assert broken is not None and not broken.controls_ok and not broken.ok
 
 
 def test_probe_markers_match_script_emissions() -> None:
@@ -250,7 +261,8 @@ def test_probe_markers_match_script_emissions() -> None:
     for dut_ip, mac in cases:
         script = bi.liveness_script(dut_ip, mac, 1006)
         markers = bi.probe_markers(dut_ip, mac)
-        emitted = {tok for tok in ("P4", "T22", "T80", "P6") if f"echo {tok}:$?" in script}
+        emitted = {tok for tok in ("C4", "CT", "C6", "P4", "T22", "T80", "P6")
+                   if f"echo {tok}:$?" in script}
         assert emitted == set(markers), (dut_ip, mac)
         assert bool(script) == bool(markers)
 
@@ -346,7 +358,7 @@ def _fake_ssh(probe_out: str, neigh_out: str | None = None):
 
 def test_refresh_liveness_probes_only_delivering_registered_ports(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    probe_out = "P4:1\nT22:0\nT80:1\nP6:1\n"
+    probe_out = CONTROLS_OK + "P4:1\nT22:0\nT80:1\nP6:1\n"
     fake_run, calls = _fake_ssh(probe_out)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
     obs = observations()          # lan2-5 delivering+registered, lan6 disabled,
@@ -382,7 +394,7 @@ def test_refresh_liveness_merges_neigh_so_live_unit_classifies_ok(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """The 2026-09-23 lan4 incident, end to end: cache empty, unit answers
     TCP:22, the post-probe neigh read materializes the MAC -> ok, not dark."""
-    probe_out = "P4:1\nT22:0\nT80:1\nP6:1\n"     # ICMP filtered, SSH answers
+    probe_out = CONTROLS_OK + "P4:1\nT22:0\nT80:1\nP6:1\n"     # ICMP filtered, SSH answers
     neigh_out = ("192.168.106.51 dev switch.1006 lladdr 11:22:33:44:55:66  REACHABLE\n")
     fake_run, _ = _fake_ssh(probe_out, neigh_out)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
@@ -407,7 +419,7 @@ def test_refresh_liveness_arp_channel_counts_as_liveness(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """All probes fail but a NEW neighbor entry materialized from the probe
     traffic itself: L2-alive, must not be darked."""
-    probe_out = "P4:1\nT22:1\nT80:1\nP6:1\n"
+    probe_out = CONTROLS_OK + "P4:1\nT22:1\nT80:1\nP6:1\n"
     neigh_out = ("192.168.106.51 dev switch.1006 lladdr de:ad:be:ef:00:01  REACHABLE\n")
     fake_run, _ = _fake_ssh(probe_out, neigh_out)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
@@ -426,7 +438,7 @@ def test_refresh_liveness_arp_channel_counts_as_liveness(
 
 def test_refresh_liveness_dead_unit_keeps_stale_macs_dark(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    probe_out = "P4:1\nT22:1\nT80:1\nP6:1\n"
+    probe_out = CONTROLS_OK + "P4:1\nT22:1\nT80:1\nP6:1\n"
     stale_neigh = ("192.168.106.51 dev switch.1006 lladdr 11:22:33:44:55:66  STALE\n")
     fake_run, _ = _fake_ssh(probe_out, stale_neigh)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
@@ -562,3 +574,23 @@ def test_no_committed_coordinates() -> None:
 def test_main_rejects_missing_host() -> None:
     with pytest.raises(SystemExit):
         bi.main(["scan"])
+
+
+def test_control_script_probes_the_switches_own_svi_through_the_vlan() -> None:
+    s = bi.control_script(1004)
+    assert "ping -c 1 -W 2 -I switch.1004 192.168.104.1" in s
+    assert "nc -w 3 192.168.104.1 22" in s
+    assert "ping6 -c 2 -W 2 -I switch.1004 ff02::1" in s
+
+
+def test_failed_controls_classify_unprobed_not_dark(tmp_path: Path) -> None:
+    """A probe path with broken controls must never verdict a port dark."""
+    obs = observations()
+    obs["lan6"].poe = "Delivering power"
+    obs["lan6"].macs = {"11:22:33:44:55:66"}
+    obs["lan6"].ips = {"11:22:33:44:55:66": ["192.168.106.51"]}
+    obs["lan6"].liveness = bi.Liveness(controls_ok=False)
+    findings = {f.port: f for f in bi.classify(registry_in(str(tmp_path)), obs)}
+    f = findings["lan6"]
+    assert f.status == "unprobed"
+    assert "controls FAILED" in f.detail

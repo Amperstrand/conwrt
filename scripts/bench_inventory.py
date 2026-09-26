@@ -192,6 +192,9 @@ class Liveness:
     An observation with ``liveness is None`` was never probed (port not
     delivering / unregistered / probe transport failed) and is classified
     from cached evidence alone, like the pre-refresh tool did.
+    ``controls_ok=False`` marks a batch whose positive controls failed:
+    every probe negative in it is UNTRUSTWORTHY (missing applet, broken
+    path) and must not be verdicted dark.
     """
 
     ping4: bool = False
@@ -199,6 +202,7 @@ class Liveness:
     tcp80: bool = False
     ping6: bool = False
     arp: bool = False       # neighbor entry materialized during probing
+    controls_ok: bool = True
 
     @property
     def ok(self) -> bool:
@@ -235,7 +239,7 @@ class PortObservation:
 class Finding:
     place: str            # registry place name, or "" for unregistered ports
     port: str
-    status: str           # ok | moved | swapped | multi_mac | alive | dark | empty | unregistered
+    status: str           # ok | moved | swapped | multi_mac | alive | dark | unprobed | empty | unregistered
     expected_mac: str
     seen_mac: str
     detail: str
@@ -296,7 +300,13 @@ def classify(registry: Registry, obs: dict[str, PortObservation]) -> list[Findin
 
         probed_dead = o.poe_delivering and o.liveness is not None and not o.liveness.ok
 
-        if expected and expected in on_port and not probed_dead:
+        if probed_dead and not o.liveness.controls_ok:
+            status, seen = "unprobed", ""
+            detail = ("PoE delivering; liveness probes ran but their positive "
+                      "controls FAILED (ping/ping6/nc against the switch's own "
+                      "SVI) — the probe path is broken, fix it before verdicting "
+                      "this port dark")
+        elif expected and expected in on_port and not probed_dead:
             status, seen = "ok", expected
             extra = on_port - {expected}
             detail = f"poe={o.poe or '?'}"
@@ -406,15 +416,38 @@ def validated_candidates(dut_ip: str, mac: str) -> tuple[str, str]:
     return dut_ip, ll
 
 
+CONTROL_MARKERS = ("C4", "CT", "C6")
+
+
+def control_script(vlan: int) -> str:
+    """Positive controls for the probe classes, run through the SAME VLAN
+    interface against the switch itself (its own SVI answers ping, its
+    dropbear answers :22, and it answers all-nodes multicast) — a probe
+    negative is only evidence if the probe provably works (AGENTS rule).
+
+    The switch's L3 on this VLAN is 192.168.10N.1 (bench-switch pattern),
+    which exists because liveness probes only run on delivering ports
+    whose SVI the collect step already touched."""
+    svi = f"192.168.{vlan - 900}.1"
+    return "; ".join([
+        f"ping -c 1 -W 2 -I switch.{vlan} {svi} >/dev/null 2>&1; echo C4:$?",
+        f"nc -w 3 {svi} 22 </dev/null >/dev/null 2>&1; echo CT:$?",
+        f"ping6 -c 2 -W 2 -I switch.{vlan} ff02::1 >/dev/null 2>&1; echo C6:$?",
+    ])
+
+
 def probe_markers(dut_ip: str, mac: str) -> tuple[str, ...]:
     """Markers the batch for these candidates emits. parse_liveness requires
     every one of them in the output before trusting the verdict."""
     ip, ll = validated_candidates(dut_ip, mac)
-    return (("P4", "T22", "T80") if ip else ()) + (("P6",) if ll else ())
+    if not ip and not ll:
+        return ()
+    return CONTROL_MARKERS + (("P4", "T22", "T80") if ip else ()) + (("P6",) if ll else ())
 
 
 def liveness_script(dut_ip: str, mac: str, vlan: int) -> str:
-    """BusyBox probe batch for one registered candidate.
+    """BusyBox probe batch for one registered candidate: controls first,
+    then the candidate probes.
 
     ping/nc/ping6 only, each with its own bounded timeout (~16s worst case
     per port). ICMP alone is not liveness on this fleet (some units filter
@@ -426,7 +459,7 @@ def liveness_script(dut_ip: str, mac: str, vlan: int) -> str:
     ip, ll = validated_candidates(dut_ip, mac)
     if not ip and not ll:
         return ""
-    parts: list[str] = []
+    parts: list[str] = [control_script(vlan)]
     if ip:
         parts += [
             f"ping -c 1 -W 2 {ip} >/dev/null 2>&1; echo P4:$?",
@@ -444,11 +477,14 @@ def parse_liveness(raw: str, expected: tuple[str, ...]) -> Liveness | None:
     """Probe batch output -> Liveness, or None when the verdict is unusable:
     no markers expected, or any expected marker line missing from the
     output. A partial batch (lost output) must read unprobed — filling the
-    gaps with False would fabricate a probed-dead verdict."""
+    gaps with False would fabricate a probed-dead verdict. A FAILED control
+    returns a controls_ok=False Liveness: the negatives are untrusted and
+    classification must say unprobed, not dark."""
     if not expected:
         return None
     lv = Liveness()
     got: set[str] = set()
+    controls_failed = False
     for line in raw.splitlines():
         name, sep, code = line.partition(":")
         if not sep:
@@ -458,8 +494,14 @@ def parse_liveness(raw: str, expected: tuple[str, ...]) -> Liveness | None:
                 setattr(lv, attr, code.strip() == "0")
                 got.add(marker)
                 break
+        if name in CONTROL_MARKERS:
+            got.add(name)
+            if code.strip() != "0":
+                controls_failed = True
     if set(expected) - got:
         return None
+    if controls_failed:
+        lv.controls_ok = False
     return lv
 
 
