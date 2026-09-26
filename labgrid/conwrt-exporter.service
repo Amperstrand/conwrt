@@ -23,6 +23,11 @@ Description=labgrid exporter for the conwrt bench (conwrt_poe power backend)
 Documentation=file://~/conwrt-labdir/../conwrt/labgrid/README.md
 After=network-online.target
 Wants=network-online.target
+## Restart-storm cap: systemd only honors these directives in [Unit] (in
+## [Service] they are unknown keys and silently ignored — the storm cap
+## then never applies and a hard config error restarts forever).
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -31,10 +36,6 @@ Type=simple
 ExecStart=%h/.local/bin/labgrid-exporter -c COORDINATOR_HOST:20408 %h/conwrt-labdir/exporter.yaml
 Restart=on-failure
 RestartSec=5
-## Ping-timeout deaths are transient by definition: retry aggressively but
-## cap the storm so a hard config error stays visible in systemctl status.
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 [Install]
 WantedBy=default.target

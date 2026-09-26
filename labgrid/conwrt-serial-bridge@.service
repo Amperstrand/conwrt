@@ -29,6 +29,10 @@ Description=conwrt serial bridge (%i) — router UART over SSH to TCP
 Documentation=file://~/../conwrt/recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md
 After=network-online.target
 Wants=network-online.target
+## Restart-storm cap must live in [Unit]: systemd ignores
+## StartLimitIntervalSec/StartLimitBurst in [Service].
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -49,8 +53,6 @@ ExecStart=/usr/bin/python3 %h/conwrt-labgrid/conwrt_serial_bridge.py \
     --listen-port ${CONWRT_SERIAL_PORT}
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 [Install]
 WantedBy=default.target

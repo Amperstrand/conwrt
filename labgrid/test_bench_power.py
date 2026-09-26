@@ -11,9 +11,11 @@ Real coordinator/switch coordinates live in local bench records only
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,8 @@ COORDINATOR = os.environ.get("LG_COORDINATOR", "")
 PLACE = os.environ.get("BENCH_PLACE", "ap-lan4")
 PORT = PLACE.removeprefix("ap-")
 SWITCH = os.environ.get("BENCH_SWITCH_HOST", "")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLACES_JSON = REPO_ROOT / "data" / "bench" / "places.json"
 
 pytestmark = [
     pytest.mark.skipif(
@@ -33,6 +37,22 @@ pytestmark = [
                "(real coords live in local bench records, not in git)",
     ),
 ]
+
+
+def _place_gate(place: str, places_path: Path) -> bool:
+    """Power-cycling is gated on the registry, exactly like the serial smoke
+    test (labgrid/test_bench_serial.py): the place must be recorded with
+    reset_allowed=true AND power_export not disabled — a protected or
+    one-way-trip DUT must never be power-cycled because an exporter stanza
+    happened to exist."""
+    if not places_path.exists():
+        return False
+    registry = json.loads(places_path.read_text(encoding="utf-8"))
+    entry = next((e for e in registry.get("places", [])
+                  if e.get("name") == place), None)
+    return bool(entry
+                and entry.get("reset_allowed") is True
+                and entry.get("power_export", True) is True)
 
 
 def _client(*args: str) -> str:
@@ -55,6 +75,10 @@ def _port_state() -> str:
 
 
 def test_power_cycle_changes_port_state() -> None:
+    if not _place_gate(PLACE, PLACES_JSON):
+        pytest.skip(
+            f"{PLACE} is not reset_allowed=true + power_export=true in "
+            f"{PLACES_JSON} — refusing to power-cycle (registry gate)")
     _client("power", "off")
     assert "Delivering" not in _port_state()
     _client("power", "on")
