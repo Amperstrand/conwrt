@@ -179,3 +179,48 @@ class TestSerialConsoleLocalCharacterization:
     def test_lint_rejects_overlong_lines(self):
         with pytest.raises(SerialLinterError):
             lint_script(["x" * (MAX_LINE + 1)])
+
+
+class TestEchoedCompletionIgnored:
+    def test_run_reports_failure_when_tty_echoes_the_command(self, pty_slave):
+        """Real serial ttys echo input: the typed `cmd && echo __RC0__ ||
+        echo __RC1__` comes back BEFORE execution. Matching that echo
+        reported success while the command was still running (Codex P1) —
+        only a standalone marker line counts."""
+        master, slave = pty_slave
+        console = SerialConsole(slave)
+        try:
+
+            def echoing_peer() -> None:
+                cmd = master_read_until(master, b"echo __RC1__")
+                os.write(master, cmd)            # the tty echo of the typed line
+                time.sleep(0.3)
+                os.write(master, b"__RC1__\r\n")  # the REAL completion: failure
+
+            t = threading.Thread(target=echoing_peer)
+            t.start()
+            rc, out = console.run("false", timeout=5.0)
+            t.join(timeout=3)
+            assert rc == 1, "echoed __RC0__ fragment must not fake success"
+            assert "__RC1__" in out
+        finally:
+            console.close()
+
+    def test_send_script_waits_for_real_completion_not_echo(self, pty_slave):
+        master, slave = pty_slave
+        console = SerialConsole(slave)
+        try:
+
+            def echoing_peer() -> None:
+                cmd = master_read_until(master, b"sh /tmp/conwrt-deploy.sh")
+                os.write(master, cmd)            # echo arrives immediately…
+                time.sleep(0.5)                   # …while the script is still running
+                os.write(master, b"__RC0__\r\n")  # real completion after execution
+
+            t = threading.Thread(target=echoing_peer)
+            t.start()
+            rc, out = console.send_script(["true"], timeout=5.0)
+            t.join(timeout=3)
+            assert rc == 0
+        finally:
+            console.close()

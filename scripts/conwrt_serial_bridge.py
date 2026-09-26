@@ -105,8 +105,17 @@ trap on_terminate TERM INT
 # stream drop (bridge side closed the channel -> cat EOF -> normal exit):
 # reap helpers but do NOT restore the getty (see comment above REMOTE_SH)
 trap '[ "$INTENTIONAL" = 1 ] || { kill $TXPID $RXPID 2>/dev/null; rm -f "$FIFO"; }' EXIT
-# hold the channel open on stdin; when the bridge drops us, stdin EOF -> exit
-cat > "$FIFO"
+# hold the channel open on stdin, forwarding console TX into the FIFO until
+# EOF. A line containing exactly the stop token is the bridge's intentional
+# shutdown signal: restore the getty and exit cleanly. The bridge sends it
+# BEFORE closing stdin so a deliberate stop never leaves /etc/inittab
+# commented and the listener's native console dead.
+while IFS= read -r line; do
+  if [ "$line" = "__CONWRT_SERIAL_BRIDGE_STOP__" ]; then
+    on_terminate
+  fi
+  printf '%s\n' "$line" > "$FIFO"
+done
 """
 
 
@@ -170,14 +179,26 @@ class SSHStream:
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
+            # Tell the REMOTE script this is an intentional shutdown so it
+            # restores the listener's getty (EOF alone is the stream-drop
+            # path, which deliberately does not restore). Give the remote
+            # shell a moment to run on_terminate before tearing down ssh.
             try:
-                self.proc.terminate()
+                assert self.proc.stdin
+                self.proc.stdin.write(b"__CONWRT_SERIAL_BRIDGE_STOP__\n")
+                self.proc.stdin.flush()
                 self.proc.wait(timeout=5)
             except Exception:
+                pass
+            if self.proc.poll() is None:
                 try:
-                    self.proc.kill()
+                    self.proc.terminate()
+                    self.proc.wait(timeout=5)
                 except Exception:
-                    pass
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
         self.proc = None
 
 
@@ -197,6 +218,20 @@ class Bridge:
                 except Exception:
                     pass
             self.client = conn
+
+    def _clear_client(self, conn: socket.socket) -> None:
+        """Clear the shared slot ONLY if it still holds this handler's own
+        socket: after a replacement (_set_client(B) closed A and installed
+        B), handler A reaching its finally block must not close B and race
+        the fresh connection into an instant disconnect."""
+        with self.client_lock:
+            if self.client is conn:
+                self.client = None
+                return
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     def _get_client(self) -> socket.socket | None:
         with self.client_lock:
@@ -251,7 +286,7 @@ class Bridge:
             pass
         finally:
             log("client disconnected")
-            self._set_client(None)
+            self._clear_client(conn)
 
     def supervise(self) -> None:
         """Keep the SSH stream up; reconnect with backoff."""

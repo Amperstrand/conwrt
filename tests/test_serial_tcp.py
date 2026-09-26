@@ -68,17 +68,30 @@ class EchoServer:
 
     @staticmethod
     def _serve(conn: socket.socket, persistent: bool) -> None:
+        def reply(data: bytes) -> bytes:
+            # Model a real OpenWrt serial console: the tty ECHOES the typed
+            # line, then the shell prints the completion marker ALONE on
+            # its own line. (A bare byte-echo used to satisfy the old
+            # substring RC match — pinning exactly the echo bug Codex
+            # flagged; the standalone marker is what real hardware emits.)
+            echoed = data
+            completion = b""
+            for line in data.splitlines(keepends=True):
+                if b"echo " in line and (b"__RC0__" in line or b"__RC1__" in line):
+                    completion += b"__RC0__\r\n"
+            return echoed + completion
+
         try:
             if not persistent:
                 data = conn.recv(4096)
                 if data:
-                    conn.sendall(data)
+                    conn.sendall(reply(data))
                 return
             while True:
                 data = conn.recv(4096)
                 if not data:
                     return
-                conn.sendall(data)
+                conn.sendall(reply(data))
         except OSError:
             pass
         finally:

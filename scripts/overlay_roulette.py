@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import subprocess
 import time
@@ -37,6 +38,11 @@ WORK_IMAGE = "/home/ubuntu/labgrid/images/work.img"
 RESULTS = Path("/home/ubuntu/labgrid/results.jsonl")
 LOGIN_HINT = b"Please press Enter to activate this console"
 PROMPT = b"root@"
+# QEMU's -serial stdio echoes input: the typed `echo __DONE__$?` line comes
+# back BEFORE the command finishes. Only a __DONE__<rc> at the START of a
+# line is the real completion — killing the VM on the echo would cut
+# firstboot mid-run and invalidate the sweep's failure-mode data.
+DONE_RE = re.compile(rb"(?:^|\r?\n)__DONE__(\d+)")
 
 
 class VM:
@@ -89,20 +95,26 @@ class VM:
 
     def run(self, cmd: str, timeout_s: int = 30) -> str:
         assert self.proc and self.proc.stdin and self.proc.stdout
-        self.proc.stdin.write(cmd.encode() + b"; echo __DONE__$?\n")
+        self.proc.stdin.write(cmd.encode() + "; echo __DONE__$?\n")
         self.proc.stdin.flush()
-        out = self._read_until(b"__DONE__", timeout_s)
+        out = b""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            out += self._read_chunk(0.5)
+            if DONE_RE.search(out):
+                break
         time.sleep(0.3)
-        fd = self.proc.stdout.fileno()
-        while True:
-            ready, _, _ = select.select([fd], [], [], 0.3)
-            if not ready:
-                break
-            chunk = os.read(fd, 8192)
-            if not chunk:
-                break
-            out += chunk
+        out += self._read_chunk(0.3)
         return out.decode(errors="replace")
+
+    def _read_chunk(self, timeout_s: float) -> bytes:
+        assert self.proc and self.proc.stdout
+        fd = self.proc.stdout.fileno()
+        ready, _, _ = select.select([fd], [], [], timeout_s)
+        if not ready:
+            return b""
+        chunk = os.read(fd, 8192)
+        return chunk if chunk else b""
 
     def cut(self) -> None:
         if self.proc:
@@ -188,14 +200,16 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             time.sleep(t_cut)
             vmf.cut()
             time.sleep(2)
-            # aftermath boot: classify
+            # aftermath boot: classify (a failed boot is no-shell, never managed)
             vm2 = VM()
             sh2 = vm2.boot()
             row = {"exp": "sweep", "t_cut": t_cut, "run": run_n,
                    "firstboot_rc": rc.strip()}
-            row.update(classify(vm2, time.monotonic() - t0))
-            if sh2 is not None:
-                vm2.cut()
+            if not sh2:
+                row.update({"outcome": "no-shell"})
+            else:
+                row.update(classify(vm2, time.monotonic() - t0))
+            vm2.cut()
             record(row)
     return 0
 

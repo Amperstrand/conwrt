@@ -50,6 +50,17 @@ MAX_LINE = 200
 TCP_PREFIX = "tcp://"
 
 
+def _standalone_marker(buf: bytes, marker: bytes) -> bool:
+    """True only when the marker occupies a WHOLE line.
+
+    Serial ttys echo input, so the buffer first receives the literal
+    command text — including the mid-line `echo __RC0__ || echo __RC1__`
+    fragment — long before the command runs. A bare substring match
+    reports success while the command is still executing (or failing);
+    the real completion marker is always printed alone on its own line."""
+    return any(line.strip() == marker for line in buf.splitlines())
+
+
 class SerialLinterError(ValueError):
     pass
 
@@ -263,11 +274,11 @@ class SerialConsole:
                 continue
             if chunk:
                 buf += chunk
-            if RC_OK.encode() in buf:
+            if _standalone_marker(buf, RC_OK.encode()):
                 time.sleep(0.3)
                 buf += self._s.read(4096)
                 return 0, buf.decode(errors="replace").replace("\r", "")
-            if RC_FAIL.encode() in buf:
+            if _standalone_marker(buf, RC_FAIL.encode()):
                 time.sleep(0.3)
                 buf += self._s.read(4096)
                 return 1, buf.decode(errors="replace").replace("\r", "")
