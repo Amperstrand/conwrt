@@ -249,6 +249,40 @@ class TestCmdFlashModelAutoDetect(CmdFlashTestCase):
         with self.assertRaises(SystemExit):
             self.run_cmd_flash(_make_args(model_id=None))
 
+    def test_ip_override_probed_first_in_board_autodetect(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "10.0.0.9" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["fingerprint_router"].call_args_list[0][0][0], "10.0.0.9")
+        self.mocks["_build_profile_from_model"].assert_called_once_with(
+            "detected-model", serial_method="", flash_method="")
+
+    def test_ip_override_probed_first_in_active_fingerprint(self):
+        self.mocks["fingerprint_router"].return_value = None
+        self.mocks["_active_fingerprint"].side_effect = (
+            lambda ip, timeout=5.0: SimpleNamespace(
+                candidates=["c"] if ip == "10.0.0.9" else []))
+        self.mocks["_match_models"].return_value = [
+            SimpleNamespace(model_id="active-model", confidence=0.9, evidence=["mac"])]
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["_active_fingerprint"].call_args_list[0][0][0], "10.0.0.9")
+        build_args = self.mocks["_build_profile_from_model"].call_args[0]
+        self.assertEqual(build_args[0], "active-model")
+
+    def test_autodetect_without_ip_still_probes_defaults(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "192.168.0.1" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None))
+        self.assertEqual(rc, 0)
+        # Probe loop covers PROBE_IPS in order (the trailing call is the
+        # post-detection fingerprint block, not part of the loop).
+        probed = [c[0][0] for c in self.mocks["fingerprint_router"].call_args_list]
+        self.assertEqual(probed[:2], ["192.168.1.1", "192.168.0.1"])
+
 
 class TestCmdFlashRequestImage(CmdFlashTestCase):
     def _request_args(self, **overrides):

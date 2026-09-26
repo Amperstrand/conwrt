@@ -485,7 +485,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
     ssh_key_path = _detect_ssh_key_path()
 
     if not args.model_id:
-        for probe_ip in PROBE_IPS:
+        probe_targets = ([args.ip] if getattr(args, "ip", None) else []) + PROBE_IPS
+        for probe_ip in probe_targets:
             fp = fingerprint_router(probe_ip)
             if fp:
                 board = fp.get("identity", {}).get("board", "")
@@ -497,7 +498,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                         break
 
         if not args.model_id:
-            for probe_ip in PROBE_IPS:
+            for probe_ip in probe_targets:
                 log(f"Active fingerprinting {probe_ip}...")
                 fp_result = _active_fingerprint(probe_ip, timeout=5.0)
                 if fp_result.candidates:
