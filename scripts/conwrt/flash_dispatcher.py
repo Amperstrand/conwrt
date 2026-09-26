@@ -253,9 +253,9 @@ def _run_state_machine(
         if ctx.no_upload:
             return 0
         cfg = _load_config()
-        openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+        device_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         openwrt_ip = _apply_profile_post_flash(
-            openwrt_ip,
+            device_ip,
             ssh_key=ctx.ssh_key_path,
             cfg=cfg,
             model_id=ctx.profile.name,
@@ -266,7 +266,7 @@ def _run_state_machine(
             log("  ⚠ Post-flash profile application failed (no IP). Aborting post-flash chain.")
             _restore_port_isolation(ctx)
             return 1
-        if openwrt_ip != (ctx.profile.openwrt_ip or ctx.profile.recovery_ip):
+        if openwrt_ip != device_ip:
             ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
@@ -362,7 +362,7 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 
 
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
+    openwrt_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     if _wait_for_sysupgrade_reboot(openwrt_ip):
         ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)
@@ -540,6 +540,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                   f"Use --serial-method to select one.", file=sys.stderr)
             return 1
 
+    model_default_ip = profile.openwrt_ip
     if getattr(args, "ip", None):
         profile = SimpleNamespace(**{**vars(profile), "openwrt_ip": args.ip, "recovery_ip": args.ip})
         log(f"Router IP overridden via --ip: {args.ip}")
@@ -552,6 +553,19 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         boot_state = _detect_boot_state("", profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
+
+    if getattr(args, "ip", None) and use_sysupgrade:
+        # sysupgrade -n (and mtd write) wipe the configured LAN address: the
+        # device comes back at the model default, not at --ip. Only a
+        # --keep-config sysupgrade retains the override address across reboot.
+        keeps_settings = bool(getattr(args, "keep_config", False)) and profile.flash_method != "mtd-write"
+        post_flash_ip = args.ip if keeps_settings else model_default_ip
+        profile = SimpleNamespace(**{**vars(profile), "post_flash_ip": post_flash_ip})
+        if keeps_settings:
+            log(f"Post-flash address: {post_flash_ip} (settings kept)")
+        else:
+            log(f"Post-flash address: {post_flash_ip} (sysupgrade resets config — "
+                f"--ip {args.ip} applies to this flash only)")
 
     generated_password = ""
     password_set = False

@@ -438,6 +438,37 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         self.mocks["_verify_device_identity"].assert_not_called()
 
+    def test_ip_override_reset_mode_expects_model_default_after_flash(self):
+        """--ip + sysupgrade -n: override for the flash, model default after."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_ip_override_keep_config_expects_override_after_flash(self):
+        """--ip + --keep-config sysupgrade: device retains the override address."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "10.0.0.9")
+
+    def test_ip_override_mtd_write_resets_even_with_keep_config(self):
+        """mtd write ignores keep_config — post-flash address is the model default."""
+        self.mocks["_build_profile_from_model"].return_value = _make_profile(
+            flash_method="mtd-write")
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_no_ip_override_sets_no_post_flash_ip(self):
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.assertFalse(hasattr(ctx.profile, "post_flash_ip"))
+
     def test_state_machine_keyboard_interrupt_returns_1(self):
         self.mocks["_run_state_machine"].side_effect = KeyboardInterrupt
         rc = self.run_cmd_flash()
