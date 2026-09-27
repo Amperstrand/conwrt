@@ -140,6 +140,7 @@ class RecoveryContext:
     initramfs_path: str = ""
     no_upload: bool = False
     no_voice: bool = False
+    upload_client: str = "curl"
     router_mac_openwrt: str = ""
     router_mac_uboot: str = ""
     timeline: Timeline = field(default_factory=Timeline)

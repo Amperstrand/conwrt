@@ -754,6 +754,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         pcap_path=pcap_path,
         no_upload=args.no_upload,
         no_voice=args.no_voice,
+        upload_client=getattr(args, "upload_client", "curl"),
         router_mac_openwrt=args.router_mac,
         router_mac_uboot=args.uboot_mac,
         generated_password=generated_password,

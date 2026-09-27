@@ -55,6 +55,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "devices at non-default addresses, e.g. after a LAN move")
     flash_parser.add_argument("--no-pcap", action="store_true",
                         help="Disable pcap monitoring (polling-only mode, no scapy needed)")
+    flash_parser.add_argument("--upload-client", default="curl", choices=["curl", "webkit"],
+                        help="Multipart framing for recovery HTTP uploads: curl default, or "
+                             "webkit (Chromium-shaped) for recovery servers that mangle "
+                             "curl-framed uploads (bench-observed on D-Link COVR recovery)")
     flash_parser.add_argument("--force-uboot", action="store_true",
                         help="Force U-Boot recovery mode even if OpenWrt is detected")
     flash_parser.add_argument("--capture", default=None,

@@ -135,7 +135,8 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     if profile.flash_method == "dlink-hnap":
         ok, response = _flash_via_dlink_hnap(ctx.image_path, profile)
     else:
-        ok, response = upload_firmware(ctx.image_path, profile)
+        ok, response = upload_firmware(ctx.image_path, profile,
+                                       client=getattr(ctx, "upload_client", "curl"))
     if not ok:
         ctx._say_fn(f"Upload failed. Try a browser at http://{profile.recovery_ip} instead.")
         ctx.state = State.FAILED
