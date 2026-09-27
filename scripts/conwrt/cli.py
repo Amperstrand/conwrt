@@ -281,4 +281,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Validate the optional labgrid bench stack (read-only; ABSENT=healthy standalone)")
     add_doctor_arguments(doctor_parser)
 
+    rp_parser = subparsers.add_parser("recovery-probe",
+        help="Classify what answers at a recovery IP (arms client alias, learns MAC)")
+    rp_parser.add_argument("--recovery-ip", default="192.168.0.1")
+    rp_parser.add_argument("--interface", default=None)
+    rp_parser.add_argument("--client-ip", default="192.168.0.10")
+    rp_parser.add_argument("--json", dest="json_out", action="store_true")
+
+    bw_parser = subparsers.add_parser("boot-watch",
+        help="Watch an interface for device boot signatures (packets + carrier + ping)")
+    bw_parser.add_argument("--interface", required=True)
+    bw_parser.add_argument("--exclude-mac", action="append", default=[])
+    bw_parser.add_argument("--watch-ip", action="append", default=[])
+    bw_parser.add_argument("--duration", type=int, default=300)
+    bw_parser.add_argument("--poll-interval", type=float, default=2.0)
+    bw_parser.add_argument("--max-packets", type=int, default=2000)
+
     return parser
