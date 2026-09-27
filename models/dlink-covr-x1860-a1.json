@@ -22,7 +22,7 @@
   ],
   "flash_methods": {
     "recovery-http": {
-      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery. ASU produces recovery.bin with custom settings baked in — works in single step. Stock recovery.bin also works but requires sysupgrade afterward for custom config. First NAND boot after U-Boot recovery flash takes 5+ minutes (stock) or ~80s (ASU with uci-defaults).",
+      "description": "D-Link recovery mode (hold reset pin under device while powering on; works on both WAN and LAN ports). IMPORTANT: use recovery.bin (NOT factory.bin) for U-Boot recovery. ASU produces recovery.bin with custom settings baked in \u2014 works in single step. Stock recovery.bin also works but requires sysupgrade afterward for custom config. First NAND boot after U-Boot recovery flash takes 5+ minutes (stock) or ~80s (ASU with uci-defaults).",
       "recovery_ip": "192.168.0.1",
       "client_ip": "192.168.0.10",
       "client_subnet": "255.255.255.0",
@@ -137,11 +137,11 @@
     "recovery-http": {
       "tested": true,
       "date": "2026-05-24",
-      "notes": "Stock recovery.bin from downloads.openwrt.org works reliably. ASU custom recovery.bin with USB use cases (tether-android-adb) causes boot failure — device has no USB port. Device falls back to U-Boot recovery after failed flash (not bricked). Post-flash SSH configuration is the recommended path: flash stock, then configure via SSH. Stock recovery.bin boots in ~90s. Port labeled 'ethernet' = LAN, 'internet' = WAN. Use LAN port for initial setup."
+      "notes": "Stock recovery.bin from downloads.openwrt.org works reliably. ASU custom recovery.bin with USB use cases (tether-android-adb) causes boot failure \u2014 device has no USB port. Device falls back to U-Boot recovery after failed flash (not bricked). Post-flash SSH configuration is the recommended path: flash stock, then configure via SSH. Stock recovery.bin boots in ~90s. Port labeled 'ethernet' = LAN, 'internet' = WAN. Use LAN port for initial setup."
     },
     "dlink-hnap": {
       "tested": false,
-      "notes": "Auth + upload works (returns OK). GetFirmwareValidation returns IsValid=false for OpenWrt images — stock firmware validation blocks non-D-Link firmware. Recovery-http is the proven method."
+      "notes": "Auth + upload works (returns OK). GetFirmwareValidation returns IsValid=false for OpenWrt images \u2014 stock firmware validation blocks non-D-Link firmware. Recovery-http is the proven method."
     },
     "sysupgrade": {
       "tested": true,
@@ -153,5 +153,18 @@
       "date": "2026-05-15",
       "notes": "Post-flash WiFi config verified: radio0=2g, radio1=5g. STA only, AP only, STA+AP all verified on real hardware."
     }
+  },
+  "bench_observations": {
+    "recovery_idle_timeout_seconds": "300-480 (measured 2026-09-27: server exits recovery ~5-8 min after entry; a flash attempt started late finds stock firmware instead)",
+    "led_language": {
+      "red_blink": "recovery mode (U-Boot HTTP server live)",
+      "red_constant": "boot attempt failed / post-flash limbo \u2014 device will fall back to recovery on next power cycle",
+      "orange_blink": "OpenWrt starting",
+      "white_constant": "OpenWrt booted"
+    },
+    "dual_image_boot": "MediaTek dual-image bootloader: first boot after a recovery flash copies main->backup partition and reboots once more before OpenWrt comes up (expect two reboots)",
+    "ports": "cable must be in the port labeled 'ethernet' (LAN) for booted OpenWrt; recovery mode answers on either port",
+    "upload_client_sensitivity": "2026-09-27: two curl-multipart uploads (24.10.8 + 24.10.5, both sha-verified locally, Content-Length exact, HTTP 200 'Upgrade successfully!') produced a non-booting NAND on an ER6P-routed seat \u2014 device fell back to recovery both times. Community reports the same family of recovery servers accepting Firefox/curl uploads but landing wrong data (Chromium works). Use upload client 'webkit' (build_webkit_multipart) or a Chromium browser when a curl upload fails to boot.",
+    "evidence": "conwrt-bench repo: sessions/2026-09-27-x1860-p2-flash-attempts.md + data/bench/er6p/20260927-x1860-p2-flash/"
   }
 }
