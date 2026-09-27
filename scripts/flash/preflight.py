@@ -80,11 +80,16 @@ def _check_stale_ip(interface: str, profile: SimpleNamespace) -> PreflightResult
         if ip and ip in existing:
             conflicts.append(ip)
     if conflicts:
+        # An exact client-ip match on the TARGET interface is not stale —
+        # configure_interface_ip() is idempotent and tolerates it. This happens
+        # legitimately when a detection pass armed the alias before preflight
+        # (routed seats, re-runs after an interrupted attempt). Anything else
+        # still fails hard.
         ips_str = " and ".join(conflicts)
         return PreflightResult(
             name="stale_ip",
-            status="fail",
-            message=f"{ips_str} already assigned to {interface} -- remove stale alias before flashing",
+            status="warn",
+            message=f"{ips_str} already assigned to {interface} (idempotent client-ip re-run tolerated)",
         )
     return PreflightResult(name="stale_ip", status="pass", message="No stale IP aliases on interface")
 

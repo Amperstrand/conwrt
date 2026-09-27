@@ -176,12 +176,17 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
     return "uboot"
 
 
-def _resolve_initial_state(mode: str, profile: object, boot_state: str) -> State:
+def _resolve_initial_state(mode: str, profile: object, boot_state: str,
+                           interface: str | None = None) -> State:
     """Resolve the initial state for the state machine."""
     config = FLASH_MODES[mode]
 
     if mode == "uboot":
-        found, detail = detect_uboot_http(profile.recovery_ip)
+        found, detail = detect_uboot_http(
+            profile.recovery_ip,
+            interface=interface,
+            client_ip=getattr(profile, "client_ip", ""),
+        )
         if found:
             log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
             return State.UBOOT_UPLOADING
@@ -324,7 +329,11 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
         if boot_state == "uboot":
             log("Boot state: U-Boot recovery mode detected")
             recovery_ip = ctx.profile.recovery_ip
-            found, detail = detect_uboot_http(recovery_ip)
+            found, detail = detect_uboot_http(
+                recovery_ip,
+                interface=ctx.interface,
+                client_ip=getattr(ctx.profile, "client_ip", ""),
+            )
             if found:
                 log(f"Recovery HTTP already live at {recovery_ip} ({detail}) — skipping power cycle")
                 ctx.timeline.uboot_http_first = ts()
@@ -732,7 +741,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
 
-    initial_state = _resolve_initial_state(mode, profile, boot_state)
+    initial_state = _resolve_initial_state(mode, profile, boot_state, interface=interface)
 
     if args.isolate_port:
         initial_state = State.PORT_ISOLATION

@@ -93,7 +93,11 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
     probe_timeout = 90
 
     while ts() - probe_start < probe_timeout:
-        found, detail = detect_uboot_http(profile.recovery_ip)
+        found, detail = detect_uboot_http(
+            profile.recovery_ip,
+            interface=getattr(ctx, "interface", None),
+            client_ip=getattr(profile, "client_ip", ""),
+        )
         if found:
             log(f"Recovery mode detected: {detail}")
             ctx.timeline.uboot_http_first = ts()

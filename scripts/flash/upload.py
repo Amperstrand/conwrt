@@ -1,12 +1,32 @@
 """HTTP/SSH firmware upload helpers."""
 from __future__ import annotations
 import os
+import secrets
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 from flash.context import DEFAULT_IP, log
 
-def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
+
+def detect_uboot_http(recovery_ip: str = DEFAULT_IP,
+                      interface: str | None = None,
+                      client_ip: str | None = None) -> tuple[bool, str]:
+    """Probe the recovery HTTP server.
+
+    On routed seats (fixture SVI, VLAN subinterface, ...) the probe source
+    must be on-link for the recovery subnet. When *interface* and *client_ip*
+    are given, the client alias is armed first (idempotent) — without it the
+    curl routes via the default route and the recovery page is invisible,
+    which made the "already live → skip power cycle" fast path unreachable
+    and forced the manual power-cycle dance (bench-verified 2026-09-27).
+    """
+    if interface and client_ip:
+        try:
+            from platform_utils import configure_interface_ip
+            configure_interface_ip(interface, client_ip, "24")
+        except Exception as e:  # noqa: BLE001 — probe must not die on alias setup
+            log(f"client-alias setup failed ({e}); probing anyway")
     try:
         r = subprocess.run(
             ["curl", "-s", "--max-time", "2", f"http://{recovery_ip}/"],
@@ -28,23 +48,70 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
         return False, str(e)[:80]
 
 
-def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 300) -> tuple[bool, str]:
+def build_webkit_multipart(image_path: str, field: str = "firmware") -> tuple[bytes, str]:
+    """Build a Chromium-shaped multipart/form-data body for *image_path*.
+
+    Some U-Boot recovery HTTP servers mishandle curl's default multipart
+    framing while accepting browser uploads (documented on D-Link COVR/DAP
+    recovery: Firefox/curl-shaped uploads land wrong in NAND despite an
+    "Upgrade successfully!" response). This builder emits the exact
+    WebKit layout: a ``----WebKitFormBoundary`` token, CRLF framing, and a
+    single octet-stream part.
+    """
+    token = "----WebKitFormBoundary" + secrets.token_hex(8)
+    marker = b"--" + token.encode("ascii")
+    with open(image_path, "rb") as fh:
+        payload = fh.read()
+    body = bytearray()
+    body += marker + b"\r\n"
+    body += (f'Content-Disposition: form-data; name="{field}"; '
+             f'filename="{os.path.basename(image_path)}"\r\n').encode("ascii")
+    body += b"Content-Type: application/octet-stream\r\n\r\n"
+    body += payload + b"\r\n"
+    body += marker + b"--\r\n"
+    return bytes(body), f"multipart/form-data; boundary={token}"
+
+
+def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 300,
+                    client: str = "curl") -> tuple[bool, str]:
+    """Upload *image_path* to the recovery server.
+
+    ``client="curl"`` uses curl's default multipart framing. ``client="webkit"``
+    sends a Chromium-shaped multipart body (see :func:`build_webkit_multipart`)
+    for recovery servers that accept browser uploads but mangle curl's.
+    """
     file_size = os.path.getsize(image_path)
     size_mb = file_size / 1024 / 1024
     endpoint = f"http://{profile.recovery_ip}{profile.upload_endpoint}"
     log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB, {file_size} bytes) to {profile.upload_endpoint}...")
+    tmp_path: str | None = None
     try:
-        r = subprocess.run(
-            [
+        if client == "webkit":
+            body, content_type = build_webkit_multipart(image_path, profile.upload_field)
+            fd = tempfile.NamedTemporaryFile(prefix="conwrt-webkit-", suffix=".body", delete=False)
+            fd.write(body)
+            fd.close()
+            tmp_path = fd.name
+            cmd = [
+                "curl", "-sk", "--show-error",
+                "-H", "Expect:",
+                "-H", "Connection: close",
+                "-H", f"Content-Type: {content_type}",
+                "--data-binary", f"@{tmp_path}",
+                "--max-time", str(timeout),
+                "-w", "\n%{size_upload}",
+                endpoint,
+            ]
+        else:
+            cmd = [
                 "curl", "-sk", "--show-error",
                 "-H", "Expect:",
                 "--max-time", str(timeout),
                 "-w", "\n%{size_upload}",
                 "-F", f"{profile.upload_field}=@{image_path};type=application/octet-stream",
                 endpoint,
-            ],
-            capture_output=True, text=True, timeout=timeout + 30, check=False,
-        )
+            ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30, check=False)
         if r.returncode == 0 and r.stdout.strip():
             # Split response body from curl write-out (last line is size_upload)
             lines = r.stdout.rsplit("\n", 1)
@@ -92,6 +159,12 @@ def upload_firmware(image_path: str, profile: SimpleNamespace, timeout: int = 30
     except (subprocess.SubprocessError, OSError) as e:
         log(f"Upload error: {e}")
         return False, str(e)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def trigger_flash(profile: SimpleNamespace) -> bool:
