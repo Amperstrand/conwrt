@@ -358,7 +358,7 @@ Use `scripts/serial-configure.py` for structured configuration. See `prompts/ser
 A PR is not done when it merges — it is done when every reviewer finding on it
 (Codex, Copilot, or human) has a disposition: fixed in code, replied-to with
 evidence, or tracked in an issue. Merging with unreplied findings creates
-silent review debt (PR #36 shipped three unaddressed Codex P1/P2 findings this
+silent review debt (PR #36 shipped three unaddressed Codex/P1/P2 findings this
 way; PRs #67/#81/#36 were later audited to clean it up).
 
 - Before merging, answer every inline review thread; react 👍 to findings you
@@ -372,3 +372,41 @@ way; PRs #67/#81/#36 were later audited to clean it up).
   `pr-review-audit` skill (runbook + fleet scan + kanban in the private repo
   `Amperstrand/pr-review-audit`). Never re-litigate from memory: re-locate
   each finding at current HEAD before classifying it.
+
+## Rogue-DHCP Discipline — never ship or deploy a competing DHCP server (2026-09-28)
+
+conwrt flashes devices that land on shared bench and house segments. The authority map and enforcement live in conwrt-bench (`docs/NETWORK-SEGMENTATION.md`, issue #28): house LAN VLAN 13 and lab island VLAN 12 are served by the ERX ONLY; bench DUT VLANs 100N are served by the bench switch ONLY.
+
+1. **Fresh OpenWrt is an armed rogue** (dnsmasq DHCP + odhcpd RA on by default). Any flow leaving a device on a shared or management segment must set `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'` — commit, restart, read back.
+2. **Keep baking it into firmware**: the sysupgrade overlay flow (scripts/profile/overlay.py) must keep injecting `dhcp.lan.ignore=1`. Removing that injection is a regression that can poison the production house WiFi — it has happened (2026-05-23 and 2026-09-28; conwrt-bench issue #28).
+3. **A use case that genuinely needs a DHCP server** (captive portal, tollgate AP, router-mode tests) deploys onto an isolated VLAN/DUT bay, never a shared segment.
+4. **Never target or cable a DUT onto ERX eth3** (production). Use bench DUT bays.
+5. After package installs on any managed device, verify dnsmasq/odhcpd did not auto-start serving.
+
+## Lab hardware: one single source of truth (2026-09-28)
+
+All lab hardware — routers, ESP32/STM32 fixtures, switches, power, serial —
+is declared in the **private repo `Amperstrand/conwrt-lab`** (`lab.yaml`:
+devices, MACs, IPs, topology, VLANs, labgrid places). This project does NOT
+own hardware state.
+
+Rules for code and agents in this repo:
+
+1. **Never hardcode device IPs, MACs, or serial-port paths.** Resolve from the
+   registry: `CONWRT_LAB=<conwrt-lab checkout>` +
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py …`, or from a labgrid place.
+2. **Access hardware through labgrid places** (coordinator `ai-legion:20408`):
+   `labgrid-client -p <place> ssh|console|power`. Acquire/release for
+   exclusivity during tests.
+3. **Flashing/adoption goes through conwrt tooling** (`Amperstrand/conwrt-bench`):
+   `scripts/dut_recover.py --from-lab <device-id>` for recovery flashes,
+   `scripts/bench_net.py` for bay/VLAN changes. These update the registry.
+4. **State changes end with a registry commit** in conwrt-lab — if you changed
+   a device (flashed, moved, adopted), lab.yaml must reflect it before you
+   walk away.
+5. **When surprised, reconcile first**:
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py reconcile` detects dead
+   devices, switch reboots, and place drift in one command.
+
+Env: `CONWRT_LAB` (this registry checkout) and `CONWRT_BENCH` (conwrt-bench
+checkout) are the two paths every hardware-touching tool understands.
