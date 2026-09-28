@@ -1,0 +1,15 @@
+{
+  "relays": {
+    "wss://nostr.slothy.win": {
+      "read": true,
+      "write": true
+    }
+  },
+  "following": [
+    {
+      "key": "npub1san22nhe59ct8pstcehav4dtkf94lkn46ltl7d30g3zzl00tg7ussgqjdd",
+      "name": "druidian"
+    }
+  ],
+  "privatekey": "e3038c5aee1d15847af44a072a8bdf5201244753805cc16130e8fe2554da5ed1"
+}
