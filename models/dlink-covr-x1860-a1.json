@@ -164,7 +164,7 @@
     },
     "dual_image_boot": "MediaTek dual-image bootloader: first boot after a recovery flash copies main->backup partition and reboots once more before OpenWrt comes up (expect two reboots)",
     "ports": "cable must be in the port labeled 'ethernet' (LAN) for booted OpenWrt; recovery mode answers on either port",
-    "upload_client_sensitivity": "2026-09-27: two curl-multipart uploads (24.10.8 + 24.10.5, both sha-verified locally, Content-Length exact, HTTP 200 'Upgrade successfully!') produced a non-booting NAND on an ER6P-routed seat \u2014 device fell back to recovery both times. Community reports the same family of recovery servers accepting Firefox/curl uploads but landing wrong data (Chromium works). Use upload client 'webkit' (build_webkit_multipart) or a Chromium browser when a curl upload fails to boot.",
-    "evidence": "conwrt-bench repo: sessions/2026-09-27-x1860-p2-flash-attempts.md + data/bench/er6p/20260927-x1860-p2-flash/"
+    "upload_client_sensitivity": "2026-09-27/28 elimination matrix on an ER6P-routed seat: FOUR recovery uploads (24.10.8 curl, 24.10.5 curl, 24.10.5 webkit-framed, 23.05.5 curl at the older 13,631,488-byte layout) \u2014 every upload sha-verified locally, byte-exact Content-Length, 'Upgrade successfully!', 100% size write-out; every boot: zero DUT packets, constant-red limbo, recovery fallback on power cycle. Version, multipart framing, and image-size theories all eliminated. Unit-specific hardware suspected (recovery-mode NAND write corruption \u2014 no bad-block management in the U-Boot recovery writer \u2014 or bootloader-variant verification reject). Discriminator: serial console (labeled header, 3.3V 115200 8n1); conwrt serial-flash bypasses the recovery HTTP server entirely if NAND is healthy.",
+    "evidence": "conwrt-bench repo: sessions/2026-09-27-x1860-p2-flash-attempts.md (incl. 2026-09-28 addendum) + data/bench/er6p/20260927-x1860-p2-flash/"
   }
 }
