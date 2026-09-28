@@ -542,3 +542,22 @@ devices: gs1900-bench, er6p). Rules:
 3. Run `lab_registry.py reconcile` when surprised — it detects dead devices,
    switch reboots (failsafes disarmed), and place drift in one command.
 4. data/inventory.jsonl remains the append-only EVIDENCE log (never state).
+
+## ERX dnsmasq Guard — MANDATORY before any dhcp config change (2026-09-28)
+
+**Incident**: anonymous `uci add dhcp host` sections duplicated named sections →
+dnsmasq treated duplicate dhcp-host lines as FATAL → crash-looped → **house-wide
+DNS+DHCP outage** (WiFi users lost internet). The ERX is a single point of failure.
+
+**Rules:**
+1. **NEVER use `uci add dhcp host`** — always use named sections:
+   `uci set dhcp.HOSTNAME=host; uci set dhcp.HOSTNAME.mac=...` (idempotent).
+2. **Run `python3 scripts/erx_dhcp_guard.py validate` BEFORE any
+   `uci commit dhcp` + dnsmasq restart.** It catches duplicate MACs/IPs that
+   would crash dnsmasq. Non-zero exit = DO NOT RESTART.
+3. **Run `erx_dhcp_guard.py check`** after any dhcp change to confirm
+   dnsmasq survived. A cron job on ai-legion monitors this every 5 minutes
+   and logs CRITICAL if unhealthy.
+4. If dnsmasq crashes: the fix is to find the duplicate with `erx_dhcp_guard.py
+   validate`, delete the offending anonymous section (`uci delete dhcp.@host[N]`),
+   commit, restart.
