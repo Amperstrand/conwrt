@@ -112,3 +112,22 @@ id 1002; ip addr add 192.168.102.10/24 dev <if>.1002`).
 | `scripts/serial_transport.py` | serial console driver (lint, chunking, break-recovery) |
 | `data/backups/<switch>/` | sysupgrade bundle, overlay tar (fork!), uci exports, manifest |
 | Amperstrand/realtek-poe @ ai-experiments | fork source of truth |
+
+## Addendum 2026-09-28 (issue #28 arc — read before bench work)
+
+- **ERX eth1 is the stock-ZyXel lab island** (VLAN 12 since the segmentation
+  re-home): stock GS1900 at static **192.168.12.3** (flash-saved), NR7101
+  DUT at 192.168.12.124, two AP3915i at 192.168.102.51/.104.51 (rogue
+  DHCP/RA disarmed). The mgmt-untagged-into-VLAN-13 leak this doc's
+  architecture implied is closed — see docs/NETWORK-SEGMENTATION.md.
+- **ERX eth4 is the ER-6P DUT rig** (OpenWrt 25.12.4, static 192.168.13.4,
+  tagged VLAN 13 uplink): per-port bays lan1-5 = VLAN 400-404, rig L3
+  192.168.40-44.1, staged DUT-client aliases on br-lan.401. Recovery-flash
+  runbook: prompts/recovery-01-flash-via-rig.md, tool:
+  scripts/dut_recover.py.
+- **Bench switch runtime failsafes die on every reboot** — re-run
+  `scripts/gs1900-bench-arm.sh` (from any host that can ssh it). It needs
+  the dnsmasq PACKAGE present and `dhcp.lan.ignore=1` committed; after the
+  2026-09-28 reboot both were missing (see docs/gotchas.md — install order
+  matters to avoid the rule-9 rogue trap). FIT lifeline images live in
+  `data/extreme-ap3915i/` (md5-gated).

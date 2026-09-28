@@ -510,3 +510,35 @@ Motivating incident: a bench adoption ran `firstboot` on ap-lan2 (AP3915i UNIT2 
 ## Bench operations rules (2026-09-25)
 
 Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network.
+
+## Rogue-DHCP Discipline — exactly one DHCP/RA authority per broadcast domain (2026-09-28)
+
+The house network has a hard production/lab boundary (design, enforcement, incident record: `docs/NETWORK-SEGMENTATION.md` + issue #28). Authority map — anything else that answers a DHCPDISCOVER or emits an RA on these segments is a rogue:
+
+| Segment | Sole DHCP/RA authority |
+|---|---|
+| House LAN VLAN 13 (production WiFi + servers; ERX eth3 chain) | ERX dnsmasq/odhcpd 192.168.13.1 |
+| Lab island VLAN 12 (ERX eth1+eth4: stock GS1900 at .12.3, ER6P rig at .12.4, + attached DUTs) | ERX dhcp.lab 192.168.12.1 |
+| Bench DUT VLANs 100N (OpenWrt GS1900 bays lan2-8) | bench switch per-VLAN dnsmasq |
+
+1. **Fresh OpenWrt is an armed rogue** — default images run DHCP + RA on br-lan. Before a device shares ANY segment: `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'` → commit, restart dnsmasq/odhcpd, READ BACK values. This class poisoned the house WiFi 2026-05-23 (docs/gotchas.md) and twice on 2026-09-28 (two AP3915i serving stale bench scopes, issue #28).
+2. **Automation bakes it in**: sysupgrade overlays keep injecting `dhcp.lan.ignore=1` (scripts/profile/overlay.py) for devices destined for any shared or management segment. Never regress this.
+3. **A test needing a DHCP server gets an isolated VLAN** (bench DUT-bay 100N pattern) — never a shared, management, or production segment. One VLAN, one server, owned by the segment owner above.
+4. **Never attach a DUT to ERX eth3** (production chain: house AP + servers). ERX eth1/eth2/eth4 terminate on isolated lab VLANs by design; GS1900 DUT bays are the sanctioned attachment point.
+5. **After any package install on network gear**, verify dnsmasq/odhcpd did not auto-start serving (Escape-Hatch rule 9 — the `apk add dnsmasq` lesson).
+6. **Detection when suspicious is mandatory**: on the ERX, any `Drop-Lab-Rogue-*` counter/log hit means a rogue is transmitting on a lab VLAN — locate it (`tcpdump -i br-lan.12 -n 'udp src port 67'`) and quiet it before continuing. Every DHCP OFFER must be accountable to the segment's authority above.
+
+## Lab Single Source of Truth (2026-09-28): data/lab.yaml + generated labgrid
+
+**data/lab.yaml is the ONE writable registry** (gitignored — contains MACs; public
+template: labgrid/lab.yaml.example). If a device/port/VLAN/place isn't in it, it
+doesn't exist. Tools: `scripts/lab_registry.py` (validate / reconcile /
+emit-exporter) and `scripts/bench_net.py` (status/apply bay-VLANs on OpenWrt DSA
+devices: gs1900-bench, er6p). Rules:
+1. Every state-changing operation ENDS by updating data/lab.yaml.
+2. exporter.yaml + labgrid places are GENERATED from it — never hand-edit
+   (append-only enrollment allowed during migration; wholesale cutover pending
+   serial-bridge modeling).
+3. Run `lab_registry.py reconcile` when surprised — it detects dead devices,
+   switch reboots (failsafes disarmed), and place drift in one command.
+4. data/inventory.jsonl remains the append-only EVIDENCE log (never state).
