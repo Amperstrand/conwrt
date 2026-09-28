@@ -169,3 +169,25 @@ All tooling updated:
 
 The NR7101 is also the lpac host: /usr/bin/lpac (v2.3.0, MIPS) deployed
 with stdio drivers at /usr/lib/lpac/driver/.
+
+## AT Port Instability (2026-09-28 finding)
+
+The RG502Q-EA USB modems AT command port SHUFFLES across power cycles:
+
+## AT Port Instability (2026-09-28 finding)
+
+The RG502Q-EA USB modem's AT command port SHUFFLES across power cycles:
+- Boot 1: ttyUSB2 (original)
+- Boot 2 (after PoE cycle): ttyUSB1  
+- Boot 3 (after another cycle): ttyUSB3
+
+**Implication**: never hardcode the AT port. Auto-detect at boot by probing
+each /dev/ttyUSB* with "AT" and checking for "OK" response.
+
+## CSIM Pacing Requirements (confirmed on new boot)
+
+- AT commands (ATI, CPIN, CFUN): respond immediately
+- AT+CSIM: requires 8+ second gaps; rapid CSIM triggers thrash; recovery = 15+ s
+- After power cycle: full 15s wait before first CSIM attempt
+
+## Current AT Port: /dev/ttyUSB3 (as of 2026-09-28 ~12:10)
