@@ -49,9 +49,9 @@ def uci_add_to_wan_zone_sh(iface: str) -> str:
     return (
         f"for _z in $(uci show firewall 2>/dev/null | grep '=zone'"
         f" | cut -d. -f2 | cut -d= -f1 || true); do"
-        f" [ \"$(uci -q get firewall.$_z.name)\" = 'wan' ] &&"
-        f" uci del_list firewall.$_z.network='{iface}' 2>/dev/null;"
-        f" uci add_list firewall.$_z.network='{iface}';"
+        f" [ \"$(uci -q get firewall.\"$_z\".name)\" = 'wan' ] &&"
+        f" uci del_list firewall.\"$_z\".network='{iface}' 2>/dev/null;"
+        f" uci add_list firewall.\"$_z\".network='{iface}';"
         f" break; done"
     )
 
