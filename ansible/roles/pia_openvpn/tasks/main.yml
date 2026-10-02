@@ -1,0 +1,171 @@
+---
+# PIA OpenVPN client.
+#
+# These tasks use ansible.builtin.raw exclusively: OpenWrt images generally have
+# no Python interpreter, so the copy/template/command modules are unavailable.
+
+- name: Assert PIA credentials are provided
+  ansible.builtin.assert:
+    that:
+      - pia_username | length > 0
+      - pia_password | length > 0
+    fail_msg: "Set pia_username and pia_password (e.g. via ansible-vault)."
+
+- name: Detect package manager
+  ansible.builtin.raw: "command -v apk >/dev/null 2>&1 && echo apk || echo opkg"
+  register: pia_pkgmgr
+  changed_when: false
+
+- name: Install OpenVPN packages
+  ansible.builtin.raw: "{{ 'apk add' if pia_pkgmgr.stdout is search('apk') else 'opkg install' }} {{ pia_packages | join(' ') }}"
+  register: pia_install
+  changed_when: "'Installing' in pia_install.stdout or 'Installed' in pia_install.stdout"
+
+- name: Download PIA RSA-4096 CA certificate
+  ansible.builtin.raw: "wget -q -O /etc/openvpn/ca.rsa.4096.crt '{{ pia_ca_url }}'"
+
+- name: Write PIA credentials file
+  ansible.builtin.raw: |
+    cat > /etc/openvpn/pia-auth.txt <<'OPENWRT_EOF'
+    {{ lookup('template', 'pia-auth.txt.j2') }}
+    OPENWRT_EOF
+    chmod 600 /etc/openvpn/pia-auth.txt
+  no_log: true
+
+- name: Write PIA OpenVPN profile
+  ansible.builtin.raw: |
+    cat > /etc/openvpn/pia.ovpn <<'OPENWRT_EOF'
+    {{ lookup('template', 'pia.ovpn.j2') }}
+    OPENWRT_EOF
+    chmod 600 /etc/openvpn/pia.ovpn
+
+- name: Configure vpnclient interface
+  ansible.builtin.raw: |
+    uci set network.vpnclient=interface
+    uci set network.vpnclient.proto='none'
+    uci set network.vpnclient.device='{{ pia_interface }}'
+    uci commit network
+
+- name: Configure OpenVPN UCI instance
+  ansible.builtin.raw: |
+    uci -q delete openvpn.pia || true
+    uci set openvpn.pia=openvpn
+    uci set openvpn.pia.enabled='1'
+    uci set openvpn.pia.config='/etc/openvpn/pia.ovpn'
+    uci set openvpn.pia.dev_type='tun'
+    uci set openvpn.pia.dev='{{ pia_interface }}'
+    uci commit openvpn
+
+- name: Lock DNS to PIA in-tunnel resolvers
+  ansible.builtin.raw: |
+    uci set dhcp.@dnsmasq[0].noresolv='1'
+    uci -q delete dhcp.@dnsmasq[0].server 2>/dev/null || true
+    {% for ns in pia_dns_servers %}
+    uci add_list dhcp.@dnsmasq[0].server='{{ ns }}'
+    {% endfor %}
+    uci commit dhcp
+
+- name: Disable IPv6
+  ansible.builtin.raw: |
+    uci set dhcp.lan.dhcpv6='disabled'
+    uci set dhcp.lan.ra='disabled'
+    uci set dhcp.lan.ndp='disabled'
+    uci commit dhcp
+    grep -q '^net.ipv6.conf.all.disable_ipv6=1' /etc/sysctl.conf 2>/dev/null || echo 'net.ipv6.conf.all.disable_ipv6=1' >> /etc/sysctl.conf
+    grep -q '^net.ipv6.conf.default.disable_ipv6=1' /etc/sysctl.conf 2>/dev/null || echo 'net.ipv6.conf.default.disable_ipv6=1' >> /etc/sysctl.conf
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1
+  when: pia_ipv6_disable | bool
+
+- name: Configure firewall (vpn zone + forwarding)
+  ansible.builtin.raw: |
+    while uci show firewall 2>/dev/null | grep -q "name='vpn_zone'"; do
+      _s=$(uci show firewall 2>/dev/null | grep "name='vpn_zone'" | head -1 | cut -d. -f2 | cut -d= -f1)
+      uci delete "firewall.$_s" 2>/dev/null
+    done
+    while uci show firewall 2>/dev/null | grep -q "dest='vpn_zone'"; do
+      _s=$(uci show firewall 2>/dev/null | grep "dest='vpn_zone'" | head -1 | cut -d. -f2 | cut -d= -f1)
+      uci delete "firewall.$_s" 2>/dev/null
+    done
+    uci set firewall.pia_vpn=zone
+    uci set firewall.pia_vpn.name='vpn_zone'
+    uci set firewall.pia_vpn.network='vpnclient'
+    uci set firewall.pia_vpn.input='REJECT'
+    uci set firewall.pia_vpn.output='ACCEPT'
+    uci set firewall.pia_vpn.forward='REJECT'
+    uci set firewall.pia_vpn.masq='1'
+    uci set firewall.pia_vpn.mtu_fix='1'
+    uci set firewall.pia_fwd=forwarding
+    uci set firewall.pia_fwd.src='lan'
+    uci set firewall.pia_fwd.dest='vpn_zone'
+    uci commit firewall
+
+- name: Configure kill switch (remove LAN->WAN forwarding)
+  ansible.builtin.raw: |
+    while uci show firewall 2>/dev/null | grep -q "dest='wan'"; do
+      _s=$(uci show firewall 2>/dev/null | grep "dest='wan'" | head -1 | cut -d. -f2 | cut -d= -f1)
+      uci delete "firewall.$_s" 2>/dev/null
+    done
+    {% if pia_phase == 'validation' %}
+    uci set firewall.wan_fallback=forwarding
+    uci set firewall.wan_fallback.src='lan'
+    uci set firewall.wan_fallback.dest='wan'
+    {% endif %}
+    uci commit firewall
+  when: pia_kill_switch | bool
+
+- name: Write PIA watchdog policy
+  ansible.builtin.raw: |
+    cat > /etc/config/pia <<'OPENWRT_EOF'
+    config settings
+    	option enabled '1'
+    	option phase '{{ pia_phase }}'
+    	option fail_open_timeout '{{ pia_fail_open_timeout }}'
+    	option require_stable_seconds '{{ pia_require_stable_seconds }}'
+    OPENWRT_EOF
+    chmod 600 /etc/config/pia
+
+- name: Deploy watchdog scripts
+  ansible.builtin.raw: |
+    cat > /usr/bin/{{ item.dest }} <<'OPENWRT_EOF'
+    {{ lookup('file', item.src) }}
+    OPENWRT_EOF
+    chmod 755 /usr/bin/{{ item.dest }}
+  loop:
+    - { src: pia-health,   dest: pia-health }
+    - { src: pia-failopen, dest: pia-failopen }
+    - { src: pia-enforce,  dest: pia-enforce }
+    - { src: pia-watchdog, dest: pia-watchdog }
+    - { src: pia-status,   dest: pia-status }
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install watchdog cron entry
+  ansible.builtin.raw: |
+    touch /etc/crontabs/root
+    grep -v pia-watchdog /etc/crontabs/root > /tmp/crontab.pia 2>/dev/null || true
+    echo '* * * * * /usr/bin/pia-watchdog' >> /tmp/crontab.pia
+    mv /tmp/crontab.pia /etc/crontabs/root
+    chmod 600 /etc/crontabs/root
+
+- name: Apply network/firewall/DNS/OpenVPN/cron
+  ansible.builtin.raw: "{{ item }}"
+  loop:
+    - /etc/init.d/network reload
+    - /etc/init.d/firewall reload
+    - /etc/init.d/dnsmasq restart
+    - /etc/init.d/openvpn restart
+    - /etc/init.d/cron enable
+    - /etc/init.d/cron restart
+
+- name: Verify the tunnel with a functional health probe
+  ansible.builtin.raw: /usr/bin/pia-health
+  register: pia_health
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: pia_health.rc == 0
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "PIA tunnel healthy: {{ pia_health.stdout }}"

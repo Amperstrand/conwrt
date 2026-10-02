@@ -1,0 +1,25 @@
+client
+dev {{ pia_interface }}
+proto udp
+{% for remote in pia_remote_hosts %}
+{% set host, _, port = remote.partition(':') %}
+remote {{ host }} {{ port or '8080' }}
+{% endfor %}
+remote-random
+resolv-retry infinite
+nobind
+persist-key
+data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+data-ciphers-fallback AES-256-CBC
+auth sha256
+tls-client
+remote-cert-tls server
+reneg-sec 0
+disable-occ
+mssfix 1420
+auth-nocache
+verb 3
+auth-user-pass /etc/openvpn/pia-auth.txt
+pull-filter ignore "route-ipv6"
+pull-filter ignore "ifconfig-ipv6"
+ca /etc/openvpn/ca.rsa.4096.crt

@@ -1,0 +1,19 @@
+---
+# Optional handlers (the main task list applies changes directly so it works
+# without gathering facts on minimal OpenWrt images). Wire these with
+# `notify:` if you prefer handler-driven restarts.
+
+- name: reload network
+  ansible.builtin.raw: /etc/init.d/network reload
+
+- name: reload firewall
+  ansible.builtin.raw: /etc/init.d/firewall reload
+
+- name: restart dnsmasq
+  ansible.builtin.raw: /etc/init.d/dnsmasq restart
+
+- name: restart openvpn
+  ansible.builtin.raw: /etc/init.d/openvpn restart
+
+- name: restart cron
+  ansible.builtin.raw: /etc/init.d/cron restart

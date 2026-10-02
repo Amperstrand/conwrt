@@ -1,0 +1,13 @@
+---
+- name: Configure Private Internet Access (OpenVPN) on OpenWrt
+  hosts: routers
+  gather_facts: false
+
+  vars:
+    pia_username: "p1234567"      # override / vault
+    pia_password: "REPLACE_ME"    # override / vault
+    pia_phase: validation          # validation -> fail open; enforced -> fail closed
+    pia_fail_open_timeout: 180
+
+  roles:
+    - role: pia_openvpn
