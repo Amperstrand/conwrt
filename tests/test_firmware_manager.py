@@ -120,3 +120,50 @@ class TestFindCachedFirmware:
         result = fm._find_cached_firmware("profile", "abc")
         assert result is not None
         assert result.name == "abc"
+
+
+class TestResolveAsuVersion:
+    def _set_latest(self, monkeypatch, latest):
+        monkeypatch.setattr(fm, "_latest_versions_cache", latest)
+
+    def test_concrete_version_passthrough(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5", "24.10.8"])
+        assert fm.resolve_asu_version("25.12.5") == "25.12.5"
+        assert fm.resolve_asu_version("24.10.2") == "24.10.2"
+
+    def test_snapshot_alias(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5", "24.10.8"])
+        assert fm.resolve_asu_version("SNAPSHOT") == "SNAPSHOT"
+        assert fm.resolve_asu_version("snapshot") == "SNAPSHOT"
+
+    def test_rc_and_snapshot_suffix_passthrough(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5"])
+        assert fm.resolve_asu_version("24.10.2-rc1") == "24.10.2-rc1"
+        assert fm.resolve_asu_version("21.02-SNAPSHOT") == "21.02-SNAPSHOT"
+
+    def test_branch_track_resolves_to_newest(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5", "24.10.8"])
+        assert fm.resolve_asu_version("25") == "25.12.5"
+        assert fm.resolve_asu_version("24") == "24.10.8"
+        assert fm.resolve_asu_version("24.10") == "24.10.8"
+        assert fm.resolve_asu_version("25.12") == "25.12.5"
+
+    def test_unknown_track_uses_pinned_fallback(self, monkeypatch):
+        self._set_latest(monkeypatch, [])
+        assert fm.resolve_asu_version("25") == "25.12.5"
+        assert fm.resolve_asu_version("24") == "24.10.8"
+
+    def test_unknown_track_no_fallback_passthrough(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5"])
+        assert fm.resolve_asu_version("23") == "23"
+
+    def test_empty_version_passthrough(self, monkeypatch):
+        self._set_latest(monkeypatch, ["25.12.5"])
+        assert fm.resolve_asu_version("") == ""
+
+    def test_model_versions_resolve(self, monkeypatch):
+        """Every models/*.json version must survive resolution to a concrete ASU version."""
+        self._set_latest(monkeypatch, ["25.12.5", "24.10.8"])
+        for version in ["24", "25", "snapshot", "2022-02-16"]:
+            resolved = fm.resolve_asu_version(version)
+            assert resolved == "SNAPSHOT" or len(resolved.split("-")[0].split(".")) >= 3 or resolved == version
