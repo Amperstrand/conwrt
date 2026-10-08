@@ -246,3 +246,40 @@ def test_default_mode_is_mac_hash() -> None:
     plan = build_plan(cfg, mode="post_install")
     kinds = [s.kind for s in _lan_steps(plan)]
     assert StepKind.LAN_IP_MAC_HASH in kinds
+
+
+def test_asu_defaults_step_exit_isolation(tmp_path) -> None:
+    """A step's early `exit` must not skip later steps in the ASU defaults file."""
+    cfg = ConwrtConfig(
+        wifi_sta=WifiSTAConfig(band="5ghz", ssid="up", encryption="psk2", key="k"),
+        use_cases=[UseCaseConfig(name="nodns")],
+    )
+    plan = build_plan(cfg, mode="asu_build")
+    script = plan.asu_defaults_script()
+
+    marker_file = tmp_path / "done"
+    # Execute the real joined script with the marker appended; the wifi_sta
+    # block ends in `exit 0` on band match — later blocks must still run.
+    sentinel = f'echo done > {marker_file}'
+    import subprocess
+    result = subprocess.run(
+        ["sh", "-c", f"{script}\n\n{sentinel}"],
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": "/usr/bin:/bin", "src": "", "i": "0"},
+    )
+    assert marker_file.exists(), f"later steps skipped: {result.stderr[-400:]}"
+
+
+def test_wifi_sta_firstboot_expands_radio_variable() -> None:
+    """The radio loop variable must reach uci as device="$_r", not literal '$_r'.
+
+    Regression: single-quoted by render_shell, the 25.12.5 NordVPN build baked
+    wireless.default_radio1.device='$_r' and the WiFi STA never came up.
+    """
+    from profile.wifi import wifi_sta_firstboot_script
+
+    script = wifi_sta_firstboot_script("5ghz", "upstream", "psk2", key="k", network="wwan")
+    assert "'$_r'" not in script, "radio variable baked as literal — STA will not bind"
+    assert 'device="$_r"' in script
+    assert "exit 0" not in script, "early exit would skip later ASU default steps"
+    assert "break" in script

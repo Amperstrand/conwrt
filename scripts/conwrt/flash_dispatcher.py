@@ -572,11 +572,23 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
 
+    interface = args.interface
     if is_serial_tftp or is_zycast:
         boot_state = "unknown"
         use_sysupgrade = False
     else:
-        boot_state = _detect_boot_state("", profile)
+        interface = args.interface or auto_detect_interface()
+        if not interface:
+            print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
+            return 1
+        # Preflight's stale_ip check demands a clean interface, and any
+        # leftover client_ip/openwrt_client_ip aliases are always conwrt's
+        # own leftovers from a previous run (no-op when absent).
+        for _attr in ("client_ip", "openwrt_client_ip"):
+            _ip = getattr(profile, _attr, "")
+            if _ip:
+                remove_interface_ip(interface, _ip, "24")
+        boot_state = _detect_boot_state(interface, profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
 
     if getattr(args, "ip", None) and use_sysupgrade:
@@ -685,7 +697,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print(f"ERROR: initramfs image not found: {initramfs_path}", file=sys.stderr)
             return 1
 
-    interface = args.interface or auto_detect_interface()
+    interface = interface or auto_detect_interface()
     if not interface:
         print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
         return 1
