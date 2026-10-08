@@ -150,8 +150,13 @@ def _flash_via_mtd_write(device_ip: str, firmware_path: str, ssh_key: Optional[s
         return False
 
 
-def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 180) -> bool:
-    """Wait for device to come back after sysupgrade reboot."""
+def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 900) -> bool:
+    """Wait for device to come back after sysupgrade reboot.
+
+    First boot of a custom image can take several minutes (NAND sysupgrade
+    plus first-boot uci-defaults that wait on WiFi association and VPN
+    handshakes) — 2026-10-08 x1860 reflash measured >180s.
+    """
     log(f"Waiting for device to reboot and SSH to come back at {device_ip}...")
     start = ts()
     while ts() - start < timeout:
