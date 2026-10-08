@@ -134,6 +134,25 @@ repo):
 - `data/inventory.jsonl` stays local and gitignored — treat it as a cache of
   your private project's data, never as the system of record.
 
+## Never Switch the AI Host Off Its Working Internet
+
+The computer running opencode depends on its live connection to reach the AI
+provider. Switching that machine's network (joining a test AP, changing WiFi,
+moving VLANs, flashing-adjacent interface churn) can silently replace a
+working uplink with a dead one and kill the session mid-task.
+
+1. **Never disconnect the AI host's working internet to test a new one.**
+   This includes joining a router's WiFi (e.g. a freshly flashed VPN/guest
+   AP) from the AI host while it is the machine's only uplink.
+2. Test new networks from a different client first, or verify the new path
+   passes real traffic BEFORE dropping the old connection. Association plus
+   a DHCP lease is not proof — check an actual internet round-trip.
+3. If the AI host must move networks, keep a verified fallback ready (the
+   wired interface with confirmed internet, a second WiFi, serial) and know
+   how to get back (nmcli/route commands written down before the switch).
+4. DHCP timeouts and "connected, no internet" states on the AI host are an
+   immediate abort: restore the last working connection before continuing.
+
 ## Related Projects
 
 - **realtek-poe fork**: [Amperstrand/realtek-poe](https://github.com/Amperstrand/realtek-poe) — AI experimentation workspace for PoE research on OpenWrt switches. All AI work happens on the `ai-experiments` branch. `main` is a pristine upstream mirror. **Never interact with the upstream `Hurricos/realtek-poe` repo** — only humans may create issues or submit PRs there.
