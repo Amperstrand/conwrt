@@ -15,6 +15,7 @@ from typing import Optional
 
 from model_loader import list_models
 from conwrt.device_inventory import auto_detect_interface
+from platform_utils import configure_interface_ip, remove_interface_ip
 
 _router_probe = importlib.import_module("router-probe")
 probe_http_get = _router_probe.probe_http_get
@@ -85,33 +86,21 @@ def _configure_interface(
     # Remove previous alias if we had one
     if current_subnet:
         old_ip = _host_ip_for_subnet(current_subnet)
-        subprocess.run(
-            ["ifconfig", interface, "inet", old_ip, "-alias"],
-            check=False,
-            capture_output=True,
-        )
+        remove_interface_ip(interface, old_ip, "24")
         if old_ip in added_aliases:
             added_aliases.remove(old_ip)
 
     # Assign new alias
     host_ip = _host_ip_for_subnet(target_subnet)
-    subprocess.run(
-        ["ifconfig", interface, "inet", host_ip, "netmask", "255.255.255.0", "alias"],
-        check=True,
-        capture_output=True,
-    )
-    added_aliases.append(host_ip)
+    if configure_interface_ip(interface, host_ip, "24"):
+        added_aliases.append(host_ip)
     return target_subnet
 
 
 def _cleanup_aliases(interface: str, added_aliases: list[str]) -> None:
     """Remove all alias IPs we added to the interface."""
     for alias_ip in list(added_aliases):
-        subprocess.run(
-            ["ifconfig", interface, "inet", alias_ip, "-alias"],
-            check=False,
-            capture_output=True,
-        )
+        remove_interface_ip(interface, alias_ip, "24")
     added_aliases.clear()
 
 
