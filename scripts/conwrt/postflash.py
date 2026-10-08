@@ -78,6 +78,7 @@ def _apply_profile_post_flash(
         lan_ip_mode=lan_ip_mode,
         hostname_pattern=hostname_pattern,
         model_id=model_id,
+        disable_dhcp=cfg.disable_lan_dhcp,
     )
     if not dry_run:
         log(f"Applying profile via {transport}...")
