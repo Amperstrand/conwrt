@@ -4,6 +4,8 @@ Each provider's render_shell(_build_<provider>_ops(...)) is the authoritative
 output. Tests verify that rendered scripts contain the expected API endpoints,
 UCI commands, firewall rules, DNS config, and provider-specific markers.
 """
+from unittest.mock import patch
+
 from profile.ops import render_shell
 from use_cases import registry
 from use_cases.vpn_providers.pia import _build_pia_ops
@@ -134,32 +136,97 @@ class TestMullvadOps:
 
 # -- NordVPN -------------------------------------------------------------------
 
+def _nordvpn_test_conf_path():
+    import tempfile
+    from pathlib import Path
+
+    conf = Path(tempfile.gettempdir()) / "conwrt-nordvpn-test.conf"
+    conf.write_text(
+        "[Interface]\n"
+        "PrivateKey = cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=\n"
+        "Address = 10.5.0.2/16\n"
+        "DNS = 103.86.96.100\n"
+        "[Peer]\n"
+        "PublicKey = qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+        "Endpoint = hamburg.de.wg.nordhold.net:51820\n"
+        "PersistentKeepalive = 25\n"
+    )
+    return str(conf)
+
+
 NORDVPN_PARAMS = {
-    "service_username": "norduser",
-    "service_password": "nordpass",
+    "config_file": _nordvpn_test_conf_path(),
+    "upstream_iface": "wwan",
+}
+
+NORDVPN_TOKEN_PARAMS = {
+    "access_token": "a" * 64,
+    "server": "81",
     "upstream_gateway": "192.168.1.1",
 }
 
 
-class TestNordvpnOps:
-    def test_api_endpoint_present(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "api.nordvpn.com" in r
-        assert "users/tokens" in r
+def _write_nordvpn_conf(tmp_path):
+    conf = tmp_path / "nordvpn.conf"
+    conf.write_text(
+        "[Interface]\n"
+        "PrivateKey = cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=\n"
+        "Address = 10.5.0.2/16\n"
+        "DNS = 103.86.96.100\n"
+        "[Peer]\n"
+        "PublicKey = qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+        "Endpoint = hamburg.de.wg.nordhold.net:51820\n"
+        "PersistentKeepalive = 25\n"
+    )
+    return str(conf)
 
-    def test_credentials_injected(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "norduser" in r
-        assert "nordpass" in r
+
+import use_cases.vpn_providers.nordvpn as watch_nordvpn
+
+
+class TestNordvpnOps:
+    def test_static_config_mode_bakes_wg(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wireguard" in r
+        assert "cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=" in r
+        assert "qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=" in r
+        assert "10.5.0.2/16" in r
+
+    def test_static_config_no_device_api_calls(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "api.nordvpn.com" not in r, "static mode must not call the API from the device"
+
+    def test_token_mode_uses_basic_auth_and_credentials_endpoint(self):
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="PRIVKEY="), \
+             patch.object(watch_nordvpn, "_resolve_endpoint",
+                          return_value=("185.1.2.3", "51820", "SRVKEY=")):
+            r = render_shell(_build_nordvpn_ops(NORDVPN_TOKEN_PARAMS))
+        assert "api.nordvpn.com/v1/users/services/credentials" in r
+        assert "nordlynx_private_key" in r
+        assert "users/tokens" not in r, "the /v2/users/tokens service-credential flow died in 2023"
+        assert "Authorization: Basic" in r
 
     def test_server_recommendations(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "recommendations" in r
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="PRIVKEY="), \
+             patch.object(watch_nordvpn, "_resolve_endpoint",
+                          return_value=("185.1.2.3", "51820", "SRVKEY=")):
+            r = render_shell(_build_nordvpn_ops(NORDVPN_TOKEN_PARAMS))
+        assert "servers/recommendations" in r
+        assert "185.1.2.3" in r
 
-    def test_wireguard_interface_configured(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
+    def test_wireguard_interface_configured(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
         assert "uci set network.wg0=interface" in r
         assert "uci set network.wg0.proto='wireguard'" in r
+
+    def test_unconfigured_returns_skip_comment(self):
+        ops = _build_nordvpn_ops({})
+        assert any("NOT CONFIGURED" in str(getattr(op, "text", "")) for op in ops)
 
     def test_dns_configured(self):
         r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))

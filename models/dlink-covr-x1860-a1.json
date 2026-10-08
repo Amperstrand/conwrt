@@ -129,6 +129,16 @@
       "date": "2026-05-18",
       "notes": "sysupgrade from stock OpenWrt 24.10.5 to ASU custom 24.10.2 build. Works via conwrt --request-image --wan-ssh. ~2m15s total. SSH key, random password, and WAN SSH all applied via ASU first-boot uci-defaults script."
     },
+    "recovery-http-25.12.5": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "Full unattended recovery-http flash from U-Boot recovery mode to ASU custom 25.12.5 build (vpn-nordvpn static config, WiFi STA uplink, mgmt WiFi, keys, kill switch) on ai-legion-small/Ubuntu (direct cable). Upload ~41s, flash ~60s, boot ~90s. Verified end-to-end: SSH key auth, wg handshake, LAN NAT through tunnel to NordVPN DE exit (Hamburg). Note: host must reach 192.168.0.1 (recovery) and 192.168.1.1 (post-flash) — conwrt now manages both client aliases automatically."
+    },
+    "vpn-nordvpn-wireguard": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "vpn-nordvpn use case with config_file (dashboard-exported WireGuard conf). 5GHz STA uplink (wwan), wg0 full tunnel with netifd-managed endpoint route, lan→vpn forwarding, kill switch, NordVPN DNS via tunnel. Exit verified from LAN client: Hamburg, DE (PacketHub S.A.)."
+    },
     "wifi_sta_ap": {
       "tested": true,
       "date": "2026-05-15",
