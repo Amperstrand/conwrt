@@ -41,7 +41,7 @@ import importlib
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 
-from platform_utils import detect_platform, check_external_deps, remove_interface_ip
+from platform_utils import detect_platform, check_external_deps, configure_interface_ip, remove_interface_ip
 from flash.preflight import run_preflight_checks
 
 from conwrt.extreme import (
@@ -550,11 +550,23 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
 
+    interface = args.interface
     if is_serial_tftp or is_zycast:
         boot_state = "unknown"
         use_sysupgrade = False
     else:
-        boot_state = _detect_boot_state("", profile)
+        interface = args.interface or auto_detect_interface()
+        if not interface:
+            print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
+            return 1
+        # Preflight's stale_ip check demands a clean interface, and any
+        # leftover client_ip/openwrt_client_ip aliases are always conwrt's
+        # own leftovers from a previous run (no-op when absent).
+        for _attr in ("client_ip", "openwrt_client_ip"):
+            _ip = getattr(profile, _attr, "")
+            if _ip:
+                remove_interface_ip(interface, _ip, "24")
+        boot_state = _detect_boot_state(interface, profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
 
     if getattr(args, "ip", None) and use_sysupgrade:
@@ -646,7 +658,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print(f"ERROR: initramfs image not found: {initramfs_path}", file=sys.stderr)
             return 1
 
-    interface = args.interface or auto_detect_interface()
+    interface = interface or auto_detect_interface()
     if not interface:
         print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
         return 1
@@ -754,6 +766,20 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
+
+    # The recovery flow probes and uploads to profile.recovery_ip — the host
+    # needs an address in that subnet for the whole state machine. After the
+    # flash reboots, the SSH monitor polls profile.openwrt_ip, which needs
+    # openwrt_client_ip. Configured here (after preflight's stale-IP check,
+    # which requires a clean start).
+    if not use_sysupgrade and not is_serial_tftp and not is_zycast:
+        recovery_client = getattr(profile, "client_ip", "")
+        if recovery_client and configure_interface_ip(interface, recovery_client, "24"):
+            log(f"Client alias: {recovery_client} on {interface} (recovery subnet)")
+        openwrt_client = getattr(profile, "openwrt_client_ip", "")
+        if openwrt_client and openwrt_client != recovery_client:
+            if configure_interface_ip(interface, openwrt_client, "24"):
+                log(f"Client alias: {openwrt_client} on {interface} (post-flash subnet)")
 
     initial_state = _resolve_initial_state(mode, profile, boot_state)
 

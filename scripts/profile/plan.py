@@ -79,11 +79,13 @@ class ProfilePlan:
         return remove
 
     def asu_defaults_script(self) -> str:
-        lines: list[str] = []
+        blocks: list[str] = []
         for step in self.steps:
             if not step.include_in_asu or not step.firstboot_script:
                 continue
-            if lines and step.firstboot_script:
-                lines.append("")
-            lines.append(step.firstboot_script.rstrip())
-        return "\n".join(lines).strip()
+            # Subshell isolation: ASU bakes all steps into ONE uci-defaults
+            # file, and some step scripts use early `exit 0` (wifi band
+            # match, optional-feature skip). Without the ( ) each exit
+            # would skip every later step in the chain.
+            blocks.append(f"(\n{step.firstboot_script.strip()}\n)")
+        return "\n\n".join(blocks).strip()

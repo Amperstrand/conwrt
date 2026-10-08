@@ -499,6 +499,19 @@ class _P(SimpleNamespace):
 
 
 class TestDetectBootState(TestCase):
+    def setUp(self):
+        # detect_boot_state manages interface aliases through platform_utils
+        # before probing; patch that IO so classification tests stay hermetic
+        # and don't consume their subprocess.run mocks on `ip` calls.
+        for target, ret in (
+            ("flash.detect.get_interface_ips", []),
+            ("flash.detect.configure_interface_ip", True),
+            ("flash.detect.remove_interface_ip", True),
+        ):
+            p = patch(target, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+        super().setUp()
     @patch("flash.detect.detect_uboot_http", return_value=(False, "no response"))
     @patch("flash.detect.check_ssh", return_value=True)
     def test_openwrt_ssh_reachable(self, mock_ssh, mock_uboot):
