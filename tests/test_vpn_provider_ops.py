@@ -160,13 +160,6 @@ NORDVPN_PARAMS = {
     "upstream_iface": "wwan",
 }
 
-NORDVPN_TOKEN_PARAMS = {
-    "access_token": "a" * 64,
-    "server": "81",
-    "upstream_gateway": "192.168.1.1",
-}
-
-
 def _write_nordvpn_conf(tmp_path):
     conf = tmp_path / "nordvpn.conf"
     conf.write_text(
@@ -195,34 +188,78 @@ class TestNordvpnOps:
         assert "qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=" in r
         assert "10.5.0.2/16" in r
 
-    def test_static_config_no_device_api_calls(self, tmp_path):
-        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
-        r = render_shell(_build_nordvpn_ops(params))
-        assert "api.nordvpn.com" not in r, "static mode must not call the API from the device"
-
-    def test_token_mode_uses_basic_auth_and_credentials_endpoint(self):
+    def test_token_mode_resolves_at_build_time(self):
+        """Token mode bakes a static config — no API calls from the device."""
         with patch.object(watch_nordvpn, "_fetch_credentials", return_value="PRIVKEY="), \
              patch.object(watch_nordvpn, "_resolve_endpoint",
                           return_value=("185.1.2.3", "51820", "SRVKEY=")):
-            r = render_shell(_build_nordvpn_ops(NORDVPN_TOKEN_PARAMS))
-        assert "api.nordvpn.com/v1/users/services/credentials" in r
-        assert "nordlynx_private_key" in r
-        assert "users/tokens" not in r, "the /v2/users/tokens service-credential flow died in 2023"
-        assert "Authorization: Basic" in r
+            r = render_shell(_build_nordvpn_ops({"access_token": "a" * 64}))
+        assert 'WG_PRIV="PRIVKEY="' in r
+        assert 'SERVER_IP="185.1.2.3"' in r
+        assert 'SERVER_KEY="SRVKEY="' in r
+        assert "api.nordvpn.com" not in r, "token mode must resolve at build time"
+        assert "curl" not in r, "no curl dependency on the device"
 
-    def test_server_recommendations(self):
-        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="PRIVKEY="), \
-             patch.object(watch_nordvpn, "_resolve_endpoint",
-                          return_value=("185.1.2.3", "51820", "SRVKEY=")):
-            r = render_shell(_build_nordvpn_ops(NORDVPN_TOKEN_PARAMS))
-        assert "servers/recommendations" in r
-        assert "185.1.2.3" in r
+    def test_server_defaults_to_de(self):
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="P="), \
+             patch.object(watch_nordvpn, "_resolve_endpoint", wraps=watch_nordvpn._resolve_endpoint) as mock:
+            mock.side_effect = lambda server, token: ("1.2.3.4", "51820", "K=")
+            _build_nordvpn_ops({"access_token": "a" * 64})
+        assert mock.call_args[0][0] == "DE"
 
     def test_wireguard_interface_configured(self, tmp_path):
         params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
         r = render_shell(_build_nordvpn_ops(params))
         assert "uci set network.wg0=interface" in r
         assert "uci set network.wg0.proto='wireguard'" in r
+
+    def test_management_rule_on_by_default(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "Allow-VPN-Management" in r
+        assert "dest_port='22 80 443'" in r
+
+    def test_management_rule_can_be_disabled(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      allow_management=False)
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "firewall.vpn_mgmt=rule" not in r, \
+            "only the stale-section cleanup may mention the rule"
+
+    def test_vpn_ap_baked_when_configured(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      ap_ssid="nord", ap_key="nordnord")
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wifinet_vpn_ap" in r
+        assert "ssid='nord'" in r
+        assert "key='nordnord'" in r
+        assert "network.vpnlan_dev.name='br-vpnlan'" in r, "AP must be bridged (standalone ifaces never deliver DHCP)"
+        assert "network.vpnlan.device='br-vpnlan'" in r
+        assert "dhcp.vpnlan=dhcp" in r
+        # Dedicated zone with its own input rules — vpnlan must NOT join the vpn
+        # zone (its input/forward policies would drop DHCP and vpnlan→wg0).
+        assert "firewall.vpn_ap_zone.name='vpnap'" in r
+        assert "firewall.vpn_ap_fwd.src='vpnap'" in r
+        assert "firewall.vpn_ap_fwd.dest='vpn'" in r
+        assert "Allow-VPNAP-DHCP" in r and "dest_port='67 68'" in r
+        assert "Allow-VPNAP-DNS" in r and "172.16.31.0/24" in r
+        assert "Allow-VPNAP-Management" in r
+        assert "del_list firewall.vpn_zone.network='vpnlan'" in r
+        # dnsmasq re-arm after the AP bridge is up
+        assert "br-vpnlan" in r and "dnsmasq restart" in r
+
+    def test_vpn_ap_absent_without_params(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wifinet_vpn_ap" not in r
+        assert "vpnlan" not in r
+
+    def test_ap_password_quoting(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      ap_ssid="it's", ap_key="pass'word")
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "ssid='it'\\''s'" in r
+        assert "key='pass'\\''word'" in r
 
     def test_unconfigured_returns_skip_comment(self):
         ops = _build_nordvpn_ops({})

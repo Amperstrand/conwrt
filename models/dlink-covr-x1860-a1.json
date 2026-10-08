@@ -136,6 +136,11 @@
       "date": "2026-10-08",
       "notes": "vpn-nordvpn use case with config_file (dashboard-exported WireGuard conf). 5GHz STA uplink (wwan), wg0 full tunnel with netifd-managed endpoint route, lan→vpn forwarding, kill switch, NordVPN DNS via tunnel. Exit verified from LAN client: Hamburg, DE (PacketHub S.A.)."
     },
+    "vpn-nordvpn-token-and-vpn-ap": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "Token mode (build-time resolution via credentials + recommendations API) with 2.4GHz VPN-exit AP (SSID nord/nordnord). From-scratch sysupgrade first boot verified: br-vpnlan bridge, vpnap zone with vpnap→vpn forwarding, DHCP/DNS/management input rules, 20dBm radio, dnsmasq re-arm. Phone client associated (-44dBm) and received DHCP lease 172.16.31.238; wired client exit via NordVPN DE; kill switch blocks on ifdown wg0. E2E stories: tests/e2e/test_nordvpn_e2e.py (5 host-side pass; phone stories pending phone replug)."
+    },
     "wifi_sta_ap": {
       "tested": true,
       "date": "2026-05-15",
