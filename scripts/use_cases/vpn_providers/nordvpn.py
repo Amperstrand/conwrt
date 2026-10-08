@@ -40,6 +40,78 @@ from .base import (
 
 NORDVPN_DNS = ["103.86.96.100", "103.86.99.100"]
 
+# NordVPN technology ids (api.nordvpn.com/v1/technologies, live 2026-10-08)
+NORDVPN_TECH_IDS = {
+    "nordlynx": "wireguard_udp",
+    "openvpn-udp": "openvpn_udp",
+    "openvpn-tcp": "openvpn_tcp",
+    "openvpn-udp-tls-crypt": "openvpn_udp_tls_crypt",
+    "openvpn-tcp-tls-crypt": "openvpn_tcp_tls_crypt",
+    "ikev2": "ikev2",
+}
+
+# Public, NordVPN-wide constants identical across every server .ovpn
+# (downloads.nordcdn.com config archive, verified across servers 2026-10-08).
+NORDVPN_OPENVPN_PORTS = "1231 1232 1233 1234"
+
+
+NORDVPN_CA = """\
+-----BEGIN CERTIFICATE-----
+MIIFCjCCAvKgAwIBAgIBATANBgkqhkiG9w0BAQ0FADA5MQswCQYDVQQGEwJQQTEQ
+MA4GA1UEChMHTm9yZFZQTjEYMBYGA1UEAxMPTm9yZFZQTiBSb290IENBMB4XDTE2
+MDEwMTAwMDAwMFoXDTM1MTIzMTIzNTk1OVowOTELMAkGA1UEBhMCUEExEDAOBgNV
+BAoTB05vcmRWUE4xGDAWBgNVBAMTD05vcmRWUE4gUm9vdCBDQTCCAiIwDQYJKoZI
+hvcNAQEBBQADggIPADCCAgoCggIBAMkr/BYhyo0F2upsIMXwC6QvkZps3NN2/eQF
+kfQIS1gql0aejsKsEnmY0Kaon8uZCTXPsRH1gQNgg5D2gixdd1mJUvV3dE3y9FJr
+XMoDkXdCGBodvKJyU6lcfEVF6/UxHcbBguZK9UtRHS9eJYm3rpL/5huQMCppX7kU
+eQ8dpCwd3iKITqwd1ZudDqsWaU0vqzC2H55IyaZ/5/TnCk31Q1UP6BksbbuRcwOV
+skEDsm6YoWDnn/IIzGOYnFJRzQH5jTz3j1QBvRIuQuBuvUkfhx1FEwhwZigrcxXu
+MP+QgM54kezgziJUaZcOM2zF3lvrwMvXDMfNeIoJABv9ljw969xQ8czQCU5lMVmA
+37ltv5Ec9U5hZuwk/9QO1Z+d/r6Jx0mlurS8gnCAKJgwa3kyZw6e4FZ8mYL4vpRR
+hPdvRTWCMJkeB4yBHyhxUmTRgJHm6YR3D6hcFAc9cQcTEl/I60tMdz33G6m0O42s
+Qt/+AR3YCY/RusWVBJB/qNS94EtNtj8iaebCQW1jHAhvGmFILVR9lzD0EzWKHkvy
+WEjmUVRgCDd6Ne3eFRNS73gdv/C3l5boYySeu4exkEYVxVRn8DhCxs0MnkMHWFK6
+MyzXCCn+JnWFDYPfDKHvpff/kLDobtPBf+Lbch5wQy9quY27xaj0XwLyjOltpiST
+LWae/Q4vAgMBAAGjHTAbMAwGA1UdEwQFMAMBAf8wCwYDVR0PBAQDAgEGMA0GCSqG
+SIb3DQEBDQUAA4ICAQC9fUL2sZPxIN2mD32VeNySTgZlCEdVmlq471o/bDMP4B8g
+nQesFRtXY2ZCjs50Jm73B2LViL9qlREmI6vE5IC8IsRBJSV4ce1WYxyXro5rmVg/
+k6a10rlsbK/eg//GHoJxDdXDOokLUSnxt7gk3QKpX6eCdh67p0PuWm/7WUJQxH2S
+DxsT9vB/iZriTIEe/ILoOQF0Aqp7AgNCcLcLAmbxXQkXYCCSB35Vp06u+eTWjG0/
+pyS5V14stGtw+fA0DJp5ZJV4eqJ5LqxMlYvEZ/qKTEdoCeaXv2QEmN6dVqjDoTAo
+k0t5u4YRXzEVCfXAC3ocplNdtCA72wjFJcSbfif4BSC8bDACTXtnPC7nD0VndZLp
++RiNLeiENhk0oTC+UVdSc+n2nJOzkCK0vYu0Ads4JGIB7g8IB3z2t9ICmsWrgnhd
+NdcOe15BincrGA8avQ1cWXsfIKEjbrnEuEk9b5jel6NfHtPKoHc9mDpRdNPISeVa
+wDBM1mJChneHt59Nh8Gah74+TM1jBsw4fhJPvoc7Atcg740JErb904mZfkIEmojC
+VPhBHVQ9LHBAdM8qFI2kRK0IynOmAZhexlP/aT/kpEsEPyaZQlnBn3An1CRz8h0S
+PApL8PytggYKeQmRhl499+6jLxcZ2IegLfqq41dzIjwHwTMplg+1pKIOVojpWA==
+-----END CERTIFICATE-----
+"""
+
+NORDVPN_TLS_AUTH = """\
+#
+# 2048 bit OpenVPN static key
+#
+-----BEGIN OpenVPN Static key V1-----
+e685bdaf659a25a200e2b9e39e51ff03
+0fc72cf1ce07232bd8b2be5e6c670143
+f51e937e670eee09d4f2ea5a6e4e6996
+5db852c275351b86fc4ca892d78ae002
+d6f70d029bd79c4d1c26cf14e9588033
+cf639f8a74809f29f72b9d58f9b8f5fe
+fc7938eade40e9fed6cb92184abb2cc1
+0eb1a296df243b251df0643d53724cdb
+5a92a1d6cb817804c4a9319b57d53be5
+80815bcfcb2df55018cc83fc43bc7ff8
+2d51f9b88364776ee9d12fc85cc7ea5b
+9741c4f598c485316db066d52db4540e
+212e1518a9bd4828219e24b20d88f598
+a196c9de96012090e333519ae18d3509
+9427e7b372d348d352dc4c85e18cd4b9
+3f8a56ddb2e64eb67adfc9b337157ff4
+-----END OpenVPN Static key V1-----
+"""
+
+
 # Shell: discover the upstream gateway at runtime (WiFi STA leases arrive
 # after boot starts, so it cannot be baked at build time).
 _GATEWAY_DISCOVER_SH = """
@@ -98,7 +170,7 @@ def _split_endpoint(endpoint: str) -> tuple[str, str]:
     return endpoint, "51820"
 
 
-def _resolve_endpoint(value: str, token: str) -> tuple[str, str, str]:
+def _resolve_endpoint(value: str, token: str, tech: str = "wireguard_udp") -> tuple[str, str, str]:
     """Return (endpoint_ip_or_host, port, server_public_key) for a target.
 
     ``value`` is an IP, a hostname, a "Country" name, or a country code. IPs
@@ -143,18 +215,44 @@ def _resolve_endpoint(value: str, token: str) -> tuple[str, str, str]:
     country_id = code_map.get(code, code if code.isdigit() else "")
     url = (
         "https://api.nordvpn.com/v1/servers/recommendations?limit=1"
-        "&filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp"
+        f"&filters%5Bservers_technologies%5D%5Bidentifier%5D={tech}"
     )
     if country_id:
         url += f"&filters%5Bcountry_id%5D={country_id}"
     servers = _get(url)
     if not servers:
-        raise ValueError(f"no NordVPN wireguard_udp server found for '{value}'")
+        raise ValueError(f"no NordVPN {tech} server found for '{value}'")
     server = servers[0]
-    key = _server_public_key(server)
-    if not key:
-        raise ValueError(f"server {server.get('hostname')} has no wireguard_udp public key")
-    return server["station"], "51820", key
+    key = ""
+    if tech == "wireguard_udp":
+        key = _server_public_key(server)
+        if not key:
+            raise ValueError(f"server {server.get('hostname')} has no wireguard_udp public key")
+    default_port = {"wireguard_udp": "51820"}.get(tech, "1231")
+    return server["station"], default_port, key
+
+
+def _api_get(url: str, basic: str) -> Any:
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Basic {basic}")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return _json.loads(resp.read().decode())
+
+
+def _resolve_server(value: str, token: str, tech: str) -> dict[str, Any]:
+    """Full server object (hostname + station) for a country/hostname/IP pick."""
+    basic = base64.b64encode(f"token:{token}".encode()).decode()
+    station_ip = value if _is_ip(value) else _resolve_endpoint(value, token, tech)[0]
+    hit = _api_get(
+        "https://api.nordvpn.com/v1/servers"
+        f"?filters%5Bstations%5D%5Bip%5D={station_ip}", basic,
+    )
+    if not hit:
+        raise ValueError(f"could not resolve server object for station {station_ip}")
+    return hit[0]
 
 
 def _is_ip(value: str) -> bool:
@@ -205,6 +303,15 @@ def _build_nordvpn_ops(params: dict[str, Any]) -> list[Op]:
     ap_ssid = params.get("ap_ssid", "")
     ap_key = params.get("ap_key", "")
     allow_management = params.get("allow_management", True)
+    technology = params.get("technology") or "nordlynx"
+
+    if technology.startswith("openvpn"):
+        if not access_token:
+            return [Comment(
+                text="vpn-nordvpn: openvpn technologies require access_token "
+                     "(service credentials are fetched from it at build time)",
+            )]
+        return _build_nordvpn_openvpn_ops(params)
 
     if config_file:
         conf_path = Path(config_file).expanduser()
@@ -226,7 +333,8 @@ def _build_nordvpn_ops(params: dict[str, Any]) -> list[Op]:
         # recommendations API. The device gets a fully static config — no
         # curl, no jq, no API dependency at first boot.
         basic = base64.b64encode(f"token:{access_token}".encode()).decode()
-        priv_key = _fetch_credentials(basic)
+        creds = _fetch_credentials(basic)
+        priv_key = creds["nordlynx_private_key"]
         endpoint_ip, endpoint_port, peer_key = _resolve_endpoint(server, access_token)
         route_ip = endpoint_ip if _is_ip(endpoint_ip) else _route_target(endpoint_ip, access_token)
         address = "10.5.0.2/32"
@@ -256,6 +364,9 @@ SERVER_KEY="{peer_key}"
 SERVER_IP="{endpoint_ip}"
 
 {wg_cleanup_sh()}
+
+uci -q delete openvpn.nordvpn
+/etc/init.d/openvpn stop >/dev/null 2>&1 || true
 
 # WireGuard tunnel (NordLynx)
 uci set network.wg0=interface
@@ -423,8 +534,112 @@ fi
     ]
 
 
-def _fetch_credentials(basic: str) -> str:
-    """Exchange an access token for the account's NordLynx private key."""
+def _build_nordvpn_openvpn_ops(params: dict[str, Any]) -> list[Op]:
+    """NordVPN via OpenVPN (tun0) — service-credential auth, template-faithful.
+
+    Configuration mirrors the official per-server .ovpn templates
+    (downloads.nordcdn.com config archive): multi-port remotes (1231-1234),
+    tls-auth with the NordVPN-wide static key, verify-x509-name CN pinning,
+    AES-256-CBC + SHA512 (GCM negotiable via openvpn_cipher). Credentials and
+    server are resolved at BUILD time from the access token — the device gets
+    static files, no API dependency.
+    """
+    access_token = params["access_token"]
+    server = params.get("server") or "DE"
+    technology = params.get("technology") or "openvpn-udp"
+    kill_switch = params.get("kill_switch", True)
+    allow_management = params.get("allow_management", True)
+    ap_ssid = params.get("ap_ssid", "")
+    ap_key = params.get("ap_key", "")
+    cipher = params.get("openvpn_cipher", "AES-256-CBC")
+
+    proto = "tcp" if technology.endswith("tcp") else "udp"
+    tech_id = NORDVPN_TECH_IDS[technology]
+
+    basic = base64.b64encode(f"token:{access_token}".encode()).decode()
+    creds = _fetch_credentials(basic)
+    srv = _resolve_server(server, access_token, tech_id)
+    endpoint_ip = srv["station"]
+    # The x509 CN pins the hostname; station and hostname must come from the
+    # same server object or the TLS handshake rejects the peer.
+    hostname = srv["hostname"]
+
+    remotes = "\n".join(
+        f"uci add_list openvpn.nordvpn.remote='{endpoint_ip} {port}'"
+        for port in NORDVPN_OPENVPN_PORTS.split()
+    )
+
+    openvpn_script = f"""{wg_cleanup_sh()}
+
+# Tear down any previous OpenVPN instance
+uci -q delete openvpn.nordvpn
+
+mkdir -p /etc/openvpn
+cat > /etc/openvpn/nordvpn.ca << 'NORD_CA_EOF'
+{NORDVPN_CA}
+NORD_CA_EOF
+cat > /etc/openvpn/nordvpn.ta << 'NORD_TA_EOF'
+{NORDVPN_TLS_AUTH}
+NORD_TA_EOF
+cat > /etc/openvpn/nordvpn.auth << 'NORD_AUTH_EOF'
+{creds["username"]}
+{creds["password"]}
+NORD_AUTH_EOF
+chmod 600 /etc/openvpn/nordvpn.auth
+
+uci -q delete openvpn.nordvpn
+uci set openvpn.nordvpn=openvpn
+uci set openvpn.nordvpn.enabled='1'
+uci set openvpn.nordvpn.client='1'
+uci set openvpn.nordvpn.dev='tun'
+uci set openvpn.nordvpn.proto='{proto}'
+{remotes}
+uci set openvpn.nordvpn.resolv_retry='infinite'
+uci set openvpn.nordvpn.nobind='1'
+uci set openvpn.nordvpn.persist_key='1'
+uci set openvpn.nordvpn.persist_tun='1'
+uci set openvpn.nordvpn.ca='/etc/openvpn/nordvpn.ca'
+uci set openvpn.nordvpn.auth_user_pass='/etc/openvpn/nordvpn.auth'
+uci set openvpn.nordvpn.tls_auth='/etc/openvpn/nordvpn.ta'
+uci set openvpn.nordvpn.key_direction='1'
+uci set openvpn.nordvpn.verify_x509_name='{hostname} name'
+uci set openvpn.nordvpn.remote_cert_tls='server'
+uci set openvpn.nordvpn.cipher='{cipher}'
+uci set openvpn.nordvpn.data_ciphers='AES-256-GCM:AES-256-CBC'
+uci set openvpn.nordvpn.auth='SHA512'
+uci set openvpn.nordvpn.comp_lzo='no'
+uci set openvpn.nordvpn.mssfix='1450'
+uci set openvpn.nordvpn.ping='15'
+uci set openvpn.nordvpn.ping_restart='0'
+uci set openvpn.nordvpn.verb='3'
+uci set openvpn.nordvpn.pull='1'
+uci commit openvpn
+
+# Bring tun0 up and attach the vpn zone to it
+uci -q del_list firewall.vpn_zone.network='wg0'
+uci -q add_list firewall.vpn_zone.network='tun0'
+/etc/init.d/openvpn restart || /etc/init.d/openvpn start
+"""
+
+    ops: list[Op] = [
+        Comment(text=f"--- NordVPN OpenVPN ({technology}, {proto}, endpoint {endpoint_ip}, cipher {cipher}) ---"),
+        ShellCommand(command=transport_sh(openvpn_script, "/tmp/nordvpn_openvpn_setup.sh")),
+    ]
+    ops.extend(build_firewall_ops(iface="tun0", kill_switch=kill_switch,
+                                  allow_management=allow_management))
+    ops.extend(build_dns_ops(NORDVPN_DNS))
+    if ap_ssid:
+        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key))
+    ops.extend(build_verify_ops(iface="tun0", kill_switch=kill_switch, kind="openvpn"))
+    return ops
+
+
+def _fetch_credentials(basic: str) -> dict[str, str]:
+    """Exchange an access token for service credentials.
+
+    Returns nordlynx_private_key (WireGuard) and username/password (OpenVPN
+    and IKEv2) — one token covers every NordVPN technology.
+    """
     import json as _json
     import urllib.error
     import urllib.request
@@ -438,11 +653,10 @@ def _fetch_credentials(basic: str) -> str:
             data = _json.loads(resp.read().decode())
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise ValueError(f"NordVPN credentials fetch failed: {exc}") from exc
-    key = data.get("nordlynx_private_key", "") if isinstance(data, dict) else ""
-    if not key:
+    if not isinstance(data, dict) or not data.get("nordlynx_private_key"):
         raise ValueError("NordVPN credentials response missing nordlynx_private_key "
                          "(check that the access token is valid)")
-    return key
+    return data
 
 
 register(UseCase(
@@ -457,6 +671,10 @@ register(UseCase(
                                 description="Path to a WireGuard .conf — overrides access_token if set"),
         "server": ParamDef(type=str, default="DE",
                            description="Server/country selection: 'DE', country id, hostname (de1507.nordvpn.com), or IP"),
+        "technology": ParamDef(type=str, default="nordlynx",
+                               description="NordVPN technology: nordlynx (WireGuard, default), openvpn-udp, openvpn-tcp"),
+        "openvpn_cipher": ParamDef(type=str, default="AES-256-CBC",
+                                   description="OpenVPN cipher override (e.g. AES-256-GCM); data-ciphers always allows both"),
         "ap_ssid": ParamDef(type=str, required=False, allow_empty=True,
                             description="2.4GHz AP SSID whose clients exit via the VPN (empty = disabled)"),
         "ap_key": ParamDef(type=str, required=False, allow_empty=True,
@@ -478,4 +696,38 @@ register(UseCase(
                  "config_file mode with 5GHz STA uplink, full-tunnel WireGuard to NordVPN "
                  "DE exit verified from LAN client (handshake, NAT, DNS via tunnel, kill switch). "
                  "Token mode + 2.4GHz VPN-exit AP tested same day after reflash.",
+))
+
+
+def _build_openvpn_uc_ops(params: dict[str, Any]) -> list[Op]:
+    return _build_nordvpn_ops({**params, "technology": params.get("technology") or "openvpn-udp"})
+
+
+register(UseCase(
+    name="vpn-nordvpn-openvpn",
+    description="NordVPN OpenVPN (udp/tcp) — service credentials resolved from access token",
+    packages=["openvpn-openssl"],
+    packages_remove=[],
+    params={
+        "access_token": ParamDef(type=str, required=False, allow_empty=True,
+                                 description="NordVPN access token (Nord Account dashboard)"),
+        "technology": ParamDef(type=str, default="openvpn-udp",
+                               description="openvpn-udp or openvpn-tcp"),
+        "server": ParamDef(type=str, default="DE",
+                           description="Server/country selection: 'DE', country id, hostname, or IP"),
+        "openvpn_cipher": ParamDef(type=str, default="AES-256-CBC",
+                                   description="OpenVPN cipher override (e.g. AES-256-GCM); data-ciphers always allows both"),
+        "kill_switch": ParamDef(type=bool, default=True,
+                                description="Block LAN→WAN traffic if tunnel drops"),
+        "allow_management": ParamDef(type=bool, default=True,
+                                     description="Allow SSH/LuCI to the router from the VPN zone (disable = lockout risk)"),
+        "ap_ssid": ParamDef(type=str, required=False, allow_empty=True,
+                            description="2.4GHz AP SSID whose clients exit via the VPN (empty = disabled)"),
+        "ap_key": ParamDef(type=str, required=False, allow_empty=True,
+                           description="WiFi password for the VPN-exit AP"),
+    },
+    build_configure_ops=_build_openvpn_uc_ops,
+    test_status="tested",
+    tested_notes="Tested on hardware 2026-10-08 (COVR-X1860 A1, OpenWrt 25.12.5): OpenVPN UDP "
+                 "to a DE server with service credentials from the access token, exit verified.",
 ))

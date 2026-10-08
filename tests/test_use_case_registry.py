@@ -44,6 +44,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "vpn-pia": ("both", "auto"),
     "vpn-mullvad": ("both", "auto"),
     "vpn-nordvpn": ("both", "auto"),
+    "vpn-nordvpn-openvpn": ("both", "auto"),
     "vpn-ivpn": ("both", "auto"),
     "vpn-surfshark": ("both", "auto"),
     "vpn-openvpn": ("both", "auto"),
