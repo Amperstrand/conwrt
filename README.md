@@ -569,35 +569,39 @@ python3 scripts/wg-setup.py --peer 3 --server my-vpn-host
 
 ### NordVPN (vpn-nordvpn)
 
-**Status: Tested on hardware** (D-Link COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08). Full-tunnel WireGuard (NordLynx) with WiFi STA uplink verified end-to-end: handshake, LAN NAT through the tunnel, NordVPN DNS, kill switch. Exit observed: Hamburg, DE.
+**Status: Tested on hardware** (D-Link COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08): unattended ASU flash → first boot brings up the tunnel, the `nord` 2.4GHz VPN-exit AP, DHCP/DNS for its clients, and management access from the VPN zone. Verified end-to-end: wired client and WiFi client exit via NordVPN DE, kill switch blocks all traffic when the tunnel dies, exit IP ≠ upstream IP. E2E user stories live in `tests/e2e/test_nordvpn_e2e.py`.
 
-Two configuration modes in `config.toml`:
-
-**1. Static config file** (recommended for ASU-baked builds — zero device-side API calls):
+**Recommended: access token mode.** Everything resolves at BUILD time on the host (NordLynx key via `/v1/users/services/credentials` with HTTP Basic `token:<token>`, server via `/v1/servers/recommendations` with the `wireguard_udp` filter) and is baked as a static first-boot script — no curl, no jq, no API dependency on the device:
 
 ```toml
 [use_cases]
 enabled = ["vpn-nordvpn"]
 
 [use_cases.vpn-nordvpn]
-config_file = "/path/to/nordvpn.conf"   # WireGuard .conf from the NordVPN dashboard
-kill_switch = true                       # reject LAN→WAN if the tunnel drops
-upstream_iface = "wwan"                  # wwan for WiFi STA uplink, wan for ethernet
-```
-
-The `.conf` is parsed at build time on the host; the WireGuard keys, endpoint, and firewall rules are baked into the firmware's first-boot script.
-
-**2. Access token** (server selection happens automatically):
-
-```toml
-[use_cases.vpn-nordvpn]
 access_token = "nord-account-access-token"   # Nord Account → NordVPN → Manual setup
-server = "DE"                                # country code, country id, hostname, or IP
+server = "DE"                                # country code/name/id, hostname, or IP (default: DE)
+ap_ssid = "nord"                             # optional: 2.4GHz AP whose clients exit via the VPN
+ap_key = "nordnord"                          # AP password
+kill_switch = true                           # reject LAN→WAN if the tunnel drops
+upstream_iface = "wwan"                      # wwan for WiFi STA uplink, wan for ethernet
 ```
 
-The device fetches its NordLynx private key from `/v1/users/services/credentials` (HTTP Basic `token:<access_token>`) and picks a `wireguard_udp` server from `/v1/servers/recommendations`. Tunnel address is static `10.5.0.2/32`; per-server WireGuard public keys come from the server API metadata. The legacy service-username/password token exchange was removed by NordVPN in April 2023 and is not supported.
+**Server selection.** `server` accepts `DE`/`germany`/`81`, a concrete hostname (`de1507.nordvpn.com`), or an IP. Pick one with the companion CLI:
 
-Routing: the LAN is forwarded into the `vpn` firewall zone; the endpoint gets a /32 route via the upstream gateway (discovered at runtime from the default route, so WiFi STA uplinks work). Optional `upstream_gateway` pins it statically.
+```bash
+python3 scripts/nordvpn.py servers --country DE --limit 5      # hostname / station / load / pubkey
+python3 scripts/nordvpn.py config --token TOKEN --server de1507.nordvpn.com --out de1507.conf
+```
+
+The legacy service-username/password token exchange was removed by NordVPN in April 2023 and is not supported. Tunnel address is static `10.5.0.2/32`; per-server WireGuard public keys come from the API metadata (they differ per server — never hardcode).
+
+**Alternative: static config file.** A dashboard-exported WireGuard `.conf` (`config_file = "/path/to/nordvpn.conf"`) is parsed at build time and overrides the token. Useful for pre-generated keys.
+
+**VPN-exit AP (`ap_ssid`).** A second SSID on the 2.4GHz radio whose clients get a DHCP lease on `172.16.31.0/24` and exit exclusively through the tunnel — no path to LAN. Hardware-verified details baked into the generated config: the AP is bridged (`br-vpnlan` — standalone AP interfaces never delivered DHCP), lives in a dedicated `vpnap` firewall zone with `vpnap→vpn` forwarding (joining the vpn zone directly drops DHCP/DNS and client forwarding), raises the shared radio to 20 dBm (txpower is radio-wide), and re-arms dnsmasq once the bridge is up.
+
+**Management over the VPN (`allow_management`, default true).** TCP 22/80/443 from the vpn zone to the router are accepted, so you can reconfigure the router through the tunnel (or from the AP) instead of locking yourself out. Set `allow_management = false` only if you have another access path. DNS from the AP is scoped to `172.16.31.0/24` so the router is not an open resolver at its VPN exit IP.
+
+Routing: the LAN is forwarded into the `vpn` firewall zone; netifd's wireguard proto installs the endpoint /32 route via the upstream gateway when the uplink comes up (a short fallback discovery covers paths where it doesn't). Optional `upstream_gateway` pins it statically.
 
 ### Future Direction
 
