@@ -134,6 +134,15 @@ repo):
 - `data/inventory.jsonl` stays local and gitignored — treat it as a cache of
   your private project's data, never as the system of record.
 
+## Never rmmod Crypto/Kernel Drivers With Live References (2026-10-08)
+
+`rmmod crypto_hw_eip93` while a strongSwan SA held live crypto transforms
+wedged the x1860 kernel (network stack dead, wifi still beaconing, SSH
+impossible — power cycle required). Unloading a driver is only safe after
+its reference count is zero; check `lsmod` usage counts and tear down every
+consumer first. When a driver misbehaves, prefer blacklisting it for the
+next boot over rmmod on a live system.
+
 ## Never Switch the AI Host Off Its Working Internet
 
 The computer running opencode depends on its live connection to reach the AI
