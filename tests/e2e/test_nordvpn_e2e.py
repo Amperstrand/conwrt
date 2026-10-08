@@ -128,6 +128,38 @@ def test_us2_phone_gets_dhcp_lease_on_vpn_ap(device: dict, phone: str) -> None:
 
 @pytest.mark.smoke
 @pytest.mark.hardware
+def test_us2b_vpn_ap_state_router_side(device: dict) -> None:
+    """As an operator I can verify the VPN-exit AP's full data path config
+    from the router itself — no phone required.
+
+    Asserts the hardware-verified design invariants (each line cost a debug
+    round-trip on 2026-10-08): bridged AP, dedicated vpnap zone with
+    forwarding into vpn, DHCP/DNS/management input rules, DHCP range armed
+    in dnsmasq, radio at usable txpower.
+    """
+    checks = {
+        "bridge": "ip -br addr show br-vpnlan | grep -q 172.16.31.1",
+        "ap_beaconing": "iwinfo phy0-ap1 info | grep -q ESSID",
+        "txpower": "iwinfo phy0-ap1 info | grep -q 'Tx-Power: 2' ",
+        "zone": "uci -q get firewall.vpn_ap_zone.name | grep -q vpnap",
+        "forwarding": "[ \"$(uci -q get firewall.vpn_ap_fwd.src)\" = vpnap ] && "
+                      "[ \"$(uci -q get firewall.vpn_ap_fwd.dest)\" = vpn ]",
+        "dhcp_rule": "uci -q get firewall.vpn_ap_dhcp.name | grep -q DHCP",
+        "dns_rule": "uci -q get firewall.vpn_ap_dns.name | grep -q DNS",
+        "mgmt_rule": "uci -q get firewall.vpn_ap_mgmt.name | grep -q Management",
+        "dhcp_range_armed": "grep -q 'set:vpnlan,172.16.31' /tmp/etc/dnsmasq.conf.*",
+        "wifi_iface": "uci -q get wireless.wifinet_vpn_ap.mode | grep -q ap",
+    }
+    failures = []
+    for name, cmd in checks.items():
+        r = device_ssh(device, cmd)
+        if r.returncode != 0:
+            failures.append(name)
+    assert not failures, f"VPN AP state incomplete: {failures}"
+
+
+@pytest.mark.smoke
+@pytest.mark.hardware
 def test_us3_phone_exits_via_vpn(device: dict, phone: str) -> None:
     """As a phone user on 'nord', my traffic flows through the router's tunnel."""
     r = _adb("ping", "-c", "3", "-W", "4", "1.1.1.1", timeout=30)

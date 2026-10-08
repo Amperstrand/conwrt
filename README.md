@@ -535,6 +535,50 @@ The legacy service-username/password token exchange was removed by NordVPN in Ap
 
 Routing: the LAN is forwarded into the `vpn` firewall zone; netifd's wireguard proto installs the endpoint /32 route via the upstream gateway when the uplink comes up (a short fallback discovery covers paths where it doesn't). Optional `upstream_gateway` pins it statically.
 
+### NordVPN OpenVPN technology (vpn-nordvpn-openvpn)
+
+**Status: Tested on hardware** (COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08): token-driven service credentials + server resolution at build time, template-faithful config, exit verified (NordVPN UK). Perf: 134–168 Mbps with 65–78% CPU on the MT7621 (see the matrix below).
+
+The same access token drives it — one token, every technology:
+
+```toml
+[use_cases]
+enabled = ["vpn-nordvpn-openvpn"]
+
+[use_cases.vpn-nordvpn-openvpn]
+access_token = "nord-account-access-token"
+technology = "openvpn-udp"          # or openvpn-tcp
+server = "DE"                       # country/hostname/IP, same semantics as nordlynx
+openvpn_cipher = "AES-256-CBC"      # template default; AES-256-GCM also negotiable
+ap_ssid = "nord"                    # the VPN-exit AP works identically over OpenVPN
+kill_switch = true
+```
+
+The generated config mirrors NordVPN's official per-server `.ovpn` templates: multi-port remotes (1231–1234), the NordVPN-wide CA and tls-auth key (embedded as constants, verified identical across all servers), `verify-x509-name` CN pinning, `remote-cert-tls server`, AES-256-CBC/SHA512 with GCM in `data-ciphers` for NCP. Service username/password are fetched from the token at build time and land in `/etc/openvpn/nordvpn.auth` (chmod 600) — nothing sensitive is committed, and the device makes no API calls.
+
+### NordVPN IKEv2/IPsec on MT7621 — status and hardware acceleration (2026-10-08)
+
+Findings from a hardware bring-up session, recorded so the next attempt starts informed:
+
+- **IKEv2 to NordVPN works**: strongSwan 6.0.3 with EAP-MSCHAPv2 using the token-derived service credentials, IKE suite AES-CBC-256/HMAC-SHA2-256/MODP-2048, virtual IP 10.6.0.22. The server certificate chains to the same NordVPN Root CA used for OpenVPN.
+- **OpenWrt 25.12 mt7621 ships without kernel XFRM** — `kmod-ipsec4 kmod-xfrm-interface kmod-nft-xfrm` must be installed (image packages, not runtime downloads, for a baked build).
+- strongSwan needs these packages beyond the base: `strongswan-charon strongswan-swanctl strongswan-mod-{aes,sha1,sha2,gmp,hmac,pubkey,x509,pem,random,nonce,eap-identity,eap-mschapv2,md4,kernel-netlink,updown,attr,openssl}` and **`strongswan-mod-socket-default`** — with only `socket-dynamic`, charon logs "sending packet" while nothing ever leaves the interface (it never binds :500).
+- **ESP CHILD_SA install fails with EINVAL (`unable to add SAD entry`) while the EIP-93 crypto driver is loaded** — IKE succeeds, TS narrows to 0/0 ↔ vip/32, then the kernel rejects the SAD entry. Unloading `crypto_hw_eip93` was attempted to confirm the driver interaction and **wedged the kernel** (network stack dead, wifi still beaconing; power cycle required). Treat the eip93 driver on kernel 6.12.94 as untested with xfrm — blacklist it before attempting IPsec, and never rmmod it with live crypto references.
+- **Hardware acceleration reality on the MT7621 (EIP-93)**: accelerates `authenc(hmac(sha1/sha256),cbc(aes))` and `rfc3686(ctr(aes))` — classic IPsec ciphers, exactly what IKEv2 negotiated. It does **not** cover AES-GCM or ChaCha20-Poly1305: WireGuard and AES-GCM run on the MIPS cores (see `/proc/crypto`: `chacha20-mips`, `poly1305-mips`, generic GCM).
+- Userspace OpenSSL on this SoC: ChaCha20-Poly1305 ≈ 23 MB/s, AES-256-CBC ≈ 11 MB/s, AES-256-GCM ≈ 6 MB/s — OpenVPN is CPU-bound well below the WireGuard ceiling.
+
+### VPN performance matrix (x1860, OpenWrt 25.12.5, 2026-10-08)
+
+iperf3 download (10s, best of 2) from a controlled server, router CPU sampled at 1 Hz. Server path caps the absolute numbers (~170 Mbps); CPU% at that load still separates the protocols. Harness: `prta-scenario-poc/tests/test_conwrt_vpn_matrix.py` (results in its gitignored `results/`).
+
+| Technology | Throughput | Router CPU | Note |
+|---|---|---|---|
+| NordLynx (WireGuard, ChaCha20) | **172 Mbit/s** | 77% | fastest, kernel path |
+| OpenVPN UDP AES-256-GCM | 156 Mbit/s | 75% | userspace OpenSSL |
+| OpenVPN TCP | 168 Mbit/s | 78% | ≈ GCM (path-capped) |
+| OpenVPN UDP AES-256-CBC | 134 Mbit/s | 65% | CBC+HMAC slower per byte |
+| IKEv2/IPsec | not measured | — | blocked by the SAD/eip93 issue above |
+
 ### Future Direction
 
 `conwrt watch` is the first interactive layer: detect what's plugged in, ask, flash. The long-term vision builds on that — interview the user before flashing ("Do you want USB tethering? SQM? A VPN?") and build the image with everything pre-configured. The `config.toml` use-case system is the declarative foundation for that interview.
