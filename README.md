@@ -10,10 +10,47 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 > **DISCLAIMER**: conwrt flashes firmware onto real hardware. You must have legal authority to modify any device you use it on. Verify model definitions and firmware images before every flash. The authors accept no liability for bricked devices or data loss.
 
+## Quick Start
+
+Plug the router into this machine's ethernet port and run:
+
+```bash
+python3 scripts/conwrt.py watch
+```
+
+conwrt scans for routers in recovery mode (and running OpenWrt), identifies the model by probe evidence, and asks before it flashes. Confirm, and it builds a fresh image with your SSH keys and config baked in (from `config.toml`), flashes, and verifies over SSH:
+
+```
+$ conwrt watch
+Watching enp5s0 — probing 4 addresses every 5.0s (Ctrl-C to stop)
+  · 192.168.0.1 — uboot
+=======================================================
+  Device found: 192.168.0.1  (uboot)
+  MAC:      3E:85:BE:87:55:42
+  Model:    COVR-X1860 A1 mesh WiFi
+  Model ID: dlink-covr-x1860-a1
+=======================================================
+  → flash this device with a fresh ASU image (latest OpenWrt, your keys baked in)? [y/N]: y
+```
+
+A router already running OpenWrt is detected via SSH board fingerprint and offered an in-place upgrade instead.
+
+Other entry points:
+
+| Command | What it does |
+|---------|--------------|
+| `conwrt watch` | Scan loop: detect → prompt → flash (the just-works path) |
+| `conwrt probe` | One-shot table of what's on the wire (IP, state, model candidates) |
+| `conwrt auto` | Deep 5-phase detection (passive listen, LLDP, DHCP, ARP, probing) with menu |
+| `python3 scripts/conwrt_tui.py` | Interactive discovery TUI (preview/dry-run by design) |
+| `conwrt flash --model-id ID --request-image` | Direct flash of a known model |
+
+Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
+
 ## Requirements
 
-- macOS (uses `say` for voice guidance, `ifconfig` for interface detection)
-- `tcpdump` and `sudo` for pcap capture and network monitoring
+- Linux or macOS (Ubuntu 22.04+/Debian and macOS tested; passwordless `sudo -n` is used for interface aliases and packet capture — without it, scanning and flashing still work, with fewer live events)
+- `curl` and `ssh` on PATH
 - Python 3.10+
 - An ethernet cable and a router to flash
 
@@ -462,9 +499,41 @@ wg_interface = "wg0"
 python3 scripts/wg-setup.py --peer 3 --server my-vpn-host
 ```
 
+### NordVPN (vpn-nordvpn)
+
+**Status: Tested on hardware** (D-Link COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08). Full-tunnel WireGuard (NordLynx) with WiFi STA uplink verified end-to-end: handshake, LAN NAT through the tunnel, NordVPN DNS, kill switch. Exit observed: Hamburg, DE.
+
+Two configuration modes in `config.toml`:
+
+**1. Static config file** (recommended for ASU-baked builds — zero device-side API calls):
+
+```toml
+[use_cases]
+enabled = ["vpn-nordvpn"]
+
+[use_cases.vpn-nordvpn]
+config_file = "/path/to/nordvpn.conf"   # WireGuard .conf from the NordVPN dashboard
+kill_switch = true                       # reject LAN→WAN if the tunnel drops
+upstream_iface = "wwan"                  # wwan for WiFi STA uplink, wan for ethernet
+```
+
+The `.conf` is parsed at build time on the host; the WireGuard keys, endpoint, and firewall rules are baked into the firmware's first-boot script.
+
+**2. Access token** (server selection happens automatically):
+
+```toml
+[use_cases.vpn-nordvpn]
+access_token = "nord-account-access-token"   # Nord Account → NordVPN → Manual setup
+server = "DE"                                # country code, country id, hostname, or IP
+```
+
+The device fetches its NordLynx private key from `/v1/users/services/credentials` (HTTP Basic `token:<access_token>`) and picks a `wireguard_udp` server from `/v1/servers/recommendations`. Tunnel address is static `10.5.0.2/32`; per-server WireGuard public keys come from the server API metadata. The legacy service-username/password token exchange was removed by NordVPN in April 2023 and is not supported.
+
+Routing: the LAN is forwarded into the `vpn` firewall zone; the endpoint gets a /32 route via the upstream gateway (discovered at runtime from the default route, so WiFi STA uplinks work). Optional `upstream_gateway` pins it statically.
+
 ### Future Direction
 
-The long-term vision is an interactive menu system that interviews the user before flashing: "Do you want USB tethering? SQM? A VPN?" — then builds a firmware image with everything pre-configured. The current `config.toml` approach is the declarative foundation for that interactive layer.
+`conwrt watch` is the first interactive layer: detect what's plugged in, ask, flash. The long-term vision builds on that — interview the user before flashing ("Do you want USB tethering? SQM? A VPN?") and build the image with everything pre-configured. The `config.toml` use-case system is the declarative foundation for that interview.
 
 ## WiFi STA/AP Configuration
 
