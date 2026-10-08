@@ -110,7 +110,7 @@ def cmd_servers(args: argparse.Namespace) -> int:
 
 def cmd_config(args: argparse.Namespace) -> int:
     basic = base64.b64encode(f"token:{args.token}".encode()).decode()
-    priv_key = _fetch_credentials(basic)
+    priv_key = _fetch_credentials(basic)["nordlynx_private_key"]
     endpoint_ip, port, peer_key = _resolve_endpoint(args.server or "DE", args.token)
     host = endpoint_ip if _is_ip(endpoint_ip) else endpoint_ip
     conf = (

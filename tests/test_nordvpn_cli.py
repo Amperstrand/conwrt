@@ -87,7 +87,7 @@ class TestServers:
 
 class TestConfigRender:
     def test_renders_conf_from_token(self, tmp_path, capsys):
-        with patch.object(nordvpn_cli, "_fetch_credentials", return_value="PRIV="), \
+        with patch.object(nordvpn_cli, "_fetch_credentials", return_value={"nordlynx_private_key": "PRIV=", "username": "u", "password": "p"}), \
              patch.object(nordvpn_cli, "_resolve_endpoint",
                           return_value=("187.40.55.102", "51820", "SRV=")):
             out = tmp_path / "nordvpn.conf"

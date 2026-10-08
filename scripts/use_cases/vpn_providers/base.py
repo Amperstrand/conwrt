@@ -194,8 +194,14 @@ def build_dns_ops(dns_servers: list[str]) -> list[Op]:
     return ops
 
 
-def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
-    """Commit, restart network, verify handshake. Auto-remove kill switch on failure."""
+def build_verify_ops(iface: str = "wg0", kill_switch: bool = True,
+                     kind: str = "wireguard") -> list[Op]:
+    """Commit, restart network, verify tunnel. Auto-remove kill switch on failure.
+
+    kind="wireguard": success = `wg show` handshake within 30s.
+    kind="openvpn": success = tun iface up with an address (traffic check is
+    left to the caller — OpenVPN has no equivalent single probe).
+    """
     ops: list[Op] = [
         UciCommit(config="network"),
         UciCommit(config="firewall"),
@@ -203,18 +209,34 @@ def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
         ServiceAction(name="network", action="restart"),
         ServiceAction(name="dnsmasq", action="restart"),
     ]
-    if kill_switch:
+    if not kill_switch:
+        return ops
+    if kind == "openvpn":
         ops.append(ShellCommand(
             command=(
-                "i=0; while [ $i -lt 30 ]; do"
-                f" if wg show {iface} 2>/dev/null | grep -q 'latest handshake'; then"
-                " echo 'VPN: tunnel verified'; exit 0;"
+                "i=0; while [ $i -lt 45 ]; do"
+                f" if ip -4 addr show dev {iface} 2>/dev/null | grep -q inet; then"
+                " echo 'VPN: tun interface verified'; exit 0;"
                 " fi; sleep 1; i=$((i+1));"
                 " done;"
-                " echo 'VPN: tunnel failed — removing kill switch to restore WAN';"
+                " echo 'VPN: tun interface failed — removing kill switch to restore WAN';"
                 " uci delete firewall.vpn_killswitch;"
                 " uci commit firewall;"
                 " fw4 restart"
             ),
         ))
+        return ops
+    ops.append(ShellCommand(
+        command=(
+            "i=0; while [ $i -lt 30 ]; do"
+            f" if wg show {iface} 2>/dev/null | grep -q 'latest handshake'; then"
+            " echo 'VPN: tunnel verified'; exit 0;"
+            " fi; sleep 1; i=$((i+1));"
+            " done;"
+            " echo 'VPN: tunnel failed — removing kill switch to restore WAN';"
+            " uci delete firewall.vpn_killswitch;"
+            " uci commit firewall;"
+            " fw4 restart"
+        ),
+    ))
     return ops

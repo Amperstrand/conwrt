@@ -190,7 +190,7 @@ class TestNordvpnOps:
 
     def test_token_mode_resolves_at_build_time(self):
         """Token mode bakes a static config — no API calls from the device."""
-        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="PRIVKEY="), \
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value={"nordlynx_private_key": "PRIVKEY=", "username": "u", "password": "p"}), \
              patch.object(watch_nordvpn, "_resolve_endpoint",
                           return_value=("185.1.2.3", "51820", "SRVKEY=")):
             r = render_shell(_build_nordvpn_ops({"access_token": "a" * 64}))
@@ -201,7 +201,7 @@ class TestNordvpnOps:
         assert "curl" not in r, "no curl dependency on the device"
 
     def test_server_defaults_to_de(self):
-        with patch.object(watch_nordvpn, "_fetch_credentials", return_value="P="), \
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value={"nordlynx_private_key": "P=", "username": "u", "password": "p"}), \
              patch.object(watch_nordvpn, "_resolve_endpoint", wraps=watch_nordvpn._resolve_endpoint) as mock:
             mock.side_effect = lambda server, token: ("1.2.3.4", "51820", "K=")
             _build_nordvpn_ops({"access_token": "a" * 64})
@@ -484,3 +484,40 @@ class TestVpnProviderRegistry:
         assert uc.params["ovpn_config"].required
         assert "wireguard-tools" not in uc.packages
         assert "openvpn-openssl" in uc.packages
+
+
+class TestHeredocTransportVerbatim:
+    def test_run_step_script_preserves_hash_lines_in_heredocs(self):
+        """Heredoc payloads carry key/cert data where '#' lines are DATA.
+
+        Regression: _run_step_script stripped comment-looking lines from the
+        whole payload, silently truncating OpenVPN tls-auth keys (TLS
+        handshake failures, 2026-10-08).
+        """
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+        from profile.apply import _run_step_script
+
+        captured = {}
+
+        def fake_run(cmd, input=None, **kwargs):
+            captured["payload"] = input
+            return type("R", (), {"returncode": 0, "stderr": ""})()
+
+        import profile.apply as apply_mod
+        with patch.object(apply_mod.subprocess, "run", side_effect=fake_run):
+            ok = _run_step_script(
+                "192.168.0.1",
+                "cat > /etc/k << 'EOF'\n"
+                "-----BEGIN KEY-----\n"
+                "#\n"
+                "# 2048 bit key\n"
+                "#\n"
+                "deadbeef\n"
+                "EOF\n",
+                "", lambda m: None,
+            )
+        assert ok
+        assert "# 2048 bit key" in captured["payload"], "heredoc data line stripped"
+        assert "deadbeef" in captured["payload"]
