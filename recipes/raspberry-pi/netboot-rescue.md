@@ -178,3 +178,23 @@ without UART there is no panic visibility. Symptom: the Pi netboot-fetches in
 a ~5-minute loop forever, never reaching the network. To RAM-netboot OpenWrt
 you must build a custom kernel with initramfs support; for stock OpenWrt on
 a Pi, boot the factory image from USB media instead.
+
+## dropbear 2025.89 (OpenWrt 25.12): authorized_keys path and directory perms
+
+Verified 2026-10-10 on RAM-netbooted OpenWrt 25.12.5 (dropbear 2025.89):
+
+- The home-path `~/.ssh/authorized_keys` is REFUSED for key auth (silent
+  rejection at the key-query phase; dropbear log shows no reason). The
+  `/etc/dropbear/authorized_keys` path works.
+- `/etc/dropbear` itself must be mode 700 (755 tripped
+  "/etc/dropbear must be owned by user or root, and not writable by group or
+  others" — the check is stricter than the message suggests). Files inside
+  must be 600 root:root.
+- Files injected via the buildroot `files/` overlay inherit the build user's
+  umask (dirs 775, owned by the build user; fakeroot fixes ownership but NOT
+  mode bits) — enforce modes with an `uci-defaults` script baked into the
+  image, e.g. `chmod 700 /etc/dropbear; chmod 600 /etc/dropbear/authorized_keys`.
+- RAM-booted systems regenerate host keys every boot → known_hosts churn for
+  every client. Bake static host keys into the image (files/etc/dropbear/
+  dropbear_*_host_key, extracted from a running instance) to keep SSH clients
+  stable across reboots.
