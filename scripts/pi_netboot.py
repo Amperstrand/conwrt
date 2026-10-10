@@ -53,11 +53,25 @@ DNSMASQ_CONF = "/etc/dnsmasq.conf"
 # ---------------------------------------------------------------------------
 
 def render_block(router_ip: str, macs: list[str], tftp_root: str,
-                 bootfile: str = DEFAULT_BOOTFILE) -> str:
-    """Render the dnsmasq config block for the rescue server."""
-    host_lines = "\n".join(
-        f"dhcp-host={mac.lower()},set:pinetboot" for mac in macs
-    )
+                 bootfile: str = DEFAULT_BOOTFILE,
+                 pin_ips: list[str | None] | None = None) -> str:
+    """Render the dnsmasq config block for the rescue server.
+
+    ``pin_ips`` (optional, one entry per MAC, None entries unpinned) appends a
+    static lease IP to each dhcp-host line. A pinned lease keeps the netbooted
+    box at a predictable address — test rigs key on it, and an unpinned block
+    has bitten us before (the pin was lost on a re-arm and the RAM-booted box
+    came up on a random pool address).
+    """
+    if pin_ips is not None and len(pin_ips) != len(macs):
+        raise ValueError("pin_ips must have one entry per MAC (use None to skip)")
+    lines = []
+    for i, mac in enumerate(macs):
+        entry = f"dhcp-host={mac.lower()},set:pinetboot"
+        if pin_ips and pin_ips[i]:
+            entry += f",{pin_ips[i]}"
+        lines.append(entry)
+    host_lines = "\n".join(lines)
     return (
         f"{MARKER_START}\n"
         f"{host_lines}\n"
@@ -68,6 +82,38 @@ def render_block(router_ip: str, macs: list[str], tftp_root: str,
         f"log-dhcp\n"
         f"{MARKER_END}"
     )
+
+
+# Firmware files the Pi bootloader fetches over TFTP before the kernel.
+# They ship inside every OpenWrt bcm27xx factory image (boot partition).
+REQUIRED_FIRMWARE = ("start4.elf", "fixup4.dat")
+DEFAULT_CMDLINE = "console=serial0,115200"
+
+
+def render_config_txt(kernel: str, dtb: str,
+                      extra_lines: list[str] | None = None) -> str:
+    """config.txt for a single-file initramfs kernel (rootfs embedded).
+
+    No ``initramfs`` directive: buildroot images built with
+    CONFIG_TARGET_ROOTFS_INITRAMFS embed the rootfs in the kernel binary
+    itself, and an explicit directive would point at a file that does not
+    exist.
+    """
+    lines = ["[all]", "arm_64bit=1", "arm_boost=1",
+             f"kernel={kernel}", f"device_tree={dtb}"]
+    if extra_lines:
+        lines.extend(extra_lines)
+    return "\n".join(lines) + "\n"
+
+
+def render_cmdline_txt(cmdline: str = DEFAULT_CMDLINE) -> str:
+    return cmdline + "\n"
+
+
+def missing_firmware(present_files: list[str]) -> list[str]:
+    """Firmware files absent from the TFTP tree (bootloader needs them all)."""
+    present = {Path(f).name for f in present_files}
+    return [f for f in REQUIRED_FIRMWARE if f not in present]
 
 
 def strip_block(config_text: str, marker: str = MARKER_START) -> tuple[str, bool]:
@@ -172,6 +218,28 @@ def write_remote_config(router: str, config_text: str) -> None:
         raise RuntimeError(f"cannot write {DNSMASQ_CONF}: {proc.stderr}")
 
 
+def write_remote_file(router: str, remote_path: str, content: str) -> None:
+    proc = run_ssh(router, f"cat > '{remote_path}'", timeout=30, input=content)
+    if proc.returncode != 0:
+        raise RuntimeError(f"cannot write {remote_path}: {proc.stderr}")
+
+
+def list_remote_dir(router: str, remote_dir: str) -> list[str]:
+    rc, out, err = _ssh(router, f"ls {remote_dir} 2>/dev/null")
+    if rc != 0:
+        return []
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def scp_files_to(router: str, files: list[Path], remote_dir: str) -> None:
+    import subprocess
+    cmd = ["scp", "-O", "-o", "BatchMode=yes"] + [str(f) for f in files] + [
+        f"root@{router}:{remote_dir}/"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"scp failed: {proc.stderr}")
+
+
 def restart_dnsmasq(router: str) -> None:
     _ssh(router, "/etc/init.d/dnsmasq restart", timeout=60)
     time.sleep(3)
@@ -221,10 +289,17 @@ def cmd_arm(args: argparse.Namespace) -> int:
     tree_dir = Path(args.tree).expanduser().resolve()
     macs = [m.lower() for m in args.mac]
     tftp_root = args.tftp_root or remote_detect_tftp_root(args.router)
+    pin: list[str] | None = None
+    if getattr(args, "ip", None):
+        if len(macs) != 1:
+            print("--ip requires exactly one --mac", file=sys.stderr)
+            return 1
+        pin = [args.ip]
 
     print(f"router      : {args.router}")
     print(f"tree        : {tree_dir} -> {tftp_root}")
-    print(f"macs        : {', '.join(macs)}")
+    print(f"macs        : {', '.join(macs)}"
+          + (f" pinned to {args.ip}" if pin else ""))
 
     upload_tree(args.router, tree_dir, tftp_root)
 
@@ -232,7 +307,7 @@ def cmd_arm(args: argparse.Namespace) -> int:
     was_armed = is_armed(old_conf)
     base = strip_block(old_conf)[0] if was_armed else old_conf
     new_conf = base.rstrip() + "\n\n" + render_block(
-        args.router, macs, tftp_root, args.bootfile) + "\n"
+        args.router, macs, tftp_root, args.bootfile, pin_ips=pin) + "\n"
 
     write_remote_config(args.router, new_conf)
     restart_dnsmasq(args.router)
@@ -248,6 +323,85 @@ def cmd_arm(args: argparse.Namespace) -> int:
 
     print(f"ARMED ({'updated' if was_armed else 'new block'}): "
           f"netboot rescue serving {tftp_root} to {len(macs)} MAC(s)")
+    return 0
+
+
+def cmd_deploy(args: argparse.Namespace) -> int:
+    """Deploy a full-OS initramfs kernel to the netboot server.
+
+    The proven chain (OpenWrt 25.12.5 on a Pi 4B, verified end to end):
+    buildroot image with CONFIG_TARGET_ROOTFS_INITRAMFS=y produces a single
+    kernel binary with the rootfs embedded; the bootloader fetches firmware
+    files + kernel + DTB over TFTP and boots a RAM-only system.
+    """
+    kernel = Path(args.kernel).expanduser().resolve()
+    dtb = Path(args.dtb).expanduser().resolve()
+    for label, path in (("kernel", kernel), ("dtb", dtb)):
+        if not path.is_file():
+            print(f"{label} file not found: {path}", file=sys.stderr)
+            return 1
+
+    tftp_root = args.tftp_root or remote_detect_tftp_root(args.router)
+    print(f"router      : {args.router}")
+    print(f"tftp root   : {tftp_root}")
+    print(f"kernel      : {kernel.name} ({kernel.stat().st_size} bytes)")
+    print(f"dtb         : {dtb.name}")
+
+    rc, _, err = _ssh(args.router, f"mkdir -p {tftp_root}")
+    if rc != 0:
+        print(f"cannot create {tftp_root}: {err}", file=sys.stderr)
+        return 1
+
+    missing = missing_firmware(list_remote_dir(args.router, tftp_root))
+    if missing:
+        fw_dir = Path(args.firmware_dir).expanduser() if args.firmware_dir else None
+        if fw_dir is None:
+            print(f"missing Pi firmware files in TFTP root: {', '.join(missing)}",
+                  file=sys.stderr)
+            print("pass --firmware-dir DIR (any OpenWrt bcm27xx factory image's "
+                  "boot partition has them)", file=sys.stderr)
+            return 1
+        fw_files = [fw_dir / name for name in missing]
+        for f in fw_files:
+            if not f.is_file():
+                print(f"firmware file not found: {f}", file=sys.stderr)
+                return 1
+        print(f"uploading firmware: {', '.join(missing)}")
+        scp_files_to(args.router, fw_files, tftp_root)
+
+    scp_files_to(args.router, [kernel, dtb], tftp_root)
+    write_remote_file(args.router, f"{tftp_root}/config.txt",
+                      render_config_txt(kernel.name, dtb.name))
+    write_remote_file(args.router, f"{tftp_root}/cmdline.txt",
+                      render_cmdline_txt(args.cmdline))
+    print(f"boot files  : config.txt (kernel={kernel.name}, dtb={dtb.name}), "
+          f"cmdline.txt ({args.cmdline})")
+
+    old_conf = read_remote_config(args.router)
+    if not is_armed(old_conf):
+        if not args.mac:
+            print("dnsmasq block not armed and no --mac given — cannot serve "
+                  "boot files to any Pi", file=sys.stderr)
+            return 1
+        pin = [args.ip] if args.ip else None
+        new_conf = old_conf.rstrip() + "\n\n" + render_block(
+            args.router, [m.lower() for m in args.mac], tftp_root,
+            pin_ips=pin) + "\n"
+        write_remote_config(args.router, new_conf)
+        restart_dnsmasq(args.router)
+        if not dnsmasq_healthy(args.router, tftp_root):
+            print("dnsmasq unhealthy after arming — rolling back", file=sys.stderr)
+            write_remote_config(args.router, old_conf)
+            restart_dnsmasq(args.router)
+            return 1
+        print(f"ARMED for {len(args.mac)} MAC(s)"
+              + (f" at {args.ip}" if args.ip else ""))
+    else:
+        print("dnsmasq block already armed — files only, no restart needed")
+
+    print("\nnext: power-cycle the Pi. Kernel fetch shows in "
+          "'logread | grep tftp' on the router; a RAM-only OpenWrt reaches "
+          "SSH in ~90s.")
     return 0
 
 
@@ -331,7 +485,32 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--tree", required=True,
                     help="local rescue boot tree (must contain config.txt)")
     sp.add_argument("--bootfile", default=DEFAULT_BOOTFILE)
+    sp.add_argument("--ip", default=None,
+                    help="pin a static lease IP (single --MAC only) so the "
+                         "netbooted box is always reachable at a known address")
     sp.set_defaults(func=cmd_arm)
+
+    sp = sub.add_parser(
+        "deploy",
+        help="deploy a full-OS initramfs kernel + dtb to the netboot server")
+    add_common(sp, macs=False)
+    sp.add_argument("--mac", nargs="+", default=None,
+                    help="Pi MAC(s) — required only if not already armed")
+    sp.add_argument("--kernel", required=True,
+                    help="initramfs kernel binary (rootfs embedded, e.g. "
+                         "openwrt-*-initramfs-kernel.bin from a buildroot "
+                         "built with CONFIG_TARGET_ROOTFS_INITRAMFS=y)")
+    sp.add_argument("--dtb", required=True,
+                    help="matching device tree blob (e.g. bcm2711-rpi-4-b.dtb)")
+    sp.add_argument("--firmware-dir", default=None,
+                    help="dir with start4.elf/fixup4.dat (OpenWrt bcm27xx "
+                         "factory image boot partition) — needed once per "
+                         "TFTP root")
+    sp.add_argument("--cmdline", default=DEFAULT_CMDLINE,
+                    help=f"kernel cmdline (default: {DEFAULT_CMDLINE})")
+    sp.add_argument("--ip", default=None,
+                    help="pin a static lease IP when arming is needed")
+    sp.set_defaults(func=cmd_deploy)
 
     sp = sub.add_parser("disarm", help="remove the managed dnsmasq block")
     add_common(sp)

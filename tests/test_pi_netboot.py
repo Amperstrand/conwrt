@@ -6,10 +6,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from pi_netboot import (
+    DEFAULT_CMDLINE,
     is_armed,
+    missing_firmware,
     netboot_loop_candidates,
     parse_dhcp_log,
     render_block,
+    render_cmdline_txt,
+    render_config_txt,
     strip_block,
 )
 
@@ -138,3 +142,80 @@ Thu Oct  8 09:47:00 2026 daemon.info dnsmasq[1]: unrelated non-dhcp line
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRenderBlockPins(unittest.TestCase):
+    def test_pin_appends_ip_to_dhcp_host(self):
+        block = render_block("10.0.0.1", ["aa:bb:cc:dd:ee:ff"], "/tmp/x",
+                             pin_ips=["10.0.0.50"])
+        self.assertIn("dhcp-host=aa:bb:cc:dd:ee:ff,set:pinetboot,10.0.0.50",
+                      block)
+
+    def test_none_pin_keeps_plain_host(self):
+        block = render_block("10.0.0.1", ["aa:bb:cc:dd:ee:ff"], "/tmp/x",
+                             pin_ips=[None])
+        self.assertIn("dhcp-host=aa:bb:cc:dd:ee:ff,set:pinetboot\n", block)
+
+    def test_mixed_pins(self):
+        block = render_block("10.0.0.1", ["aa:aa:aa:aa:aa:aa",
+                                          "bb:bb:bb:bb:bb:bb"], "/tmp/x",
+                             pin_ips=[None, "10.0.0.9"])
+        self.assertIn("dhcp-host=aa:aa:aa:aa:aa:aa,set:pinetboot\n", block)
+        self.assertIn("dhcp-host=bb:bb:bb:bb:bb:bb,set:pinetboot,10.0.0.9",
+                      block)
+
+    def test_pin_list_length_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            render_block("10.0.0.1", ["aa:aa:aa:aa:aa:aa"], "/tmp/x",
+                         pin_ips=["10.0.0.1", "10.0.0.2"])
+
+
+class TestRenderConfigTxt(unittest.TestCase):
+    def test_single_file_kernel_no_initramfs_directive(self):
+        txt = render_config_txt("openwrt-initramfs-kernel.bin",
+                                "bcm2711-rpi-4-b.dtb")
+        self.assertIn("arm_64bit=1", txt)
+        self.assertIn("kernel=openwrt-initramfs-kernel.bin", txt)
+        self.assertIn("device_tree=bcm2711-rpi-4-b.dtb", txt)
+        directive_lines = [ln for ln in txt.splitlines()
+                           if ln.startswith("initramfs")]
+        self.assertEqual(directive_lines, [])
+        self.assertTrue(txt.endswith("\n"))
+
+    def test_extra_lines_appended(self):
+        txt = render_config_txt("k.bin", "d.dtb", extra_lines=["hdmi=off"])
+        self.assertIn("hdmi=off", txt)
+        self.assertLess(txt.index("device_tree="), txt.index("hdmi=off"))
+
+
+class TestRenderCmdline(unittest.TestCase):
+    def test_default_and_custom(self):
+        self.assertEqual(render_cmdline_txt(), DEFAULT_CMDLINE + "\n")
+        self.assertEqual(render_cmdline_txt("quiet"), "quiet\n")
+
+
+class TestMissingFirmware(unittest.TestCase):
+    def test_empty_tree_reports_all(self):
+        self.assertEqual(missing_firmware([]),
+                         ["start4.elf", "fixup4.dat"])
+
+    def test_populated_tree_reports_none(self):
+        self.assertEqual(
+            missing_firmware(["config.txt", "start4.elf", "fixup4.dat",
+                              "kernel8.img"]), [])
+
+    def test_partial_tree(self):
+        self.assertEqual(missing_firmware(["start4.elf"]), ["fixup4.dat"])
+
+
+class TestDeployParser(unittest.TestCase):
+    def test_deploy_subcommand_requires_kernel_and_dtb(self):
+        import pi_netboot as pn
+        with self.assertRaises(SystemExit) as cm:
+            pn.main(["deploy", "--router", "10.0.0.1"])
+        self.assertEqual(cm.exception.code, 2)
+
+        with self.assertRaises(SystemExit) as cm:
+            pn.main(["deploy", "--router", "10.0.0.1", "--kernel", "/k",
+                     "--dtb", "/d", "--help"])
+        self.assertEqual(cm.exception.code, 0)
