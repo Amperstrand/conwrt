@@ -99,3 +99,23 @@ must survive.
 
 `pi_netboot.py disarm --purge` removes the dnsmasq block and TFTP tree; the
 Pi falls through to its next boot medium (USB/SD).
+
+## Reseller mode on a single-port Pi (verified limitation)
+
+A RAM-booted Pi was verified as a full reseller hop: gateway redirected to an
+upstream TollGate (tag-scoped dnsmasq option 3), `reseller_mode: true`, wallet
+funded with Cashu tokens from the shared test mint — the Pi discovered the
+upstream, paid 452 sats, and received a 9.95 GB metered allotment, then
+correctly attempted renewals.
+
+Two topology constraints discovered:
+
+- The wired upstream detector only probes PHYSICAL interfaces. With the port
+  bridged into `br-lan` (required by the tollgate packaging's nftables
+  exemption and stock nodogsplash), no wired probe fires — `only_interfaces:
+  ["br-lan"]` does not override this. Reseller-on-wireless (upstream_wifi) or
+  an unbridged WAN-class port is the supported path; a single-port Pi doing
+  wired reseller needs the unbridged topology and loses the bridge-native
+  packaging behavior.
+- The backend rewrites `config.json` at startup; edit it before first start or
+  restart after editing (RAM boots are always "first boot").
