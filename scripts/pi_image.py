@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Provision an OS image onto a disk attached to a Raspberry Pi, over SSH.
+
+Designed for headless lab Pis managed by conwrt: the Pi runs an OS with SSH
+access (e.g. Raspberry Pi OS or Ubuntu on a boot stick), a target disk is
+attached to it, and this tool:
+
+1. pre-flights the target (exists, is a disk, big enough, nothing mounted),
+2. transfers a compressed OS image (local file served over LAN HTTP, or a URL),
+3. verifies the sha256 checksum,
+4. streams it onto the disk (xz-decompressed dd),
+5. injects cloud-init headless config (user, ssh key, hostname, DHCP).
+
+Requires SSH on the target: the conwrt netboot rescue shell only runs telnetd,
+so a rescue-shell flash is a manual procedure — see
+recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick on the
+workstation, use the Rescue Kit flash script instead.
+
+Usage:
+    pi_image.py provision --host 192.168.13.240 --device /dev/sdb \
+        --image ubuntu.img.xz --sha256 <hash> --hostname pi4 \
+        --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub
+
+Wipes the target disk. Never points --device at the Pi's boot medium.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import socket
+import subprocess
+import sys
+import threading
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ssh_utils import run_ssh  # noqa: E402
+
+MIN_DEVICE_GB = 8
+DD_BLOCK = "4M"
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (unit-testable)
+# ---------------------------------------------------------------------------
+
+def _is_mounted(entry: dict) -> bool:
+    """lsblk emits mountpoints as a string, a list (possibly of nulls), or null."""
+    mp = entry.get("mountpoints")
+    if not mp:
+        return False
+    if isinstance(mp, str):
+        return bool(mp)
+    return any(bool(m) for m in mp)
+
+
+def pick_target_device(lsblk_json: str, min_gb: int = MIN_DEVICE_GB,
+                       allow_mounted: bool = False) -> str:
+    """Choose the target disk from `lsblk -b -J -o ...` output.
+
+    Returns the device path (e.g. /dev/sda). Refuses anything that is not a
+    whole disk, is too small, or has mounted partitions.
+    """
+    data = json.loads(lsblk_json)
+    devices = data.get("blockdevices", [])
+    candidates: list[tuple[str, int, str]] = []
+    for dev in devices:
+        if dev.get("type") != "disk":
+            continue
+        size = int(dev.get("size", 0))
+        name = f"/dev/{dev['name']}"
+        mounted = (_is_mounted(dev)
+                   or any(_is_mounted(c) for c in (dev.get("children") or [])))
+        if mounted and not allow_mounted:
+            continue
+        if size >= min_gb * (1 << 30):
+            candidates.append((name, size, dev.get("model") or ""))
+    if len(candidates) == 1:
+        return candidates[0][0]
+    if not candidates:
+        raise SystemExit(
+            f"no eligible disk >= {min_gb}GB found (unmounted whole disks only)")
+    detail = ", ".join(f"{n} ({s // (1 << 30)}GB, {m})" for n, s, m in candidates)
+    raise SystemExit(f"multiple eligible disks — pick explicitly: {detail}")
+
+
+def boot_partition(device: str) -> str:
+    """First partition path, handling both /dev/sda and /dev/mmcblk0 styles."""
+    return device + ("p1" if device[-1].isdigit() else "1")
+
+
+def render_meta_data(hostname: str) -> str:
+    return f"instance-id: {hostname}\nlocal-hostname: {hostname}\n"
+
+
+def render_user_data(user: str, hostname: str, ssh_keys: list[str],
+                     sudo_nopass: bool = True,
+                     password: str | None = None) -> str:
+    """Render #cloud-config user-data.
+
+    Forces ssh on at boot (runcmd) — some raspi images ship sshd disabled and
+    would lock out a headless box. `password` (if set) is the account's
+    break-glass password; callers must record it in a credentials file.
+    """
+    sudo_rule = "ALL=(ALL) NOPASSWD:ALL" if sudo_nopass else "ALL=(ALL):ALL"
+    stanza = [
+        f"  - name: {user}",
+        "    groups: [adm, sudo]",
+        "    shell: /bin/bash",
+        f"    sudo: {sudo_rule}",
+        "    lock_passwd: true",
+    ]
+    if password:
+        stanza.append(f"    password: {password}")
+    stanza.append("    ssh_authorized_keys:")
+    stanza += [f"      - {key}" for key in ssh_keys]
+    return (
+        "#cloud-config\n"
+        f"hostname: {hostname}\n"
+        "manage_etc_hosts: true\n"
+        "users:\n"
+        + "\n".join(stanza) + "\n"
+        "ssh_pwauth: false\n"
+        "chpasswd:\n"
+        "  expire: false\n"
+        "runcmd:\n"
+        "  - systemctl enable --now ssh || systemctl enable --now sshd || true\n"
+    )
+
+
+def render_network_config() -> str:
+    return (
+        "version: 2\n"
+        "ethernets:\n"
+        "  eth0:\n"
+        "    dhcp4: true\n"
+        "    optional: true\n"
+    )
+
+
+def sha256_of(path: Path, chunk: int = 1 << 20) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while block := fh.read(chunk):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def _ssh(host: str, command: str, timeout: int = 60,
+         input_text: str | None = None) -> tuple[int, str, str]:
+    proc = run_ssh(host, command, timeout=timeout, input=input_text)
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def local_ip_for(host: str) -> str:
+    """Local source IP the workstation would use to reach `host`."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((host, 22))
+        return probe.getsockname()[0]
+    finally:
+        probe.close()
+
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(Path(kwargs.pop("directory"))),
+                        **kwargs)
+
+    def log_message(self, *args):  # silence request log
+        pass
+
+
+def serve_file(path: Path, port: int = 0) -> tuple[HTTPServer, int]:
+    directory = str(path.parent)
+
+    def handler(*a, **kw):
+        return _QuietHandler(*a, directory=directory, **kw)
+
+    server = HTTPServer(("0.0.0.0", port), handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+def preflight(host: str, device: str, min_gb: int) -> None:
+    rc, out, err = _ssh(host, "lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL")
+    if rc != 0:
+        raise SystemExit(f"cannot lsblk {host}: {err}")
+    target = pick_target_device(out, min_gb=min_gb) \
+        if device == "auto" else _check_explicit(out, device, min_gb)
+    if target != device and device != "auto":
+        raise SystemExit(f"refusing: {device} not eligible (choose {target})")
+    print(f"target: {target}")
+
+
+def _check_explicit(lsblk_json: str, device: str, min_gb: int) -> str:
+    data = json.loads(lsblk_json)
+    for dev in data.get("blockdevices", []):
+        if f"/dev/{dev['name']}" == device:
+            if dev.get("type") != "disk":
+                raise SystemExit(f"refusing: {device} is not a whole disk")
+            if int(dev.get("size", 0)) < min_gb * (1 << 30):
+                raise SystemExit(f"refusing: {device} smaller than {min_gb}GB")
+            if (_is_mounted(dev)
+                    or any(_is_mounted(c) for c in (dev.get("children") or []))):
+                raise SystemExit(f"refusing: {device} has mounted partitions")
+            return device
+    raise SystemExit(f"refusing: {device} not found on host")
+
+
+def transfer_image(host: str, image: Path, sha256: str | None,
+                   remote_path: str) -> None:
+    ip = local_ip_for(host)
+    server, port = serve_file(image)
+    url = f"http://{ip}:{port}/{image.name}"
+    print(f"transferring {image.name} ({image.stat().st_size // (1 << 20)}MB) "
+          f"to {host} over LAN http ...")
+    try:
+        rc, _, err = _ssh(host, f"wget -q -O {remote_path} {url}", timeout=3600)
+        if rc != 0:
+            raise SystemExit(f"transfer failed: {err}")
+    finally:
+        server.shutdown()
+    if sha256:
+        rc, out, _ = _ssh(host, f"sha256sum {remote_path}")
+        actual = out.split()[0] if out.split() else ""
+        if actual != sha256:
+            raise SystemExit(f"checksum MISMATCH: {actual} != {sha256}")
+        print("checksum ok")
+
+
+def write_image(host: str, remote_path: str, device: str) -> None:
+    rc, _, err = _ssh(
+        host,
+        f"xz -d -c {remote_path} | dd of={device} bs={DD_BLOCK} && sync",
+        timeout=1800)
+    if rc != 0:
+        raise SystemExit(f"write failed: {err}")
+    print(f"image written to {device}")
+
+
+def inject_cloud_init(host: str, device: str, user: str, hostname: str,
+                      ssh_keys: list[str], password: str | None = None) -> None:
+    part = boot_partition(device)
+    mount_cmd = (f"mkdir -p /mnt/pi-img && mount -t vfat {part} /mnt/pi-img")
+    rc, _, err = _ssh(host, mount_cmd)
+    if rc != 0:
+        raise SystemExit(
+            f"cannot mount {part} as vfat ({err.strip()}). If this is the "
+            "rescue shell, the vfat kernel modules are missing — push "
+            "fat.ko/vfat.ko/nls_*.ko for the rescue kernel and insmod them, "
+            "or run the injection from a booted OS.")
+    files = {
+        "meta-data": render_meta_data(hostname),
+        "user-data": render_user_data(user, hostname, ssh_keys, password=password),
+        "network-config": render_network_config(),
+    }
+    for name, content in files.items():
+        rc, _, err = _ssh(host,
+                          f"cat > /mnt/pi-img/{name}", input_text=content)
+        if rc != 0:
+            raise SystemExit(f"cannot write {name}: {err}")
+    _ssh(host, "umount /mnt/pi-img && sync")
+    print(f"cloud-init injected (user={user}, hostname={hostname})")
+
+
+def cmd_provision(args: argparse.Namespace) -> int:
+    import secrets
+    image = Path(args.image).expanduser().resolve()
+    if not image.is_file():
+        raise SystemExit(f"image not found: {image}")
+    ssh_keys = [Path(k).expanduser().read_text().strip()
+                for k in args.ssh_key]
+
+    password = args.password or secrets.token_urlsafe(12)
+    preflight(args.host, args.device, args.min_gb)
+    remote_path = f"/tmp/{image.name}"
+    transfer_image(args.host, image, args.sha256, remote_path)
+    write_image(args.host, remote_path, args.device)
+    _ssh(args.host, f"rm -f {remote_path}")
+    if not args.no_inject:
+        inject_cloud_init(args.host, args.device, args.user,
+                          args.hostname, ssh_keys, password)
+        creds = Path(str(image) + ".credentials.txt")
+        creds.write_text(
+            f"host={args.hostname}\nuser={args.user}\npassword={password}\n"
+            f"break-glass: console login, or rescue shell + mount rootfs\n")
+        print(f"credentials written to {creds} — store this file, "
+              "it is the only record of the password")
+    print("done. reboot the Pi to boot the new OS "
+          "(netboot server must be disarmed for USB boot to be reached).")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("provision", help="flash + configure a Pi-attached disk")
+    sp.add_argument("--host", required=True, help="Pi IP reachable via root SSH")
+    sp.add_argument("--device", required=True,
+                    help="target disk on the Pi (e.g. /dev/sda) or 'auto'")
+    sp.add_argument("--image", required=True, help="local .img.xz file")
+    sp.add_argument("--sha256", default=None, help="expected image checksum")
+    sp.add_argument("--hostname", default="pi4")
+    sp.add_argument("--user", default="ubuntu")
+    sp.add_argument("--ssh-key", action="append", default=[],
+                    help="public key file(s) to authorize (repeatable)")
+    sp.add_argument("--min-gb", type=int, default=MIN_DEVICE_GB)
+    sp.add_argument("--no-inject", action="store_true",
+                    help="skip cloud-init injection")
+    sp.set_defaults(func=cmd_provision)
+
+    args = p.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
