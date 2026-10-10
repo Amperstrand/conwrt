@@ -24,7 +24,7 @@ Usage:
     pi_eeprom.py encode --modes network usb sd
     pi_eeprom.py build --boot-order 0xf142 --out data/cache/pi-eeprom \
                        [--pieeprom PATH] [--recovery PATH] [--set KEY=VALUE ...]
-    pi_eeprom.py push   --router 192.168.13.1 --tftp-root <dir> --package-dir DIR
+    pi_eeprom.py push   --router 192.168.1.1 --tftp-root <dir> --package-dir DIR
 """
 
 from __future__ import annotations

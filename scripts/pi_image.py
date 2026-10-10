@@ -17,7 +17,7 @@ recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick on the
 workstation, use the Rescue Kit flash script instead.
 
 Usage:
-    pi_image.py provision --host 192.168.13.240 --device /dev/sdb \
+    pi_image.py provision --host 192.168.1.240 --device /dev/sdb \
         --image ubuntu.img.xz --sha256 <hash> --hostname pi4 \
         --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub
 

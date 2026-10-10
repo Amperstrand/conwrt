@@ -109,6 +109,8 @@ def render_perms_fix() -> str:
 
 
 def render_password_setup(password: str) -> str:
+    if "'" in password or "\\" in password:
+        raise ValueError("root password must not contain quotes or backslashes")
     return (
         "#!/bin/sh\n"
         f"printf '%s\\n%s\\n' '{password}' '{password}' | passwd root "
@@ -163,7 +165,7 @@ def write_overlay(out_dir: Path, authorized_key: Path,
     put("etc/dropbear/authorized_keys", key_text + "\n", 0o600)
     put("root/.ssh/authorized_keys", key_text + "\n", 0o600)
     if nodogsplash:
-        put("etc/config/nodogsplash", render_nodogsplash_config(interface),
+        put("etc/config/nodogsplash", render_nodogsplash_config("br-lan"),
             0o644)
 
     if root_password:

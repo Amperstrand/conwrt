@@ -20,10 +20,10 @@ from pi_netboot import (
 
 class TestRenderBlock(unittest.TestCase):
     def test_block_contains_essentials(self):
-        block = render_block("192.168.13.1", ["E4:5F:01:14:A4:66"],
+        block = render_block("192.168.1.1", ["E4:5F:01:12:34:56"],
                              "/tmp/dnsmasq.cfg01411c.d/tftpboot")
-        self.assertIn("dhcp-host=e4:5f:01:14:a4:66,set:pinetboot", block)
-        self.assertIn("dhcp-option=tag:pinetboot,66,192.168.13.1", block)
+        self.assertIn("dhcp-host=e4:5f:01:12:34:56,set:pinetboot", block)
+        self.assertIn("dhcp-option=tag:pinetboot,66,192.168.1.1", block)
         self.assertIn("dhcp-option=tag:pinetboot,67,config.txt", block)
         self.assertIn("enable-tftp", block)
         self.assertIn("tftp-root=/tmp/dnsmasq.cfg01411c.d/tftpboot", block)
@@ -112,21 +112,21 @@ class TestIsArmed(unittest.TestCase):
 
 class TestParseDhcpLog(unittest.TestCase):
     LOG = """
-Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPDISCOVER(br-lan.13) e4:5f:01:14:a4:66
-Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPOFFER(br-lan.13) 192.168.13.240 e4:5f:01:14:a4:66
-Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPREQUEST(br-lan.13) 192.168.13.240 e4:5f:01:14:a4:66
-Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPACK(br-lan.13) 192.168.13.240 e4:5f:01:14:a4:66 pidebug
-Thu Oct  8 09:46:00 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan.13) dc:a6:32:11:22:33
-Thu Oct  8 09:46:20 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan.13) dc:a6:32:11:22:33
-Thu Oct  8 09:46:40 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan.13) dc:a6:32:11:22:33
+Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPDISCOVER(br-lan) e4:5f:01:12:34:56
+Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPOFFER(br-lan) 192.168.1.240 e4:5f:01:12:34:56
+Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPREQUEST(br-lan) 192.168.1.240 e4:5f:01:12:34:56
+Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 123 DHCPACK(br-lan) 192.168.1.240 e4:5f:01:12:34:56 pidebug
+Thu Oct  8 09:46:00 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan) dc:a6:32:11:22:33
+Thu Oct  8 09:46:20 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan) dc:a6:32:11:22:33
+Thu Oct  8 09:46:40 2026 daemon.info dnsmasq-dhcp[1]: 456 DHCPDISCOVER(br-lan) dc:a6:32:11:22:33
 Thu Oct  8 09:47:00 2026 daemon.info dnsmasq[1]: unrelated non-dhcp line
 """
 
     def test_counts(self):
         counts = parse_dhcp_log(self.LOG)
-        self.assertEqual(counts["e4:5f:01:14:a4:66"]["discover"], 1)
-        self.assertEqual(counts["e4:5f:01:14:a4:66"]["request"], 1)
-        self.assertEqual(counts["e4:5f:01:14:a4:66"]["ack"], 1)
+        self.assertEqual(counts["e4:5f:01:12:34:56"]["discover"], 1)
+        self.assertEqual(counts["e4:5f:01:12:34:56"]["request"], 1)
+        self.assertEqual(counts["e4:5f:01:12:34:56"]["ack"], 1)
         self.assertEqual(counts["dc:a6:32:11:22:33"]["discover"], 3)
         self.assertEqual(counts["dc:a6:32:11:22:33"].get("request", 0), 0)
 

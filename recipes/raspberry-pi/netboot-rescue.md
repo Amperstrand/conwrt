@@ -176,8 +176,9 @@ full chain works (DHCP -> TFTP kernel 12MB + hand-built rootfs cpio 6.9MB,
 verified transfers), but the kernel silently panics — no root, no network, and
 without UART there is no panic visibility. Symptom: the Pi netboot-fetches in
 a ~5-minute loop forever, never reaching the network. To RAM-netboot OpenWrt
-you must build a custom kernel with initramfs support; for stock OpenWrt on
-a Pi, boot the factory image from USB media instead.
+the supported path is a buildroot build with `CONFIG_TARGET_ROOTFS_INITRAMFS=y`
+(single kernel file, rootfs embedded — see netboot-full-os.md); booting stock
+factory images from USB media remains the fallback.
 
 ## dropbear 2025.89 (OpenWrt 25.12): authorized_keys path and directory perms
 

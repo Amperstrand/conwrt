@@ -144,10 +144,9 @@ class TestRenderNodogsplash(unittest.TestCase):
             out = Path(td) / "o1"
             written = write_overlay(out, key, nodogsplash=True,
                                     interface="eth1")
-            nds = (out / "etc/config/nodogsplash").read_text()
             names = {str(p.relative_to(out)) for p in written}
             self.assertIn("etc/config/nodogsplash", names)
-            self.assertIn("option gatewayinterface 'eth1'",
+            self.assertIn("option gatewayinterface 'br-lan'",
                           (out / "etc/config/nodogsplash").read_text())
 
     def test_no_flag_no_config(self):
@@ -159,3 +158,14 @@ class TestRenderNodogsplash(unittest.TestCase):
             self.assertFalse((out / "etc/config/nodogsplash").exists())
             self.assertNotIn("etc/config/nodogsplash",
                              {str(p.relative_to(out)) for p in written})
+
+
+class TestPasswordEscaping(unittest.TestCase):
+    def test_plain_password_rendered(self):
+        script = render_password_setup("s3cret-pw")
+        self.assertEqual(script.count("s3cret-pw"), 2)
+
+    def test_quote_and_backslash_rejected(self):
+        for bad in ("pa'ss", "pa\\ss"):
+            with self.assertRaises(ValueError):
+                render_password_setup(bad)

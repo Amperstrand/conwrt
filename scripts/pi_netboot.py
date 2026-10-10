@@ -22,11 +22,11 @@ Safety design (learned the hard way — see recipes/raspberry-pi/netboot-rescue.
   (/tmp/dnsmasq.<section>.d), which is visible to the jailed dnsmasq.
 
 Usage:
-    pi_netboot.py arm    --router 192.168.13.1 --tree ~/pi-rescue-kit/tftp-tree \
-                         --mac e4:5f:01:14:a4:66
-    pi_netboot.py disarm --router 192.168.13.1 [--purge]
-    pi_netboot.py status --router 192.168.13.1
-    pi_netboot.py detect --router 192.168.13.1 [--min-discover 3]
+    pi_netboot.py arm    --router 192.168.1.1 --tree ~/pi-rescue-kit/tftp-tree \
+                         --mac e4:5f:01:12:34:56
+    pi_netboot.py disarm --router 192.168.1.1 [--purge]
+    pi_netboot.py status --router 192.168.1.1
+    pi_netboot.py detect --router 192.168.1.1 [--min-discover 3]
 """
 
 from __future__ import annotations
@@ -153,6 +153,23 @@ def is_armed(config_text: str, marker: str = MARKER_START) -> bool:
     return "pinetboot" in config_text
 
 
+def armed_macs(config_text: str) -> list[str]:
+    """MAC allowlist of an existing managed block (empty when not armed)."""
+    macs: list[str] = []
+    in_block = False
+    for line in config_text.splitlines():
+        if line.strip() == MARKER_START:
+            in_block = True
+            continue
+        if line.strip() == MARKER_END:
+            break
+        if in_block and line.startswith("dhcp-host="):
+            fields = line[len("dhcp-host="):].split(",")
+            if fields and ":" in fields[0]:
+                macs.append(fields[0].strip().lower())
+    return macs
+
+
 def parse_dhcp_log(log_text: str) -> dict[str, dict[str, int]]:
     """Count DISCOVER/REQUEST/ACK per MAC from dnsmasq-dhcp log lines."""
     counts: dict[str, dict[str, int]] = {}
@@ -212,8 +229,11 @@ def read_remote_config(router: str) -> str:
 
 
 def write_remote_config(router: str, config_text: str) -> None:
-    proc = run_ssh(router, f"cat > {DNSMASQ_CONF}", timeout=30,
-                   input=config_text)
+    # Atomic replace: a truncated /etc/dnsmasq.conf crash-loops dnsmasq and
+    # takes the LAN's DHCP/DNS down with it.
+    proc = run_ssh(router,
+                   f"cat > {DNSMASQ_CONF}.new && mv {DNSMASQ_CONF}.new {DNSMASQ_CONF}",
+                   timeout=30, input=config_text)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot write {DNSMASQ_CONF}: {proc.stderr}")
 
@@ -275,8 +295,8 @@ def upload_tree(router: str, tree_dir: Path, remote_root: str) -> None:
 
 def subprocess_scp_tree(tree_dir: Path, router: str, remote_root: str):
     import subprocess
-    files = sorted(str(p) for p in tree_dir.iterdir() if p.is_file())
-    cmd = ["scp", "-O", "-o", "BatchMode=yes"] + files + [
+    entries = sorted(str(p) for p in tree_dir.iterdir())
+    cmd = ["scp", "-O", "-o", "BatchMode=yes", "-r"] + entries + [
         f"root@{router}:{remote_root}/"]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
@@ -378,26 +398,33 @@ def cmd_deploy(args: argparse.Namespace) -> int:
           f"cmdline.txt ({args.cmdline})")
 
     old_conf = read_remote_config(args.router)
-    if not is_armed(old_conf):
-        if not args.mac:
+    already_armed = is_armed(old_conf)
+    if already_armed and not (args.mac or args.ip):
+        print("dnsmasq block already armed — files only, no restart needed")
+    else:
+        if not args.mac and not already_armed:
             print("dnsmasq block not armed and no --mac given — cannot serve "
                   "boot files to any Pi", file=sys.stderr)
             return 1
-        pin = [args.ip] if args.ip else None
-        new_conf = old_conf.rstrip() + "\n\n" + render_block(
-            args.router, [m.lower() for m in args.mac], tftp_root,
-            pin_ips=pin) + "\n"
+        if args.mac and args.ip and len(args.mac) > 1:
+            print("--ip requires exactly one --mac", file=sys.stderr)
+            return 1
+        macs = ([m.lower() for m in args.mac] if args.mac
+                else armed_macs(old_conf))
+        pin: list[str] | None = [args.ip] if (args.ip and len(macs) == 1) else None
+        base = strip_block(old_conf)[0] if already_armed else old_conf
+        new_conf = base.rstrip() + "\n\n" + render_block(
+            args.router, macs, tftp_root, pin_ips=pin) + "\n"
         write_remote_config(args.router, new_conf)
         restart_dnsmasq(args.router)
         if not dnsmasq_healthy(args.router, tftp_root):
-            print("dnsmasq unhealthy after arming — rolling back", file=sys.stderr)
+            print("dnsmasq unhealthy after reconfig — rolling back",
+                  file=sys.stderr)
             write_remote_config(args.router, old_conf)
             restart_dnsmasq(args.router)
             return 1
-        print(f"ARMED for {len(args.mac)} MAC(s)"
-              + (f" at {args.ip}" if args.ip else ""))
-    else:
-        print("dnsmasq block already armed — files only, no restart needed")
+        print(f"{'updated' if already_armed else 'ARMED'} block for "
+              f"{len(macs)} MAC(s)" + (f" pinned to {args.ip}" if pin else ""))
 
     print("\nnext: power-cycle the Pi. Kernel fetch shows in "
           "'logread | grep tftp' on the router; a RAM-only OpenWrt reaches "
@@ -408,19 +435,20 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 def cmd_disarm(args: argparse.Namespace) -> int:
     old_conf = read_remote_config(args.router)
     new_conf, removed = strip_block(old_conf)
-    if not removed:
-        print("not armed — nothing to do")
-        return 0
-    write_remote_config(args.router, new_conf)
-    restart_dnsmasq(args.router)
-    if not dnsmasq_healthy(args.router):
-        print("WARNING: dnsmasq unhealthy after disarm — inspect the router",
-              file=sys.stderr)
-        return 1
+    if removed:
+        write_remote_config(args.router, new_conf)
+        restart_dnsmasq(args.router)
+        if not dnsmasq_healthy(args.router):
+            print("WARNING: dnsmasq unhealthy after disarm — inspect the router",
+                  file=sys.stderr)
+            return 1
     if args.purge:
         tftp_root = args.tftp_root or remote_detect_tftp_root(args.router)
         _ssh(args.router, f"rm -rf {tftp_root}")
         print(f"purged {tftp_root}")
+    if not removed:
+        print("not armed" + (" — purge done" if args.purge else " — nothing to do"))
+        return 0
     print("DISARMED: dnsmasq back to stock; network-first Pis fall through "
           "to their next boot medium")
     return 0
@@ -519,7 +547,9 @@ def main(argv: list[str] | None = None) -> int:
     sp.set_defaults(func=cmd_disarm)
 
     sp = sub.add_parser("status", help="show armed state and recent Pi dhcp events")
-    add_common(sp, macs=True)
+    add_common(sp)
+    sp.add_argument("--mac", nargs="*", default=None,
+                    help="also show recent dhcp events for these MACs")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("detect",
