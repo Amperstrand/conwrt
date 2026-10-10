@@ -164,3 +164,17 @@ sync && umount /mnt && reboot -f
 break-glass password (written to `<image>.credentials.txt`), an
 `ssh_authorized_keys` entry, and a `runcmd` that force-enables sshd — so a
 freshly provisioned Pi can never lock you out.
+
+## RAM-netbooting a full OS: the kernel must support initrd
+
+A Pi netboot chain (TFTP kernel + initramfs) can boot ANY sufficiently small
+OS image — but only if the kernel has initrd support compiled in. **OpenWrt
+release kernels strip initramfs support** (the build system's
+`Kernel/SetNoInitramfs` removes all INITRAMFS config entries, which is also
+why OpenWrt ships no initramfs images for bcm27xx). Verified 2026-10-10: the
+full chain works (DHCP -> TFTP kernel 12MB + hand-built rootfs cpio 6.9MB,
+verified transfers), but the kernel silently panics — no root, no network, and
+without UART there is no panic visibility. Symptom: the Pi netboot-fetches in
+a ~5-minute loop forever, never reaching the network. To RAM-netboot OpenWrt
+you must build a custom kernel with initramfs support; for stock OpenWrt on
+a Pi, boot the factory image from USB media instead.
