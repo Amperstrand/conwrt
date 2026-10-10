@@ -15,6 +15,9 @@ runs/
 
 # Local test results — never published, may contain network details
 test-results/
+
+# Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
+data/inventory.jsonl
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub

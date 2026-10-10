@@ -9,7 +9,7 @@ def find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str,
     if method_hint and method_hint in methods:
         return method_hint, methods[method_hint]
     # edgeos-kernel-swap, extreme-rdwr-tftp-initramfs, and oem-http are preferred for initial install from stock firmware
-    for method_name in ("edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http", "oem-ftp"):
+    for method_name in ("edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http", "oem-ftp", "netboot-rescue"):
         if method_name in methods:
             return method_name, methods[method_name]
     for method_name, method_cfg in methods.items():
@@ -76,6 +76,9 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
     elif is_oem:
         client_ip = fm.get("client_ip", "")
         recovery_ip = fm.get("stock_default_ip", model["openwrt"]["default_ip"])
+    elif method_name == "netboot-rescue":
+        client_ip = fm.get("client_ip", "")
+        recovery_ip = fm.get("tftp_router_ip", "192.168.1.1")
     else:
         client_ip = fm["client_ip"]
         recovery_ip = fm["recovery_ip"]
