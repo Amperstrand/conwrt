@@ -122,3 +122,34 @@ class TestWriteOverlay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRenderNodogsplash(unittest.TestCase):
+    def test_gateway_interface_matches_overlay_interface(self):
+        from pi_overlay import render_nodogsplash_config
+        cfg = render_nodogsplash_config("eth0")
+        self.assertIn("option gatewayinterface 'eth0'", cfg)
+        self.assertNotIn("br-lan", cfg)
+        self.assertIn("config nodogsplash", cfg)
+
+    def test_flag_writes_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            key = Path(td) / "key.pub"
+            key.write_text("ssh-ed25519 AAAAfake user@host\n")
+            out = Path(td) / "o1"
+            written = write_overlay(out, key, nodogsplash=True,
+                                    interface="eth1")
+            names = {str(p.relative_to(out)) for p in written}
+            self.assertIn("etc/config/nodogsplash", names)
+            self.assertIn("option gatewayinterface 'eth1'",
+                          (out / "etc/config/nodogsplash").read_text())
+
+    def test_no_flag_no_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            key = Path(td) / "key.pub"
+            key.write_text("ssh-ed25519 AAAAfake user@host\n")
+            out = Path(td) / "o2"
+            written = write_overlay(out, key)
+            self.assertFalse((out / "etc/config/nodogsplash").exists())
+            self.assertNotIn("etc/config/nodogsplash",
+                             {str(p.relative_to(out)) for p in written})

@@ -108,13 +108,28 @@ def render_password_setup(password: str) -> str:
     )
 
 
+def render_nodogsplash_config(interface: str = "eth0") -> str:
+    # nodogsplash's stock config wants br-lan as its gateway interface; this
+    # overlay deliberately runs the interface unbridged, so point NDS at it
+    # or its init refuses to start ("Interface br-lan not detected").
+    return (
+        'config nodogsplash\n'
+        f'\toption gatewayinterface \'{interface}\'\n'
+        '\toption gatewayname \'TollGate\'\n'
+        '\toption maxclients \'20\'\n'
+        '\toption preauthidletimeout \'10\'\n'
+        '\toption authidletimeout \'480\'\n'
+    )
+
+
 HOST_KEY_FILES = ("dropbear_ed25519_host_key", "dropbear_rsa_host_key")
 
 
 def write_overlay(out_dir: Path, authorized_key: Path,
                   root_password: str | None = None,
                   host_key_dir: Path | None = None,
-                  interface: str = "eth0") -> list[Path]:
+                  interface: str = "eth0",
+                  nodogsplash: bool = False) -> list[Path]:
     """Materialise the overlay under out_dir. Returns files written."""
     key_text = authorized_key.read_text(encoding="utf-8").strip()
     if not key_text.startswith(("ssh-", "ecdsa-")):
@@ -139,6 +154,9 @@ def write_overlay(out_dir: Path, authorized_key: Path,
     put("etc/uci-defaults/98-conwrt-perms", render_perms_fix(), 0o755)
     put("etc/dropbear/authorized_keys", key_text + "\n", 0o600)
     put("root/.ssh/authorized_keys", key_text + "\n", 0o600)
+    if nodogsplash:
+        put("etc/config/nodogsplash", render_nodogsplash_config(interface),
+            0o644)
 
     if root_password:
         put("etc/uci-defaults/99-conwrt-password",
@@ -164,7 +182,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     try:
         written = write_overlay(out_dir, key, args.root_password, hk_dir,
-                                args.interface)
+                                args.interface, args.nodogsplash)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -190,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
                          "(stops known_hosts churn across RAM reboots)")
     sp.add_argument("--interface", default="eth0",
                     help="interface for the DHCP-client lan (default: eth0)")
+    sp.add_argument("--nodogsplash", action="store_true",
+                    help="also generate /etc/config/nodogsplash with the "
+                         "gateway interface matching --interface (stock NDS "
+                         "wants br-lan and refuses to start without it)")
     sp.set_defaults(func=cmd_init)
     args = p.parse_args(argv)
     return args.func(args)
