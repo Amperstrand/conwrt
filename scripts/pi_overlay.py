@@ -44,6 +44,10 @@ from pathlib import Path
 
 
 def render_network_config(interface: str = "eth0") -> str:
+    # Bridge topology: the tollgate packaging is bridge-native — its nftables
+    # API exemption matches iifname br-lan/br-private (not physical ports) and
+    # stock nodogsplash wants br-lan as gateway interface. Running the port
+    # unbridged leaves :2121 firewalled and NDS refusing to start.
     return (
         'config interface "loopback"\n'
         '\toption device "lo"\n'
@@ -51,8 +55,13 @@ def render_network_config(interface: str = "eth0") -> str:
         '\toption ipaddr "127.0.0.1"\n'
         '\toption netmask "255.0.0.0"\n'
         '\n'
+        'config device\n'
+        '\toption name "br-lan"\n'
+        '\toption type "bridge"\n'
+        f'\tlist ports "{interface}"\n'
+        '\n'
         'config interface "lan"\n'
-        f'\toption device "{interface}"\n'
+        '\toption device "br-lan"\n'
         '\toption proto "dhcp"\n'
     )
 
@@ -108,10 +117,9 @@ def render_password_setup(password: str) -> str:
     )
 
 
-def render_nodogsplash_config(interface: str = "eth0") -> str:
-    # nodogsplash's stock config wants br-lan as its gateway interface; this
-    # overlay deliberately runs the interface unbridged, so point NDS at it
-    # or its init refuses to start ("Interface br-lan not detected").
+def render_nodogsplash_config(interface: str = "br-lan") -> str:
+    # Stock NDS already wants br-lan; this renderer exists for non-bridge
+    # topologies where the gateway interface must be named explicitly.
     return (
         'config nodogsplash\n'
         f'\toption gatewayinterface \'{interface}\'\n'

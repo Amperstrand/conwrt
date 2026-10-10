@@ -18,15 +18,16 @@ from pi_overlay import (
 
 
 class TestRenderNetwork(unittest.TestCase):
-    def test_lan_is_dhcp_client_on_interface(self):
+    def test_lan_is_dhcp_client_on_bridge(self):
         cfg = render_network_config("eth0")
         self.assertIn('config interface "lan"', cfg)
-        self.assertIn('option device "eth0"', cfg)
+        self.assertIn('option device "br-lan"', cfg)
         self.assertIn('option proto "dhcp"', cfg)
+        self.assertIn('option type "bridge"', cfg)
         self.assertNotIn("192.168.1.1", cfg)
 
-    def test_custom_interface(self):
-        self.assertIn('option device "eth1"', render_network_config("eth1"))
+    def test_custom_port_bridged(self):
+        self.assertIn('list ports "eth1"', render_network_config("eth1"))
 
 
 class TestRenderDhcp(unittest.TestCase):
@@ -125,12 +126,16 @@ if __name__ == "__main__":
 
 
 class TestRenderNodogsplash(unittest.TestCase):
-    def test_gateway_interface_matches_overlay_interface(self):
+    def test_gateway_interface_default_bridge(self):
         from pi_overlay import render_nodogsplash_config
-        cfg = render_nodogsplash_config("eth0")
-        self.assertIn("option gatewayinterface 'eth0'", cfg)
-        self.assertNotIn("br-lan", cfg)
+        cfg = render_nodogsplash_config()
+        self.assertIn("option gatewayinterface 'br-lan'", cfg)
         self.assertIn("config nodogsplash", cfg)
+
+    def test_gateway_interface_explicit(self):
+        from pi_overlay import render_nodogsplash_config
+        self.assertIn("option gatewayinterface 'eth9'",
+                      render_nodogsplash_config("eth9"))
 
     def test_flag_writes_config(self):
         with tempfile.TemporaryDirectory() as td:
@@ -139,6 +144,7 @@ class TestRenderNodogsplash(unittest.TestCase):
             out = Path(td) / "o1"
             written = write_overlay(out, key, nodogsplash=True,
                                     interface="eth1")
+            nds = (out / "etc/config/nodogsplash").read_text()
             names = {str(p.relative_to(out)) for p in written}
             self.assertIn("etc/config/nodogsplash", names)
             self.assertIn("option gatewayinterface 'eth1'",
