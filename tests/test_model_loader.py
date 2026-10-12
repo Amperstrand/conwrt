@@ -468,6 +468,24 @@ class TestFindModelByBoardName(TestCase):
             assert model is not None
             self.assertEqual(model["id"], "test-device-v1")
 
+    def test_finds_by_board_names_alias_list(self):
+        """openwrt.board_names aliases must match exactly (QEMU DMI names)."""
+        import tempfile
+
+        model = dict(SAMPLE_MODEL)
+        model["openwrt"] = dict(SAMPLE_MODEL["openwrt"])
+        model["openwrt"]["board_names"] = [
+            "testcorp,test-device-v1", "conwrt-conwrt-test-vm",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            _write_model(tmpdir, "test-device-v1", model)
+            with patch("model_loader.MODELS_DIR", tmpdir):
+                found = model_loader.find_model_by_board_name("conwrt-conwrt-test-vm")
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found["id"], "test-device-v1")
+
     def test_returns_none_when_no_match(self):
         import tempfile
 

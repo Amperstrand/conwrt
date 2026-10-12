@@ -122,10 +122,20 @@ def find_model_by_mac_oui(oui: str) -> list[dict[str, Any]]:
 
 
 def find_model_by_board_name(board_name: str) -> Optional[dict[str, Any]]:
-    """Find model by OpenWrt board_name or device string."""
+    """Find model by OpenWrt board_name or device string.
+
+    Matches, in order: the singular ``openwrt.board_name``/``openwrt.device``
+    fields, any exact alias in the ``openwrt.board_names`` list (used for
+    devices whose board_name varies with firmware — e.g. OpenWrt >= 24.10
+    x86_64 derives it from SMBIOS/DMI, so a QEMU test VM reports
+    ``<manufacturer>-<product>`` instead of ``generic``), then the model id
+    with dash/underscore normalization.
+    """
     for model in list_models():
         ow = model.get("openwrt", {})
         if board_name in (ow.get("board_name"), ow.get("device")):
+            return model
+        if board_name in (ow.get("board_names") or []):
             return model
         if model.get("id", "").replace("-", "_") == board_name.replace(",", "_"):
             return model
