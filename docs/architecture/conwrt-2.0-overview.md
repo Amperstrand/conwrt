@@ -131,11 +131,11 @@ interface" (ADR-0004).
 |---|---|---|
 | `conwrt-types` | **exists (M1 slice)** | domain types: DeviceModel (parses today's `models/*.json`), MAC/OUI, capability enums |
 | `conwrt-core` | **exists (M1 slice)** | capability traits, boot-state classifier, identification, mock provider |
-| `conwrt-protocols` | M2+ | tftp, xmodem (fills the documented-but-missing method), zycast, ubus, verification |
+| `conwrt-protocols` | **exists (M2 slice)** | tftp, **xmodem — via the maintained `xmodem` crate**, zycast, ubus, verification |
 | `conwrt-profiles` | M7 | desired-state schema, planner, module registry |
 | `conwrt-agent-proto` | M3 | wire format, framing, versioning |
 | `conwrt-agent` | M3+ | provider-side implementation (export capabilities) |
-| `providers/conwrt-local-std` | M2 | tokio/serialport/russh providers |
+| `providers/conwrt-local-std` | **exists (M2 slice)** | tokio/serialport/httparse/russh providers |
 | `apps/conwrt-cli` | **exists (M1 slice)** | clap frontend |
 | `apps/conwrt-web` | M7 | axum + embedded UI |
 | `apps/conwrt-esp32`, `apps/conwrt-stm32` | M5/M6 | embassy apps |
@@ -145,6 +145,12 @@ Crates are created when they carry real code — no placeholder hierarchy
 parity (it is already zero-dependency and cross-compiles to OpenWrt targets).
 
 ## 6. Library selections (summary — full dossier in ADRs)
+
+**Libraries-first policy**: maintained crates are adopted wherever they fit;
+protocol or platform code is hand-rolled only when no crate covers the need,
+and every such case is recorded with its justification in the owning
+ADR/crate docs (e.g. subprocess `ping` for unprivileged ICMP; `/proc/net/arp`
+parsing for the Linux neighbor table).
 
 | Concern | std (desktop/OpenWrt) | no_std (MCU) |
 |---|---|---|

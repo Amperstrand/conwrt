@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/conwrt-types",
     "crates/conwrt-core",
+    "crates/conwrt-protocols",
+    "providers/conwrt-local-std",
     "apps/conwrt-cli",
 ]
 
@@ -18,6 +20,8 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 pollster = "0.4"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "process", "macros", "fs"] }
+embedded-io = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

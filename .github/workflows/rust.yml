@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "crates/**"
+      - "providers/**"
       - "apps/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -14,6 +15,7 @@ on:
     branches: [master]
     paths:
       - "crates/**"
+      - "providers/**"
       - "apps/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -34,4 +36,4 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
-          cargo check -p conwrt-types -p conwrt-core --no-default-features --target thumbv7em-none-eabihf
+          cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
