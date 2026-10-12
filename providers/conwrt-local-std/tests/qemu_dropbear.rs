@@ -80,7 +80,7 @@ async fn dropbear_exec_and_exit_codes() {
     assert_eq!(release.exit_code, Some(0));
     let text = String::from_utf8_lossy(&release.stdout);
     assert!(text.contains("OpenWrt"), "got: {text}");
-    assert!(text.contains("24.10"), "got: {text}");
+    assert!(text.contains("25.12"), "got: {text}");
 
     assert_eq!(session.exec("true").await.expect("true").exit_code, Some(0));
     assert_eq!(

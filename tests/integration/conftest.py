@@ -21,7 +21,7 @@ VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 SSH_PORT = 2222
 SSH_HOST = "127.0.0.1"
-OPENWRT_VERSION = "24.10.2"
+OPENWRT_VERSION = "25.12.5"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
 PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
@@ -78,10 +78,16 @@ def _prepare_image(image_path: Path) -> None:
     with DHCP (QEMU provides 10.0.2.15), and disable the firewall entirely
     so dropbear is reachable on port 22 via the hostfwd port forward.
     """
-    if SSH_KEY.exists():
+    # Prep is keyed on the image, not the SSH key: a version bump replaces
+    # the image and must re-run injection even when the key pair persists
+    # (a 24.10→25.12 bump silently skipped prep and left the VM's dropbear
+    # behind the default WAN firewall — unreachable via hostfwd).
+    stamp = image_path.with_name(image_path.name + f".prepped-{OPENWRT_VERSION}")
+    if stamp.exists():
         return
-    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
-                   capture_output=True, check=True)
+    if not SSH_KEY.exists():
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
+                       capture_output=True, check=True)
     pubkey = (SSH_KEY.with_suffix(".pub")).read_text().strip()
 
     r = subprocess.run(
@@ -175,6 +181,7 @@ PREBAKE
     )
     if r.returncode != 0:
         pytest.fail(f"Image preparation failed: {r.stderr}")
+    stamp.touch()
 
 
 def _download_prebake_packages() -> None:
