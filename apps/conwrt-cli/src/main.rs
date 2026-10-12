@@ -311,19 +311,25 @@ fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf)
 
 fn cmd_models_validate(dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
-    for model in registry.models() {
+    let models = registry.models();
+    println!(
+        "{:<40}  {:<12}  {:<22}  {:<20}  Description",
+        "Model ID", "Vendor", "Target", "Flash Methods"
+    );
+    println!("{}", "-".repeat(140));
+    for model in models {
+        let target = &model.openwrt.target;
+        let methods = model
+            .flash_method_names()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
-            "ok   {} ({}) — {} flash method(s)",
-            model.id,
-            model.vendor,
-            model.flash_methods.as_ref().map_or(0, |m| m.len())
+            "{:<40}  {:<12}  {:<22}  [{}]  {}",
+            model.id, model.vendor, target, methods, model.description
         );
     }
-    println!(
-        "\n{} model(s) valid in {}",
-        registry.models().len(),
-        dir.display()
-    );
+    println!("\n{} model(s) valid in {}", models.len(), dir.display());
     ExitCode::SUCCESS
 }
 
