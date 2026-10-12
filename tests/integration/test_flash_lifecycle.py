@@ -33,7 +33,7 @@ FLASH_SERIAL = REPO_ROOT / "tests" / "integration" / ".openwrt-flash-serial.log"
 
 FLASH_HOST = "127.0.0.2"   # distinct loopback address — cannot hijack a real device IP
 FLASH_PORT = 2223
-OPENWRT_VERSION = "24.10.2"
+OPENWRT_VERSION = "25.12.5"
 
 SSH_BASE = [
     "ssh", "-o", "StrictHostKeyChecking=no",

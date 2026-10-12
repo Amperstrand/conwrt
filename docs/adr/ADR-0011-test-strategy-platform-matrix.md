@@ -27,6 +27,27 @@ hardware rings behind CI environments.
    - **Ring 3 — hardware-in-the-loop (authorized only):** labgrid places /
      bench bays / physical routers; destructive tests behind explicit
      environment gates; never in default CI.
+
+### Running the rings today (Rust side)
+
+- **Ring 1**: `make rust-ci` (fmt, clippy, all tests, no_std gate). SSH
+  protocol behavior is covered in-process by a scripted **russh server
+  fixture** (`ssh_fixture.rs`) — real key exchange/auth/exec/scp wire with
+  zero external binaries.
+- **Ring 2**: boot the integration VM (OpenWrt 24.10 x86-64, Dropbear
+  forwarded to `127.0.0.1:2222` — `scripts/local-tests.sh integration`
+  or the equivalent qemu invocation), then:
+
+  ```bash
+  CONWRT_QEMU_VM=1 cargo test -p conwrt-local-std --test qemu_dropbear -- --nocapture
+  ```
+
+  covers TOFU trust, exec + exit codes, and a byte-verified scp roundtrip
+  against **real Dropbear**. `conwrt diagnose --ip 127.0.0.1 --ssh-port 2222`
+  exercises the full read-only workflow against the same VM.
+- **Ring 3**: physical router via `CONWRT_DEVICE_IP` (1.x e2e harness) —
+  destructive operations only with explicit operator authorization, per
+  AGENTS.md.
 2. **Architectural acceptance tests (Ring 1, mandatory):**
    - same workflow + model data against local-mock and remote-mock
      providers produce identical results;

@@ -12,7 +12,7 @@ M0 design ──► M1 foundation ──► M2 native CLI ──► M3 agent ─
                                               └► M8 labgrid/HIL ──► M9 legacy retirement
 ```
 
-## M0 — Architecture and research ✅ (this branch)
+## M0 — Architecture and research 📦 (draft PR #119)
 
 Audit of 1.x (engine map, model schema reality, safety mechanisms, test
 inventory); library dossier (postcard/COBS, russh/sunset, embassy/esp-hal 1.x,
@@ -22,7 +22,7 @@ contract, pattern catalogue). ADRs 0000–0011. Backlog created.
 
 **Exit:** documented design + actionable issues + first slice selected. ✔
 
-## M1 — Portable Rust foundation 🚧 (in progress)
+## M1 — Portable Rust foundation 📦 (draft PR #119)
 
 - Cargo workspace (`crates/`, `apps/`) beside Python; no 1.x disruption.
 - `conwrt-types`: DeviceModel parsing + validation of the real `models/*.json`
@@ -39,7 +39,7 @@ contract, pattern catalogue). ADRs 0000–0011. Backlog created.
 (Python) unaffected; CLI demonstrates a real read-only diagnostic workflow
 against mock capabilities. Rust workflow runs in GitHub CI.
 
-## M2 — Native CLI and workflow parity
+## M2 — Native CLI and workflow parity 📦 (draft PRs #122/#123; SerialIo + serial-flash driver and XMODEM receiver matrix #124 remain)
 
 - `providers/conwrt-local-std`: tokio/serialport/std::net implementations of
   the M1 trait set (real ARP/ping/HTTP/SSH-banner probing, read-only).
