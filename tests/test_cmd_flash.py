@@ -604,3 +604,24 @@ class TestCmdFlashSourceImage(CmdFlashTestCase):
         self.run_cmd_flash(_make_args(suspend_wifi=False))
         self.mocks["suspend_wifi"].assert_not_called()
         self.mocks["restore_wifi"].assert_not_called()
+
+
+class TestCmdFlashRealValidation(CmdFlashTestCase):
+    """Exercise the real _validate_args (the patch in setUp is bypassed) so the
+    --source-image path is guarded end-to-end. Regression for the bug where
+    _validate_args rejected the no-image case before sourcing ran."""
+
+    def test_source_image_passes_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        rc = self.run_cmd_flash(_make_args(
+            image=None, request_image=False, source_image=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_called_once()
+
+    def test_no_image_no_source_fails_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(
+                image=None, request_image=False, source_image=False))

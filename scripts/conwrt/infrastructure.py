@@ -253,8 +253,9 @@ def _generate_random_password() -> str:
 
 
 def _validate_args(args: argparse.Namespace) -> Optional[str]:
-    if not args.image and not args.request_image:
-        return "One of --image or --request-image is required."
+    source_image = getattr(args, "source_image", False)
+    if not args.image and not args.request_image and not source_image:
+        return "One of --image, --request-image, or --source-image is required."
 
     if args.image and args.request_image:
         return "--image and --request-image are mutually exclusive."
