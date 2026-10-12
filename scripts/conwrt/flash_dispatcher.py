@@ -793,6 +793,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
 
+    # Bring up the recovery interface (client alias + /32 host route) BEFORE
+    # detecting the initial state. This runs after preflight (so the alias is
+    # not flagged as stale) and lets a device already sitting in U-Boot/web
+    # recovery be detected immediately instead of forcing an extra power cycle.
+    if config.setup_interface:
+        _setup_interface_ips(interface, profile)
+
     initial_state = _resolve_initial_state(mode, profile, boot_state)
 
     if args.isolate_port:
@@ -853,9 +860,6 @@ def cmd_flash(args: argparse.Namespace) -> int:
     rc = 1
     try:
         if config.has_monitors:
-            if config.setup_interface:
-                _setup_interface_ips(interface, profile)
-
             say_label = {
                 "sysupgrade": "sysupgrade recovery",
                 "edgeos": "edgeos-kernel-swap flash",

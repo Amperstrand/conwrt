@@ -437,6 +437,20 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         ml_kwargs = self.mocks["monitor_lifecycle"].call_args.kwargs
         self.assertTrue(ml_kwargs["pcap_enabled"])
 
+    def test_recovery_interface_setup_runs_before_detection(self):
+        # A device already in U-Boot must be detected on the first probe, which
+        # requires the recovery interface/route to be up first.
+        order = []
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        self.mocks["_setup_interface_ips"].side_effect = lambda *a, **k: order.append("setup")
+        self.mocks["detect_uboot_http"].side_effect = (
+            lambda *a, **k: (order.append("detect"), (False, ""))[1])
+        self.captured_ctx()
+        self.run_cmd_flash()
+        self.assertIn("setup", order)
+        self.assertIn("detect", order)
+        self.assertLess(order.index("setup"), order.index("detect"))
+
     def test_force_uboot_overrides_openwrt(self):
         self.mocks["_detect_boot_state"].return_value = "openwrt"
         self.mocks["detect_uboot_http"].return_value = (True, "HTTP 200")
