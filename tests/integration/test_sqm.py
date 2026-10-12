@@ -24,8 +24,8 @@ def test_openssh_available(ssh_cmd):
 
 
 def test_sqm_package_installed(openwrt_vm, ssh_cmd):
-    ssh_cmd("opkg update 2>/dev/null; opkg install sqm-scripts luci-app-sqm 2>&1", timeout=60)
-    out = ssh_cmd("opkg list-installed | grep sqm")
+    ssh_cmd("apk update >/dev/null 2>&1; apk add sqm-scripts luci-app-sqm 2>&1", timeout=120)
+    out = ssh_cmd("apk list --installed 2>/dev/null | grep sqm")
     assert "sqm-scripts" in out
 
 

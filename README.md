@@ -38,6 +38,7 @@ Useful targets:
 | `make validate-models` | Validate every `models/*.json` against `schemas/model.schema.json` | Yes |
 | `make test` | Python unit tests plus the existing smoke test | Yes |
 | `make ci` | lint + typecheck + schemas + models + tests | Yes |
+| `make rust-ci` | Rust workspace: fmt + clippy + tests + `no_std` cross-check (`crates/`, `apps/`) | Yes |
 | `make ipk` | Build conwrt as an arch-independent OpenWrt ipk package | Yes |
 | `make integration` | Full QEMU OpenWrt VM suite incl. a real `conwrt flash` sysupgrade lifecycle | Yes (local VM) |
 | `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
@@ -87,6 +88,17 @@ Requirements for the VM layers: Linux with KVM (`/dev/kvm`),
 preparation. The VM fixture boots a per-session qcow2 overlay over a pristine
 base, so every run starts from clean state. A full integration run including
 the flash lifecycle takes ~7 minutes.
+
+### Conwrt 2.0 (Rust foundation)
+
+A portable Rust implementation is growing beside the Python code
+(strangler-fig migration — no 1.x disruption). The M1 slice lives in
+`crates/` + `apps/`: shared domain types that parse and validate the same
+`models/*.json`, capability traits with a mock provider, a read-only
+boot-state diagnostic workflow, and a `conwrt` CLI (`models`, `identify`,
+`probe --scenario`). Design: [docs/architecture/conwrt-2.0-overview.md](docs/architecture/conwrt-2.0-overview.md),
+decisions in [docs/adr/](docs/adr/), plan in [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md).
+Run `make rust-ci` (hardware-safe).
 
 Related knobs:
 

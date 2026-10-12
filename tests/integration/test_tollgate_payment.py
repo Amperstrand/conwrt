@@ -183,11 +183,11 @@ def _setup_router(vm):
     """nodogsplash + br-lan bridge + tollgate-wrt on the session VM."""
     binary = _build_tollgate_wrt()
     r = _ssh(vm, (
-        "opkg update >/dev/null 2>&1; "
-        "opkg install nodogsplash kmod-veth ip-full >/dev/null 2>&1; "
-        "opkg list-installed | grep -q nodogsplash && "
-        "opkg list-installed | grep -q ip-full && "
-        "opkg list-installed | grep -q kmod-veth && echo nds-ok || echo nds-missing"
+        "apk update >/dev/null 2>&1; "
+        "apk add nodogsplash kmod-veth ip-full >/dev/null 2>&1; "
+        "apk list --installed 2>/dev/null | grep -q nodogsplash && "
+        "apk list --installed 2>/dev/null | grep -q ip-full && "
+        "apk list --installed 2>/dev/null | grep -q kmod-veth && echo nds-ok || echo nds-missing"
     ), timeout=300)
     if "nds-ok" not in r.stdout:
         pytest.skip("VM cannot install nodogsplash via opkg — add it to "
