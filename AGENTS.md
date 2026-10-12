@@ -2,6 +2,18 @@
 
 Safety-critical rules for AI agents operating on real hardware.
 
+## Branch From origin/master, Never From Polluted Local State
+
+**Feature branches must be cut from `origin/master` (or an explicitly stacked
+PR branch), never from a local master that contains unpushed work from other
+sessions.** PR #119 originally carried ~16 unrelated VPN/nordvpn commits this
+way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
+(2026-10-12 external review, P0).
+
+- Before branching: `git fetch origin && git diff origin/master..master` must be empty
+- If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
+- Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
+
 ## NEVER Force Sysupgrade
 
 **`sysupgrade -F` is FORBIDDEN.** No exceptions.
