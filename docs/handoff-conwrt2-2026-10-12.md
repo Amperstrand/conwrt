@@ -69,7 +69,12 @@ branch completion — #104/#105/#106 are reopened until #122/#123 land.
 5. **Model schema tightening** (#118): live evidence already added one OUI
    (`a8:63:7d`) missing from the x1860 model — the de-facto field set keeps
    drifting from `model.schema.json`.
-6. **Stale inventory practice**: the specimen record disagreed with live
+6. **ASU profile-id strictness**: the build API rejects profile ids that
+   don't match the release's `profiles.json` exactly — pass the model
+   JSON's `openwrt.profile` verbatim (`dlink_covr-x1860-a1`, hyphenated
+   for this device; the all-underscore form returns HTTP 400 "Unsupported
+   profile"). Cost one rejected request during the x1860 image prep.
+7. **Stale inventory practice**: the specimen record disagreed with live
    state (firmware version). Ring-3 runs should refresh the local cache as a
    matter of course.
 
