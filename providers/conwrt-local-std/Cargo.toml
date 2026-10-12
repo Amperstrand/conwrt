@@ -1,0 +1,17 @@
+[package]
+name = "conwrt-local-std"
+description = "Local Linux/macOS capability provider for conwrt (tokio): link probing, ping, ARP lookup (M2, ADR-0003)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conwrt-core = { path = "../../crates/conwrt-core" }
+conwrt-types = { path = "../../crates/conwrt-types" }
+httparse = "1"
+tokio = { workspace = true }
+
+[lints]
+workspace = true
