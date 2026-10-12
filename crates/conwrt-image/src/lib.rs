@@ -12,12 +12,19 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub mod cache;
+pub mod clean;
 pub mod error;
+pub mod metadata;
 pub mod timestamp;
 pub mod types;
 
 pub use cache::request_cache_key;
+pub use clean::{clean_cache, CleanOptions, CleanReport};
 pub use error::ImageError;
+pub use metadata::{
+    find_cached, find_cached_build, list_entries, read_metadata, show_metadata, CachedImage,
+    CachedMetadata, ListEntry, METADATA_FILENAME,
+};
 pub use types::{
     BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue,
     SubmitResponse,
