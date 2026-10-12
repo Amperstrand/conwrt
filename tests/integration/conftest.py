@@ -149,25 +149,25 @@ DROPBEAR
         sudo mkdir -p /mnt/owrt/etc/uci-defaults
         sudo tee /mnt/owrt/etc/uci-defaults/99-install-sqm > /dev/null <<'INSTALL'
 #!/bin/sh
-opkg update >/dev/null 2>&1
-opkg install sqm-scripts luci-app-sqm >/dev/null 2>&1 || true
+apk update >/dev/null 2>&1
+apk add sqm-scripts luci-app-sqm >/dev/null 2>&1 || true
 exit 0
 INSTALL
         sudo chmod +x /mnt/owrt/etc/uci-defaults/99-install-sqm
 
-        # Pre-bake: inject .ipk files into image — QEMU guest can't reach opkg repos
+        # Pre-bake: inject .apk files into image — QEMU guest can't reach apk repos
         sudo mkdir -p /mnt/owrt/tmp/prebake
         for pkg in {" ".join(PREBAKE_PACKAGES)}; do
-            ipk=$(ls /tmp/conwrt-prebake/$pkg*.ipk 2>/dev/null | head -1)
-            if [ -n "$ipk" ]; then
-                sudo cp "$ipk" /mnt/owrt/tmp/prebake/
+            apk_file=$(ls /tmp/conwrt-prebake/$pkg*.apk 2>/dev/null | head -1)
+            if [ -n "$apk_file" ]; then
+                sudo cp "$apk_file" /mnt/owrt/tmp/prebake/
             fi
         done
-        if sudo ls /mnt/owrt/tmp/prebake/*.ipk >/dev/null 2>&1; then
+        if sudo ls /mnt/owrt/tmp/prebake/*.apk >/dev/null 2>&1; then
             sudo tee /mnt/owrt/etc/uci-defaults/98-prebake-packages > /dev/null <<'PREBAKE'
 #!/bin/sh
 cd /tmp/prebake 2>/dev/null || exit 0
-opkg install *.ipk 2>/dev/null || true
+apk add --allow-untrusted ./*.apk >/dev/null 2>&1 || true
 rm -rf /tmp/prebake
 exit 0
 PREBAKE
@@ -187,7 +187,7 @@ PREBAKE
 def _download_prebake_packages() -> None:
     prebake_dir = Path("/tmp/conwrt-prebake")
     prebake_dir.mkdir(parents=True, exist_ok=True)
-    if any(prebake_dir.glob("*.ipk")):
+    if any(prebake_dir.glob("*.apk")):
         return
     print("Downloading pre-bake packages...", flush=True)
     listing = subprocess.run(
@@ -198,7 +198,7 @@ def _download_prebake_packages() -> None:
         print(f"  Warning: could not fetch package listing: {listing.stderr}")
         return
     import re
-    available = set(re.findall(r'href="([^"]+\.ipk)"', listing.stdout))
+    available = set(re.findall(r'href="([^"]+\.apk)"', listing.stdout))
     for pkg in PREBAKE_PACKAGES:
         match = next((a for a in available if a.startswith(pkg + "_")), None)
         if not match:
