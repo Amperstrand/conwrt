@@ -96,6 +96,10 @@ stability5: ## Fire-and-forget: 5 consecutive integration runs for stability ban
 integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
 	@bash scripts/local-tests.sh integration
 
+bench-vpn: ## VPN technology benchmark on the bench router (env-gated, see tests/bench/conftest.py)
+	@CONWRT_BENCH_ROUTER=$${CONWRT_BENCH_ROUTER:-192.168.1.1} \
+		python3 -m pytest tests/bench -v -s --timeout=1200
+
 bench: ## Run bufferbloat benchmark against local QEMU VM (results in test-results/)
 	@bash scripts/local-tests.sh bench
 
