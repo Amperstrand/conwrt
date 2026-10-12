@@ -35,7 +35,13 @@ import urllib.request  # noqa: E402
 COUNTRY_ALIASES = {"germany": "DE", "de": "DE"}
 
 
-def _get_json(url: str, token: str = "") -> object:
+def _get_json(url: str, token: str = "") -> list[dict]:
+    """GET *url* and return the JSON payload as a list of objects.
+
+    The NordVPN API is a network trust boundary: every endpoint this CLI
+    consumes returns a JSON array of objects, so anything else is rejected
+    here rather than leaking "object" into call sites.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "conwrt-nordvpn/1.0"})
     if token:
         req.add_header(
@@ -43,7 +49,10 @@ def _get_json(url: str, token: str = "") -> object:
             "Basic " + base64.b64encode(f"token:{token}".encode()).decode(),
         )
     with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode())
+        data = json.loads(resp.read().decode())
+    if not isinstance(data, list) or not all(isinstance(entry, dict) for entry in data):
+        raise ValueError(f"unexpected JSON payload from {url}")
+    return data
 
 
 def _country_id(country: str) -> str:

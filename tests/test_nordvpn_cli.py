@@ -43,6 +43,45 @@ class TestCountryId:
                 nordvpn_cli._country_id("ZZ")
 
 
+class TestGetJson:
+    """The NordVPN API is a network trust boundary — payloads must be
+    validated to list[dict] there, not at call sites."""
+
+    @staticmethod
+    def _fake_response(payload: bytes):
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Resp(payload)
+
+    def test_rejects_non_list_payload(self):
+        with patch.object(nordvpn_cli.urllib.request, "urlopen",
+                          return_value=self._fake_response(b'{"error": "nope"}')):
+            with pytest.raises(ValueError, match="unexpected JSON payload"):
+                nordvpn_cli._get_json("https://api.nordvpn.com/v1/servers/countries")
+
+    def test_rejects_non_dict_entries(self):
+        with patch.object(nordvpn_cli.urllib.request, "urlopen",
+                          return_value=self._fake_response(b'["de1", "de2"]')):
+            with pytest.raises(ValueError, match="unexpected JSON payload"):
+                nordvpn_cli._get_json("https://api.nordvpn.com/v1/servers/countries")
+
+    def test_accepts_list_of_dicts(self):
+        with patch.object(nordvpn_cli.urllib.request, "urlopen",
+                          return_value=self._fake_response(b'[{"id": 81}]')):
+            assert nordvpn_cli._get_json("https://x/") == [{"id": 81}]
+
+
 class TestServers:
     def test_lists_hostname_station_load_key(self):
         fake_servers = [{
