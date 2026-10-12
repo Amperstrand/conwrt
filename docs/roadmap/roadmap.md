@@ -22,7 +22,7 @@ contract, pattern catalogue). ADRs 0000–0011. Backlog created.
 
 **Exit:** documented design + actionable issues + first slice selected. ✔
 
-## M1 — Portable Rust foundation 🚧 (in progress)
+## M1 — Portable Rust foundation ✅ (PR #119)
 
 - Cargo workspace (`crates/`, `apps/`) beside Python; no 1.x disruption.
 - `conwrt-types`: DeviceModel parsing + validation of the real `models/*.json`
@@ -39,7 +39,7 @@ contract, pattern catalogue). ADRs 0000–0011. Backlog created.
 (Python) unaffected; CLI demonstrates a real read-only diagnostic workflow
 against mock capabilities. Rust workflow runs in GitHub CI.
 
-## M2 — Native CLI and workflow parity
+## M2 — Native CLI and workflow parity 🟡 (exit criterion met — #122/#123; SerialIo + serial-flash driver and classifier refinement remain)
 
 - `providers/conwrt-local-std`: tokio/serialport/std::net implementations of
   the M1 trait set (real ARP/ping/HTTP/SSH-banner probing, read-only).
