@@ -1,0 +1,24 @@
+[package]
+name = "conwrt-core"
+description = "Portable conwrt engine core: capability traits, device-state classification, identification, workflows (Tier-A: no_std + alloc)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+# Enables std-only conveniences (error trait impls). The engine logic itself
+# stays no_std-compatible; CI checks the no-default-features build for
+# thumbv7em-none-eabihf (ADR-0002).
+std = ["conwrt-types/std"]
+
+[dependencies]
+conwrt-types = { path = "../conwrt-types", default-features = false }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[lints]
+workspace = true
