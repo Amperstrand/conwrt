@@ -33,11 +33,17 @@ from model_loader import load_model
 # ``openwrt.release`` overrides this; ``--release`` / the env var override both.
 DEFAULT_RELEASE = "24.10.2"
 
+# Default OpenWrt image flavour. Models whose flash method needs a different
+# artefact (e.g. ``squashfs-factory.bin`` for OEM web recovery, or
+# ``initramfs-kernel.bin``) declare ``openwrt.image_suffix``.
+DEFAULT_IMAGE_SUFFIX = "squashfs-sysupgrade.bin"
+
 DEFAULT_BASE_URL = "https://downloads.openwrt.org"
 
 _RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _ENV_RELEASE_VARS = ("CONWRT_OPENWRT_RELEASE", "OPENWRT_RELEASE")
 _ENV_BASE_VARS = ("CONWRT_OPENWRT_BASE",)
+_ENV_SUFFIX_VARS = ("CONWRT_IMAGE_SUFFIX",)
 
 ModelLike = Union[str, dict]
 
@@ -97,8 +103,36 @@ def resolve_release(model: ModelLike, override: Optional[str] = None) -> str:
     return candidate
 
 
-def image_filename(model: ModelLike, release: str) -> str:
-    """Return the vanilla sysupgrade image basename for *model*."""
+def _env_suffix() -> Optional[str]:
+    for name in _ENV_SUFFIX_VARS:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def image_suffix(model: ModelLike, override: Optional[str] = None) -> str:
+    """Resolve the image flavour suffix for *model*.
+
+    Precedence: explicit ``override`` > ``CONWRT_IMAGE_SUFFIX`` env >
+    ``openwrt.image_suffix`` in the model > :data:`DEFAULT_IMAGE_SUFFIX`.
+    """
+    model = _as_model(model)
+    return (
+        override
+        or _env_suffix()
+        or model.get("openwrt", {}).get("image_suffix")
+        or DEFAULT_IMAGE_SUFFIX
+    )
+
+
+def image_filename(model: ModelLike, release: str, suffix: Optional[str] = None) -> str:
+    """Return the vanilla image basename for *model*.
+
+    *suffix* is the trailing flavour (e.g. ``squashfs-sysupgrade.bin``,
+    ``squashfs-factory.bin``, ``initramfs-kernel.bin``). It defaults to the
+    model's ``openwrt.image_suffix`` or :data:`DEFAULT_IMAGE_SUFFIX`.
+    """
     model = _as_model(model)
     openwrt = model.get("openwrt", {})
     target = openwrt.get("target", "")
@@ -110,8 +144,8 @@ def image_filename(model: ModelLike, release: str) -> str:
         )
     if not profile:
         raise ValueError(f"Model '{model.get('id', '?')}' is missing openwrt.profile")
-    _, subtarget = target.split("/", 1)
-    return f"openwrt-{release}-{target.replace('/', '-')}-{profile}-squashfs-sysupgrade.bin"
+    resolved_suffix = image_suffix(model, suffix)
+    return f"openwrt-{release}-{target.replace('/', '-')}-{profile}-{resolved_suffix}"
 
 
 def target_dir_url(model: ModelLike, release: str) -> str:
@@ -121,10 +155,11 @@ def target_dir_url(model: ModelLike, release: str) -> str:
     return f"{downloads_base()}/releases/{release}/targets/{target}"
 
 
-def resolve_image_url(model: ModelLike, release: Optional[str] = None) -> str:
-    """Return the full vanilla sysupgrade download URL for *model*."""
+def resolve_image_url(model: ModelLike, release: Optional[str] = None,
+                      suffix: Optional[str] = None) -> str:
+    """Return the full vanilla image download URL for *model*."""
     resolved = resolve_release(model, release)
-    return f"{target_dir_url(model, resolved)}/{image_filename(model, resolved)}"
+    return f"{target_dir_url(model, resolved)}/{image_filename(model, resolved, suffix)}"
 
 
 def parse_sha256sums(text: str, filename: str) -> Optional[str]:
@@ -183,18 +218,20 @@ def fetch_image(
     release: Optional[str] = None,
     dest_dir: Optional[Union[str, os.PathLike]] = None,
     *,
+    suffix: Optional[str] = None,
     verify: bool = True,
     force: bool = False,
     log_fn=log,
 ) -> str:
-    """Download + verify the vanilla sysupgrade image for *model*.
+    """Download + verify the vanilla image for *model*.
 
     Returns the local path. A cached file with a matching SHA-256 is reused
-    unless *force* is set.
+    unless *force* is set. *suffix* selects the image flavour (defaults to the
+    model's ``openwrt.image_suffix``).
     """
     resolved = resolve_release(model, release)
-    filename = image_filename(model, resolved)
-    url = resolve_image_url(model, resolved)
+    filename = image_filename(model, resolved, suffix)
+    url = resolve_image_url(model, resolved, suffix)
 
     if dest_dir is None:
         target_dir = images_dir()

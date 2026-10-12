@@ -79,6 +79,7 @@ def _make_args(**overrides):
         yes=False,
         source_image=True,
         release=None,
+        image_suffix=None,
         suspend_wifi=False,
     )
     defaults.update(overrides)
@@ -606,6 +607,12 @@ class TestCmdFlashSourceImage(CmdFlashTestCase):
         self.run_cmd_flash(_make_args(image=None, request_image=False, release="25.12.5"))
         self.assertEqual(
             self.mocks["_fetch_image"].call_args.kwargs.get("release"), "25.12.5")
+
+    def test_image_suffix_passed_through(self):
+        self.run_cmd_flash(_make_args(
+            image=None, request_image=False, image_suffix="squashfs-factory.bin"))
+        self.assertEqual(
+            self.mocks["_fetch_image"].call_args.kwargs.get("suffix"), "squashfs-factory.bin")
 
     def test_suspend_wifi_wraps_and_restores(self):
         self.mocks["suspend_wifi"].return_value = "nmcli"

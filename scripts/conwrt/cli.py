@@ -92,6 +92,10 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--release", default=None,
                         help="OpenWrt release for --source-image (e.g. 24.10.2). Defaults to "
                              "openwrt.release in the model, then the repo default.")
+    flash_parser.add_argument("--image-suffix", default=None,
+                        help="Vanilla image flavour for --source-image (e.g. squashfs-sysupgrade.bin, "
+                             "squashfs-factory.bin, initramfs-kernel.bin). Defaults to the model's "
+                             "openwrt.image_suffix, then squashfs-sysupgrade.bin.")
     flash_parser.add_argument("--suspend-wifi", action="store_true",
                         help="Temporarily disable host WiFi radios during U-Boot recovery to avoid "
                              "subnet collisions with the recovery address (restored afterwards)")
@@ -104,6 +108,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model ID from models/ (e.g. glinet-mt3000)")
     image_parser.add_argument("--release", default=None,
         help="OpenWrt release override (e.g. 24.10.2)")
+    image_parser.add_argument("--image-suffix", default=None,
+        help="Image flavour (e.g. squashfs-sysupgrade.bin, squashfs-factory.bin). "
+             "Defaults to the model's openwrt.image_suffix, then squashfs-sysupgrade.bin.")
     image_parser.add_argument("--dest", default=None,
         help="Destination directory (default: images/)")
     image_parser.add_argument("--force", action="store_true",

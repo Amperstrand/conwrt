@@ -40,6 +40,10 @@
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
           "description": "Optional full OpenWrt release (e.g. 24.10.2) for vanilla image downloads; defaults to the repo-wide release"
         },
+        "image_suffix": {
+          "type": "string",
+          "description": "Optional vanilla image flavour suffix after the profile (e.g. squashfs-sysupgrade.bin, squashfs-factory.bin, initramfs-kernel.bin); defaults to squashfs-sysupgrade.bin"
+        },
         "default_ip": {"type": "string", "minLength": 1}
       }
     },

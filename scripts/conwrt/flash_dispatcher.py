@@ -659,6 +659,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             image_path = _fetch_image(
                 args.model_id,
                 release=getattr(args, "release", None),
+                suffix=getattr(args, "image_suffix", None),
                 log_fn=log,
             )
             log(f"Sourced image: {image_path}")

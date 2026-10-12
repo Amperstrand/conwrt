@@ -13,9 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from conwrt import image_source
 from conwrt.image_source import (
+    DEFAULT_IMAGE_SUFFIX,
     DEFAULT_RELEASE,
     fetch_image,
     image_filename,
+    image_suffix,
     parse_sha256sums,
     resolve_image_url,
     resolve_release,
@@ -88,6 +90,34 @@ class TestImageFilenameAndUrl(TestCase):
     def test_base_url_override(self):
         with patch.dict("os.environ", {"CONWRT_OPENWRT_BASE": "https://mirror.example"}):
             self.assertTrue(resolve_image_url(_MT3000, "24.10.2").startswith("https://mirror.example/"))
+
+
+class TestImageSuffix(TestCase):
+    def test_default_suffix(self):
+        self.assertEqual(image_suffix(_MT3000), DEFAULT_IMAGE_SUFFIX)
+
+    def test_model_suffix(self):
+        model = {"id": "x", "openwrt": {"target": "a/b", "profile": "p",
+                                        "image_suffix": "squashfs-factory.bin"}}
+        self.assertEqual(image_suffix(model), "squashfs-factory.bin")
+
+    def test_override_wins(self):
+        self.assertEqual(image_suffix(_MT3000, "initramfs-kernel.bin"),
+                         "initramfs-kernel.bin")
+
+    def test_env_wins_over_model(self):
+        with patch.dict("os.environ", {"CONWRT_IMAGE_SUFFIX": "initramfs-kernel.bin"}):
+            self.assertEqual(image_suffix(_MT3000), "initramfs-kernel.bin")
+
+    def test_filename_and_url_use_suffix(self):
+        self.assertEqual(
+            image_filename(_MT3000, "24.10.2", "squashfs-factory.bin"),
+            "openwrt-24.10.2-mediatek-filogic-glinet_gl-mt3000-squashfs-factory.bin",
+        )
+        self.assertTrue(
+            resolve_image_url(_MT3000, "24.10.2", "squashfs-factory.bin").endswith(
+                "-squashfs-factory.bin")
+        )
 
 
 class TestParseSha256sums(TestCase):

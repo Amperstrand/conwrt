@@ -13,7 +13,8 @@ from conwrt.cmd_image import cmd_image
 
 
 def _args(**overrides):
-    defaults = dict(model_id="glinet-mt3000", release=None, dest=None, force=False)
+    defaults = dict(model_id="glinet-mt3000", release=None, dest=None, force=False,
+                    image_suffix=None)
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
@@ -30,6 +31,11 @@ class TestCmdImage(TestCase):
     def test_release_passed(self, mock_fetch):
         cmd_image(_args(release="25.12.5"))
         self.assertEqual(mock_fetch.call_args.kwargs.get("release"), "25.12.5")
+
+    @patch("conwrt.cmd_image.fetch_image", return_value="/tmp/x.bin")
+    def test_suffix_passed(self, mock_fetch):
+        cmd_image(_args(image_suffix="squashfs-factory.bin"))
+        self.assertEqual(mock_fetch.call_args.kwargs.get("suffix"), "squashfs-factory.bin")
 
     @patch("conwrt.cmd_image.fetch_image", side_effect=RuntimeError("boom"))
     def test_fetch_failure_returns_1(self, mock_fetch):
