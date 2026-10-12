@@ -97,3 +97,63 @@ class TestConfirm:
     def test_non_tty_declines(self):
         with patch.object(watch.sys.stdin, "isatty", return_value=False):
             assert watch._confirm("flash?", False) is False
+
+
+class TestAmbiguousModelIds:
+    def test_same_model_two_units_is_ambiguous(self):
+        model = {"id": "ap3915i"}
+        picks = [
+            ("10.0.0.1", "uboot", "AA:BB:CC:00:00:01", model),
+            ("10.0.0.2", "uboot", "AA:BB:CC:00:00:02", model),
+        ]
+        assert watch._ambiguous_model_ids(picks) == {"ap3915i"}
+
+    def test_same_model_same_mac_is_not_ambiguous(self):
+        model = {"id": "ap3915i"}
+        picks = [
+            ("10.0.0.1", "uboot", "AA:BB:CC:00:00:01", model),
+            ("10.0.0.2", "openwrt", "AA:BB:CC:00:00:01", model),
+        ]
+        assert watch._ambiguous_model_ids(picks) == set()
+
+    def test_distinct_models_not_ambiguous(self):
+        picks = [
+            ("10.0.0.1", "uboot", "AA:BB:CC:00:00:01", {"id": "a"}),
+            ("10.0.0.2", "uboot", "AA:BB:CC:00:00:02", {"id": "b"}),
+        ]
+        assert watch._ambiguous_model_ids(picks) == set()
+
+    def test_missing_mac_or_model_ignored(self):
+        picks = [
+            ("10.0.0.1", "uboot", "", {"id": "a"}),
+            ("10.0.0.2", "uboot", "AA:BB:CC:00:00:02", None),
+        ]
+        assert watch._ambiguous_model_ids(picks) == set()
+
+
+class TestMacForIp:
+    @staticmethod
+    def _resp(stdout=""):
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.stdout = stdout
+        return r
+
+    @patch("subprocess.run")
+    def test_linux_uses_ip_neigh(self, mock_run):
+        mock_run.return_value = self._resp("? (192.168.0.1) at BC:22:28:99:1D:00 dev enp5s0\n")
+        with patch("platform_utils.detect_platform", return_value="linux"):
+            assert watch._mac_for_ip("192.168.0.1") == "BC:22:28:99:1D:00"
+        assert mock_run.call_args.args[0] == ["ip", "neigh", "show", "192.168.0.1"]
+
+    @patch("subprocess.run")
+    def test_darwin_uses_arp(self, mock_run):
+        mock_run.return_value = self._resp("? (192.168.0.1) at bc:22:28:99:1d:0 on en6 [ethernet]\n")
+        with patch("platform_utils.detect_platform", return_value="darwin"):
+            assert watch._mac_for_ip("192.168.0.1") == "BC:22:28:99:1D:00"
+        assert mock_run.call_args.args[0] == ["arp", "-n", "192.168.0.1"]
+
+    @patch("subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_tool_returns_empty(self, mock_run):
+        with patch("platform_utils.detect_platform", return_value="darwin"):
+            assert watch._mac_for_ip("192.168.0.1") == ""

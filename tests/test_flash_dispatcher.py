@@ -328,9 +328,10 @@ class TestUbootCleanup(TestCase):
         _uboot_cleanup(ctx, profile, "en0")
         mock_route.assert_called_once_with("en0", "192.168.1.1")
 
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
     @patch("conwrt.flash_dispatcher.remove_interface_ip")
     @patch("conwrt.flash_dispatcher.remove_host_route")
-    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip):
+    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip, mock_alias):
         from conwrt.flash_dispatcher import _uboot_cleanup
         ctx = _make_ctx()
         profile = _make_profile(
@@ -338,13 +339,25 @@ class TestUbootCleanup(TestCase):
         _uboot_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_called_once_with("en0", "192.168.1.254", "24")
 
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
     @patch("conwrt.flash_dispatcher.remove_interface_ip")
     @patch("conwrt.flash_dispatcher.remove_host_route")
-    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip):
+    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip, mock_alias):
         from conwrt.flash_dispatcher import _uboot_cleanup
         ctx = _make_ctx()
         profile = _make_profile(
             recovery_ip="192.168.1.1", openwrt_ip="192.168.1.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=False)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_operator_primary_address_never_removed(self, mock_route, mock_remove_ip, mock_alias):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.9.1", client_ip="192.168.1.254")
         _uboot_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_not_called()
 
@@ -356,6 +369,40 @@ class TestUbootCleanup(TestCase):
         profile = _make_profile(recovery_ip="")
         _uboot_cleanup(ctx, profile, "en0")
         mock_route.assert_not_called()
+
+
+# ===================================================================
+# _remove_stale_client_aliases
+# ===================================================================
+
+class TestRemoveStaleClientAliases(TestCase):
+    """Leftover cleanup must only touch alias-style addresses."""
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_removes_alias_style_leftovers(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="192.168.0.10", openwrt_client_ip="192.168.1.254")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_any_call("en0", "192.168.0.10", "24")
+        mock_remove.assert_any_call("en0", "192.168.1.254", "24")
+        self.assertEqual(mock_remove.call_count, 2)
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=False)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_operator_primary_addresses_survive(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="192.168.1.254", openwrt_client_ip="")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_no_client_ips_no_calls(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="", openwrt_client_ip="")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_not_called()
 
 
 # ===================================================================

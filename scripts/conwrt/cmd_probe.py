@@ -15,7 +15,7 @@ from typing import Optional
 
 from model_loader import list_models
 from conwrt.device_inventory import auto_detect_interface
-from platform_utils import configure_interface_ip, remove_interface_ip
+from platform_utils import configure_interface_ip, interface_has_ip, remove_interface_ip
 
 _router_probe = importlib.import_module("router-probe")
 probe_http_get = _router_probe.probe_http_get
@@ -83,15 +83,15 @@ def _configure_interface(
     if target_subnet == current_subnet:
         return current_subnet
 
-    # Remove previous alias if we had one
     if current_subnet:
         old_ip = _host_ip_for_subnet(current_subnet)
-        remove_interface_ip(interface, old_ip, "24")
         if old_ip in added_aliases:
+            remove_interface_ip(interface, old_ip, "24")
             added_aliases.remove(old_ip)
 
-    # Assign new alias
     host_ip = _host_ip_for_subnet(target_subnet)
+    if interface_has_ip(interface, host_ip):
+        return target_subnet
     if configure_interface_ip(interface, host_ip, "24"):
         added_aliases.append(host_ip)
     return target_subnet

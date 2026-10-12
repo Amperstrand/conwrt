@@ -170,56 +170,67 @@ def _split_endpoint(endpoint: str) -> tuple[str, str]:
     return endpoint, "51820"
 
 
+def _country_id_from_list(countries: list[dict[str, Any]], code: str) -> str:
+    """Resolve a 2-letter code or country name to a NordVPN country id.
+
+    ``countries`` is the /v1/servers/countries payload. Returns "" when the
+    country is unknown (the recommendations query then runs unfiltered).
+    """
+    needle = code.strip().lower()
+    for entry in countries:
+        if entry.get("code", "").lower() == needle or entry.get("name", "").lower() == needle:
+            return str(entry["id"])
+    return ""
+
+
 def _resolve_endpoint(value: str, token: str, tech: str = "wireguard_udp") -> tuple[str, str, str]:
     """Return (endpoint_ip_or_host, port, server_public_key) for a target.
 
     ``value`` is an IP, a hostname, a "Country" name, or a country code. IPs
-    and hostnames are resolved via filters[hostname]/direct use; anything else
-    goes through the recommendations API with a country filter.
+    and hostnames are resolved via the servers API to a full server object
+    (the WireGuard public key lives in its technologies metadata); anything
+    else goes through the recommendations API with a country filter.
     """
-    import json as _json
-    import urllib.request
-
-    def _get(url: str, basic: str = "") -> Any:
-        req = urllib.request.Request(url)
-        if basic:
-            req.add_header("Authorization", f"Basic {basic}")
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return _json.loads(resp.read().decode())
-
     basic = base64.b64encode(f"token:{token}".encode()).decode()
     parts = value.rsplit(":", 1)
     looks_like_host = len(parts) == 2 and parts[1].isdigit()
     host_value = parts[0] if looks_like_host else value
 
     if _is_ip(host_value) or host_value.endswith(".nordvpn.com"):
-        server = {
-            "station": host_value if _is_ip(host_value) else "",
-            "hostname": host_value,
-        }
-        if not server["station"]:
-            hit = _get(
+        if _is_ip(host_value):
+            server_list = _api_get(
                 "https://api.nordvpn.com/v1/servers"
-                f"?filters%5Bhostname%5D={host_value.split('.')[0]}",
-                basic,
+                f"?filters%5Bstations%5D%5Bip%5D={host_value}", basic,
             )
-            if not hit:
-                raise ValueError(f"no NordVPN server found for hostname {host_value}")
-            server["station"] = hit[0].get("station", "")
-        key = _server_public_key(server) or ""
+        else:
+            server_list = _api_get(
+                "https://api.nordvpn.com/v1/servers"
+                f"?filters%5Bhostname%5D={host_value.split('.')[0]}", basic,
+            )
+        if not server_list:
+            raise ValueError(f"no NordVPN server found for {host_value}")
+        server = server_list[0]
+        key = _server_public_key(server)
+        if tech == "wireguard_udp" and not key:
+            raise ValueError(f"server {server.get('hostname', host_value)} has no "
+                             f"wireguard_udp public key")
         ip, port = _split_endpoint(value if looks_like_host else f"{host_value}:51820")
-        return server["station"] or host_value, port, key
+        return server.get("station", "") or host_value, port, key
 
     code = host_value.strip().lower()
-    code_map = {"germany": "81", "de": "81"}
-    country_id = code_map.get(code, code if code.isdigit() else "")
+    if code.isdigit():
+        country_id = code
+    else:
+        country_id = _country_id_from_list(
+            _api_get("https://api.nordvpn.com/v1/servers/countries", basic), code,
+        )
     url = (
         "https://api.nordvpn.com/v1/servers/recommendations?limit=1"
         f"&filters%5Bservers_technologies%5D%5Bidentifier%5D={tech}"
     )
     if country_id:
         url += f"&filters%5Bcountry_id%5D={country_id}"
-    servers = _get(url)
+    servers = _api_get(url, basic)
     if not servers:
         raise ValueError(f"no NordVPN {tech} server found for '{value}'")
     server = servers[0]

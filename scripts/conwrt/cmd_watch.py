@@ -44,13 +44,20 @@ def _prioritize(ips: list[str]) -> list[str]:
 
 def _mac_for_ip(ip: str) -> str:
     """Return the neighbor MAC for ip (probes have already ARPed it)."""
-    r = subprocess.run(
-        ["ip", "neigh", "show", ip],
-        capture_output=True, text=True, timeout=5, check=False,
-    )
+    from platform_utils import detect_platform
+
+    if detect_platform() == "darwin":
+        cmd = ["arp", "-n", ip]
+    else:
+        cmd = ["ip", "neigh", "show", ip]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return ""
     for token in r.stdout.split():
         if token.count(":") == 5:
-            return token.upper()
+            octets = token.split(":")
+            return ":".join(octet.zfill(2) for octet in octets).upper()
     return ""
 
 
@@ -142,6 +149,22 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
     return answer in ("y", "yes")
 
 
+def _ambiguous_model_ids(
+    picks: list[tuple[str, str, str, dict | None]],
+) -> set[str]:
+    """Model ids that this scan found on more than one physical unit.
+
+    AGENTS.md specimen rule: with several identical units live, "flash the
+    AP3915i" style selection is ambiguous — the operator must isolate the
+    intended unit instead of auto-flashing one of them.
+    """
+    by_model: dict[str, set[str]] = {}
+    for _ip, _state, mac, model in picks:
+        if model and mac:
+            by_model.setdefault(model["id"], set()).add(mac)
+    return {model_id for model_id, macs in by_model.items() if len(macs) > 1}
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     interface = args.interface or auto_detect_interface()
     if not interface:
@@ -183,10 +206,22 @@ def cmd_watch(args: argparse.Namespace) -> int:
             finally:
                 _cleanup_aliases(interface, added_aliases)
 
+            picks: list[tuple[str, str, str, dict | None]] = []
             for ip, state in findings:
                 mac = _mac_for_ip(ip)
                 model = _pick_model(ip, state, models, mac)
+                picks.append((ip, state, mac, model))
+            ambiguous = _ambiguous_model_ids(picks)
+
+            for ip, state, mac, model in picks:
                 _print_card(ip, mac, state, model)
+
+                if model and model["id"] in ambiguous:
+                    print(f"  ✗ REFUSING to flash: multiple {model['id']} units are live "
+                          f"(MAC {mac} is not unambiguous). Power off the other "
+                          f"candidate(s) or flash by explicit specimen, then re-run.")
+                    flashed.add(ip)
+                    continue
 
                 cmd = _flash_command(ip, state, model, args)
                 if cmd is None:

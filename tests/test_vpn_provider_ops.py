@@ -521,3 +521,64 @@ class TestHeredocTransportVerbatim:
         assert ok
         assert "# 2048 bit key" in captured["payload"], "heredoc data line stripped"
         assert "deadbeef" in captured["payload"]
+
+
+class TestNordvpnCountryId:
+    def test_code_and_name_resolve(self):
+        from use_cases.vpn_providers.nordvpn import _country_id_from_list
+        countries = [
+            {"id": 81, "name": "Germany", "code": "DE"},
+            {"id": 227, "name": "United States", "code": "US"},
+        ]
+        assert _country_id_from_list(countries, "de") == "81"
+        assert _country_id_from_list(countries, "DE") == "81"
+        assert _country_id_from_list(countries, "germany") == "81"
+        assert _country_id_from_list(countries, "US") == "227"
+        assert _country_id_from_list(countries, "united states") == "227"
+
+    def test_unknown_country_returns_empty(self):
+        from use_cases.vpn_providers.nordvpn import _country_id_from_list
+        countries = [{"id": 81, "name": "Germany", "code": "DE"}]
+        assert _country_id_from_list(countries, "ZZ") == ""
+        assert _country_id_from_list(countries, "Atlantis") == ""
+
+
+class TestNordvpnPinnedServerKey:
+    def test_hostname_pin_yields_public_key(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {
+            "hostname": "de1507.nordvpn.com", "station": "187.40.55.114",
+            "technologies": [{"identifier": "wireguard_udp",
+                              "metadata": [{"name": "public_key", "value": "PUBKEY123"}]}],
+        }
+        with patch.object(nv, "_api_get", return_value=[server]) as mock_api:
+            endpoint, port, key = nv._resolve_endpoint("de1507.nordvpn.com", "token")
+        assert key == "PUBKEY123"
+        assert endpoint == "187.40.55.114"
+        assert port == "51820"
+        assert "hostname" in mock_api.call_args.args[0]
+
+    def test_ip_pin_yields_public_key(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {
+            "hostname": "de1507.nordvpn.com", "station": "187.40.55.114",
+            "technologies": [{"identifier": "wireguard_udp",
+                              "metadata": [{"name": "public_key", "value": "PUBKEY123"}]}],
+        }
+        with patch.object(nv, "_api_get", return_value=[server]) as mock_api:
+            endpoint, port, key = nv._resolve_endpoint("187.40.55.114:51820", "token")
+        assert key == "PUBKEY123"
+        assert endpoint == "187.40.55.114"
+        assert port == "51820"
+        assert "stations" in mock_api.call_args.args[0]
+
+    def test_pin_without_wg_key_raises(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {"hostname": "legacy.example", "station": "1.2.3.4", "technologies": []}
+        with patch.object(nv, "_api_get", return_value=[server]):
+            import pytest as _pytest
+            with _pytest.raises(ValueError, match="wireguard_udp public key"):
+                nv._resolve_endpoint("1.2.3.4", "token")
