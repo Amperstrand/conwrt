@@ -5,7 +5,7 @@ SCHEMAS_DIR := schemas
 MODEL ?=
 RELEASE ?=
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image recovery test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image recovery sta test smoke ci ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -99,6 +99,23 @@ source-image: ## Download + verify the vanilla OpenWrt image only (MODEL= requir
 recovery: ## Flash a device in recovery mode for any model (MODEL=, optionally IFACE=)
 	@$(SCRIPTS_DIR)/flash-recovery.sh "$(MODEL)" "$(IFACE)"
 ## Usage: make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6
+
+##
+## Device configuration
+##
+
+sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, optional BAND=, ENCRYPTION=, IP=)
+	@if [ -z "$(SSID)" ]; then \
+		echo "Usage: make sta SSID=UpstreamNetwork KEY=passphrase [BAND=2.4ghz] [ENCRYPTION=psk2] [IP=192.168.1.1]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py configure --ip $(or $(IP),192.168.1.1) \
+		--sta-ssid "$(SSID)" \
+		$(if $(KEY),--sta-key "$(KEY)",) \
+		$(if $(BAND),--sta-band $(BAND),) \
+		$(if $(ENCRYPTION),--sta-encryption $(ENCRYPTION),) \
+		$(ARGS)
+## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
 test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
 	@pytest tests -m "not integration"
