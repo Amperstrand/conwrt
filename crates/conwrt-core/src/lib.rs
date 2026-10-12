@@ -23,6 +23,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub mod capability;
+pub mod fingerprint;
 pub mod identify;
 pub mod mock;
 pub mod plan;
@@ -30,6 +31,7 @@ pub mod ssh;
 pub mod state;
 
 pub use capability::{HttpProbeResult, LinkProbe, ProbeError, SshBanner, Time};
+pub use fingerprint::{FingerprintReport, OpenwrtRelease, confirm, parse_openwrt_release};
 pub use identify::{MatchKind, ModelMatch, identify_by_mac};
 pub use mock::MockProber;
 pub use plan::{
