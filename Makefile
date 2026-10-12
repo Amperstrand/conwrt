@@ -120,7 +120,7 @@ rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
-	cargo check -p conwrt-types -p conwrt-core --no-default-features --target thumbv7em-none-eabihf
+	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
 
 rust-test: ## Run Rust workspace tests only
 	cargo test --workspace

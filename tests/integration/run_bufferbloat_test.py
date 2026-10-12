@@ -245,7 +245,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     print("\n--- Installing iperf3 on router ---")
-    ssh(args.host, args.port, args.key, "opkg update 2>/dev/null; opkg install iperf3 2>&1 | tail -3", timeout=60)
+    ssh(args.host, args.port, args.key, "apk update >/dev/null 2>&1; apk add iperf3 2>&1 | tail -3", timeout=120)
 
     print("\n--- Capturing system info ---")
     sysinfo = {

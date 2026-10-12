@@ -51,3 +51,4 @@ __pycache__/
 # Rust build artifacts
 target/
 *.egg-info/
+tests/integration/.openwrt.img.prepped-*

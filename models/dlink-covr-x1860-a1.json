@@ -18,7 +18,8 @@
     "wifi": "2.4GHz + 5GHz WiFi 6 (MT7915DAN + MT7975DN, ax, DBDC)"
   },
   "mac_oui": [
-    "BC:22:28"
+    "BC:22:28",
+    "a8:63:7d"
   ],
   "flash_methods": {
     "recovery-http": {

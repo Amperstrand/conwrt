@@ -21,7 +21,7 @@ VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 SSH_PORT = 2222
 SSH_HOST = "127.0.0.1"
-OPENWRT_VERSION = "24.10.2"
+OPENWRT_VERSION = "25.12.5"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
 PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
@@ -78,10 +78,16 @@ def _prepare_image(image_path: Path) -> None:
     with DHCP (QEMU provides 10.0.2.15), and disable the firewall entirely
     so dropbear is reachable on port 22 via the hostfwd port forward.
     """
-    if SSH_KEY.exists():
+    # Prep is keyed on the image, not the SSH key: a version bump replaces
+    # the image and must re-run injection even when the key pair persists
+    # (a 24.10→25.12 bump silently skipped prep and left the VM's dropbear
+    # behind the default WAN firewall — unreachable via hostfwd).
+    stamp = image_path.with_name(image_path.name + f".prepped-{OPENWRT_VERSION}")
+    if stamp.exists():
         return
-    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
-                   capture_output=True, check=True)
+    if not SSH_KEY.exists():
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
+                       capture_output=True, check=True)
     pubkey = (SSH_KEY.with_suffix(".pub")).read_text().strip()
 
     r = subprocess.run(
@@ -143,25 +149,25 @@ DROPBEAR
         sudo mkdir -p /mnt/owrt/etc/uci-defaults
         sudo tee /mnt/owrt/etc/uci-defaults/99-install-sqm > /dev/null <<'INSTALL'
 #!/bin/sh
-opkg update >/dev/null 2>&1
-opkg install sqm-scripts luci-app-sqm >/dev/null 2>&1 || true
+apk update >/dev/null 2>&1
+apk add sqm-scripts luci-app-sqm >/dev/null 2>&1 || true
 exit 0
 INSTALL
         sudo chmod +x /mnt/owrt/etc/uci-defaults/99-install-sqm
 
-        # Pre-bake: inject .ipk files into image — QEMU guest can't reach opkg repos
+        # Pre-bake: inject .apk files into image — QEMU guest can't reach apk repos
         sudo mkdir -p /mnt/owrt/tmp/prebake
         for pkg in {" ".join(PREBAKE_PACKAGES)}; do
-            ipk=$(ls /tmp/conwrt-prebake/$pkg*.ipk 2>/dev/null | head -1)
-            if [ -n "$ipk" ]; then
-                sudo cp "$ipk" /mnt/owrt/tmp/prebake/
+            apk_file=$(ls /tmp/conwrt-prebake/$pkg*.apk 2>/dev/null | head -1)
+            if [ -n "$apk_file" ]; then
+                sudo cp "$apk_file" /mnt/owrt/tmp/prebake/
             fi
         done
-        if sudo ls /mnt/owrt/tmp/prebake/*.ipk >/dev/null 2>&1; then
+        if sudo ls /mnt/owrt/tmp/prebake/*.apk >/dev/null 2>&1; then
             sudo tee /mnt/owrt/etc/uci-defaults/98-prebake-packages > /dev/null <<'PREBAKE'
 #!/bin/sh
 cd /tmp/prebake 2>/dev/null || exit 0
-opkg install *.ipk 2>/dev/null || true
+apk add --allow-untrusted ./*.apk >/dev/null 2>&1 || true
 rm -rf /tmp/prebake
 exit 0
 PREBAKE
@@ -175,12 +181,13 @@ PREBAKE
     )
     if r.returncode != 0:
         pytest.fail(f"Image preparation failed: {r.stderr}")
+    stamp.touch()
 
 
 def _download_prebake_packages() -> None:
     prebake_dir = Path("/tmp/conwrt-prebake")
     prebake_dir.mkdir(parents=True, exist_ok=True)
-    if any(prebake_dir.glob("*.ipk")):
+    if any(prebake_dir.glob("*.apk")):
         return
     print("Downloading pre-bake packages...", flush=True)
     listing = subprocess.run(
@@ -191,7 +198,7 @@ def _download_prebake_packages() -> None:
         print(f"  Warning: could not fetch package listing: {listing.stderr}")
         return
     import re
-    available = set(re.findall(r'href="([^"]+\.ipk)"', listing.stdout))
+    available = set(re.findall(r'href="([^"]+\.apk)"', listing.stdout))
     for pkg in PREBAKE_PACKAGES:
         match = next((a for a in available if a.startswith(pkg + "_")), None)
         if not match:

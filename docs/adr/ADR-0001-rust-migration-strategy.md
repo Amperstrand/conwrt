@@ -39,6 +39,14 @@ encodes years of hardware lessons: UART break recovery, sysupgrade exit-code
 6. **Keep Python adapters where the ecosystem requires them** (labgrid client
    usage, OpenWrt packaging glue) even after M9; the runtime core is what
    goes Rust-first.
+7. **Libraries-first.** Rust protocol/platform code adopts maintained crates
+   wherever they fit (the M0 dossier is the candidate list); hand-rolled
+   implementations require a recorded justification — e.g. XMODEM is the
+   `xmodem` crate (with its known mid-stream-NAK limitation pinned by
+   fitness tests and whole-transfer retry policy), HTTP probing parses with
+   `httparse`, while unprivileged ICMP (system `ping` subprocess) and
+   Linux `/proc/net/arp` parsing remain deliberately hand-rolled (no
+   maintained crate fits without root or new dependencies).
 
 ## Consequences
 

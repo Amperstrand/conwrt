@@ -51,6 +51,25 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
+    /// Run the read-only diagnostic workflow against the local network
+    /// interfaces (real provider — Linux/macOS).
+    Diagnose {
+        /// Target address to probe.
+        #[arg(long)]
+        ip: IpAddr,
+        /// Interface used for carrier/ARP queries (e.g. enp5s0, en0).
+        #[arg(long)]
+        interface: Option<String>,
+        /// HTTP port to probe (80; override for OEM/recovery servers).
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
+        /// SSH port to probe for the identification banner (22).
+        #[arg(long, default_value_t = 22)]
+        ssh_port: u16,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
         /// Target address (used for reporting; the mock answers anything).
@@ -126,6 +145,13 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
+        Command::Diagnose {
+            ip,
+            interface,
+            http_port,
+            ssh_port,
+            dir,
+        } => cmd_diagnose(ip, interface, http_port, ssh_port, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
         Command::Plan {
             profile,
@@ -216,7 +242,7 @@ fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
 }
 
 fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
-    let (registry, dir_display) = load_registry(dir);
+    let (registry, _) = load_registry(dir);
     let mut prober = MockProber::responding(ip, scenario.named());
     let diagnosis = match pollster::block_on(diagnose(&mut prober, ip, registry.models())) {
         Ok(d) => d,
@@ -225,6 +251,44 @@ fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    print_diagnosis(&diagnosis);
+    println!("\n(provider: scripted mock — `conwrt diagnose` uses the local provider)");
+    ExitCode::SUCCESS
+}
+
+fn cmd_diagnose(
+    ip: IpAddr,
+    interface: Option<String>,
+    http_port: u16,
+    ssh_port: u16,
+    dir: &Path,
+) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let mut prober = match interface {
+        Some(iface) => conwrt_local_std::LocalProber::on_interface(iface),
+        None => conwrt_local_std::LocalProber::global(),
+    };
+    prober = prober.with_ports(http_port, ssh_port);
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("diagnose failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    print_diagnosis(&diagnosis);
+    println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    ExitCode::SUCCESS
+}
+
+fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
     println!("target:     {}", diagnosis.ip);
     if let Some(mac) = diagnosis.mac {
         println!("MAC:        {mac}");
@@ -246,12 +310,6 @@ fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
             println!("candidate:  {} ({})", m.model_id, m.vendor);
         }
     }
-    println!(
-        "\n(provider: scripted mock; models from {} — local-std and remote \
-         providers arrive with M2/M3)",
-        dir_display.display()
-    );
-    ExitCode::SUCCESS
 }
 
 #[allow(clippy::too_many_arguments)]

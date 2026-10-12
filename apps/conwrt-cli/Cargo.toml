@@ -14,8 +14,10 @@ path = "src/main.rs"
 [dependencies]
 conwrt-types = { path = "../../crates/conwrt-types" }
 conwrt-core = { path = "../../crates/conwrt-core" }
+conwrt-local-std = { path = "../../providers/conwrt-local-std" }
 clap = { workspace = true }
 pollster = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
