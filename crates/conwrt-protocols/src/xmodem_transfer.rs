@@ -8,7 +8,7 @@
 //!   bootloaders, 1024 for XMODEM-1k (≈8× faster on the same line).
 //!
 //! Known library limitations, accepted deliberately (bench-serial context;
-//! revisit if a target misbehaves — see #106):
+//! revisit if a target misbehaves — #124).
 //! - a mid-stream `NAK` is counted as an error but the block is **not**
 //!   retransmitted; the receiver will abort on the sequence mismatch and
 //!   the driver should retry the whole transfer,

@@ -190,3 +190,180 @@ fn eot_nak_once_then_ack_succeeds() {
     handle.join().expect("receiver thread");
     assert_eq!(sent, 5);
 }
+
+/// A mid-stream NAK (receiver wants block N retransmitted) makes the sender
+/// advance to block N+1 instead. A strict receiver then aborts on the
+/// sequence mismatch while the sender reports success — the driver must
+/// verify receiver-side acceptance, never trust the sender-side Ok.
+/// Pins xmodem-0.4 `send_stream`: non-ACK ⇒ error count + next block.
+#[test]
+fn mid_stream_nak_advances_without_retransmit() {
+    let (mut dev, mut peer) = UnixStream::pair().expect("socketpair");
+    let payload: Vec<u8> = (0..384u16).map(|v| (v % 256) as u8).collect();
+    let expected = payload.clone();
+
+    let handle = std::thread::spawn(move || {
+        peer.write_all(&[CRC_START]).expect("start C");
+        recv_frame(&mut peer, 128, 2, 1);
+        // Request retransmission of block 1…
+        peer.write_all(&[NAK]).expect("nak block 1");
+        // …and observe the sender skip straight to block 2.
+        let frame2 = recv_frame(&mut peer, 128, 2, 2);
+        assert_eq!(&frame2[..], &expected[128..256]);
+        peer.write_all(&[ACK]).expect("ack block 2");
+        recv_frame(&mut peer, 128, 2, 3);
+        peer.write_all(&[ACK]).expect("ack block 3");
+        recv_eot_and_ack(&mut peer);
+    });
+
+    let mut stream = std::io::Cursor::new(payload);
+    let sent = send_firmware(&mut dev, &mut stream, BlockLength::Standard)
+        .expect("sender completes despite the NAK");
+    handle.join().expect("receiver thread");
+    assert_eq!(sent, 384);
+}
+
+/// Mid-stream CAN is NOT honored (xmodem-0.4 TODO): the bytes are consumed
+/// as generic errors and the transfer continues. Only CAN at transfer start
+/// cancels. If the crate ever fixes this, this test fails and the driver's
+/// cancellation handling must be revisited.
+#[test]
+fn mid_stream_can_is_counted_not_honored() {
+    let (mut dev, mut peer) = UnixStream::pair().expect("socketpair");
+    let payload = vec![0x55u8; 384];
+
+    let handle = std::thread::spawn(move || {
+        peer.write_all(&[CRC_START]).expect("start C");
+        recv_frame(&mut peer, 128, 2, 1);
+        peer.write_all(&[ACK]).expect("ack block 1");
+        recv_frame(&mut peer, 128, 2, 2);
+        // Receiver aborts: double CAN mid-stream…
+        peer.write_all(&[CAN, CAN]).expect("cancel mid-stream");
+        // …but the sender swallows both as error counts (one per frame
+        // response) and keeps sending the remaining block.
+        recv_frame(&mut peer, 128, 2, 3);
+        peer.write_all(&[ACK]).expect("ack block 3");
+        recv_eot_and_ack(&mut peer);
+    });
+
+    let mut stream = std::io::Cursor::new(payload);
+    let sent = send_firmware(&mut dev, &mut stream, BlockLength::Standard)
+        .expect("mid-stream CAN must not cancel in xmodem-0.4");
+    handle.join().expect("receiver thread");
+    assert_eq!(sent, 384);
+}
+
+/// Read timeouts while waiting for an ACK consume the error budget until
+/// the transfer aborts with ExhaustedRetries — no hang, no partial success.
+///
+/// Uses a channel-backed double, not a socketpair: Linux surfaces
+/// `SO_RCVTIMEO` as `ErrorKind::WouldBlock`, which the crate treats as
+/// fatal, while real serial-port timeouts surface as `TimedOut` — the kind
+/// the crate soft-handles. The double reproduces the serial semantics.
+#[test]
+fn ack_read_timeouts_exhaust_error_budget() {
+    use std::sync::mpsc;
+
+    struct FakeSerial {
+        inbound: mpsc::Receiver<u8>,
+        outbound: mpsc::Sender<u8>,
+    }
+    impl Read for FakeSerial {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self
+                .inbound
+                .recv_timeout(std::time::Duration::from_millis(5))
+            {
+                Ok(byte) => {
+                    buf[0] = byte;
+                    Ok(1)
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "serial read timeout",
+                )),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "peer gone",
+                )),
+            }
+        }
+    }
+    impl Write for FakeSerial {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            for byte in buf {
+                self.outbound.send(*byte).expect("receiver alive");
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (to_sender, inbound) = mpsc::channel();
+    let (outbound, from_sender) = mpsc::channel();
+    to_sender.send(CRC_START).expect("start C");
+
+    let responder = std::thread::spawn(move || {
+        let mut seen = 0usize;
+        while let Ok(_byte) = from_sender.recv() {
+            seen += 1;
+            if seen == 128 + 3 + 2 {
+                // frame 1 fully arrived: ACK it once, then fall silent
+                to_sender.send(ACK).expect("ack");
+            }
+        }
+    });
+
+    let mut dev = FakeSerial { inbound, outbound };
+    let payload = vec![0xA7u8; 4096];
+    let mut stream = std::io::Cursor::new(payload);
+    let err = send_firmware(&mut dev, &mut stream, BlockLength::Standard).unwrap_err();
+    drop(dev);
+    responder.join().expect("responder");
+    assert!(
+        matches!(err, XmodemError::ExhaustedRetries),
+        "expected error exhaustion, got {err:?}"
+    );
+}
+
+/// After a failed transfer the documented recovery is a fresh whole-file
+/// retry: `send_firmware` must leave no residue that breaks a restart.
+#[test]
+fn whole_transfer_restart_after_failure_succeeds() {
+    let (mut failed_dev, mut failed_peer) = UnixStream::pair().expect("socketpair");
+    failed_dev
+        .set_read_timeout(Some(std::time::Duration::from_millis(10)))
+        .expect("read timeout");
+    let junk = vec![1u8; 512];
+    failed_peer.write_all(&[CRC_START]).expect("start C");
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match failed_peer.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    });
+    let mut stream = std::io::Cursor::new(junk);
+    assert!(send_firmware(&mut failed_dev, &mut stream, BlockLength::Standard).is_err());
+    drop(failed_dev);
+    reader.join().expect("drain");
+
+    let (mut dev, mut peer) = UnixStream::pair().expect("socketpair");
+    let payload: Vec<u8> = (0..100u8).collect();
+    let expected = payload.clone();
+    let handle = std::thread::spawn(move || {
+        peer.write_all(&[CRC_START]).expect("start C");
+        let frame = recv_frame(&mut peer, 128, 2, 1);
+        assert_eq!(&frame[..100], &expected[..]);
+        peer.write_all(&[ACK]).expect("ack block");
+        recv_eot_and_ack(&mut peer);
+    });
+    let mut stream = std::io::Cursor::new(payload);
+    let sent = send_firmware(&mut dev, &mut stream, BlockLength::Standard).expect("restart ok");
+    handle.join().expect("receiver thread");
+    assert_eq!(sent, 100);
+}

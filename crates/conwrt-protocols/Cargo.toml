@@ -1,6 +1,6 @@
 [package]
 name = "conwrt-protocols"
-description = "Protocol integrations for conwrt — XMODEM via the `xmodem` crate (libraries-first policy; fills the README-promised serial flash method — #106)"
+description = "Protocol integrations for conwrt — XMODEM via the `xmodem` crate (libraries-first policy; fills the README-promised serial flash method — #106; reliability follow-ups #124)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
