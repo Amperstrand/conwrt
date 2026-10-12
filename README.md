@@ -43,6 +43,16 @@ Useful targets:
 | `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
 | `make e2e` | Tests against a physical router (needs `CONWRT_DEVICE_IP`) | No — real device |
 
+Device configuration targets (these mutate real hardware):
+
+| Target | What it does |
+|--------|--------------|
+| `make sta` | Connect the router to an upstream WiFi AP as a client (`SSID=`, `KEY=`, optional `BAND=`, `ENCRYPTION=`, `IP=`) |
+
+```bash
+make sta SSID=StarGate KEY=passphrase BAND=2.4ghz       # WiFi WAN backhaul
+```
+
 ### Local test layers (nothing leaves your machine)
 
 `make integration` / `make bench` / `make e2e` wrap `scripts/local-tests.sh`
@@ -478,6 +488,23 @@ conwrt automatically configures WiFi after flashing based on `[network.sta]` and
 2. **ASU first-boot** (via `--request-image`): The same uci commands are baked into the firmware's first-boot script, so WiFi is configured before first SSH.
 
 Both flows use the same radio detection logic — iterate `radio0..radio3`, check `band` option, match to the configured band.
+
+### Quick STA connect (no config.toml edit)
+
+Point a running router at an upstream AP directly from the CLI or make:
+
+```bash
+make sta SSID=StarGate KEY=passphrase BAND=2.4ghz IP=192.168.1.1
+# equivalently:
+python3 scripts/conwrt.py configure --ip 192.168.1.1 \
+  --sta-ssid StarGate --sta-key passphrase --sta-band 2.4ghz
+```
+
+This creates the `wwan` interface (DHCP, added to the `wan` firewall zone),
+switches the chosen band's radio to client mode, and connects. `--sta-band`
+defaults to `[network.sta].band` or `2.4ghz`; `--sta-encryption` defaults to
+`psk2` (use `sae` for WPA3, `none` for open). The other radio keeps serving the
+local AP.
 
 ### Example: WiFi WAN backhaul
 

@@ -178,6 +178,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Set router hostname (overrides config.toml [device].hostname)")
     cfg_parser.add_argument("--wifi-disable", action="store_true",
         help="Disable all WiFi radios")
+    cfg_parser.add_argument("--sta-ssid", default=None,
+        help="Connect the router to this upstream WiFi SSID as a client (STA) and "
+             "create the wwan interface. Overrides [network.sta] in config.toml.")
+    cfg_parser.add_argument("--sta-key", default=None,
+        help="Upstream WiFi passphrase for --sta-ssid")
+    cfg_parser.add_argument("--sta-band", default=None,
+        choices=["2.4ghz", "5ghz", "5ghz-low", "5ghz-high"],
+        help="Band for the STA connection (default: [network.sta].band or 2.4ghz)")
+    cfg_parser.add_argument("--sta-encryption", default=None,
+        choices=["psk2", "psk3", "sae", "none"],
+        help="STA encryption (default: [network.sta].encryption or psk2)")
     cfg_parser.add_argument("--verify", action="store_true",
         help="After applying config, reboot and verify persistence")
     cfg_parser.add_argument("--lan-ip-mode", default=None,

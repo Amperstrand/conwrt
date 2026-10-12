@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from conwrt.device_inventory import auto_detect_interface
@@ -18,7 +19,7 @@ import argparse
 from flash.context import log
 from ssh_utils import run_ssh
 
-from config import load_config as _load_config
+from config import WifiSTAConfig, load_config as _load_config
 from profile.apply import verify_persistence as _verify_persistence
 from conwrt.postflash import _client_ip_for_subnet
 
@@ -27,10 +28,29 @@ if _CONWRT_DIR not in sys.path:
     sys.path.insert(0, _CONWRT_DIR)
 
 
+def _sta_config_from_args(args: argparse.Namespace, cfg) -> "WifiSTAConfig | None":
+    """Build a WifiSTAConfig from --sta-* flags, or None when --sta-ssid is absent."""
+    ssid = getattr(args, "sta_ssid", None)
+    if not ssid:
+        return None
+    existing = cfg.wifi_sta
+    return WifiSTAConfig(
+        band=getattr(args, "sta_band", None) or (existing.band if existing else "2.4ghz"),
+        ssid=ssid,
+        encryption=(getattr(args, "sta_encryption", None)
+                    or (existing.encryption if existing else "psk2")),
+        key=getattr(args, "sta_key", None) or (existing.key if existing else ""),
+    )
+
+
 def cmd_configure(args: argparse.Namespace) -> int:
     """Apply config.toml settings to a running OpenWrt router via SSH."""
     ip = args.ip
     cfg = _load_config()
+
+    sta = _sta_config_from_args(args, cfg)
+    if sta is not None:
+        cfg = replace(cfg, wifi_sta=sta)
 
     password, ssh_key_path, ssh_pub_path, ssh_key_text, wan_ssh = _resolve_configure_options(
         args, cfg,

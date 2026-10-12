@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run sta test smoke ci ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -68,6 +68,23 @@ validate: ## Validate findings JSON (wraps scripts/validate-findings.sh)
 commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@echo "Committing run artifacts..."
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
+
+##
+## Device configuration
+##
+
+sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, optional BAND=, ENCRYPTION=, IP=)
+	@if [ -z "$(SSID)" ]; then \
+		echo "Usage: make sta SSID=UpstreamNetwork KEY=passphrase [BAND=2.4ghz] [ENCRYPTION=psk2] [IP=192.168.1.1]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py configure --ip $(or $(IP),192.168.1.1) \
+		--sta-ssid "$(SSID)" \
+		$(if $(KEY),--sta-key "$(KEY)",) \
+		$(if $(BAND),--sta-band $(BAND),) \
+		$(if $(ENCRYPTION),--sta-encryption $(ENCRYPTION),) \
+		$(ARGS)
+## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
 test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
 	@pytest tests -m "not integration"
