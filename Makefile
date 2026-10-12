@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci rust-ci rust-test ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -114,6 +114,16 @@ ci: ## Run all hardware-safe CI checks
 	@$(MAKE) validate-schemas
 	@$(MAKE) validate-models
 	@$(MAKE) test
+
+rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo test --workspace
+	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
+	cargo check -p conwrt-types -p conwrt-core --no-default-features --target thumbv7em-none-eabihf
+
+rust-test: ## Run Rust workspace tests only
+	cargo test --workspace
 
 ipk: ## Build conwrt ipk for OpenWrt
 	@$(SCRIPTS_DIR)/build_ipk.sh --output dist $(ARGS)
