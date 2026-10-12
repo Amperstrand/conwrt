@@ -9,10 +9,15 @@
 //! - `conwrt probe --scenario …` — run the diagnostic workflow against a
 //!   scripted mock provider (demonstrates the capability-provider swap;
 //!   local-std and remote providers arrive in M2/M3).
+//! - `conwrt plan --profile sqm …` — plan a desired-state profile for a
+//!   diagnosed device: typed, inspectable operations, verification intent,
+//!   and a hard refusal for anything but a confirmed OpenWrt identity
+//!   (I/O-free dry-run; the M7 executor applies plans later).
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
-use conwrt_core::{DeviceState, diagnose};
+use conwrt_core::plan::SqmProfile;
+use conwrt_core::{DeviceState, Profile, diagnose, plan_profile};
 use core::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -58,6 +63,34 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
+    /// Plan a desired-state profile for a diagnosed device (read-only; mock
+    /// transport — the M7 executor applies plans later).
+    Plan {
+        /// Desired-state profile to plan.
+        #[arg(long)]
+        profile: ProfileChoice,
+        /// Model to plan for (id from `conwrt models`).
+        #[arg(long)]
+        model_id: String,
+        /// Shaper download rate in Kbit/s (sqm).
+        #[arg(long)]
+        download_kbps: u32,
+        /// Shaper upload rate in Kbit/s (sqm).
+        #[arg(long)]
+        upload_kbps: u32,
+        /// UCI network name to shape (sqm).
+        #[arg(long, default_value = "wan")]
+        interface: String,
+        /// Target address (used for reporting; the mock answers anything).
+        #[arg(long, default_value = "192.168.1.1")]
+        ip: IpAddr,
+        /// Which scripted scenario the mock provider answers with.
+        #[arg(long, default_value = "openwrt")]
+        scenario: ScenarioChoice,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -66,6 +99,7 @@ enum ScenarioChoice {
     Unreachable,
     Uboot,
     Openwrt,
+    SshOnly,
     Stock,
 }
 
@@ -76,9 +110,15 @@ impl ScenarioChoice {
             ScenarioChoice::Unreachable => NamedScenario::Unreachable,
             ScenarioChoice::Uboot => NamedScenario::UbootRecovery,
             ScenarioChoice::Openwrt => NamedScenario::OpenWrt,
+            ScenarioChoice::SshOnly => NamedScenario::SshOnly,
             ScenarioChoice::Stock => NamedScenario::StockVendor,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ProfileChoice {
+    Sqm,
 }
 
 fn main() -> ExitCode {
@@ -87,6 +127,25 @@ fn main() -> ExitCode {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::Plan {
+            profile,
+            model_id,
+            download_kbps,
+            upload_kbps,
+            interface,
+            ip,
+            scenario,
+            dir,
+        } => cmd_plan(
+            profile,
+            &model_id,
+            download_kbps,
+            upload_kbps,
+            &interface,
+            ip,
+            scenario,
+            &dir,
+        ),
     }
 }
 
@@ -193,4 +252,84 @@ fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
         dir_display.display()
     );
     ExitCode::SUCCESS
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_plan(
+    profile: ProfileChoice,
+    model_id: &str,
+    download_kbps: u32,
+    upload_kbps: u32,
+    interface: &str,
+    ip: IpAddr,
+    scenario: ScenarioChoice,
+    dir: &Path,
+) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let model = match registry.models().iter().find(|m| m.id == model_id) {
+        Some(m) => m.clone(),
+        None => {
+            eprintln!("unknown model id {model_id:?} (see `conwrt models`)");
+            return ExitCode::from(2);
+        }
+    };
+    let mut prober = MockProber::responding(ip, scenario.named());
+    let diagnosis = match pollster::block_on(diagnose(&mut prober, ip, registry.models())) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("probe failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let profile = match profile {
+        ProfileChoice::Sqm => Profile::Sqm(SqmProfile {
+            download_kbps,
+            upload_kbps,
+            interface: interface.into(),
+            ..default_sqm()
+        }),
+    };
+    match plan_profile(&diagnosis.state, &model, &profile) {
+        Ok(plan) => {
+            println!("plan:     {} → model {}", plan.profile_id, plan.model_id);
+            println!(
+                "state:    {} (confirmed OpenWrt identity)",
+                diagnosis.state.as_str()
+            );
+            println!("\noperations:");
+            for (i, op) in plan.ops.iter().enumerate() {
+                let rendered = op.to_string();
+                let mut lines = rendered.lines();
+                println!("  {:>2}. {}", i + 1, lines.next().unwrap_or_default());
+                for line in lines {
+                    println!("      {line}");
+                }
+            }
+            println!("\nverification:");
+            for check in &plan.verification {
+                println!(
+                    "  ✓ {} — `{}` contains {:?}",
+                    check.description, check.command, check.expect_contains
+                );
+            }
+            println!("\n(dry-run: planning is I/O-free; the M7 executor applies and verifies)");
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            eprintln!("refused: {reason}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn default_sqm() -> SqmProfile {
+    SqmProfile {
+        download_kbps: 10_000,
+        upload_kbps: 5_000,
+        interface: "wan".into(),
+        qdisc: "cake".into(),
+        script: "piece_of_cake.qos".into(),
+        link_layer: "none".into(),
+        overhead: 0,
+    }
 }
