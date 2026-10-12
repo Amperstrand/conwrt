@@ -13,14 +13,19 @@
 
 pub mod cache;
 pub mod clean;
+pub mod client;
 pub mod error;
+pub mod http;
 pub mod metadata;
 pub mod timestamp;
 pub mod types;
+pub mod workflow;
 
 pub use cache::request_cache_key;
 pub use clean::{clean_cache, CleanOptions, CleanReport};
+pub use client::{AsuClient, AsuEndpoints, PollConfig, DEFAULT_ASU_BASE, USER_AGENT};
 pub use error::ImageError;
+pub use http::ReqwestAsuClient;
 pub use metadata::{
     find_cached, find_cached_build, list_entries, read_metadata, show_metadata, CachedImage,
     CachedMetadata, ListEntry, METADATA_FILENAME,
@@ -29,3 +34,4 @@ pub use types::{
     BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue,
     SubmitResponse,
 };
+pub use workflow::{request_and_cache, RequestExtras, RequestOutcome};
