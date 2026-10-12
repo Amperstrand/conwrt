@@ -70,7 +70,25 @@ Research findings (2026-10-12):
 - postcard is not self-describing: additive-only evolution + catch-all enum
   arms + schema fingerprint gates are mandatory review points.
 - The postcard-rpc-vs-custom decision is deliberately deferred behind the M3
-  prototype with named kill-criteria.
+  prototype with named kill-criteria. **Resolved 2026-10-12: ADOPTED** (see
+  the spike verdict below).
+
+## Spike verdict (2026-10-12) — postcard-rpc ADOPTED
+
+The #107 prototype (branch `spike/conwrt-2.0-postcard-rpc`, commits
+1886f10 + 7398909) answered every kill-criterion in the framework's favor:
+
+| Criterion | Threshold | Measured |
+|---|---|---|
+| Custom wire wrapper LOC | < 300 | **232** (TCP + COBS, host + device sides) |
+| Streaming/backpressure/resume LOC | ≤ 300 | **144** (a `/status` endpoint + idempotent contiguous-append chunks) |
+| Behavior | must survive controller loss | 5 MiB push killed at 40%, reconnected, resumed from the device-reported offset, assembled sha256 verified |
+| Cost | sanity | 46 µs/rtt echo; ~21 MiB/s lock-step push; 51.6 MiB/s effective on resume |
+
+Decision: build `conwrt-agent-proto` (M3) on postcard-rpc 0.12 with a thin
+shared COBS pump and two wires (TCP, USB-CDC). The device
+one-connection-per-`run()` model maps directly onto the lease/reconnect
+semantics of §5. Full API findings and measurements: issue #107.
 
 ## Alternatives considered
 
