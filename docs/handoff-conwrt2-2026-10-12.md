@@ -10,11 +10,15 @@ Companions: [architecture](../architecture/conwrt-2.0-overview.md) ·
 
 ## Where things stand
 
+Status policy (external review 2026-10-12): a milestone is **shipped** only
+when its implementing PR merges to master. Issues close on merge, not on
+branch completion — #104/#105/#106 are reopened until #122/#123 land.
+
 | Milestone | State | Evidence |
 |---|---|---|
-| M0 design/research/ADRs/backlog | ✅ | ADRs 0000–0011; parent #100 + issues #101–#118 |
-| M1 Rust foundation | ✅ | PR #119 (draft): workspace, conwrt-types (24-model corpus parity), conwrt-core (traits/classifier/mock), CLI, CI + no_std gate |
-| M2 native CLI + workflow parity | 🟡 mostly done | #104/#105/#106 closed via PRs #122/#123 (drafts): local-std provider, `conwrt diagnose`, SSH provider (russh + scp-over-exec + trust ladder), XMODEM via the `xmodem` crate |
+| M0 design/research/ADRs/backlog | 📦 in draft PR #119 | ADRs 0000–0011; parent #100 + issues #101–#118 |
+| M1 Rust foundation | 📦 in draft PR #119 | workspace, conwrt-types (24-model corpus parity), conwrt-core (traits/classifier/mock), CLI, CI + no_std gate |
+| M2 native CLI + workflow parity | 📦 in draft PRs #122/#123 | local-std provider, `conwrt diagnose`, SSH provider (russh + scp-over-exec + trust ladder), XMODEM via the `xmodem` crate |
 | M3+ (agent, OpenWrt agent, MCU, profiles, UI) | ⬜ not started | #107–#117 |
 
 ## Verified evidence, by test ring (ADR-0011)
