@@ -11,9 +11,12 @@
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+pub mod cache;
 pub mod error;
+pub mod timestamp;
 pub mod types;
 
+pub use cache::request_cache_key;
 pub use error::ImageError;
 pub use types::{
     BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue,
