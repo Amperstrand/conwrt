@@ -1,14 +1,21 @@
-//! # postcard-rpc spike (#107, ADR-0004)
+//! # postcard-rpc spike (#107, ADR-0004) — phase 2
 //!
-//! Viability question: can postcard-rpc 0.12 drive a **TCP** transport with
-//! a thin custom wire (the crate ships no TCP impl), using COBS framing
-//! identical to the USB-CDC/serial path ("one codec everywhere")?
+//! Phase 1 (proven): TCP transport via custom COBS wire, both sides,
+//! 1000 echo round-trips @ 46µs/rtt, 236 LOC wire glue.
 //!
-//! This binary runs BOTH sides in-process over a loopback TCP socket:
-//! a device-side `Server` with an `EchoEndpoint` (String -> String) and a
-//! host-side `HostClient`, then measures round-trip latency. The custom
-//! wire-glue line count feeds ADR-0004's kill-criteria (<300 LOC rule).
+//! Phase 2 (this file adds): firmware-sized streaming with backpressure
+//! and resume — the remaining ADR-0004 kill-criteria measurement:
+//! - `/chunk`:  lock-step chunk push (await per-chunk ack => backpressure
+//!   by construction; no unbounded buffering anywhere)
+//! - `/status`: device-reported contiguous offset per transfer id
+//! - the host KILLS the connection mid-transfer, reconnects, queries
+//!   status, resumes, and the assembled payload's sha256 must match
+//!
+//! Device transfer state lives in Arc<Mutex<HashMap>> shared across
+//! per-connection dispatchers, so resume survives reconnects exactly as
+//! an agent's would across controller loss.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
@@ -20,9 +27,10 @@ use postcard_rpc::host_client::HostClient;
 use postcard_rpc::server::Server;
 use postcard_rpc::{define_dispatch, endpoints, topics, TopicDirection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
-// Protocol definition (what a real conwrt-agent-proto crate would contain)
+// Protocol definition
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, postcard_schema::Schema)]
@@ -31,11 +39,34 @@ pub enum WireErr {
     BadRequest,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, postcard_schema::Schema)]
+pub struct FirmwareChunk {
+    pub id: u32,
+    pub offset: u32,
+    pub total: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, postcard_schema::Schema)]
+pub struct ChunkAck {
+    pub offset: u32,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, postcard_schema::Schema)]
+pub struct TransferStatus {
+    pub offset: u32,
+    pub total: u32,
+    pub done: bool,
+}
+
 endpoints! {
     list = ENDPOINT_LIST;
-    | EndpointTy   | RequestTy | ResponseTy | Path    |
-    | ------------ | --------- | ---------- | ------- |
-    | EchoEndpoint | String    | String     | "/echo" |
+    | EndpointTy   | RequestTy     | ResponseTy     | Path      |
+    | ------------ | ------------- | -------------- | --------- |
+    | EchoEndpoint | String        | String         | "/echo"   |
+    | ChunkEndpoint | FirmwareChunk | ChunkAck      | "/chunk"  |
+    | StatusEndpoint | u32          | TransferStatus | "/status" |
 }
 
 topics! {
@@ -53,8 +84,7 @@ topics! {
 }
 
 // ---------------------------------------------------------------------------
-// Host-side TCP wire (host WireTx/WireRx/WireSpawn; mirrors the in-tree
-// serial COBS wire byte-for-byte)
+// Host-side TCP wire (identical to phase 1, buffer sized for 4 KiB chunks)
 // ---------------------------------------------------------------------------
 
 mod host_wire {
@@ -89,8 +119,8 @@ mod host_wire {
 
     pub struct TcpWireRx {
         pub rx: tokio::io::ReadHalf<tokio::net::TcpStream>,
-        pub buf: Box<[u8; 1024]>,
-        pub acc: Box<CobsAccumulator<1024>>,
+        pub buf: Box<[u8; 8192]>,
+        pub acc: Box<CobsAccumulator<8192>>,
         pub pending: VecDeque<Vec<u8>>,
     }
 
@@ -131,7 +161,7 @@ mod host_wire {
 }
 
 // ---------------------------------------------------------------------------
-// Device-side TCP wire (server WireTx/WireRx traits; COBS again)
+// Device-side TCP wire (identical to phase 1, buffer sized for 4 KiB chunks)
 // ---------------------------------------------------------------------------
 
 mod device_wire {
@@ -225,8 +255,8 @@ mod device_wire {
 
     pub struct ServerTcpRx {
         pub rx: tokio::io::ReadHalf<tokio::net::TcpStream>,
-        pub buf: Box<[u8; 1024]>,
-        pub acc: Box<CobsAccumulator<1024>>,
+        pub buf: Box<[u8; 8192]>,
+        pub acc: Box<CobsAccumulator<8192>>,
         pub pending: VecDeque<Vec<u8>>,
     }
 
@@ -294,13 +324,48 @@ use device_wire::ServerSpawn;
 use postcard_rpc::Topic;
 
 // ---------------------------------------------------------------------------
-// Device application: dispatch with an echo handler
+// Device application: echo + firmware-chunk assembly with durable transfers
 // ---------------------------------------------------------------------------
 
-pub struct Ctx;
+/// Transfer store shared across connection lifetimes (resume support).
+pub type Transfers = Arc<std::sync::Mutex<HashMap<u32, (Vec<u8>, u32)>>>;
+
+pub struct Ctx {
+    pub transfers: Transfers,
+}
 
 async fn echo_handler(_ctx: &mut Ctx, _hdr: VarHeader, req: String) -> String {
     req
+}
+
+async fn chunk_handler(
+    ctx: &mut Ctx,
+    _hdr: VarHeader,
+    chunk: FirmwareChunk,
+) -> ChunkAck {
+    // Simulated flash write: accept ONLY the next contiguous chunk.
+    let mut transfers = ctx.transfers.lock().unwrap();
+    let entry = transfers.entry(chunk.id).or_insert_with(|| (Vec::new(), chunk.total));
+    let (data, total) = entry;
+    *total = chunk.total;
+    if chunk.offset as usize == data.len() {
+        data.extend_from_slice(&chunk.data);
+    }
+    // Out-of-order/duplicate chunks are dropped silently (idempotent resume).
+    let done = data.len() == *total as usize;
+    ChunkAck { offset: data.len() as u32, done }
+}
+
+async fn status_handler(_ctx: &mut Ctx, _hdr: VarHeader, id: u32) -> TransferStatus {
+    let transfers = _ctx.transfers.lock().unwrap();
+    match transfers.get(&id) {
+        Some((data, total)) => TransferStatus {
+            offset: data.len() as u32,
+            total: *total,
+            done: data.len() == *total as usize,
+        },
+        None => TransferStatus { offset: 0, total: 0, done: false },
+    }
 }
 
 define_dispatch! {
@@ -313,9 +378,11 @@ define_dispatch! {
     endpoints: {
         list: ENDPOINT_LIST;
 
-        | EndpointTy   | kind  | handler      |
-        | -----------  | ----- | ------------ |
-        | EchoEndpoint | async | echo_handler |
+        | EndpointTy    | kind  | handler        |
+        | ------------- | ----- | -------------- |
+        | EchoEndpoint  | async | echo_handler   |
+        | ChunkEndpoint | async | chunk_handler  |
+        | StatusEndpoint | async | status_handler |
     };
     topics_in: {
         list: TOPICS_IN_LIST;
@@ -329,42 +396,17 @@ define_dispatch! {
 }
 
 // ---------------------------------------------------------------------------
-// Main: device (listener) + host (client) in one process over loopback TCP
+// Main: device (listener loop) + host (connect, stream, kill, resume, verify)
 // ---------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    // Device side
-    let device = tokio::spawn(async move {
-        let (socket, _) = listener.accept().await.unwrap();
-        let (rx, tx) = tokio::io::split(socket);
-        let stx = device_wire::ServerTcpTx {
-            tx: Arc::new(tokio::sync::Mutex::new(tx)),
-            log_ctr: std::sync::atomic::AtomicU32::new(0),
-        };
-        let srx = device_wire::ServerTcpRx {
-            rx,
-            buf: Box::new([0u8; 1024]),
-            acc: Box::new(CobsAccumulator::new()),
-            pending: VecDeque::new(),
-        };
-        let dispatch = SingleDispatcher::new(Ctx, device_wire::ServerSpawn);
-        let mut server: Server<_, _, Box<[u8]>, _> =
-            Server::new(stx, srx, vec![0u8; 4096].into(), dispatch, VarKeyKind::Key8);
-        let _ = server.run().await;
-    });
-
-    // Host side
+async fn client_at(addr: std::net::SocketAddr) -> HostClient<WireErr> {
     let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
     let (rx, tx) = tokio::io::split(socket);
-    let client: HostClient<WireErr> = HostClient::new_with_wire(
+    HostClient::new_with_wire(
         host_wire::TcpWireTx { tx },
         host_wire::TcpWireRx {
             rx,
-            buf: Box::new([0u8; 1024]),
+            buf: Box::new([0u8; 8192]),
             acc: Box::new(CobsAccumulator::new()),
             pending: VecDeque::new(),
         },
@@ -372,30 +414,137 @@ async fn main() {
         VarSeqKind::Seq1,
         "err",
         8,
+    )
+}
+
+#[tokio::main]
+async fn main() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    // Shared transfer store: survives per-connection dispatchers.
+    let transfers: Transfers = Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+    // Device side: accept loop — a dead connection ends server.run(), we
+    // rebuild the server (same shared store) for the next controller.
+    let device_transfers = Arc::clone(&transfers);
+    let device = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            eprintln!("[device] connection accepted");
+            let (rx, tx) = tokio::io::split(socket);
+            let stx = device_wire::ServerTcpTx {
+                tx: Arc::new(tokio::sync::Mutex::new(tx)),
+                log_ctr: std::sync::atomic::AtomicU32::new(0),
+            };
+            let srx = device_wire::ServerTcpRx {
+                rx,
+                buf: Box::new([0u8; 8192]),
+                acc: Box::new(CobsAccumulator::new()),
+                pending: VecDeque::new(),
+            };
+            let dispatch = SingleDispatcher::new(
+                Ctx { transfers: Arc::clone(&device_transfers) },
+                device_wire::ServerSpawn,
+            );
+            let mut server: Server<_, _, Box<[u8]>, _> =
+                Server::new(stx, srx, vec![0u8; 16384].into(), dispatch, VarKeyKind::Key8);
+            let _ = server.run().await;
+            eprintln!("[device] server.run() RETURNED (connection over)");
+        }
+    });
+
+    // ---- Phase 1 regression: echo ----
+    let client = client_at(addr).await;
+    let resp = client
+        .send_resp::<EchoEndpoint>(&"hello".to_string())
+        .await
+        .expect("echo");
+    assert_eq!(resp, "hello");
+    println!("echo: ok");
+
+    // ---- Phase 2: firmware-sized streaming with kill + resume ----
+    let quick = std::env::var("QUICK").is_ok();
+    let chunk_size: usize = if quick { 256 } else { 4096 };
+    let total_size: usize = if quick { 1024 } else { 5 * 1024 * 1024 };
+    let CHUNK: usize = chunk_size;
+    let TOTAL: usize = total_size;
+    let transfer_id: u32 = 7;
+    let payload: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+    let expect_sha = Sha256::digest(&payload);
+    println!("payload: {TOTAL} bytes in {CHUNK}-byte chunks");
+
+    let t0 = Instant::now();
+    drop(client); // release the echo connection so the device can accept the streaming one
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let client = client_at(addr).await;
+
+    // Send the first 40% lock-step (backpressure by construction: each
+    // chunk's ack is awaited before the next is written).
+    let kill_after = (TOTAL / CHUNK) * 40 / 100;
+    for i in 0..kill_after {
+        let offset = i * CHUNK;
+        let ack = client
+            .send_resp::<ChunkEndpoint>(&FirmwareChunk {
+                id: transfer_id,
+                offset: offset as u32,
+                total: TOTAL as u32,
+                data: payload[offset..offset + CHUNK].to_vec(),
+            })
+            .await
+            .expect("chunk ack");
+        assert_eq!(ack.offset as usize, offset + CHUNK);
+    }
+    println!("pre-kill: {kill_after} chunks acked ({} bytes) in {:?}", kill_after * CHUNK, t0.elapsed());
+
+    // KILL the connection mid-transfer.
+    drop(client);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    println!("connection killed mid-transfer");
+
+    // Reconnect: query status, resume from the device-reported offset.
+    let t1 = Instant::now();
+    let client = client_at(addr).await;
+    let status = client
+        .send_resp::<StatusEndpoint>(&transfer_id)
+        .await
+        .expect("status");
+    println!("post-reconnect status: {status:?}");
+    assert_eq!(status.total as usize, TOTAL);
+    assert_eq!(status.offset as usize, kill_after * CHUNK);
+
+    let resume_from = status.offset as usize;
+    for offset in (resume_from..TOTAL).step_by(CHUNK) {
+        let end = (offset + CHUNK).min(TOTAL);
+        let ack = client
+            .send_resp::<ChunkEndpoint>(&FirmwareChunk {
+                id: transfer_id,
+                offset: offset as u32,
+                total: TOTAL as u32,
+                data: payload[offset..end].to_vec(),
+            })
+            .await
+            .expect("chunk ack");
+        assert_eq!(ack.offset as usize, end);
+    }
+    let dt = t1.elapsed();
+    println!(
+        "resumed+finished {} bytes in {dt:?} => {:.2} MiB/s effective",
+        TOTAL - resume_from,
+        (TOTAL - resume_from) as f64 / 1024.0 / 1024.0 / dt.as_secs_f64()
     );
 
-    // One correctness round-trip
-    let resp = client
-        .send_resp::<EchoEndpoint>(&"hello postcard-rpc over tcp".to_string())
-        .await
-        .expect("round trip");
-    println!("echo: {resp:?}");
-    assert_eq!(resp, "hello postcard-rpc over tcp");
-
-    // Latency measurement
-    const N: u32 = 1_000;
-    let t0 = Instant::now();
-    for i in 0..N {
-        let resp = client
-            .send_resp::<EchoEndpoint>(&format!("ping-{i}"))
-            .await
-            .expect("round trip");
-        assert_eq!(resp, format!("ping-{i}"));
-    }
-    let dt = t0.elapsed();
-    println!("{N} round-trips in {dt:?} => {:.2?}/rtt", dt / N);
+    // Verify the assembled payload matches the source byte-for-byte.
+    let (assembled, _) = {
+        let guard = transfers.lock().unwrap();
+        guard.get(&transfer_id).cloned().unwrap()
+    };
+    assert_eq!(assembled.len(), TOTAL);
+    assert_eq!(Sha256::digest(&assembled), expect_sha);
+    println!("sha256 verified: assembled == source");
+    println!("spike phase 2 OK");
 
     drop(client);
+    device.abort();
     let _ = device.await;
-    println!("spike OK");
 }
