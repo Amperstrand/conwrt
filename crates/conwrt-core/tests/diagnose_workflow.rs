@@ -28,6 +28,7 @@ fn workflow_classifies_named_scenarios() {
         (NamedScenario::Unreachable, DeviceState::Unreachable),
         (NamedScenario::UbootRecovery, DeviceState::UbootRecovery),
         (NamedScenario::OpenWrt, DeviceState::OpenWrt),
+        (NamedScenario::SshOnly, DeviceState::SshOnly),
         (NamedScenario::StockVendor, DeviceState::StockVendor),
     ];
     for (scenario, expected) in cases {

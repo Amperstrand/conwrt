@@ -40,6 +40,8 @@ pub enum NamedScenario {
     UbootRecovery,
     /// OpenWrt with dropbear + uhttpd.
     OpenWrt,
+    /// SSH answering with no identifying HTTP evidence (OS unconfirmed).
+    SshOnly,
     /// Vendor web UI without SSH.
     StockVendor,
 }
@@ -78,6 +80,14 @@ impl NamedScenario {
                     software: "dropbear_2024.86".into(),
                 }),
                 mac: Some(MacAddress::parse("94:83:c4:0a:0b:0d").unwrap()),
+                ..Default::default()
+            },
+            NamedScenario::SshOnly => Scenario {
+                ping: true,
+                ssh_banner: Some(SshBanner {
+                    software: "SSH-2.0-dropbear_2024.86".into(),
+                }),
+                mac: Some(MacAddress::parse("94:83:c4:0a:0b:0f").unwrap()),
                 ..Default::default()
             },
             NamedScenario::StockVendor => Scenario {
