@@ -1,0 +1,21 @@
+[package]
+name = "conwrt-cli"
+description = "conwrt command-line interface (thin frontend over conwrt-core — ADR-0008)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "conwrt"
+path = "src/main.rs"
+
+[dependencies]
+conwrt-types = { path = "../../crates/conwrt-types" }
+conwrt-core = { path = "../../crates/conwrt-core" }
+clap = { workspace = true }
+pollster = { workspace = true }
+
+[lints]
+workspace = true
