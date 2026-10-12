@@ -170,8 +170,8 @@ class TestFlashModes(TestCase):
     def test_zycast_cleanup_is_set(self):
         self.assertIsNotNone(self.modes["zycast"].cleanup)
 
-    def test_uboot_cleanup_is_none(self):
-        self.assertIsNone(self.modes["uboot"].cleanup)
+    def test_uboot_cleanup_is_set(self):
+        self.assertIsNotNone(self.modes["uboot"].cleanup)
 
     def test_sysupgrade_cleanup_is_none(self):
         self.assertIsNone(self.modes["sysupgrade"].cleanup)
@@ -310,6 +310,52 @@ class TestExtremeCleanup(TestCase):
         profile = _make_profile(openwrt_client_ip="192.168.1.2", client_ip="192.168.1.2")
         _extreme_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_not_called()
+
+
+# ===================================================================
+# _uboot_cleanup
+# ===================================================================
+
+class TestUbootCleanup(TestCase):
+    """Tests for _uboot_cleanup — must not leave the recovery host route behind."""
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_removes_recovery_host_route(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(recovery_ip="192.168.1.1")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_route.assert_called_once_with("en0", "192.168.1.1")
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.9.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_called_once_with("en0", "192.168.1.254", "24")
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.1.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_no_recovery_ip_skips_route(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(recovery_ip="")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_route.assert_not_called()
 
 
 # ===================================================================

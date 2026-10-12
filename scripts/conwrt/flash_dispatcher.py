@@ -41,7 +41,10 @@ import importlib
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 
-from platform_utils import detect_platform, check_external_deps, remove_interface_ip, suspend_wifi, restore_wifi
+from platform_utils import (
+    detect_platform, check_external_deps, remove_interface_ip,
+    remove_host_route, suspend_wifi, restore_wifi,
+)
 from flash.preflight import run_preflight_checks
 
 from conwrt.extreme import (
@@ -145,13 +148,30 @@ def _zycast_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> No
         zycast_proc.terminate()
 
 
+def _uboot_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    """Tear down the U-Boot recovery network shims.
+
+    The recovery IP is usually a subnet the operator also uses elsewhere (e.g.
+    a 192.168.1.0/24 upstream). Leaving the /32 host route in place would
+    hijack that address on the host after the flash, so remove it (and the
+    recovery-side client alias once the device has moved to another subnet).
+    """
+    recovery_ip = getattr(profile, "recovery_ip", "")
+    if recovery_ip:
+        remove_host_route(interface, recovery_ip)
+    final_ip = getattr(profile, "openwrt_ip", "") or recovery_ip
+    client_ip = getattr(profile, "client_ip", "")
+    if client_ip and final_ip and client_ip.rsplit(".", 1)[0] != final_ip.rsplit(".", 1)[0]:
+        remove_interface_ip(interface, client_ip, "24")
+
+
 FLASH_MODES: dict[str, FlashModeConfig] = {
     "sysupgrade": FlashModeConfig(State.SYSUPGRADE_UPLOADING, pcap_enabled=False),
     "edgeos": FlashModeConfig(State.EDGEOS_STAGE1, pcap_enabled=False),
     "extreme": FlashModeConfig(State.EXTREME_STOCK_PREFLIGHT, pcap_enabled=False, cleanup=_extreme_cleanup),
     "serial": FlashModeConfig(State.SERIAL_WAITING_FOR_BOOTMENU, has_monitors=False, cleanup=_serial_cleanup),
     "zycast": FlashModeConfig(State.ZYCAST_WAITING_FOR_DEVICE, cleanup=_zycast_cleanup),
-    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True),
+    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True, cleanup=_uboot_cleanup),
 }
 
 
