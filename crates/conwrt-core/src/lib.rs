@@ -25,11 +25,16 @@ use alloc::vec::Vec;
 pub mod capability;
 pub mod identify;
 pub mod mock;
+pub mod ssh;
 pub mod state;
 
 pub use capability::{HttpProbeResult, LinkProbe, ProbeError, SshBanner, Time};
 pub use identify::{MatchKind, ModelMatch, identify_by_mac};
 pub use mock::MockProber;
+pub use ssh::{
+    HostKeyView, MemoryTrustStore, Refusal, RefusalReason, TrustDecision, TrustMode, TrustedHow,
+    evaluate_host_key,
+};
 pub use state::{DeviceState, ProbeEvidence};
 
 use conwrt_types::DeviceModel;

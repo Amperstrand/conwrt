@@ -11,7 +11,11 @@ repository.workspace = true
 conwrt-core = { path = "../../crates/conwrt-core" }
 conwrt-types = { path = "../../crates/conwrt-types" }
 httparse = "1"
+russh = "0.64"
 tokio = { workspace = true }
+
+[dev-dependencies]
+rand = "0.10"
 
 [lints]
 workspace = true
