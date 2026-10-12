@@ -9,6 +9,10 @@ from model_loader import load_model, list_models
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from rust_migration import soft_deprecated
+
+    soft_deprecated("conwrt models", "model listing/validation")
     models = list_models()
     if not models:
         print("No models found in models/ directory.", file=sys.stderr)
