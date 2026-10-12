@@ -41,7 +41,7 @@ import importlib
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 
-from platform_utils import detect_platform, check_external_deps, remove_interface_ip
+from platform_utils import detect_platform, check_external_deps, remove_interface_ip, suspend_wifi, restore_wifi
 from flash.preflight import run_preflight_checks
 
 from conwrt.extreme import (
@@ -107,6 +107,8 @@ from conwrt.infrastructure import (
 from conwrt.firmware import (
     _request_custom_image,
 )
+
+from conwrt.image_source import fetch_image as _fetch_image
 
 from conwrt.device_inventory import _print_timeline, _record_inventory, auto_detect_interface
 from conwrt.cli import _build_parser
@@ -628,8 +630,24 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if args.initramfs:
         request_metadata["initramfs_path"] = args.initramfs
 
+    # Source the vanilla OpenWrt image for the resolved model when the operator
+    # supplied neither a local image nor an ASU request. This is the recovery
+    # path: the device is not running OpenWrt, so no ASU build is meaningful.
+    if not image_path and getattr(args, "source_image", True):
+        try:
+            _say_fn("Sourcing vanilla OpenWrt image...")
+            image_path = _fetch_image(
+                args.model_id,
+                release=getattr(args, "release", None),
+                log_fn=log,
+            )
+            log(f"Sourced image: {image_path}")
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            log(f"Image sourcing failed: {e}")
+            image_path = ""
+
     if not image_path:
-        parser.error("One of --image or --request-image is required.")
+        parser.error("One of --image, --request-image, or --source-image is required.")
 
     if not os.path.isfile(image_path):
         print(f"ERROR: image not found: {image_path}", file=sys.stderr)
@@ -801,36 +819,51 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if mode == "zycast":
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
 
-    if config.has_monitors:
-        if config.setup_interface:
-            _setup_interface_ips(interface, profile)
+    # Optional: temporarily disable host WiFi so a shared subnet (e.g. host
+    # WiFi and the recovery address both on 192.168.1.0/24) cannot steal
+    # recovery traffic. Restored in the finally block below.
+    wifi_token = ""
+    if getattr(args, "suspend_wifi", False):
+        wifi_token = suspend_wifi()
+        if wifi_token:
+            log("Suspended host WiFi for recovery (will restore afterwards).")
+        else:
+            log("Note: --suspend-wifi requested but no supported WiFi control was found.")
 
-        say_label = {
-            "sysupgrade": "sysupgrade recovery",
-            "edgeos": "edgeos-kernel-swap flash",
-            "extreme": "extreme stock flash",
-            "zycast": "multicast recovery",
-        }.get(mode, "recovery. Listen for instructions")
-        _say_fn(f"Starting {profile.description} {say_label}.")
+    rc = 1
+    try:
+        if config.has_monitors:
+            if config.setup_interface:
+                _setup_interface_ips(interface, profile)
 
-        with monitor_lifecycle(
-            interface, event_queue, pcap_path, profile, args,
-            pcap_enabled=config.pcap_enabled,
-        ) as (pcap, link):
+            say_label = {
+                "sysupgrade": "sysupgrade recovery",
+                "edgeos": "edgeos-kernel-swap flash",
+                "extreme": "extreme stock flash",
+                "zycast": "multicast recovery",
+            }.get(mode, "recovery. Listen for instructions")
+            _say_fn(f"Starting {profile.description} {say_label}.")
+
+            with monitor_lifecycle(
+                interface, event_queue, pcap_path, profile, args,
+                pcap_enabled=config.pcap_enabled,
+            ) as (pcap, link):
+                try:
+                    rc = _run_state_machine(ctx, event_queue, pcap, link)
+                except KeyboardInterrupt:
+                    log("Interrupted by user.")
+                    rc = 1
+        else:
+            _say_fn(f"Starting {profile.description} serial recovery.")
             try:
-                rc = _run_state_machine(ctx, event_queue, pcap, link)
+                rc = _run_state_machine(ctx, event_queue, None, None)
             except KeyboardInterrupt:
                 log("Interrupted by user.")
                 rc = 1
-    else:
-        _say_fn(f"Starting {profile.description} serial recovery.")
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, None)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-
-    if config.cleanup:
-        config.cleanup(ctx, profile, interface)
+    finally:
+        if wifi_token:
+            restore_wifi(wifi_token)
+        if config.cleanup:
+            config.cleanup(ctx, profile, interface)
 
     return rc

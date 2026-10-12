@@ -35,6 +35,11 @@
           "description": "Optional /tmp/sysinfo/board_name for auto-detect"
         },
         "version": {"type": "string", "minLength": 1},
+        "release": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Optional full OpenWrt release (e.g. 24.10.2) for vanilla image downloads; defaults to the repo-wide release"
+        },
         "default_ip": {"type": "string", "minLength": 1}
       }
     },

@@ -83,8 +83,31 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--isolate-port", default="",
                         help="Switch port to isolate into VLAN before flashing (e.g. lan5). "
                              "Requires running on OpenWrt with port_isolation in model JSON.")
+    source_group = flash_parser.add_mutually_exclusive_group()
+    source_group.add_argument("--source-image", dest="source_image", action="store_true", default=True,
+                        help="Download the vanilla OpenWrt sysupgrade image for the model when "
+                             "neither --image nor --request-image is given (default)")
+    source_group.add_argument("--no-source-image", dest="source_image", action="store_false",
+                        help="Do not download a vanilla OpenWrt image automatically")
+    flash_parser.add_argument("--release", default=None,
+                        help="OpenWrt release for --source-image (e.g. 24.10.2). Defaults to "
+                             "openwrt.release in the model, then the repo default.")
+    flash_parser.add_argument("--suspend-wifi", action="store_true",
+                        help="Temporarily disable host WiFi radios during U-Boot recovery to avoid "
+                             "subnet collisions with the recovery address (restored afterwards)")
 
     subparsers.add_parser("list", help="List available device models")
+
+    image_parser = subparsers.add_parser("image",
+        help="Download + verify the vanilla OpenWrt sysupgrade image for a model")
+    image_parser.add_argument("--model-id", required=True,
+        help="Model ID from models/ (e.g. glinet-mt3000)")
+    image_parser.add_argument("--release", default=None,
+        help="OpenWrt release override (e.g. 24.10.2)")
+    image_parser.add_argument("--dest", default=None,
+        help="Destination directory (default: images/)")
+    image_parser.add_argument("--force", action="store_true",
+        help="Re-download even if a cached copy exists")
 
     uc_parser = subparsers.add_parser("list-use-cases",
         help="List available use case presets")

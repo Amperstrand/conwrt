@@ -211,6 +211,23 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def md5_file(path: str) -> str:
+    """MD5 of a local file, to compare against a bootloader-reported MD5.
+
+    U-Boot's web failsafe returns an MD5 for the uploaded image (not SHA-256,
+    which BusyBox/OpenWrt uses on-device). This mirrors the bootloader's hash so
+    a truncated or corrupted upload can be rejected before triggering the flash.
+    """
+    h = hashlib.md5()
+    with open(str(path), "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 1.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:

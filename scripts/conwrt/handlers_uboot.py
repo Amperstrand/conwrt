@@ -4,8 +4,8 @@ import time
 from typing import Optional
 
 from flash.context import Event, State, log, ts, wait_for_event
-from flash.context import get_link_state, sha256_file
-from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
+from flash.context import get_link_state, md5_file, sha256_file
+from flash.upload import detect_uboot_http, parse_uboot_response, upload_firmware, trigger_flash
 from flash.hnap import _flash_via_dlink_hnap
 from conwrt.infrastructure import RecoveryContext
 from conwrt.monitors import PcapMonitor, LinkMonitor
@@ -145,6 +145,29 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
         log("WARNING: SHA-256 mismatch! File may have been modified on disk during upload.")
     else:
         log(f"SHA-256 verified (after upload): {ctx.sha256_after}")
+
+    # The GL.iNet/MediaTek U-Boot failsafe returns "<size> <md5>" for the bytes
+    # it received. Compare that against the local file and refuse to trigger the
+    # flash on a mismatch (a corrupted/truncated upload otherwise only shows up
+    # as a failed boot). Other bootloaders (e.g. D-Link HNAP) return HTML, so
+    # the check is skipped when no MD5 is present.
+    uboot_size, uboot_md5 = parse_uboot_response(response)
+    if uboot_md5:
+        local_md5 = md5_file(ctx.image_path)
+        log(f"U-Boot MD5: {uboot_md5} (received {uboot_size} bytes)")
+        log(f"Local  MD5: {local_md5}")
+        if local_md5 != uboot_md5:
+            msg = ("U-Boot MD5 mismatch — the router received a corrupted or "
+                   "truncated image. Refusing to trigger the flash.")
+            if ctx.assume_yes:
+                log(f"WARNING: {msg} (continuing because --yes was given)")
+            else:
+                ctx._say_fn("Firmware verification failed. Not flashing.")
+                log(f"FAIL: {msg}")
+                ctx.state = State.FAILED
+                return
+        else:
+            log("MD5 verified: router received the exact image bytes.")
 
     if profile.flash_method != "dlink-hnap" and trigger_flash(profile):
         ctx.timeline.flash_triggered = ts()

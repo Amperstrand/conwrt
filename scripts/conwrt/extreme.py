@@ -15,7 +15,7 @@ from typing import Optional
 from flash.context import Event, State, DEFAULT_IP, log, ts
 from flash.context import sha256_file
 from ssh_utils import ssh_cmd, scp_cmd
-from platform_utils import configure_interface_ip
+from platform_utils import add_host_route, configure_interface_ip
 from conwrt.infrastructure import TFTPServerManager, RecoveryContext
 from conwrt.monitors import check_ssh
 from conwrt.extreme_helpers import (
@@ -29,6 +29,16 @@ def _setup_interface_ips(interface: str, profile: SimpleNamespace) -> None:
     openwrt_client = profile.openwrt_client_ip
     if openwrt_client and openwrt_client != profile.client_ip:
         configure_interface_ip(interface, openwrt_client, "24")
+    # Prefer the recovery address over the wired interface with a /32 host
+    # route. Without this, a colliding subnet on another interface (e.g. the
+    # operator's WiFi also on 192.168.1.0/24) can steal recovery traffic.
+    recovery_ip = getattr(profile, "recovery_ip", "")
+    if recovery_ip:
+        if add_host_route(interface, recovery_ip):
+            log(f"Host route: {recovery_ip}/32 via {interface}")
+        else:
+            log(f"Note: could not add host route for {recovery_ip} via {interface} "
+                f"(sudo required?) — relying on subnet selection")
 
 
 def _extreme_tftp_server_ip(profile: SimpleNamespace) -> str:

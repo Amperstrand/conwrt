@@ -1,10 +1,29 @@
 """HTTP/SSH firmware upload helpers."""
 from __future__ import annotations
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 
 from flash.context import DEFAULT_IP, log
+
+# GL.iNet / MediaTek U-Boot failsafe returns "<size> <md5>" from POST /upload
+# (see gl-inet/mt798x-boot failsafe/failsafe.c). D-Link and others return HTML.
+_UBOOT_RESPONSE_RE = re.compile(r"^\s*(\d+)\s+([0-9a-fA-F]{32})\s*$")
+
+
+def parse_uboot_response(response: str) -> tuple[int | None, str | None]:
+    """Parse a U-Boot ``<size> <md5>`` upload response.
+
+    Returns ``(size, md5)`` where either value is ``None`` when the response is
+    not the GL.iNet/MediaTek format (e.g. D-Link returns HTML).
+    """
+    if not response:
+        return None, None
+    match = _UBOOT_RESPONSE_RE.match(response)
+    if not match:
+        return None, None
+    return int(match.group(1)), match.group(2).lower()
 
 def detect_uboot_http(recovery_ip: str = DEFAULT_IP) -> tuple[bool, str]:
     try:

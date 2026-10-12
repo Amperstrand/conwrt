@@ -43,6 +43,20 @@ Useful targets:
 | `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
 | `make e2e` | Tests against a physical router (needs `CONWRT_DEVICE_IP`) | No — real device |
 
+Device flashing targets (these mutate real hardware):
+
+| Target | What it does |
+|--------|--------------|
+| `make detect` | Auto-detect the connected router (non-interactive) |
+| `make flash` | Source the right vanilla OpenWrt image for the connected router and flash it |
+| `make flash-uboot` | Force U-Boot recovery flash (enter U-Boot, then run; pass `MODEL=` for non-SSH recovery) |
+| `make source-image` | Download + verify the vanilla OpenWrt image only (`MODEL=glinet-mt3000`) |
+
+```bash
+make source-image MODEL=glinet-mt3000 RELEASE=24.10.2   # cache + verify only
+make flash-uboot MODEL=glinet-mt3000                    # U-Boot recovery mode
+```
+
 ### Local test layers (nothing leaves your machine)
 
 `make integration` / `make bench` / `make e2e` wrap `scripts/local-tests.sh`
@@ -241,6 +255,20 @@ Use cases and packages are defined once in `scripts/use_cases/` and applied via 
 python3 scripts/conwrt.py list
 ```
 
+### Source the vanilla OpenWrt image for a model
+
+Download + SHA-256 verify the stock OpenWrt sysupgrade image (into the
+gitignored `images/` cache) without flashing. This is what `conwrt flash` uses
+automatically when neither `--image` nor `--request-image` is given.
+
+```bash
+python3 scripts/conwrt.py image --model-id glinet-mt3000
+python3 scripts/conwrt.py image --model-id glinet-mt3000 --release 25.12.5
+```
+
+The release comes from `openwrt.release` in the model (falling back to the
+repo default); pass `--release` / set `CONWRT_OPENWRT_RELEASE` to override.
+
 ### Manage cached firmware
 
 ```bash
@@ -274,6 +302,9 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--model-id ID` | Model ID from models/ (auto-detected if device is running OpenWrt) |
 | `--image PATH` | Path to firmware image |
 | `--request-image` | Request custom image from ASU with baked-in settings |
+| `--source-image` / `--no-source-image` | Download the vanilla OpenWrt image for the model when neither `--image` nor `--request-image` is given (default: on) |
+| `--release VERSION` | OpenWrt release for `--source-image` (e.g. `24.10.2`); defaults to `openwrt.release` in the model |
+| `--suspend-wifi` | Temporarily disable host WiFi during U-Boot recovery to avoid subnet collisions (restored afterwards) |
 | `--ssh-key PATH` | SSH public key to embed (auto-detected: id_ed25519.pub or id_rsa.pub) |
 | `--password PASS` | Set root password (default: random, printed once, saved in inventory) |
 | `--no-password` | Skip password, key-only auth |

@@ -141,6 +141,101 @@ def get_link_state(interface: str) -> bool:
     return False
 
 
+def add_host_route(interface: str, target_ip: str) -> bool:
+    """Force traffic for a single host out a specific interface.
+
+    Installs a ``/32`` route for *target_ip* via *interface* so recovery
+    traffic uses the wired interface even when another interface (e.g. host
+    WiFi) shares the target subnet. Returns True on success.
+    """
+    plat = detect_platform()
+    if plat == "darwin":
+        cmd = ["route", "-n", "add", "-host", target_ip, "-interface", interface]
+    else:
+        cmd = ["ip", "route", "replace", f"{target_ip}/32", "dev", interface]
+    if not is_root():
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=5, check=False)
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def remove_host_route(interface: str, target_ip: str) -> bool:
+    """Remove a host route previously installed by :func:`add_host_route`."""
+    plat = detect_platform()
+    if plat == "darwin":
+        cmd = ["route", "-n", "delete", "-host", target_ip]
+    else:
+        cmd = ["ip", "route", "del", f"{target_ip}/32", "dev", interface]
+    if not is_root():
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=5, check=False)
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _which(tool: str) -> bool:
+    from shutil import which
+    return which(tool) is not None
+
+
+def _macos_wifi_device() -> str:
+    """Return the macOS WiFi BSD device name (e.g. en0), or ''."""
+    try:
+        result = subprocess.run(
+            ["networksetup", "-listallhardwareports"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    lines = result.stdout.splitlines()
+    for i, line in enumerate(lines):
+        if "Wi-Fi" in line or "AirPort" in line:
+            for j in range(i + 1, min(i + 3, len(lines))):
+                if lines[j].startswith("Device:"):
+                    return lines[j].split(":", 1)[1].strip()
+    return ""
+
+
+def suspend_wifi() -> str:
+    """Best-effort temporary WiFi shutdown; returns a token for :func:`restore_wifi`.
+
+    Returns "" when no supported WiFi control tool is available (the caller
+    should proceed — the wired host route is the primary collision fix).
+    """
+    plat = detect_platform()
+    if plat == "darwin":
+        device = _macos_wifi_device()
+        if not device:
+            return ""
+        subprocess.run(["networksetup", "-setairportpower", device, "off"],
+                       capture_output=True, text=True, check=False)
+        return device
+    if _which("nmcli"):
+        subprocess.run(["nmcli", "radio", "wifi", "off"],
+                       capture_output=True, text=True, check=False)
+        return "nmcli"
+    return ""
+
+
+def restore_wifi(token: str) -> None:
+    """Undo :func:`suspend_wifi` using the returned token."""
+    if not token:
+        return
+    if token == "nmcli":
+        subprocess.run(["nmcli", "radio", "wifi", "on"],
+                       capture_output=True, text=True, check=False)
+        return
+    subprocess.run(["networksetup", "-setairportpower", token, "on"],
+                   capture_output=True, text=True, check=False)
+
+
 def has_scapy() -> bool:
     """Check if scapy is importable."""
     try:
