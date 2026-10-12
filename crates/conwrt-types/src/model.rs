@@ -5,14 +5,22 @@
 //! `additionalProperties: true` during migration and the de-facto field set
 //! is being tightened incrementally (issue #118). Parsing must never reject
 //! a model file that the 1.x Python validator accepts.
+//!
+//! These types are **read-only projections**: only `Deserialize` is derived.
+//! Reserializing a parsed model would silently drop every field not yet in
+//! the typed schema (vendor/bootloader-specific recovery metadata), so
+//! writeback is prevented at compile time. A lossless representation
+//! (e.g. `#[serde(flatten)]` extras + real-corpus roundtrip tests) arrives
+//! with the schema tightening in #118; until then any model-writing tooling
+//! must operate on the raw JSON.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// A device model definition (`models/{id}.json`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct DeviceModel {
     /// conwrt slug; must match the `models/{id}.json` filename.
     pub id: String,
@@ -34,7 +42,7 @@ pub struct DeviceModel {
 }
 
 /// OpenWrt target coordinates for a model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct OpenwrtInfo {
     /// OpenWrt target, `target/subtarget` (e.g. `ath79/generic`).
     pub target: String,
@@ -57,7 +65,7 @@ pub struct OpenwrtInfo {
 /// Common parameters from the model schema are typed; method-specific extras
 /// are intentionally ignored here until the schema tightening (#118) gives
 /// them a home.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct FlashMethod {
     /// What this method does (required by the schema).
     pub description: String,
@@ -161,13 +169,5 @@ mod tests {
         let bad = r#"{"id":"x","vendor":"v","description":"d",
             "flash_methods":{"m":{"description":"x"}}}"#;
         assert!(serde_json::from_str::<DeviceModel>(bad).is_err());
-    }
-
-    #[test]
-    fn serializes_round_trip() {
-        let m = parse(MINIMAL);
-        let s = serde_json::to_string(&m).unwrap();
-        let m2: DeviceModel = serde_json::from_str(&s).unwrap();
-        assert_eq!(m, m2);
     }
 }
