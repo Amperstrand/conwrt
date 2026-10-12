@@ -136,7 +136,7 @@ U-Boot mode cannot auto-detect the model (no SSH), so:
 - [x] Tests (image_source, upload parse, handlers_uboot MD5, cmd_flash sourcing, platform_utils, extreme host route, cmd_image)
 - [x] `make ci` green (ruff + pyright + schemas + models + 3914 tests + smoke)
 - [x] Live sanity: `fetch_image` downloaded + SHA-256-verified the real MT3000 24.10.2 image; cache reuse confirmed
-- [ ] Branch pushed to fork; PR opened against `Amperstrand/conwrt`
+- [x] Branch `feat/image-source-and-make-flash` pushed to `c03rad0r/conwrt`; PR #99 opened against `Amperstrand/conwrt`
 
 ## Verification log
 
