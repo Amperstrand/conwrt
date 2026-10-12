@@ -22,16 +22,15 @@ pub mod types;
 pub mod workflow;
 
 pub use cache::request_cache_key;
-pub use clean::{clean_cache, CleanOptions, CleanReport};
-pub use client::{AsuClient, AsuEndpoints, PollConfig, DEFAULT_ASU_BASE, USER_AGENT};
+pub use clean::{CleanOptions, CleanReport, clean_cache};
+pub use client::{AsuClient, AsuEndpoints, DEFAULT_ASU_BASE, PollConfig, USER_AGENT};
 pub use error::ImageError;
 pub use http::ReqwestAsuClient;
 pub use metadata::{
-    find_cached, find_cached_build, list_entries, read_metadata, show_metadata, CachedImage,
-    CachedMetadata, ListEntry, METADATA_FILENAME,
+    CachedImage, CachedMetadata, ListEntry, METADATA_FILENAME, find_cached, find_cached_build,
+    list_entries, read_metadata, show_metadata,
 };
 pub use types::{
-    BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue,
-    SubmitResponse,
+    BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue, SubmitResponse,
 };
-pub use workflow::{request_and_cache, RequestExtras, RequestOutcome};
+pub use workflow::{RequestExtras, RequestOutcome, request_and_cache};
