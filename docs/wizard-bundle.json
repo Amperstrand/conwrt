@@ -30,7 +30,7 @@
       "vendor": "D-Link",
       "description": "COVR-X1860 A1 mesh WiFi",
       "target": "ramips/mt7621",
-      "version": "25",
+      "version": "24",
       "capabilities": [
         "ethernet",
         "wifi"
@@ -1138,5 +1138,5 @@
       "markdown": "## Enable SSH on WAN\n\n### enable SSH on the WAN port\n\n```sh\nuci -q delete firewall.wan_ssh; uci set firewall.wan_ssh=rule\nuci set firewall.wan_ssh.src='wan'\nuci set firewall.wan_ssh.dest_port='22'\nuci set firewall.wan_ssh.proto='tcp'\nuci set firewall.wan_ssh.target='ACCEPT'\nuci commit firewall\n/etc/init.d/firewall restart\n```\n"
     }
   ],
-  "generated_at": "2026-10-12 14:41 UTC"
+  "generated_at": "2026-10-12 21:25 UTC"
 }

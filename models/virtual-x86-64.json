@@ -8,6 +8,7 @@
     "profile": "generic",
     "version": "24",
     "board_name": "generic",
+    "board_names": ["generic", "conwrt-conwrt-test-vm"],
     "default_ip": "192.168.1.1"
   },
   "mac_oui": [],
