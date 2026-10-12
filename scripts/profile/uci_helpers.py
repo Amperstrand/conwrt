@@ -40,19 +40,28 @@ def uci_cleanup_sections(config: str, match_pattern: str) -> ShellCommand:
 
 
 def uci_add_to_wan_zone_sh(iface: str) -> str:
-    """Shell snippet: find wan zone by name, del_list then add_list (idempotent).
+    """Shell snippet: make *iface* a member of the ``wan`` zone only.
 
-    Iterates firewall zones by ``name`` attribute (not by index), removes the
-    interface from the wan zone's ``network`` list if present, then adds it.
-    This prevents accumulation across reconfigure runs.
+    Iterates firewall zones by the ``name`` attribute (not by index). For the
+    zone named ``wan`` it del_lists then add_lists *iface*; for every other zone
+    it removes *iface* if present. This is idempotent (no accumulation) and
+    prevents mis-assignment.
+
+    Note: the previous version used ``[ ... = 'wan' ] && del_list; add_list;
+    break`` — the ``;`` made ``add_list``/``break`` run on the *first* zone
+    regardless of its name, so the interface landed in ``lan`` (and the loop
+    never reached ``wan``). Guard the whole body with an explicit ``if``.
     """
     return (
         f"for _z in $(uci show firewall 2>/dev/null | grep '=zone'"
         f" | cut -d. -f2 | cut -d= -f1 || true); do"
-        f" [ \"$(uci -q get firewall.\"$_z\".name)\" = 'wan' ] &&"
-        f" uci del_list firewall.\"$_z\".network='{iface}' 2>/dev/null;"
+        f" if [ \"$(uci -q get firewall.\"$_z\".name)\" = 'wan' ]; then"
+        f" uci -q del_list firewall.\"$_z\".network='{iface}' 2>/dev/null;"
         f" uci add_list firewall.\"$_z\".network='{iface}';"
-        f" break; done"
+        f" else"
+        f" uci -q del_list firewall.\"$_z\".network='{iface}' 2>/dev/null;"
+        f" fi;"
+        f" done; true"
     )
 
 

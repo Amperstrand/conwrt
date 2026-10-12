@@ -2,7 +2,10 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci rust-ci rust-test ipk clean integration bench e2e
+MODEL ?=
+RELEASE ?=
+
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image recovery sta test smoke ci rust-ci rust-test ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -68,6 +71,51 @@ validate: ## Validate findings JSON (wraps scripts/validate-findings.sh)
 commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@echo "Committing run artifacts..."
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
+
+##
+## Device flashing
+##
+
+detect: ## Auto-detect the connected router (non-interactive)
+	@echo "Auto-detecting connected router..."
+	@$(SCRIPTS_DIR)/conwrt.py auto --no-menu $(ARGS)
+
+flash: ## Source the right OpenWrt image for the connected router and flash it
+	@$(SCRIPTS_DIR)/conwrt.py flash $(if $(MODEL),--model-id $(MODEL),) $(ARGS)
+## Usage: make flash [MODEL=glinet-mt3000] [ARGS="--no-voice"]
+
+flash-uboot: ## Force U-Boot recovery flash (enter U-Boot, then run; MODEL= recommended)
+	@$(SCRIPTS_DIR)/conwrt.py flash --force-uboot $(if $(MODEL),--model-id $(MODEL),) $(ARGS)
+## Usage: make flash-uboot MODEL=glinet-mt3000
+
+source-image: ## Download + verify the vanilla OpenWrt image only (MODEL= required)
+	@if [ -z "$(MODEL)" ]; then \
+		echo "Usage: make source-image MODEL=glinet-mt3000 [RELEASE=24.10.2]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py image --model-id $(MODEL) $(if $(RELEASE),--release $(RELEASE),) $(ARGS)
+## Usage: make source-image MODEL=glinet-mt3000 RELEASE=24.10.2
+
+recovery: ## Flash a device in recovery mode for any model (MODEL=, optionally IFACE=)
+	@$(SCRIPTS_DIR)/flash-recovery.sh "$(MODEL)" "$(IFACE)"
+## Usage: make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6
+
+##
+## Device configuration
+##
+
+sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, optional BAND=, ENCRYPTION=, IP=)
+	@if [ -z "$(SSID)" ]; then \
+		echo "Usage: make sta SSID=UpstreamNetwork KEY=passphrase [BAND=2.4ghz] [ENCRYPTION=psk2] [IP=192.168.1.1]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py configure --ip $(or $(IP),192.168.1.1) \
+		--sta-ssid "$(SSID)" \
+		$(if $(KEY),--sta-key "$(KEY)",) \
+		$(if $(BAND),--sta-band $(BAND),) \
+		$(if $(ENCRYPTION),--sta-encryption $(ENCRYPTION),) \
+		$(ARGS)
+## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
 test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
 	@pytest tests -m "not integration"

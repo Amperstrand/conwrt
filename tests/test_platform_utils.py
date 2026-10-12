@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from platform_utils import (
+    add_host_route,
     check_external_deps,
     configure_interface_ip,
     detect_platform,
@@ -16,7 +17,10 @@ from platform_utils import (
     has_scapy,
     has_tcpdump,
     is_root,
+    remove_host_route,
     remove_interface_ip,
+    restore_wifi,
+    suspend_wifi,
 )
 
 
@@ -250,3 +254,101 @@ class TestCheckExternalDeps:
             return _completed(returncode=0)
         mock_run.side_effect = side_effect
         assert any("ssh" in dep for dep in check_external_deps())
+
+
+class TestAddHostRoute:
+    @patch("platform_utils.is_root", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_linux_uses_ip_route_replace(self, mock_run, mock_plat, mock_root):
+        mock_run.return_value = _completed(returncode=0)
+        assert add_host_route("eth0", "192.168.1.1") is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["ip", "route", "replace", "192.168.1.1/32", "dev", "eth0"]
+
+    @patch("platform_utils.is_root", return_value=False)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_prepends_sudo_when_not_root(self, mock_run, mock_plat, mock_root):
+        mock_run.return_value = _completed(returncode=0)
+        add_host_route("eth0", "192.168.1.1")
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:2] == ["sudo", "-n"]
+
+    @patch("platform_utils.is_root", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="darwin")
+    @patch("platform_utils.subprocess.run")
+    def test_darwin_uses_route_add_host(self, mock_run, mock_plat, mock_root):
+        mock_run.return_value = _completed(returncode=0)
+        assert add_host_route("en0", "192.168.1.1") is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["route", "-n", "add", "-host", "192.168.1.1", "-interface", "en0"]
+
+    @patch("platform_utils.is_root", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run", return_value=_completed(returncode=1))
+    def test_returns_false_on_failure(self, mock_run, mock_plat, mock_root):
+        assert add_host_route("eth0", "192.168.1.1") is False
+
+
+class TestRemoveHostRoute:
+    @patch("platform_utils.is_root", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_linux_uses_ip_route_del(self, mock_run, mock_plat, mock_root):
+        mock_run.return_value = _completed(returncode=0)
+        assert remove_host_route("eth0", "192.168.1.1") is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["ip", "route", "del", "192.168.1.1/32", "dev", "eth0"]
+
+    @patch("platform_utils.is_root", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="darwin")
+    @patch("platform_utils.subprocess.run")
+    def test_darwin_uses_route_delete(self, mock_run, mock_plat, mock_root):
+        mock_run.return_value = _completed(returncode=0)
+        assert remove_host_route("en0", "192.168.1.1") is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["route", "-n", "delete", "-host", "192.168.1.1"]
+
+
+class TestSuspendWifi:
+    @patch("platform_utils._macos_wifi_device", return_value="")
+    @patch("platform_utils.detect_platform", return_value="darwin")
+    def test_darwin_returns_empty_when_no_device(self, mock_plat, mock_dev):
+        assert suspend_wifi() == ""
+
+    @patch("platform_utils.subprocess.run")
+    @patch("platform_utils._macos_wifi_device", return_value="en0")
+    @patch("platform_utils.detect_platform", return_value="darwin")
+    def test_darwin_turns_off_and_returns_device(self, mock_plat, mock_dev, mock_run):
+        assert suspend_wifi() == "en0"
+        assert mock_run.call_args[0][0] == ["networksetup", "-setairportpower", "en0", "off"]
+
+    @patch("platform_utils._which", return_value=False)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    def test_linux_returns_empty_without_nmcli(self, mock_plat, mock_which):
+        assert suspend_wifi() == ""
+
+    @patch("platform_utils._which", return_value=True)
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_linux_uses_nmcli(self, mock_run, mock_plat, mock_which):
+        assert suspend_wifi() == "nmcli"
+        assert mock_run.call_args[0][0] == ["nmcli", "radio", "wifi", "off"]
+
+
+class TestRestoreWifi:
+    @patch("platform_utils.subprocess.run")
+    def test_no_token_is_noop(self, mock_run):
+        restore_wifi("")
+        mock_run.assert_not_called()
+
+    @patch("platform_utils.subprocess.run")
+    def test_nmcli_token(self, mock_run):
+        restore_wifi("nmcli")
+        assert mock_run.call_args[0][0] == ["nmcli", "radio", "wifi", "on"]
+
+    @patch("platform_utils.subprocess.run")
+    def test_device_token(self, mock_run):
+        restore_wifi("en0")
+        assert mock_run.call_args[0][0] == ["networksetup", "-setairportpower", "en0", "on"]

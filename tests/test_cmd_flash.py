@@ -77,6 +77,10 @@ def _make_args(**overrides):
         isolate_port=None,
         no_pcap=False,
         yes=False,
+        source_image=True,
+        release=None,
+        image_suffix=None,
+        suspend_wifi=False,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -154,6 +158,12 @@ class CmdFlashTestCase(TestCase):
             "_generate_random_password": patch(
                 "conwrt.flash_dispatcher._generate_random_password",
                 return_value="rand-pw"),
+            "_fetch_image": patch(
+                "conwrt.flash_dispatcher._fetch_image"),
+            "suspend_wifi": patch(
+                "conwrt.flash_dispatcher.suspend_wifi"),
+            "restore_wifi": patch(
+                "conwrt.flash_dispatcher.restore_wifi"),
         }
         self.mocks = {}
         for name, p in patches.items():
@@ -174,6 +184,7 @@ class CmdFlashTestCase(TestCase):
         os.close(fd)
         self.addCleanup(os.unlink, self.image_path)
         self.mocks["_build_profile_from_model"].return_value = _make_profile()
+        self.mocks["_fetch_image"].return_value = self.image_path
 
     def run_cmd_flash(self, args=None):
         from conwrt.flash_dispatcher import cmd_flash
@@ -427,6 +438,20 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         ml_kwargs = self.mocks["monitor_lifecycle"].call_args.kwargs
         self.assertTrue(ml_kwargs["pcap_enabled"])
 
+    def test_recovery_interface_setup_runs_before_detection(self):
+        # A device already in U-Boot must be detected on the first probe, which
+        # requires the recovery interface/route to be up first.
+        order = []
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        self.mocks["_setup_interface_ips"].side_effect = lambda *a, **k: order.append("setup")
+        self.mocks["detect_uboot_http"].side_effect = (
+            lambda *a, **k: (order.append("detect"), (False, ""))[1])
+        self.captured_ctx()
+        self.run_cmd_flash()
+        self.assertIn("setup", order)
+        self.assertIn("detect", order)
+        self.assertLess(order.index("setup"), order.index("detect"))
+
     def test_force_uboot_overrides_openwrt(self):
         self.mocks["_detect_boot_state"].return_value = "openwrt"
         self.mocks["detect_uboot_http"].return_value = (True, "HTTP 200")
@@ -551,3 +576,73 @@ class TestCmdFlashFingerprintLog(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         # br-lan MAC adopted as router_mac when not explicitly given
         self.assertEqual(args.router_mac, "AA:BB:CC:DD:EE:FF")
+
+
+class TestCmdFlashSourceImage(CmdFlashTestCase):
+    def test_explicit_image_skips_sourcing(self):
+        rc = self.run_cmd_flash(_make_args(image=self.image_path))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_not_called()
+
+    def test_sources_image_when_none_given(self):
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(image=None, request_image=False))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_called_once()
+        self.assertEqual(self.mocks["_fetch_image"].call_args[0][0], "test-model")
+        # sourced path flows into the RecoveryContext
+        self.assertEqual(ctx.profile.name, "test-model")
+
+    def test_source_failure_errors(self):
+        self.mocks["_fetch_image"].side_effect = RuntimeError("no such image")
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(image=None, request_image=False))
+
+    def test_no_source_image_errors(self):
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(
+                image=None, request_image=False, source_image=False))
+
+    def test_release_passed_through(self):
+        self.run_cmd_flash(_make_args(image=None, request_image=False, release="25.12.5"))
+        self.assertEqual(
+            self.mocks["_fetch_image"].call_args.kwargs.get("release"), "25.12.5")
+
+    def test_image_suffix_passed_through(self):
+        self.run_cmd_flash(_make_args(
+            image=None, request_image=False, image_suffix="squashfs-factory.bin"))
+        self.assertEqual(
+            self.mocks["_fetch_image"].call_args.kwargs.get("suffix"), "squashfs-factory.bin")
+
+    def test_suspend_wifi_wraps_and_restores(self):
+        self.mocks["suspend_wifi"].return_value = "nmcli"
+        rc = self.run_cmd_flash(_make_args(suspend_wifi=True))
+        self.assertEqual(rc, 0)
+        self.mocks["suspend_wifi"].assert_called_once()
+        self.mocks["restore_wifi"].assert_called_once_with("nmcli")
+
+    def test_no_suspend_wifi_by_default(self):
+        self.run_cmd_flash(_make_args(suspend_wifi=False))
+        self.mocks["suspend_wifi"].assert_not_called()
+        self.mocks["restore_wifi"].assert_not_called()
+
+
+class TestCmdFlashRealValidation(CmdFlashTestCase):
+    """Exercise the real _validate_args (the patch in setUp is bypassed) so the
+    --source-image path is guarded end-to-end. Regression for the bug where
+    _validate_args rejected the no-image case before sourcing ran."""
+
+    def test_source_image_passes_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        rc = self.run_cmd_flash(_make_args(
+            image=None, request_image=False, source_image=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_called_once()
+
+    def test_no_image_no_source_fails_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(
+                image=None, request_image=False, source_image=False))

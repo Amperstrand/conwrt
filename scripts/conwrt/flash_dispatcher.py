@@ -41,7 +41,10 @@ import importlib
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 
-from platform_utils import detect_platform, check_external_deps, remove_interface_ip
+from platform_utils import (
+    detect_platform, check_external_deps, remove_interface_ip,
+    remove_host_route, suspend_wifi, restore_wifi,
+)
 from flash.preflight import run_preflight_checks
 
 from conwrt.extreme import (
@@ -108,6 +111,8 @@ from conwrt.firmware import (
     _request_custom_image,
 )
 
+from conwrt.image_source import fetch_image as _fetch_image
+
 from conwrt.device_inventory import _print_timeline, _record_inventory, auto_detect_interface
 from conwrt.cli import _build_parser
 
@@ -143,13 +148,30 @@ def _zycast_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> No
         zycast_proc.terminate()
 
 
+def _uboot_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    """Tear down the U-Boot recovery network shims.
+
+    The recovery IP is usually a subnet the operator also uses elsewhere (e.g.
+    a 192.168.1.0/24 upstream). Leaving the /32 host route in place would
+    hijack that address on the host after the flash, so remove it (and the
+    recovery-side client alias once the device has moved to another subnet).
+    """
+    recovery_ip = getattr(profile, "recovery_ip", "")
+    if recovery_ip:
+        remove_host_route(interface, recovery_ip)
+    final_ip = getattr(profile, "openwrt_ip", "") or recovery_ip
+    client_ip = getattr(profile, "client_ip", "")
+    if client_ip and final_ip and client_ip.rsplit(".", 1)[0] != final_ip.rsplit(".", 1)[0]:
+        remove_interface_ip(interface, client_ip, "24")
+
+
 FLASH_MODES: dict[str, FlashModeConfig] = {
     "sysupgrade": FlashModeConfig(State.SYSUPGRADE_UPLOADING, pcap_enabled=False),
     "edgeos": FlashModeConfig(State.EDGEOS_STAGE1, pcap_enabled=False),
     "extreme": FlashModeConfig(State.EXTREME_STOCK_PREFLIGHT, pcap_enabled=False, cleanup=_extreme_cleanup),
     "serial": FlashModeConfig(State.SERIAL_WAITING_FOR_BOOTMENU, has_monitors=False, cleanup=_serial_cleanup),
     "zycast": FlashModeConfig(State.ZYCAST_WAITING_FOR_DEVICE, cleanup=_zycast_cleanup),
-    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True),
+    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True, cleanup=_uboot_cleanup),
 }
 
 
@@ -628,8 +650,25 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if args.initramfs:
         request_metadata["initramfs_path"] = args.initramfs
 
+    # Source the vanilla OpenWrt image for the resolved model when the operator
+    # supplied neither a local image nor an ASU request. This is the recovery
+    # path: the device is not running OpenWrt, so no ASU build is meaningful.
+    if not image_path and getattr(args, "source_image", True):
+        try:
+            _say_fn("Sourcing vanilla OpenWrt image...")
+            image_path = _fetch_image(
+                args.model_id,
+                release=getattr(args, "release", None),
+                suffix=getattr(args, "image_suffix", None),
+                log_fn=log,
+            )
+            log(f"Sourced image: {image_path}")
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            log(f"Image sourcing failed: {e}")
+            image_path = ""
+
     if not image_path:
-        parser.error("One of --image or --request-image is required.")
+        parser.error("One of --image, --request-image, or --source-image is required.")
 
     if not os.path.isfile(image_path):
         print(f"ERROR: image not found: {image_path}", file=sys.stderr)
@@ -755,6 +794,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
 
+    # Bring up the recovery interface (client alias + /32 host route) BEFORE
+    # detecting the initial state. This runs after preflight (so the alias is
+    # not flagged as stale) and lets a device already sitting in U-Boot/web
+    # recovery be detected immediately instead of forcing an extra power cycle.
+    if config.setup_interface:
+        _setup_interface_ips(interface, profile)
+
     initial_state = _resolve_initial_state(mode, profile, boot_state)
 
     if args.isolate_port:
@@ -801,36 +847,48 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if mode == "zycast":
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
 
-    if config.has_monitors:
-        if config.setup_interface:
-            _setup_interface_ips(interface, profile)
+    # Optional: temporarily disable host WiFi so a shared subnet (e.g. host
+    # WiFi and the recovery address both on 192.168.1.0/24) cannot steal
+    # recovery traffic. Restored in the finally block below.
+    wifi_token = ""
+    if getattr(args, "suspend_wifi", False):
+        wifi_token = suspend_wifi()
+        if wifi_token:
+            log("Suspended host WiFi for recovery (will restore afterwards).")
+        else:
+            log("Note: --suspend-wifi requested but no supported WiFi control was found.")
 
-        say_label = {
-            "sysupgrade": "sysupgrade recovery",
-            "edgeos": "edgeos-kernel-swap flash",
-            "extreme": "extreme stock flash",
-            "zycast": "multicast recovery",
-        }.get(mode, "recovery. Listen for instructions")
-        _say_fn(f"Starting {profile.description} {say_label}.")
+    rc = 1
+    try:
+        if config.has_monitors:
+            say_label = {
+                "sysupgrade": "sysupgrade recovery",
+                "edgeos": "edgeos-kernel-swap flash",
+                "extreme": "extreme stock flash",
+                "zycast": "multicast recovery",
+            }.get(mode, "recovery. Listen for instructions")
+            _say_fn(f"Starting {profile.description} {say_label}.")
 
-        with monitor_lifecycle(
-            interface, event_queue, pcap_path, profile, args,
-            pcap_enabled=config.pcap_enabled,
-        ) as (pcap, link):
+            with monitor_lifecycle(
+                interface, event_queue, pcap_path, profile, args,
+                pcap_enabled=config.pcap_enabled,
+            ) as (pcap, link):
+                try:
+                    rc = _run_state_machine(ctx, event_queue, pcap, link)
+                except KeyboardInterrupt:
+                    log("Interrupted by user.")
+                    rc = 1
+        else:
+            _say_fn(f"Starting {profile.description} serial recovery.")
             try:
-                rc = _run_state_machine(ctx, event_queue, pcap, link)
+                rc = _run_state_machine(ctx, event_queue, None, None)
             except KeyboardInterrupt:
                 log("Interrupted by user.")
                 rc = 1
-    else:
-        _say_fn(f"Starting {profile.description} serial recovery.")
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, None)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-
-    if config.cleanup:
-        config.cleanup(ctx, profile, interface)
+    finally:
+        if wifi_token:
+            restore_wifi(wifi_token)
+        if config.cleanup:
+            config.cleanup(ctx, profile, interface)
 
     return rc
