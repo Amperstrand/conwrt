@@ -5,7 +5,7 @@ SCHEMAS_DIR := schemas
 MODEL ?=
 RELEASE ?=
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image test smoke ci ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image recovery test smoke ci ipk clean integration bench e2e
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -95,6 +95,10 @@ source-image: ## Download + verify the vanilla OpenWrt image only (MODEL= requir
 	fi
 	@$(SCRIPTS_DIR)/conwrt.py image --model-id $(MODEL) $(if $(RELEASE),--release $(RELEASE),) $(ARGS)
 ## Usage: make source-image MODEL=glinet-mt3000 RELEASE=24.10.2
+
+recovery: ## Flash a device in recovery mode for any model (MODEL=, optionally IFACE=)
+	@$(SCRIPTS_DIR)/flash-recovery.sh "$(MODEL)" "$(IFACE)"
+## Usage: make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6
 
 test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
 	@pytest tests -m "not integration"

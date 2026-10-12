@@ -50,12 +50,18 @@ Device flashing targets (these mutate real hardware):
 | `make detect` | Auto-detect the connected router (non-interactive) |
 | `make flash` | Source the right vanilla OpenWrt image for the connected router and flash it |
 | `make flash-uboot` | Force U-Boot recovery flash (enter U-Boot, then run; pass `MODEL=` for non-SSH recovery) |
-| `make source-image` | Download + verify the vanilla OpenWrt image only (`MODEL=glinet-mt3000`) |
+| `make source-image` | Download + verify the vanilla OpenWrt image only (`MODEL=`, optional `RELEASE=`, `ARGS=--image-suffix ...`) |
+| `make recovery` | Generic recovery flash for any model: probe the recovery web server, then `conwrt flash` (`MODEL=`, optional `IFACE=`) |
 
 ```bash
 make source-image MODEL=glinet-mt3000 RELEASE=24.10.2   # cache + verify only
-make flash-uboot MODEL=glinet-mt3000                    # U-Boot recovery mode
+make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6       # any model, recovery mode
 ```
+
+The recovery helper (`scripts/flash-recovery.sh`) is model-agnostic: it reads
+the model's recovery IP from `models/`, briefly configures the wired NIC to
+probe the bootloader web server (**aborting if it isn't there**), then runs
+`conwrt flash`. Models without an HTTP recovery address skip the probe.
 
 ### Local test layers (nothing leaves your machine)
 
@@ -257,17 +263,25 @@ python3 scripts/conwrt.py list
 
 ### Source the vanilla OpenWrt image for a model
 
-Download + SHA-256 verify the stock OpenWrt sysupgrade image (into the
-gitignored `images/` cache) without flashing. This is what `conwrt flash` uses
+Download + SHA-256 verify the stock OpenWrt image (into the gitignored
+`images/` cache) without flashing. This is what `conwrt flash` uses
 automatically when neither `--image` nor `--request-image` is given.
 
 ```bash
 python3 scripts/conwrt.py image --model-id glinet-mt3000
 python3 scripts/conwrt.py image --model-id glinet-mt3000 --release 25.12.5
+python3 scripts/conwrt.py image --model-id dlink-covr-x1860-a1          # model's image_suffix (factory)
+python3 scripts/conwrt.py image --model-id glinet-mt3000 --image-suffix squashfs-factory.bin
 ```
 
-The release comes from `openwrt.release` in the model (falling back to the
-repo default); pass `--release` / set `CONWRT_OPENWRT_RELEASE` to override.
+The **release** comes from `openwrt.release` in the model (falling back to the
+repo default); override with `--release` / `CONWRT_OPENWRT_RELEASE`.
+
+The **image flavour** comes from `openwrt.image_suffix` in the model (e.g.
+`squashfs-factory.bin` for OEM web recovery, `initramfs-kernel.bin`,
+`squashfs-sysupgrade.bin`), defaulting to `squashfs-sysupgrade.bin`; override
+with `--image-suffix` / `CONWRT_IMAGE_SUFFIX`. This is what lets one code path
+source the correct artefact for GL.iNet, D-Link, and other devices alike.
 
 ### Manage cached firmware
 
@@ -304,6 +318,7 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--request-image` | Request custom image from ASU with baked-in settings |
 | `--source-image` / `--no-source-image` | Download the vanilla OpenWrt image for the model when neither `--image` nor `--request-image` is given (default: on) |
 | `--release VERSION` | OpenWrt release for `--source-image` (e.g. `24.10.2`); defaults to `openwrt.release` in the model |
+| `--image-suffix SUFFIX` | Vanilla image flavour for `--source-image` (e.g. `squashfs-factory.bin`); defaults to `openwrt.image_suffix`, then `squashfs-sysupgrade.bin` |
 | `--suspend-wifi` | Temporarily disable host WiFi during U-Boot recovery to avoid subnet collisions (restored afterwards) |
 | `--ssh-key PATH` | SSH public key to embed (auto-detected: id_ed25519.pub or id_rsa.pub) |
 | `--password PASS` | Set root password (default: random, printed once, saved in inventory) |
