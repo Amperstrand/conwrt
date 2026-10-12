@@ -122,18 +122,21 @@ impl fmt::Display for ServiceAction {
 pub enum UciValue {
     /// Fixed string, safe for single-quoted `uci set`.
     Literal(String),
-    /// The Linux network device resolved from a UCI network name at apply
-    /// time (direct device, else the default-route interface, else the name
-    /// itself) — the 1.x `wan → phy1-sta0` resolution, kept out of the plan
-    /// so plans stay device-independent.
-    ResolvedDevice,
+    /// The Linux network device resolved from `network` (a UCI network
+    /// name) at apply time — direct device, else default-route interface,
+    /// else the name itself. The 1.x `wan → phy1-sta0` lesson, kept out of
+    /// the plan so plans stay device-independent.
+    ResolvedDevice {
+        /// UCI network name to resolve, e.g. `wan`.
+        network: String,
+    },
 }
 
 impl fmt::Display for UciValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UciValue::Literal(v) => write!(f, "{v}"),
-            UciValue::ResolvedDevice => write!(f, "<resolved-device>"),
+            UciValue::ResolvedDevice { network } => write!(f, "<device of {network}>"),
         }
     }
 }
@@ -303,6 +306,139 @@ pub fn plan_profile(
     }
 }
 
+/// Single-quote a literal for POSIX shells (`'` → `'\''`).
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn device_var(network: &str) -> String {
+    let sanitized: String = network
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("_conwrt_dev_{sanitized}")
+}
+
+/// UCI identifier keys render bare (1.x convention); non-identifier
+/// characters are rejected-by-sanitization rather than quoted.
+fn uci_key(key: &str) -> String {
+    key.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Render a plan to a POSIX shell script (BusyBox `ash`-compatible — the
+/// OpenWrt shell transport, matching 1.x's `render_shell` conventions:
+/// single-quoted uci values, `/etc/init.d/<name> <action>`).
+///
+/// The whole plan renders as **one script** so device-resolution state
+/// (`ResolveNetworkDevice` → `UciValue::ResolvedDevice`) survives within a
+/// single remote shell. Run it with `set -e`; verification is separate and
+/// read-only (see `Plan::verification`).
+#[must_use]
+pub fn render_shell(plan: &Plan) -> String {
+    let mut script = String::new();
+    script.push_str("#!/bin/sh\n");
+    script.push_str(&format!(
+        "# conwrt plan: {} -> model {}\n",
+        plan.profile_id, plan.model_id
+    ));
+    script.push_str("set -e\n\n");
+
+    for op in &plan.ops {
+        match op {
+            PlanOp::EnsurePackage { name } => {
+                script.push_str(&format!("# install package {name}\n"));
+                script.push_str(&format!(
+                    "opkg install {} 2>/dev/null || apk add {}\n\n",
+                    shell_quote(name),
+                    shell_quote(name)
+                ));
+            }
+            PlanOp::ClearUciSections {
+                config,
+                section_type,
+            } => {
+                script.push_str(&format!("# clear {config}.{section_type} sections\n"));
+                script.push_str(&format!(
+                    "for _s in $(uci -q show {config} 2>/dev/null | grep '={section_type}' \
+                     | cut -d. -f2 | cut -d= -f1); do uci -q delete {config}.$_s; done\ntrue\n\n"
+                ));
+            }
+            PlanOp::ResolveNetworkDevice { network } => {
+                let var = device_var(network);
+                script.push_str(&format!("# resolve device for network {network}\n"));
+                script.push_str(&format!(
+                    "{var}=$(uci get network.{network}.device 2>/dev/null)\n\
+                     if [ -z \"${var}\" ] || ! ip addr show \"${var}\" 2>/dev/null \
+                     | grep -q \"inet \"; then\n\
+                     \x20 {var}=$(ip route show default 0.0.0.0/0 2>/dev/null \
+                     | awk '{{print $5}}' | head -1)\n\
+                     fi\n\
+                     if [ -z \"${var}\" ]; then {var}={network}; fi\n\n"
+                ));
+            }
+            PlanOp::SetUciSection {
+                config,
+                section,
+                section_type,
+                options,
+            } => {
+                script.push_str(&format!("# uci {config}.{section}={section_type}\n"));
+                script.push_str(&format!(
+                    "uci set {config}.{}={}\n",
+                    shell_quote(section),
+                    shell_quote(section_type)
+                ));
+                for (option, value) in options {
+                    match value {
+                        UciValue::Literal(v) => script.push_str(&format!(
+                            "uci set {config}.{section}.{}={}\n",
+                            uci_key(option),
+                            shell_quote(v)
+                        )),
+                        UciValue::ResolvedDevice { network } => {
+                            let var = device_var(network);
+                            script.push_str(&format!(
+                                "uci set {config}.{section}.{}=\"${var}\"\n",
+                                uci_key(option)
+                            ));
+                        }
+                    }
+                }
+                script.push('\n');
+            }
+            PlanOp::CommitUci { config } => {
+                script.push_str(&format!("# uci commit {config}\nuci commit {config}\n\n"));
+            }
+            PlanOp::Service { name, action } => {
+                let action = match action {
+                    ServiceAction::Enable => "enable",
+                    ServiceAction::Restart => "restart",
+                };
+                script.push_str(&format!(
+                    "# service {name} {action}\n/etc/init.d/{} {}\n\n",
+                    shell_quote(name),
+                    action
+                ));
+            }
+        }
+    }
+    script
+}
+
 fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> {
     sqm.validate()?;
     let iface = &sqm.interface;
@@ -328,7 +464,12 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
             options: vec![
                 ("enabled".into(), literal("1".into())),
                 // actual device, not the UCI network name (1.x lesson)
-                ("interface".into(), UciValue::ResolvedDevice),
+                (
+                    "interface".into(),
+                    UciValue::ResolvedDevice {
+                        network: iface.clone(),
+                    },
+                ),
                 ("script".into(), literal(sqm.script.clone())),
                 ("qdisc".into(), literal(sqm.qdisc.clone())),
                 ("linklayer".into(), literal(sqm.link_layer.clone())),
@@ -455,5 +596,61 @@ mod tests {
             .validate(),
             Err(Unsupported::InvalidParams(_))
         ));
+    }
+
+    #[test]
+    fn render_shell_matches_1x_conventions() {
+        let model = model_with_capabilities(None);
+        let plan = plan_profile(
+            &DeviceState::OpenWrt,
+            &model,
+            &Profile::Sqm(SqmProfile {
+                download_kbps: 340_000,
+                upload_kbps: 19_000,
+                ..test_sqm_defaults()
+            }),
+        )
+        .expect("plans");
+        let script = render_shell(&plan);
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("set -e"));
+        // package install covers both package managers
+        assert!(script.contains("opkg install 'sqm-scripts' 2>/dev/null || apk add 'sqm-scripts'"));
+        // clear-sections idiom, 1.x style
+        assert!(script.contains("uci -q show sqm 2>/dev/null | grep '=queue'"));
+        // device resolution sets the var the section later references
+        assert!(script.contains("_conwrt_dev_wan=$(uci get network.wan.device 2>/dev/null)"));
+        assert!(script.contains("uci set sqm.wan.interface=\"$_conwrt_dev_wan\""));
+        // single-quoted literals, 1.x convention
+        assert!(script.contains("uci set sqm.wan.download='340000'"));
+        assert!(script.contains("uci set sqm.wan.upload='19000'"));
+        assert!(script.contains("uci commit sqm"));
+        assert!(script.contains("/etc/init.d/'sqm' enable"));
+        assert!(script.contains("/etc/init.d/'sqm' restart"));
+    }
+
+    #[test]
+    fn render_shell_quotes_hostile_literals() {
+        let model = model_with_capabilities(None);
+        let mut sqm = test_sqm_defaults();
+        sqm.script = "evil'; rm -rf /; '".into();
+        let plan = plan_profile(&DeviceState::OpenWrt, &model, &Profile::Sqm(sqm)).expect("plans");
+        let script = render_shell(&plan);
+        assert!(
+            script.contains("uci set sqm.wan.script='evil'\\''; rm -rf /; '\\'''"),
+            "single quotes must be escaped, not interpolated: {script}"
+        );
+    }
+
+    fn test_sqm_defaults() -> SqmProfile {
+        SqmProfile {
+            download_kbps: 10_000,
+            upload_kbps: 5_000,
+            interface: "wan".into(),
+            qdisc: "cake".into(),
+            script: "piece_of_cake.qos".into(),
+            link_layer: "none".into(),
+            overhead: 0,
+        }
     }
 }
