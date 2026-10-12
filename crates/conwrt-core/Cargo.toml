@@ -19,6 +19,7 @@ conwrt-types = { path = "../conwrt-types", default-features = false }
 
 [dev-dependencies]
 pollster = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,175 @@
+//! Desired-state planning workflow tests (#113 minimal slice): the planner
+//! composes with `diagnose`, is provably I/O-free, and refuses to plan for
+//! devices without a confirmed OpenWrt identity.
+
+use conwrt_core::mock::{MockProber, NamedScenario};
+use conwrt_core::plan::{PlanOp, Profile, ServiceAction, SqmProfile, UciValue, Unsupported};
+use conwrt_core::{DeviceState, diagnose, plan_profile};
+use core::net::IpAddr;
+
+fn model() -> conwrt_types::DeviceModel {
+    serde_json::from_str(
+        "{\"id\":\"glinet-gl-ar150\",\"vendor\":\"GL.iNet\",\"description\":\"AR150\",\
+          \"openwrt\":{\"target\":\"ath79/generic\",\"device\":\"glinet,gl-ar150\",\
+          \"profile\":\"glinet_gl-ar150\",\"version\":\"24\",\"default_ip\":\"192.168.8.1\"},\
+          \"mac_oui\":[\"94:83:C4\"],\"capabilities\":[\"ethernet\",\"wifi\",\"usb\"]}",
+    )
+    .expect("fixture model parses")
+}
+
+fn sqm() -> SqmProfile {
+    SqmProfile {
+        download_kbps: 340_000,
+        upload_kbps: 19_000,
+        interface: "wan".into(),
+        qdisc: "cake".into(),
+        script: "piece_of_cake.qos".into(),
+        link_layer: "none".into(),
+        overhead: 0,
+    }
+}
+
+fn target() -> IpAddr {
+    IpAddr::from([192, 168, 8, 1])
+}
+
+#[test]
+fn sqm_plan_ops_are_typed_and_ordered() {
+    let model = model();
+    let plan = plan_profile(&DeviceState::OpenWrt, &model, &Profile::Sqm(sqm()))
+        .expect("confirmed OpenWrt plans fine");
+
+    assert_eq!(plan.profile_id, "sqm");
+    assert_eq!(plan.model_id, "glinet-gl-ar150");
+
+    let kinds: Vec<&str> = plan
+        .ops
+        .iter()
+        .map(|op| match op {
+            PlanOp::EnsurePackage { .. } => "package",
+            PlanOp::ClearUciSections { .. } => "clear",
+            PlanOp::ResolveNetworkDevice { .. } => "resolve",
+            PlanOp::SetUciSection { .. } => "section",
+            PlanOp::CommitUci { .. } => "commit",
+            PlanOp::Service { .. } => "service",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "package", "package", "clear", "resolve", "section", "commit", "service", "service"
+        ]
+    );
+
+    let names: Vec<&str> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            PlanOp::EnsurePackage { name } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["sqm-scripts", "luci-app-sqm"]);
+
+    let section = plan.ops.iter().find_map(|op| match op {
+        PlanOp::SetUciSection { options, .. } => Some(options),
+        _ => None,
+    });
+    let options = section.expect("plan sets the sqm queue section");
+    let get = |key: &str| {
+        options
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| panic!("option {key} missing"))
+    };
+    assert_eq!(get("download"), UciValue::Literal("340000".into()));
+    assert_eq!(get("upload"), UciValue::Literal("19000".into()));
+    // the 1.x lesson, typed: shape the resolved device, not the UCI name
+    assert_eq!(get("interface"), UciValue::ResolvedDevice);
+
+    let services: Vec<(String, ServiceAction)> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            PlanOp::Service { name, action } => Some((name.clone(), *action)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        services,
+        [
+            ("sqm".into(), ServiceAction::Enable),
+            ("sqm".into(), ServiceAction::Restart)
+        ]
+    );
+    assert_eq!(plan.verification.len(), 3);
+}
+
+#[test]
+fn planning_is_pure_over_a_recorded_provider() {
+    let target = target();
+    let mut prober = MockProber::responding(target, NamedScenario::OpenWrt);
+    let models = vec![model()];
+    let diagnosis = pollster::block_on(diagnose(&mut prober, target, &models)).unwrap();
+
+    let calls_after_diagnose = prober.calls().len();
+    assert!(calls_after_diagnose > 0, "diagnose exercised capabilities");
+
+    let plan = plan_profile(&diagnosis.state, &models[0], &Profile::Sqm(sqm()))
+        .expect("plans for OpenWrt");
+    assert!(!plan.ops.is_empty());
+    assert_eq!(
+        prober.calls().len(),
+        calls_after_diagnose,
+        "planning must not touch the provider (dry-run purity)"
+    );
+}
+
+#[test]
+fn unconfirmed_states_never_get_plans() {
+    let model = model();
+    for state in [
+        DeviceState::SshOnly,
+        DeviceState::StockVendor,
+        DeviceState::UbootRecovery,
+        DeviceState::Off,
+        DeviceState::Unreachable,
+        DeviceState::Unknown,
+    ] {
+        let refusal = plan_profile(&state, &model, &Profile::Sqm(sqm())).expect_err("must refuse");
+        assert_eq!(
+            refusal,
+            Unsupported::UnconfirmedDeviceState(state),
+            "state {state:?}"
+        );
+    }
+}
+
+#[test]
+fn ssh_only_scenario_end_to_end_is_refused() {
+    let target = target();
+    let mut prober = MockProber::responding(target, NamedScenario::SshOnly);
+    let models = vec![model()];
+    let diagnosis = pollster::block_on(diagnose(&mut prober, target, &models)).unwrap();
+    assert_eq!(diagnosis.state, DeviceState::SshOnly);
+    match plan_profile(&diagnosis.state, &models[0], &Profile::Sqm(sqm())) {
+        Err(Unsupported::UnconfirmedDeviceState(DeviceState::SshOnly)) => {}
+        other => panic!("expected SshOnly refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn invalid_params_are_rejected_before_any_ops() {
+    let model = model();
+    let bad = SqmProfile {
+        download_kbps: 0,
+        ..sqm()
+    };
+    assert_eq!(
+        plan_profile(&DeviceState::OpenWrt, &model, &Profile::Sqm(bad)),
+        Err(Unsupported::InvalidParams(
+            "download_kbps must be ≥ 1".into()
+        ))
+    );
+}
