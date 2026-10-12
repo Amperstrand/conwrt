@@ -1,0 +1,105 @@
+"""Tests for pi_image.py pure helpers (device selection, cloud-init rendering)."""
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from pi_image import (
+    boot_partition,
+    pick_target_device,
+    render_meta_data,
+    render_network_config,
+    render_user_data,
+)
+
+GB = 1 << 30
+
+
+def disk(name, size_gb, mounted_parts=(), model="FakeDisk"):
+    children = [
+        {"name": f"{name}1", "type": "part", "mountpoints": [None]},
+        {"name": f"{name}2", "type": "part", "mountpoints": [None]},
+    ]
+    for i, mp in enumerate(mounted_parts):
+        children[i]["mountpoints"] = [mp]
+    return {"name": name, "size": size_gb * GB, "type": "disk",
+            "model": model, "mountpoints": [None], "children": children}
+
+
+def lsblk(*devices):
+    import json
+    return json.dumps({"blockdevices": list(devices)})
+
+
+class TestPickTargetDevice(unittest.TestCase):
+    def test_single_eligible_disk(self):
+        out = lsblk(disk("sda", 1000))
+        self.assertEqual(pick_target_device(out), "/dev/sda")
+
+    def test_skips_small_disk(self):
+        out = lsblk(disk("sda", 7), disk("sdb", 1000))
+        self.assertEqual(pick_target_device(out), "/dev/sdb")
+
+    def test_skips_mounted_disk(self):
+        out = lsblk(
+            disk("sda", 7, mounted_parts=("/boot/firmware", "/")),
+            disk("sdb", 1000),
+        )
+        self.assertEqual(pick_target_device(out), "/dev/sdb")
+
+    def test_refuses_when_only_mounted(self):
+        with self.assertRaises(SystemExit):
+            pick_target_device(lsblk(disk("sda", 1000,
+                                          mounted_parts=("/",))))
+
+    def test_refuses_multiple_candidates(self):
+        with self.assertRaises(SystemExit):
+            pick_target_device(lsblk(disk("sda", 1000), disk("sdb", 2000)))
+
+    def test_refuses_no_disk(self):
+        with self.assertRaises(SystemExit):
+            pick_target_device(lsblk())
+
+
+class TestBootPartition(unittest.TestCase):
+    def test_sda(self):
+        self.assertEqual(boot_partition("/dev/sda"), "/dev/sda1")
+
+    def test_mmcblk(self):
+        self.assertEqual(boot_partition("/dev/mmcblk0"), "/dev/mmcblk0p1")
+
+
+class TestCloudInitRendering(unittest.TestCase):
+    def test_user_data(self):
+        ud = render_user_data("ubuntu", "pi4", ["ssh-ed25519 AAAA me@host"])
+        self.assertTrue(ud.startswith("#cloud-config\n"))
+        self.assertIn("hostname: pi4\n", ud)
+        self.assertIn("name: ubuntu\n", ud)
+        self.assertIn("ssh-ed25519 AAAA me@host", ud)
+        self.assertIn("ssh_pwauth: false\n", ud)
+
+    def test_user_data_forces_ssh_on(self):
+        ud = render_user_data("ubuntu", "pi4", ["ssh-ed25519 AAAA me@host"])
+        self.assertIn("runcmd:\n", ud)
+        self.assertIn("systemctl enable --now ssh", ud)
+
+    def test_user_data_break_glass_password(self):
+        ud = render_user_data("ubuntu", "pi4", ["ssh-ed25519 AAAA me@host"],
+                              password="s3cret!")
+        self.assertIn("password: s3cret!\n", ud)
+        self.assertIn("ssh_authorized_keys:\n", ud)
+
+    def test_meta_data(self):
+        md = render_meta_data("pi4")
+        self.assertIn("instance-id: pi4", md)
+        self.assertIn("local-hostname: pi4", md)
+
+    def test_network_config(self):
+        nc = render_network_config()
+        self.assertIn("version: 2\n", nc)
+        self.assertIn("dhcp4: true", nc)
+
+
+if __name__ == "__main__":
+    unittest.main()
