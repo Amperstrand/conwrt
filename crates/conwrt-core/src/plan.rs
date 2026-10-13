@@ -589,7 +589,11 @@ pub fn render_shell(plan: &Plan) -> String {
                 let var = device_var(network);
                 script.push_str(&format!("# resolve device for network {network}\n"));
                 script.push_str(&format!(
-                    "{var}=$(uci get network.{network}.device 2>/dev/null)\n\
+                    // `|| true`: under `set -e`, a failed command
+                    // substitution in an assignment aborts the script —
+                    // and `uci get` exits 1 when the option is absent
+                    // (which is this branch's whole purpose).
+                    "{var}=$(uci get network.{network}.device 2>/dev/null || true)\n\
                      if [ -z \"${var}\" ] || ! ip addr show \"${var}\" 2>/dev/null \
                      | grep -q \"inet \"; then\n\
                      \x20 {var}=$(ip route show default 0.0.0.0/0 2>/dev/null \
@@ -887,7 +891,9 @@ mod tests {
         // clear-sections idiom, 1.x style
         assert!(script.contains("uci -q show sqm 2>/dev/null | grep '=queue'"));
         // device resolution sets the var the section later references
-        assert!(script.contains("_conwrt_dev_wan=$(uci get network.wan.device 2>/dev/null)"));
+        assert!(
+            script.contains("_conwrt_dev_wan=$(uci get network.wan.device 2>/dev/null || true)")
+        );
         assert!(script.contains("uci set sqm.wan.interface=\"$_conwrt_dev_wan\""));
         // single-quoted literals, 1.x convention
         assert!(script.contains("uci set sqm.wan.download='340000'"));
