@@ -87,7 +87,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session")
-def router() -> Iterator[dict]:
+def router() -> dict[str, object]:
     r = ssh_run(". /etc/openwrt_release; echo $DISTRIB_RELEASE; "
                 "cat /tmp/sysinfo/board_name; grep -c ^processor /proc/cpuinfo")
     assert r.returncode == 0, f"router {ROUTER} unreachable over SSH"
