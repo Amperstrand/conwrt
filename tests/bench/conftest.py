@@ -18,6 +18,8 @@ The user's repo config.toml is NEVER modified: each scenario switch runs
 """
 from __future__ import annotations
 
+from typing import Iterator
+
 import json
 import os
 import re
@@ -85,7 +87,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session")
-def router() -> dict:
+def router() -> Iterator[dict]:
     r = ssh_run(". /etc/openwrt_release; echo $DISTRIB_RELEASE; "
                 "cat /tmp/sysinfo/board_name; grep -c ^processor /proc/cpuinfo")
     assert r.returncode == 0, f"router {ROUTER} unreachable over SSH"
@@ -95,7 +97,7 @@ def router() -> dict:
 
 
 @pytest.fixture(scope="session")
-def results(router) -> dict:
+def results(router: dict) -> Iterator[dict]:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = RESULTS_ROOT / f"vpn-bench-{stamp}"
     doc = {
