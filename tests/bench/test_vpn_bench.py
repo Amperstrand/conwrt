@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import iperf
+from .conftest import iperf
 
 pytestmark = [pytest.mark.bench]
 
