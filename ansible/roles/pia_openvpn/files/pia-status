@@ -1,0 +1,22 @@
+#!/bin/sh
+# Human-readable PIA VPN status
+echo "=== PIA VPN status ($(date)) ==="
+out=$(/usr/bin/pia-health 2>&1); rc=$?
+case $rc in
+	0) echo "State:   HEALTHY" ;;
+	2) echo "State:   DEGRADED" ;;
+	*) echo "State:   DOWN" ;;
+esac
+echo "Probe:   $out"
+echo "Phase:   $(uci -q get pia.settings.phase 2>/dev/null || echo validation)"
+if ip -4 addr show tun0 2>/dev/null | grep -q inet; then
+	echo "tun0:    $(ip -4 addr show tun0 | awk '/inet /{print $2}')"
+fi
+srv=$(logread 2>/dev/null | grep 'Peer Connection Initiated with' | tail -1 | sed 's/.*with //')
+[ -n "$srv" ] && echo "Server:  $srv"
+echo "--- counters ---"
+grep -e 'TUN/TAP' -e 'Updated' /var/run/openvpn.pia.status 2>/dev/null
+echo "--- fail-open ---"
+[ -f /tmp/pia/failopen ] && echo "FAIL-OPEN ACTIVE (WAN fallback)" || echo "normal (tunnel preferred)"
+echo "--- recent watchdog ---"
+tail -n 5 /tmp/pia-watchdog.log 2>/dev/null || echo "(no watchdog log yet)"

@@ -1,0 +1,44 @@
+---
+# Private Internet Access (PIA) OpenVPN client — role defaults.
+# Override in inventory/group_vars or the play.
+
+# Required — PIA account. username is the "p-number" (e.g. p1234567).
+pia_username: ""
+pia_password: ""
+
+# Endpoint pool (host:port). remote-random provides failover.
+pia_remote_hosts:
+  - 151.241.122.99:8080     # US East (New Jersey)
+  - 37.19.197.168:8080      # US East (New Jersey)
+  - 151.241.119.192:8080    # US East (New Jersey)
+  - 37.19.220.37:8080       # US Washington DC
+  - 181.41.206.48:8080      # US Denver
+  - 102.129.153.205:8080    # US Florida
+  - 145.79.182.176:8080     # US Atlanta
+  - 193.56.117.160:8080     # US Chicago
+  - 191.96.106.197:8080     # US California
+  - 173.239.198.91:8080     # US Seattle
+
+# PIA in-tunnel resolvers (only reachable through the tunnel).
+pia_dns_servers:
+  - 10.0.0.241
+  - 10.0.0.242
+  - 10.0.0.243
+
+pia_ca_url: "https://raw.githubusercontent.com/pia-foss/manual-connections/master/ca.rsa.4096.crt"
+pia_interface: tun0
+
+pia_kill_switch: true
+pia_ipv6_disable: true
+
+# validation = fail open on outage; enforced = strict fail closed.
+pia_phase: validation
+pia_fail_open_timeout: 180
+pia_require_stable_seconds: 86400
+
+pia_packages:
+  - openvpn-openssl
+  - luci-app-openvpn
+  - kmod-tun
+  - kmod-udptunnel4
+  - kmod-udptunnel6
