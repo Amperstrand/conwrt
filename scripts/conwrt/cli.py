@@ -275,6 +275,25 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--quiet", action="store_true",
         help="Only print responding IPs")
 
+    watch_parser = subparsers.add_parser("watch",
+        help="Scan for routers in recovery/flashable state and prompt to flash")
+    watch_parser.add_argument("--interface", default=None,
+        help="Ethernet interface (auto-detected if omitted)")
+    watch_parser.add_argument("--interval", type=float, default=5.0,
+        help="Seconds between scan rounds (default: 5)")
+    watch_parser.add_argument("--timeout", type=float, default=2.0,
+        help="Per-target probe timeout in seconds (default: 2)")
+    watch_parser.add_argument("--model-id", default=None,
+        help="Flash this model ID instead of the auto-detected match")
+    watch_parser.add_argument("--image", default=None,
+        help="Flash this image instead of requesting an ASU build")
+    watch_parser.add_argument("--no-upload", action="store_true",
+        help="Dry run: detect and prompt but never upload")
+    watch_parser.add_argument("--loop", action="store_true",
+        help="Keep watching after a flash instead of exiting")
+    watch_parser.add_argument("--yes", action="store_true",
+        help="Flash without confirmation prompt")
+
     flow_parser = subparsers.add_parser("flow",
         help="Deploy or generate a composite flow (e.g. net4sats)")
     flow_sub = flow_parser.add_subparsers(dest="flow_command")

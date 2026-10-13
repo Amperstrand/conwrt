@@ -10,10 +10,47 @@ A framework for flashing routers with OpenWrt, with a 2-stage workflow:
 
 > **DISCLAIMER**: conwrt flashes firmware onto real hardware. You must have legal authority to modify any device you use it on. Verify model definitions and firmware images before every flash. The authors accept no liability for bricked devices or data loss.
 
+## Quick Start
+
+Plug the router into this machine's ethernet port and run:
+
+```bash
+python3 scripts/conwrt.py watch
+```
+
+conwrt scans for routers in recovery mode (and running OpenWrt), identifies the model by probe evidence, and asks before it flashes. Confirm, and it builds a fresh image with your SSH keys and config baked in (from `config.toml`), flashes, and verifies over SSH:
+
+```
+$ conwrt watch
+Watching enp5s0 — probing 4 addresses every 5.0s (Ctrl-C to stop)
+  · 192.168.0.1 — uboot
+=======================================================
+  Device found: 192.168.0.1  (uboot)
+  MAC:      AA:BB:CC:12:34:56
+  Model:    COVR-X1860 A1 mesh WiFi
+  Model ID: dlink-covr-x1860-a1
+=======================================================
+  → flash this device with a fresh ASU image (latest OpenWrt, your keys baked in)? [y/N]: y
+```
+
+A router already running OpenWrt is detected via SSH board fingerprint and offered an in-place upgrade instead.
+
+Other entry points:
+
+| Command | What it does |
+|---------|--------------|
+| `conwrt watch` | Scan loop: detect → prompt → flash (the just-works path) |
+| `conwrt probe` | One-shot table of what's on the wire (IP, state, model candidates) |
+| `conwrt auto` | Deep 5-phase detection (passive listen, LLDP, DHCP, ARP, probing) with menu |
+| `python3 scripts/conwrt_tui.py` | Interactive discovery TUI (preview/dry-run by design) |
+| `conwrt flash --model-id ID --request-image` | Direct flash of a known model |
+
+Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
+
 ## Requirements
 
-- macOS (uses `say` for voice guidance, `ifconfig` for interface detection)
-- `tcpdump` and `sudo` for pcap capture and network monitoring
+- Linux or macOS (Ubuntu 22.04+/Debian and macOS tested; passwordless `sudo -n` is used for interface aliases and packet capture — without it, scanning and flashing still work, with fewer live events)
+- `curl` and `ssh` on PATH
 - Python 3.10+
 - An ethernet cable and a router to flash
 
@@ -530,9 +567,89 @@ wg_interface = "wg0"
 python3 scripts/wg-setup.py --peer 3 --server my-vpn-host
 ```
 
+### NordVPN (vpn-nordvpn)
+
+**Status: Tested on hardware** (D-Link COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08): unattended ASU flash → first boot brings up the tunnel, the `nord` 2.4GHz VPN-exit AP, DHCP/DNS for its clients, and management access from the VPN zone. Verified end-to-end: wired client and WiFi client exit via NordVPN DE, kill switch blocks all traffic when the tunnel dies, exit IP ≠ upstream IP. E2E user stories live in `tests/e2e/test_nordvpn_e2e.py`.
+
+**Recommended: access token mode.** Everything resolves at BUILD time on the host (NordLynx key via `/v1/users/services/credentials` with HTTP Basic `token:<token>`, server via `/v1/servers/recommendations` with the `wireguard_udp` filter) and is baked as a static first-boot script — no curl, no jq, no API dependency on the device:
+
+```toml
+[use_cases]
+enabled = ["vpn-nordvpn"]
+
+[use_cases.vpn-nordvpn]
+access_token = "nord-account-access-token"   # Nord Account → NordVPN → Manual setup
+server = "DE"                                # country code/name/id, hostname, or IP (default: DE)
+ap_ssid = "nord"                             # optional: 2.4GHz AP whose clients exit via the VPN
+ap_key = "nordnord"                          # AP password
+kill_switch = true                           # reject LAN→WAN if the tunnel drops
+upstream_iface = "wwan"                      # wwan for WiFi STA uplink, wan for ethernet
+```
+
+**Server selection.** `server` accepts `DE`/`germany`/`81`, a concrete hostname (`de1507.nordvpn.com`), or an IP. Pick one with the companion CLI:
+
+```bash
+python3 scripts/nordvpn.py servers --country DE --limit 5      # hostname / station / load / pubkey
+python3 scripts/nordvpn.py config --token TOKEN --server de1507.nordvpn.com --out de1507.conf
+```
+
+The legacy service-username/password token exchange was removed by NordVPN in April 2023 and is not supported. Tunnel address is static `10.5.0.2/32`; per-server WireGuard public keys come from the API metadata (they differ per server — never hardcode).
+
+**Alternative: static config file.** A dashboard-exported WireGuard `.conf` (`config_file = "/path/to/nordvpn.conf"`) is parsed at build time and overrides the token. Useful for pre-generated keys.
+
+**VPN-exit AP (`ap_ssid`).** A second SSID on the 2.4GHz radio whose clients get a DHCP lease on `172.16.31.0/24` and exit exclusively through the tunnel — no path to LAN. Hardware-verified details baked into the generated config: the AP is bridged (`br-vpnlan` — standalone AP interfaces never delivered DHCP), lives in a dedicated `vpnap` firewall zone with `vpnap→vpn` forwarding (joining the vpn zone directly drops DHCP/DNS and client forwarding), raises the shared radio to 20 dBm (txpower is radio-wide), and re-arms dnsmasq once the bridge is up.
+
+**Management over the VPN (`allow_management`, default true).** TCP 22/80/443 from the vpn zone to the router are accepted, so you can reconfigure the router through the tunnel (or from the AP) instead of locking yourself out. Set `allow_management = false` only if you have another access path. DNS from the AP is scoped to `172.16.31.0/24` so the router is not an open resolver at its VPN exit IP.
+
+Routing: the LAN is forwarded into the `vpn` firewall zone; netifd's wireguard proto installs the endpoint /32 route via the upstream gateway when the uplink comes up (a short fallback discovery covers paths where it doesn't). Optional `upstream_gateway` pins it statically.
+
+### NordVPN OpenVPN technology (vpn-nordvpn-openvpn)
+
+**Status: Tested on hardware** (COVR-X1860 A1, OpenWrt 25.12.5, 2026-10-08): token-driven service credentials + server resolution at build time, template-faithful config, exit verified (NordVPN UK). Perf: 134–168 Mbps with 65–78% CPU on the MT7621 (see the matrix below).
+
+The same access token drives it — one token, every technology:
+
+```toml
+[use_cases]
+enabled = ["vpn-nordvpn-openvpn"]
+
+[use_cases.vpn-nordvpn-openvpn]
+access_token = "nord-account-access-token"
+technology = "openvpn-udp"          # or openvpn-tcp
+server = "DE"                       # country/hostname/IP, same semantics as nordlynx
+openvpn_cipher = "AES-256-CBC"      # template default; AES-256-GCM also negotiable
+ap_ssid = "nord"                    # the VPN-exit AP works identically over OpenVPN
+kill_switch = true
+```
+
+The generated config mirrors NordVPN's official per-server `.ovpn` templates: multi-port remotes (1231–1234), the NordVPN-wide CA and tls-auth key (embedded as constants, verified identical across all servers), `verify-x509-name` CN pinning, `remote-cert-tls server`, AES-256-CBC/SHA512 with GCM in `data-ciphers` for NCP. Service username/password are fetched from the token at build time and land in `/etc/openvpn/nordvpn.auth` (chmod 600) — nothing sensitive is committed, and the device makes no API calls.
+
+### NordVPN IKEv2/IPsec on MT7621 — status and hardware acceleration (2026-10-08)
+
+Findings from a hardware bring-up session, recorded so the next attempt starts informed:
+
+- **IKEv2 to NordVPN works**: strongSwan 6.0.3 with EAP-MSCHAPv2 using the token-derived service credentials, IKE suite AES-CBC-256/HMAC-SHA2-256/MODP-2048, virtual IP 10.6.0.22. The server certificate chains to the same NordVPN Root CA used for OpenVPN.
+- **OpenWrt 25.12 mt7621 ships without kernel XFRM** — `kmod-ipsec4 kmod-xfrm-interface kmod-nft-xfrm` must be installed (image packages, not runtime downloads, for a baked build).
+- strongSwan needs these packages beyond the base: `strongswan-charon strongswan-swanctl strongswan-mod-{aes,sha1,sha2,gmp,hmac,pubkey,x509,pem,random,nonce,eap-identity,eap-mschapv2,md4,kernel-netlink,updown,attr,openssl}` and **`strongswan-mod-socket-default`** — with only `socket-dynamic`, charon logs "sending packet" while nothing ever leaves the interface (it never binds :500).
+- **ESP CHILD_SA install fails with EINVAL (`unable to add SAD entry`) while the EIP-93 crypto driver is loaded** — IKE succeeds, TS narrows to 0/0 ↔ vip/32, then the kernel rejects the SAD entry. Unloading `crypto_hw_eip93` was attempted to confirm the driver interaction and **wedged the kernel** (network stack dead, wifi still beaconing; power cycle required). Treat the eip93 driver on kernel 6.12.94 as untested with xfrm — blacklist it before attempting IPsec, and never rmmod it with live crypto references.
+- **Hardware acceleration reality on the MT7621 (EIP-93)**: accelerates `authenc(hmac(sha1/sha256),cbc(aes))` and `rfc3686(ctr(aes))` — classic IPsec ciphers, exactly what IKEv2 negotiated. It does **not** cover AES-GCM or ChaCha20-Poly1305: WireGuard and AES-GCM run on the MIPS cores (see `/proc/crypto`: `chacha20-mips`, `poly1305-mips`, generic GCM).
+- Userspace OpenSSL on this SoC: ChaCha20-Poly1305 ≈ 23 MB/s, AES-256-CBC ≈ 11 MB/s, AES-256-GCM ≈ 6 MB/s — OpenVPN is CPU-bound well below the WireGuard ceiling.
+
+### VPN performance matrix (x1860, OpenWrt 25.12.5, 2026-10-08)
+
+iperf3 download (10s, best of 2) from a controlled server, router CPU sampled at 1 Hz. Server path caps the absolute numbers (~170 Mbps); CPU% at that load still separates the protocols. Harness: `prta-scenario-poc/tests/test_conwrt_vpn_matrix.py` (results in its gitignored `results/`).
+
+| Technology | Throughput | Router CPU | Note |
+|---|---|---|---|
+| NordLynx (WireGuard, ChaCha20) | **172 Mbit/s** | 77% | fastest, kernel path |
+| OpenVPN UDP AES-256-GCM | 156 Mbit/s | 75% | userspace OpenSSL |
+| OpenVPN TCP | 168 Mbit/s | 78% | ≈ GCM (path-capped) |
+| OpenVPN UDP AES-256-CBC | 134 Mbit/s | 65% | CBC+HMAC slower per byte |
+| IKEv2/IPsec | not measured | — | blocked by the SAD/eip93 issue above |
+
 ### Future Direction
 
-The long-term vision is an interactive menu system that interviews the user before flashing: "Do you want USB tethering? SQM? A VPN?" — then builds a firmware image with everything pre-configured. The current `config.toml` approach is the declarative foundation for that interactive layer.
+`conwrt watch` is the first interactive layer: detect what's plugged in, ask, flash. The long-term vision builds on that — interview the user before flashing ("Do you want USB tethering? SQM? A VPN?") and build the image with everything pre-configured. The `config.toml` use-case system is the declarative foundation for that interview.
 
 ## WiFi STA/AP Configuration
 

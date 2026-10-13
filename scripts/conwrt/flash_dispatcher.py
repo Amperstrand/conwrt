@@ -43,7 +43,7 @@ fingerprint_router = _router_fingerprint.fingerprint_router
 
 from platform_utils import (
     detect_platform, check_external_deps, remove_interface_ip,
-    remove_host_route, suspend_wifi, restore_wifi,
+    remove_host_route, suspend_wifi, restore_wifi, interface_addr_is_alias,
 )
 from flash.preflight import run_preflight_checks
 
@@ -162,7 +162,34 @@ def _uboot_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> Non
     final_ip = getattr(profile, "openwrt_ip", "") or recovery_ip
     client_ip = getattr(profile, "client_ip", "")
     if client_ip and final_ip and client_ip.rsplit(".", 1)[0] != final_ip.rsplit(".", 1)[0]:
-        remove_interface_ip(interface, client_ip, "24")
+        _remove_client_alias(interface, client_ip)
+
+
+def _remove_client_alias(interface: str, ip: str) -> bool:
+    """Remove a model client_ip alias from *interface* — only if alias-style.
+
+    The address may instead be the operator's own configuration on that
+    interface (a primary address shared with others); conwrt never deletes
+    those. Returns True when the address was removed.
+    """
+    if not interface_addr_is_alias(interface, ip):
+        log(f"Not removing {ip} from {interface}: it is the interface's primary "
+            f"address (operator configuration, not a conwrt alias)")
+        return False
+    return remove_interface_ip(interface, ip, "24")
+
+
+def _remove_stale_client_aliases(interface: str, profile: SimpleNamespace) -> None:
+    """Clear leftover client aliases from a previous run before preflight.
+
+    Preflight's stale_ip check demands a clean interface. Leftovers are
+    alias-style additions (secondary addresses, or the sole address on a bare
+    flash NIC) — a primary address the operator configured is never touched.
+    """
+    for _attr in ("client_ip", "openwrt_client_ip"):
+        _ip = getattr(profile, _attr, "")
+        if _ip:
+            _remove_client_alias(interface, _ip)
 
 
 FLASH_MODES: dict[str, FlashModeConfig] = {
@@ -572,11 +599,17 @@ def cmd_flash(args: argparse.Namespace) -> int:
 
     openwrt_ip = profile.openwrt_ip or profile.recovery_ip
 
+    interface = args.interface
     if is_serial_tftp or is_zycast:
         boot_state = "unknown"
         use_sysupgrade = False
     else:
-        boot_state = _detect_boot_state("", profile)
+        interface = args.interface or auto_detect_interface()
+        if not interface:
+            print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
+            return 1
+        _remove_stale_client_aliases(interface, profile)
+        boot_state = _detect_boot_state(interface, profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
 
     if getattr(args, "ip", None) and use_sysupgrade:
@@ -685,7 +718,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print(f"ERROR: initramfs image not found: {initramfs_path}", file=sys.stderr)
             return 1
 
-    interface = args.interface or auto_detect_interface()
+    interface = interface or auto_detect_interface()
     if not interface:
         print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
         return 1

@@ -4,6 +4,8 @@ Each provider's render_shell(_build_<provider>_ops(...)) is the authoritative
 output. Tests verify that rendered scripts contain the expected API endpoints,
 UCI commands, firewall rules, DNS config, and provider-specific markers.
 """
+from unittest.mock import patch
+
 from profile.ops import render_shell
 from use_cases import registry
 from use_cases.vpn_providers.pia import _build_pia_ops
@@ -134,32 +136,134 @@ class TestMullvadOps:
 
 # -- NordVPN -------------------------------------------------------------------
 
+def _nordvpn_test_conf_path():
+    import tempfile
+    from pathlib import Path
+
+    conf = Path(tempfile.gettempdir()) / "conwrt-nordvpn-test.conf"
+    conf.write_text(
+        "[Interface]\n"
+        "PrivateKey = cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=\n"
+        "Address = 10.5.0.2/16\n"
+        "DNS = 103.86.96.100\n"
+        "[Peer]\n"
+        "PublicKey = qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+        "Endpoint = hamburg.de.wg.nordhold.net:51820\n"
+        "PersistentKeepalive = 25\n"
+    )
+    return str(conf)
+
+
 NORDVPN_PARAMS = {
-    "service_username": "norduser",
-    "service_password": "nordpass",
-    "upstream_gateway": "192.168.1.1",
+    "config_file": _nordvpn_test_conf_path(),
+    "upstream_iface": "wwan",
 }
+
+def _write_nordvpn_conf(tmp_path):
+    conf = tmp_path / "nordvpn.conf"
+    conf.write_text(
+        "[Interface]\n"
+        "PrivateKey = cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=\n"
+        "Address = 10.5.0.2/16\n"
+        "DNS = 103.86.96.100\n"
+        "[Peer]\n"
+        "PublicKey = qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+        "Endpoint = hamburg.de.wg.nordhold.net:51820\n"
+        "PersistentKeepalive = 25\n"
+    )
+    return str(conf)
+
+
+import use_cases.vpn_providers.nordvpn as watch_nordvpn
 
 
 class TestNordvpnOps:
-    def test_api_endpoint_present(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "api.nordvpn.com" in r
-        assert "users/tokens" in r
+    def test_static_config_mode_bakes_wg(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wireguard" in r
+        assert "cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=" in r
+        assert "qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=" in r
+        assert "10.5.0.2/16" in r
 
-    def test_credentials_injected(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "norduser" in r
-        assert "nordpass" in r
+    def test_token_mode_resolves_at_build_time(self):
+        """Token mode bakes a static config — no API calls from the device."""
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value={"nordlynx_private_key": "PRIVKEY=", "username": "u", "password": "p"}), \
+             patch.object(watch_nordvpn, "_resolve_endpoint",
+                          return_value=("185.1.2.3", "51820", "SRVKEY=")):
+            r = render_shell(_build_nordvpn_ops({"access_token": "a" * 64}))
+        assert 'WG_PRIV="PRIVKEY="' in r
+        assert 'SERVER_IP="185.1.2.3"' in r
+        assert 'SERVER_KEY="SRVKEY="' in r
+        assert "api.nordvpn.com" not in r, "token mode must resolve at build time"
+        assert "curl" not in r, "no curl dependency on the device"
 
-    def test_server_recommendations(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
-        assert "recommendations" in r
+    def test_server_defaults_to_de(self):
+        with patch.object(watch_nordvpn, "_fetch_credentials", return_value={"nordlynx_private_key": "P=", "username": "u", "password": "p"}), \
+             patch.object(watch_nordvpn, "_resolve_endpoint", wraps=watch_nordvpn._resolve_endpoint) as mock:
+            mock.side_effect = lambda server, token: ("1.2.3.4", "51820", "K=")
+            _build_nordvpn_ops({"access_token": "a" * 64})
+        assert mock.call_args[0][0] == "DE"
 
-    def test_wireguard_interface_configured(self):
-        r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
+    def test_wireguard_interface_configured(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
         assert "uci set network.wg0=interface" in r
         assert "uci set network.wg0.proto='wireguard'" in r
+
+    def test_management_rule_on_by_default(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "Allow-VPN-Management" in r
+        assert "dest_port='22 80 443'" in r
+
+    def test_management_rule_can_be_disabled(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      allow_management=False)
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "firewall.vpn_mgmt=rule" not in r, \
+            "only the stale-section cleanup may mention the rule"
+
+    def test_vpn_ap_baked_when_configured(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      ap_ssid="nord", ap_key="nordnord")
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wifinet_vpn_ap" in r
+        assert "ssid='nord'" in r
+        assert "key='nordnord'" in r
+        assert "network.vpnlan_dev.name='br-vpnlan'" in r, "AP must be bridged (standalone ifaces never deliver DHCP)"
+        assert "network.vpnlan.device='br-vpnlan'" in r
+        assert "dhcp.vpnlan=dhcp" in r
+        # Dedicated zone with its own input rules — vpnlan must NOT join the vpn
+        # zone (its input/forward policies would drop DHCP and vpnlan→wg0).
+        assert "firewall.vpn_ap_zone.name='vpnap'" in r
+        assert "firewall.vpn_ap_fwd.src='vpnap'" in r
+        assert "firewall.vpn_ap_fwd.dest='vpn'" in r
+        assert "Allow-VPNAP-DHCP" in r and "dest_port='67 68'" in r
+        assert "Allow-VPNAP-DNS" in r and "172.16.31.0/24" in r
+        assert "Allow-VPNAP-Management" in r
+        assert "del_list firewall.vpn_zone.network='vpnlan'" in r
+        # dnsmasq re-arm after the AP bridge is up
+        assert "br-vpnlan" in r and "dnsmasq restart" in r
+
+    def test_vpn_ap_absent_without_params(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "wifinet_vpn_ap" not in r
+        assert "vpnlan" not in r
+
+    def test_ap_password_quoting(self, tmp_path):
+        params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),
+                      ap_ssid="it's", ap_key="pass'word")
+        r = render_shell(_build_nordvpn_ops(params))
+        assert "ssid='it'\\''s'" in r
+        assert "key='pass'\\''word'" in r
+
+    def test_unconfigured_returns_skip_comment(self):
+        ops = _build_nordvpn_ops({})
+        assert any("NOT CONFIGURED" in str(getattr(op, "text", "")) for op in ops)
 
     def test_dns_configured(self):
         r = render_shell(_build_nordvpn_ops(NORDVPN_PARAMS))
@@ -380,3 +484,101 @@ class TestVpnProviderRegistry:
         assert uc.params["ovpn_config"].required
         assert "wireguard-tools" not in uc.packages
         assert "openvpn-openssl" in uc.packages
+
+
+class TestHeredocTransportVerbatim:
+    def test_run_step_script_preserves_hash_lines_in_heredocs(self):
+        """Heredoc payloads carry key/cert data where '#' lines are DATA.
+
+        Regression: _run_step_script stripped comment-looking lines from the
+        whole payload, silently truncating OpenVPN tls-auth keys (TLS
+        handshake failures, 2026-10-08).
+        """
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+        from profile.apply import _run_step_script
+
+        captured = {}
+
+        def fake_run(cmd, input=None, **kwargs):
+            captured["payload"] = input
+            return type("R", (), {"returncode": 0, "stderr": ""})()
+
+        import profile.apply as apply_mod
+        with patch.object(apply_mod.subprocess, "run", side_effect=fake_run):
+            ok = _run_step_script(
+                "192.168.0.1",
+                "cat > /etc/k << 'EOF'\n"
+                "-----BEGIN KEY-----\n"
+                "#\n"
+                "# 2048 bit key\n"
+                "#\n"
+                "deadbeef\n"
+                "EOF\n",
+                "", lambda m: None,
+            )
+        assert ok
+        assert "# 2048 bit key" in captured["payload"], "heredoc data line stripped"
+        assert "deadbeef" in captured["payload"]
+
+
+class TestNordvpnCountryId:
+    def test_code_and_name_resolve(self):
+        from use_cases.vpn_providers.nordvpn import _country_id_from_list
+        countries = [
+            {"id": 81, "name": "Germany", "code": "DE"},
+            {"id": 227, "name": "United States", "code": "US"},
+        ]
+        assert _country_id_from_list(countries, "de") == "81"
+        assert _country_id_from_list(countries, "DE") == "81"
+        assert _country_id_from_list(countries, "germany") == "81"
+        assert _country_id_from_list(countries, "US") == "227"
+        assert _country_id_from_list(countries, "united states") == "227"
+
+    def test_unknown_country_returns_empty(self):
+        from use_cases.vpn_providers.nordvpn import _country_id_from_list
+        countries = [{"id": 81, "name": "Germany", "code": "DE"}]
+        assert _country_id_from_list(countries, "ZZ") == ""
+        assert _country_id_from_list(countries, "Atlantis") == ""
+
+
+class TestNordvpnPinnedServerKey:
+    def test_hostname_pin_yields_public_key(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {
+            "hostname": "de1507.nordvpn.com", "station": "187.40.55.114",
+            "technologies": [{"identifier": "wireguard_udp",
+                              "metadata": [{"name": "public_key", "value": "PUBKEY123"}]}],
+        }
+        with patch.object(nv, "_api_get", return_value=[server]) as mock_api:
+            endpoint, port, key = nv._resolve_endpoint("de1507.nordvpn.com", "token")
+        assert key == "PUBKEY123"
+        assert endpoint == "187.40.55.114"
+        assert port == "51820"
+        assert "hostname" in mock_api.call_args.args[0]
+
+    def test_ip_pin_yields_public_key(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {
+            "hostname": "de1507.nordvpn.com", "station": "187.40.55.114",
+            "technologies": [{"identifier": "wireguard_udp",
+                              "metadata": [{"name": "public_key", "value": "PUBKEY123"}]}],
+        }
+        with patch.object(nv, "_api_get", return_value=[server]) as mock_api:
+            endpoint, port, key = nv._resolve_endpoint("187.40.55.114:51820", "token")
+        assert key == "PUBKEY123"
+        assert endpoint == "187.40.55.114"
+        assert port == "51820"
+        assert "stations" in mock_api.call_args.args[0]
+
+    def test_pin_without_wg_key_raises(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {"hostname": "legacy.example", "station": "1.2.3.4", "technologies": []}
+        with patch.object(nv, "_api_get", return_value=[server]):
+            import pytest as _pytest
+            with _pytest.raises(ValueError, match="wireguard_udp public key"):
+                nv._resolve_endpoint("1.2.3.4", "token")
