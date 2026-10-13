@@ -35,6 +35,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "nodns": ("ssh", "auto"),
     "openclash": ("ssh", "auto"),
     "pbr": ("both", "auto"),
+    "rescue-watchdog": ("both", "auto"),
     "sqm": ("both", "auto"),
     "ssh-hardening": ("both", "auto"),
     "ssl": ("ssh", "auto"),
