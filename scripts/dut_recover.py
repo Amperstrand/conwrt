@@ -107,7 +107,7 @@ def main():
 
     if args.from_lab:
         import yaml, os
-        lab = Path(os.environ.get("CONWRT_LAB", REPO / "data")) / "lab.yaml"
+        lab = Path(os.environ.get("CONWRT_LAB", os.path.join(REPO, "data"))) / "lab.yaml"
         cfg = yaml.safe_load(lab.read_text())
         d = cfg["devices"].get(args.from_lab) or sys.exit(f"--from-lab: unknown device {args.from_lab}")
         if not args.rig or args.rig == "root@192.168.12.4":
