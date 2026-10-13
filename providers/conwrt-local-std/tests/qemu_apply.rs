@@ -97,7 +97,11 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
     assert!(script.contains("apk add 'sqm-scripts'"));
 
     let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
-    assert!(outcome.applied, "script must exit 0 on the VM");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM; stderr:\n{}",
+        outcome.stderr
+    );
     assert!(
         outcome.fully_verified(),
         "verification failed: {:?}",

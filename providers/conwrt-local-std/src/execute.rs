@@ -28,6 +28,8 @@ pub struct ApplyOutcome {
     pub script: String,
     /// Whether the apply script ran to success (exit 0).
     pub applied: bool,
+    /// The apply script's stderr transcript (failure diagnostics).
+    pub stderr: String,
     /// Per-check verification results (empty when apply failed).
     pub verification: Vec<VerifyResult>,
 }
@@ -63,6 +65,7 @@ pub async fn apply_plan(session: &SshSession, plan: &Plan) -> Result<ApplyOutcom
     Ok(ApplyOutcome {
         script,
         applied,
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         verification,
     })
 }
