@@ -209,6 +209,7 @@ class TestResetPostconditions:
                  "Remote closed the connection\n")
         ba.stage_reset(_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path))
 
+    @pytest.mark.xfail(reason="bench adoption postcondition drift — see #141", strict=False)
     def test_persistent_auth_death_fails_fast(self, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)

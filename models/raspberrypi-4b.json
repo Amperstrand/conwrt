@@ -10,7 +10,15 @@
     "version": "24.10",
     "default_ip": "192.168.1.1"
   },
-  "capabilities": ["ethernet", "wifi", "bluetooth", "usb", "serial", "ssh", "tftp"],
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "bluetooth",
+    "usb",
+    "serial",
+    "ssh",
+    "tftp"
+  ],
   "hardware": {
     "soc": "Broadcom BCM2711 quad-core Cortex-A72 @ 1.5GHz (BCM2711C0)",
     "ram": "1/2/4/8 GB LPDDR4 SDRAM",
@@ -18,10 +26,10 @@
     "ethernet": "Gigabit ethernet (BCM54213PE, ext. RGMII)",
     "wifi": "802.11ac dual-band (Cypress CYW43455), Bluetooth 5.0 (onboard, SDIO/UART)",
     "storage": "microSD (DSLI mode), USB mass storage, netboot; NVMe only via PCIe HAT boards",
-    "power": "USB-C 5.1V/3A (official PSU). Bus-powered 2.5in HDDs can brown out weak PSUs — use externally powered disks",
+    "power": "USB-C 5.1V/3A (official PSU). Bus-powered 2.5in HDDs can brown out weak PSUs \u2014 use externally powered disks",
     "serial": "GPIO14/15 UART, 115200 8N1, 3.3V. Silent unless BOOT_UART=1 (bootloader) or console enabled (kernel). Pi 5 uses a dedicated 3-pin debug connector instead",
     "eeprom": "64Mbit SPI flash (W25Q64) holds the bootloader. Update flows: SD/USB recovery files, network (TFTP), or on-device rpi-eeprom-update",
-    "note": "Board recovery: nRPIBOOT jumper (GPIO40) + rpiboot mass-storage gadget gives the host direct block-device access over USB-C — no boot media or network required"
+    "note": "Board recovery: nRPIBOOT jumper (GPIO40) + rpiboot mass-storage gadget gives the host direct block-device access over USB-C \u2014 no boot media or network required"
   },
   "mac_oui": [
     "B8:27:EB",
@@ -55,14 +63,14 @@
       "dhcp": "DISCOVER with vendor-class option 60 = PXEClient:Arch:00000:UNDI:002001, option 93/94/97 (ARCH/NDI/GUID). GUID embeds ASCII Rpi4 or Rpi5 plus the MAC.",
       "requirements": "OFFER must include option 66 (TFTP server) and/or 67 (bootfile) or the bootloader ignores it and keeps DISCOVERing forever. Plain DHCP OFFERs without boot options are rejected.",
       "transport": "TFTP only (no HTTP boot on BCM2711/2712). Requests <serial>/ first, then root. dnsmasq with enable-tftp + per-host dhcp-option 66/67 is sufficient.",
-      "tftp_files": "config.txt, start4.elf/start5.elf, fixup*.dat, kernel*.img, dtbs, initramfs — same files as a FAT boot partition."
+      "tftp_files": "config.txt, start4.elf/start5.elf, fixup*.dat, kernel*.img, dtbs, initramfs \u2014 same files as a FAT boot partition."
     },
     "netboot_os": {
-      "method": "Single initramfs kernel binary (rootfs embedded) served over TFTP. Build OpenWrt from source with CONFIG_TARGET_ROOTFS_INITRAMFS=y — release kernels do support external initrd (CONFIG_BLK_DEV_INITRD=y in the generic config) but bcm27xx ships no initramfs images, and hand-built cpio + release-kernel boots died silently in testing (no UART feedback). Full build: ~22 min on 16 cores; overlay-only rebuilds ~5 min.",
-      "config_txt": "kernel=<image>, device_tree=<matching dtb>; NO initramfs directive — the rootfs is embedded in the kernel binary.",
+      "method": "Single initramfs kernel binary (rootfs embedded) served over TFTP. Build OpenWrt from source with CONFIG_TARGET_ROOTFS_INITRAMFS=y \u2014 release kernels do support external initrd (CONFIG_BLK_DEV_INITRD=y in the generic config) but bcm27xx ships no initramfs images, and hand-built cpio + release-kernel boots died silently in testing (no UART feedback). Full build: ~22 min on 16 cores; overlay-only rebuilds ~5 min.",
+      "config_txt": "kernel=<image>, device_tree=<matching dtb>; NO initramfs directive \u2014 the rootfs is embedded in the kernel binary.",
       "overlay": "scripts/pi_overlay.py init generates the buildroot files/ overlay: DHCP-client lan, DNS-only dnsmasq, authorized_keys at BOTH /etc/dropbear/ and ~/.ssh/ (dropbear 2025.89 refuses the home path), boot-time chmod 700/600 (files/ copy preserves the build user's umask; dropbear rejects group-writable paths even root-owned), optional baked host keys (RAM boots regenerate keys each boot, churning known_hosts).",
-      "deploy": "scripts/pi_netboot.py deploy --kernel <image> --dtb <dtb> [--firmware-dir DIR] [--mac ... --ip ...] — firmware files (start4.elf, fixup4.dat) are needed once per TFTP root; any OpenWrt bcm27xx factory image boot partition has them.",
-      "semantics": "RAM-only: runtime installs vanish on reboot by design — every boot is factory state. Bake into files/ anything that must persist.",
+      "deploy": "scripts/pi_netboot.py deploy --kernel <image> --dtb <dtb> [--firmware-dir DIR] [--mac ... --ip ...] \u2014 firmware files (start4.elf, fixup4.dat) are needed once per TFTP root; any OpenWrt bcm27xx factory image boot partition has them.",
+      "semantics": "RAM-only: runtime installs vanish on reboot by design \u2014 every boot is factory state. Bake into files/ anything that must persist.",
       "verified": "OpenWrt 25.12.5 (kernel 6.12.94) on Pi 4B: ~90 s power-on to SSH at the pinned lease, key auth working from first boot"
     },
     "eeprom_update": {
@@ -80,7 +88,16 @@
         "tested": true,
         "date": "2026-10-08",
         "notes": "Full rescue executed: netboot-looping Pi (dead boot medium + network-first EEPROM) recovered to a RAM shell via dnsmasq TFTP on the lab router; EEPROM config fixed over the same channel."
-      }
+      },
+      "resources_required": [
+        "power",
+        "ssh-service",
+        "tftp-server",
+        "rescue-boot-tree"
+      ],
+      "envelope": [
+        "tftp-lifeline-armed"
+      ]
     },
     "usb-image": {
       "description": "Write an OS image (Ubuntu Server, Raspberry Pi OS, OpenWrt) to a USB disk / SD card and boot it natively. conwrt pi_image.py provisions a Pi-attached disk over SSH; scripts/pi_rescue/flash-rescue.sh writes a local stick. Headless via cloud-init (user-data/network-config/meta-data on the boot FAT) or Raspberry Pi OS boot-marker + authorized_keys injection.",
@@ -89,7 +106,15 @@
         "tested": true,
         "date": "2026-10-08",
         "notes": "Ubuntu Server 26.04.1 arm64+raspi written to a Pi-attached 1TB USB disk from the netboot rescue shell, cloud-init injected via vfat mount, first boot verified over SSH."
-      }
+      },
+      "resources_required": [
+        "power",
+        "usb-storage",
+        "ssh-service"
+      ],
+      "envelope": [
+        "host-written-disk-image"
+      ]
     },
     "eeprom-update-netboot": {
       "description": "Deliver EEPROM config/firmware changes over the network: build a package with scripts/pi_eeprom.py (BOOT_ORDER, BOOT_UART, etc.) and place recovery.bin + pieeprom.upd + pieeprom.sig in the netboot tree or on the boot medium. The bootloader applies it on the next boot and skips re-application on version match.",
@@ -99,15 +124,39 @@
         "tested": true,
         "date": "2026-10-08",
         "notes": "BOOT_ORDER changed 0xf241 -> 0xf142 (network-first) via TFTP-delivered update; verified by subsequent netboot-first behavior."
-      }
+      },
+      "resources_required": [
+        "power",
+        "tftp-server",
+        "boot-fat",
+        "bootenv-write"
+      ],
+      "envelope": [
+        "no-otp-lock"
+      ]
     },
     "rpiboot-usb": {
       "description": "Physical recovery/provisioning over USB-C: set the nRPIBOOT jumper (GPIO40) before power-on and run rpiboot from the host; mass-storage-gadget64 exposes the Pi's disks as USB mass storage. No boot media or network needed. Untested in conwrt.",
-      "requires": "physical access, USB-C data cable, host rpiboot package"
+      "requires": "physical access, USB-C data cable, host rpiboot package",
+      "resources_required": [
+        "power",
+        "physical-access",
+        "usb-data-link"
+      ],
+      "envelope": [
+        "host-mass-storage"
+      ]
     },
     "sd-image": {
       "description": "Classic SD card flashing (Imager / dd). Boot marker files: 'ssh' (enable sshd), userconf.txt (user), or cloud-init files. Default fallback medium in stock BOOT_ORDER.",
-      "requires": "SD card + reader"
+      "requires": "SD card + reader",
+      "resources_required": [
+        "power",
+        "sd-card"
+      ],
+      "envelope": [
+        "host-written-disk-image"
+      ]
     }
   },
   "signatures": {
@@ -118,14 +167,14 @@
     },
     "no_other_traffic": {
       "source": "Verified on live hardware, 2026-10-08",
-      "pattern": "Netboot-looping Pi emits NOTHING besides DHCP DISCOVERs — no IPv6 RS, no mDNS, no ARP for a gateway. Presence of any other traffic implies a booted OS.",
+      "pattern": "Netboot-looping Pi emits NOTHING besides DHCP DISCOVERs \u2014 no IPv6 RS, no mDNS, no ARP for a gateway. Presence of any other traffic implies a booted OS.",
       "meaning": "A Pi showing DHCP-only chatter has never booted an OS. There is no IP to SSH to."
     }
   },
   "provisioning": {
     "ubuntu_server": {
       "image": "https://cdimage.ubuntu.com/ubuntu/releases/<ver>/release/ubuntu-<ver>-preinstalled-server-arm64+raspi.img.xz",
-      "sha256": "SHA256SUMS in the same directory — always verify",
+      "sha256": "SHA256SUMS in the same directory \u2014 always verify",
       "headless": "cloud-init NoCloud files on the boot FAT partition: user-data (#cloud-config: user, ssh_authorized_keys, hostname), network-config (v2, eth0 dhcp4), meta-data. Inject with scripts/pi_image.py provision or by mounting the boot partition.",
       "first_boot": "cloud-init grows the rootfs to fill the disk (minutes on large HDDs) and creates the user. sshd is reachable after user creation.",
       "note": "Ubuntu Server ships with ssh present; verify port 22 after first boot completes. If closed, enable from the rescue shell: symlink ssh.service into multi-user.target.wants in the rootfs."
@@ -136,7 +185,7 @@
     }
   },
   "safety": {
-    "netboot_security": "Plain TFTP netboot is unauthenticated: anyone on the L2 who controls DHCP can boot or re-image a netboot-first Pi. Keep the rescue server DISARMED when not in use (pi_netboot.py disarm), restrict boot options to known MACs (dhcp-host tags), and prefer VLAN port isolation during rescue. True tamper-proofing requires Raspberry Pi secure boot (SIGNED_BOOT=1 + OTP key hash + signed boot.img) — irreversible OTP programming, documented in recipes/raspberry-pi/eeprom-and-security.md.",
+    "netboot_security": "Plain TFTP netboot is unauthenticated: anyone on the L2 who controls DHCP can boot or re-image a netboot-first Pi. Keep the rescue server DISARMED when not in use (pi_netboot.py disarm), restrict boot options to known MACs (dhcp-host tags), and prefer VLAN port isolation during rescue. True tamper-proofing requires Raspberry Pi secure boot (SIGNED_BOOT=1 + OTP key hash + signed boot.img) \u2014 irreversible OTP programming, documented in recipes/raspberry-pi/eeprom-and-security.md.",
     "psu": "2.5in USB HDDs draw ~1A at spin-up. On a weak PSU the Pi browns out mid-boot (hangs, TCP resets, stale ARP). Use externally powered disks or the official 5.1V/3A PSU.",
     "dnsmasq_tftp_hazard": "On OpenWrt, dnsmasq runs in a procd ujail: a tftp-root that does not exist (or is outside the jail-mounted conf-dir) crash-loops dnsmasq and takes down LAN DHCP/DNS. Always create the TFTP tree BEFORE configuring, and keep it under /tmp/dnsmasq.<section>.d/ (jail-visible). scripts/pi_netboot.py enforces this ordering with automatic rollback.",
     "no_screen": "All rescue paths here work headless: netboot rescue shell (telnetd), cloud-init injection, EEPROM-over-network. UART (BOOT_UART=1) is the last-resort debug channel."
@@ -155,7 +204,7 @@
     "usb-image": {
       "tested": true,
       "date": "2026-10-08",
-      "notes": "Ubuntu Server 26.04.1 arm64+raspi written to a 1TB USB SSD attached to the Pi, flashed from the netboot rescue shell over LAN (nc transfer, sha256 verified, xzcat|dd, cloud-init injected via built-in kernel vfat). SSD booted Ubuntu natively once. Boot-to-ssh verification was ultimately blocked by a board-level hardware fault on the test unit (memory corruption + spontaneous resets — see recipes/raspberry-pi/netboot-rescue.md RAM diagnostics); the flashing/injection procedure itself is verified."
+      "notes": "Ubuntu Server 26.04.1 arm64+raspi written to a 1TB USB SSD attached to the Pi, flashed from the netboot rescue shell over LAN (nc transfer, sha256 verified, xzcat|dd, cloud-init injected via built-in kernel vfat). SSD booted Ubuntu natively once. Boot-to-ssh verification was ultimately blocked by a board-level hardware fault on the test unit (memory corruption + spontaneous resets \u2014 see recipes/raspberry-pi/netboot-rescue.md RAM diagnostics); the flashing/injection procedure itself is verified."
     },
     "eeprom-update-netboot": {
       "tested": true,

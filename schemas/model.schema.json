@@ -164,7 +164,13 @@
                 "multicast-l2",
                 "bootenv-write",
                 "packet-observer",
-                "wifi-sta-link"
+                "wifi-sta-link",
+                "usb-storage",
+                "sd-card",
+                "physical-access",
+                "usb-data-link",
+                "boot-fat",
+                "rescue-boot-tree"
               ]
             },
             "uniqueItems": true,
@@ -183,7 +189,10 @@
                 "zycast-kill-plan",
                 "rom-audit",
                 "keys-and-password",
-                "known-broken"
+                "known-broken",
+                "host-written-disk-image",
+                "host-mass-storage",
+                "no-otp-lock"
               ]
             },
             "uniqueItems": true,
