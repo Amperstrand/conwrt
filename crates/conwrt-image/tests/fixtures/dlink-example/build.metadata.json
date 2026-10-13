@@ -1,0 +1,44 @@
+{
+  "cache_key": "9b25a3336bb3a22fc5e0712b7223e89023a6f549d90b801d8197bd04227c2d7c",
+  "request_hash": "6ae4a03c491df54e4e2a6b28b93c4e08",
+  "distro": "openwrt",
+  "version": "24.10.2",
+  "version_code": "r2782-9gef7f5a",
+  "target": "ramips/mt7621",
+  "profile": "dlink_covr-x1860-a1",
+  "packages": [
+    "curl",
+    "htop",
+    "wireguard-tools"
+  ],
+  "packages_all": {
+    "curl": "8.9.1-r1",
+    "htop": "3.3.0-r1",
+    "wireguard-tools": "1.0.20210914-r1"
+  },
+  "defaults": null,
+  "ssh_key_source": "~/.ssh/id_ed25519.pub",
+  "images": [
+    {
+      "type": "sysupgrade",
+      "name": "openwrt-24.10.2-ramips-mt7621-dlink_covr-x1860-a1-squashfs-sysupgrade.bin",
+      "sha256": "0145157c364a341720cdf57b715567427446e91480e13a5b463f68498f7ac95b",
+      "size_bytes": 19,
+      "verified": true
+    },
+    {
+      "type": "factory",
+      "name": "openwrt-24.10.2-ramips-mt7621-dlink_covr_x1860_a1-squashfs-factory.bin",
+      "sha256": "be25923ea1d3355d500275a48ca520c45cfe7fb37bfe93733896073e37e5c54e",
+      "size_bytes": 17,
+      "verified": true
+    }
+  ],
+  "linux_kernel": {
+    "version": "5.15.167",
+    "release": "1"
+  },
+  "build_at": "2026-10-12T10:00:00+00:00",
+  "enqueued_at": "2026-10-12T09:59:00+00:00",
+  "downloaded_at": "2026-10-12T10:05:33"
+}

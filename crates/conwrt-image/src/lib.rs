@@ -1,10 +1,11 @@
 //! # conwrt-image
 //!
 //! ASU (Attended SysUpgrade) firmware-image client for conwrt — Rust
-//! parity for `scripts/firmware-manager.py` plus vanilla OpenWrt image
+//! parity for `scripts/firmware-manager.py`, vanilla OpenWrt image
 //! sourcing from `downloads.openwrt.org` (`scripts/conwrt/image_source.py`),
-//! following the strangler-fig migration (ADR-0001): library first, no CLI
-//! yet.
+//! and the flash-method-aware image selection of
+//! `scripts/conwrt/firmware.py` — following the strangler-fig migration
+//! (ADR-0001): library first, no CLI yet.
 //!
 //! The crate is std-only (no `no_std` requirement) and performs no I/O at
 //! import time; every network interaction goes through the [`AsuClient`]
@@ -20,6 +21,7 @@ pub mod downloads;
 pub mod error;
 pub mod http;
 pub mod metadata;
+pub mod select;
 pub mod timestamp;
 pub mod types;
 pub mod vanilla;
@@ -37,6 +39,10 @@ pub use http::ReqwestAsuClient;
 pub use metadata::{
     CachedImage, CachedMetadata, ListEntry, METADATA_FILENAME, find_cached, find_cached_build,
     list_entries, read_metadata, show_metadata,
+};
+pub use select::{
+    INITRAMFS_FLASH_METHODS, RECOVERY_FLASH_METHODS, SelectedImage, preferred_image_types,
+    select_image,
 };
 pub use types::{
     BuildManifest, BuildRequest, BuildStatus, ImageType, ManifestImage, StatusValue, SubmitResponse,
