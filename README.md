@@ -26,7 +26,7 @@ Watching enp5s0 — probing 4 addresses every 5.0s (Ctrl-C to stop)
   · 192.168.0.1 — uboot
 =======================================================
   Device found: 192.168.0.1  (uboot)
-  MAC:      3E:85:BE:87:55:42
+  MAC:      AA:BB:CC:12:34:56
   Model:    COVR-X1860 A1 mesh WiFi
   Model ID: dlink-covr-x1860-a1
 =======================================================
