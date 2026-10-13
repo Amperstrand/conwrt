@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WATCHER = r"""#!/bin/sh
