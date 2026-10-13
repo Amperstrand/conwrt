@@ -17,7 +17,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::SqmProfile;
-use conwrt_core::{DeviceState, Profile, diagnose, plan_profile};
+use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
+use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
+use conwrt_local_std::fingerprint::fingerprint;
+use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
 use core::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -82,8 +85,26 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
-    /// Plan a desired-state profile for a diagnosed device (read-only; mock
-    /// transport — the M7 executor applies plans later).
+    /// Fingerprint a device over SSH with authenticated, read-only evidence
+    /// (OpenWrt release, board name, hostname) — the confirming layer above
+    /// the passive probe: upgrades an unconfirmed `ssh-only` classification.
+    Fingerprint {
+        /// Target address of the device.
+        #[arg(long)]
+        ip: IpAddr,
+        /// SSH port.
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// Login user (OpenWrt default: root).
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Private key file for auth (omit to use password auth).
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Password for auth (ignored when --key is given).
+        #[arg(long, default_value = "")]
+        password: String,
+    },
     Plan {
         /// Desired-state profile to plan.
         #[arg(long)]
@@ -153,6 +174,13 @@ fn main() -> ExitCode {
             dir,
         } => cmd_diagnose(ip, interface, http_port, ssh_port, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::Fingerprint {
+            ip,
+            port,
+            user,
+            key,
+            password,
+        } => cmd_fingerprint(ip, port, &user, key.as_deref(), &password),
         Command::Plan {
             profile,
             model_id,
@@ -390,4 +418,87 @@ fn default_sqm() -> SqmProfile {
         link_layer: "none".into(),
         overhead: 0,
     }
+}
+
+fn cmd_fingerprint(
+    ip: IpAddr,
+    port: u16,
+    user: &str,
+    key: Option<&Path>,
+    password: &str,
+) -> ExitCode {
+    let auth = match key {
+        Some(path) => SshAuth::KeyFile {
+            path: path.to_path_buf(),
+            passphrase: None,
+        },
+        None if !password.is_empty() => SshAuth::Password(password.to_string()),
+        None => {
+            eprintln!("provide --key <path> or --password <secret> for authentication");
+            return ExitCode::from(2);
+        }
+    };
+    let target = SshTarget {
+        addr: format!("{ip}:{port}"),
+        user: user.to_string(),
+        auth,
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut store = MemoryTrustStore::new();
+    let session = match runtime.block_on(connect(
+        &target,
+        &mut store,
+        &SshOptions {
+            mode: TrustMode::TrustOnFirstUse,
+            ..Default::default()
+        },
+    )) {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("connect failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("host key:   {}", session.presented_key.fingerprint);
+    let report = match runtime.block_on(fingerprint(&session)) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("fingerprint failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("target:     {ip}");
+    if let Some(release) = &report.release {
+        println!(
+            "release:    {}",
+            release.description.as_deref().unwrap_or("?")
+        );
+        println!("version:    {}", release.release.as_deref().unwrap_or("?"));
+        println!("target:     {}", release.target.as_deref().unwrap_or("?"));
+    }
+    if let Some(board) = &report.board_name {
+        println!("board_name: {board}");
+    }
+    if let Some(hostname) = &report.hostname {
+        println!("hostname:   {hostname}");
+    }
+    for note in &report.notes {
+        println!("note:       {note}");
+    }
+    let confirmed = confirm(DeviceState::SshOnly, report.release.as_ref());
+    println!(
+        "identity:   {}",
+        if confirmed == DeviceState::OpenWrt {
+            "OpenWrt CONFIRMED (authenticated /etc/openwrt_release)"
+        } else {
+            "OpenWrt NOT confirmed (no authenticated release evidence)"
+        }
+    );
+    ExitCode::SUCCESS
 }
