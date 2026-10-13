@@ -3,7 +3,9 @@
 //! devices without a confirmed OpenWrt identity.
 
 use conwrt_core::mock::{MockProber, NamedScenario};
-use conwrt_core::plan::{PlanOp, Profile, ServiceAction, SqmProfile, UciValue, Unsupported};
+use conwrt_core::plan::{
+    DohProfile, PlanOp, Profile, ServiceAction, SqmProfile, UciValue, Unsupported, render_shell,
+};
 use conwrt_core::{DeviceState, diagnose, plan_profile};
 use core::net::IpAddr;
 
@@ -50,6 +52,10 @@ fn sqm_plan_ops_are_typed_and_ordered() {
             PlanOp::ClearUciSections { .. } => "clear",
             PlanOp::ResolveNetworkDevice { .. } => "resolve",
             PlanOp::SetUciSection { .. } => "section",
+            PlanOp::SetUciOptions { .. } => "options",
+            PlanOp::UciDeleteOption { .. } => "delete-option",
+            PlanOp::UciAddList { .. } => "add-list",
+            PlanOp::ResetUciConfig { .. } => "reset-config",
             PlanOp::CommitUci { .. } => "commit",
             PlanOp::Service { .. } => "service",
         })
@@ -176,5 +182,58 @@ fn invalid_params_are_rejected_before_any_ops() {
         Err(Unsupported::InvalidParams(
             "download_kbps must be ≥ 1".into()
         ))
+    );
+}
+
+fn doh() -> DohProfile {
+    DohProfile {
+        provider: "quad9".into(),
+        listen_port: 5053,
+    }
+}
+
+#[test]
+fn doh_plan_ports_1x_semantics() {
+    let model = model();
+    let plan = plan_profile(&DeviceState::OpenWrt, &model, &Profile::Doh(doh())).expect("plans");
+    assert_eq!(plan.profile_id, "doh");
+
+    let script = render_shell(&plan);
+    assert!(script.contains("opkg install 'https-dns-proxy'"));
+    assert!(script.contains("uci -q delete https-dns-proxy >/dev/null 2>&1 || true"));
+    assert!(script.contains("uci set https-dns-proxy.'main'='https_dns_proxy'"));
+    assert!(
+        script.contains(
+            "uci set https-dns-proxy.main.resolver_url='https://dns.quad9.net/dns-query'"
+        )
+    );
+    assert!(script.contains("uci set https-dns-proxy.main.listen_port='5053'"));
+    assert!(script.contains("uci set dhcp.@dnsmasq[0].noresolv='1'"));
+    assert!(script.contains("uci -q delete dhcp.@dnsmasq[0].server || true"));
+    assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'"));
+    assert!(script.contains("uci commit dhcp"));
+    assert!(script.contains("/etc/init.d/'dnsmasq' restart"));
+    assert_eq!(plan.verification.len(), 3);
+}
+
+#[test]
+fn doh_custom_url_must_be_https() {
+    let model = model();
+    let bad = DohProfile {
+        provider: "http://insecure.example/dns-query".into(),
+        listen_port: 5053,
+    };
+    assert!(matches!(
+        plan_profile(&DeviceState::OpenWrt, &model, &Profile::Doh(bad)),
+        Err(Unsupported::InvalidParams(_))
+    ));
+}
+
+#[test]
+fn doh_unconfirmed_state_refused_like_sqm() {
+    let model = model();
+    assert_eq!(
+        plan_profile(&DeviceState::SshOnly, &model, &Profile::Doh(doh())),
+        Err(Unsupported::UnconfirmedDeviceState(DeviceState::SshOnly))
     );
 }

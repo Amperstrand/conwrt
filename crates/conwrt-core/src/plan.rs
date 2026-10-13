@@ -71,11 +71,55 @@ impl SqmProfile {
     }
 }
 
+/// DNS-over-HTTPS via `https-dns-proxy` — port of the tested 1.x `doh`
+/// use case (`scripts/use_cases/doh.py`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DohProfile {
+    /// Provider name from [`DOH_PROVIDERS`] or a custom `https://` URL.
+    pub provider: String,
+    /// Local listen port for the proxy (dnsmasq forwards here).
+    pub listen_port: u16,
+}
+
+/// Named DoH resolver endpoints (1.x parity).
+pub const DOH_PROVIDERS: &[(&str, &str)] = &[
+    ("cloudflare", "https://cloudflare-dns.com/dns-query"),
+    ("google", "https://dns.google/dns-query"),
+    ("quad9", "https://dns.quad9.net/dns-query"),
+    ("mullvad", "https://dns.mullvad.net/dns-query"),
+    ("adguard", "https://dns.adguard-dns.com/dns-query"),
+];
+
+impl DohProfile {
+    /// The resolver URL this profile points at.
+    #[must_use]
+    pub fn resolver_url(&self) -> &str {
+        for (name, url) in DOH_PROVIDERS {
+            if *name == self.provider {
+                return url;
+            }
+        }
+        &self.provider
+    }
+
+    fn validate(&self) -> Result<(), Unsupported> {
+        let url = self.resolver_url();
+        if !url.starts_with("https://") || url.contains('\'') {
+            return Err(Unsupported::InvalidParams(
+                "provider must be a known name or an https:// URL".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// A desired-state profile: the outcome wanted, never the steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Profile {
     /// Eliminate bufferbloat with SQM.
     Sqm(SqmProfile),
+    /// Encrypted DNS resolution for the whole LAN.
+    Doh(DohProfile),
 }
 
 impl Profile {
@@ -84,6 +128,7 @@ impl Profile {
     pub fn id(&self) -> &'static str {
         match self {
             Profile::Sqm(_) => "sqm",
+            Profile::Doh(_) => "doh",
         }
     }
 
@@ -94,6 +139,7 @@ impl Profile {
     pub fn requires(&self) -> &'static [&'static str] {
         match self {
             Profile::Sqm(_) => &[],
+            Profile::Doh(_) => &[],
         }
     }
 }
@@ -173,6 +219,41 @@ pub enum PlanOp {
         /// Ordered `(option, value)` pairs.
         options: Vec<(String, UciValue)>,
     },
+    /// Set options on an existing (possibly anonymous) section, e.g.
+    /// `dhcp.@dnsmasq[0]`, without creating it.
+    SetUciOptions {
+        /// UCI config name.
+        config: String,
+        /// Section reference — named (`lan`) or anonymous (`@dnsmasq[0]`).
+        section: String,
+        /// Ordered `(option, value)` pairs.
+        options: Vec<(String, UciValue)>,
+    },
+    /// Delete one option from a section (idempotent under `set -e`).
+    UciDeleteOption {
+        /// UCI config name.
+        config: String,
+        /// Section reference.
+        section: String,
+        /// Option to remove.
+        option: String,
+    },
+    /// Append a value to a UCI list option.
+    UciAddList {
+        /// UCI config name.
+        config: String,
+        /// Section reference.
+        section: String,
+        /// List option name.
+        option: String,
+        /// Value to append.
+        value: String,
+    },
+    /// Reset a whole UCI config file to empty (`uci delete <config>`).
+    ResetUciConfig {
+        /// UCI config name.
+        config: String,
+    },
     /// Persist a UCI config (`uci commit`).
     CommitUci {
         /// UCI config name.
@@ -210,6 +291,29 @@ impl fmt::Display for PlanOp {
                 }
                 Ok(())
             }
+            PlanOp::SetUciOptions {
+                config,
+                section,
+                options,
+            } => {
+                write!(f, "uci {config}.{section} options")?;
+                for (option, value) in options {
+                    write!(f, "\n  {config}.{section}.{option}={value}")?;
+                }
+                Ok(())
+            }
+            PlanOp::UciDeleteOption {
+                config,
+                section,
+                option,
+            } => write!(f, "uci delete {config}.{section}.{option}"),
+            PlanOp::UciAddList {
+                config,
+                section,
+                option,
+                value,
+            } => write!(f, "uci add_list {config}.{section}.{option}={value}"),
+            PlanOp::ResetUciConfig { config } => write!(f, "uci reset {config}"),
             PlanOp::CommitUci { config } => write!(f, "uci commit {config}"),
             PlanOp::Service { name, action } => write!(f, "service {name} {action}"),
         }
@@ -303,7 +407,94 @@ pub fn plan_profile(
     capabilities_satisfied(model, profile.requires())?;
     match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
+        Profile::Doh(doh) => plan_doh(model, doh),
     }
+}
+
+fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> {
+    doh.validate()?;
+    let url = doh.resolver_url().to_string();
+    let port = doh.listen_port;
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "https-dns-proxy".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-https-dns-proxy".into(),
+        },
+        PlanOp::ResetUciConfig {
+            config: "https-dns-proxy".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "https-dns-proxy".into(),
+            section: "main".into(),
+            section_type: "https_dns_proxy".into(),
+            options: vec![
+                ("bootstrap_dns".into(), literal("1.1.1.1,8.8.8.8".into())),
+                ("listen_addr".into(), literal("127.0.0.1".into())),
+                ("listen_port".into(), literal(port.to_string())),
+                ("resolver_url".into(), literal(url.clone())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "https-dns-proxy".into(),
+        },
+        PlanOp::Service {
+            name: "https-dns-proxy".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "https-dns-proxy".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            options: vec![("noresolv".into(), literal("1".into()))],
+        },
+        PlanOp::UciDeleteOption {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+        },
+        PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: format!("127.0.0.1#{port}"),
+        },
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "resolver URL persisted".into(),
+            command: "uci -q get https-dns-proxy.main.resolver_url".into(),
+            expect_contains: url,
+        },
+        VerificationCheck {
+            description: "dnsmasq forwards to the local proxy".into(),
+            command: "uci -q get dhcp.@dnsmasq[0].server".into(),
+            expect_contains: format!("127.0.0.1#{port}"),
+        },
+        VerificationCheck {
+            description: "proxy enabled at boot".into(),
+            command: "/etc/init.d/https-dns-proxy enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "doh".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
 }
 
 /// Single-quote a literal for POSIX shells (`'` → `'\''`).
@@ -331,6 +522,21 @@ fn uci_key(key: &str) -> String {
     key.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Section references may also be anonymous (`@dnsmasq[0]`) — still bare
+/// in renders, still shell-word-safe by construction.
+fn uci_section_ref(section: &str) -> String {
+    section
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '@' | '[' | ']') {
                 c
             } else {
                 '_'
@@ -419,6 +625,63 @@ pub fn render_shell(plan: &Plan) -> String {
                     }
                 }
                 script.push('\n');
+            }
+            PlanOp::SetUciOptions {
+                config,
+                section,
+                options,
+            } => {
+                let section = uci_section_ref(section);
+                script.push_str(&format!("# uci {config}.{section} options\n"));
+                for (option, value) in options {
+                    match value {
+                        UciValue::Literal(v) => script.push_str(&format!(
+                            "uci set {config}.{section}.{}={}\n",
+                            uci_key(option),
+                            shell_quote(v)
+                        )),
+                        UciValue::ResolvedDevice { network } => {
+                            let var = device_var(network);
+                            script.push_str(&format!(
+                                "uci set {config}.{section}.{}=\"${var}\"\n",
+                                uci_key(option)
+                            ));
+                        }
+                    }
+                }
+                script.push('\n');
+            }
+            PlanOp::UciDeleteOption {
+                config,
+                section,
+                option,
+            } => {
+                let section = uci_section_ref(section);
+                script.push_str(&format!(
+                    "# uci delete {config}.{section}.{}\nuci -q delete {config}.{section}.{} \
+|| true\n\n",
+                    uci_key(option),
+                    uci_key(option)
+                ));
+            }
+            PlanOp::UciAddList {
+                config,
+                section,
+                option,
+                value,
+            } => {
+                let section = uci_section_ref(section);
+                script.push_str(&format!(
+                    "# uci add_list {config}.{section}.{}\nuci add_list {config}.{section}.{}={}\n\n",
+                    uci_key(option),
+                    uci_key(option),
+                    shell_quote(value)
+                ));
+            }
+            PlanOp::ResetUciConfig { config } => {
+                script.push_str(&format!(
+                    "# reset uci {config}\nuci -q delete {config} >/dev/null 2>&1 || true\n\n"
+                ));
             }
             PlanOp::CommitUci { config } => {
                 script.push_str(&format!("# uci commit {config}\nuci commit {config}\n\n"));
