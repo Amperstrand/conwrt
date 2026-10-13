@@ -4,6 +4,7 @@ members = [
     "crates/conwrt-types",
     "crates/conwrt-core",
     "crates/conwrt-protocols",
+    "crates/conwrt-image",
     "providers/conwrt-local-std",
     "apps/conwrt-cli",
 ]

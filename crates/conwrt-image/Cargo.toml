@@ -1,0 +1,26 @@
+[package]
+name = "conwrt-image"
+description = "ASU (Attended SysUpgrade) firmware-image client for conwrt — Rust parity for scripts/firmware-manager.py: build request, status polling, SHA-256-verified download, images/ cache layout (list/show/find/clean)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Libraries-first (ADR-0001): reqwest (rustls, no default TLS), serde,
+# thiserror, sha2. Tests use httpmock — no real network calls.
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { workspace = true }
+
+[dev-dependencies]
+httpmock = "0.7"
+tempfile = "3"
+tokio = { workspace = true }
+
+[lints]
+workspace = true
