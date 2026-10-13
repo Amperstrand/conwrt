@@ -99,8 +99,8 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
     let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
     assert!(
         outcome.applied,
-        "script must exit 0 on the VM; stderr:\n{}",
-        outcome.stderr
+        "script must exit 0 on the VM; stderr:\n{}\nscript:\n{}",
+        outcome.stderr, outcome.script
     );
     assert!(
         outcome.fully_verified(),
