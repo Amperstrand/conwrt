@@ -114,8 +114,8 @@ sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, opti
 		$(ARGS)
 ## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
-test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
-	@pytest tests -m "not integration"
+test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests and hardware bench runs
+	@pytest tests -m "not integration and not bench"
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
@@ -140,6 +140,10 @@ stability5: ## Fire-and-forget: 5 consecutive integration runs for stability ban
 
 integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
 	@bash scripts/local-tests.sh integration
+
+bench-vpn: ## VPN technology benchmark on the bench router (env-gated, see tests/bench/conftest.py)
+	@CONWRT_BENCH_ROUTER=$${CONWRT_BENCH_ROUTER:-192.168.1.1} \
+		python3 -m pytest tests/bench -v -s --timeout=1200
 
 bench: ## Run bufferbloat benchmark against local QEMU VM (results in test-results/)
 	@bash scripts/local-tests.sh bench

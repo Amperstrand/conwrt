@@ -742,3 +742,171 @@ register(UseCase(
     tested_notes="Tested on hardware 2026-10-08 (COVR-X1860 A1, OpenWrt 25.12.5): OpenVPN UDP "
                  "to a DE server with service credentials from the access token, exit verified.",
 ))
+
+
+def _build_ikev2_ops(params: dict[str, Any]) -> list[Op]:
+    """NordVPN IKEv2/IPsec via strongSwan — EAP-MSCHAPv2, kernel ESP.
+
+    Hardware-bring-up lessons baked in (2026-10-08, COVR-X1860 / MT7621):
+
+    - socket-default is mandatory: with socket-dynamic, charon logs
+      "sending packet" while nothing ever leaves (never binds UDP :500).
+    - eap-identity answers the server's EAP_IDENTITY request; without it the
+      inline NAK stalls the exchange.
+    - ESP proposals must NOT include modp (no PFS) — NordVPN rejects it.
+    - local_ts=dynamic (the acquired virtual IP), remote_ts 0/0.
+    - The stock mt7621 kernel ships without XFRM: the kmod-ipsec* packages
+      must be in the image (they are, via this use case's package list).
+    - hw_accel=false removes the EIP-93 crypto engine before any SA exists
+      (rmmod at usage 0 is safe; with live references it wedges the kernel —
+      see AGENTS.md) and blacklists it for subsequent boots. hw_accel=true
+      forces the module in: ESP AES-CBC/SHA then negotiates onto EIP-93
+      transforms — note SAD install has failed with EINVAL in that
+      configuration on kernel 6.12.94; the bench records the outcome either
+      way.
+    """
+    access_token = params.get("access_token", "")
+    if not access_token:
+        return [Comment(
+            text="vpn-nordvpn-ikev2: NOT CONFIGURED — set access_token in "
+                 "config.toml [use_cases.vpn-nordvpn-ikev2] (EAP credentials "
+                 "are derived from it at build time)",
+        )]
+    server = params.get("server") or "DE"
+    hw_accel = params.get("hw_accel", True)
+    kill_switch = params.get("kill_switch", True)
+    allow_management = params.get("allow_management", True)
+    ap_ssid = params.get("ap_ssid", "")
+    ap_key = params.get("ap_key", "")
+
+    basic = base64.b64encode(f"token:{access_token}".encode()).decode()
+    creds = _fetch_credentials(basic)
+    srv = _resolve_server(server, access_token, "ikev2")
+
+    hw_block = (
+        "modprobe crypto_hw_eip93 2>/dev/null || true\n"
+        if hw_accel else
+        "rmmod crypto_hw_eip93 2>/dev/null || true\n"
+        "mkdir -p /etc/modprobe.d\n"
+        "echo 'blacklist crypto_hw_eip93' > /etc/modprobe.d/no-eip93.conf\n"
+    )
+
+    ikev2_script = f"""# --- NordVPN IKEv2 (strongSwan, EAP-MSCHAPv2) ---
+{hw_block}
+mkdir -p /var/ipsec /etc/swanctl/conf.d /etc/swanctl/x509ca
+
+printf 'charon {{\\n  install_routes = yes\\n}}\\n' > /var/ipsec/strongswan.conf
+
+cat > /etc/swanctl/x509ca/nordvpn.pem << 'NORD_CA_EOF'
+{NORDVPN_CA}
+NORD_CA_EOF
+
+cat > /etc/swanctl/conf.d/nordvpn-ikev2.conf << 'NORD_SWAN_EOF'
+connections {{
+  nordvpn {{
+    version = 2
+    send_cert = never
+    local_addrs = %defaultroute
+    remote_addrs = {srv["station"]}
+    proposals = aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048
+    reauth_time = 0s
+    fragmentation = yes
+    mobike = yes
+    local {{
+      auth = eap
+      eap_id = "{creds["username"]}"
+    }}
+    remote {{
+      auth = pubkey
+      id = %any
+    }}
+    vips = 0.0.0.0
+    dpd_delay = 60s
+    children {{
+      nord {{
+        remote_ts = 0.0.0.0/0
+        local_ts = dynamic
+        start_action = start
+        close_action = restart
+        esp_proposals = aes256-sha256, aes256-sha1, aes128-sha256
+        rekey_time = 3600s
+      }}
+    }}
+  }}
+}}
+secrets {{
+  eap-nord {{
+    secret = "{creds["password"]}"
+  }}
+}}
+NORD_SWAN_EOF
+
+chmod 600 /etc/swanctl/conf.d/nordvpn-ikev2.conf
+
+# charon is not under procd here: start it from rc.local after the network
+grep -q 'nordvpn-ikev2-charon' /etc/rc.local 2>/dev/null || cat >> /etc/rc.local << 'NORD_RC_EOF'
+# nordvpn-ikev2-charon
+( sleep 8; /usr/lib/ipsec/charon >/dev/null 2>&1; ) &
+( sleep 20; swanctl --load-all >/dev/null 2>&1; swanctl --initiate --child nord >/dev/null 2>&1; ) &
+NORD_RC_EOF
+
+# also bring it up right now (first boot)
+( sleep 8; /usr/lib/ipsec/charon >/dev/null 2>&1; ) &
+( sleep 20; swanctl --load-all >/dev/null 2>&1; swanctl --initiate --child nord >/dev/null 2>&1; ) &
+echo "NordVPN IKEv2 staged: server {srv['hostname']} ({srv['station']}), hw_accel={'on' if hw_accel else 'off'}"
+"""
+
+    ops: list[Op] = [
+        Comment(text=f"--- NordVPN IKEv2/IPsec (server {srv['hostname']}, hw_accel={hw_accel}) ---"),
+        ShellCommand(command=transport_sh(ikev2_script, "/tmp/nordvpn_ikev2_setup.sh")),
+    ]
+    ops.extend(build_firewall_ops(iface="ipsec0", kill_switch=kill_switch,
+                                  allow_management=allow_management))
+    ops.append(ShellCommand(command=(
+        "nft add rule inet fw4 input_wan udp dport { 500, 4500 } accept comment 'IKE/NAT-T' 2>/dev/null; "
+        "nft add rule inet fw4 input_wan meta l4proto esp accept comment 'ESP' 2>/dev/null; true"
+    )))
+    ops.extend(build_dns_ops(NORDVPN_DNS))
+    if ap_ssid:
+        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key))
+    return ops
+
+
+register(UseCase(
+    name="vpn-nordvpn-ikev2",
+    description="NordVPN IKEv2/IPsec (strongSwan, EAP-MSCHAPv2) — optional EIP-93 hw accel",
+    packages=[
+        "strongswan", "strongswan-charon", "strongswan-swanctl",
+        "strongswan-mod-aes", "strongswan-mod-sha1", "strongswan-mod-sha2",
+        "strongswan-mod-gmp", "strongswan-mod-hmac", "strongswan-mod-pubkey",
+        "strongswan-mod-x509", "strongswan-mod-pem", "strongswan-mod-random",
+        "strongswan-mod-nonce", "strongswan-mod-eap-identity",
+        "strongswan-mod-eap-mschapv2", "strongswan-mod-md4",
+        "strongswan-mod-kernel-netlink", "strongswan-mod-updown",
+        "strongswan-mod-attr", "strongswan-mod-openssl",
+        "strongswan-mod-socket-default",
+        "kmod-ipsec4", "kmod-xfrm-interface", "kmod-nft-xfrm",
+    ],
+    packages_remove=[],
+    params={
+        "access_token": ParamDef(type=str, required=False, allow_empty=True,
+                                 description="NordVPN access token (Nord Account dashboard)"),
+        "server": ParamDef(type=str, default="DE",
+                           description="Server/country selection: 'DE', country id, hostname, or IP"),
+        "hw_accel": ParamDef(type=bool, default=True,
+                             description="EIP-93 hardware crypto on (false = rmmod+blacklist before any SA)"),
+        "kill_switch": ParamDef(type=bool, default=True,
+                                description="Block LAN→WAN traffic if tunnel drops"),
+        "allow_management": ParamDef(type=bool, default=True,
+                                     description="Allow SSH/LuCI to the router from the VPN zone"),
+        "ap_ssid": ParamDef(type=str, required=False, allow_empty=True,
+                            description="2.4GHz AP SSID whose clients exit via the VPN (empty = disabled)"),
+        "ap_key": ParamDef(type=str, required=False, allow_empty=True,
+                           description="WiFi password for the VPN-exit AP"),
+    },
+    build_configure_ops=_build_ikev2_ops,
+    test_status="untested",
+    tested_notes="IKE_SA proven manually 2026-10-08 (EAP-MSCHAPv2, AES-CBC-256/SHA256); "
+                 "CHILD_SA blocked by SAD EINVAL with eip93 loaded — hw_accel=false is the "
+                 "supported path pending the driver verdict.",
+))
