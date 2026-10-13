@@ -86,7 +86,12 @@ fn sqm_plan_ops_are_typed_and_ordered() {
     assert_eq!(get("download"), UciValue::Literal("340000".into()));
     assert_eq!(get("upload"), UciValue::Literal("19000".into()));
     // the 1.x lesson, typed: shape the resolved device, not the UCI name
-    assert_eq!(get("interface"), UciValue::ResolvedDevice);
+    assert_eq!(
+        get("interface"),
+        UciValue::ResolvedDevice {
+            network: "wan".into()
+        }
+    );
 
     let services: Vec<(String, ServiceAction)> = plan
         .ops

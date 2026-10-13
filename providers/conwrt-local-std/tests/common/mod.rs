@@ -47,7 +47,8 @@ pub struct ChannelRole {
 
 /// The scripted fixture server.
 pub struct FixtureServer {
-    files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    pub files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    pub exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>>,
     roles: HashMap<ChannelId, ChannelRole>,
 }
 
@@ -79,6 +80,22 @@ impl russh::server::Handler for FixtureServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let request = String::from_utf8_lossy(request).into_owned();
+        {
+            let scripted = self
+                .exec_responses
+                .lock()
+                .expect("exec_responses")
+                .get(&request)
+                .cloned();
+            if let Some((exit_code, stdout)) = scripted {
+                session.channel_success(channel)?;
+                session.data(channel, stdout.into_bytes())?;
+                session.exit_status_request(channel, exit_code)?;
+                session.eof(channel)?;
+                session.close(channel)?;
+                return Ok(());
+            }
+        }
         if let Some(dir) = request.strip_prefix("scp -t ") {
             session.channel_success(channel)?;
             session.data(channel, &[0u8][..])?;
@@ -256,11 +273,13 @@ fn parent_dir(path: &str) -> String {
 pub struct Fixture {
     pub addr: String,
     pub files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    pub exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>>,
 }
 
 impl Fixture {
     pub async fn start() -> Self {
         let files: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+        let exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>> = Arc::default();
         let config = Arc::new(server::Config {
             auth_rejection_time: std::time::Duration::ZERO,
             keys: vec![
@@ -276,10 +295,12 @@ impl Fixture {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr").to_string();
         let server_files = Arc::clone(&files);
+        let server_exec = Arc::clone(&exec_responses);
         tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 let handler = FixtureServer {
                     files: Arc::clone(&server_files),
+                    exec_responses: Arc::clone(&server_exec),
                     roles: HashMap::new(),
                 };
                 let config = Arc::clone(&config);
@@ -288,7 +309,18 @@ impl Fixture {
                 });
             }
         });
-        Self { addr, files }
+        Self {
+            addr,
+            files,
+            exec_responses,
+        }
+    }
+
+    pub fn set_exec_response(&self, command: &str, exit_code: u32, stdout: &str) {
+        self.exec_responses
+            .lock()
+            .expect("exec_responses")
+            .insert(command.to_string(), (exit_code, stdout.to_string()));
     }
 
     pub fn put_file(&self, path: &str, contents: &str) {
