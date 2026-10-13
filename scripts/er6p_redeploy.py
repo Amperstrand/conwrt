@@ -53,7 +53,7 @@ def erx(cmd: str, timeout: int = 30) -> str:
 
 def pty_ssh(port: int, command: str, tries: int = 12) -> str:
     """SSH with empty-password support via pty (first-login only path)."""
-    for attempt in range(tries):
+    for _attempt in range(tries):
         cmd = ["ssh", "-p", str(port), "-o", "StrictHostKeyChecking=accept-new",
                "-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1",
                "-o", "ConnectTimeout=8", "root@127.0.0.1", command]
@@ -99,11 +99,11 @@ def stage_preflight():
 def stage_catch():
     print("== STAGE catch")
     alive = False
-    for i in range(30):
+    for _i in range(30):
         o = erx(f"ping -c 1 -W 1 -I br-lan.14 {CATCH_IP} >/dev/null 2>&1 && echo A || echo B")
         if "A" in o: alive = True; break
         time.sleep(5)
-    ok(f"factory LAN alive at {CATCH_IP} (attempt {i+1})") if alive else die("factory LAN never came up")
+    ok(f"factory LAN alive at {CATCH_IP} (attempt {_i+1})") if alive else die("factory LAN never came up")
     o = erx(f"ip neigh show {CATCH_IP} dev br-lan.14")
     if "74:83:c2:75:08:91" in o: ok("MAC assert: 74:83:c2:75:08:91 (ER6P br-lan)")
     else: die(f"unexpected MAC: {o!r}")
@@ -203,12 +203,12 @@ def stage_apply_and_verify():
          '(setsid sh -c "sleep 2; ubus call network reload; /etc/init.d/dnsmasq restart; '
          '/etc/init.d/odhcpd restart; /etc/init.d/firewall restart" >/dev/null 2>&1 &); echo RELOADING'], timeout=15)
     alive = False
-    for i in range(20):
+    for _i in range(20):
         c, o = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", ERX,
                     f"ping -c 1 -W 1 {ER6P_FINAL} >/dev/null 2>&1 && echo A || echo B"], timeout=15)
         if "A" in o: alive = True; break
         time.sleep(5)
-    ok(f"{ER6P_FINAL} answers ping (attempt {i+1})") if alive else die("final mgmt never came up")
+    ok(f"{ER6P_FINAL} answers ping (attempt {_i+1})") if alive else die("final mgmt never came up")
     c, o = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
                 "-o", "StrictHostKeyChecking=accept-new", f"root@{ER6P_FINAL}",
                 "echo FINAL-KEYED; hostname; uci get dhcp.lan.ignore; ip -4 -o addr | grep -c 'br-lan.4'"], timeout=20)

@@ -14,7 +14,7 @@ Design rules (see data/lab.yaml header + AGENTS.md):
   - tools that change device state must finish by updating lab.yaml.
 """
 from __future__ import annotations
-import argparse, os, ipaddress, json, re, subprocess, sys, tempfile, os
+import argparse, os, ipaddress, json, re, subprocess, sys, tempfile
 from pathlib import Path
 
 import yaml  # PyYAML (repo already depends on it via labgrid tooling)
