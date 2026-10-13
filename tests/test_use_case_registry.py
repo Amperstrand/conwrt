@@ -48,6 +48,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "travelmate": ("both", "auto"),
     "vpn-node": ("ssh", "auto"),
     "vpn-pia": ("both", "auto"),
+    "vpn-pia-openvpn": ("both", "auto"),
     "vpn-mullvad": ("both", "auto"),
     "vpn-nordvpn": ("both", "auto"),
     "vpn-nordvpn-openvpn": ("both", "auto"),
