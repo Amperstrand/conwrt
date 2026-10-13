@@ -94,7 +94,7 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
 
     // hardware-safe dry-run evidence: the script must be exactly what the
     // ring-1 tests pinned (op order + quoting), against a real userspace
-    assert!(script.contains("opkg install 'sqm-scripts'"));
+    assert!(script.contains("apk add 'sqm-scripts'"));
 
     let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
     assert!(outcome.applied, "script must exit 0 on the VM");

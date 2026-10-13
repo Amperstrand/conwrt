@@ -567,10 +567,12 @@ pub fn render_shell(plan: &Plan) -> String {
         match op {
             PlanOp::EnsurePackage { name } => {
                 script.push_str(&format!("# install package {name}\n"));
+                // 1.x apk-aware shape (a11bfd6) + index self-heal: a fresh
+                // 25.x boot may lack the apk adb index until `apk update`.
                 script.push_str(&format!(
-                    "opkg install {} 2>/dev/null || apk add {}\n\n",
-                    shell_quote(name),
-                    shell_quote(name)
+                    "if command -v apk >/dev/null 2>&1; then apk add {q} || {{ apk update \
+&& apk add {q}; }}; else opkg update && opkg install {q}; fi\n\n",
+                    q = shell_quote(name)
                 ));
             }
             PlanOp::ClearUciSections {
@@ -878,7 +880,10 @@ mod tests {
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains("set -e"));
         // package install covers both package managers
-        assert!(script.contains("opkg install 'sqm-scripts' 2>/dev/null || apk add 'sqm-scripts'"));
+        assert!(script.contains(
+            "if command -v apk >/dev/null 2>&1; then apk add 'sqm-scripts' || { apk update"
+        ));
+        assert!(script.contains("opkg update && opkg install 'sqm-scripts'; fi"));
         // clear-sections idiom, 1.x style
         assert!(script.contains("uci -q show sqm 2>/dev/null | grep '=queue'"));
         // device resolution sets the var the section later references
