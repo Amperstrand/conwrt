@@ -1,0 +1,37 @@
+# conwrt operator configuration — EXAMPLE, copy to config.toml and edit.
+#
+# config.toml is gitignored on purpose (README privacy section): it can name
+# your keys, networks, and use-case credentials. This example shows the
+# recognized sections with placeholder values; see README for the full
+# option reference.
+
+[password]
+# "none" = key-only auth; "random" = generate and print once; or a literal.
+mode = "none"
+
+[network]
+# "static" keeps the model default; "keep" leaves the LAN IP untouched
+# (use when the address is managed externally).
+lan_ip_mode = "static"
+lan_ip = "192.168.1.1"
+
+[network.sta]
+# WiFi WAN backhaul (band: 2.4ghz | 5ghz | 6ghz; encryption: psk2 | sae | none).
+# band = "5ghz"
+# ssid = "UpstreamNetwork"
+# encryption = "psk2"
+# key = "change-me"
+
+[use_cases]
+enabled = ["sqm"]
+
+[use_cases.sqm]
+download_kbps = 340000
+upload_kbps = 19000
+
+# Example provider-backed use case (see scripts/use_cases/vpn_providers/).
+# Credentials stay operator-private — never commit real values.
+# [use_cases.vpn-node]
+# provider = "nordvpn"
+# token_env = "NORDVPN_TOKEN"
+# region = "nl"
