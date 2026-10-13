@@ -38,6 +38,7 @@ class TestValidateArgs(TestCase):
             password=None,
             no_password=None,
             wan_ssh=None,
+            source_image=False,
         )
         defaults.update(kwargs)
         return argparse.Namespace(**defaults)
@@ -47,6 +48,27 @@ class TestValidateArgs(TestCase):
         result = _validate_args(args)
         assert result is not None
         assert "--image" in result or "--request-image" in result
+
+    def test_no_image_with_source_image_returns_none(self):
+        args = self._ns(source_image=True)
+        result = _validate_args(args)
+        assert result is None
+
+    def test_no_image_no_source_image_mentions_source_image(self):
+        args = self._ns(source_image=False)
+        result = _validate_args(args)
+        assert result is not None
+        assert "--source-image" in result
+
+    def test_namespace_without_source_image_attribute_errors(self):
+        # Backward compatibility: older callers without the attr still require
+        # an explicit image.
+        args = argparse.Namespace(
+            image=None, request_image=None, ssh_key=None,
+            password=None, no_password=None, wan_ssh=None,
+        )
+        result = _validate_args(args)
+        assert result is not None
 
     def test_both_image_and_request_image_returns_error(self):
         args = self._ns(image="fw.bin", request_image=True)

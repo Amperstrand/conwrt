@@ -44,7 +44,10 @@ import importlib
 _router_fingerprint = importlib.import_module("router-fingerprint")
 fingerprint_router = _router_fingerprint.fingerprint_router
 
-from platform_utils import detect_platform, check_external_deps, remove_interface_ip
+from platform_utils import (
+    detect_platform, check_external_deps, remove_interface_ip,
+    remove_host_route, suspend_wifi, restore_wifi,
+)
 from flash.preflight import run_preflight_checks
 
 from conwrt.extreme import (
@@ -60,6 +63,7 @@ from conwrt.extreme import (
 from conwrt.flash_utils import (
     _flash_via_sysupgrade, _flash_via_mtd_write,
     _wait_for_sysupgrade_reboot, _find_model_id_by_board, _detect_ssh_key_path,
+    _verify_device_identity,
 )
 
 from conwrt.handlers_uboot import (
@@ -110,6 +114,8 @@ from conwrt.firmware import (
     _request_custom_image,
 )
 
+from conwrt.image_source import fetch_image as _fetch_image
+
 from conwrt.device_inventory import _print_timeline, _record_inventory, auto_detect_interface
 from conwrt.cli import _build_parser
 
@@ -145,13 +151,30 @@ def _zycast_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> No
         zycast_proc.terminate()
 
 
+def _uboot_cleanup(ctx: RecoveryContext, profile: object, interface: str) -> None:
+    """Tear down the U-Boot recovery network shims.
+
+    The recovery IP is usually a subnet the operator also uses elsewhere (e.g.
+    a 192.168.1.0/24 upstream). Leaving the /32 host route in place would
+    hijack that address on the host after the flash, so remove it (and the
+    recovery-side client alias once the device has moved to another subnet).
+    """
+    recovery_ip = getattr(profile, "recovery_ip", "")
+    if recovery_ip:
+        remove_host_route(interface, recovery_ip)
+    final_ip = getattr(profile, "openwrt_ip", "") or recovery_ip
+    client_ip = getattr(profile, "client_ip", "")
+    if client_ip and final_ip and client_ip.rsplit(".", 1)[0] != final_ip.rsplit(".", 1)[0]:
+        remove_interface_ip(interface, client_ip, "24")
+
+
 FLASH_MODES: dict[str, FlashModeConfig] = {
     "sysupgrade": FlashModeConfig(State.SYSUPGRADE_UPLOADING, pcap_enabled=False),
     "edgeos": FlashModeConfig(State.EDGEOS_STAGE1, pcap_enabled=False),
     "extreme": FlashModeConfig(State.EXTREME_STOCK_PREFLIGHT, pcap_enabled=False, cleanup=_extreme_cleanup),
     "serial": FlashModeConfig(State.SERIAL_WAITING_FOR_BOOTMENU, has_monitors=False, cleanup=_serial_cleanup),
     "zycast": FlashModeConfig(State.ZYCAST_WAITING_FOR_DEVICE, cleanup=_zycast_cleanup),
-    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True),
+    "uboot": FlashModeConfig(State.WAITING_FOR_POWER_OFF, setup_interface=True, cleanup=_uboot_cleanup),
 }
 
 
@@ -260,9 +283,9 @@ def _run_state_machine(
         if ctx.no_upload:
             return 0
         cfg = _load_config()
-        openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+        device_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or ctx.profile.recovery_ip
         openwrt_ip = _apply_profile_post_flash(
-            openwrt_ip,
+            device_ip,
             ssh_key=ctx.ssh_key_path,
             cfg=cfg,
             model_id=ctx.profile.name,
@@ -273,8 +296,10 @@ def _run_state_machine(
             log("  ⚠ Post-flash profile application failed (no IP). Aborting post-flash chain.")
             _restore_port_isolation(ctx)
             return 1
-        if openwrt_ip != (ctx.profile.openwrt_ip or ctx.profile.recovery_ip):
-            ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
+        # Always sync the profile to the address the device answers at now —
+        # with --ip + sysupgrade -n the pre-flash override is stale, and
+        # _record_inventory fingerprints profile.openwrt_ip.
+        ctx.profile = SimpleNamespace(**{**vars(ctx.profile), "openwrt_ip": openwrt_ip})
         _apply_sticker_credentials_post_flash(
             openwrt_ip, ssh_key=ctx.ssh_key_path,
             model_id=ctx.profile.name, cfg=cfg,
@@ -373,7 +398,7 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 
 
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
-    openwrt_ip = ctx.profile.openwrt_ip or DEFAULT_IP
+    openwrt_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
     reboot_seen = _wait_for_sysupgrade_reboot(openwrt_ip)
     drain_serial_milestones(event_queue, ctx)
@@ -504,7 +529,8 @@ def cmd_flash(args: argparse.Namespace) -> int:
     ssh_key_path = _detect_ssh_key_path()
 
     if not args.model_id:
-        for probe_ip in PROBE_IPS:
+        probe_targets = ([args.ip] if getattr(args, "ip", None) else []) + PROBE_IPS
+        for probe_ip in probe_targets:
             fp = fingerprint_router(probe_ip)
             if fp:
                 board = fp.get("identity", {}).get("board", "")
@@ -516,7 +542,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                         break
 
         if not args.model_id:
-            for probe_ip in PROBE_IPS:
+            for probe_ip in probe_targets:
                 log(f"Active fingerprinting {probe_ip}...")
                 fp_result = _active_fingerprint(probe_ip, timeout=5.0)
                 if fp_result.candidates:
@@ -559,6 +585,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
                   f"Use --serial-method to select one.", file=sys.stderr)
             return 1
 
+    model_default_ip = profile.openwrt_ip
     if getattr(args, "ip", None):
         profile = SimpleNamespace(**{**vars(profile), "openwrt_ip": args.ip, "recovery_ip": args.ip})
         log(f"Router IP overridden via --ip: {args.ip}")
@@ -571,6 +598,19 @@ def cmd_flash(args: argparse.Namespace) -> int:
     else:
         boot_state = _detect_boot_state("", profile)
         use_sysupgrade = boot_state == "openwrt" and not args.force_uboot
+
+    if getattr(args, "ip", None) and use_sysupgrade:
+        # sysupgrade -n (and mtd write) wipe the configured LAN address: the
+        # device comes back at the model default, not at --ip. Only a
+        # --keep-config sysupgrade retains the override address across reboot.
+        keeps_settings = bool(getattr(args, "keep_config", False)) and profile.flash_method != "mtd-write"
+        post_flash_ip = args.ip if keeps_settings else model_default_ip
+        profile = SimpleNamespace(**{**vars(profile), "post_flash_ip": post_flash_ip})
+        if keeps_settings:
+            log(f"Post-flash address: {post_flash_ip} (settings kept)")
+        else:
+            log(f"Post-flash address: {post_flash_ip} (sysupgrade resets config — "
+                f"--ip {args.ip} applies to this flash only)")
 
     generated_password = ""
     password_set = False
@@ -630,8 +670,25 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if args.initramfs:
         request_metadata["initramfs_path"] = args.initramfs
 
+    # Source the vanilla OpenWrt image for the resolved model when the operator
+    # supplied neither a local image nor an ASU request. This is the recovery
+    # path: the device is not running OpenWrt, so no ASU build is meaningful.
+    if not image_path and getattr(args, "source_image", True):
+        try:
+            _say_fn("Sourcing vanilla OpenWrt image...")
+            image_path = _fetch_image(
+                args.model_id,
+                release=getattr(args, "release", None),
+                suffix=getattr(args, "image_suffix", None),
+                log_fn=log,
+            )
+            log(f"Sourced image: {image_path}")
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            log(f"Image sourcing failed: {e}")
+            image_path = ""
+
     if not image_path:
-        parser.error("One of --image or --request-image is required.")
+        parser.error("One of --image, --request-image, or --source-image is required.")
 
     if not os.path.isfile(image_path):
         print(f"ERROR: image not found: {image_path}", file=sys.stderr)
@@ -738,8 +795,31 @@ def cmd_flash(args: argparse.Namespace) -> int:
         log("No running router detected at this IP (expected — device needs recovery)")
         print()
 
+    # AGENTS.md "Always Identify Before Flashing": with an --ip override we are
+    # about to sysupgrade whatever device answers there — verify its board
+    # identity (board.json + /tmp/sysinfo/board_name) matches the selected
+    # model first, and abort on any mismatch or unreadable identity.
+    if use_sysupgrade and getattr(args, "ip", None):
+        ok, detail = _verify_device_identity(openwrt_ip, args.model_id,
+                                             ssh_key_path or None)
+        if not ok:
+            print(f"ERROR: device identity check failed at {openwrt_ip}: {detail}",
+                  file=sys.stderr)
+            print("Refusing to flash — --model-id does not match the device at "
+                  "the overridden --ip address (AGENTS.md: Always Identify "
+                  "Before Flashing).", file=sys.stderr)
+            return 1
+        log(f"  ✓ identity: {detail}")
+
     mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
     config = FLASH_MODES[mode]
+
+    # Bring up the recovery interface (client alias + /32 host route) BEFORE
+    # detecting the initial state. This runs after preflight (so the alias is
+    # not flagged as stale) and lets a device already sitting in U-Boot/web
+    # recovery be detected immediately instead of forcing an extra power cycle.
+    if config.setup_interface:
+        _setup_interface_ips(interface, profile)
 
     initial_state = _resolve_initial_state(mode, profile, boot_state, interface=interface)
 
@@ -788,36 +868,48 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if mode == "zycast":
         log(f"Flash path: zycast multicast ({profile.zycast_multicast_group}:{profile.zycast_multicast_port})")
 
-    if config.has_monitors:
-        if config.setup_interface:
-            _setup_interface_ips(interface, profile)
+    # Optional: temporarily disable host WiFi so a shared subnet (e.g. host
+    # WiFi and the recovery address both on 192.168.1.0/24) cannot steal
+    # recovery traffic. Restored in the finally block below.
+    wifi_token = ""
+    if getattr(args, "suspend_wifi", False):
+        wifi_token = suspend_wifi()
+        if wifi_token:
+            log("Suspended host WiFi for recovery (will restore afterwards).")
+        else:
+            log("Note: --suspend-wifi requested but no supported WiFi control was found.")
 
-        say_label = {
-            "sysupgrade": "sysupgrade recovery",
-            "edgeos": "edgeos-kernel-swap flash",
-            "extreme": "extreme stock flash",
-            "zycast": "multicast recovery",
-        }.get(mode, "recovery. Listen for instructions")
-        _say_fn(f"Starting {profile.description} {say_label}.")
+    rc = 1
+    try:
+        if config.has_monitors:
+            say_label = {
+                "sysupgrade": "sysupgrade recovery",
+                "edgeos": "edgeos-kernel-swap flash",
+                "extreme": "extreme stock flash",
+                "zycast": "multicast recovery",
+            }.get(mode, "recovery. Listen for instructions")
+            _say_fn(f"Starting {profile.description} {say_label}.")
 
-        with monitor_lifecycle(
-            interface, event_queue, pcap_path, profile, args,
-            pcap_enabled=config.pcap_enabled,
-        ) as (pcap, link):
+            with monitor_lifecycle(
+                interface, event_queue, pcap_path, profile, args,
+                pcap_enabled=config.pcap_enabled,
+            ) as (pcap, link):
+                try:
+                    rc = _run_state_machine(ctx, event_queue, pcap, link)
+                except KeyboardInterrupt:
+                    log("Interrupted by user.")
+                    rc = 1
+        else:
+            _say_fn(f"Starting {profile.description} serial recovery.")
             try:
-                rc = _run_state_machine(ctx, event_queue, pcap, link)
+                rc = _run_state_machine(ctx, event_queue, None, None)
             except KeyboardInterrupt:
                 log("Interrupted by user.")
                 rc = 1
-    else:
-        _say_fn(f"Starting {profile.description} serial recovery.")
-        try:
-            rc = _run_state_machine(ctx, event_queue, None, None)
-        except KeyboardInterrupt:
-            log("Interrupted by user.")
-            rc = 1
-
-    if config.cleanup:
-        config.cleanup(ctx, profile, interface)
+    finally:
+        if wifi_token:
+            restore_wifi(wifi_token)
+        if config.cleanup:
+            config.cleanup(ctx, profile, interface)
 
     return rc

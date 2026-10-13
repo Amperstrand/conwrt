@@ -190,7 +190,7 @@ class RecoveryContext:
         log(f"SUCCESS — {message}")
         if verify_fn is not None:
             verify_fn(
-                self.profile.openwrt_ip or self.profile.recovery_ip,
+                getattr(self.profile, "post_flash_ip", "") or self.profile.openwrt_ip or self.profile.recovery_ip,
                 wan_ssh_expected=self.wan_ssh_enabled,
                 mgmt_wifi_expected=bool(self.defaults_script),
             )
@@ -276,6 +276,23 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def md5_file(path: str) -> str:
+    """MD5 of a local file, to compare against a bootloader-reported MD5.
+
+    U-Boot's web failsafe returns an MD5 for the uploaded image (not SHA-256,
+    which BusyBox/OpenWrt uses on-device). This mirrors the bootloader's hash so
+    a truncated or corrupted upload can be rejected before triggering the flash.
+    """
+    h = hashlib.md5()
+    with open(str(path), "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 1.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -285,6 +302,9 @@ def poll_until(predicate: Callable[[], bool], timeout: float, interval: float = 
     return False
 
 
+# Empty-queue poll cadence inside wait_for_event. Module constant so tests
+# can shrink it (real 1s polls dominate unit-test wall time otherwise).
+EVENT_POLL_INTERVAL = 1.0
 def apply_serial_milestone(ctx: RecoveryContext, event: Event, event_ts: float) -> None:
     """Record a --serial boot milestone on the timeline.
 
@@ -338,7 +358,7 @@ def wait_for_event(
     start = ts()
     while ts() - start < timeout:
         try:
-            event, event_ts, detail = eq.get(timeout=1.0)
+            event, event_ts, detail = eq.get(timeout=EVENT_POLL_INTERVAL)
 
             if event in target_events:
                 if success_state is not None:

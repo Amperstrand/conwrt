@@ -20,6 +20,11 @@ _ANDROID_PKGS = [
     "kmod-usb-net",
     "kmod-usb-net-rndis",
     "kmod-usb-net-cdc-ether",
+    # Modern Android (Pixel 10 / Android 15+) exposes USB tethering via
+    # CDC-NCM (class 0x02/0x0a), NOT RNDIS — without cdc_ncm the kernel
+    # cannot bind to the phone's network interface at all (field-tested
+    # 2026-10-01, conwrt-bench#46).
+    "kmod-usb-net-cdc-ncm",
     "kmod-usb2",
     "usbutils",
 ]
@@ -40,7 +45,7 @@ _ADB_PKG = ["adb"]
 def _detect_usb_net_device(match_android: bool, match_ios: bool, timeout: int = 45) -> str:
     drivers = []
     if match_android:
-        drivers += ["rndis", "cdc_ether", "usbnet"]
+        drivers += ["rndis", "cdc_ether", "cdc_ncm", "usbnet"]
     if match_ios:
         drivers += ["ipheth"]
     driver_pattern = "\\|".join(drivers) if drivers else ""
@@ -101,7 +106,13 @@ def _start_usbmuxd() -> str:
 
 
 def _adb_hotplug_script() -> str:
-    return """\
+    # Two enablement methods, tried per USB bind with exponential backoff:
+    # 1. `svc usb setFunctions rndis` — works on Android <= 12 only
+    # 2. UI automation — Android 14+ rejects privileged tethering APIs from
+    #    plain adb shell (UID 2000, "Invalid UID range", conwrt-bench#46), but
+    #    uiautomator dump + input tap simulate a user toggling the switch and
+    #    work on Pixel 10 / Android 15. Sequence field-verified 2026-10-01.
+    return r"""\
 mkdir -p /etc/hotplug.d/usb
 cat > /etc/hotplug.d/usb/99-usb-tether-adb << 'HOTPLUG_EOF'
 [ "$ACTION" = "bind" ] || exit 0
@@ -111,7 +122,9 @@ HOME=/root
 export HOME
 command -v adb >/dev/null 2>&1 || exit 0
 DELAY=1
-for attempt in 1 2 3 4 5 6 7; do
+attempt=0
+while [ $attempt -lt 7 ]; do
+    attempt=$((attempt + 1))
     sleep $DELAY
     if ip addr show usb0 2>/dev/null | grep -q "inet "; then
         exit 0
@@ -121,8 +134,29 @@ for attempt in 1 2 3 4 5 6 7; do
         adb shell svc usb setFunctions rndis 2>/dev/null
         sleep 3
         if ip addr show usb0 2>/dev/null | grep -q "inet "; then
-            logger -t usb-tether "ADB enabled tethering (attempt $attempt)"
+            logger -t usb-tether "ADB svc enabled tethering (attempt $attempt)"
             exit 0
+        fi
+        adb shell input keyevent KEYCODE_WAKEUP 2>/dev/null
+        sleep 1
+        adb shell am start -a android.settings.TETHER_SETTINGS 2>/dev/null
+        sleep 3
+        adb shell uiautomator dump /sdcard/ui.xml 2>/dev/null
+        UI=$(adb shell cat /sdcard/ui.xml 2>/dev/null)
+        USB_ROW=$(echo "$UI" | grep -oE 'USB.tethering[^>]*bounds="\[[0-9]+,[0-9]+' | grep -oE '[0-9]+,[0-9]+' | head -1)
+        USB_Y=$(echo "$USB_ROW" | cut -d, -f2)
+        if [ -n "$USB_Y" ]; then
+            USB_Y_CENTER=$((USB_Y + 28))
+            SWITCH=$(echo "$UI" | grep -oE "Switch[^>]*bounds=\"\[[0-9]+,${USB_Y_CENTER}" | grep -oE '\[[0-9]+,' | grep -oE '[0-9]+' | head -1)
+            if [ -n "$SWITCH" ]; then
+                SWITCH_CENTER=$((SWITCH + 65))
+                adb shell input tap $SWITCH_CENTER $USB_Y_CENTER 2>/dev/null
+                sleep 3
+                if ip addr show usb0 2>/dev/null | grep -q "inet "; then
+                    logger -t usb-tether "ADB UI toggle enabled tethering (attempt $attempt)"
+                    exit 0
+                fi
+            fi
         fi
     fi
     DELAY=$((DELAY * 2))
@@ -207,7 +241,7 @@ register(UseCase(
     build_configure=lambda p: render_shell(_build_tether_ops(p)),
     build_configure_ops=_build_tether_ops,
     test_status="tested",
-    tested_notes="GL.iNet MT3000, Android RNDIS",
+    tested_notes="GL.iNet MT3000, Android RNDIS + CDC-NCM (Pixel 10)",
     requires_capabilities=["usb"],
 ))
 
@@ -225,13 +259,13 @@ register(UseCase(
 
 register(UseCase(
     name="tether-android-adb",
-    description="USB WAN from Android phone with ADB auto-enable. Confirm on phone, tethering activates automatically.",
+    description="USB WAN from Android phone with ADB auto-enable (legacy svc switch + Android 14+ UI-automation toggle). Confirm on phone, tethering activates automatically.",
     packages=_ANDROID_PKGS + _ADB_PKG,
     params=_IFACE_PARAM,
     build_configure=lambda p: render_shell(_build_tether_android_adb_ops(p)),
     build_configure_ops=_build_tether_android_adb_ops,
     test_status="tested",
-    tested_notes="GL.iNet MT3000",
+    tested_notes="GL.iNet MT3000, Pixel 10 (Android 15) via UI toggle",
     requires_capabilities=["usb"],
 ))
 

@@ -45,6 +45,7 @@ class TestHandleZycastWaitingDetectsMulticast(TestCase):
 
 
 class TestHandleZycastWaitingRecordsLinkUp(TestCase):
+    @patch("conwrt.handlers_zycast.WAIT_POLL_INTERVAL", 0.001)
     @patch("conwrt.handlers_zycast._drain_events")
     @patch("conwrt.handlers_zycast.ts", side_effect=[0, 0, 0, 0, 200])
     @patch("conwrt.handlers_zycast.log")
@@ -57,6 +58,7 @@ class TestHandleZycastWaitingRecordsLinkUp(TestCase):
 
 
 class TestHandleZycastWaitingRecordsPowerOff(TestCase):
+    @patch("conwrt.handlers_zycast.WAIT_POLL_INTERVAL", 0.001)
     @patch("conwrt.handlers_zycast._drain_events")
     @patch("conwrt.handlers_zycast.ts", side_effect=[0, 0, 0, 0, 200])
     @patch("conwrt.handlers_zycast.log")
@@ -141,6 +143,7 @@ class TestHandleZycastSendingException(TestCase):
 
 
 class TestHandleZycastSendingTimeoutTerminate(TestCase):
+    @patch("conwrt.handlers_zycast.SEND_POLL_INTERVAL", 0.001)
     @patch("conwrt.handlers_zycast.sha256_file", return_value="abc123")
     @patch("conwrt.handlers_zycast.log")
     @patch("conwrt.handlers_zycast.ts", side_effect=[0, 0, 0, 50, 150, 250, 260, 270, 280])

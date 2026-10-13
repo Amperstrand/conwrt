@@ -137,6 +137,13 @@ class TestResolveExtremeUbootValue(TestCase):
 # ===========================================================================
 
 class TestSetupInterfaceIps(TestCase):
+    def setUp(self):
+        # Host-route install shells out (sudo ip route); mock it so tests stay
+        # hardware-safe and don't touch the host routing table.
+        patcher = patch("conwrt.extreme.add_host_route", return_value=True)
+        self.mock_host_route = patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch("conwrt.extreme.configure_interface_ip")
     def test_calls_with_client_ip(self, mock_cfg):
         p = _make_profile(client_ip="10.0.0.1", openwrt_client_ip="")
@@ -162,6 +169,18 @@ class TestSetupInterfaceIps(TestCase):
         p = _make_profile(client_ip="", openwrt_client_ip="10.0.0.2")
         _setup_interface_ips("en0", p)
         mock_cfg.assert_called_once_with("en0", "10.0.0.2", "24")
+
+    @patch("conwrt.extreme.configure_interface_ip")
+    def test_adds_host_route_for_recovery_ip(self, mock_cfg):
+        p = _make_profile(recovery_ip="192.168.0.1")
+        _setup_interface_ips("en0", p)
+        self.mock_host_route.assert_called_once_with("en0", "192.168.0.1")
+
+    @patch("conwrt.extreme.configure_interface_ip")
+    def test_no_host_route_without_recovery_ip(self, mock_cfg):
+        p = _make_profile(recovery_ip="")
+        _setup_interface_ips("en0", p)
+        self.mock_host_route.assert_not_called()
 
 
 # ===========================================================================

@@ -38,10 +38,41 @@ Useful targets:
 | `make validate-models` | Validate every `models/*.json` against `schemas/model.schema.json` | Yes |
 | `make test` | Python unit tests plus the existing smoke test | Yes |
 | `make ci` | lint + typecheck + schemas + models + tests | Yes |
+| `make rust-ci` | Rust workspace: fmt + clippy + tests + `no_std` cross-check (`crates/`, `apps/`) | Yes |
 | `make ipk` | Build conwrt as an arch-independent OpenWrt ipk package | Yes |
 | `make integration` | Full QEMU OpenWrt VM suite incl. a real `conwrt flash` sysupgrade lifecycle | Yes (local VM) |
 | `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
 | `make e2e` | Tests against a physical router (needs `CONWRT_DEVICE_IP`) | No — real device |
+
+Device flashing targets (these mutate real hardware):
+
+| Target | What it does |
+|--------|--------------|
+| `make detect` | Auto-detect the connected router (non-interactive) |
+| `make flash` | Source the right vanilla OpenWrt image for the connected router and flash it |
+| `make flash-uboot` | Force U-Boot recovery flash (enter U-Boot, then run; pass `MODEL=` for non-SSH recovery) |
+| `make source-image` | Download + verify the vanilla OpenWrt image only (`MODEL=`, optional `RELEASE=`, `ARGS=--image-suffix ...`) |
+| `make recovery` | Generic recovery flash for any model: probe the recovery web server, then `conwrt flash` (`MODEL=`, optional `IFACE=`) |
+
+```bash
+make source-image MODEL=glinet-mt3000 RELEASE=24.10.2   # cache + verify only
+make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6       # any model, recovery mode
+```
+
+The recovery helper (`scripts/flash-recovery.sh`) is model-agnostic: it reads
+the model's recovery IP from `models/`, briefly configures the wired NIC to
+probe the bootloader web server (**aborting if it isn't there**), then runs
+`conwrt flash`. Models without an HTTP recovery address skip the probe.
+
+Device configuration targets (these mutate real hardware):
+
+| Target | What it does |
+|--------|--------------|
+| `make sta` | Connect the router to an upstream WiFi AP as a client (`SSID=`, `KEY=`, optional `BAND=`, `ENCRYPTION=`, `IP=`) |
+
+```bash
+make sta SSID=StarGate KEY=passphrase BAND=2.4ghz       # WiFi WAN backhaul
+```
 
 ### Local test layers (nothing leaves your machine)
 
@@ -58,6 +89,17 @@ preparation. The VM fixture boots a per-session qcow2 overlay over a pristine
 base, so every run starts from clean state. A full integration run including
 the flash lifecycle takes ~7 minutes.
 
+### Conwrt 2.0 (Rust foundation)
+
+A portable Rust implementation is growing beside the Python code
+(strangler-fig migration — no 1.x disruption). The M1 slice lives in
+`crates/` + `apps/`: shared domain types that parse and validate the same
+`models/*.json`, capability traits with a mock provider, a read-only
+boot-state diagnostic workflow, and a `conwrt` CLI (`models`, `identify`,
+`probe --scenario`). Design: [docs/architecture/conwrt-2.0-overview.md](docs/architecture/conwrt-2.0-overview.md),
+decisions in [docs/adr/](docs/adr/), plan in [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md).
+Run `make rust-ci` (hardware-safe).
+
 Related knobs:
 
 - `CONWRT_CONFIG=/path/to/config.toml` — override the repo-root config for any
@@ -66,6 +108,10 @@ Related knobs:
   untouched; useful when the address is managed externally.
 - `conwrt flash --keep-config` — sysupgrade without `-n`: settings and SSH
   keys survive the upgrade. `conwrt flash --ip <addr>` targets a device at a
+  non-default address (e.g. after a LAN move). Without `--keep-config` the
+  override applies to the pre-flash connection only: `sysupgrade -n` resets
+  the device to the model's default address, which is where conwrt polls,
+  verifies, and records inventory after the flash.
   non-default address (e.g. after a LAN move).
 - `CONWRT_BENCH=direct|labgrid` — one-shot bench-backend override for the
   `scripts/bench_*.py` tools (direct is the default; see
@@ -252,6 +298,28 @@ Use cases and packages are defined once in `scripts/use_cases/` and applied via 
 python3 scripts/conwrt.py list
 ```
 
+### Source the vanilla OpenWrt image for a model
+
+Download + SHA-256 verify the stock OpenWrt image (into the gitignored
+`images/` cache) without flashing. This is what `conwrt flash` uses
+automatically when neither `--image` nor `--request-image` is given.
+
+```bash
+python3 scripts/conwrt.py image --model-id glinet-mt3000
+python3 scripts/conwrt.py image --model-id glinet-mt3000 --release 25.12.5
+python3 scripts/conwrt.py image --model-id dlink-covr-x1860-a1          # model's image_suffix (factory)
+python3 scripts/conwrt.py image --model-id glinet-mt3000 --image-suffix squashfs-factory.bin
+```
+
+The **release** comes from `openwrt.release` in the model (falling back to the
+repo default); override with `--release` / `CONWRT_OPENWRT_RELEASE`.
+
+The **image flavour** comes from `openwrt.image_suffix` in the model (e.g.
+`squashfs-factory.bin` for OEM web recovery, `initramfs-kernel.bin`,
+`squashfs-sysupgrade.bin`), defaulting to `squashfs-sysupgrade.bin`; override
+with `--image-suffix` / `CONWRT_IMAGE_SUFFIX`. This is what lets one code path
+source the correct artefact for GL.iNet, D-Link, and other devices alike.
+
 ### Manage cached firmware
 
 ```bash
@@ -285,6 +353,10 @@ python3 scripts/router-fingerprint.py --ip 192.168.1.1 --output fingerprint.json
 | `--model-id ID` | Model ID from models/ (auto-detected if device is running OpenWrt) |
 | `--image PATH` | Path to firmware image |
 | `--request-image` | Request custom image from ASU with baked-in settings |
+| `--source-image` / `--no-source-image` | Download the vanilla OpenWrt image for the model when neither `--image` nor `--request-image` is given (default: on) |
+| `--release VERSION` | OpenWrt release for `--source-image` (e.g. `24.10.2`); defaults to `openwrt.release` in the model |
+| `--image-suffix SUFFIX` | Vanilla image flavour for `--source-image` (e.g. `squashfs-factory.bin`); defaults to `openwrt.image_suffix`, then `squashfs-sysupgrade.bin` |
+| `--suspend-wifi` | Temporarily disable host WiFi during U-Boot recovery to avoid subnet collisions (restored afterwards) |
 | `--ssh-key PATH` | SSH public key to embed (auto-detected: id_ed25519.pub or id_rsa.pub) |
 | `--password PASS` | Set root password (default: random, printed once, saved in inventory) |
 | `--no-password` | Skip password, key-only auth |
@@ -490,6 +562,23 @@ conwrt automatically configures WiFi after flashing based on `[network.sta]` and
 2. **ASU first-boot** (via `--request-image`): The same uci commands are baked into the firmware's first-boot script, so WiFi is configured before first SSH.
 
 Both flows use the same radio detection logic — iterate `radio0..radio3`, check `band` option, match to the configured band.
+
+### Quick STA connect (no config.toml edit)
+
+Point a running router at an upstream AP directly from the CLI or make:
+
+```bash
+make sta SSID=StarGate KEY=passphrase BAND=2.4ghz IP=192.168.1.1
+# equivalently:
+python3 scripts/conwrt.py configure --ip 192.168.1.1 \
+  --sta-ssid StarGate --sta-key passphrase --sta-band 2.4ghz
+```
+
+This creates the `wwan` interface (DHCP, added to the `wan` firewall zone),
+switches the chosen band's radio to client mode, and connects. `--sta-band`
+defaults to `[network.sta].band` or `2.4ghz`; `--sta-encryption` defaults to
+`psk2` (use `sae` for WPA3, `none` for open). The other radio keeps serving the
+local AP.
 
 ### Example: WiFi WAN backhaul
 

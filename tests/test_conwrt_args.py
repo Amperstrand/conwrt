@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import py_compile
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -16,6 +17,27 @@ def test_conwrt_script_compiles() -> None:
 
 def test_firmware_manager_script_compiles() -> None:
     py_compile.compile(str(ROOT / "scripts" / "firmware-manager.py"), doraise=True)
+
+
+def test_shim_propagates_nonzero_exit_code() -> None:
+    # scripts/conwrt.py must surface the flasher's exit code (a silent rc=0 on
+    # failure makes wrappers report a bogus success).
+    shim = ROOT / "scripts" / "conwrt.py"
+    r = subprocess.run(
+        [sys.executable, str(shim), "flash", "--model-id", "glinet-mt3000",
+         "--no-source-image"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode != 0, r.stdout + r.stderr
+
+
+def test_shim_returns_zero_on_version() -> None:
+    shim = ROOT / "scripts" / "conwrt.py"
+    r = subprocess.run(
+        [sys.executable, str(shim), "--version"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 class TestFlashParser:

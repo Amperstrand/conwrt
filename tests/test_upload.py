@@ -7,11 +7,36 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from flash.upload import detect_uboot_http, upload_firmware, trigger_flash
+from flash.upload import detect_uboot_http, parse_uboot_response, upload_firmware, trigger_flash
 
 
 def _mock_run(stdout="", stderr="", returncode=0):
     return MagicMock(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+class TestParseUbootResponse(TestCase):
+    def test_parses_size_and_md5(self):
+        size, md5 = parse_uboot_response("5242880 d41d8cd98f00b204e9800998ecf8427e")
+        self.assertEqual(size, 5242880)
+        self.assertEqual(md5, "d41d8cd98f00b204e9800998ecf8427e")
+
+    def test_lowercases_md5(self):
+        _, md5 = parse_uboot_response("1024 ABCDEF0123456789ABCDEF0123456789")
+        self.assertEqual(md5, "abcdef0123456789abcdef0123456789")
+
+    def test_tolerates_surrounding_whitespace(self):
+        size, md5 = parse_uboot_response("  1024 abcdef0123456789abcdef0123456789\n")
+        self.assertEqual(size, 1024)
+        self.assertIsNotNone(md5)
+
+    def test_html_response_returns_none(self):
+        self.assertEqual(parse_uboot_response("<!DOCTYPE html><html>OK</html>"), (None, None))
+
+    def test_empty_returns_none(self):
+        self.assertEqual(parse_uboot_response(""), (None, None))
+
+    def test_wrong_hash_length_returns_none(self):
+        self.assertEqual(parse_uboot_response("1024 abc123"), (None, None))
 
 
 class TestDetectUbootHttp(TestCase):

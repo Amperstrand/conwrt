@@ -55,6 +55,10 @@ def _make_configure_args(**overrides):
         transport="ssh",
         ubus_user="root",
         ubus_password="",
+        sta_ssid=None,
+        sta_key=None,
+        sta_band=None,
+        sta_encryption=None,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -1095,3 +1099,87 @@ class TestCmdProfilePlan:
 
         # build_plan(cfg, mode=..., model_capabilities=...)
         assert mock_build.call_args.args[0] is cfg
+
+
+# ---------------------------------------------------------------------------
+# commands_configure._sta_config_from_args / --sta-* wiring
+# ---------------------------------------------------------------------------
+
+
+class TestStaConfigFromArgs:
+    def test_none_without_sta_ssid(self):
+        from conwrt.commands_configure import _sta_config_from_args
+        assert _sta_config_from_args(_make_configure_args(), _make_cfg()) is None
+
+    def test_builds_from_flags(self):
+        from conwrt.commands_configure import _sta_config_from_args
+        sta = _sta_config_from_args(
+            _make_configure_args(sta_ssid="Up", sta_key="pw",
+                                 sta_band="5ghz", sta_encryption="sae"),
+            _make_cfg(),
+        )
+        assert (sta.ssid, sta.key, sta.band, sta.encryption) == ("Up", "pw", "5ghz", "sae")
+
+    def test_defaults_band_encryption(self):
+        from conwrt.commands_configure import _sta_config_from_args
+        sta = _sta_config_from_args(_make_configure_args(sta_ssid="Up"), _make_cfg())
+        assert sta.band == "2.4ghz"
+        assert sta.encryption == "psk2"
+        assert sta.key == ""
+
+    def test_falls_back_to_existing_config_values(self):
+        from config import WifiSTAConfig
+        from conwrt.commands_configure import _sta_config_from_args
+        cfg = _make_cfg(wifi_sta=WifiSTAConfig(band="5ghz", ssid="old",
+                                               encryption="sae", key="oldpw"))
+        sta = _sta_config_from_args(_make_configure_args(sta_ssid="new"), cfg)
+        assert (sta.ssid, sta.band, sta.encryption, sta.key) == ("new", "5ghz", "sae", "oldpw")
+
+
+class TestCmdConfigureStaOverride:
+    @patch("conwrt.commands_configure._record_configure_inventory")
+    @patch("conwrt.commands_configure._cfg_install_ssh_key")
+    @patch("conwrt.commands_configure._apply_profile_post_flash")
+    @patch("conwrt.commands_configure._resolve_configure_options")
+    @patch("conwrt.commands_configure._load_config")
+    @patch("conwrt.commands_configure.auto_detect_interface")
+    @patch("conwrt.commands_configure.log")
+    def test_sta_flags_override_cfg_passed_to_apply(
+        self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
+        mock_install, mock_record,
+    ):
+        from conwrt.commands_configure import cmd_configure
+        mock_load.return_value = _make_cfg()
+        mock_resolve.return_value = ("", "/k", "", "", False)
+        mock_iface.return_value = "en0"
+        mock_apply.return_value = "192.168.1.1"
+
+        cmd_configure(_make_configure_args(
+            dry_run=True, sta_ssid="StarGate", sta_key="secret", sta_band="5ghz"))
+
+        cfg_arg = mock_apply.call_args.kwargs["cfg"]
+        assert cfg_arg.wifi_sta is not None
+        assert cfg_arg.wifi_sta.ssid == "StarGate"
+        assert cfg_arg.wifi_sta.key == "secret"
+        assert cfg_arg.wifi_sta.band == "5ghz"
+
+    @patch("conwrt.commands_configure._record_configure_inventory")
+    @patch("conwrt.commands_configure._cfg_install_ssh_key")
+    @patch("conwrt.commands_configure._apply_profile_post_flash")
+    @patch("conwrt.commands_configure._resolve_configure_options")
+    @patch("conwrt.commands_configure._load_config")
+    @patch("conwrt.commands_configure.auto_detect_interface")
+    @patch("conwrt.commands_configure.log")
+    def test_no_sta_flags_leaves_cfg_untouched(
+        self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
+        mock_install, mock_record,
+    ):
+        from conwrt.commands_configure import cmd_configure
+        cfg = _make_cfg()
+        mock_load.return_value = cfg
+        mock_resolve.return_value = ("", "/k", "", "", False)
+        mock_iface.return_value = "en0"
+        mock_apply.return_value = "192.168.1.1"
+
+        cmd_configure(_make_configure_args(dry_run=True))
+        assert mock_apply.call_args.kwargs["cfg"] is cfg

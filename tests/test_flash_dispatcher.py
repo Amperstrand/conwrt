@@ -170,8 +170,8 @@ class TestFlashModes(TestCase):
     def test_zycast_cleanup_is_set(self):
         self.assertIsNotNone(self.modes["zycast"].cleanup)
 
-    def test_uboot_cleanup_is_none(self):
-        self.assertIsNone(self.modes["uboot"].cleanup)
+    def test_uboot_cleanup_is_set(self):
+        self.assertIsNotNone(self.modes["uboot"].cleanup)
 
     def test_sysupgrade_cleanup_is_none(self):
         self.assertIsNone(self.modes["sysupgrade"].cleanup)
@@ -310,6 +310,52 @@ class TestExtremeCleanup(TestCase):
         profile = _make_profile(openwrt_client_ip="192.168.1.2", client_ip="192.168.1.2")
         _extreme_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_not_called()
+
+
+# ===================================================================
+# _uboot_cleanup
+# ===================================================================
+
+class TestUbootCleanup(TestCase):
+    """Tests for _uboot_cleanup — must not leave the recovery host route behind."""
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_removes_recovery_host_route(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(recovery_ip="192.168.1.1")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_route.assert_called_once_with("en0", "192.168.1.1")
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.9.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_called_once_with("en0", "192.168.1.254", "24")
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.1.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_no_recovery_ip_skips_route(self, mock_route, mock_remove_ip):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(recovery_ip="")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_route.assert_not_called()
 
 
 # ===================================================================
@@ -748,6 +794,28 @@ class TestHandleSysupgradeBooting(TestCase):
         eq = queue.Queue()
         self.handler(ctx, eq)
         mock_wait.assert_called_once_with(DEFAULT_IP)
+
+    @patch("conwrt.flash_dispatcher.verify_router")
+    @patch("conwrt.flash_dispatcher._wait_for_sysupgrade_reboot", return_value=True)
+    def test_prefers_post_flash_ip_over_override(self, mock_wait, mock_verify):
+        """sysupgrade -n + --ip: poll the model default, not the pre-flash override."""
+        profile = _make_profile(openwrt_ip="10.0.0.5", post_flash_ip="192.168.1.1")
+        ctx = _make_ctx(state=State.SYSUPGRADE_BOOTING, profile=profile)
+        eq = queue.Queue()
+        self.handler(ctx, eq)
+        mock_wait.assert_called_once_with("192.168.1.1")
+        self.assertEqual(ctx.state, State.COMPLETE)
+
+    @patch("conwrt.flash_dispatcher.verify_router")
+    @patch("conwrt.flash_dispatcher._wait_for_sysupgrade_reboot", return_value=True)
+    def test_success_verifies_at_post_flash_ip(self, mock_wait, mock_verify):
+        """mark_success → verify_router targets the post-flash address."""
+        profile = _make_profile(openwrt_ip="10.0.0.5", post_flash_ip="192.168.1.1")
+        ctx = _make_ctx(state=State.SYSUPGRADE_BOOTING, profile=profile)
+        eq = queue.Queue()
+        self.handler(ctx, eq)
+        mock_verify.assert_called_once()
+        self.assertEqual(mock_verify.call_args[0][0], "192.168.1.1")
 
     @patch("conwrt.flash_dispatcher._wait_for_sysupgrade_reboot", return_value=False)
     def test_failure_calls_say_fn(self, mock_wait):
@@ -1220,6 +1288,52 @@ class TestRunStateMachine(TestCase):
         result = self.runner(ctx, eq, None, None)
         self.assertEqual(result, 0)
         self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.1")
+
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    @patch("conwrt.flash_dispatcher._record_inventory")
+    @patch("conwrt.flash_dispatcher._deploy_tollgate_post_flash")
+    @patch("conwrt.flash_dispatcher._register_wireguard_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_sticker_credentials_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_profile_post_flash")
+    @patch("conwrt.flash_dispatcher._load_config")
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    def test_postflash_chain_uses_post_flash_ip(self, mock_timeline, mock_config,
+                                                mock_apply, mock_sticker,
+                                                mock_wg, mock_tollgate,
+                                                mock_inv, mock_restore):
+        """sysupgrade -n + --ip: the post-flash chain SSHes to the model default."""
+        mock_config.return_value = MagicMock()
+        mock_apply.return_value = "192.168.1.1"
+        profile = _make_profile(openwrt_ip="10.0.0.5", post_flash_ip="192.168.1.1")
+        ctx = _make_ctx(state=State.COMPLETE, profile=profile)
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, None, None)
+        self.assertEqual(result, 0)
+        self.assertEqual(mock_apply.call_args[0][0], "192.168.1.1")
+
+    @patch("conwrt.flash_dispatcher._restore_port_isolation")
+    @patch("conwrt.flash_dispatcher._record_inventory")
+    @patch("conwrt.flash_dispatcher._deploy_tollgate_post_flash")
+    @patch("conwrt.flash_dispatcher._register_wireguard_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_sticker_credentials_post_flash")
+    @patch("conwrt.flash_dispatcher._apply_profile_post_flash")
+    @patch("conwrt.flash_dispatcher._load_config")
+    @patch("conwrt.flash_dispatcher._print_timeline")
+    def test_postflash_inventory_targets_actual_address(self, mock_timeline, mock_config,
+                                                        mock_apply, mock_sticker,
+                                                        mock_wg, mock_tollgate,
+                                                        mock_inv, mock_restore):
+        """sysupgrade -n + --ip: even when profile application keeps the address,
+        profile.openwrt_ip is synced so _record_inventory fingerprints where the
+        device actually is, not the stale pre-flash override."""
+        mock_config.return_value = MagicMock()
+        mock_apply.return_value = "192.168.1.1"  # unchanged from device_ip
+        profile = _make_profile(openwrt_ip="10.0.0.5", post_flash_ip="192.168.1.1")
+        ctx = _make_ctx(state=State.COMPLETE, profile=profile)
+        eq = queue.Queue()
+        result = self.runner(ctx, eq, None, None)
+        self.assertEqual(result, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "192.168.1.1")
 
 
 # ===================================================================

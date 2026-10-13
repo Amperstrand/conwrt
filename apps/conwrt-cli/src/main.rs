@@ -1,0 +1,722 @@
+//! # conwrt (Rust CLI)
+//!
+//! Thin frontend over the conwrt engine (ADR-0008). M1 surface is
+//! deliberately read-only and mock-backed:
+//!
+//! - `conwrt models validate` — validate the shared `models/*.json` corpus
+//!   (parity with `make validate-models`).
+//! - `conwrt identify --mac …` — OUI-prefix model identification.
+//! - `conwrt probe --scenario …` — run the diagnostic workflow against a
+//!   scripted mock provider (demonstrates the capability-provider swap;
+//!   local-std and remote providers arrive in M2/M3).
+//! - `conwrt plan --profile sqm …` — plan a desired-state profile for a
+//!   diagnosed device: typed, inspectable operations, verification intent,
+//!   and a hard refusal for anything but a confirmed OpenWrt identity
+//!   (I/O-free dry-run; the M7 executor applies plans later).
+
+use clap::{Parser, Subcommand, ValueEnum};
+use conwrt_core::mock::{MockProber, NamedScenario};
+use conwrt_core::plan::SqmProfile;
+use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
+use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
+use conwrt_local_std::fingerprint::fingerprint;
+use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
+use core::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+#[derive(Parser)]
+#[command(
+    name = "conwrt",
+    version,
+    about = "Router lifecycle framework (Conwrt 2.0 engine, M1 slice)",
+    disable_help_subcommand = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Validate device model JSON files against the model schema.
+    Models {
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+    /// Identify model candidates for a MAC address (OUI prefix match).
+    Identify {
+        /// MAC address, e.g. `94:83:C4:00:11:22`.
+        #[arg(long)]
+        mac: String,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+    /// Run the read-only diagnostic workflow against the local network
+    /// interfaces (real provider — Linux/macOS).
+    Diagnose {
+        /// Target address to probe.
+        #[arg(long)]
+        ip: IpAddr,
+        /// Interface used for carrier/ARP queries (e.g. enp5s0, en0).
+        #[arg(long)]
+        interface: Option<String>,
+        /// HTTP port to probe (80; override for OEM/recovery servers).
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
+        /// SSH port to probe for the identification banner (22).
+        #[arg(long, default_value_t = 22)]
+        ssh_port: u16,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+    /// Run the read-only diagnostic workflow against a scripted provider.
+    Probe {
+        /// Target address (used for reporting; the mock answers anything).
+        #[arg(long, default_value = "192.168.1.1")]
+        ip: IpAddr,
+        /// Which scripted scenario the mock provider answers with.
+        #[arg(long, default_value = "uboot")]
+        scenario: ScenarioChoice,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+    /// Apply a desired-state profile to a device over SSH. DRY-RUN by
+    /// default: prints the exact script. Mutating execution requires
+    /// --execute AND a fingerprint-confirmed OpenWrt identity.
+    Apply {
+        /// Desired-state profile to apply.
+        #[arg(long)]
+        profile: ProfileChoice,
+        /// Model to plan for (id from `conwrt models`).
+        #[arg(long)]
+        model_id: String,
+        /// Shaper download rate in Kbit/s (sqm).
+        #[arg(long)]
+        download_kbps: u32,
+        /// Shaper upload rate in Kbit/s (sqm).
+        #[arg(long)]
+        upload_kbps: u32,
+        /// UCI network name to shape (sqm).
+        #[arg(long, default_value = "wan")]
+        interface: String,
+        /// Target address of the device.
+        #[arg(long)]
+        ip: IpAddr,
+        /// SSH port.
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// Login user (OpenWrt default: root).
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Private key file for auth (omit to use password auth).
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Password for auth (ignored when --key is given).
+        #[arg(long, default_value = "")]
+        password: String,
+        /// Actually execute the mutating script (default is dry-run).
+        #[arg(long)]
+        execute: bool,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+    /// Fingerprint a device over SSH with authenticated, read-only evidence
+    /// (OpenWrt release, board name, hostname) — the confirming layer above
+    /// the passive probe: upgrades an unconfirmed `ssh-only` classification.
+    Fingerprint {
+        /// Target address of the device.
+        #[arg(long)]
+        ip: IpAddr,
+        /// SSH port.
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// Login user (OpenWrt default: root).
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Private key file for auth (omit to use password auth).
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Password for auth (ignored when --key is given).
+        #[arg(long, default_value = "")]
+        password: String,
+    },
+    Plan {
+        /// Desired-state profile to plan.
+        #[arg(long)]
+        profile: ProfileChoice,
+        /// Model to plan for (id from `conwrt models`).
+        #[arg(long)]
+        model_id: String,
+        /// Shaper download rate in Kbit/s (sqm).
+        #[arg(long)]
+        download_kbps: u32,
+        /// Shaper upload rate in Kbit/s (sqm).
+        #[arg(long)]
+        upload_kbps: u32,
+        /// UCI network name to shape (sqm).
+        #[arg(long, default_value = "wan")]
+        interface: String,
+        /// Target address (used for reporting; the mock answers anything).
+        #[arg(long, default_value = "192.168.1.1")]
+        ip: IpAddr,
+        /// Which scripted scenario the mock provider answers with.
+        #[arg(long, default_value = "openwrt")]
+        scenario: ScenarioChoice,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ScenarioChoice {
+    Off,
+    Unreachable,
+    Uboot,
+    Openwrt,
+    SshOnly,
+    Stock,
+}
+
+impl ScenarioChoice {
+    fn named(self) -> NamedScenario {
+        match self {
+            ScenarioChoice::Off => NamedScenario::Off,
+            ScenarioChoice::Unreachable => NamedScenario::Unreachable,
+            ScenarioChoice::Uboot => NamedScenario::UbootRecovery,
+            ScenarioChoice::Openwrt => NamedScenario::OpenWrt,
+            ScenarioChoice::SshOnly => NamedScenario::SshOnly,
+            ScenarioChoice::Stock => NamedScenario::StockVendor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ProfileChoice {
+    Sqm,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Models { dir } => cmd_models_validate(&dir),
+        Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
+        Command::Diagnose {
+            ip,
+            interface,
+            http_port,
+            ssh_port,
+            dir,
+        } => cmd_diagnose(ip, interface, http_port, ssh_port, &dir),
+        Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::Fingerprint {
+            ip,
+            port,
+            user,
+            key,
+            password,
+        } => cmd_fingerprint(ip, port, &user, key.as_deref(), &password),
+        Command::Apply {
+            profile,
+            model_id,
+            download_kbps,
+            upload_kbps,
+            interface,
+            ip,
+            port,
+            user,
+            key,
+            password,
+            execute,
+            dir,
+        } => cmd_apply(
+            profile,
+            &model_id,
+            download_kbps,
+            upload_kbps,
+            &interface,
+            ip,
+            port,
+            &user,
+            key.as_deref(),
+            &password,
+            execute,
+            &dir,
+        ),
+        Command::Plan {
+            profile,
+            model_id,
+            download_kbps,
+            upload_kbps,
+            interface,
+            ip,
+            scenario,
+            dir,
+        } => cmd_plan(
+            profile,
+            &model_id,
+            download_kbps,
+            upload_kbps,
+            &interface,
+            ip,
+            scenario,
+            &dir,
+        ),
+    }
+}
+
+fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf) {
+    match conwrt_types::registry::ModelRegistry::load_dir(dir) {
+        Ok((registry, invalid)) if invalid.is_empty() => (registry, dir.to_path_buf()),
+        Ok((_, invalid)) => {
+            eprintln!("invalid models in {}:", dir.display());
+            for bad in invalid {
+                eprintln!("  {}: {}", bad.path.display(), bad.problems.join("; "));
+            }
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn cmd_models_validate(dir: &Path) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    for model in registry.models() {
+        println!(
+            "ok   {} ({}) — {} flash method(s)",
+            model.id,
+            model.vendor,
+            model.flash_methods.as_ref().map_or(0, |m| m.len())
+        );
+    }
+    println!(
+        "\n{} model(s) valid in {}",
+        registry.models().len(),
+        dir.display()
+    );
+    ExitCode::SUCCESS
+}
+
+fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
+    let mac = match conwrt_types::MacAddress::parse(mac) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let (registry, _) = load_registry(dir);
+    let matches = conwrt_core::identify_by_mac(registry.models(), Some(&mac));
+    println!("MAC:      {}", mac);
+    println!("OUI:      {}", mac.oui());
+    if matches.is_empty() {
+        println!("candidates: (none — OUI not in the model corpus)");
+    } else {
+        for m in &matches {
+            println!(
+                "candidate: {} ({}, via {})",
+                m.model_id,
+                m.vendor,
+                m.kind.as_str()
+            );
+        }
+        println!(
+            "\nnote: OUI matches are candidates, not confirmations; \
+             board fingerprinting (M2) is the confirming layer"
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let mut prober = MockProber::responding(ip, scenario.named());
+    let diagnosis = match pollster::block_on(diagnose(&mut prober, ip, registry.models())) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("probe failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    print_diagnosis(&diagnosis);
+    println!("\n(provider: scripted mock — `conwrt diagnose` uses the local provider)");
+    ExitCode::SUCCESS
+}
+
+fn cmd_diagnose(
+    ip: IpAddr,
+    interface: Option<String>,
+    http_port: u16,
+    ssh_port: u16,
+    dir: &Path,
+) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let mut prober = match interface {
+        Some(iface) => conwrt_local_std::LocalProber::on_interface(iface),
+        None => conwrt_local_std::LocalProber::global(),
+    };
+    prober = prober.with_ports(http_port, ssh_port);
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("diagnose failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    print_diagnosis(&diagnosis);
+    println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    ExitCode::SUCCESS
+}
+
+fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
+    println!("target:     {}", diagnosis.ip);
+    if let Some(mac) = diagnosis.mac {
+        println!("MAC:        {mac}");
+    }
+    println!("state:      {}", diagnosis.state.as_str());
+    if !matches!(diagnosis.state, DeviceState::Off | DeviceState::Unreachable) {
+        println!(
+            "evidence:   ping={} http={} ssh={}",
+            diagnosis.evidence.ping,
+            diagnosis.evidence.http.is_some(),
+            diagnosis.evidence.ssh_banner.is_some(),
+        );
+    }
+    for note in &diagnosis.notes {
+        println!("note:       {note}");
+    }
+    if !diagnosis.model_candidates.is_empty() {
+        for m in &diagnosis.model_candidates {
+            println!("candidate:  {} ({})", m.model_id, m.vendor);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_plan(
+    profile: ProfileChoice,
+    model_id: &str,
+    download_kbps: u32,
+    upload_kbps: u32,
+    interface: &str,
+    ip: IpAddr,
+    scenario: ScenarioChoice,
+    dir: &Path,
+) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let model = match registry.models().iter().find(|m| m.id == model_id) {
+        Some(m) => m.clone(),
+        None => {
+            eprintln!("unknown model id {model_id:?} (see `conwrt models`)");
+            return ExitCode::from(2);
+        }
+    };
+    let mut prober = MockProber::responding(ip, scenario.named());
+    let diagnosis = match pollster::block_on(diagnose(&mut prober, ip, registry.models())) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("probe failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let profile = match profile {
+        ProfileChoice::Sqm => Profile::Sqm(SqmProfile {
+            download_kbps,
+            upload_kbps,
+            interface: interface.into(),
+            ..default_sqm()
+        }),
+    };
+    match plan_profile(&diagnosis.state, &model, &profile) {
+        Ok(plan) => {
+            println!("plan:     {} → model {}", plan.profile_id, plan.model_id);
+            println!(
+                "state:    {} (confirmed OpenWrt identity)",
+                diagnosis.state.as_str()
+            );
+            println!("\noperations:");
+            for (i, op) in plan.ops.iter().enumerate() {
+                let rendered = op.to_string();
+                let mut lines = rendered.lines();
+                println!("  {:>2}. {}", i + 1, lines.next().unwrap_or_default());
+                for line in lines {
+                    println!("      {line}");
+                }
+            }
+            println!("\nverification:");
+            for check in &plan.verification {
+                println!(
+                    "  ✓ {} — `{}` contains {:?}",
+                    check.description, check.command, check.expect_contains
+                );
+            }
+            println!("\n(dry-run: planning is I/O-free; the M7 executor applies and verifies)");
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            eprintln!("refused: {reason}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn default_sqm() -> SqmProfile {
+    SqmProfile {
+        download_kbps: 10_000,
+        upload_kbps: 5_000,
+        interface: "wan".into(),
+        qdisc: "cake".into(),
+        script: "piece_of_cake.qos".into(),
+        link_layer: "none".into(),
+        overhead: 0,
+    }
+}
+
+fn cmd_fingerprint(
+    ip: IpAddr,
+    port: u16,
+    user: &str,
+    key: Option<&Path>,
+    password: &str,
+) -> ExitCode {
+    let auth = match key {
+        Some(path) => SshAuth::KeyFile {
+            path: path.to_path_buf(),
+            passphrase: None,
+        },
+        None if !password.is_empty() => SshAuth::Password(password.to_string()),
+        None => {
+            eprintln!("provide --key <path> or --password <secret> for authentication");
+            return ExitCode::from(2);
+        }
+    };
+    let target = SshTarget {
+        addr: format!("{ip}:{port}"),
+        user: user.to_string(),
+        auth,
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut store = MemoryTrustStore::new();
+    let session = match runtime.block_on(connect(
+        &target,
+        &mut store,
+        &SshOptions {
+            mode: TrustMode::TrustOnFirstUse,
+            ..Default::default()
+        },
+    )) {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("connect failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("host key:   {}", session.presented_key.fingerprint);
+    let report = match runtime.block_on(fingerprint(&session)) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("fingerprint failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("target:     {ip}");
+    if let Some(release) = &report.release {
+        println!(
+            "release:    {}",
+            release.description.as_deref().unwrap_or("?")
+        );
+        println!("version:    {}", release.release.as_deref().unwrap_or("?"));
+        println!("target:     {}", release.target.as_deref().unwrap_or("?"));
+    }
+    if let Some(board) = &report.board_name {
+        println!("board_name: {board}");
+    }
+    if let Some(hostname) = &report.hostname {
+        println!("hostname:   {hostname}");
+    }
+    for note in &report.notes {
+        println!("note:       {note}");
+    }
+    let confirmed = confirm(DeviceState::SshOnly, report.release.as_ref());
+    println!(
+        "identity:   {}",
+        if confirmed == DeviceState::OpenWrt {
+            "OpenWrt CONFIRMED (authenticated /etc/openwrt_release)"
+        } else {
+            "OpenWrt NOT confirmed (no authenticated release evidence)"
+        }
+    );
+    ExitCode::SUCCESS
+}
+
+fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
+    match key {
+        Some(path) => Ok(SshAuth::KeyFile {
+            path: path.to_path_buf(),
+            passphrase: None,
+        }),
+        None if !password.is_empty() => Ok(SshAuth::Password(password.to_string())),
+        None => Err("provide --key <path> or --password <secret> for authentication".into()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_apply(
+    profile: ProfileChoice,
+    model_id: &str,
+    download_kbps: u32,
+    upload_kbps: u32,
+    interface: &str,
+    ip: IpAddr,
+    port: u16,
+    user: &str,
+    key: Option<&Path>,
+    password: &str,
+    execute: bool,
+    dir: &Path,
+) -> ExitCode {
+    let (registry, _) = load_registry(dir);
+    let model = match registry.models().iter().find(|m| m.id == model_id) {
+        Some(m) => m.clone(),
+        None => {
+            eprintln!("unknown model id {model_id:?} (see `conwrt models`)");
+            return ExitCode::from(2);
+        }
+    };
+    let profile = match profile {
+        ProfileChoice::Sqm => Profile::Sqm(SqmProfile {
+            download_kbps,
+            upload_kbps,
+            interface: interface.into(),
+            ..default_sqm()
+        }),
+    };
+
+    let auth = match ssh_auth(key, password) {
+        Ok(auth) => auth,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
+    };
+    let target = SshTarget {
+        addr: format!("{ip}:{port}"),
+        user: user.to_string(),
+        auth,
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut store = MemoryTrustStore::new();
+    let session = match runtime.block_on(connect(
+        &target,
+        &mut store,
+        &SshOptions {
+            mode: TrustMode::TrustOnFirstUse,
+            ..Default::default()
+        },
+    )) {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("connect failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("host key:   {}", session.presented_key.fingerprint);
+
+    let report = match runtime.block_on(fingerprint(&session)) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("fingerprint failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let confirmed = confirm(DeviceState::SshOnly, report.release.as_ref());
+    if confirmed != DeviceState::OpenWrt {
+        eprintln!(
+            "refused: {ip} has no fingerprint-confirmed OpenWrt identity \
+             (see `conwrt fingerprint`); refusing to apply a mutating plan"
+        );
+        return ExitCode::FAILURE;
+    }
+    if let Some(board) = &report.board_name {
+        if !board.is_empty() && *board != model.openwrt.device {
+            eprintln!(
+                "refused: board_name {board:?} does not match model {} target device {:?}",
+                model.id, model.openwrt.device
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let plan = match plan_profile(&confirmed, &model, &profile) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            eprintln!("planning refused: {reason}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "# plan: {} ops, {} verification checks",
+        plan.ops.len(),
+        plan.verification.len()
+    );
+    println!();
+    println!("{}", render_shell(&plan));
+
+    if !execute {
+        println!("# dry-run: no changes made. Re-run with --execute to apply.");
+        return ExitCode::SUCCESS;
+    }
+
+    eprintln!("# executing on {ip} ...");
+    match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
+        Ok(outcome) if outcome.fully_verified() => {
+            println!("applied:   script exit 0");
+            for check in &outcome.verification {
+                println!("verified:  ✓ {} (`{}`)", check.description, check.stdout);
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(outcome) => {
+            eprintln!(
+                "apply incomplete: applied={} — failing checks:",
+                outcome.applied
+            );
+            for check in outcome.verification.iter().filter(|c| !c.passed) {
+                eprintln!("  ✗ {}: got {:?}", check.description, check.stdout);
+            }
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("apply failed: {e}");
+            ExitCode::from(2)
+        }
+    }
+}

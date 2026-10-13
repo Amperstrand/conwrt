@@ -33,7 +33,7 @@ def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str) -
 
 
 def test_doh_configures_https_dns_proxy(openwrt_vm, ssh_cmd, tmp_path):
-    ssh_cmd("opkg update 2>/dev/null; opkg install https-dns-proxy 2>&1", timeout=120)
+    ssh_cmd("apk update >/dev/null 2>&1; apk add https-dns-proxy 2>&1", timeout=120)
 
     result = _run_conwrt_configure("""\
         [password]
@@ -103,7 +103,7 @@ def test_nodns_configures_local_cache(openwrt_vm, ssh_cmd, tmp_path):
 
 
 def test_multiple_use_cases_combined(openwrt_vm, ssh_cmd, tmp_path):
-    ssh_cmd("opkg update 2>/dev/null; opkg install https-dns-proxy 2>&1", timeout=120)
+    ssh_cmd("apk update >/dev/null 2>&1; apk add https-dns-proxy 2>&1", timeout=120)
 
     result = _run_conwrt_configure("""\
         [password]

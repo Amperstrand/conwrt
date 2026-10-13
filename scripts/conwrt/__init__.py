@@ -39,6 +39,7 @@ def main() -> int:
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
         "-h", "--help", "--version", "-V",
+        "probe", "flow", "lan-migrate", "image", "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
@@ -78,6 +79,7 @@ def main() -> int:
         "bench-doctor": ("bench_doctor", "cmd_bench_doctor"),
         "recovery-probe": ("conwrt.cmd_recovery_probe", "cmd_recovery_probe"),
         "boot-watch": ("conwrt.cmd_boot_watch", "cmd_boot_watch"),
+        "image": ("conwrt.cmd_image", "cmd_image"),
     }
 
     entry = _COMMAND_MAP.get(command)

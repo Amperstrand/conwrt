@@ -34,7 +34,7 @@ FLASH_SERIAL = REPO_ROOT / "tests" / "integration" / ".openwrt-flash-serial.log"
 
 FLASH_HOST = "127.0.0.2"   # distinct loopback address — cannot hijack a real device IP
 FLASH_PORT = 2223
-OPENWRT_VERSION = "24.10.2"
+OPENWRT_VERSION = "25.12.5"
 
 SSH_BASE = [
     "ssh", "-o", "StrictHostKeyChecking=no",
@@ -98,6 +98,10 @@ def flash_vm():
     )
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
+    # OpenWrt >= 24.10 x86_64 derives board_name from SMBIOS '<manufacturer>-<product>';
+    # without this pin it varies with the host's QEMU build. Must stay in sync with
+    # models/virtual-x86-64.json openwrt.board_names.
+    smbios_args = ["-smbios", "type=1,manufacturer=conwrt,product=conwrt-test-vm"]
     qemu_cmd = [
         "qemu-system-x86_64",
         "-drive", f"file={FLASH_OVERLAY},format=qcow2,if=virtio",
@@ -108,6 +112,7 @@ def flash_vm():
         "-serial", f"file:{FLASH_SERIAL}",
         "-pidfile", str(FLASH_PIDFILE),
         "-daemonize",
+        *smbios_args,
         *kvm_args,
     ]
     r = subprocess.run(qemu_cmd, capture_output=True, text=True, timeout=30)

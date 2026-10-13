@@ -77,6 +77,10 @@ def _make_args(**overrides):
         isolate_port=None,
         no_pcap=False,
         yes=False,
+        source_image=True,
+        release=None,
+        image_suffix=None,
+        suspend_wifi=False,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -132,6 +136,9 @@ class CmdFlashTestCase(TestCase):
             "load_model": patch("conwrt.flash_dispatcher.load_model", return_value={}),
             "_detect_boot_state": patch(
                 "conwrt.flash_dispatcher._detect_boot_state", return_value="openwrt"),
+            "_verify_device_identity": patch(
+                "conwrt.flash_dispatcher._verify_device_identity",
+                return_value=(True, "device identity 'board' matches model test-model")),
             "_request_custom_image": patch(
                 "conwrt.flash_dispatcher._request_custom_image", return_value=("", {})),
             "run_preflight_checks": patch(
@@ -151,6 +158,12 @@ class CmdFlashTestCase(TestCase):
             "_generate_random_password": patch(
                 "conwrt.flash_dispatcher._generate_random_password",
                 return_value="rand-pw"),
+            "_fetch_image": patch(
+                "conwrt.flash_dispatcher._fetch_image"),
+            "suspend_wifi": patch(
+                "conwrt.flash_dispatcher.suspend_wifi"),
+            "restore_wifi": patch(
+                "conwrt.flash_dispatcher.restore_wifi"),
         }
         self.mocks = {}
         for name, p in patches.items():
@@ -171,6 +184,7 @@ class CmdFlashTestCase(TestCase):
         os.close(fd)
         self.addCleanup(os.unlink, self.image_path)
         self.mocks["_build_profile_from_model"].return_value = _make_profile()
+        self.mocks["_fetch_image"].return_value = self.image_path
 
     def run_cmd_flash(self, args=None):
         from conwrt.flash_dispatcher import cmd_flash
@@ -245,6 +259,40 @@ class TestCmdFlashModelAutoDetect(CmdFlashTestCase):
     def test_no_autodetect_errors(self):
         with self.assertRaises(SystemExit):
             self.run_cmd_flash(_make_args(model_id=None))
+
+    def test_ip_override_probed_first_in_board_autodetect(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "10.0.0.9" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["fingerprint_router"].call_args_list[0][0][0], "10.0.0.9")
+        self.mocks["_build_profile_from_model"].assert_called_once_with(
+            "detected-model", serial_method="", flash_method="")
+
+    def test_ip_override_probed_first_in_active_fingerprint(self):
+        self.mocks["fingerprint_router"].return_value = None
+        self.mocks["_active_fingerprint"].side_effect = (
+            lambda ip, timeout=5.0: SimpleNamespace(
+                candidates=["c"] if ip == "10.0.0.9" else []))
+        self.mocks["_match_models"].return_value = [
+            SimpleNamespace(model_id="active-model", confidence=0.9, evidence=["mac"])]
+        rc = self.run_cmd_flash(_make_args(model_id=None, ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.mocks["_active_fingerprint"].call_args_list[0][0][0], "10.0.0.9")
+        build_args = self.mocks["_build_profile_from_model"].call_args[0]
+        self.assertEqual(build_args[0], "active-model")
+
+    def test_autodetect_without_ip_still_probes_defaults(self):
+        self.mocks["fingerprint_router"].side_effect = (
+            lambda ip: {"identity": {"board": "test-board,name"}} if ip == "192.168.0.1" else None)
+        self.mocks["_find_model_id_by_board"].return_value = "detected-model"
+        rc = self.run_cmd_flash(_make_args(model_id=None))
+        self.assertEqual(rc, 0)
+        # Probe loop covers PROBE_IPS in order (the trailing call is the
+        # post-detection fingerprint block, not part of the loop).
+        probed = [c[0][0] for c in self.mocks["fingerprint_router"].call_args_list]
+        self.assertEqual(probed[:2], ["192.168.1.1", "192.168.0.1"])
 
 
 class TestCmdFlashRequestImage(CmdFlashTestCase):
@@ -390,6 +438,20 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         ml_kwargs = self.mocks["monitor_lifecycle"].call_args.kwargs
         self.assertTrue(ml_kwargs["pcap_enabled"])
 
+    def test_recovery_interface_setup_runs_before_detection(self):
+        # A device already in U-Boot must be detected on the first probe, which
+        # requires the recovery interface/route to be up first.
+        order = []
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        self.mocks["_setup_interface_ips"].side_effect = lambda *a, **k: order.append("setup")
+        self.mocks["detect_uboot_http"].side_effect = (
+            lambda *a, **k: (order.append("detect"), (False, ""))[1])
+        self.captured_ctx()
+        self.run_cmd_flash()
+        self.assertIn("setup", order)
+        self.assertIn("detect", order)
+        self.assertLess(order.index("setup"), order.index("detect"))
+
     def test_force_uboot_overrides_openwrt(self):
         self.mocks["_detect_boot_state"].return_value = "openwrt"
         self.mocks["detect_uboot_http"].return_value = (True, "HTTP 200")
@@ -413,6 +475,65 @@ class TestCmdFlashModeResolution(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
         self.assertEqual(ctx.profile.recovery_ip, "10.0.0.9")
+
+    def test_ip_override_identity_mismatch_aborts_before_flash(self):
+        self.mocks["_verify_device_identity"].return_value = (
+            False, "device at 10.0.0.9 reports board 'other,device' which does not "
+            "match selected model 'test-model' — refusing to flash")
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 1)
+        self.mocks["_verify_device_identity"].assert_called_once_with(
+            "10.0.0.9", "test-model", "/tmp/key")
+        self.mocks["_run_state_machine"].assert_not_called()
+
+    def test_ip_override_identity_match_proceeds(self):
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_called_once()
+        self.mocks["_run_state_machine"].assert_called_once()
+
+    def test_identity_check_skipped_without_ip_override(self):
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
+
+    def test_identity_check_skipped_when_not_sysupgrade(self):
+        """--ip + --force-uboot: no live sysupgrade path ⇒ no identity gate."""
+        self.mocks["_detect_boot_state"].return_value = "unknown"
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", force_uboot=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_verify_device_identity"].assert_not_called()
+
+    def test_ip_override_reset_mode_expects_model_default_after_flash(self):
+        """--ip + sysupgrade -n: override for the flash, model default after."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_ip_override_keep_config_expects_override_after_flash(self):
+        """--ip + --keep-config sysupgrade: device retains the override address."""
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.openwrt_ip, "10.0.0.9")
+        self.assertEqual(ctx.profile.post_flash_ip, "10.0.0.9")
+
+    def test_ip_override_mtd_write_resets_even_with_keep_config(self):
+        """mtd write ignores keep_config — post-flash address is the model default."""
+        self.mocks["_build_profile_from_model"].return_value = _make_profile(
+            flash_method="mtd-write")
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(ip="10.0.0.9", keep_config=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(ctx.profile.post_flash_ip, "192.168.1.1")
+
+    def test_no_ip_override_sets_no_post_flash_ip(self):
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash()
+        self.assertEqual(rc, 0)
+        self.assertFalse(hasattr(ctx.profile, "post_flash_ip"))
 
     def test_state_machine_keyboard_interrupt_returns_1(self):
         self.mocks["_run_state_machine"].side_effect = KeyboardInterrupt
@@ -455,3 +576,73 @@ class TestCmdFlashFingerprintLog(CmdFlashTestCase):
         self.assertEqual(rc, 0)
         # br-lan MAC adopted as router_mac when not explicitly given
         self.assertEqual(args.router_mac, "AA:BB:CC:DD:EE:FF")
+
+
+class TestCmdFlashSourceImage(CmdFlashTestCase):
+    def test_explicit_image_skips_sourcing(self):
+        rc = self.run_cmd_flash(_make_args(image=self.image_path))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_not_called()
+
+    def test_sources_image_when_none_given(self):
+        ctx = self.captured_ctx()
+        rc = self.run_cmd_flash(_make_args(image=None, request_image=False))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_called_once()
+        self.assertEqual(self.mocks["_fetch_image"].call_args[0][0], "test-model")
+        # sourced path flows into the RecoveryContext
+        self.assertEqual(ctx.profile.name, "test-model")
+
+    def test_source_failure_errors(self):
+        self.mocks["_fetch_image"].side_effect = RuntimeError("no such image")
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(image=None, request_image=False))
+
+    def test_no_source_image_errors(self):
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(
+                image=None, request_image=False, source_image=False))
+
+    def test_release_passed_through(self):
+        self.run_cmd_flash(_make_args(image=None, request_image=False, release="25.12.5"))
+        self.assertEqual(
+            self.mocks["_fetch_image"].call_args.kwargs.get("release"), "25.12.5")
+
+    def test_image_suffix_passed_through(self):
+        self.run_cmd_flash(_make_args(
+            image=None, request_image=False, image_suffix="squashfs-factory.bin"))
+        self.assertEqual(
+            self.mocks["_fetch_image"].call_args.kwargs.get("suffix"), "squashfs-factory.bin")
+
+    def test_suspend_wifi_wraps_and_restores(self):
+        self.mocks["suspend_wifi"].return_value = "nmcli"
+        rc = self.run_cmd_flash(_make_args(suspend_wifi=True))
+        self.assertEqual(rc, 0)
+        self.mocks["suspend_wifi"].assert_called_once()
+        self.mocks["restore_wifi"].assert_called_once_with("nmcli")
+
+    def test_no_suspend_wifi_by_default(self):
+        self.run_cmd_flash(_make_args(suspend_wifi=False))
+        self.mocks["suspend_wifi"].assert_not_called()
+        self.mocks["restore_wifi"].assert_not_called()
+
+
+class TestCmdFlashRealValidation(CmdFlashTestCase):
+    """Exercise the real _validate_args (the patch in setUp is bypassed) so the
+    --source-image path is guarded end-to-end. Regression for the bug where
+    _validate_args rejected the no-image case before sourcing ran."""
+
+    def test_source_image_passes_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        rc = self.run_cmd_flash(_make_args(
+            image=None, request_image=False, source_image=True))
+        self.assertEqual(rc, 0)
+        self.mocks["_fetch_image"].assert_called_once()
+
+    def test_no_image_no_source_fails_real_validation(self):
+        from conwrt.infrastructure import _validate_args as real_validate
+        self.mocks["_validate_args"].side_effect = real_validate
+        with self.assertRaises(SystemExit):
+            self.run_cmd_flash(_make_args(
+                image=None, request_image=False, source_image=False))

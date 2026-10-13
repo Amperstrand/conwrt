@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e labgrid-check labgrid-test
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -69,15 +69,74 @@ commit-run: ## Commit redacted artifacts (wraps scripts/commit-run.sh)
 	@echo "Committing run artifacts..."
 	@$(SCRIPTS_DIR)/commit-run.sh $(ARGS)
 
-test: ## Run Python unit tests plus existing safe shell smoke test
-	@python3 -m pytest tests
-	@python3 -m pytest tests/integration/test_use_cases_dry_run.py -q
+##
+## Device flashing
+##
+
+detect: ## Auto-detect the connected router (non-interactive)
+	@echo "Auto-detecting connected router..."
+	@$(SCRIPTS_DIR)/conwrt.py auto --no-menu $(ARGS)
+
+flash: ## Source the right OpenWrt image for the connected router and flash it
+	@$(SCRIPTS_DIR)/conwrt.py flash $(if $(MODEL),--model-id $(MODEL),) $(ARGS)
+## Usage: make flash [MODEL=glinet-mt3000] [ARGS="--no-voice"]
+
+flash-uboot: ## Force U-Boot recovery flash (enter U-Boot, then run; MODEL= recommended)
+	@$(SCRIPTS_DIR)/conwrt.py flash --force-uboot $(if $(MODEL),--model-id $(MODEL),) $(ARGS)
+## Usage: make flash-uboot MODEL=glinet-mt3000
+
+source-image: ## Download + verify the vanilla OpenWrt image only (MODEL= required)
+	@if [ -z "$(MODEL)" ]; then \
+		echo "Usage: make source-image MODEL=glinet-mt3000 [RELEASE=24.10.2]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py image --model-id $(MODEL) $(if $(RELEASE),--release $(RELEASE),) $(ARGS)
+## Usage: make source-image MODEL=glinet-mt3000 RELEASE=24.10.2
+
+recovery: ## Flash a device in recovery mode for any model (MODEL=, optionally IFACE=)
+	@$(SCRIPTS_DIR)/flash-recovery.sh "$(MODEL)" "$(IFACE)"
+## Usage: make recovery MODEL=glinet-mt3000 IFACE=enp0s31f6
+
+##
+## Device configuration
+##
+
+sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, optional BAND=, ENCRYPTION=, IP=)
+	@if [ -z "$(SSID)" ]; then \
+		echo "Usage: make sta SSID=UpstreamNetwork KEY=passphrase [BAND=2.4ghz] [ENCRYPTION=psk2] [IP=192.168.1.1]"; \
+		exit 1; \
+	fi
+	@$(SCRIPTS_DIR)/conwrt.py configure --ip $(or $(IP),192.168.1.1) \
+		--sta-ssid "$(SSID)" \
+		$(if $(KEY),--sta-key "$(KEY)",) \
+		$(if $(BAND),--sta-band $(BAND),) \
+		$(if $(ENCRYPTION),--sta-encryption $(ENCRYPTION),) \
+		$(ARGS)
+## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
+
+test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
+	@pytest tests -m "not integration"
+	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
 		bats tests/*.bats; \
 	else \
 		echo "bats-core is not installed; skipping bats tests (smoke still ran)"; \
 	fi
+
+test-all: ## Everything `test` runs plus QEMU integration tests inline (KVM hosts only)
+	@pytest tests
+	@$(MAKE) smoke
+
+bg-integration: ## Fire-and-forget: launch the VM suite detached; verdict lands in test-results/history.md
+	@mkdir -p test-results
+	@setsid bash -c 'make integration >> test-results/bg-integration.log 2>&1; echo "bg-integration exit=$$? $$(date -Is)" >> test-results/bg-integration.log' < /dev/null > /dev/null 2>&1 &
+	@echo "integration launched detached — log: test-results/bg-integration.log, verdicts: test-results/history.md"
+
+stability5: ## Fire-and-forget: 5 consecutive integration runs for stability banking
+	@mkdir -p test-results
+	@setsid bash -c 'for i in 1 2 3 4 5; do echo "=== stability5 RUN $$i $$(date -Is) ===" >> test-results/stability5.log; make integration >> test-results/stability5.log 2>&1 && echo "RUN $$i: PASS" >> test-results/stability5.log || echo "RUN $$i: FAIL" >> test-results/stability5.log; done; echo "stability5 DONE $$(date -Is)" >> test-results/stability5.log' < /dev/null > /dev/null 2>&1 &
+	@echo "5× integration launched detached — log: test-results/stability5.log, verdicts: test-results/history.md"
 
 integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
 	@bash scripts/local-tests.sh integration
@@ -106,6 +165,16 @@ labgrid-check: ## Offline labgrid cross-check: exporter.yaml vs places.json (no 
 
 labgrid-test: ## Run a labgrid pytest with a full evidence bundle (usage: make labgrid-test T=<pytest args> [DH=<dut-host>])
 	@python3 scripts/bench_run.py --name bench $(if $(DH),--device-host $(DH),) -- $(T)
+
+rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo test --workspace
+	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
+	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
+
+rust-test: ## Run Rust workspace tests only
+	cargo test --workspace
 
 ipk: ## Build conwrt ipk for OpenWrt
 	@$(SCRIPTS_DIR)/build_ipk.sh --output dist $(ARGS)

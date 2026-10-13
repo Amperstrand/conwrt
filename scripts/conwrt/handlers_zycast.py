@@ -7,6 +7,10 @@ from zycast import run_zycast_auto
 from conwrt.infrastructure import RecoveryContext
 from conwrt.handlers_uboot import _drain_events
 
+# Empty-queue poll cadences while waiting/sending (tests shrink them).
+WAIT_POLL_INTERVAL = 1.0
+SEND_POLL_INTERVAL = 2.0
+
 
 def _handle_zycast_waiting(ctx: RecoveryContext, eq: queue.Queue) -> None:
     profile = ctx.profile
@@ -20,7 +24,7 @@ def _handle_zycast_waiting(ctx: RecoveryContext, eq: queue.Queue) -> None:
 
     while ts() - probe_start < probe_timeout:
         try:
-            event, event_ts, detail = eq.get(timeout=1.0)
+            event, event_ts, detail = eq.get(timeout=WAIT_POLL_INTERVAL)
             if event == Event.ZYCAST_MULTICAST_DETECTED:
                 ctx.timeline.uboot_http_first = ts()
                 log(f"ZyXEL Multiboot detected: {detail}")
@@ -83,7 +87,7 @@ def _handle_zycast_sending(ctx: RecoveryContext, eq: queue.Queue) -> None:
         if retcode is not None:
             break
         try:
-            event, event_ts, detail = eq.get(timeout=2.0)
+            event, event_ts, detail = eq.get(timeout=SEND_POLL_INTERVAL)
             if event == Event.ZYCAST_MULTICAST_DETECTED:
                 log(f"  multicast activity: {detail[:80]}")
         except queue.Empty:

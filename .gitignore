@@ -15,6 +15,9 @@ runs/
 
 # Local test results — never published, may contain network details
 test-results/
+
+# Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
+data/inventory.jsonl
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub
@@ -66,3 +69,15 @@ labgrid/console.yaml
 
 # local operator-profile backup (same rule as config.toml)
 config.toml.bak
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Rust build artifacts
+target/
+*.egg-info/
+tests/integration/.openwrt.img.prepped-*
+
+# Operator-private conwrt config (README: "config.toml is gitignored") —
+# never commit; tests inject their own via CONWRT_CONFIG
+config.toml

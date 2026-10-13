@@ -347,3 +347,52 @@ class TestHandleUbootFlashingWithPcap(TestCase):
         pcap_monitor = MagicMock()
         _handle_uboot_flashing(ctx, eq, pcap_monitor)
         self.assertEqual(ctx.state, State.FAILED)
+
+
+class TestHandleUbootUploadingMd5Verification(TestCase):
+    _RESPONSE = "5242880 d41d8cd98f00b204e9800998ecf8427e"
+
+    @patch("conwrt.handlers_uboot.trigger_flash", return_value=True)
+    @patch("conwrt.handlers_uboot.md5_file", return_value="d41d8cd98f00b204e9800998ecf8427e")
+    @patch("conwrt.handlers_uboot.sha256_file", return_value="sha")
+    @patch("conwrt.handlers_uboot.upload_firmware", return_value=(True, _RESPONSE))
+    def test_matching_md5_advances(self, mock_upload, mock_sha, mock_md5, mock_trigger):
+        ctx = _make_ctx()
+        eq = queue.Queue()
+        _handle_uboot_uploading(ctx, eq)
+        self.assertEqual(ctx.state, State.UBOOT_FLASHING)
+        mock_md5.assert_called_once_with("/tmp/fw.bin")
+        mock_trigger.assert_called_once()
+
+    @patch("conwrt.handlers_uboot.trigger_flash", return_value=True)
+    @patch("conwrt.handlers_uboot.md5_file", return_value="00000000000000000000000000000000")
+    @patch("conwrt.handlers_uboot.sha256_file", return_value="sha")
+    @patch("conwrt.handlers_uboot.upload_firmware", return_value=(True, _RESPONSE))
+    def test_mismatch_aborts_before_trigger(self, mock_upload, mock_sha, mock_md5, mock_trigger):
+        ctx = _make_ctx()
+        eq = queue.Queue()
+        _handle_uboot_uploading(ctx, eq)
+        self.assertEqual(ctx.state, State.FAILED)
+        mock_trigger.assert_not_called()
+
+    @patch("conwrt.handlers_uboot.trigger_flash", return_value=True)
+    @patch("conwrt.handlers_uboot.md5_file", return_value="00000000000000000000000000000000")
+    @patch("conwrt.handlers_uboot.sha256_file", return_value="sha")
+    @patch("conwrt.handlers_uboot.upload_firmware", return_value=(True, _RESPONSE))
+    def test_mismatch_with_assume_yes_continues(self, mock_upload, mock_sha, mock_md5, mock_trigger):
+        ctx = _make_ctx(assume_yes=True)
+        eq = queue.Queue()
+        _handle_uboot_uploading(ctx, eq)
+        self.assertEqual(ctx.state, State.UBOOT_FLASHING)
+        mock_trigger.assert_called_once()
+
+    @patch("conwrt.handlers_uboot.trigger_flash", return_value=True)
+    @patch("conwrt.handlers_uboot.md5_file")
+    @patch("conwrt.handlers_uboot.sha256_file", return_value="sha")
+    @patch("conwrt.handlers_uboot.upload_firmware", return_value=(True, "<!DOCTYPE html>ok"))
+    def test_no_md5_skips_check(self, mock_upload, mock_sha, mock_md5, mock_trigger):
+        ctx = _make_ctx()
+        eq = queue.Queue()
+        _handle_uboot_uploading(ctx, eq)
+        self.assertEqual(ctx.state, State.UBOOT_FLASHING)
+        mock_md5.assert_not_called()

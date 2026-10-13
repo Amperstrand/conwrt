@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportCallIssue=false, reportAttributeAccessIssue=false
 
+import json
 import os
 import subprocess
 import time
@@ -165,6 +166,57 @@ def _wait_for_sysupgrade_reboot(device_ip: str, timeout: int = 180) -> bool:
 def _find_model_id_by_board(board_name: str) -> Optional[str]:
     model = find_model_by_board_name(board_name)
     return model["id"] if model else None
+
+
+def _verify_device_identity(device_ip: str, model_id: str,
+                            ssh_key: Optional[str] = None) -> tuple[bool, str]:
+    """Verify the live device at *device_ip* is an instance of *model_id*.
+
+    AGENTS.md "Always Identify Before Flashing": read BOTH /etc/board.json
+    (model.id) and /tmp/sysinfo/board_name from the device and refuse to
+    flash on any mismatch. Returns (ok, detail).
+    """
+    command = (
+        "echo '===BOARD_JSON==='; cat /etc/board.json 2>/dev/null; "
+        "echo '===BOARD_NAME==='; cat /tmp/sysinfo/board_name 2>/dev/null"
+    )
+    try:
+        r = subprocess.run(ssh_cmd(device_ip, command, key=ssh_key, connect_timeout=10),
+                           capture_output=True, text=True, timeout=20, check=False)
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"SSH identity probe failed: {e}"
+    if r.returncode != 0:
+        stderr_hint = (r.stderr or "").strip()[:200]
+        return False, f"SSH identity probe rc={r.returncode}: {stderr_hint or '(no stderr)'}"
+
+    board_json_id = ""
+    board_name = ""
+    if "===BOARD_JSON===" in r.stdout:
+        board_section = r.stdout.split("===BOARD_JSON===", 1)[1]
+        board_section = board_section.split("===BOARD_NAME===", 1)[0].strip()
+        try:
+            board_json_id = json.loads(board_section).get("model", {}).get("id", "")
+        except (json.JSONDecodeError, AttributeError):
+            board_json_id = ""
+    if "===BOARD_NAME===" in r.stdout:
+        name_section = r.stdout.split("===BOARD_NAME===", 1)[1].strip()
+        if name_section:
+            board_name = name_section.splitlines()[0].strip()
+
+    reported = [v for v in (board_json_id, board_name) if v]
+    if not reported:
+        return False, ("could not read device identity — both /etc/board.json model.id "
+                       "and /tmp/sysinfo/board_name are empty/unreadable")
+    if board_json_id and board_name and board_json_id != board_name:
+        return False, (f"device identity sources disagree: board.json='{board_json_id}' "
+                       f"vs /tmp/sysinfo/board_name='{board_name}'")
+
+    for value in reported:
+        found = find_model_by_board_name(value)
+        if found and found.get("id") == model_id:
+            return True, f"device identity '{value}' matches model {model_id}"
+    return False, (f"device at {device_ip} reports board '{reported[0]}' which does not "
+                   f"match selected model '{model_id}' — refusing to flash")
 
 
 def _detect_ssh_key_path() -> str:

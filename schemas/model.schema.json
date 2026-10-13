@@ -56,14 +56,22 @@
           "type": "string",
           "description": "Optional /tmp/sysinfo/board_name for auto-detect"
         },
-        "version": {
-          "type": "string",
-          "minLength": 1
+        "board_names": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Optional additional exact-match board_name aliases (e.g. SMBIOS/DMI-derived names on x86_64: OpenWrt >= 24.10 reports '<manufacturer>-<product>' instead of 'generic')"
         },
-        "default_ip": {
+        "version": {"type": "string", "minLength": 1},
+        "release": {
           "type": "string",
-          "minLength": 1
-        }
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Optional full OpenWrt release (e.g. 24.10.2) for vanilla image downloads; defaults to the repo-wide release"
+        },
+        "image_suffix": {
+          "type": "string",
+          "description": "Optional vanilla image flavour suffix after the profile (e.g. squashfs-sysupgrade.bin, squashfs-factory.bin, initramfs-kernel.bin); defaults to squashfs-sysupgrade.bin"
+        },
+        "default_ip": {"type": "string", "minLength": 1}
       }
     },
     "capabilities": {
