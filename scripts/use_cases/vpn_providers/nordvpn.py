@@ -765,7 +765,13 @@ def _build_ikev2_ops(params: dict[str, Any]) -> list[Op]:
       configuration on kernel 6.12.94; the bench records the outcome either
       way.
     """
-    access_token = params["access_token"]
+    access_token = params.get("access_token", "")
+    if not access_token:
+        return [Comment(
+            text="vpn-nordvpn-ikev2: NOT CONFIGURED — set access_token in "
+                 "config.toml [use_cases.vpn-nordvpn-ikev2] (EAP credentials "
+                 "are derived from it at build time)",
+        )]
     server = params.get("server") or "DE"
     hw_accel = params.get("hw_accel", True)
     kill_switch = params.get("kill_switch", True)
