@@ -18,6 +18,10 @@ test-results/
 
 # Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
 data/inventory.jsonl
+scripts/data/
+captures/
+scripts/captures/
+*.pcap
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub

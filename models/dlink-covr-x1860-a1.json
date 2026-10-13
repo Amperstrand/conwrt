@@ -151,10 +151,35 @@
       "date": "2026-05-18",
       "notes": "sysupgrade from stock OpenWrt 24.10.5 to ASU custom 24.10.2 build. Works via conwrt --request-image --wan-ssh. ~2m15s total. SSH key, random password, and WAN SSH all applied via ASU first-boot uci-defaults script."
     },
+    "recovery-http-25.12.5": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "Full unattended recovery-http flash from U-Boot recovery mode to ASU custom 25.12.5 build (vpn-nordvpn static config, WiFi STA uplink, mgmt WiFi, keys, kill switch) on ai-legion-small/Ubuntu (direct cable). Upload ~41s, flash ~60s, boot ~90s. Verified end-to-end: SSH key auth, wg handshake, LAN NAT through tunnel to NordVPN DE exit (Hamburg). Note: host must reach 192.168.0.1 (recovery) and 192.168.1.1 (post-flash) \u2014 conwrt now manages both client aliases automatically."
+    },
+    "vpn-nordvpn-wireguard": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "vpn-nordvpn use case with config_file (dashboard-exported WireGuard conf). 5GHz STA uplink (wwan), wg0 full tunnel with netifd-managed endpoint route, lan\u2192vpn forwarding, kill switch, NordVPN DNS via tunnel. Exit verified from LAN client: Hamburg, DE (PacketHub S.A.)."
+    },
+    "vpn-nordvpn-token-and-vpn-ap": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "Token mode (build-time resolution via credentials + recommendations API) with 2.4GHz VPN-exit AP (SSID nord/nordnord). From-scratch sysupgrade first boot verified: br-vpnlan bridge, vpnap zone with vpnap\u2192vpn forwarding, DHCP/DNS/management input rules, 20dBm radio, dnsmasq re-arm. Phone client associated (-44dBm) and received DHCP lease 172.16.31.238; wired client exit via NordVPN DE; kill switch blocks on ifdown wg0. E2E stories: tests/e2e/test_nordvpn_e2e.py (5 host-side pass; phone stories pending phone replug)."
+    },
     "wifi_sta_ap": {
       "tested": true,
       "date": "2026-05-15",
       "notes": "Post-flash WiFi config verified: radio0=2g, radio1=5g. STA only, AP only, STA+AP all verified on real hardware."
+    },
+    "vpn-nordvpn-openvpn": {
+      "tested": true,
+      "date": "2026-10-08",
+      "notes": "vpn-nordvpn-openvpn use case: token-driven service credentials + DE server resolved at build time; template-faithful OpenVPN (multi-port 1231-1234, tls-auth, CN pin). Exit verified (UK box via API recommendation). Perf: 134-168 Mbps, 65-78% CPU. Configure-mode verified on-device; ASU bake path shares the same ops."
+    },
+    "vpn-nordvpn-ikev2": {
+      "tested": false,
+      "date": "2026-10-08",
+      "notes": "IKEv2/IPsec IKE_SA established (strongSwan 6.0.3, EAP-MSCHAPv2 with token creds, AES-CBC-256/HMAC-SHA2-256/MODP-2048, vip 10.6.0.22). ESP CHILD_SA blocked: SAD install EINVAL while eip93 crypto driver loaded (kernel 6.12.94, OpenWrt 25.12; kmod-ipsec4 present). rmmod of eip93 with live refs wedged the kernel - power cycle required. See README 'NordVPN IKEv2/IPsec on MT7621' for the full recipe and cautions."
     }
   },
   "bench_observations": {

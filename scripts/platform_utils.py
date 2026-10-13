@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 
 
@@ -19,6 +20,48 @@ def is_root() -> bool:
         return os.getuid() == 0
     except AttributeError:
         return False
+
+
+def list_interface_ips(interface: str) -> list[str]:
+    """Return the interface's IPv4 addresses, primary first.
+
+    Both ``ip addr`` and ``ifconfig`` list the primary address before any
+    aliases, so position encodes the operator-configured address vs. alias
+    additions.
+    """
+    plat = detect_platform()
+    try:
+        if plat == "darwin":
+            r = subprocess.run(["ifconfig", interface],
+                               capture_output=True, text=True, check=False)
+        else:
+            r = subprocess.run(["ip", "addr", "show", interface],
+                               capture_output=True, text=True, check=False)
+    except (FileNotFoundError, OSError):
+        return []
+    if r.returncode != 0:
+        return []
+    return re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout)
+
+
+def interface_has_ip(interface: str, ip_addr: str) -> bool:
+    """True if *ip_addr* is already assigned to *interface*."""
+    return ip_addr in list_interface_ips(interface)
+
+
+def interface_addr_is_alias(interface: str, ip_addr: str) -> bool:
+    """True if *ip_addr* may be an address conwrt added (safe to remove).
+
+    A secondary address (listed after the primary) is alias-style — conwrt's
+    own leftovers land there. A sole address on an otherwise empty interface
+    is treated as an alias too (bare bench NIC carrying only a conwrt
+    client_ip). A primary address sharing the interface with others is the
+    operator's configuration and is never conwrt's to remove.
+    """
+    ips = list_interface_ips(interface)
+    if ip_addr not in ips:
+        return False
+    return len(ips) == 1 or ips[0] != ip_addr
 
 
 def configure_interface_ip(interface: str, ip_addr: str, subnet: str = "24") -> bool:

@@ -16,7 +16,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
-use conwrt_core::plan::SqmProfile;
+use conwrt_core::plan::{DohProfile, SqmProfile};
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
@@ -95,15 +95,21 @@ enum Command {
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (sqm).
+        /// Shaper download rate in Kbit/s (required for sqm).
         #[arg(long)]
-        download_kbps: u32,
-        /// Shaper upload rate in Kbit/s (sqm).
+        download_kbps: Option<u32>,
+        /// Shaper upload rate in Kbit/s (required for sqm).
         #[arg(long)]
-        upload_kbps: u32,
+        upload_kbps: Option<u32>,
         /// UCI network name to shape (sqm).
         #[arg(long, default_value = "wan")]
         interface: String,
+        /// DoH provider name or https:// URL (doh).
+        #[arg(long)]
+        provider: Option<String>,
+        /// DoH local listen port (doh).
+        #[arg(long)]
+        listen_port: Option<u16>,
         /// Target address of the device.
         #[arg(long)]
         ip: IpAddr,
@@ -153,15 +159,21 @@ enum Command {
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (sqm).
+        /// Shaper download rate in Kbit/s (required for sqm).
         #[arg(long)]
-        download_kbps: u32,
-        /// Shaper upload rate in Kbit/s (sqm).
+        download_kbps: Option<u32>,
+        /// Shaper upload rate in Kbit/s (required for sqm).
         #[arg(long)]
-        upload_kbps: u32,
+        upload_kbps: Option<u32>,
         /// UCI network name to shape (sqm).
         #[arg(long, default_value = "wan")]
         interface: String,
+        /// DoH provider name or https:// URL (doh).
+        #[arg(long)]
+        provider: Option<String>,
+        /// DoH local listen port (doh).
+        #[arg(long)]
+        listen_port: Option<u16>,
         /// Target address (used for reporting; the mock answers anything).
         #[arg(long, default_value = "192.168.1.1")]
         ip: IpAddr,
@@ -200,6 +212,7 @@ impl ScenarioChoice {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ProfileChoice {
     Sqm,
+    Doh,
 }
 
 fn main() -> ExitCode {
@@ -228,6 +241,8 @@ fn main() -> ExitCode {
             download_kbps,
             upload_kbps,
             interface,
+            provider,
+            listen_port,
             ip,
             port,
             user,
@@ -241,6 +256,8 @@ fn main() -> ExitCode {
             download_kbps,
             upload_kbps,
             &interface,
+            provider,
+            listen_port,
             ip,
             port,
             &user,
@@ -255,6 +272,8 @@ fn main() -> ExitCode {
             download_kbps,
             upload_kbps,
             interface,
+            provider,
+            listen_port,
             ip,
             scenario,
             dir,
@@ -264,6 +283,8 @@ fn main() -> ExitCode {
             download_kbps,
             upload_kbps,
             &interface,
+            provider,
+            listen_port,
             ip,
             scenario,
             &dir,
@@ -412,9 +433,11 @@ fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
 fn cmd_plan(
     profile: ProfileChoice,
     model_id: &str,
-    download_kbps: u32,
-    upload_kbps: u32,
+    download_kbps: Option<u32>,
+    upload_kbps: Option<u32>,
     interface: &str,
+    provider: Option<String>,
+    listen_port: Option<u16>,
     ip: IpAddr,
     scenario: ScenarioChoice,
     dir: &Path,
@@ -435,13 +458,19 @@ fn cmd_plan(
             return ExitCode::from(2);
         }
     };
-    let profile = match profile {
-        ProfileChoice::Sqm => Profile::Sqm(SqmProfile {
-            download_kbps,
-            upload_kbps,
-            interface: interface.into(),
-            ..default_sqm()
-        }),
+    let profile = match build_profile(
+        profile,
+        download_kbps,
+        upload_kbps,
+        interface,
+        provider,
+        listen_port,
+    ) {
+        Ok(profile) => profile,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
     };
     match plan_profile(&diagnosis.state, &model, &profile) {
         Ok(plan) => {
@@ -586,9 +615,11 @@ fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
 fn cmd_apply(
     profile: ProfileChoice,
     model_id: &str,
-    download_kbps: u32,
-    upload_kbps: u32,
+    download_kbps: Option<u32>,
+    upload_kbps: Option<u32>,
     interface: &str,
+    provider: Option<String>,
+    listen_port: Option<u16>,
     ip: IpAddr,
     port: u16,
     user: &str,
@@ -605,13 +636,19 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let profile = match profile {
-        ProfileChoice::Sqm => Profile::Sqm(SqmProfile {
-            download_kbps,
-            upload_kbps,
-            interface: interface.into(),
-            ..default_sqm()
-        }),
+    let profile = match build_profile(
+        profile,
+        download_kbps,
+        upload_kbps,
+        interface,
+        provider,
+        listen_port,
+    ) {
+        Ok(profile) => profile,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
     };
 
     let auth = match ssh_auth(key, password) {
@@ -718,5 +755,30 @@ fn cmd_apply(
             eprintln!("apply failed: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+fn build_profile(
+    profile: ProfileChoice,
+    download_kbps: Option<u32>,
+    upload_kbps: Option<u32>,
+    interface: &str,
+    provider: Option<String>,
+    listen_port: Option<u16>,
+) -> Result<Profile, String> {
+    match profile {
+        ProfileChoice::Sqm => match (download_kbps, upload_kbps) {
+            (Some(download_kbps), Some(upload_kbps)) => Ok(Profile::Sqm(SqmProfile {
+                download_kbps,
+                upload_kbps,
+                interface: interface.into(),
+                ..default_sqm()
+            })),
+            _ => Err("--download-kbps and --upload-kbps are required for sqm".into()),
+        },
+        ProfileChoice::Doh => Ok(Profile::Doh(DohProfile {
+            provider: provider.unwrap_or_else(|| "cloudflare".into()),
+            listen_port: listen_port.unwrap_or(5053),
+        })),
     }
 }

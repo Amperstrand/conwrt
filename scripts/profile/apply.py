@@ -93,6 +93,12 @@ _CONTROL_FLOW_RE = re.compile(
 )
 
 
+def _shell_lines_without_comments(script: str) -> list[str]:
+    """Non-blank, non-comment lines — only safe for &&-chained one-liners."""
+    return [ln for ln in script.strip().splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+
+
 def _run_step_script(
     ip: str,
     script: str,
@@ -100,16 +106,17 @@ def _run_step_script(
     log: LogFn,
     timeout: int = 300,
 ) -> bool:
-    lines = [ln for ln in script.strip().splitlines()
-             if ln.strip() and not ln.strip().startswith("#")]
-    if not lines:
-        return True
     if _HEREDOC_RE.search(script):
-        payload = "set -e\n" + "\n".join(lines) + "\n"
+        # Heredoc payloads carry file content (keys, certs) where '#' lines
+        # and blank lines are DATA — must be transported verbatim. VPN steps
+        # run several settle loops through one exec: allow generous time.
+        payload = "set -e\n" + script.strip() + "\n"
+        timeout = max(timeout, 600)
     elif _CONTROL_FLOW_RE.search(script):
+        lines = _shell_lines_without_comments(script)
         payload = " && ".join(lines) + "\n"
     else:
-        chain = " && ".join(lines)
+        chain = " && ".join(_shell_lines_without_comments(script))
         return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)
     r = subprocess.run(
         ssh_cmd(ip, "sh -s", key=ssh_key or None, connect_timeout=10),
