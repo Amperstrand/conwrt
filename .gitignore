@@ -81,3 +81,6 @@ tests/integration/.openwrt.img.prepped-*
 # Operator-private conwrt config (README: "config.toml is gitignored") —
 # never commit; tests inject their own via CONWRT_CONFIG
 config.toml
+
+# Local Python virtualenv (dev setup) — never commit
+.venv/
