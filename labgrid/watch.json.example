@@ -1,0 +1,28 @@
+## bench_watch config — copy to data/bench/watch.json (gitignored) and fill
+## real hosts. Real coordinates live in local bench records only.
+##
+## Every device gets: reconnecting log streams + (optional) SNAP polling.
+## snap kinds: "switch" (PoE daemon RSS/port digest — the leak instrument),
+##             "openwrt" (boot_id/uptime — the reboot oracle), "none".
+## Verify with: python3 scripts/bench_watch.py --config <file> --validate-config
+{
+  "outputs_dir": "data/bench/watch",
+  "max_dir_mb": 512,
+  "devices": [
+    {
+      "name": "switch",
+      "host": "SWITCH_MGMT_IP",
+      "streams": ["logread -f", "dmesg -w"],
+      "snap": "switch",
+      "snap_interval_s": 60
+    },
+    {
+      "name": "ap-lan4",
+      "host": "192.168.104.51",
+      "streams": ["logread -f"],
+      "snap": "openwrt",
+      "snap_interval_s": 120,
+      "comment": "enable per adopted DUT; keep ap-lan5-class units stream-only"
+    }
+  ]
+}

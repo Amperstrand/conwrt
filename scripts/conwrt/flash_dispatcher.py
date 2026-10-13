@@ -24,7 +24,10 @@ from flash.context import (
     Event,
     PROBE_IPS,
     REBOOT_TIMEOUT,
+    SERIAL_MILESTONES,
     State,
+    apply_serial_milestone,
+    drain_serial_milestones,
     log,
     say,
     sha256_file,
@@ -223,12 +226,17 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
     return "uboot"
 
 
-def _resolve_initial_state(mode: str, profile: object, boot_state: str) -> State:
+def _resolve_initial_state(mode: str, profile: object, boot_state: str,
+                           interface: str | None = None) -> State:
     """Resolve the initial state for the state machine."""
     config = FLASH_MODES[mode]
 
     if mode == "uboot":
-        found, detail = detect_uboot_http(profile.recovery_ip)
+        found, detail = detect_uboot_http(
+            profile.recovery_ip,
+            interface=interface,
+            client_ip=getattr(profile, "client_ip", ""),
+        )
         if found:
             log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
             return State.UBOOT_UPLOADING
@@ -373,7 +381,11 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
         if boot_state == "uboot":
             log("Boot state: U-Boot recovery mode detected")
             recovery_ip = ctx.profile.recovery_ip
-            found, detail = detect_uboot_http(recovery_ip)
+            found, detail = detect_uboot_http(
+                recovery_ip,
+                interface=ctx.interface,
+                client_ip=getattr(ctx.profile, "client_ip", ""),
+            )
             if found:
                 log(f"Recovery HTTP already live at {recovery_ip} ({detail}) — skipping power cycle")
                 ctx.timeline.uboot_http_first = ts()
@@ -415,7 +427,9 @@ def _handle_sysupgrade_rebooting(ctx: RecoveryContext, event_queue: queue.Queue)
 def _handle_sysupgrade_booting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
     openwrt_ip = getattr(ctx.profile, "post_flash_ip", "") or ctx.profile.openwrt_ip or DEFAULT_IP
     method = "mtd-write" if ctx.profile.flash_method == "mtd-write" else "sysupgrade"
-    if _wait_for_sysupgrade_reboot(openwrt_ip):
+    reboot_seen = _wait_for_sysupgrade_reboot(openwrt_ip)
+    drain_serial_milestones(event_queue, ctx)
+    if reboot_seen:
         ctx.mark_success(f"{method} recovery complete.", verify_fn=verify_router)
     else:
         ctx._say_fn("Device did not come back after flash.")
@@ -456,6 +470,12 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
                 ctx._say_fn("OpenWrt is booting.")
                 log("ICMPv6 from router MAC detected — OpenWrt is booting")
                 break
+            elif event == Event.SERIAL_KERNEL_START:
+                apply_serial_milestone(ctx, event, event_ts)
+                log("Serial milestone: kernel starting — OpenWrt is booting")
+                break
+            elif event in SERIAL_MILESTONES:
+                apply_serial_milestone(ctx, event, event_ts)
             elif event == Event.SSH_UP:
                 ctx.timeline.ssh_available = event_ts
                 ctx._say_fn("Recovery complete! Router is back online.")
@@ -834,7 +854,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
     if config.setup_interface:
         _setup_interface_ips(interface, profile)
 
-    initial_state = _resolve_initial_state(mode, profile, boot_state)
+    initial_state = _resolve_initial_state(mode, profile, boot_state, interface=interface)
 
     if args.isolate_port:
         initial_state = State.PORT_ISOLATION
@@ -847,6 +867,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
         pcap_path=pcap_path,
         no_upload=args.no_upload,
         no_voice=args.no_voice,
+        upload_client=getattr(args, "upload_client", "curl"),
         router_mac_openwrt=args.router_mac,
         router_mac_uboot=args.uboot_mac,
         generated_password=generated_password,

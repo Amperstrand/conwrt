@@ -460,3 +460,81 @@ Freshly flashed OpenWrt devices boot with DHCP server enabled on br-lan by defau
 - Device configuration
 - SSH keys
 - Boot partition format and mount options
+
+## Recovery-mode flashing (lessons 2026-09-28, issue #28 / X1860 arc)
+
+### Recovery firmware does not answer ping — probe TCP, not ICMP
+
+**Incident (2026-09-28):** a COVR-X1860 in recovery mode (blinking red) was
+declared "dead device" after `ping 192.168.0.1` failed on three probes.
+U-Boot recovery HTTP servers implement ARP + TCP/HTTP only — no ICMP. The
+device was alive and flashable the whole time.
+
+**Rule:** dark DUT diagnostics = `curl -m 3 -s -o /dev/null -w '%{http_code}'
+http://<ip>/` at the model's `recovery_ip`, never ping. Corollary: steady red
+LED (D-Link class) = wedged/bootloop stack (zero L2 frames — even tcpdump
+shows nothing); blinking red = recovery server live. Re-enter recovery by
+holding the reset pin while powering on (~10-12 s).
+
+### Flash through a rig with an armed watcher, not by polling
+
+The low-token pattern (now `scripts/dut_recover.py` +
+`prompts/recovery-01-flash-via-rig.md`): scp the `recovery.bin` to the rig
+router (ER6P bay: per-port VLANs 400-404, staged client aliases), push a
+detached `setsid` watcher that polls the recovery URL every 2 s and curl-POSTs
+the image the moment it appears, then let the operator do the physical reset
+dance. The LLM session ends the turn; the flash fires unattended.
+Decoupling LLM polling from human-paced physical action is the single
+biggest token saver in this flow.
+
+### Reflashed devices: known_hosts will bite before the device does
+
+Every reflash regenerates dropbear host keys. `ssh-keygen -f
+~/.ssh/known_hosts -R <dut-ip>` BEFORE the post-flash SSH, or the session
+dies in MITM warnings (AGENTS.md documented this for initramfs; it applies
+to every recovery flash too).
+
+### ZyXel GS1900 v2.90: config save = authenticated GET of cmd=6
+
+The web UI's header Save button is just `<a href="dispatcher.cgi?cmd=6">`.
+A full browser is unnecessary: the pure-curl flow works — login POST
+(`username=admin&password=<encode(pw)>&login=true` → hex authId →
+`authId=<hash>&login_chk=true` → OK), then `GET /cgi-bin/dispatcher.cgi?cmd=6`
+returns a page containing `Configuration saved!`. The FIXED Python
+`encode_password()` lives in recipes/zyxel/gs1900-8hp/notes.md — never
+re-derive it (the encode() bug era cost a whole session once).
+IP changes applied via cmd=516 are runtime-only until this save runs.
+
+### Bench switch (OpenWrt GS1900): dnsmasq package and dhcp.lan.ignore can silently vanish
+
+**Incident (2026-09-28):** after the bench switch self-rebooted (third
+documented occurrence), `gs1900-bench-arm.sh` failed — the dnsmasq binary
+was absent (runtime lifelines unstartable) and `/etc/config/dhcp` had
+`dhcp.lan` (interface=lan = the production mgmt VLAN, start=100, no
+`ignore=1`) configured but inert only because the binary was missing.
+Installing dnsmasq with that section live would have created a rogue DHCP
+server on the production house LAN — the exact rule-9 trap.
+
+**Rule:** on the bench switch, set `dhcp.lan.ignore=1` and commit BEFORE
+installing/re-enabling dnsmasq, then `apk add dnsmasq`, then
+`/etc/init.d/dnsmasq disable`. `bench_switch.py` deploys should assert both
+(ignore=1 committed AND dnsmasq installed) so reboots can't regress this.
+
+### Rogue-RA is the IPv6 twin of rogue-DHCP — and dumb-APs ship with it ON (2026-09-28)
+
+**Incident:** the production house AP (OpenWrt EX5700, dumb-AP bridge mode) was
+answering Router Solicitations on the house LAN with its own Router
+Advertisements (`dhcp.lan.ra='server'` + managed-config flags = stock default).
+WiFi clients could non-deterministically pick the AP as their IPv6 gateway.
+The same applies to ANY bridged OpenWrt device — the v4 DHCP server being off
+(`ignore=1`) does NOT clear odhcpd; always also set `ra='disabled'` +
+`dhcpv6='disabled'`.
+
+**Detection (all cheap):** `ip neigh | grep router` shows neighbors that
+announced themselves as routers (look for unexpected MACs); the decisive probe
+is a Router Solicitation + capture — `scapy: sendp(Ether/IPv6(dst=ff02::2)/ICMPv6ND_RS())`
+on the segment while `tcpdump 'icmp6 and ip6[40] == 134'` runs; every RA server
+must answer within seconds. Exactly ONE announcer per segment is the invariant
+(here: the ERX only — verified post-fix). Fix on a production AP is
+odhcpd-only (never touches hostapd/netifd wireless): WiFi associations and
+IPv4 are outside the blast radius.

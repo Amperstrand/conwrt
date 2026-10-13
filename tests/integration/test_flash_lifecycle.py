@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -77,6 +78,8 @@ def _qemu_available() -> bool:
 
 @pytest.fixture(scope="module")
 def flash_vm():
+    if not (sys.platform.startswith("linux") and os.path.exists("/dev/kvm")):
+        pytest.skip("VM integration layer needs Linux with KVM (/dev/kvm) — run via `make integration`")
     if not VM_BASE.exists() or not _qemu_available():
         pytest.skip("pristine VM base not prepared or QEMU missing — run the integration suite once first")
     _ensure_ssh_config_entry()

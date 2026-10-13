@@ -51,11 +51,25 @@
       "silence_timeout": 30,
       "two_stage": true,
       "stage1_image": "initramfs",
-      "stage2_method": "sysupgrade"
+      "stage2_method": "sysupgrade",
+      "resources_required": [
+        "stock-web-admin",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "image-type-factory",
+        "partition-backup"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades.",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "mtd-write": {
       "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions.",
@@ -63,7 +77,14 @@
       "partition": "firmware",
       "requires_initramfs": true,
       "flash_time_seconds": 120,
-      "silence_timeout": 30
+      "silence_timeout": 30,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match",
+        "partition-backup"
+      ]
     },
     "serial-tftp-openwrt": {
       "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to UART header on left side of PCB. Two-stage: boot initramfs via TFTP, then sysupgrade.",
@@ -90,7 +111,16 @@
         "ipaddr": "192.168.1.1",
         "baudrate": "115200",
         "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP."
-      }
+      },
+      "resources_required": [
+        "power",
+        "serial-console",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup"
+      ]
     }
   },
   "partition_layout": {

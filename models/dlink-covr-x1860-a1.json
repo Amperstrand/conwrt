@@ -36,12 +36,27 @@
       "flash_time_seconds": 300,
       "silence_timeout": 180,
       "reset_instructions": "Connect ethernet to any port (WAN or LAN). Use a pin to press and hold the reset button UNDER the device. Plug in power while holding reset. Hold for ~10-12 seconds until LED blinks red, then release.",
-      "led_pattern": "status LED blinks red"
+      "led_pattern": "status LED blinks red",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "dlink-hnap": {
       "description": "D-Link stock firmware HNAP SOAP API firmware upload (no reset needed, works when router is running stock firmware)",
@@ -57,7 +72,14 @@
       "flash_time_seconds": 150,
       "silence_timeout": 30,
       "notes": "HNAP challenge-response auth with HMAC-MD5 + custom AES (HNAP_CONTENT). Login with default password, upload factory image via multipart POST. WARNING: GetFirmwareValidation rejects OpenWrt images on stock v1.02 (IsValid=false). Use recovery-http for reliable flashing.",
-      "caveat": "Firmware upload API returns OK but stock firmware validation blocks non-D-Link images. The GPL RSA signing key is a test key, not the production key. Recovery-http (U-Boot) bypasses all validation."
+      "caveat": "Firmware upload API returns OK but stock firmware validation blocks non-D-Link images. The GPL RSA signing key is a test key, not the production key. Recovery-http (U-Boot) bypasses all validation.",
+      "resources_required": [
+        "stock-web-admin",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "known-broken"
+      ]
     }
   },
   "signatures": {
@@ -159,5 +181,18 @@
       "date": "2026-10-08",
       "notes": "IKEv2/IPsec IKE_SA established (strongSwan 6.0.3, EAP-MSCHAPv2 with token creds, AES-CBC-256/HMAC-SHA2-256/MODP-2048, vip 10.6.0.22). ESP CHILD_SA blocked: SAD install EINVAL while eip93 crypto driver loaded (kernel 6.12.94, OpenWrt 25.12; kmod-ipsec4 present). rmmod of eip93 with live refs wedged the kernel - power cycle required. See README 'NordVPN IKEv2/IPsec on MT7621' for the full recipe and cautions."
     }
+  },
+  "bench_observations": {
+    "recovery_idle_timeout_seconds": "300-480 (measured 2026-09-27: server exits recovery ~5-8 min after entry; a flash attempt started late finds stock firmware instead)",
+    "led_language": {
+      "red_blink": "recovery mode (U-Boot HTTP server live)",
+      "red_constant": "boot attempt failed / post-flash limbo \u2014 device will fall back to recovery on next power cycle",
+      "orange_blink": "OpenWrt starting",
+      "white_constant": "OpenWrt booted"
+    },
+    "dual_image_boot": "MediaTek dual-image bootloader: first boot after a recovery flash copies main->backup partition and reboots once more before OpenWrt comes up (expect two reboots)",
+    "ports": "cable must be in the port labeled 'ethernet' (LAN) for booted OpenWrt; recovery mode answers on either port",
+    "upload_client_sensitivity": "2026-09-27/28 elimination matrix on an ER6P-routed seat: FOUR recovery uploads (24.10.8 curl, 24.10.5 curl, 24.10.5 webkit-framed, 23.05.5 curl at the older 13,631,488-byte layout) \u2014 every upload sha-verified locally, byte-exact Content-Length, 'Upgrade successfully!', 100% size write-out; every boot: zero DUT packets, constant-red limbo, recovery fallback on power cycle. Version, multipart framing, and image-size theories all eliminated. Unit-specific hardware suspected (recovery-mode NAND write corruption \u2014 no bad-block management in the U-Boot recovery writer \u2014 or bootloader-variant verification reject). Discriminator: serial console (labeled header, 3.3V 115200 8n1); conwrt serial-flash bypasses the recovery HTTP server entirely if NAND is healthy.",
+    "evidence": "conwrt-bench repo: sessions/2026-09-27-x1860-p2-flash-attempts.md (incl. 2026-09-28 addendum) + data/bench/er6p/20260927-x1860-p2-flash/"
   }
 }

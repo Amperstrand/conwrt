@@ -25,6 +25,15 @@ Usage:
   # Specify session name (for log directory)
   python3 scripts/serial-console.py /dev/cu.usbserial-BG02QAPG --session nr7101-flash
 
+PORT may be a local /dev serial adapter or a remote serial-console bridge of
+the form tcp://HOST:PORT (baud is a property of the remote line and is
+ignored). From a Mac, forward the bridge port first:
+
+  ssh -N -L 4002:127.0.0.1:4002 ai-legion
+  python3 scripts/serial-console.py tcp://127.0.0.1:4002 --monitor
+
+(--diagnose / --auto-baud / --loopback operate on a local /dev adapter only.)
+
 Command injection (send keystrokes to a running session):
   printf '\\x1b' > /tmp/conwrt-serial-cmd          # ESC byte
   printf 'help\\r' > /tmp/conwrt-serial-cmd          # type "help" + CR
@@ -60,6 +69,7 @@ from serial_baud import (
     detect_boot_stage,
     score_baud_data,
 )
+from serial_transport import SerialLike, open_serial
 
 
 # ─── Serial Session ─────────────────────────────────────────────────────────
@@ -88,7 +98,7 @@ class SerialSession:
         self.cmd_fifo = Path("/tmp/conwrt-serial-cmd")
 
         self.alive = False
-        self.ser: serial.Serial | None = None
+        self.ser: SerialLike | None = None
         self.reader_thread: threading.Thread | None = None
 
         self.total_rx = 0
@@ -98,12 +108,11 @@ class SerialSession:
         self.start_time = time.time()
 
     def open(self) -> bool:
-        """Open the serial port. Returns True on success."""
+        """Open the serial port (local /dev or tcp://HOST:PORT). Returns True on success."""
         try:
-            self.ser = serial.Serial(
+            self.ser = open_serial(
                 self.port, self.baud,
                 timeout=0.05,
-                rtscts=False, dsrdtr=False,
             )
             self.ser.setRTS(False)
             self.ser.setDTR(False)
@@ -613,7 +622,7 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("port", nargs="?", default=None,
-                        help="serial port (e.g. /dev/cu.usbserial-BG02QAPG)")
+                        help="serial port (local /dev path or tcp://HOST:PORT)")
     parser.add_argument("--baud", type=int, default=115200,
                         help="baud rate (default: 115200)")
     parser.add_argument("--session", default="",
@@ -641,6 +650,14 @@ def main():
     if args.list:
         list_ports()
         sys.exit(0)
+
+    local_only = (args.auto_baud or args.auto_baud_only or args.loopback
+                  or (args.diagnose and args.port))
+    if args.port and args.port.startswith("tcp://") and local_only:
+        print("ERROR: --diagnose / --auto-baud / --loopback operate on a local /dev "
+              f"serial adapter; {args.port} is a remote bridge (baud and adapter "
+              "wiring belong to the remote line)", file=sys.stderr)
+        sys.exit(1)
 
     if args.diagnose:
         diagnose_adapter(args.port)

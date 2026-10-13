@@ -274,7 +274,7 @@ class TestMainHappyPath(TestCase):
         empty_loc.count.return_value = 0
         content_frame.locator.return_value = empty_loc
 
-        argv = ["configure-stock-switch.py"]
+        argv = ["configure-stock-switch.py", "--new-password", "test-pass"]
         with patch("builtins.open", create=True):
             with patch.object(sys, "argv", argv):
                 with patch(

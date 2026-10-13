@@ -248,3 +248,21 @@ wan_ssh = false
 # # peers = [
 # #   { npub = "npub1...", bt_mac = "AA:BB:CC:DD:EE:FF" },
 # # ]
+
+# --- Optional labgrid bench integration ---
+# Persistent form of the bench-backend switch for scripts/bench_session.py.
+# The direct backend (switch SSH + ubus PoE + dbclient jumps) is the default
+# and needs nothing here. labgrid mode requires the labgrid package
+# (pip install labgrid) — requesting it without the package fails with a
+# clean typed error, never an ImportError.
+# One-shot override either way: CONWRT_BENCH=direct|labgrid environment
+# variable (env wins over this section). Coordinator can also come from
+# LG_COORDINATOR=<host:port> (the labgrid convention).
+#
+# [labgrid]
+# enabled = true                     # false/absent = direct backend (default)
+# coordinator = "192.168.13.221:20408"  # labgrid coordinator address
+# exporter_host = "my-exporter-host" # ssh alias of the labgrid exporter host
+#                                    # (bench_doctor probes loopback-bound
+#                                    # serial bridges through it; the session
+#                                    # backends do not use it)

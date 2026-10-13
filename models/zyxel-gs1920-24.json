@@ -59,18 +59,41 @@
       "two_stage": true,
       "stage1_image": "initramfs (ZyNOS-wrapped)",
       "stage2_method": "sysupgrade",
-      "note": "FTP handler accepts properly formatted ZyNOS images (SIG + checksum), bypasses web occupancy gate, and patches mmap_addr for target slot. Proven with stock firmware upload. Dual-slot fallback to other slot if initramfs fails."
+      "note": "FTP handler accepts properly formatted ZyNOS images (SIG + checksum), bypasses web occupancy gate, and patches mmap_addr for target slot. Proven with stock firmware upload. Dual-slot fallback to other slot if initramfs fails.",
+      "resources_required": [
+        "stock-ftp",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "image-type-factory",
+        "partition-backup"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from running OpenWrt initramfs or permanent install. Standard method for upgrades or permanent installation after initramfs boot.",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "serial-tftp-openwrt": {
       "description": "Flash via serial + TFTP. Requires RS-232 serial cable (not available). Two-stage: boot initramfs via TFTP, then sysupgrade. UNTESTED — no serial cable on hand.",
       "serial_baud": 115200,
       "tftp_load_address": "0x84f00000",
       "tested": false,
-      "note": "TFTP load address estimated from RTL839X family (same as GS1900-24E). UNTESTED — no serial cable available."
+      "note": "TFTP load address estimated from RTL839X family (same as GS1900-24E). UNTESTED — no serial cable available.",
+      "resources_required": [
+        "power",
+        "serial-console",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup"
+      ]
     }
   },
   "partition_layout": {

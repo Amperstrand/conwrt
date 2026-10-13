@@ -1,0 +1,40 @@
+# lab.yaml.example — PUBLIC template for data/lab.yaml (the local-only,
+# gitignored single source of truth). Copy to data/lab.yaml and fill with
+# REAL values (MACs, IPs) — data/* never leaves the machine.
+#
+# Rules:
+#   1. If it isn't in data/lab.yaml, it doesn't exist.
+#   2. Every state-changing operation ENDS by updating it.
+#   3. exporter.yaml + labgrid places are GENERATED from it
+#      (scripts/lab_registry.py emit-exporter / deploy-exporter).
+#   4. data/inventory.jsonl = append-only evidence log (never state).
+#   5. Secrets -> data/lab-secrets.yaml (gitignored), referenced by key.
+
+meta:
+  updated: "YYYY-MM-DDTHH:MM:SS"
+
+subnets:
+  192.168.XX.0/24: {vlan: XX, owner: device-id, purpose: "..."}
+
+devices:
+  device-id:
+    model: model-id-from-models-dir
+    role: house-router|production-ap|bench-switch|dut-rig|lab-dut|prta-fixture|labgrid-host
+    wired: {peer/port: local-port, "vlanNN untagged|tagged"}
+    mgmt: 192.168.XX.YY
+    macs: {sys: "aa:bb:cc:dd:ee:ff", recovery: "..."}   # ALL known MACs per device
+    firmware: "..."
+    rogue: disabled|unknown       # dhcp/ra discipline state
+    keyed: true|false
+    state: adopted|dark|blocked-...
+    labgrid_place: place-name     # if enrolled
+    notes: "..."
+
+topology:
+  - [device-a, port, device-b, port, "vlanNN untagged|tagged"]
+
+labgrid:
+  coordinator: "host:port"
+  exporter: {host: host, config: "~/path/exporter.yaml"}
+  places:
+    place-name: {device: device-id, power: "switch/port|none", serial: "host:port|none"}

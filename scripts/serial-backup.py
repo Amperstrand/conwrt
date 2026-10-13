@@ -23,17 +23,27 @@ Examples:
 
     # Backup all partitions (takes a long time)
     python3 scripts/serial-backup.py /dev/cu.usbserial-XXXX 57600 --all
+
+PORT may also be a remote serial-console bridge of the form tcp://HOST:PORT
+(baud is a property of the remote line and is ignored). From a Mac, forward
+the bridge port first: ssh -N -L 4002:127.0.0.1:4002 ai-legion, then use
+tcp://127.0.0.1:4002 as PORT.
 """
 import argparse
 import base64
 import re
-import serial
 import sys
 import time
 from pathlib import Path
 
+from serial_transport import (
+    SerialConnectionError,
+    SerialLike,
+    open_serial,
+)
 
-def send_and_wait(s: serial.Serial, command: str, wait: float = 2.0) -> str:
+
+def send_and_wait(s: SerialLike, command: str, wait: float = 2.0) -> str:
     """Send command and read response."""
     s.write((command + "\r\n").encode())
     time.sleep(wait)
@@ -62,7 +72,7 @@ def parse_partitions(output: str) -> list[dict]:
     return partitions
 
 
-def dump_partition(s: serial.Serial, partition: dict, output_file: Path) -> bool:
+def dump_partition(s: SerialLike, partition: dict, output_file: Path) -> bool:
     """Dump a single partition via base64 over serial."""
     dev = f"/dev/{partition['device']}"
     name = partition["name"]
@@ -146,8 +156,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Dump device partitions over serial via base64"
     )
-    parser.add_argument("port", help="Serial port")
-    parser.add_argument("baud", type=int, help="Baud rate")
+    parser.add_argument("port", help="serial port (local /dev path or tcp://HOST:PORT)")
+    parser.add_argument("baud", type=int, help="baud rate (ignored for tcp://)")
     parser.add_argument("--partition", metavar="NAME",
                         help="Dump specific partition by name (e.g., Factory)")
     parser.add_argument("--all", action="store_true",
@@ -158,7 +168,11 @@ def main():
                         help="List partitions and exit")
     args = parser.parse_args()
 
-    s = serial.Serial(args.port, args.baud, timeout=1)
+    try:
+        s = open_serial(args.port, args.baud, timeout=1)
+    except SerialConnectionError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Break to clean prompt
     s.write(b"\x03\r\n")

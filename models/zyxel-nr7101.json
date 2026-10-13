@@ -54,13 +54,26 @@
           "type": "ras"
         }
       },
-      "zycast_binary": "conwrt scripts/zycast.py (C binary with Python fallback)"
+      "zycast_binary": "conwrt scripts/zycast.py (C binary with Python fallback)",
+      "resources_required": [
+        "power",
+        "multicast-l2"
+      ],
+      "envelope": [
+        "zycast-kill-plan"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt. SCP image to /tmp/ then run sysupgrade -n. Use scp -O (legacy protocol) as OpenWrt dropbear may lack SFTP. Boot takes ~60s after flash.",
       "command": "sysupgrade -n /tmp/firmware.bin",
       "scp_note": "Use scp -O flag — OpenWrt dropbear lacks /usr/libexec/sftp-server",
-      "boot_time_seconds": 60
+      "boot_time_seconds": 60,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "signatures": {
