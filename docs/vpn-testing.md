@@ -50,6 +50,24 @@ shape is covered hermetically only.
 Related non-provider VPN use cases: `wireguard-client` (tested on hardware),
 `vpn-node`, `cashu_vpn_client` — see `python3 scripts/conwrt.py list-use-cases`.
 
+## Drift watch (early warning)
+
+Provider APIs change silently; the weekly **VPN Drift Watch** workflow
+(`.github/workflows/vpn-drift-watch.yml`, Mondays 07:00 UTC) turns drift
+into a red workflow + maintainer email:
+
+1. runs `make test-live` (public contract tests; credential-gated tests skip), and
+2. scans [gluetun](https://github.com/qdm12/gluetun) releases — the
+   best-maintained tracker of provider-side changes — for lines mentioning
+   conwrt's providers. Any provider line with a change verb escalates.
+
+gluetun is research-only (per AGENTS.md external-repo etiquette), not a
+dependency: conwrt stays native (kernel WireGuard + netifd), and gluetun's
+release notes serve as an upstream early-warning feed. Manual run:
+`python3 scripts/vpn-drift-watch.py [--skip-tests] [--days N]`. Note
+GitHub disables scheduled workflows after 60 idle days — a monthly
+workflow_dispatch run keeps it armed.
+
 ## API drift log
 
 Provider APIs break silently — the generated scripts curl them at first boot
