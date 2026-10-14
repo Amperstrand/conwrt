@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -46,6 +48,10 @@ def _sta_config_from_args(args: argparse.Namespace, cfg) -> "WifiSTAConfig | Non
 def cmd_configure(args: argparse.Namespace) -> int:
     """Apply config.toml settings to a running OpenWrt router via SSH."""
     ip = args.ip
+    port = getattr(args, "port", None)
+    if port is not None:
+        # venue-fed port: every nested ssh/scp in the apply stack reads it
+        os.environ["CONWRT_SSH_PORT"] = str(port)
     cfg = _load_config()
 
     sta = _sta_config_from_args(args, cfg)

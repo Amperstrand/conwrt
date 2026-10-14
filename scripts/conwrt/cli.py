@@ -204,6 +204,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cfg_parser = subparsers.add_parser("configure",
         help="Apply config.toml settings to a running OpenWrt router via SSH")
+    cfg_parser.add_argument("--port", default=None, type=int,
+                            help="SSH port of the target (venue-fed; default: 22 or ssh-config)")
     cfg_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address (default: 192.168.1.1)")
     cfg_parser.add_argument("--model-id", default=None,

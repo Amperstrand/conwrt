@@ -433,11 +433,19 @@ def _venue_unreachable(stderr: str) -> bool:
 
 
 class VenueHandle:
-    """The whole venue contract a venue-agnostic test sees: a name + run()."""
+    """The whole venue contract a venue-agnostic test sees: a name + run().
 
-    def __init__(self, name: str, run):
+    ``ssh_target`` (host, port, key) is the optional direct-SSH capability:
+    present for venues reachable with plain ssh from this host (the QEMU
+    session VM), None for exporter-proxied-only venues (bench places on
+    unrouted VLANs). Flows that shell out to conwrt CLI tools need it.
+    """
+
+    def __init__(self, name: str, run, ssh_target=None, model_id=None):
         self.name = name
         self._run = run
+        self.ssh_target = ssh_target
+        self.model_id = model_id
 
     def run(self, command: str, timeout: int = 30):
         return self._run(command, timeout=timeout)
@@ -472,6 +480,8 @@ def venue(request):
         yield VenueHandle(
             name=f"virtual-x86-64@qemu(127.0.0.1:{vm['port']})",
             run=_qemu_venue_runner(vm),
+            ssh_target=(vm["host"], vm["port"], vm["key"]),
+            model_id="virtual-x86-64",
         )
         return
 
