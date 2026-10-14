@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from profile.ops import render_shell
 from use_cases import registry
-from use_cases.vpn_providers.pia import _build_pia_ops
+from use_cases.vpn_providers.pia import _build_pia_ops, _build_pia_openvpn_ops
 from use_cases.vpn_providers.mullvad import _build_mullvad_ops
 from use_cases.vpn_providers.nordvpn import _build_nordvpn_ops
 from use_cases.vpn_providers.ivpn import _build_ivpn_ops
@@ -87,6 +87,83 @@ class TestPiaOps:
         r = render_shell(_build_pia_ops(PIA_PARAMS))
         assert "apk add jq" in r
         assert "opkg install jq" in r
+
+
+
+
+# -- PIA OpenVPN -----------------------------------------------------------------
+
+PIA_OVPN_PARAMS = {
+    "username": "p1234567",
+    "password": "testpass",
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wwan",
+}
+
+
+class TestPiaOpenvpnOps:
+    def _render(self, extra=None):
+        params = dict(PIA_OVPN_PARAMS)
+        params.update(extra or {})
+        return render_shell(_build_pia_openvpn_ops(params))
+
+    def test_registry_entry(self):
+        assert "vpn-pia-openvpn" in registry()
+
+    def test_validated_recipe_markers(self):
+        r = self._render()
+        # RSA-4096 CA written on-device, credentials via auth-user-pass.
+        assert "BEGIN CERTIFICATE" in r
+        assert "pia-ca.rsa.4096.crt" in r
+        assert "auth_user_pass='/etc/openvpn/pia.auth" in r
+        assert "chmod 600 /etc/openvpn/pia.auth" in r
+        # UDP 8080 + endpoint pool + remote-random.
+        assert "proto='udp'" in r
+        assert " 8080'" in r
+        assert "remote_random='1'" in r
+        assert r.count("uci add_list openvpn.pia.remote='") == 10
+
+    def test_ipv6_pull_filters_present(self):
+        r = self._render()
+        assert 'pull_filter=\'ignore "route-ipv6"\'' in r or \
+               'pull_filter\'=\'ignore "route-ipv6"\'' in r or \
+               'ignore "route-ipv6"' in r
+        assert 'ignore "ifconfig-ipv6"' in r
+
+    def test_no_persist_tun(self):
+        r = self._render()
+        assert "persist_tun='" not in r  # the option is never set (the comment explains why)
+
+    def test_openvpn_27_ciphers(self):
+        r = self._render()
+        assert "data_ciphers='AES-256-GCM:AES-128-GCM:AES-256-CBC'" in r
+        assert "data_ciphers_fallback='AES-256-CBC'" in r
+
+    def test_wireguard_variant_torn_down(self):
+        r = self._render()
+        assert "uci -q delete network.wg0" in r
+        assert "add_list firewall.vpn_zone.network='tun0'" in r
+
+    def test_endpoint_routes_pinned_to_upstream(self):
+        r = self._render()
+        assert "ip route replace $_pia_ep/32 via 192.168.8.1 dev wwan" in r
+
+    def test_kill_switch_and_dns(self):
+        r = self._render()
+        assert "10.0.0.241" in r  # PIA in-tunnel resolver
+        assert "REJECT" in r or "reject" in r  # kill-switch rule family
+
+    def test_unconfigured_degrades_to_comment(self):
+        ops = _build_pia_openvpn_ops({})
+        assert len(ops) == 1
+        r = render_shell(ops)
+        assert "NOT CONFIGURED" in r
+
+    def test_custom_pool_override(self):
+        r = self._render({"remotes": ["203.0.113.7", "203.0.113.8"], "port": "1194"})
+        assert r.count("uci add_list openvpn.pia.remote='") == 2
+        assert " 1194'" in r
+
 
 
 # -- Mullvad -------------------------------------------------------------------
