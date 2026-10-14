@@ -705,3 +705,48 @@ Rules for code and agents in this repo:
 
 Env: `CONWRT_LAB` (this registry checkout) and `CONWRT_BENCH` (conwrt-bench
 checkout) are the two paths every hardware-touching tool understands.
+
+## Multi-Agent Coordination on the Shared Host (the 2026-10-13 collisions)
+
+Motivating incidents (two AI sessions sharing one checkout and one Linux
+host, 2026-10-12/13): (1) session A switched git branches mid-flight while
+session B was committing — B's commits silently landed on local `master`,
+exactly the "polluted local master" state the branching rule above forbids,
+caused this time by structure, not sloppiness; (2) both sessions' QEMU test
+VMs wanted host port 2222 — the loser got 30 cascading fixture errors with
+no culprit named; (3) while diagnosing (2), session B ran
+`pkill -f "qemu-system-x86_64.*hostfwd"` and killed session A's live
+tollgate VM (recoverable only because it ran snapshot-mode with a boot
+script), and the same pattern self-matched B's own shell and hung it.
+
+Rules — prefer structure that makes collisions impossible over rules that
+merely discourage them:
+
+1. **One worktree per session. The main checkout is a read-only hub.** Never
+   commit from the shared checkout; create
+   `git worktree add ../conwrt-<session> -b <session>/feat-x origin/master`
+   (or run `scripts/dev-session.sh start <name>`, which also registers the
+   session). Worktrees share the object store and remotes; each has its own
+   HEAD/index/files, so branch switches and stashes cannot collide.
+2. **Kill only what you own.** Every background process an agent starts
+   (QEMU, TFTP, recorders, daemons) writes its PID to a session-scoped
+   pidfile dir (`/tmp/opencode/<session>/pids/` or a per-session tmp dir).
+   Teardown kills only PIDs read from YOUR pidfiles, after a
+   `/proc/<pid>/cmdline` sanity check. **`pkill`/`killall` by pattern is
+   FORBIDDEN on this host** — other sessions' processes are indistinguishable
+   in `ps`, and `pkill -f` matches your own shell's command line.
+3. **Ports are claimed, not assumed.** Long-lived listeners must take their
+   port from an env var (`CONWRT_VM_SESSION_PORT`, `CONWRT_VM_FLASH_PORT`,
+   …) so a colliding session can shift, and must fail fast with the holder
+   named (`ss -tlnp` hint) instead of cascading errors. Check
+   `data/active-sessions.jsonl` before claiming.
+4. **Claim before you code.** Branch names carry the owner
+   (`<session>/feat-x`), the PR opens (draft) before the work starts, and
+   `scripts/dev-session.sh` appends `{session, worktree, ports, areas}` to
+   the gitignored `data/active-sessions.jsonl` ledger. Before starting work
+   in an area, check `gh pr list` and the ledger — overlapping streams are
+   a coordination failure even when git itself merges cleanly.
+5. **Expect master to move at machine speed.** Sibling agents merge PRs in
+   minutes. Fetch immediately before merging, rebase instead of resolving
+   surprise conflicts by hand, and never assume the merge-result you tested
+   locally is still current an hour later.

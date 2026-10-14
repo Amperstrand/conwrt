@@ -18,6 +18,7 @@ test-results/
 
 # Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
 data/inventory.jsonl
+data/active-sessions.jsonl
 scripts/data/
 captures/
 scripts/captures/
