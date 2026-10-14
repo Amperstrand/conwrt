@@ -49,14 +49,14 @@ PEER_IP=$(echo "$RESPONSE" | json_get ipv4_address)
 PEER_IP=${{PEER_IP%%/*}}
 
 # Fetch server list and pick best server
-SERVERS=$(curl -s -m 15 "https://api.mullvad.net/public/relays/wireguard/")
+SERVERS=$(curl -s -m 15 -H "Accept: application/json" "https://api.mullvad.net/www/relays/wireguard/")
 if [ -n "{country_filter}" ]; then
     SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.[] | select(.country_code=="{country}")] | .[0]')
 else
     SERVER_ENTRY=$(echo "$SERVERS" | jq -r '.[0]')
 fi
 SERVER_IP=$(echo "$SERVER_ENTRY" | json_get ipv4_addr_in)
-SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get public_key)
+SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get pubkey)
 SERVER_HOST=$(echo "$SERVER_ENTRY" | json_get hostname)
 SERVER_PORT=51820
 

@@ -2,6 +2,13 @@
 
 conwrt tracks what has been validated on real hardware versus what is defined from documentation only.
 
+## VPN providers
+
+VPN provider support, per-tier test status (hermetic / live API / bench /
+hardware), credential-gated live tests, and the provider API drift log live
+in [vpn-testing.md](vpn-testing.md). Quick reference: `make test` (hermetic),
+`make test-live` (real provider APIs, no router needed).
+
 ## Use case presets
 
 Run `python3 scripts/conwrt.py list-use-cases` for the current registry. Each preset declares:
