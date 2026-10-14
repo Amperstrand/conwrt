@@ -30,6 +30,14 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
         op = ">" if i == 0 else ">>"
         lines.append(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}")
     lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
+    if keys:
+        # Key baked => key-only auth (#155): the x1860 incident unit came up
+        # with password-attempt surface enabled by default.
+        lines += [
+            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+            "uci commit dropbear",
+        ]
     return "\n".join(lines)
 
 
@@ -39,6 +47,14 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
         op = ">" if i == 0 else ">>"
         ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
+    if keys:
+        ops += [
+            UciSet(config="dropbear", section="@dropbear[0]", values={
+                "PasswordAuth": "off",
+                "RootPasswordAuth": "off",
+            }),
+            UciCommit(config="dropbear"),
+        ]
     return ops
 
 

@@ -19,6 +19,7 @@
 pub mod execute;
 pub mod fingerprint;
 pub mod ssh;
+pub mod v6;
 
 use conwrt_core::capability::{HttpProbeResult, LinkProbe, ProbeError, SshBanner};
 use conwrt_types::MacAddress;

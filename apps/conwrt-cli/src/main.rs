@@ -73,6 +73,22 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
+    /// IPv6 dark-device discovery (#156): probe-host self-check, active
+    /// Router Solicitation (rdisc6), RA decode, EUI-64 derivation, banner
+    /// probes. The tool that would have turned the 2026-10-12 x1860
+    /// incident into a ten-second diagnosis.
+    DiscoverV6 {
+        /// Interface to probe (e.g. enp5s0).
+        #[arg(long)]
+        interface: String,
+        /// Optionally derive the EUI-64 link-local for a MAC seen on the
+        /// wire (ARP/dump) and banner-probe it — works even with NO RA.
+        #[arg(long)]
+        mac: Option<String>,
+        /// Also probe these TCP ports on the discovered router link-local.
+        #[arg(long, value_delimiter = ',', default_value = "22,80")]
+        ports: Vec<u16>,
+    },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
         /// Target address (used for reporting; the mock answers anything).
@@ -220,6 +236,11 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
+        Command::DiscoverV6 {
+            interface,
+            mac,
+            ports,
+        } => cmd_discover_v6(&interface, mac.as_deref(), &ports),
         Command::Diagnose {
             ip,
             interface,
@@ -781,4 +802,90 @@ fn build_profile(
             listen_port: listen_port.unwrap_or(5053),
         })),
     }
+}
+
+fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCode {
+    use conwrt_local_std::v6;
+
+    println!("=== probe-host self-check ({}):", interface);
+    let check = v6::self_check(interface);
+    println!(
+        "  exists={} carrier={:?} ipv6_disabled={:?} link_local={}",
+        check.exists,
+        check.carrier,
+        check.ipv6_disabled,
+        check
+            .link_local
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "none".into())
+    );
+    for problem in check.problems() {
+        println!("  !! {problem}");
+    }
+    if !check.ready() {
+        println!("\nfix the problems above first — the prober itself cannot speak v6.");
+    }
+
+    println!("\n=== soliciting router advertisement (rdisc6):");
+    match v6::solicit_router_advertisement(interface, 2) {
+        Ok(Some(ra)) => {
+            println!(
+                "  router mac      : {:?}",
+                ra.router_mac.map(|m| m.to_string())
+            );
+            println!(
+                "  router link-local: {}",
+                ra.router_link_local
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "?".into())
+            );
+            println!("  prefixes        : {:?}", ra.prefixes);
+            println!("  dns             : {:?}", ra.dns_servers);
+            println!(
+                "  stateful addr/other: {}/{}",
+                ra.stateful_address, ra.stateful_other
+            );
+            println!("  mtu             : {:?}", ra.mtu);
+            println!("\n  ready commands:");
+            for cmd in ra.commands(interface) {
+                println!("    {cmd}");
+            }
+            if let (Some(ll), Some(idx)) = (ra.router_link_local, v6::interface_index(interface)) {
+                for port in ports {
+                    if let Some(banner) =
+                        v6::banner_probe_v6(ll, idx, *port, std::time::Duration::from_secs(3))
+                    {
+                        println!("    :{port} banner: {banner:?}");
+                    }
+                }
+            }
+        }
+        Ok(None) => {
+            println!("  no router answered — try --mac for EUI-64 derivation without an RA")
+        }
+        Err(e) => println!("  {e}"),
+    }
+
+    if let Some(mac_str) = mac {
+        match conwrt_types::MacAddress::parse(mac_str) {
+            Ok(mac) => {
+                let ll = v6::derive_eui64_link_local(&mac);
+                println!("\n=== EUI-64 for {mac}: {ll}");
+                if let Some(idx) = v6::interface_index(interface) {
+                    for port in ports {
+                        match v6::banner_probe_v6(ll, idx, *port, std::time::Duration::from_secs(3))
+                        {
+                            Some(banner) => println!("    :{port} banner: {banner:?}"),
+                            None => println!("    :{port} no answer"),
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
