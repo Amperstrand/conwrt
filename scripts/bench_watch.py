@@ -230,6 +230,7 @@ class DeviceWatcher(threading.Thread):
         # the same name makes every clean thread shutdown raise
         # TypeError("'Event' object is not callable") out of join() (#141).
         self._stop_evt = threading.Event()
+        self._proc: subprocess.Popen | None = None
         self._backoff = backoff_min_s
         self._spawn = spawn or self._ssh_spawn
         self._run_call = run_call or self._ssh_run
@@ -266,6 +267,7 @@ class DeviceWatcher(threading.Thread):
                 continue
             self.events.emit(self.cfg.name, "connected")
             assert proc.stdout is not None
+            self._proc = proc
             quota = self._quota_exceeded()
             with raw_path.open("a") as raw:
                 raw.write(f"=== connected {utcnow()} ===\n")
@@ -328,6 +330,29 @@ class DeviceWatcher(threading.Thread):
 
     def stop(self) -> None:
         self._stop_evt.set()
+        proc = self._proc
+        if proc is not None:
+            # An idle stream blocks in `for line in proc.stdout` and only
+            # notices the flag between lines — killing the live proc unblocks
+            # the read so the tail is persisted and the thread can exit.
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+def _shutdown(watchers: list[DeviceWatcher], snaps: list[threading.Thread],
+              events: EventLog) -> None:
+    """Stop every watcher, join every thread (bounded), then log 'stopping'.
+
+    'stopping' is emitted only after the joins: tails are persisted inside
+    run() before thread exit, so the event means "tails are on disk".
+    """
+    for w in watchers:
+        w.stop()
+    for t in [*watchers, *snaps]:
+        t.join(timeout=5)
+    events.emit("watch", "stopping")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -379,9 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        for w in watchers:
-            w.stop()
-        events.emit("watch", "stopping")
+        _shutdown(watchers, snaps, events)
     return 0
 
 

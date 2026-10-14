@@ -5,6 +5,7 @@ streams. No SSH, no network (spawn/run_call are injected)."""
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -118,12 +119,13 @@ class _FakeProc:
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
         self.stdout = iter(lines)
+        self.killed = False
 
     def wait(self) -> int:
         return 0
 
     def kill(self) -> None:
-        return None
+        self.killed = True
 
 
 def test_watcher_reconnect_writes_tail_and_events(tmp_path: Path) -> None:
@@ -155,6 +157,35 @@ def test_watcher_reconnect_writes_tail_and_events(tmp_path: Path) -> None:
     assert b"line-three" in tail or b"line-two" in tail
     raws = list((tmp_path / "fake").glob("*.log"))
     assert raws and "=== connected" in raws[0].read_text()
+
+
+def test_shutdown_kills_stream_joins_threads_and_emits_stopping(
+        tmp_path: Path) -> None:
+    cfg = bw.DeviceConfig(name="fake", host="unused", snap_kind="openwrt",
+                          snap_interval_s=9999)
+    events = bw.EventLog(tmp_path / "events.jsonl")
+    procs: list[_FakeProc] = []
+
+    def fake_spawn(cmd: str) -> _FakeProc:
+        proc = _FakeProc(["line-a\n"])
+        procs.append(proc)
+        return proc
+
+    w = bw.DeviceWatcher(cfg, tmp_path, events, max_dir_mb=10,
+                         spawn=fake_spawn,
+                         run_call=lambda cmd: "", backoff_min_s=0.05)
+    snap = threading.Thread(target=w.snap_forever, daemon=True)
+    w.start()
+    snap.start()
+    deadline = time.monotonic() + 5
+    while not procs and time.monotonic() < deadline:
+        time.sleep(0.01)
+    bw._shutdown([w], [snap], events)
+    assert not w.is_alive() and not snap.is_alive()
+    assert procs and procs[-1].killed
+    kinds = [json.loads(line)["event"] for line in
+             (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert kinds[-1] == "stopping"
 
 
 def test_snap_once_emits_snap_and_reboot(tmp_path: Path) -> None:
