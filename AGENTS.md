@@ -595,7 +595,7 @@ Motivating incident: a bench adoption ran `firstboot` on ap-lan2 (AP3915i UNIT2 
 
 ## Bench operations rules (2026-09-25)
 
-Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network.
+Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network. Labgrid specifics (coordinator, exporter fleet, reservation queueing, exclusion domains, trusted-network model) live in the same repo at `docs/labgrid-coordination.md` — updated 2026-10-14 as the org-wide canon; use `LG_COORDINATOR` (native) and queue with `reserve --wait` rather than poll-acquire.
 
 ## Rogue-DHCP Discipline — exactly one DHCP/RA authority per broadcast domain (2026-09-28)
 
