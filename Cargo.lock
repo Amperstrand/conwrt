@@ -712,6 +712,7 @@ name = "conwrt-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "conwrt-agent-proto",
  "conwrt-core",
  "conwrt-local-std",
  "conwrt-types",
