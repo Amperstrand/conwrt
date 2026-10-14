@@ -235,3 +235,46 @@ class TestCheckSsh(TestCase):
         check_ssh("192.168.1.1", connect_timeout=7)
         _, kwargs = mock_run_ssh.call_args
         self.assertEqual(kwargs["timeout"], 12)
+
+
+class TestPortSupport:
+    """Venue-fed ports (PRTA plan S3): hardware venues have no ssh-config
+    entry to lean on — the port must be injectable."""
+
+    def test_ssh_cmd_no_port_by_default(self):
+        from ssh_utils import ssh_cmd
+        cmd = ssh_cmd("192.168.1.1", "uptime")
+        assert "-p" not in cmd
+
+    def test_ssh_cmd_explicit_port(self):
+        from ssh_utils import ssh_cmd
+        cmd = ssh_cmd("127.0.0.1", "uptime", port=2322)
+        i = cmd.index("-p")
+        assert cmd[i + 1] == "2322"
+
+    def test_ssh_cmd_env_port_fallback(self, monkeypatch):
+        from ssh_utils import ssh_cmd
+        monkeypatch.setenv("CONWRT_SSH_PORT", "2422")
+        cmd = ssh_cmd("127.0.0.1", "uptime")
+        i = cmd.index("-p")
+        assert cmd[i + 1] == "2422"
+
+    def test_ssh_cmd_explicit_port_beats_env(self, monkeypatch):
+        from ssh_utils import ssh_cmd
+        monkeypatch.setenv("CONWRT_SSH_PORT", "2422")
+        cmd = ssh_cmd("127.0.0.1", "uptime", port=2322)
+        i = cmd.index("-p")
+        assert cmd[i + 1] == "2322"
+
+    def test_scp_cmd_explicit_port(self):
+        from ssh_utils import scp_cmd
+        cmd = scp_cmd("127.0.0.1", "a", "b", port=2322)
+        assert "-P" in cmd  # scp uses capital -P
+        i = cmd.index("-P")
+        assert cmd[i + 1] == "2322"
+
+    def test_env_port_invalid_ignored(self, monkeypatch):
+        from ssh_utils import ssh_cmd
+        monkeypatch.setenv("CONWRT_SSH_PORT", "not-a-port")
+        cmd = ssh_cmd("192.168.1.1", "uptime")
+        assert "-p" not in cmd
