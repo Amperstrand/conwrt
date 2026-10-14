@@ -36,6 +36,14 @@ pub enum WireEndpoint {
         /// Transfer to query.
         transfer_id: u64,
     },
+    /// Write bytes to a UART port (M5 #110). Requires the lease on
+    /// `uart{port}`; the reply is [`WireResult::UartWritten`].
+    UartWrite {
+        /// Port index (0-based, as advertised in capabilities).
+        port: u8,
+        /// Payload bytes for the UART TX line.
+        data: Vec<u8>,
+    },
 }
 
 /// A response from the agent (agent → controller), correlated by id.
@@ -53,6 +61,8 @@ pub enum WireResult {
     HeartbeatAcked,
     /// Stream ack (contiguous offset = the resume token).
     StreamAck(StreamAck),
+    /// Bytes accepted onto the UART TX line (M5 #110).
+    UartWritten(usize),
     /// The endpoint errored.
     Error(WireError),
 }
@@ -68,6 +78,9 @@ pub enum WireError {
     Internal(String),
     /// Request sent before a successful handshake.
     NotHandshaked,
+    /// The operation needs the named resource lease first (M5 #110: UART
+    /// writes are lease-gated).
+    LeaseRequired(String),
 }
 
 /// The wire frame: exactly one per COBS frame.
@@ -109,6 +122,14 @@ pub enum AgentEvent {
         lease_id: u64,
         /// The policy.
         policy: DisconnectPolicy,
+    },
+    /// Bytes received from a UART port (M5 #110) — unsolicited push,
+    /// harvested controller-side via `AgentClient::try_recv_event`.
+    UartData {
+        /// Port index (0-based).
+        port: u8,
+        /// Payload bytes from the UART RX line.
+        data: Vec<u8>,
     },
 }
 
