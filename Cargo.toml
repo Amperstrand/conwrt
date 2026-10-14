@@ -10,6 +10,10 @@ members = [
     "apps/conwrt-cli",
     "apps/conwrt-agent",
 ]
+# Tier-C firmware (ADR-0002): no_std cortex-m builds that must never enter
+# host `cargo test --workspace`. CI builds it explicitly with --target and
+# gates it with cargo size.
+exclude = ["apps/conwrt-stm32"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,8 +28,8 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 pollster = "0.4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "process", "macros", "fs"] }
-postcard = "1"
-postcard-rpc = { version = "0.12", features = ["use-std", "cobs"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+postcard-rpc = { version = "0.12", default-features = false, features = ["cobs"] }
 embedded-io = "0.7"
 
 [workspace.lints.rust]

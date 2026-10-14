@@ -7,12 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["std"]
+std = ["dep:tokio", "postcard-rpc/use-std"]
+
 [dependencies]
 postcard = { workspace = true }
 postcard-rpc = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
-cobs = "0.4"
+tokio = { workspace = true, optional = true }
+cobs = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 sha2 = "0.10"

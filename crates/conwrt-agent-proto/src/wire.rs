@@ -1,22 +1,19 @@
 //! COBS-over-TCP transport for both protocol sides (issue #108).
 //!
 //! Straight out of the #107 spike (verdict: ADOPT — 232 LOC of wire glue,
-//! 46 µs/rtt, streaming+resume verified): one COBS codec everywhere
-//! ("one codec everywhere", ADR-0004 §2), a shared receive pump so host
-//! and device sides do not duplicate the FeedResult dance, and tokio
-//! TcpStream halves.
+//! 46 µs/rtt, streaming+resume verified): the shared [`crate::cobs`] pump
+//! ("one codec everywhere", ADR-0004 §2) wrapped in tokio TcpStream
+//! halves.
 
-use std::collections::VecDeque;
-
-use postcard_rpc::accumulator::raw::{CobsAccumulator, FeedResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Receive pump shared by both sides: feeds bytes into the COBS accumulator
-/// and yields complete (decoded) frames.
+use crate::cobs::encode_frame;
+
+/// Receive pump shared by both sides: feeds bytes into the shared COBS
+/// pump ([`crate::cobs::CobsPump`]) and yields complete (decoded) frames.
 pub struct CobsReceiver {
     buf: Box<[u8; 8192]>,
-    acc: Box<CobsAccumulator<8192>>,
-    pending: VecDeque<Vec<u8>>,
+    pump: crate::cobs::CobsPump,
 }
 
 impl CobsReceiver {
@@ -25,8 +22,7 @@ impl CobsReceiver {
     pub fn new() -> Self {
         Self {
             buf: Box::new([0u8; 8192]),
-            acc: Box::new(CobsAccumulator::new()),
-            pending: VecDeque::new(),
+            pump: crate::cobs::CobsPump::new(),
         }
     }
 
@@ -37,25 +33,14 @@ impl CobsReceiver {
         rx: &mut tokio::net::tcp::OwnedReadHalf,
     ) -> std::io::Result<Option<Vec<u8>>> {
         loop {
-            if let Some(frame) = self.pending.pop_front() {
+            if let Some(frame) = self.pump.pop_frame() {
                 return Ok(Some(frame));
             }
             let n = rx.read(&mut self.buf[..]).await?;
             if n == 0 {
                 return Ok(None);
             }
-            let mut window = &self.buf[..n];
-            while !window.is_empty() {
-                window = match self.acc.feed(window) {
-                    FeedResult::Consumed => break,
-                    FeedResult::OverFull(w) => w,
-                    FeedResult::DeserError(w) => w,
-                    FeedResult::Success { data, remaining } => {
-                        self.pending.push_back(data.to_vec());
-                        remaining
-                    }
-                };
-            }
+            self.pump.feed(&self.buf[..n]);
         }
     }
 }
@@ -80,8 +65,7 @@ impl CobsSender {
 
     /// Encode one frame (COBS + trailing delimiter) and write it fully.
     pub async fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
-        let mut encoded = cobs::encode_vec(frame);
-        encoded.push(0);
+        let encoded = encode_frame(frame);
         self.tx.write_all(&encoded).await
     }
 }

@@ -7,23 +7,34 @@
 //!
 //! Layering (ADR-0004):
 //! - [`protocol`] — the message types both sides share (no I/O).
-//! - [`wire`] — COBS-over-TCP transport for host and device sides.
+//! - [`cobs`] — transport-agnostic COBS framing (the "one codec
+//!   everywhere" §2 rule): feed raw transport bytes, get decoded frames.
 //! - [`leases`] — the lease table with heartbeat expiry + disconnect
 //!   policies.
 //!
-//! `no_std` note: this crate is Tier-B (std) for M3; the message types in
-//! [`protocol`] are `no_std`-compatible (serde+alloc only) so an MCU
-//! device-side can reuse them verbatim (ADR-0002).
+//! Tier-A crate (ADR-0002): `no_std` + `alloc` by default; the `std`
+//! feature (default for host builds) adds the tokio TCP transport
+//! ([`wire`]) and the host-side agent ([`agent`]) / controller
+//! ([`controller`]) runtimes. MCU apps (Tier C) build with
+//! `--no-default-features` and reuse [`protocol`], [`cobs`], and
+//! [`leases`] verbatim.
 
-// Tier-B (std) crate for M3; protocol + leases modules stay no_std-shaped
-// (serde + alloc) for the future MCU device side (ADR-0002).
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
-pub mod agent;
-pub mod controller;
 pub mod dispatch;
 pub mod leases;
 pub mod protocol;
+pub mod server;
+
+#[cfg(feature = "std")]
+pub mod agent;
+#[cfg(feature = "std")]
+pub mod controller;
+#[cfg(feature = "std")]
 pub mod wire;
+
+pub mod cobs;
+pub use cobs::{CobsPump, encode_frame};

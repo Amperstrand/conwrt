@@ -1,0 +1,37 @@
+[package]
+name = "conwrt-stm32"
+description = "Conwrt MCU agent for the STM32F469I-DISCO (M5, #110): USB CDC-ACM transport, COBS frames, shared Tier-A agent core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Tier-C firmware crate (ADR-0002): excluded from the root workspace so host
+# tooling never builds it (see root Cargo.toml). Build with:
+#   cargo build --release --target thumbv7em-none-eabihf
+# Size gate:
+#   cargo size --release --target thumbv7em-none-eabihf
+# Board: STM32F469I-DISCO — USB OTG-FS on PA12 (DP) / PA11 (DM), connector
+# CN13; HSE 8 MHz crystal; USART6 on PG14/PG9 (UART capability, next slice).
+
+[dependencies]
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
+
+embassy-stm32 = { version = "0.6.0", features = ["stm32f469ni", "memory-x", "time-driver-any", "exti"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-usb = "0.6.0"
+embassy-time = { version = "0.5.1", features = ["tick-hz-32_768"] }
+embassy-futures = "0.1.2"
+
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+embedded-alloc = "0.7"
+
+defmt = "1.0"
+defmt-rtt = "1.0"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
