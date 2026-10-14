@@ -21,6 +21,7 @@ from .base import (
     build_firewall_ops,
     build_verify_ops,
     keypair_sh,
+    wg0_uci_sh,
     static_route_sh,
     transport_sh,
     wg_cleanup_sh,
@@ -68,24 +69,7 @@ PEER_IP=$(cat /tmp/vpn_addkey.json | json_get peer_ip)
 
 PIA_PRIV=$(cat /tmp/vpn_private.key)
 
-# Configure WireGuard interface
-uci set network.wg0=interface
-uci set network.wg0.proto='wireguard'
-uci set network.wg0.private_key="$PIA_PRIV"
-uci set network.wg0.listen_port='51820'
-uci add_list network.wg0.addresses="${{PEER_IP}}/32"
-uci set network.wg0.mtu='1280'
-uci set network.wg0.auto='1'
-
-# Add PIA peer
-uci add network wireguard_wg0
-uci set network.@wireguard_wg0[0].public_key="$SERVER_KEY"
-uci set network.@wireguard_wg0[0].endpoint_host="$SERVER_IP"
-uci set network.@wireguard_wg0[0].endpoint_port="$SERVER_PORT"
-uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'
-uci set network.@wireguard_wg0[0].route_allowed_ips='1'
-uci set network.@wireguard_wg0[0].persistent_keepalive='25'
-
+{wg0_uci_sh('"$PIA_PRIV"', '"${PEER_IP}/32"', '"$SERVER_KEY"', '"$SERVER_IP"', '"$SERVER_PORT"')}
 {static_route_sh("SERVER_IP", gateway, upstream_iface, "pia_server_route")}
 """
 

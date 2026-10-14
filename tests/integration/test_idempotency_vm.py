@@ -13,9 +13,13 @@ import tempfile
 import textwrap
 from pathlib import Path
 
+import sys
+
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from vm_port import port_from_env  # noqa: E402
 pytestmark = [pytest.mark.hardware]
 
 VM_SSH = [
@@ -23,7 +27,7 @@ VM_SSH = [
     "-o", "UserKnownHostsFile=/dev/null",
     "-o", "ConnectTimeout=5",
     "-i", str(REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"),
-    "-p", "2222", "root@127.0.0.1",
+    "-p", str(port_from_env("CONWRT_VM_SESSION_PORT", 2222)), "root@127.0.0.1",
 ]
 
 CONFIG = """\

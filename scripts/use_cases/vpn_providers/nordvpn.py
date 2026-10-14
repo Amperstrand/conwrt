@@ -34,6 +34,7 @@ from .base import (
     build_dns_ops,
     build_firewall_ops,
     build_verify_ops,
+    wg0_uci_sh,
     wg_cleanup_sh,
     transport_sh,
 )
@@ -417,6 +418,8 @@ def _build_nordvpn_ops(params: dict[str, Any]) -> list[Op]:
     else:
         route_block = _GATEWAY_DISCOVER_SH.format(iface=upstream_iface, route_ip=route_ip)
 
+    address_lit = "'" + address + "'"
+    port_lit = "'" + endpoint_port + "'"
     nordvpn_script = f"""{JSON_HELPER_SH}
 WG_PRIV="{priv_key}"
 SERVER_KEY="{peer_key}"
@@ -428,20 +431,7 @@ uci -q delete openvpn.nordvpn
 /etc/init.d/openvpn stop >/dev/null 2>&1 || true
 
 # WireGuard tunnel (NordLynx)
-uci set network.wg0=interface
-uci set network.wg0.proto='wireguard'
-uci set network.wg0.private_key="$WG_PRIV"
-uci add_list network.wg0.addresses='{address}'
-uci set network.wg0.mtu='{mtu}'
-uci set network.wg0.auto='1'
-
-uci add network wireguard_wg0
-uci set network.@wireguard_wg0[0].public_key="$SERVER_KEY"
-uci set network.@wireguard_wg0[0].endpoint_host="$SERVER_IP"
-uci set network.@wireguard_wg0[0].endpoint_port='{endpoint_port}'
-uci add_list network.@wireguard_wg0[0].allowed_ips='{allowed_ips}'
-uci set network.@wireguard_wg0[0].route_allowed_ips='1'
-uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'
+{wg0_uci_sh('"$WG_PRIV"', address_lit, '"$SERVER_KEY"', '"$SERVER_IP"', port_lit, mtu=mtu, keepalive=keepalive, listen_port=False)}
 
 uci -q delete network.nordvpn_server_route
 {route_block}

@@ -685,3 +685,59 @@ class TestNordvpnPinnedServerKey:
             import pytest as _pytest
             with _pytest.raises(ValueError, match="wireguard_udp public key"):
                 nv._resolve_endpoint("de1507.nordvpn.com", "token")
+
+
+class TestSurfsharkEndpointDnsParse:
+    """The static-route DNS resolution must parse real BusyBox nslookup
+    output (OpenWrt 25.12.5, captured live 2026-10-14) — the first shipped
+    version assumed a GNU format and silently resolved nothing on-device."""
+
+    CAPTURED = (
+        "Server:\t\t127.0.0.1\n"
+        "Address:\t127.0.0.1:53\n"
+        "\n"
+        "Non-authoritative answer:\n"
+        "Name:\tal-tia.prod.surfshark.com\n"
+        "Address: 172.216.15.213\n"
+    )
+
+    @staticmethod
+    def _awk_program() -> str:
+        import re
+        from use_cases.vpn_providers.surfshark import _build_surfshark_ops
+        from profile.ops import render_shell
+        script = render_shell(_build_surfshark_ops(
+            {"username": "u", "password": "p", "upstream_gateway": "192.168.1.1"}))
+        line = next(l for l in script.splitlines() if "Address:" in l and "awk" in l)
+        m = re.search(r"awk '(.*)' \| tail", line)
+        assert m, f"awk program not found in: {line}"
+        return m.group(1)
+
+    def test_parses_busybox_answer_not_resolver(self):
+        import subprocess
+        r = subprocess.run(
+            ["awk", self._awk_program()],
+            input=self.CAPTURED, capture_output=True, text=True, check=True,
+        )
+        assert r.stdout.strip() == "172.216.15.213"
+
+    def test_multiple_answers_takes_last(self):
+        import subprocess
+        out = (
+            "Server:\t\t127.0.0.1\nAddress:\t127.0.0.1:53\n\n"
+            "Name:\thost\nAddress: 1.1.1.1\nAddress: 2.2.2.2\n"
+        )
+        lines = [l for l in subprocess.run(
+            ["awk", self._awk_program()],
+            input=out, capture_output=True, text=True, check=True,
+        ).stdout.splitlines() if l.strip()]
+        assert lines[-1] == "2.2.2.2"
+
+    def test_no_answer_yields_empty(self):
+        import subprocess
+        out = "Server:\t\t127.0.0.1\nAddress:\t127.0.0.1:53\n;; connection timed out\n"
+        r = subprocess.run(
+            ["awk", self._awk_program()],
+            input=out, capture_output=True, text=True, check=True,
+        )
+        assert r.stdout.strip() == ""

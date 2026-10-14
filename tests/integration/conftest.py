@@ -23,6 +23,7 @@ from vm_port import port_from_env, require_free  # noqa: E402
 VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
 VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
+VM_PIDFILE = REPO_ROOT / "tests" / "integration" / ".openwrt-session-vm.pid"
 SSH_PORT = port_from_env("CONWRT_VM_SESSION_PORT", 2222)
 SSH_HOST = "127.0.0.1"
 OPENWRT_VERSION = "25.12.5"
@@ -281,6 +282,7 @@ def openwrt_vm():
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
         "-serial", f"file:{SERIAL_LOG}",
+        "-pidfile", str(VM_PIDFILE),
         "-daemonize",
         *kvm_args,
     ]
@@ -310,21 +312,40 @@ def openwrt_vm():
     ssh_dir.mkdir(parents=True, exist_ok=True)
     ssh_config = ssh_dir / "config"
     existing = ssh_config.read_text() if ssh_config.exists() else ""
-    if f"Host {SSH_HOST}" not in existing:
-        ssh_config.write_text(
-            existing
-            + f"\nHost {SSH_HOST}\n"
-            f"    Port {SSH_PORT}\n"
-            f"    IdentityFile {SSH_KEY}\n"
-            f"    StrictHostKeyChecking no\n"
-            f"    UserKnownHostsFile /dev/null\n"
-        )
+    wanted = (
+        f"\nHost {SSH_HOST}\n"
+        f"    Port {SSH_PORT}\n"
+        f"    IdentityFile {SSH_KEY}\n"
+        f"    StrictHostKeyChecking no\n"
+        f"    UserKnownHostsFile /dev/null\n"
+    )
+    if wanted not in existing:
+        # the port is env-overridable — a stale entry must never be trusted
+        lines = existing.splitlines(keepends=True)
+        kept: list[str] = []
+        i = 0
+        while i < len(lines):
+            if lines[i].strip() == f"Host {SSH_HOST}":
+                i += 1
+                while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
+                    i += 1
+                continue
+            kept.append(lines[i])
+            i += 1
+        ssh_config.write_text("".join(kept) + wanted)
 
     yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY)}
 
     _capture_evidence()
-    subprocess.run(["pkill", "-f", "qemu-system-x86_64.*openwrt"],
-                   capture_output=True)
+    if VM_PIDFILE.exists():
+        try:
+            pid = int(VM_PIDFILE.read_text().strip())
+            cmdline = Path(f"/proc/{pid}/cmdline")
+            if cmdline.exists() and "qemu-system-x86_64" in cmdline.read_text():
+                subprocess.run(["kill", str(pid)], capture_output=True)
+        except (ValueError, OSError):
+            pass
+        VM_PIDFILE.unlink(missing_ok=True)
     if VM_OVERLAY.exists():
         VM_OVERLAY.unlink()
 
@@ -355,3 +376,34 @@ def ssh_cmd(openwrt_vm):
     def _run(command: str, timeout: int = 30) -> str:
         return _ssh(command, timeout=timeout).stdout
     return _run
+
+
+def vm_ssh_cmd(command: str, timeout: int = 60):
+    import subprocess as _sp
+    return _sp.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
+         "-i", str(SSH_KEY), "-p", str(SSH_PORT), f"root@{SSH_HOST}", command],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+@pytest.fixture(scope="session")
+def wireguard_installed(openwrt_vm):
+    # OpenWrt 24.10 = opkg; 25.x = apk (see AGENTS.md package-era map)
+    def vm(command: str, timeout: int = 60) -> str:
+        r = vm_ssh_cmd(command, timeout)
+        assert r.returncode == 0, f"vm command failed: {command}\n{r.stderr}"
+        return r.stdout.strip()
+
+    if "opkg" in vm("command -v opkg || true"):
+        if "wireguard-tools" not in vm("opkg list-installed"):
+            vm("opkg update >/dev/null 2>&1 && "
+               "opkg install wireguard-tools kmod-wireguard >/dev/null 2>&1", timeout=180)
+    else:
+        if "wireguard-tools" not in vm("apk info 2>/dev/null"):
+            vm("apk update >/dev/null 2>&1 && "
+               "apk add wireguard-tools kmod-wireguard >/dev/null 2>&1", timeout=180)
+    assert "wg" in vm("command -v wg || true"), "wireguard-tools not installable on the VM"
+    return vm
