@@ -1,6 +1,5 @@
 """Tests for Extreme Networks AP391x flash method support."""
 
-import pytest
 import json
 import queue
 import struct
@@ -355,7 +354,6 @@ class TestExtremeHandlers(unittest.TestCase):
     @patch("conwrt.extreme._ensure_extreme_backup_dir")
     @patch("conwrt.extreme._setup_interface_ips")
     @patch("conwrt.extreme._ssh_with_password")
-    @pytest.mark.xfail(reason="transition-gate vs evolved extreme handlers — see #141", strict=False)
     def test_preflight_marks_rdwr_broken_but_continues(
         self,
         mock_ssh,
