@@ -21,6 +21,9 @@
 
 extern crate alloc;
 
+pub mod agent;
+pub mod controller;
+pub mod dispatch;
 pub mod leases;
 pub mod protocol;
 pub mod wire;
