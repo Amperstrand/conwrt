@@ -407,3 +407,94 @@ def wireguard_installed(openwrt_vm):
                "apk add wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
     assert "wg" in vm("command -v wg || true"), "wireguard-tools not installable on the VM"
     return vm
+
+
+# --- Venue fixture (PRTA transition plan §3, step S2) --------------------------
+
+import sys as _sys
+
+_sys.path.insert(0, str(REPO_ROOT / "tests"))
+from venues import venues_from_env  # noqa: E402
+
+VENUES = venues_from_env()
+
+_VENUE_UNREACHABLE_MARKERS = (
+    "Timeout while waiting for ssh connection",
+    "NoDriverFoundError",
+    "Connection timed out",
+    "Connection refused",
+    "No route to host",
+    "Traceback (most recent call last)",
+)
+
+
+def _venue_unreachable(stderr: str) -> bool:
+    return any(marker in stderr for marker in _VENUE_UNREACHABLE_MARKERS)
+
+
+class VenueHandle:
+    """The whole venue contract a venue-agnostic test sees: a name + run()."""
+
+    def __init__(self, name: str, run):
+        self.name = name
+        self._run = run
+
+    def run(self, command: str, timeout: int = 30):
+        return self._run(command, timeout=timeout)
+
+
+def _qemu_venue_runner(vm: dict):
+    def _run(command: str, timeout: int):
+        return vm_ssh_cmd(command, timeout=timeout)
+    return _run
+
+
+def _labgrid(args: list[str], place: str, timeout: int = 40):
+    client = os.environ.get("CONWRT_LABGRID_CLIENT", "labgrid-client")
+    coordinator = os.environ.get("CONWRT_LABGRID_COORDINATOR", "ai-legion:20408")
+    return subprocess.run(
+        [client, "-x", coordinator, "-p", place, *args],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+
+
+@pytest.fixture(params=VENUES, ids=[v.key for v in VENUES])
+def venue(request):
+    """A device to run commands on — QEMU VM, labgrid place, or direct SSH.
+
+    Selected by the runner via CONWRT_VENUES (default: qemu-session only).
+    Dark labgrid venues SKIP (never fail) — on a multi-agent host the place
+    may be held by a sibling session or the device itself dark.
+    """
+    chosen = request.param
+    if chosen.kind == "qemu-session":
+        vm = request.getfixturevalue("openwrt_vm")
+        yield VenueHandle(
+            name=f"virtual-x86-64@qemu(127.0.0.1:{vm['port']})",
+            run=_qemu_venue_runner(vm),
+        )
+        return
+
+    place = chosen.place or ""
+    acquired = _labgrid(["acquire"], place, timeout=25)
+    if acquired.returncode != 0:
+        pytest.skip(
+            f"labgrid place {place!r} not acquirable on "
+            f"{os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')} "
+            f"(held by a sibling session or coordinator down): "
+            f"{acquired.stderr.strip()[-200:]}"
+        )
+
+    def _run(command: str, timeout: int):
+        # Exporter-proxied SSH: this host has no route to the bench VLANs;
+        # the labgrid client tunnels through the exporter host.
+        r = _labgrid(["ssh", "--", command], place, timeout=timeout)
+        if _venue_unreachable(r.stderr):
+            pytest.skip(f"{place}: venue unreachable via labgrid "
+                        f"(rc={r.returncode}): {r.stderr.strip()[-300:]}")
+        return r
+
+    try:
+        yield VenueHandle(name=f"labgrid:{place}", run=_run)
+    finally:
+        _labgrid(["release"], place, timeout=25)
