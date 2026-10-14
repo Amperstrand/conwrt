@@ -15,6 +15,7 @@ path = "src/main.rs"
 conwrt-types = { path = "../../crates/conwrt-types" }
 conwrt-core = { path = "../../crates/conwrt-core" }
 conwrt-local-std = { path = "../../providers/conwrt-local-std" }
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
 clap = { workspace = true }
 pollster = { workspace = true }
 tokio = { workspace = true }

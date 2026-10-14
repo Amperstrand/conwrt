@@ -36,7 +36,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand)]
 enum Command {
     /// Validate device model JSON files against the model schema.
@@ -88,6 +87,11 @@ enum Command {
         /// Also probe these TCP ports on the discovered router link-local.
         #[arg(long, value_delimiter = ',', default_value = "22,80")]
         ports: Vec<u16>,
+    },
+    /// Agent controller subcommands (#108).
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
     },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
@@ -201,7 +205,6 @@ enum Command {
         dir: PathBuf,
     },
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ScenarioChoice {
     Off,
@@ -211,7 +214,6 @@ enum ScenarioChoice {
     SshOnly,
     Stock,
 }
-
 impl ScenarioChoice {
     fn named(self) -> NamedScenario {
         match self {
@@ -224,17 +226,46 @@ impl ScenarioChoice {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ProfileChoice {
     Sqm,
     Doh,
 }
-
+#[derive(Subcommand)]
+enum AgentCommand {
+    /// Connect to an agent: handshake + list capabilities.
+    Info {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+    },
+    /// Acquire a resource lease.
+    Lease {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+        /// Resource to lease (e.g. uart0, eth0).
+        #[arg(long)]
+        resource: String,
+        /// Shared (non-exclusive) lease.
+        #[arg(long)]
+        shared: bool,
+    },
+    /// Query a stream transfer's status (the resume token).
+    Status {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+        /// Transfer to query.
+        #[arg(long)]
+        transfer_id: u64,
+    },
+}
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Models { dir } => cmd_models_validate(&dir),
+        Command::Agent { command } => cmd_agent(command),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
         Command::DiscoverV6 {
             interface,
@@ -312,7 +343,6 @@ fn main() -> ExitCode {
         ),
     }
 }
-
 fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf) {
     match conwrt_types::registry::ModelRegistry::load_dir(dir) {
         Ok((registry, invalid)) if invalid.is_empty() => (registry, dir.to_path_buf()),
@@ -329,7 +359,6 @@ fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf)
         }
     }
 }
-
 fn cmd_models_validate(dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
     for model in registry.models() {
@@ -347,7 +376,6 @@ fn cmd_models_validate(dir: &Path) -> ExitCode {
     );
     ExitCode::SUCCESS
 }
-
 fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
     let mac = match conwrt_types::MacAddress::parse(mac) {
         Ok(m) => m,
@@ -378,7 +406,6 @@ fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
     }
     ExitCode::SUCCESS
 }
-
 fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
     let mut prober = MockProber::responding(ip, scenario.named());
@@ -393,7 +420,6 @@ fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
     println!("\n(provider: scripted mock — `conwrt diagnose` uses the local provider)");
     ExitCode::SUCCESS
 }
-
 fn cmd_diagnose(
     ip: IpAddr,
     interface: Option<String>,
@@ -425,7 +451,6 @@ fn cmd_diagnose(
     println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
     ExitCode::SUCCESS
 }
-
 fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
     println!("target:     {}", diagnosis.ip);
     if let Some(mac) = diagnosis.mac {
@@ -449,7 +474,6 @@ fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_plan(
     profile: ProfileChoice,
@@ -525,7 +549,6 @@ fn cmd_plan(
         }
     }
 }
-
 fn default_sqm() -> SqmProfile {
     SqmProfile {
         download_kbps: 10_000,
@@ -537,7 +560,6 @@ fn default_sqm() -> SqmProfile {
         overhead: 0,
     }
 }
-
 fn cmd_fingerprint(
     ip: IpAddr,
     port: u16,
@@ -620,7 +642,6 @@ fn cmd_fingerprint(
     );
     ExitCode::SUCCESS
 }
-
 fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
     match key {
         Some(path) => Ok(SshAuth::KeyFile {
@@ -631,7 +652,6 @@ fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
         None => Err("provide --key <path> or --password <secret> for authentication".into()),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_apply(
     profile: ProfileChoice,
@@ -732,7 +752,6 @@ fn cmd_apply(
             return ExitCode::FAILURE;
         }
     }
-
     let plan = match plan_profile(&confirmed, &model, &profile) {
         Ok(plan) => plan,
         Err(reason) => {
@@ -752,7 +771,6 @@ fn cmd_apply(
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
         return ExitCode::SUCCESS;
     }
-
     eprintln!("# executing on {ip} ...");
     match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
         Ok(outcome) if outcome.fully_verified() => {
@@ -778,7 +796,6 @@ fn cmd_apply(
         }
     }
 }
-
 fn build_profile(
     profile: ProfileChoice,
     download_kbps: Option<u32>,
@@ -803,7 +820,6 @@ fn build_profile(
         })),
     }
 }
-
 fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCode {
     use conwrt_local_std::v6;
 
@@ -825,7 +841,6 @@ fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCod
     if !check.ready() {
         println!("\nfix the problems above first — the prober itself cannot speak v6.");
     }
-
     println!("\n=== soliciting router advertisement (rdisc6):");
     match v6::solicit_router_advertisement(interface, 2) {
         Ok(Some(ra)) => {
@@ -865,7 +880,6 @@ fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCod
         }
         Err(e) => println!("  {e}"),
     }
-
     if let Some(mac_str) = mac {
         match conwrt_types::MacAddress::parse(mac_str) {
             Ok(mac) => {
@@ -888,4 +902,105 @@ fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCod
         }
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_agent(command: AgentCommand) -> ExitCode {
+    use conwrt_agent_proto::controller::AgentClient;
+    use conwrt_agent_proto::protocol::DisconnectPolicy;
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match command {
+        AgentCommand::Info { addr } => {
+            let caps = rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await
+            });
+            match caps {
+                Ok(caps) => {
+                    println!("connected to {addr}");
+                    println!("capabilities ({}):", caps.len());
+                    for c in &caps {
+                        let detail = if c.detail.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                " [{}]",
+                                c.detail
+                                    .iter()
+                                    .map(|(k, v)| format!("{k}={v}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        };
+                        println!("  {}{}", c.name, detail);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        AgentCommand::Lease {
+            addr,
+            resource,
+            shared,
+        } => {
+            let result = rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await?;
+                client
+                    .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+                        resource,
+                        exclusive: !shared,
+                        on_disconnect: DisconnectPolicy::Abort,
+                    })
+                    .await
+            });
+            match result {
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { heartbeat_ms }) => {
+                    println!("granted (heartbeat every {heartbeat_ms}ms)");
+                    ExitCode::SUCCESS
+                }
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Denied { holder }) => {
+                    eprintln!("denied (holder: {holder:?})");
+                    ExitCode::from(1)
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        AgentCommand::Status { addr, transfer_id } => {
+            let result = rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await?;
+                client.stream_status(transfer_id).await
+            });
+            match result {
+                Ok(ack) => {
+                    println!(
+                        "transfer {transfer_id}: {}/{} bytes{}",
+                        ack.contiguous,
+                        if ack.done { "done" } else { "in progress" },
+                        if ack.done { " (done)" } else { "" }
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
 }
