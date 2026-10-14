@@ -6,6 +6,8 @@
 //! identical regardless of which side of ADR-0002's tier boundary the
 //! agent runs on.
 
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -21,6 +23,22 @@ const HEARTBEAT_BUDGET: u32 = 3;
 /// Heartbeat interval advertised with each grant.
 const HEARTBEAT_MS: u32 = 1000;
 
+/// Where UART-bound bytes actually go — the transport-independent stand-in
+/// for real UART hardware. The HIL mock records; the firmware sinks into
+/// the board UART.
+///
+/// `Send` supertrait: keeps [`ServerCore`] `Send` so the host-side mock can
+/// spawn it on tokio (the MCU runs it in a single embassy task where the
+/// bound is a no-op marker).
+pub trait UartSink: Send {
+    /// Write `data` to `port`; returns the byte count accepted.
+    ///
+    /// # Errors
+    /// Hardware failure or an invalid port — surfaced to the controller
+    /// as a [`WireError`].
+    fn uart_write(&mut self, port: u8, data: &[u8]) -> Result<usize, WireError>;
+}
+
 /// The protocol state machine: what an agent IS, independent of how bytes
 /// arrive (tokio TCP, USB CDC, …).
 pub struct ServerCore {
@@ -29,6 +47,8 @@ pub struct ServerCore {
     handshaked: bool,
     controller: Option<String>,
     leases: LeaseTable,
+    uart: Option<Box<dyn UartSink>>,
+    outbound_events: VecDeque<AgentEvent>,
 }
 
 impl ServerCore {
@@ -41,12 +61,29 @@ impl ServerCore {
             handshaked: false,
             controller: None,
             leases: LeaseTable::new(),
+            uart: None,
+            outbound_events: VecDeque::new(),
         }
+    }
+
+    /// New agent core with a UART sink attached (enables lease-gated
+    /// `UartWrite` handling).
+    #[must_use]
+    pub fn with_uart(
+        agent_version: &str,
+        capabilities: Vec<CapabilityInfo>,
+        uart: Box<dyn UartSink>,
+    ) -> Self {
+        let mut core = Self::new(agent_version, capabilities);
+        core.uart = Some(uart);
+        core
     }
 
     /// Drop all session state — call on connection loss. Leases die with
     /// their controller (the `Abort` default); parking `Complete` work
-    /// across reconnects is an M6 concern.
+    /// across reconnects is an M6 concern. Queued outbound events SURVIVE:
+    /// they are agent output, not controller state (a boot banner queued
+    /// before a connection still delivers on connect).
     pub fn reset_session(&mut self) {
         self.handshaked = false;
         self.controller = None;
@@ -136,6 +173,26 @@ impl ServerCore {
             WireEndpoint::StreamStatus { transfer_id } => {
                 WireResult::Error(WireError::UnknownTransfer(transfer_id))
             }
+            WireEndpoint::UartWrite { port, data } => {
+                let resource = alloc::format!("uart{port}");
+                let controller = self.controller.clone().unwrap_or_default();
+                let held = self
+                    .leases
+                    .leases()
+                    .any(|lease| lease.resource == resource && lease.controller == controller);
+                if !held {
+                    return WireResult::Error(WireError::LeaseRequired(resource));
+                }
+                match self.uart.as_mut() {
+                    Some(sink) => match sink.uart_write(port, &data) {
+                        Ok(n) => WireResult::UartWritten(n),
+                        Err(e) => WireResult::Error(e),
+                    },
+                    None => WireResult::Error(WireError::Internal(String::from(
+                        "no uart sink attached",
+                    ))),
+                }
+            }
         }
     }
 
@@ -149,6 +206,22 @@ impl ServerCore {
             .into_iter()
             .map(AgentEvent::LeaseExpired)
             .collect()
+    }
+
+    /// Queue unsolicited UART RX bytes for the controller (the firmware's
+    /// UART receive task calls this). Delivery is via [`ServerCore::take_events`]
+    /// on the transport's next drain.
+    pub fn push_uart_data(&mut self, port: u8, data: &[u8]) {
+        self.outbound_events.push_back(AgentEvent::UartData {
+            port,
+            data: Vec::from(data),
+        });
+    }
+
+    /// Drain queued outbound events; the transport sends each as one frame.
+    #[must_use]
+    pub fn take_events(&mut self) -> Vec<AgentEvent> {
+        self.outbound_events.drain(..).collect()
     }
 }
 
@@ -335,5 +408,98 @@ mod tests {
         );
         let refused = request(&mut c, 3, WireEndpoint::Capabilities);
         assert_eq!(refused, WireResult::Error(WireError::NotHandshaked));
+    }
+
+    type SharedWrites = std::sync::Arc<std::sync::Mutex<Vec<(u8, Vec<u8>)>>>;
+
+    struct RecordingSink {
+        written: SharedWrites,
+    }
+
+    impl UartSink for RecordingSink {
+        fn uart_write(&mut self, port: u8, data: &[u8]) -> Result<usize, WireError> {
+            self.written.lock().unwrap().push((port, data.to_vec()));
+            Ok(data.len())
+        }
+    }
+
+    fn uart_core() -> (ServerCore, SharedWrites) {
+        let written: SharedWrites = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let core = ServerCore::with_uart(
+            "test-agent 0.1",
+            Vec::new(),
+            Box::new(RecordingSink {
+                written: std::sync::Arc::clone(&written),
+            }),
+        );
+        (core, written)
+    }
+
+    fn lease_uart0(c: &mut ServerCore) {
+        request(
+            c,
+            2,
+            WireEndpoint::LeaseAcquire(LeaseRequestShape {
+                resource: String::from("uart0"),
+                exclusive: true,
+                on_disconnect: DisconnectPolicy::Abort,
+            }),
+        );
+    }
+
+    #[test]
+    fn uart_write_without_lease_is_refused() {
+        let (mut c, written) = uart_core();
+        handshake(&mut c);
+        let result = request(
+            &mut c,
+            3,
+            WireEndpoint::UartWrite {
+                port: 0,
+                data: Vec::from(&b"AT\r"[..]),
+            },
+        );
+        assert_eq!(
+            result,
+            WireResult::Error(WireError::LeaseRequired(String::from("uart0")))
+        );
+        assert!(
+            written.lock().unwrap().is_empty(),
+            "refused write must not reach the sink"
+        );
+    }
+
+    #[test]
+    fn uart_write_with_lease_reaches_sink() {
+        let (mut c, written) = uart_core();
+        handshake(&mut c);
+        lease_uart0(&mut c);
+        let result = request(
+            &mut c,
+            3,
+            WireEndpoint::UartWrite {
+                port: 0,
+                data: Vec::from(&b"AT\r"[..]),
+            },
+        );
+        assert_eq!(result, WireResult::UartWritten(3));
+        assert_eq!(*written.lock().unwrap(), vec![(0u8, b"AT\r".to_vec())]);
+    }
+
+    #[test]
+    fn uart_events_queue_drain_and_survive_reset() {
+        let (mut c, _written) = uart_core();
+        c.push_uart_data(0, b"boot banner");
+        c.reset_session();
+        let events = c.take_events();
+        assert_eq!(events.len(), 1, "queued event must survive reset_session");
+        assert!(matches!(
+            &events[0],
+            AgentEvent::UartData { port: 0, data } if data == b"boot banner"
+        ));
+        assert!(
+            c.take_events().is_empty(),
+            "drain must empty the queue exactly once"
+        );
     }
 }

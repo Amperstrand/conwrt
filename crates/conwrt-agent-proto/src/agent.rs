@@ -253,5 +253,10 @@ async fn dispatch_request(
                 done,
             })
         }
+        // UART passthrough is the MCU agents' capability (#110); the std
+        // TCP agent has no local UART hardware to sink bytes into.
+        WireEndpoint::UartWrite { .. } => WireResult::Error(crate::dispatch::WireError::Internal(
+            "uart passthrough unsupported on this agent".into(),
+        )),
     }
 }

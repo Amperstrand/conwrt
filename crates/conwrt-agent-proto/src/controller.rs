@@ -198,6 +198,25 @@ impl AgentClient {
         }
     }
 
+    /// Write bytes to a UART port (lease-gated agent-side, M5 #110).
+    /// Incoming UART bytes arrive unsolicited as `AgentEvent::UartData`
+    /// via [`AgentClient::try_recv_event`].
+    ///
+    /// # Errors
+    /// Transport failure, missing lease (`LeaseRequired`), or agent error.
+    pub async fn uart_write(&mut self, port: u8, data: Vec<u8>) -> Result<usize, ClientError> {
+        match self
+            .round_trip(WireEndpoint::UartWrite { port, data })
+            .await?
+        {
+            WireResult::UartWritten(n) => Ok(n),
+            WireResult::Error(e) => Err(ClientError::Agent(e)),
+            _ => Err(ClientError::Agent(crate::dispatch::WireError::Internal(
+                "unexpected response type".into(),
+            ))),
+        }
+    }
+
     /// Send one stream chunk and await its ack (lock-step backpressure).
     ///
     /// # Errors

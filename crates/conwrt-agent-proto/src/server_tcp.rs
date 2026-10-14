@@ -41,6 +41,11 @@ async fn mock_connection(socket: TcpStream, server: &mut ServerCore) -> io::Resu
             continue;
         };
         sender.send(&frame_bytes_of(&response)?).await?;
+        for event in server.take_events() {
+            sender
+                .send(&frame_bytes_of(&WireFrame::Event(event))?)
+                .await?;
+        }
     }
     Ok(())
 }
