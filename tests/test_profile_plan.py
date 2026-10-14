@@ -109,6 +109,7 @@ def test_mac_hash_ip_step_generated() -> None:
     step = mac_steps[0]
     assert "10.$_o2.$_o3.1" in step.configure_script
     assert "sha256sum" in step.configure_script
+    assert "uci set network.lan.netmask" in step.configure_script
     assert step.include_in_post_install is True
 
 
@@ -122,6 +123,7 @@ def test_mac_hash_ip_firstboot_script() -> None:
     fb = mac_steps[0].firstboot_script
     assert "eth0/address" in fb
     assert "uci set network.lan.ipaddr" in fb
+    assert "uci set network.lan.netmask" in fb
     assert "uci commit network" in fb
 
 
@@ -231,6 +233,11 @@ def test_lan_ip_mode_static_with_lan_ip_adds_static_step() -> None:
     plan = build_plan(cfg, mode="post_install")
     kinds = [s.kind for s in _lan_steps(plan)]
     assert StepKind.LAN_IP in kinds
+    step = next(s for s in _lan_steps(plan) if s.kind == StepKind.LAN_IP)
+    # Regression (#151): a static ipaddr emitted without an explicit netmask
+    # leaves 25.12 netifd defaulting to /32 — the device goes receive-only.
+    assert "uci set network.lan.netmask" in step.firstboot_script
+    assert "uci set network.lan.netmask" in step.configure_script
 
 
 def test_lan_ip_mode_static_without_lan_ip_adds_no_step() -> None:

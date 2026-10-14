@@ -490,12 +490,18 @@ def build_plan(
             f"{_mac_src_fb}",
             _hash_derive.replace("; ", "\n"),
             'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
+            # Netmask MUST be explicit: 24.10 netifd defaulted a missing
+            # netmask to /24, but 25.12 defaults to /32 — which leaves the
+            # device receive-only-silent (ARP answers, no on-link replies).
+            # Incident: conwrt-lab x1860-1 incident_2026_10_13_recovery (#151).
+            'uci set network.lan.netmask="255.255.255.0"',
             "uci commit network",
         ])
         _mac_ip_ssh = " ; ".join([
             f"{_mac_src_ssh}",
             _hash_derive,
             'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
+            'uci set network.lan.netmask="255.255.255.0"',
             "uci commit network",
         ])
         steps.append(ProfileStep(
@@ -513,19 +519,29 @@ def build_plan(
                 ShellCommand("_o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"),
                 ShellCommand("_o3=$((_o3 % 250 + 1))"),
                 ShellCommand('uci set network.lan.ipaddr="10.$_o2.$_o3.1"'),
+                ShellCommand('uci set network.lan.netmask="255.255.255.0"'),
                 ShellCommand("uci commit network"),
             ],
         ))
     elif cfg.lan_ip:
-        _lan_fb = f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)} && uci commit network"
+        _lan_fb = (
+            f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+            " && uci set network.lan.netmask='255.255.255.0'"
+            " && uci commit network"
+        )
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
             label=f"LAN IP → {cfg.lan_ip}",
             firstboot_script=_lan_fb,
-                configure_script=f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}",
+            configure_script=(
+                f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+                " && uci set network.lan.netmask='255.255.255.0'"
+            ),
             include_in_asu=True,
             ops=[
-                UciSet(config="network", section="lan", values={"ipaddr": cfg.lan_ip}),
+                UciSet(config="network", section="lan", values={
+                    "ipaddr": cfg.lan_ip, "netmask": "255.255.255.0",
+                }),
             ],
         ))
 
