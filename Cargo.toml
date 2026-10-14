@@ -8,6 +8,7 @@ members = [
     "crates/conwrt-agent-proto",
     "providers/conwrt-local-std",
     "apps/conwrt-cli",
+    "apps/conwrt-agent",
 ]
 
 [workspace.package]
