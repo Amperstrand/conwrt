@@ -72,7 +72,7 @@ def is_default_route(interface: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _check_stale_ip(interface: str, profile: SimpleNamespace) -> PreflightResult:
-    """Fail if client IPs are already assigned to the interface."""
+    """Warn when a profile client IP is already on the interface (idempotent re-run)."""
     existing = get_interface_ips(interface)
     conflicts: list[str] = []
     for attr in ("client_ip", "openwrt_client_ip"):
