@@ -175,14 +175,14 @@ MAAS DHCP snippets (MD6 deprecation) don't affect our setup — we configure DHC
 ```
   Customer VM → customer VLAN → x1860 gateway → WireGuard wg0 → VPS exit → internet
        │                          │                                    │
-  10.50.0.x                 10.50.0.1                            46.224.104.12
-  (bench subnet)         (WiFi uplink mgmt)                    (inr2.cashu.exchange)
+  10.50.0.x                 10.50.0.1                            <vps-exit-ip>
+  (bench subnet)         (WiFi uplink mgmt)                    (<vps-hostname>)
                                                               (public NAT exit)
 ```
 
 ### WireGuard Setup (verified working)
 
-**VPS (inr2.cashu.exchange / 46.224.104.12):**
+**VPS (<vps-hostname> / <vps-exit-ip>):**
 ```
 [Interface]
 Address = 10.99.0.1/24
@@ -197,7 +197,7 @@ AllowedIPs = 10.99.0.2/32, 10.50.0.0/24
 **x1860 (OpenWrt UCI):**
 ```
 network.wg0 = wireguard interface, private key, 10.99.0.2/24
-peer = VPS public key, endpoint 46.224.104.12:51820
+peer = VPS public key, endpoint <vps-exit-ip>:51820
 allowed_ips = 0.0.0.0/0 (all internet through VPN)
 firewall: wg0 in wan zone (lan→wan forwarding allowed)
 ```
@@ -205,4 +205,4 @@ firewall: wg0 in wan zone (lan→wan forwarding allowed)
 ### Verified Performance
 - WireGuard latency: ~30ms (bench → VPS)
 - All bench devices automatically exit through VPN (no per-device config)
-- Public IP confirmed: 46.224.104.12 (not home IP)
+- Public IP confirmed: <vps-exit-ip> (not home IP)
