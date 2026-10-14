@@ -126,7 +126,6 @@ class _FakeProc:
         return None
 
 
-@pytest.mark.xfail(reason="DeviceWatcher stop-path TypeError on py3.10 — see #141", strict=False)
 def test_watcher_reconnect_writes_tail_and_events(tmp_path: Path) -> None:
     cfg = bw.DeviceConfig(name="fake", host="unused", snap_kind="none",
                           snap_interval_s=9999)

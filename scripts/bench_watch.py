@@ -225,7 +225,11 @@ class DeviceWatcher(threading.Thread):
         self.out_dir = out_dir
         self.events = events
         self.max_dir_mb = max_dir_mb
-        self._stop = threading.Event()
+        # Named _stop_evt, NOT _stop: threading.Thread has a private _stop()
+        # method that CPython calls when run() returns — an Event attribute of
+        # the same name makes every clean thread shutdown raise
+        # TypeError("'Event' object is not callable") out of join() (#141).
+        self._stop_evt = threading.Event()
         self._backoff = backoff_min_s
         self._spawn = spawn or self._ssh_spawn
         self._run_call = run_call or self._ssh_run
@@ -251,7 +255,7 @@ class DeviceWatcher(threading.Thread):
     def run(self) -> None:  # thread: raw stream
         dev_dir = self.out_dir / self.cfg.name
         dev_dir.mkdir(parents=True, exist_ok=True)
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             raw_path = dev_dir / f"{time.strftime('%Y%m%d')}.log"
             ring = RingBuffer()
             try:
@@ -266,7 +270,7 @@ class DeviceWatcher(threading.Thread):
             with raw_path.open("a") as raw:
                 raw.write(f"=== connected {utcnow()} ===\n")
                 for line in proc.stdout:
-                    if self._stop.is_set():
+                    if self._stop_evt.is_set():
                         proc.kill()
                         break
                     ring.extend(line.encode())
@@ -288,7 +292,7 @@ class DeviceWatcher(threading.Thread):
             self._sleep_backoff()
 
     def _sleep_backoff(self) -> None:
-        self._stop.wait(self._backoff)
+        self._stop_evt.wait(self._backoff)
         self._backoff = min(self._backoff * 2, BACKOFF_MAX_S)
 
     # -- snapshot loop ----------------------------------------------------
@@ -296,7 +300,7 @@ class DeviceWatcher(threading.Thread):
     def snap_forever(self) -> None:  # thread: SNAP polling + reboot oracle
         if self.cfg.snap_kind == "none":
             return
-        while not self._stop.wait(self.cfg.snap_interval_s):
+        while not self._stop_evt.wait(self.cfg.snap_interval_s):
             self.snap_once()
 
     def snap_once(self) -> SnapState | None:
@@ -323,7 +327,7 @@ class DeviceWatcher(threading.Thread):
         return used > self.max_dir_mb * 1024 * 1024
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
 
 
 def main(argv: list[str] | None = None) -> int:
