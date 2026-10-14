@@ -33,7 +33,10 @@ FLASH_PIDFILE = REPO_ROOT / "tests" / "integration" / ".openwrt-flash-vm.pid"
 FLASH_SERIAL = REPO_ROOT / "tests" / "integration" / ".openwrt-flash-serial.log"
 
 FLASH_HOST = "127.0.0.2"   # distinct loopback address — cannot hijack a real device IP
-FLASH_PORT = 2223
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from vm_port import port_from_env, require_free  # noqa: E402
+
+FLASH_PORT = port_from_env("CONWRT_VM_FLASH_PORT", 2223)
 OPENWRT_VERSION = "25.12.5"
 
 SSH_BASE = [
@@ -52,21 +55,35 @@ def _vm_ssh(cmd: str, timeout: int = 30) -> subprocess.CompletedProcess:
 
 def _ensure_ssh_config_entry() -> None:
     """conwrt reaches the device via root@<ip> with no port flag — the port and
-    key come from ~/.ssh/config (same mechanism the session VM relies on)."""
+    key come from ~/.ssh/config (same mechanism the session VM relies on).
+
+    The port is env-overridable (CONWRT_VM_FLASH_PORT), so an existing entry
+    with a different port is replaced rather than trusted."""
     ssh_config = Path.home() / ".ssh" / "config"
     existing = ssh_config.read_text() if ssh_config.exists() else ""
-    if f"Host {FLASH_HOST}\n" in existing:
-        return
-    ssh_config.parent.mkdir(parents=True, exist_ok=True)
-    ssh_config.write_text(
-        existing
-        + f"\nHost {FLASH_HOST}\n"
+    wanted = (
+        f"\nHost {FLASH_HOST}\n"
         f"    HostName 127.0.0.2\n"
         f"    Port {FLASH_PORT}\n"
         f"    IdentityFile {VM_KEY}\n"
         f"    StrictHostKeyChecking no\n"
         f"    UserKnownHostsFile /dev/null\n"
     )
+    if wanted in existing:
+        return
+    lines = existing.splitlines(keepends=True)
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == f"Host {FLASH_HOST}":
+            i += 1
+            while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
+                i += 1
+            continue
+        kept.append(lines[i])
+        i += 1
+    ssh_config.parent.mkdir(parents=True, exist_ok=True)
+    ssh_config.write_text("".join(kept) + wanted)
 
 
 def _qemu_available() -> bool:
@@ -102,6 +119,8 @@ def flash_vm():
     # without this pin it varies with the host's QEMU build. Must stay in sync with
     # models/virtual-x86-64.json openwrt.board_names.
     smbios_args = ["-smbios", "type=1,manufacturer=conwrt,product=conwrt-test-vm"]
+    require_free(FLASH_PORT, FLASH_HOST, "CONWRT_VM_FLASH_PORT",
+                 "flash-lifecycle VM (dedicated QEMU fixture)")
     qemu_cmd = [
         "qemu-system-x86_64",
         "-drive", f"file={FLASH_OVERLAY},format=qcow2,if=virtio",
