@@ -31,7 +31,11 @@ defmt = "1.0"
 defmt-rtt = "1.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 
+[profile.dev]
+panic = "abort"
+
 [profile.release]
 opt-level = "s"
 lto = true
 codegen-units = 1
+panic = "abort"
