@@ -168,3 +168,41 @@ M1 (fix images) → M2 (commission host) → M3 (compose VM) → M4 (VPN)
 ## DHCP Snippets Deprecation Note
 
 MAAS DHCP snippets (MD6 deprecation) don't affect our setup — we configure DHCP via the subnet/VLAN API, not snippets. No action needed, but noted for future MAAS upgrades.
+
+## VPN Exit Node Configuration (2026-10-14)
+
+### Architecture
+```
+  Customer VM → customer VLAN → x1860 gateway → WireGuard wg0 → VPS exit → internet
+       │                          │                                    │
+  10.50.0.x                 10.50.0.1                            46.224.104.12
+  (bench subnet)         (WiFi uplink mgmt)                    (inr2.cashu.exchange)
+                                                              (public NAT exit)
+```
+
+### WireGuard Setup (verified working)
+
+**VPS (inr2.cashu.exchange / 46.224.104.12):**
+```
+[Interface]
+Address = 10.99.0.1/24
+ListenPort = 51820
+PostUp = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; iptables -A FORWARD -i wg0 -j ACCEPT
+
+[Peer]  # x1860 bench gateway
+PublicKey = XR7oMeguu6+ChSrhnQyfxkVyQAUBh3erw19UrmmkMgE=
+AllowedIPs = 10.99.0.2/32, 10.50.0.0/24
+```
+
+**x1860 (OpenWrt UCI):**
+```
+network.wg0 = wireguard interface, private key, 10.99.0.2/24
+peer = VPS public key, endpoint 46.224.104.12:51820
+allowed_ips = 0.0.0.0/0 (all internet through VPN)
+firewall: wg0 in wan zone (lan→wan forwarding allowed)
+```
+
+### Verified Performance
+- WireGuard latency: ~30ms (bench → VPS)
+- All bench devices automatically exit through VPN (no per-device config)
+- Public IP confirmed: 46.224.104.12 (not home IP)
