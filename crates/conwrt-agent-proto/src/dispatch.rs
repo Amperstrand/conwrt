@@ -4,6 +4,8 @@
 //! correlation id; responses echo it. The agent dispatches on the
 //! [`WireEndpoint`] variant; the controller correlates on the id.
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
