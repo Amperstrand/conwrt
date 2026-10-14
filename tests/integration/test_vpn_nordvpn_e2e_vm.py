@@ -64,14 +64,14 @@ def test_nordvpn_token_tunnel_e2e(openwrt_vm, wireguard_installed):
     assert vm("uci -q get network.wg0.proto") == "wireguard"
 
     deadline = time.time() + 120
-    handshake = "0"
+    handshake = 0
     while time.time() < deadline:
-        out = vm("wg show wg0 latest-handshake 2>/dev/null || true")
-        if out and out != "0":
-            handshake = out
+        out = vm("wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}'")
+        if out and out.isdigit() and int(out) > 0:
+            handshake = int(out)
             break
         time.sleep(5)
-    assert handshake != "0", (
+    assert handshake > 0, (
         f"no WireGuard handshake within 120s — tunnel not established\n"
         f"wg show:\n{vm('wg show wg0')}")
 
@@ -82,10 +82,8 @@ def test_nordvpn_token_tunnel_e2e(openwrt_vm, wireguard_installed):
     )
     assert rx_bytes > 0, f"tunnel up but no received traffic: {transfer}"
 
-    if "curl" not in vm("command -v curl || true"):
-        vm("apk update >/dev/null 2>&1 && apk add curl >/dev/null 2>&1 "
-           "|| opkg update >/dev/null 2>&1 && opkg install curl >/dev/null 2>&1",
-           timeout=180)
+    assert "curl" in vm("command -v curl || true"), \
+        "curl must be preinstalled by the wireguard_installed fixture"
     vm_exit_ip = vm("curl -s --interface wg0 --max-time 30 https://api.ipify.org", timeout=45)
     host_exit_ip = _host_exit_ip()
     assert vm_exit_ip and vm_exit_ip != host_exit_ip, (
