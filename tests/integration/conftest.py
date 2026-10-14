@@ -400,10 +400,10 @@ def wireguard_installed(openwrt_vm):
     if "opkg" in vm("command -v opkg || true"):
         if "wireguard-tools" not in vm("opkg list-installed"):
             vm("opkg update >/dev/null 2>&1 && "
-               "opkg install wireguard-tools kmod-wireguard >/dev/null 2>&1", timeout=180)
+               "opkg install wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
     else:
         if "wireguard-tools" not in vm("apk info 2>/dev/null"):
             vm("apk update >/dev/null 2>&1 && "
-               "apk add wireguard-tools kmod-wireguard >/dev/null 2>&1", timeout=180)
+               "apk add wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
     assert "wg" in vm("command -v wg || true"), "wireguard-tools not installable on the VM"
     return vm
