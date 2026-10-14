@@ -17,10 +17,13 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from vm_port import port_from_env, require_free  # noqa: E402
+
 VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
 VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
-SSH_PORT = 2222
+SSH_PORT = port_from_env("CONWRT_VM_SESSION_PORT", 2222)
 SSH_HOST = "127.0.0.1"
 OPENWRT_VERSION = "25.12.5"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
@@ -266,6 +269,9 @@ def openwrt_vm():
         ["qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(VM_BASE), str(VM_OVERLAY)],
         capture_output=True, text=True, timeout=30, check=True,
     )
+
+    require_free(SSH_PORT, SSH_HOST, "CONWRT_VM_SESSION_PORT",
+                 "session VM (QEMU OpenWrt integration fixture)")
 
     qemu_cmd = [
         "qemu-system-x86_64",
