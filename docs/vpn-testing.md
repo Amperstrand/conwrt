@@ -13,6 +13,8 @@ what has been verified, and what still needs a test. Last full audit:
 | Live API contract | `make test-live` | internet | The provider APIs still return the JSON shape our generated first-boot scripts parse |
 | Live API, credentials | `make test-live` + env secrets | provider account | Read-only authenticated endpoints (token exchange, account info) |
 | Bench | `make bench-vpn` | physical router + `CONWRT_BENCH_TOKEN` | Real tunnel establishment, exit verification, iperf3 throughput per technology |
+| VM apply | `make integration` (tests/integration/test_vpn_providers_vm.py) | QEMU OpenWrt VM | Provider ops execute on real BusyBox/netifd; uci state + kernel acceptance verified. Secret-free (nordvpn config_file mode; random keys — config application proven, no tunnel) |
+| VM e2e | `CONWRT_LIVE_NORDVPN_TOKEN=... make integration` | QEMU VM + one NordVPN token | Full chain: credential fetch + server selection host-side, ops on the VM, live WireGuard handshake, and real traffic THROUGH the tunnel (exit IP differs from host). Skips without the token |
 | Hardware validation | manual (recorded in `test_status`/`tested_notes`) | a router + account | The full use case works on a real device |
 
 Credential-gated tests **skip silently** when their env var is unset. Secrets
@@ -21,7 +23,7 @@ committed:
 
 | Env variable | Unlocks | Destructive? |
 |---|---|---|
-| `CONWRT_LIVE_NORDVPN_TOKEN` | NordVPN service-credentials fetch (`nordlynx_private_key`) | no (read-only) |
+| `CONWRT_LIVE_NORDVPN_TOKEN` | NordVPN service-credentials fetch + the full VM e2e tunnel test | no (read-only) |
 | `CONWRT_LIVE_PIA_USER` + `CONWRT_LIVE_PIA_PASS` | PIA token generation | no (additive) |
 | `CONWRT_LIVE_MULLVAD_TOKEN` | Mullvad account info | no (read-only) |
 | `CONWRT_BENCH_TOKEN` | Full bench scenarios on a router | yes (configures the router) |
@@ -35,7 +37,7 @@ shape is covered hermetically only.
 
 | Provider | Technologies | Config surface | Hermetic | Live contract | Bench | Hardware |
 |---|---|---|---|---|---|---|
-| `vpn-nordvpn` | NordLynx (WireGuard) | `access_token` or `config_file`; **country** selection (`server` param) | `TestNordvpnOps`, `TestNordvpnPinnedServerKey` | countries / recommendations / filter canaries | `nordlynx` scenario | ✅ tested 2026-10-08 (COVR-X1860 A1, 25.12.5) |
+| `vpn-nordvpn` | NordLynx (WireGuard) | `access_token` or `config_file`; **country** selection (`server` param) | `TestNordvpnOps`, `TestNordvpnPinnedServerKey` | countries / recommendations / filter canaries | `nordlynx` scenario | ✅ tested 2026-10-08 (COVR-X1860 A1, 25.12.5); VM-apply tier ✅ 2026-10-14 |
 | `vpn-nordvpn-openvpn` | OpenVPN udp/tcp (CBC/GCM) | `access_token`; country selection | `TestNordvpnOps` | same endpoints as above | `openvpn-udp-cbc/-gcm`, `openvpn-tcp` | ✅ tested (DE exit, service creds) |
 | `vpn-nordvpn-ikev2` | IKEv2/IPsec | `access_token`; needs strongswan baked into the image | (rendering) | — | `ikev2-*` (needs `CONWRT_BENCH_IPSEC=1`) | ❌ untested (degrades gracefully without token) |
 | `vpn-pia` | WireGuard | `username`/`password` (device fetches token + registers key) | `TestPiaOps` | token exchange (gated) | — | ✅ tested on hardware |
@@ -68,6 +70,12 @@ catch drift on the host. Found and fixed so far:
 - **2026-10-14 — IVPN**: server list moved to `/v4/servers.json` (the
   extensionless path 404s) and reshaped to `{"wireguard": [{hosts:
   [...]}]}` (no more `wg_port`; 51820 fallback stands). Fixed in `vpn-ivpn`.
+- **2026-10-14 — Surfshark (2nd find)**: the endpoint-DNS parse for the
+  static route assumed GNU nslookup output; BusyBox (OpenWrt 25.12.5)
+  prints a different format and the parse silently resolved NOTHING on
+  the target (route always skipped). Fixed with a format-tolerant parse
+  verified on a live VM; regression tests feed the captured real output.
+  This is exactly what the VM-apply tier now guards against.
 - **2026-10-14 — Surfshark**: `/v3/servers` is gone; replaced by
   `/v4/server/clusters/generic` (public, no auth), which is **hostname-only**
   (`connectionName` + `pubKey`, no IP field). `vpn-surfshark` now uses the
@@ -84,10 +92,9 @@ catch drift on the host. Found and fixed so far:
    (`CONWRT_BENCH_IPSEC=1` bench scenarios exist for it).
 3. **PIA-OpenVPN provider op-path on hardware** — the recipe is validated;
    running it through `conwrt configure` on a router is the missing step.
-4. **VM tier for VPN use cases** — the QEMU session VM exercises the ops
-   pipeline but a real tunnel needs a real upstream + credentials; not
-   attempted. Feasible: flash-VM + user-net NAT + a provider token would
-   validate key exchange end-to-end without bench hardware.
+4. **Token-mode e2e for the other providers** — the NordVPN e2e exists
+   (`CONWRT_LIVE_NORDVPN_TOKEN`); Mullvad/IVPN/Surfshark equivalents
+   need their accounts and would follow the same pattern.
 
 ## Adding a provider
 
