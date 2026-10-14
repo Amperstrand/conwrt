@@ -65,6 +65,7 @@ impl NamedScenario {
                     status: 200,
                     server_header: Some("uwWMPre/1.00".into()),
                     title: None,
+                    body_snippet: None,
                 }),
                 mac: Some(MacAddress::parse("94:83:c4:0a:0b:0c").unwrap()),
                 ..Default::default()
@@ -75,6 +76,7 @@ impl NamedScenario {
                     status: 200,
                     server_header: Some("uhttpd/1.0".into()),
                     title: Some("OpenWrt LuCI".into()),
+                    body_snippet: None,
                 }),
                 ssh_banner: Some(SshBanner {
                     software: "dropbear_2024.86".into(),
@@ -96,6 +98,7 @@ impl NamedScenario {
                     status: 200,
                     server_header: Some("lighttpd/1.4.64".into()),
                     title: Some("Vendor Setup".into()),
+                    body_snippet: None,
                 }),
                 mac: Some(MacAddress::parse("94:83:c4:0a:0b:0e").unwrap()),
                 ..Default::default()

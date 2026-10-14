@@ -77,6 +77,9 @@ pub struct ProbeEvidence {
 
 /// Server-header fragments that fingerprint bootloader recovery web servers
 /// (U-Boot httpd and OEM recovery stacks observed in conwrt captures).
+///
+/// Matched against the HTTP `Server` header only; page-content markers
+/// live in [`DEFAULT_RECOVERY_BODY_HINTS`].
 pub const DEFAULT_RECOVERY_HINTS: &[&str] = &[
     "uboot",
     "u-boot",
@@ -87,6 +90,28 @@ pub const DEFAULT_RECOVERY_HINTS: &[&str] = &[
     "thttpd/2.",
 ];
 
+/// Page-content fragments that fingerprint bootloader recovery pages,
+/// matched case-insensitively against the `<title>` and the body snippet.
+///
+/// Some OEM recovery servers (observed on real hardware, issue #131) send
+/// HTTP 200 with **no `Server` header and an empty title** — the page body
+/// is then the only carrier of the fingerprint ("U-Boot", "firmware
+/// upgrade"...). Bare `upload` is deliberately excluded: it false-positives
+/// on stock backup/settings pages; the compound `upload firmware` is
+/// recovery-specific.
+///
+/// Model-level `signatures` data (the model JSON already carries pcap-derived
+/// boot signatures) can extend both hint lists later; that plumbing is not
+/// built yet.
+pub const DEFAULT_RECOVERY_BODY_HINTS: &[&str] = &[
+    "uboot",
+    "u-boot",
+    "firmware upgrade",
+    "firmware update",
+    "upload firmware",
+    "recovery",
+];
+
 /// Classify with the default recovery fingerprints.
 #[must_use]
 pub fn classify(evidence: &ProbeEvidence) -> DeviceState {
@@ -95,7 +120,10 @@ pub fn classify(evidence: &ProbeEvidence) -> DeviceState {
 
 /// Classify, returning human-oriented notes for the diagnosis audit trail.
 /// `recovery_hints` are case-insensitive substrings matched against the HTTP
-/// `Server` header; model-specific `signatures` data can extend these later.
+/// `Server` header; [`DEFAULT_RECOVERY_BODY_HINTS`] are additionally matched
+/// against the page `<title>` and body snippet, so recovery servers that
+/// send no `Server` header still classify (issue #131). Model-specific
+/// `signatures` data can extend these later.
 #[must_use]
 pub fn classify_with_notes(
     evidence: &ProbeEvidence,
@@ -130,7 +158,7 @@ pub fn classify_with_notes(
         let recovery_http = evidence
             .http
             .as_ref()
-            .is_some_and(|http| matches_recovery_hints(http, recovery_hints));
+            .is_some_and(|http| find_recovery_match(http, recovery_hints).is_some());
         if openwrt_http {
             notes.push(format!(
                 "SSH banner '{}' plus OpenWrt HTTP fingerprints",
@@ -156,10 +184,12 @@ pub fn classify_with_notes(
         }
     } else {
         let http = evidence.http.as_ref().expect("checked both channels above");
-        if matches_recovery_hints(http, recovery_hints) {
+        if let Some(matched) = find_recovery_match(http, recovery_hints) {
             notes.push(format!(
-                "HTTP server header {:?} matches recovery fingerprints",
-                http.server_header.as_deref().unwrap_or_default()
+                "HTTP recovery fingerprints matched in the {} (server {:?}, title {:?})",
+                matched.describe(),
+                http.server_header.as_deref().unwrap_or_default(),
+                http.title.as_deref().unwrap_or("")
             ));
             notes.push("no SSH while a recovery server answers: bootloader mode".into());
             (DeviceState::UbootRecovery, notes)
@@ -176,15 +206,68 @@ pub fn classify_with_notes(
     }
 }
 
-fn matches_recovery_hints(
+/// Which HTTP evidence surface carried a recovery fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryMatch {
+    /// `Server` header matched a caller-supplied header hint.
+    ServerHeader,
+    /// `<title>` matched a default body hint.
+    Title,
+    /// Body snippet matched a default body hint.
+    Body,
+}
+
+impl RecoveryMatch {
+    fn describe(self) -> &'static str {
+        match self {
+            RecoveryMatch::ServerHeader => "server header",
+            RecoveryMatch::Title => "page title",
+            RecoveryMatch::Body => "page body",
+        }
+    }
+}
+
+/// A recovery fingerprint matches if a header hint hits the `Server` header
+/// **or** a body hint hits the page title or body snippet (issue #131:
+/// headerless recovery servers).
+fn find_recovery_match(
     http: &crate::capability::HttpProbeResult,
     recovery_hints: &[&str],
-) -> bool {
-    let server = http.server_header.as_deref().unwrap_or_default();
-    let lowered = server.to_ascii_lowercase();
-    recovery_hints
+) -> Option<RecoveryMatch> {
+    let server = http
+        .server_header
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if recovery_hints
         .iter()
-        .any(|hint| lowered.contains(&hint.to_ascii_lowercase()))
+        .any(|hint| server.contains(&hint.to_ascii_lowercase()))
+    {
+        return Some(RecoveryMatch::ServerHeader);
+    }
+    let title = http
+        .title
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if DEFAULT_RECOVERY_BODY_HINTS
+        .iter()
+        .any(|hint| title.contains(&hint.to_ascii_lowercase()))
+    {
+        return Some(RecoveryMatch::Title);
+    }
+    let body = http
+        .body_snippet
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if DEFAULT_RECOVERY_BODY_HINTS
+        .iter()
+        .any(|hint| body.contains(&hint.to_ascii_lowercase()))
+    {
+        return Some(RecoveryMatch::Body);
+    }
+    None
 }
 
 /// OpenWrt HTTP fingerprints (uhttpd or a LuCI/OpenWrt title).
@@ -210,11 +293,17 @@ mod tests {
     use super::*;
     use crate::capability::{HttpProbeResult, SshBanner};
 
-    fn http(status: u16, server: Option<&str>, title: Option<&str>) -> Option<HttpProbeResult> {
+    fn http(
+        status: u16,
+        server: Option<&str>,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> Option<HttpProbeResult> {
         Some(HttpProbeResult {
             status,
             server_header: server.map(String::from),
             title: title.map(String::from),
+            body_snippet: body.map(String::from),
         })
     }
 
@@ -252,7 +341,7 @@ mod tests {
     fn recovery_server_header_is_uboot() {
         for server in ["uwWMPre/1.0", "GoAhead-http", "Boa/0.94.14rc21"] {
             let ev = ProbeEvidence {
-                http: http(200, Some(server), None),
+                http: http(200, Some(server), None, None),
                 ..Default::default()
             };
             assert_eq!(classify(&ev), DeviceState::UbootRecovery, "server={server}");
@@ -260,9 +349,55 @@ mod tests {
     }
 
     #[test]
+    fn recovery_body_without_server_or_title_is_uboot() {
+        // Regression (issue #131, real hardware): the recovery server
+        // answered 200 with no Server header and an empty title — only the
+        // page body carries the fingerprint. Synthetic page.
+        let ev = ProbeEvidence {
+            http: http(
+                200,
+                None,
+                None,
+                Some("<html><body><h1>Firmware Upgrade</h1><p>U-Boot</p></body></html>"),
+            ),
+            ..Default::default()
+        };
+        let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, DeviceState::UbootRecovery);
+        assert!(notes.iter().any(|n| n.contains("page body")));
+    }
+
+    #[test]
+    fn recovery_title_without_server_is_uboot() {
+        let ev = ProbeEvidence {
+            http: http(200, None, Some("Firmware Upgrade"), None),
+            ..Default::default()
+        };
+        let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, DeviceState::UbootRecovery);
+        assert!(notes.iter().any(|n| n.contains("page title")));
+    }
+
+    #[test]
+    fn unrelated_body_without_server_or_title_stays_stock() {
+        let ev = ProbeEvidence {
+            http: http(
+                200,
+                None,
+                None,
+                Some("<html><body><h1>Welcome to the setup wizard</h1></body></html>"),
+            ),
+            ..Default::default()
+        };
+        let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, DeviceState::StockVendor);
+        assert!(notes.iter().any(|n| n.contains("stock firmware")));
+    }
+
+    #[test]
     fn custom_recovery_hints_extend_matching() {
         let ev = ProbeEvidence {
-            http: http(200, Some("VendorRecovery/9"), None),
+            http: http(200, Some("VendorRecovery/9"), None, None),
             ..Default::default()
         };
         assert_eq!(classify(&ev), DeviceState::StockVendor);
@@ -275,7 +410,7 @@ mod tests {
     #[test]
     fn vendor_ui_without_ssh_is_stock() {
         let ev = ProbeEvidence {
-            http: http(200, Some("lighttpd/1.4"), Some("DIR-1960 Setup")),
+            http: http(200, Some("lighttpd/1.4"), Some("DIR-1960 Setup"), None),
             ..Default::default()
         };
         assert_eq!(classify(&ev), DeviceState::StockVendor);
@@ -298,7 +433,7 @@ mod tests {
         // dropbear next to its vendor web UI must NOT be classified OpenWrt.
         let ev = ProbeEvidence {
             ssh_banner: banner("SSH-2.0-dropbear"),
-            http: http(200, Some("mini_httpd"), Some("Vendor Setup")),
+            http: http(200, Some("mini_httpd"), Some("Vendor Setup"), None),
             ping: true,
             ..Default::default()
         };
@@ -312,7 +447,7 @@ mod tests {
         // probe, MITM) — refuse to guess.
         let ev = ProbeEvidence {
             ssh_banner: banner("SSH-2.0-OpenSSH_9.6"),
-            http: http(200, Some("Boa/0.94.14rc21"), None),
+            http: http(200, Some("Boa/0.94.14rc21"), None, None),
             ping: true,
             ..Default::default()
         };
@@ -336,7 +471,7 @@ mod tests {
     fn ssh_plus_uhttpd_is_openwrt_certain() {
         let ev = ProbeEvidence {
             ssh_banner: banner("dropbear_2024.86"),
-            http: http(200, Some("uhttpd/1.0"), Some("OpenWrt LuCI")),
+            http: http(200, Some("uhttpd/1.0"), Some("OpenWrt LuCI"), None),
             ..Default::default()
         };
         let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
