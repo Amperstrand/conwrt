@@ -34,6 +34,8 @@ pub mod agent;
 #[cfg(feature = "std")]
 pub mod controller;
 #[cfg(feature = "std")]
+pub mod server_tcp;
+#[cfg(feature = "std")]
 pub mod wire;
 
 pub mod cobs;
