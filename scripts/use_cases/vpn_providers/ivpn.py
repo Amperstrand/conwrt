@@ -42,10 +42,9 @@ PEER_IP=$(echo "$KEY_RESP" | json_get ip_address)
 # Strip CIDR if present
 PEER_IP=${{PEER_IP%%/*}}
 
-# Fetch server list and pick first
-SERVERS=$(curl -s -m 15 "https://api.ivpn.net/v4/servers")
-# Get first WireGuard-capable server
-SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.servers[] | .hosts[] | select(has("public_key"))] | .[0]')
+# Fetch server list and pick first (.json variant — the extensionless path 404s)
+SERVERS=$(curl -s -m 15 "https://api.ivpn.net/v4/servers.json")
+SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.wireguard[].hosts[] | select(has("public_key"))] | .[0]')
 SERVER_IP=$(echo "$SERVER_ENTRY" | json_get host)
 SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get public_key)
 SERVER_PORT=$(echo "$SERVER_ENTRY" | json_get wg_port)
