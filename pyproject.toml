@@ -29,6 +29,7 @@ markers = [
   "destructive: mutates device state (sysupgrade, firstboot)",
   "hardware: requires physical router connected via ethernet",
   "integration: QEMU-backed tests under tests/integration (deselect with -m \"not integration\")",
+  "live: hits real VPN provider APIs over the network (tests/live; credential-gated subset needs env secrets)",
 ]
 filterwarnings = [
   # Third-party scapy imports cryptography's FFDH; nothing for us to act on.
