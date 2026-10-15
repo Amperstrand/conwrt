@@ -22,3 +22,7 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Drift watch (live contracts + gluetun scan)
         run: python3 scripts/vpn-drift-watch.py
+        env:
+          # optional owner-added secrets; absent → those contract tests skip
+          CONWRT_LIVE_NORDVPN_TOKEN: ${{ secrets.CONWRT_LIVE_NORDVPN_TOKEN }}
+          CONWRT_LIVE_MULLVAD_TOKEN: ${{ secrets.CONWRT_LIVE_MULLVAD_TOKEN }}
