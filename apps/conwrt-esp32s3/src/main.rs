@@ -69,7 +69,12 @@ async fn main(_spawner: Spawner) {
     let mut dev_cfg = UsbDevConfig::new(0xc0de, 0xcafe);
     dev_cfg.manufacturer = Some("Amperstrand");
     dev_cfg.product = Some("conwrt agent");
-    dev_cfg.serial_number = Some("esp32s3-01");
+    // Per-board USB serial from the eFuse base MAC: two S3 agents on one
+    // host must enumerate as distinct ttyACM specimens (stable by-id paths),
+    // never a shared hardcoded identity.
+    let serial = alloc::format!("conwrt-{}", esp_hal::efuse::base_mac_address());
+    esp_println::println!("usb serial: {serial}");
+    dev_cfg.serial_number = Some(&serial);
 
     let mut config_descriptor = [0u8; 256];
     let mut bos_descriptor = [0u8; 256];

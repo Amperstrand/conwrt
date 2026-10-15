@@ -70,8 +70,9 @@ jobs:
   # toolchain ships, on SysV-format section sizes:
   # - flash = every loaded section (excludes the NOLOAD .stack filler and
   #   .bss), incl. esp-hal's alignment dummies
-  # - ram   = .data + .bss + .rwdata* (excludes .stack: esp-hal 1.2 grows
-  #   the stack to fill free DRAM, so it is not a real consumption)
+  # - ram   = .data + .bss + .rwdata* + .rwtext (IRAM-resident code —
+  #   matches esp-hal's own binary-size accounting; excludes .stack: esp-hal
+  #   1.2 grows the stack to fill free DRAM, so it is not a consumption)
   # Budget: flash <= 256 KiB, ram <= 128 KiB (S3: 8 MB flash / 512 KiB SRAM,
   # 48 KiB of the ram number is the esp-alloc protocol heap).
   firmware-esp32s3:
@@ -98,6 +99,6 @@ jobs:
           SIZE_OUT=$(xtensa-esp32s3-elf-size -A target/xtensa-esp32s3-none-elf/release/conwrt-esp32s3)
           echo "$SIZE_OUT"
           FLASH=$(echo "$SIZE_OUT" | awk '$1 ~ /^\./ && $1 != ".stack" && $1 != ".bss" && $1 != ".comment" {sum += $2} END {print sum+0}')
-          RAM=$(echo "$SIZE_OUT" | awk '$1 == ".data" || $1 == ".bss" || $1 ~ /^\.rwdata/ {sum += $2} END {print sum+0}')
+          RAM=$(echo "$SIZE_OUT" | awk '$1 == ".data" || $1 == ".bss" || $1 ~ /^\.rwdata/ || $1 == ".rwtext" {sum += $2} END {print sum+0}')
           echo "flash-bytes: $FLASH  ram-bytes: $RAM"
           test "$FLASH" -le 262144 && test "$RAM" -le 131072
