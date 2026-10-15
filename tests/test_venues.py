@@ -113,3 +113,43 @@ class TestProtectedRefusal:
         venues_from_env(env={}, place_list=lambda: _places(),
                         protected_places=protected)
         assert calls == [], "qemu-only selection must not query protection"
+
+
+class TestDirectDevice:
+    LAB = {"devices": {
+        "x1860-desk": {"mgmt": "192.168.104.52", "ssh_port": 22,
+                       "ssh_key": "~/.ssh/id_ed25519",
+                       "model": "dlink-covr-x1860-a1"},
+        "second-host": {"mgmt": "192.168.12.3"},
+    }}
+
+    def test_resolves_device(self):
+        from venues import direct_device
+        dev = direct_device("x1860-desk", lab_yaml=lambda: self.LAB)
+        assert dev["host"] == "192.168.104.52"
+        assert dev["port"] == 22
+        assert dev["model"] == "dlink-covr-x1860-a1"
+
+    def test_missing_registry_is_actionable(self):
+        from venues import direct_device
+        with pytest.raises(ValueError, match="data/lab.yaml is absent"):
+            direct_device("any", lab_yaml=lambda: {})
+
+    def test_unknown_device_names_known(self):
+        from venues import direct_device
+        with pytest.raises(ValueError, match=r"known: x1860-desk, second-host"):
+            direct_device("ghost", lab_yaml=lambda: self.LAB)
+
+    def test_device_without_host_refused(self):
+        from venues import direct_device
+        lab = {"devices": {"broken": {"state": "dark"}}}
+        with pytest.raises(ValueError, match="no mgmt address"):
+            direct_device("broken", lab_yaml=lambda: lab)
+
+    def test_direct_venue_resolves_without_coordinator(self):
+        # direct: needs no labgrid place list — coordinator-free resolution
+        venues = venues_from_env(env={"CONWRT_VENUES": "direct:x1860-desk"},
+                                 place_list=lambda: (_ for _ in ()).throw(
+                                     RuntimeError("coordinator must not be queried")),
+                                 protected_places=lambda: set())
+        assert [v.key for v in venues] == ["direct:x1860-desk"]

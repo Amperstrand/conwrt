@@ -149,3 +149,53 @@ def venues_from_env(
                 )
 
     return venues
+
+
+def default_lab_yaml() -> dict:
+    """Parsed data/lab.yaml ({} when absent)."""
+    if not LAB_YAML.exists():
+        return {}
+    import yaml
+
+    return yaml.safe_load(LAB_YAML.read_text()) or {}
+
+
+def direct_device(
+    name: str,
+    lab_yaml: Optional[Callable[[], dict]] = None,
+) -> dict:
+    """Connection parameters for a ``direct:<name>`` venue from data/lab.yaml.
+
+    Consumes the canonical registry schema (labgrid/lab.yaml.example):
+    ``devices:`` is a mapping keyed by device id; the venue host is the
+    device's ``mgmt`` address, with optional ``ssh_port`` / ``ssh_key``
+    (absolute or ~ path) / ``model`` (conwrt model id) extensions.
+    Addresses live ONLY in data/lab.yaml (local, gitignored) — never in
+    code, commits, or docs.
+
+    Raises ValueError with an actionable message for a missing registry or
+    unknown device.
+    """
+    loader = lab_yaml or default_lab_yaml
+    data = loader()
+    devices = data.get("devices") or {}
+    if not data:
+        raise ValueError(
+            "direct: venue requested but data/lab.yaml is absent — the lab "
+            "registry (SSOT) must declare the device first"
+        )
+    dev = devices.get(name)
+    if dev is None:
+        known = ", ".join(filter(None, devices)) or "none"
+        raise ValueError(
+            f"direct device {name!r} not in data/lab.yaml devices "
+            f"(known: {known})"
+        )
+    if not dev.get("mgmt"):
+        raise ValueError(f"direct device {name!r} has no mgmt address in data/lab.yaml")
+    return {
+        "host": dev["mgmt"],
+        "port": int(dev.get("ssh_port", 22)),
+        "key": dev.get("ssh_key"),
+        "model": dev.get("model"),
+    }
