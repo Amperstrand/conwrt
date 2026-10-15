@@ -197,6 +197,7 @@ conwrt's target is Rust. This use case prepares for that transition:
 | Pi won't boot from USB | VL711 warm-reboot issue | Power cycle (never warm reboot) |
 | dhcpd not listening | MAAS temporal deadlock | Check dhcpd.conf has subnet block |
 | Image sync stalled | Rate limiting or workflow deadlock | Wipe image-storage, re-import |
+| Sync "incomplete" but deploys work | Temporal workflow never marks the job complete on the Pi (#170) — the flag lies | `python3 scripts/maas_image_status.py --api-json <payload> --storage-root <image-storage>` (or `--evidence-json` over SSH): file bytes are the verdict, not the workflow |
 | QEMU DHCP timeout | STP on bridge port | `ip link set br-bench type bridge stp_state 0` |
 | No beacons received | Listener IP wrong | Check laptop has 10.50.0.127 |
 | SSH to Pi fails via WiFi | Firewall pinhole missing | Check x1860 firewall rules |
