@@ -230,7 +230,8 @@ class SerialConsole:
         self._s.close()
         time.sleep(3)
         self._s = open_serial(self.port, self.baud, self.timeout)
-        self._s.reset_input_buffer()
+        # Freshly opened handle: buffers empty by construction; draining
+        # here races fresh device output and eats early bytes (#202).
 
     def activate(self, wait: float = 0.8) -> str:
         self._s.write(b"\n")

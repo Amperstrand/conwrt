@@ -157,7 +157,10 @@ class SerialBootMonitor:
         except (SerialConnectionError, pyserial.SerialException) as e:
             log(f"WARNING: serial line lost after break ({e}) — continuing pcap-only")
             return False
-        self._transport.reset_input_buffer()
+        # No reset_input_buffer() here: this transport was JUST opened, so
+        # its buffers are empty by construction and a drain can only delete
+        # FRESH output. Bytes racing in between open and drain (a fast boot
+        # banner) were silently eaten — the #202 CI flake.
         return True
 
     def run(self) -> None:

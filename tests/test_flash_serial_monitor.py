@@ -267,6 +267,58 @@ class TestSerialBootMonitorMilestones(TestCase):
         finally:
             server.stop()
 
+    def test_break_reconnect_never_drains_the_fresh_transport(self):
+        """#202 regression pin: the reopen path must not reset_input_buffer
+        the JUST-OPENED transport. A fresh handle is empty by construction;
+        a drain there races fresh output and silently eats early boot bytes
+        (the intermittent CI failure where the banner milestone vanished).
+        """
+        from flash import serial_monitor as sm
+
+        class RecordingTransport:
+            def __init__(self, chunks):
+                self._chunks = list(chunks)
+                self.reset_calls = 0
+
+            def read(self, size):
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def reset_input_buffer(self):
+                self.reset_calls += 1
+
+            def close(self):
+                pass
+
+        transports: list[RecordingTransport] = []
+
+        def fake_open(port, baud, timeout):
+            if not transports:
+                transports.append(
+                    RecordingTransport([b"\x00" * 16]))
+            else:
+                transports.append(
+                    RecordingTransport([
+                        (UBOOT_BANNER_PRIMARY + "\r\n").encode(),
+                        (STARTING_KERNEL + "\r\n").encode(),
+                    ]))
+            return transports[-1]
+
+        with patch.object(sm, "BREAK_RECOVERY_WAIT", 0.01), \
+                patch.object(sm, "open_serial", fake_open):
+            q: queue.Queue = queue.Queue()
+            mon = sm.SerialBootMonitor("tcp://fake", 115200, q)
+            t = threading.Thread(target=mon.run, daemon=True)
+            t.start()
+            events = _collect(q, want=2, timeout=10)
+            mon.stop()
+            t.join(timeout=5)
+
+        assert [e[0] for e in events] == [
+            Event.SERIAL_UBOOT_BANNER, Event.SERIAL_KERNEL_START]
+        assert len(transports) == 2, "reconnect must open a fresh transport"
+        assert all(tp.reset_calls == 0 for tp in transports), (
+            "reset_input_buffer on a fresh handle deletes fresh output (#202)")
+
     def test_null_break_chunk_reconnects_and_continues(self):
         """A relayed UART break (0x00 run) must not kill the monitor: it
         reconnects and keeps parsing the following connection's stream."""
