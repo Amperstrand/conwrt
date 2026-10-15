@@ -22,10 +22,12 @@ callable) so unit tests need no coordinator — the pattern proven by prta's
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAB_YAML = REPO_ROOT / "data" / "lab.yaml"
@@ -70,6 +72,9 @@ def default_place_list() -> str:
 def default_protected_places() -> set[str]:
     """Places marked protected in data/lab.yaml (the lab SSOT).
 
+    Both registry shapes count: the legacy ``places:`` list and the
+    canonical ``devices:`` mapping (a device entry with ``protected: true``
+    protects its ``labgrid_place``, or its own id when no place is named).
     Returns an empty set when the registry is absent — places are GENERATED
     from the registry, so a coordinator place implies registry membership;
     the protection flag is what the registry adds.
@@ -84,6 +89,9 @@ def default_protected_places() -> set[str]:
         name = place.get("name", "") if isinstance(place, dict) else ""
         if name and place.get("protected"):
             protected.add(name)
+    for dev_id, dev in (data.get("devices") or {}).items():
+        if isinstance(dev, dict) and dev.get("protected"):
+            protected.add(dev.get("labgrid_place") or dev_id)
     return protected
 
 
@@ -199,3 +207,91 @@ def direct_device(
         "key": dev.get("ssh_key"),
         "model": dev.get("model"),
     }
+
+
+class ProtectedPlaceError(ValueError):
+    """A mutating fixture was pointed at a protected place/device."""
+
+
+@dataclass(frozen=True)
+class FlashLease:
+    """What flash_lease() yields: identity of the hold it took."""
+
+    place: str
+    reservation: str   # the cancelable name handed to `reserve --name`
+    dry: bool = False  # True = local no-op, no coordinator was contacted
+
+
+def _lease_token(value: str) -> str:
+    """Sanitize a session/story fragment for a reservation name."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", value)[:60] or "x"
+
+
+@contextmanager
+def flash_lease(
+    place: str,
+    *,
+    session: str,
+    story: str,
+    runner: Optional[Runner] = None,
+    env: Optional[dict[str, str]] = None,
+    protected_places: Callable[[], set[str]] = default_protected_places,
+) -> Iterator[FlashLease]:
+    """§4.3 of the transition plan: an exclusive, named hold on a place.
+
+        reserve(name=f"conwrt-<session>-<story>") --wait
+            → acquire → yield FlashLease → release
+
+    The reservation NAME carries the session id, so a crashed run leaves a
+    *named*, cancelable reservation (``labgrid-client cancel-reservation
+    <name>``) instead of a silent lockout. One mutating fixture per place
+    per run; VM flash work keeps the dedicated ``flash_vm`` shape — a QEMU
+    overlay is its own lease.
+
+    Safety order (identity gates stay in force):
+      1. protected places are refused BEFORE any coordinator call
+         (ProtectedPlaceError, a ValueError — same contract as
+         venues_from_env);
+      2. ``CONWRT_FLASH_LEASE_DRY=1`` (or truthy in ``env``) makes the
+         lease a local no-op — zero subprocess calls, dry=True on the
+         handle. CI and hardware-safe development never touch the
+         coordinator through this fixture.
+
+    The runner contract matches default_runner (args only; the runner
+    adds client + coordinator flags). Reserve/acquire failures raise
+    RuntimeError with the stderr tail — a failed lease must never yield.
+    """
+    run = runner or default_runner
+    env = dict(os.environ) if env is None else env
+    reservation = "conwrt-{}-{}".format(
+        _lease_token(session), _lease_token(story)
+    )
+
+    if place in protected_places():
+        raise ProtectedPlaceError(
+            f"flash_lease: place {place!r} is marked protected in "
+            f"data/lab.yaml — mutating fixtures never run there"
+        )
+
+    if env.get("CONWRT_FLASH_LEASE_DRY", "").lower() in ("1", "true", "yes"):
+        yield FlashLease(place=place, reservation=reservation, dry=True)
+        return
+
+    reserved = run(["reserve", f"name={place}", "--name", reservation, "--wait"])
+    if reserved.returncode != 0:
+        raise RuntimeError(
+            f"flash_lease: reserve of {place!r} failed (reservation "
+            f"{reservation!r} may need cancel-reservation): "
+            f"{reserved.stderr.strip()[-200:]}"
+        )
+    acquired = run(["-p", place, "acquire"])
+    if acquired.returncode != 0:
+        run(["cancel-reservation", reservation])
+        raise RuntimeError(
+            f"flash_lease: acquire of {place!r} failed (reservation "
+            f"{reservation!r} canceled): {acquired.stderr.strip()[-200:]}"
+        )
+    try:
+        yield FlashLease(place=place, reservation=reservation)
+    finally:
+        run(["-p", place, "release"])

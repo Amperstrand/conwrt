@@ -414,7 +414,11 @@ def wireguard_installed(openwrt_vm):
 import sys as _sys
 
 _sys.path.insert(0, str(REPO_ROOT / "tests"))
-from venues import direct_device, venues_from_env  # noqa: E402
+from venues import (  # noqa: E402
+    direct_device,
+    flash_lease as flash_lease_ctx,
+    venues_from_env,
+)
 
 VENUES = venues_from_env()
 
@@ -539,3 +543,23 @@ def venue(request):
         yield VenueHandle(name=f"labgrid:{place}", run=_run)
     finally:
         _labgrid(["release"], place, timeout=25)
+
+
+@pytest.fixture
+def flash_lease(request):
+    """§4.3 lease factory for MUTATING work on a hardware place.
+
+    Usage: ``with flash_lease("x1860-1", story="sysupgrade") as lease: ...``.
+    Protected places raise ProtectedPlaceError (before any coordinator
+    call); CONWRT_FLASH_LEASE_DRY=1 keeps the lease local (zero subprocess)
+    — CI and hardware-safe development must set it. VM venues don't take
+    leases (the QEMU overlay is its own isolation).
+    """
+    def _make(place: str, story: str = ""):
+        session = os.environ.get("CONWRT_SESSION_ID") or f"pid{os.getpid()}"
+        return flash_lease_ctx(
+            place,
+            session=session,
+            story=story or request.node.name,
+        )
+    return _make
