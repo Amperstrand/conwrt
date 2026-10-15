@@ -92,3 +92,6 @@ config.toml
 
 # Local Python virtualenv (dev setup) — never commit
 .venv/
+
+# Local env/credential files — never commit
+.env*
