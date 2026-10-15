@@ -77,10 +77,10 @@ async fn strict_mode_refuses_unknown_host_with_pin_hint() {
 
 #[tokio::test]
 async fn first_use_refusal_sends_zero_auth_attempts() {
-    /// #125 regression: the structural guarantee — on a FirstUse refusal
-    /// (Strict), authentication must NEVER have been attempted. The
-    /// fixture counts every auth callback; a regression that reorders the
-    /// ladder after the handshake would send credentials first.
+    // #125 regression: the structural guarantee — on a FirstUse refusal
+    // (Strict), authentication must NEVER have been attempted. The
+    // fixture counts every auth callback; a regression that reorders the
+    // ladder after the handshake would send credentials first.
     let fixture = Fixture::start().await;
     let mut store = MemoryTrustStore::new();
     let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
@@ -102,9 +102,9 @@ async fn first_use_refusal_sends_zero_auth_attempts() {
 
 #[tokio::test]
 async fn changed_key_refusal_sends_zero_auth_attempts() {
-    /// #125 regression: ChangedKey (MITM/reimage signature) must refuse
-    /// with zero auth attempts — a stored same-algorithm key differs, so
-    /// the ladder stops at the handshake.
+    // #125 regression: ChangedKey (MITM/reimage signature) must refuse
+    // with zero auth attempts — a stored same-algorithm key differs, so
+    // the ladder stops at the handshake.
     let fixture = Fixture::start().await;
     let mut store = MemoryTrustStore::new();
     // Seed the store with a DIFFERENT ed25519 key for this exact host:
