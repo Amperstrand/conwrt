@@ -750,3 +750,43 @@ merely discourage them:
    minutes. Fetch immediately before merging, rebase instead of resolving
    surprise conflicts by hand, and never assume the merge-result you tested
    locally is still current an hour later.
+
+## D-Link Recovery Flashing: One-Request Server, Slow Dual-Image Boots, Stale Keys (2026-10-14/15)
+
+Paid for twice in one session (both dark x1860s, plus the Sept #91 saga).
+Full evidence matrix: `models/dlink-covr-x1860-a1.json` bench_observations
+(PR #198) and the bench registry dossiers.
+
+1. **Never GET the recovery page before uploading.** The U-Boot recovery
+   httpd (uIP stack) serves exactly ONE HTTP request, then RSTs every new
+   SYN. Probe arming by ARP only (`ip neigh` for 192.168.0.1, model-wide
+   soft MAC) — any curl of the page burns the window and costs a
+   power-cycle.
+2. **Upload with a real Chromium** (headless Playwright, local form so the
+   multipart POST is the first request) — but know the limits: the
+   2026-10-14 matrix showed even a byte-perfect Chromium POST can produce
+   accepted-but-no-boot. The client was never the #91 variable; suspect
+   flash-write or dual-image timing. Never blame the client without a pcap.
+3. **The COVR dual-image boot takes 15–20+ minutes** (main→backup copy +
+   double reboot). "5+ minutes" in the recipe is wrong; do not declare a
+   flash failed before ~25 min of silence.
+4. **ASU profile names use DASHES in the model part** —
+   `dlink_covr-x1860-a1`, not the all-underscore registry form. The
+   underscore form returns HTTP 400 "Unsupported profile" and costs a
+   build cycle. Check `openwrt.profile` in the model JSON (or the
+   conwrt-image crate's golden filename logic).
+5. **Baked dropbear keys go stale.** A parked unit flashed with an old
+   ASU image boots fine but locks you out (the key belonged to a
+   decommissioned host). Rebuild via ASU with the CURRENT fleet key
+   before flashing anything that has been dark — case-sealed, no-serial
+   units have no second door.
+
+## Long-Running Remote Work Dies With Its Pane (2026-10-14)
+
+Herdr panes churn (operator closes tabs, sessions restart). Anything
+started as a pane background job — builds, watchers, tunnels, pcaps —
+dies with it, usually silently. Rules: stage work as ON-DISK launcher
+scripts (`/tmp/*.sh`) started with `setsid nohup … < /dev/null &`, write
+logs to files, and have supervisors/tunnels re-established by idempotent
+launchers rather than trusted to survive. If a log file "was never
+created", that is this rule, not a mystery.
