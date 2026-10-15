@@ -36,6 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scenarios import Scenario, default_scenarios  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tests"))
+from venues import Venue, venues_from_env  # noqa: E402
+
 ROUTER = os.environ.get("CONWRT_BENCH_ROUTER", "192.168.1.1")
 IFACE = os.environ.get("CONWRT_BENCH_IFACE", "enp5s0")
 IPERF_SERVER = os.environ.get("CONWRT_BENCH_SERVER", "inr2.cashu.exchange")
@@ -77,6 +80,29 @@ def _router_alive() -> bool:
     return False
 
 
+def bench_venue(venues: list[Venue] | None = None) -> tuple[str | None, str]:
+    """(router_ip_override, venue_label) from CONWRT_VENUES, else (None, "").
+
+    Exactly one non-qemu venue feeds the bench router axis (its address
+    resolved from the lab registry when direct:); qemu-session venues are
+    not bench routers (flash-capable venue required — plan §4/§5); multiple
+    hardware venues would need a per-venue scenario loop (post-step).
+    """
+    vs = venues if venues is not None else venues_from_env()
+    hw = [v for v in vs if v.kind != "qemu-session"]
+    if not hw:
+        return None, ""
+    if len(hw) > 1:
+        raise ValueError(
+            "bench venue axis takes ONE hardware venue per run "
+            f"(got: {', '.join(v.key for v in hw)}); loop runs per venue")
+    v = hw[0]
+    if v.kind == "direct":
+        from venues import direct_device
+        return direct_device(v.place or "")["host"], v.key
+    return None, v.key  # labgrid: exporter-proxied — bench keeps its own ROUTER
+
+
 def pytest_collection_modifyitems(config, items):
     if _router_alive():
         return
@@ -88,12 +114,16 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def router() -> dict[str, object]:
+    venue_ip, venue_label = bench_venue()
+    if venue_ip:
+        globals()["ROUTER"] = venue_ip
+        globals()["SSH"] = SSH[:-1] + [f"root@{venue_ip}"]
     r = ssh_run(". /etc/openwrt_release; echo $DISTRIB_RELEASE; "
                 "cat /tmp/sysinfo/board_name; grep -c ^processor /proc/cpuinfo")
     assert r.returncode == 0, f"router {ROUTER} unreachable over SSH"
     rel, board, cores = r.stdout.split()
     return {"ip": ROUTER, "iface": IFACE, "release": rel,
-            "board": board, "cores": int(cores)}
+            "board": board, "cores": int(cores), "venue": venue_label}
 
 
 @pytest.fixture(scope="session")
@@ -104,6 +134,7 @@ def results(router: dict) -> Iterator[dict]:
         "meta": {
             "router": router["ip"], "board": router["board"],
             "release": router["release"], "cores": router["cores"],
+            "venue": router.get("venue", ""),
             "iperf_server": IPERF_SERVER, "iperf_seconds": IPERF_SECONDS,
             "started": datetime.now(timezone.utc).isoformat(),
         },
@@ -112,9 +143,11 @@ def results(router: dict) -> Iterator[dict]:
     yield doc
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(json.dumps(doc, indent=2))
+    venue_tag = f", venue `{router['venue']}`" if router.get("venue") else ""
     lines = ["# VPN bench", "",
              f"router `{router['board']}` @ {router['release']} "
-             f"({router['cores']} hw threads), iperf server {IPERF_SERVER}, "
+             f"({router['cores']} hw threads){venue_tag}, "
+             f"iperf server {IPERF_SERVER}, "
              f"{IPERF_SECONDS}s per direction", "",
              "| scenario | down Mbit/s | up Mbit/s | CPU% down | CPU% up | exit |",
              "|---|---|---|---|---|---|"]

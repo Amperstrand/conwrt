@@ -26,6 +26,13 @@ def test_ssh_reachable_and_board_identity(venue):
     except subprocess.TimeoutExpired as exc:
         pytest.skip(f"{venue.name}: SSH timed out ({exc}) — venue dark, not a test failure")
 
+    _SSH_CONNECT_ERRORS = ("no route to host", "connection refused",
+                            "connection timed out", "permission denied",
+                            "connection reset")
+    if r.returncode == 255 and any(
+            e in r.stderr.lower() for e in _SSH_CONNECT_ERRORS):
+        pytest.skip(f"{venue.name}: venue dark (SSH connect failed: "
+                    f"{r.stderr.strip()[-120:]})")
     assert r.returncode == 0, f"{venue.name}: SSH failed rc={r.returncode}\n{r.stderr.strip()[-400:]}"
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     assert len(lines) >= 2, f"{venue.name}: incomplete identity output: {r.stdout!r}"

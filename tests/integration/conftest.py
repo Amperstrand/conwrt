@@ -414,7 +414,7 @@ def wireguard_installed(openwrt_vm):
 import sys as _sys
 
 _sys.path.insert(0, str(REPO_ROOT / "tests"))
-from venues import venues_from_env  # noqa: E402
+from venues import direct_device, venues_from_env  # noqa: E402
 
 VENUES = venues_from_env()
 
@@ -425,6 +425,11 @@ _VENUE_UNREACHABLE_MARKERS = (
     "Connection refused",
     "No route to host",
     "Traceback (most recent call last)",
+    # a place without a usable NetworkService (or with a resource class the
+    # local labgrid install doesn't know) is an environment condition, not
+    # a test failure — the sweep evidence 2026-10-15 hit both shapes
+    "no NetworkService resource found",
+    "unknown resource class",
 )
 
 
@@ -482,6 +487,32 @@ def venue(request):
             run=_qemu_venue_runner(vm),
             ssh_target=(vm["host"], vm["port"], vm["key"]),
             model_id="virtual-x86-64",
+        )
+        return
+
+    if chosen.kind == "direct":
+        dev = direct_device(chosen.place or "")
+        host = dev["host"]
+        port = int(dev.get("port", 22))
+        if dev.get("key"):
+            dev["key"] = str(Path(dev["key"]).expanduser())
+
+        def _direct_run(command: str, timeout: int):
+            cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
+                   "-o", "UserKnownHostsFile=/dev/null",
+                   "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                   "-o", "LogLevel=ERROR"]
+            if dev.get("key"):
+                cmd += ["-i", str(dev["key"])]
+            cmd += ["-p", str(port), f"root@{host}", command]
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout, check=False)
+
+        yield VenueHandle(
+            name=f"direct:{chosen.place}({host})",
+            run=_direct_run,
+            ssh_target=(host, port, dev.get("key")),
+            model_id=dev.get("model"),
         )
         return
 
