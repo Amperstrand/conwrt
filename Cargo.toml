@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/conwrt-types",
     "crates/conwrt-core",
+    "crates/conwrt-maas",
     "crates/conwrt-protocols",
     "crates/conwrt-image",
     "crates/conwrt-agent-proto",

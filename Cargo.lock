@@ -759,6 +759,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conwrt-maas"
+version = "0.1.0"
+dependencies = [
+ "conwrt-core",
+ "pollster",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "conwrt-protocols"
 version = "0.1.0"
 dependencies = [
