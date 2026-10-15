@@ -715,8 +715,13 @@ dependencies = [
  "conwrt-agent-proto",
  "conwrt-core",
  "conwrt-local-std",
+ "conwrt-maas",
  "conwrt-types",
+ "httpmock",
  "pollster",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
 ]
 
