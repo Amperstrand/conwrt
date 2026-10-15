@@ -1,6 +1,6 @@
 """The one-token NordVPN e2e, venue-parametrized (PRTA transition plan S3).
 
-Same story as tests/integration/test_vpn_nordvpn_e2e_vm.py — one secret
+Supersedes the VM-only module (deleted, S3.5) — one secret
 (``CONWRT_LIVE_NORDVPN_TOKEN``), full chain: credential fetch + server
 selection host-side, ops applied via ``conwrt configure``, live WireGuard
 handshake, traffic through the tunnel, exit IP differs from the host —
@@ -13,9 +13,10 @@ Venues without the direct-SSH capability (exporter-proxied bench places on
 unrouted VLANs) skip with the reason: ``conwrt configure`` shells out to
 plain ssh and needs host reachability.
 
-Per the plan, the old VM-only file stays until this module has one green
-VM run AND one green hardware run recorded in test-results/ (S3.5 then
-deletes it).
+S3.5 executed 2026-10-15: the VM-only predecessor was deleted after the
+gate evidence in test-results/notes/run-20261015-venues-s3-hardware-dry.md
+(VM run green; hardware venues dry — every live DUT door owner-gated at
+deletion time, deviation recorded there on explicit reviewer instruction).
 """
 from __future__ import annotations
 
