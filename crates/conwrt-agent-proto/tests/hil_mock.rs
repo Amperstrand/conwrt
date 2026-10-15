@@ -10,7 +10,7 @@ use conwrt_agent_proto::controller::{AgentClient, ClientError};
 use conwrt_agent_proto::dispatch::{AgentEvent, WireError};
 use conwrt_agent_proto::protocol::{DisconnectPolicy, LeaseRequest, LeaseResponse};
 use conwrt_agent_proto::server::{ServerCore, UartSink};
-use conwrt_agent_proto::server_tcp::{run_mock_on, serial_mock};
+use conwrt_agent_proto::server_tcp::{run_echo_mock_on, run_mock_on, serial_mock};
 
 use tokio::net::TcpListener;
 use tokio::task;
@@ -205,6 +205,47 @@ async fn uart_rx_event_flows_to_controller() {
         Some(AgentEvent::UartData {
             port: 0,
             data: b"boot banner".to_vec(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn uart_echo_round_trips_through_the_scripted_peer() {
+    // #110's acceptance shape, mock stage: the controller writes to the
+    // agent's UART and the scripted peer echoes it back as an RX event —
+    // the full controller → agent → sink → event → controller loop.
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral");
+    let addr = listener.local_addr().expect("local addr").to_string();
+    task::spawn(async move {
+        run_echo_mock_on(listener, "echo-mock 0.1.0").await;
+    });
+
+    let mut client = AgentClient::connect(&addr).await.expect("connect");
+    client.handshake("laptop-hil").await.expect("handshake");
+    let LeaseResponse::Granted { .. } = client
+        .acquire_lease(uart0_exclusive())
+        .await
+        .expect("grant")
+    else {
+        panic!("acquire must grant");
+    };
+
+    let n = client
+        .uart_write(0, b"ping".to_vec())
+        .await
+        .expect("leased write");
+    assert_eq!(n, 4);
+
+    // the echo returns as an unsolicited event; the follow-up round trip
+    // harvests it into the client's event queue
+    let _ = client.capabilities().await.expect("capabilities");
+    assert_eq!(
+        client.try_recv_event(),
+        Some(AgentEvent::UartData {
+            port: 0,
+            data: b"ping".to_vec(),
         })
     );
 }
