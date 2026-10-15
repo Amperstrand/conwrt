@@ -13,6 +13,9 @@
 //!   diagnosed device: typed, inspectable operations, verification intent,
 //!   and a hard refusal for anything but a confirmed OpenWrt identity
 //!   (I/O-free dry-run; the M7 executor applies plans later).
+//! - `conwrt maas flash …` / `conwrt maas vm …` — MAAS portable-lab
+//!   operations (#169): the verify→write→verify→inject disk pipeline and
+//!   the VM lifecycle (create/list/describe/destroy) over a region API.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
@@ -93,6 +96,12 @@ enum Command {
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
+    },
+    /// MAAS portable-lab operations (#169): lab disk flashing and the VM
+    /// lifecycle (compose/deploy/list/describe/destroy) over the region API.
+    Maas {
+        #[command(subcommand)]
+        command: MaasCommand,
     },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
@@ -246,6 +255,92 @@ enum ProfileChoice {
     Doh,
 }
 #[derive(Subcommand)]
+enum MaasCommand {
+    /// Run the lab disk pipeline (verify → write → verify → inject) on a
+    /// target file or device. The image is checksum-gated before ANY
+    /// write; a seed is injected only after read-back verification.
+    Flash {
+        /// Image file to write.
+        #[arg(long)]
+        image: PathBuf,
+        /// Published SHA-256 of the image (64 hex chars).
+        #[arg(long)]
+        sha256: String,
+        /// Target file or block device to write.
+        #[arg(long)]
+        target: PathBuf,
+        /// cloud-init user-data file (required with --meta-data).
+        #[arg(long, requires = "meta_data")]
+        user_data: Option<PathBuf>,
+        /// cloud-init meta-data file (required with --user-data).
+        #[arg(long, requires = "user_data")]
+        meta_data: Option<PathBuf>,
+        /// Optional cloud-init network-config file.
+        #[arg(long)]
+        network_config: Option<PathBuf>,
+    },
+    /// VM lifecycle over the MAAS region API.
+    Vm {
+        #[command(subcommand)]
+        command: VmCommand,
+    },
+}
+#[derive(Subcommand)]
+enum VmCommand {
+    /// Compose, commission, allocate, and deploy a VM (resolves when
+    /// Deployed).
+    Create {
+        /// Instance hostname (DNS label).
+        #[arg(long)]
+        name: String,
+        /// Virtual CPUs.
+        #[arg(long, default_value_t = 2)]
+        cores: u16,
+        /// Memory in MiB.
+        #[arg(long, default_value_t = 2048)]
+        memory_mib: u32,
+        /// Root disk in GiB.
+        #[arg(long, default_value_t = 20)]
+        disk_gib: u32,
+        /// Region API base, e.g. http://maas-host:5240/MAAS/api/2.0.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+        /// VM host id to compose on.
+        #[arg(long, env = "CONWRT_MAAS_VM_HOST")]
+        vm_host: String,
+        /// Poll interval while awaiting lifecycle states (ms).
+        #[arg(long, default_value_t = 1000)]
+        poll_ms: u64,
+        /// Maximum poll attempts per awaited state.
+        #[arg(long, default_value_t = 60)]
+        max_polls: u32,
+    },
+    /// List all machines the region knows.
+    List {
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+    /// Describe one machine by system_id.
+    Describe {
+        /// MAAS system_id.
+        #[arg(long)]
+        system_id: String,
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+    /// Release and delete a machine.
+    Destroy {
+        /// MAAS system_id.
+        #[arg(long)]
+        system_id: String,
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+}
+#[derive(Subcommand)]
 enum AgentCommand {
     /// Connect to an agent: handshake + list capabilities.
     Info {
@@ -280,6 +375,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
+        Command::Maas { command } => cmd_maas(command),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
         Command::DiscoverV6 {
             interface,
@@ -926,6 +1022,254 @@ fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCod
         }
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_maas(command: MaasCommand) -> ExitCode {
+    match command {
+        MaasCommand::Flash {
+            image,
+            sha256,
+            target,
+            user_data,
+            meta_data,
+            network_config,
+        } => cmd_maas_flash(
+            &image,
+            &sha256,
+            &target,
+            user_data,
+            meta_data,
+            network_config,
+        ),
+        MaasCommand::Vm { command } => cmd_maas_vm(command),
+    }
+}
+
+fn cmd_maas_flash(
+    image_path: &Path,
+    sha256: &str,
+    target: &Path,
+    user_data: Option<PathBuf>,
+    meta_data: Option<PathBuf>,
+    network_config: Option<PathBuf>,
+) -> ExitCode {
+    use conwrt_local_std::block::FileBlockWriter;
+    use conwrt_maas::flash::{CloudInitSeed, DiskFlashPlan, Sha256, execute_flash};
+    use std::str::FromStr;
+
+    let image = match std::fs::read(image_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("cannot read image {}: {e}", image_path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let digest = match Sha256::from_str(sha256) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("--sha256: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let had_network_config = network_config.is_some();
+    let mut plan = DiskFlashPlan::new(digest);
+    if let (Some(ud_path), Some(md_path)) = (&user_data, &meta_data) {
+        let user_data = match std::fs::read_to_string(ud_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot read user-data {}: {e}", ud_path.display());
+                return ExitCode::from(2);
+            }
+        };
+        let meta_data = match std::fs::read_to_string(md_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot read meta-data {}: {e}", md_path.display());
+                return ExitCode::from(2);
+            }
+        };
+        let network_config = network_config.map(|p| {
+            std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("cannot read network-config {}: {e}", p.display()))
+        });
+        plan = plan.with_seed(CloudInitSeed {
+            user_data,
+            meta_data,
+            network_config,
+        });
+    }
+
+    let mut writer = FileBlockWriter::new(target);
+    match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
+        Ok(report) => {
+            println!("image:     {}", image_path.display());
+            println!("sha256:    {digest} (verified before write)");
+            println!("target:    {}", target.display());
+            println!(
+                "written:   {} bytes (read-back verified)",
+                report.bytes_written
+            );
+            if report.seed_injected {
+                println!(
+                    "seed:      staged at {}.seed/ (user-data, meta-data{})",
+                    target.display(),
+                    if had_network_config {
+                        ", network-config"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("flash refused: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Real clock for provider polling (tokio sleep — the CLI owns a runtime).
+struct RealTime;
+
+impl conwrt_core::Time for RealTime {
+    async fn sleep_ms(&mut self, ms: u64) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+}
+
+fn maas_runtime() -> Result<tokio::runtime::Runtime, ExitCode> {
+    tokio::runtime::Runtime::new().map_err(|e| {
+        eprintln!("cannot start async runtime: {e}");
+        ExitCode::from(2)
+    })
+}
+
+fn cmd_maas_vm(command: VmCommand) -> ExitCode {
+    use conwrt_local_std::maas::HttpMaasClient;
+    use conwrt_maas::provider::{ComputeProvider, MaasProvider, VmSpec};
+
+    let rt = match maas_runtime() {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+
+    fn http_client(region: &str, vm_host: &str) -> Result<HttpMaasClient, ExitCode> {
+        let mut client = HttpMaasClient::new(region, vm_host).map_err(|e| {
+            eprintln!("{e}");
+            ExitCode::from(2)
+        })?;
+        if let Ok(auth) = std::env::var("CONWRT_MAAS_AUTH") {
+            client = client.with_authorization(auth);
+        }
+        Ok(client)
+    }
+
+    match command {
+        VmCommand::Create {
+            name,
+            cores,
+            memory_mib,
+            disk_gib,
+            region,
+            vm_host,
+            poll_ms,
+            max_polls,
+        } => {
+            let spec = VmSpec {
+                name,
+                cores,
+                memory_mib,
+                disk_gib,
+            };
+            let client = match http_client(&region, &vm_host) {
+                Ok(c) => c,
+                Err(code) => return code,
+            };
+            let mut provider = MaasProvider::new(client, RealTime).with_polling(poll_ms, max_polls);
+            match rt.block_on(provider.create_vm(&spec)) {
+                Ok(vm) => {
+                    println!("created:   {} ({})", vm.system_id, vm.hostname);
+                    println!("state:     {}", vm.state);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("create failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::List { region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.list_vms()) {
+                Ok(vms) => {
+                    if vms.is_empty() {
+                        println!("no machines");
+                    }
+                    for vm in vms {
+                        println!("{:<10} {:<20} {}", vm.system_id, vm.hostname, vm.state);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("list failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::Describe { system_id, region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.describe_vm(&system_id)) {
+                Ok(vm) => {
+                    println!("system_id: {}", vm.system_id);
+                    println!("hostname:  {}", vm.hostname);
+                    println!("state:     {}", vm.state);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("describe failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::Destroy { system_id, region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.destroy_vm(&system_id)) {
+                Ok(()) => {
+                    println!("destroyed: {system_id} (released and deleted)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("destroy failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    }
 }
 
 fn cmd_agent(command: AgentCommand) -> ExitCode {

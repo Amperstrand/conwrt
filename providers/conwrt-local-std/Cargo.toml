@@ -9,16 +9,21 @@ repository.workspace = true
 
 [dependencies]
 conwrt-core = { path = "../../crates/conwrt-core" }
+conwrt-maas = { path = "../../crates/conwrt-maas" }
 conwrt-types = { path = "../../crates/conwrt-types" }
 httparse = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 russh = "0.64"
+serde = { workspace = true }
+thiserror = "2"
 tokio = { workspace = true }
 
 [dev-dependencies]
+httpmock = "0.7"
 rand = "0.10"
-tempfile = "3"
 serde_json = { workspace = true }
 sha2 = "0.10"
+tempfile = "3"
 
 [lints]
 workspace = true
