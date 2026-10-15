@@ -20,7 +20,7 @@ use conwrt_core::plan::{DohProfile, SqmProfile};
 use conwrt_core::ssh::TrustMode;
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
-use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
+use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -113,6 +113,10 @@ enum Command {
         /// Desired-state profile to apply.
         #[arg(long)]
         profile: ProfileChoice,
+        /// Explicitly forget the stored host key before connecting
+        /// (reflash/reimage escape hatch; logged, never silent).
+        #[arg(long)]
+        relearn_host_key: bool,
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
@@ -143,9 +147,10 @@ enum Command {
         /// Private key file for auth (omit to use password auth).
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Password for auth (ignored when --key is given).
-        #[arg(long, default_value = "")]
-        password: String,
+        /// Password for auth (ignored when --key is given; env
+        /// CONWRT_SSH_PASSWORD as fallback).
+        #[arg(long)]
+        password: Option<String>,
         /// Actually execute the mutating script (default is dry-run).
         #[arg(long)]
         execute: bool,
@@ -162,6 +167,11 @@ enum Command {
         /// Target address of the device.
         #[arg(long)]
         ip: IpAddr,
+        /// Explicitly forget the stored host key for this device before
+        /// connecting (the reflash/reimage escape hatch). TOFU re-learns
+        /// on success. Never silent: the action is logged.
+        #[arg(long)]
+        relearn_host_key: bool,
         /// SSH port.
         #[arg(long, default_value_t = 22)]
         port: u16,
@@ -171,9 +181,10 @@ enum Command {
         /// Private key file for auth (omit to use password auth).
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Password for auth (ignored when --key is given).
-        #[arg(long, default_value = "")]
-        password: String,
+        /// Password for auth (ignored when --key is given; env
+        /// CONWRT_SSH_PASSWORD as fallback).
+        #[arg(long)]
+        password: Option<String>,
     },
     Plan {
         /// Desired-state profile to plan.
@@ -285,12 +296,21 @@ fn main() -> ExitCode {
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
         Command::Fingerprint {
             ip,
+            relearn_host_key,
             port,
             user,
             key,
             password,
-        } => cmd_fingerprint(ip, port, &user, key.as_deref(), &password),
+        } => cmd_fingerprint(
+            ip,
+            relearn_host_key,
+            port,
+            &user,
+            key.as_deref(),
+            password.as_deref(),
+        ),
         Command::Apply {
+            relearn_host_key,
             profile,
             model_id,
             download_kbps,
@@ -306,6 +326,7 @@ fn main() -> ExitCode {
             execute,
             dir,
         } => cmd_apply(
+            relearn_host_key,
             profile,
             &model_id,
             download_kbps,
@@ -317,7 +338,7 @@ fn main() -> ExitCode {
             port,
             &user,
             key.as_deref(),
-            &password,
+            password.as_deref(),
             execute,
             &dir,
         ),
@@ -565,19 +586,16 @@ fn default_sqm() -> SqmProfile {
 }
 fn cmd_fingerprint(
     ip: IpAddr,
+    relearn_host_key: bool,
     port: u16,
     user: &str,
     key: Option<&Path>,
-    password: &str,
+    password: Option<&str>,
 ) -> ExitCode {
-    let auth = match key {
-        Some(path) => SshAuth::KeyFile {
-            path: path.to_path_buf(),
-            passphrase: None,
-        },
-        None if !password.is_empty() => SshAuth::Password(password.to_string()),
-        None => {
-            eprintln!("provide --key <path> or --password <secret> for authentication");
+    let auth = match resolve_auth(key, password) {
+        Ok(auth) => auth,
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::from(2);
         }
     };
@@ -586,6 +604,10 @@ fn cmd_fingerprint(
         user: user.to_string(),
         auth,
     };
+    if relearn_host_key {
+        eprintln!("# relearn-host-key: forgetting stored key for {ip}:{port}");
+        store_forget(&target.addr);
+    }
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -645,18 +667,13 @@ fn cmd_fingerprint(
     );
     ExitCode::SUCCESS
 }
-fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
-    match key {
-        Some(path) => Ok(SshAuth::KeyFile {
-            path: path.to_path_buf(),
-            passphrase: None,
-        }),
-        None if !password.is_empty() => Ok(SshAuth::Password(password.to_string())),
-        None => Err("provide --key <path> or --password <secret> for authentication".into()),
-    }
+fn store_forget(addr: &str) {
+    use conwrt_core::ssh::TrustStore;
+    FileTrustStore::new(FileTrustStore::default_path()).forget(addr);
 }
 #[allow(clippy::too_many_arguments)]
 fn cmd_apply(
+    relearn_host_key: bool,
     profile: ProfileChoice,
     model_id: &str,
     download_kbps: Option<u32>,
@@ -668,7 +685,7 @@ fn cmd_apply(
     port: u16,
     user: &str,
     key: Option<&Path>,
-    password: &str,
+    password: Option<&str>,
     execute: bool,
     dir: &Path,
 ) -> ExitCode {
@@ -695,7 +712,7 @@ fn cmd_apply(
         }
     };
 
-    let auth = match ssh_auth(key, password) {
+    let auth = match resolve_auth(key, password) {
         Ok(auth) => auth,
         Err(msg) => {
             eprintln!("{msg}");
@@ -707,6 +724,10 @@ fn cmd_apply(
         user: user.to_string(),
         auth,
     };
+    if relearn_host_key {
+        eprintln!("# relearn-host-key: forgetting stored key for {ip}:{port}");
+        store_forget(&target.addr);
+    }
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
