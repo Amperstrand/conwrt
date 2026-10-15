@@ -296,6 +296,47 @@ class TestSerialBootMonitorMilestones(TestCase):
         finally:
             server.stop()
 
+    def test_break_recovery_keeps_bytes_relayed_during_reopen(self):
+        """#202: a fresh TCP connection's first bytes are never stale.
+
+        The bridge relays the stream the moment the monitor reconnects;
+        recovery used to ``reset_input_buffer()`` on the NEW socket, so any
+        milestone bytes that had already landed (the banner, on slow or
+        contended runners) were drained and lost — the monitor then parsed
+        only what arrived after the drain. The delayed-open simulation
+        below pins the banner into the socket receive buffer before the
+        recovery path continues, which is exactly the observed race,
+        deterministically.
+        """
+        from flash import serial_monitor as sm
+        real_open_serial = sm.open_serial
+
+        def slow_open(port: str, baud: int, timeout: float = 0.2):
+            transport = real_open_serial(port, baud, timeout=timeout)
+            time.sleep(0.15)  # banner lands in the socket buffer during reopen
+            return transport
+
+        server = ScriptedSerialServer(
+            scripts=[
+                [b"\x00" * 16],                                  # conn 1: break only
+                [(UBOOT_BANNER_PRIMARY + "\r\n").encode(),       # conn 2: relayed at accept
+                 (STARTING_KERNEL + "\r\n").encode()],
+            ],
+            chunk_delay=0.05)
+        server.start()
+        try:
+            with patch("flash.serial_monitor.BREAK_RECOVERY_WAIT", 0.05), \
+                 patch("flash.serial_monitor.open_serial", new=slow_open):
+                mon, t, q = self._run_monitor(server)
+                events = _collect(q, want=2, timeout=5)
+                mon.stop()
+                t.join(timeout=5)
+            assert [e[0] for e in events] == [
+                Event.SERIAL_UBOOT_BANNER, Event.SERIAL_KERNEL_START], \
+                "bytes relayed during reopen must reach the parser, not the drain"
+        finally:
+            server.stop()
+
 
 # ─── Disconnect semantics: warn once, pcap-only, no abort ───────────────────
 
