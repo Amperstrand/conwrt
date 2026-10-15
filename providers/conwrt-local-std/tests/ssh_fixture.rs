@@ -8,7 +8,7 @@ mod common;
 
 use common::{FIXTURE_PASSWORD, Fixture};
 use conwrt_core::ssh::{MemoryTrustStore, Refusal, RefusalReason, TrustMode, TrustStore};
-use conwrt_local_std::ssh::{SshAuth, SshError, SshOptions, SshTarget, connect, resolve_auth};
+use conwrt_local_std::ssh::{SshAuth, SshError, SshOptions, SshTarget, connect};
 use std::path::Path;
 
 fn target(addr: &str) -> SshTarget {
@@ -359,6 +359,6 @@ fn resolve_auth_precedence_flags_then_env_then_error() {
         "must name the env vars: {err}"
     );
     // Empty env values are ignored (no insecure empty-password default).
-    let empty = |k: &str| (k == "CONWRT_SSH_PASSWORD").then(|| String::new());
+    let empty = |k: &str| (k == "CONWRT_SSH_PASSWORD").then(String::new);
     assert!(resolve_auth_with(&empty, None, None).is_err());
 }
