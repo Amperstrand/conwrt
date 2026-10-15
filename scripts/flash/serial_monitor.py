@@ -165,13 +165,16 @@ class SerialBootMonitor:
             return False
         if not self._is_tcp:
             # A local adapter's OS buffer still holds the power-off window's
-            # break garbage — drain it. A fresh TCP connection is different:
-            # its first bytes are never stale (the bridge relays the live
-            # stream from the moment it accepts), so draining there races
-            # away milestone bytes that already landed during the reopen
-            # (#202). The NUL tail is consumed by the read loop instead.
+            # break garbage — drain it (and a NUL-leading read afterwards is
+            # a fresh break: the drain consumed any stale tail, so recovery
+            # must re-trigger). A fresh TCP connection is different: its
+            # first bytes are never stale (the bridge relays the live stream
+            # from the moment it accepts), so draining there races away
+            # milestone bytes that already landed during the reopen (#202).
+            # The NUL tail is consumed by the read loop instead.
             self._transport.reset_input_buffer()
-        self._consuming_break_tail = True
+        else:
+            self._consuming_break_tail = True
         return True
 
     def run(self) -> None:
