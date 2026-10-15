@@ -17,10 +17,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{DohProfile, SqmProfile};
-use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
+use conwrt_core::ssh::TrustMode;
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
 use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
+use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -153,6 +154,8 @@ enum Command {
         dir: PathBuf,
     },
     /// Fingerprint a device over SSH with authenticated, read-only evidence
+    /// (TOFU host keys persist in ~/.config/conwrt/known_hosts —
+    /// $CONWRT_KNOWN_HOSTS overrides)
     /// (OpenWrt release, board name, hostname) — the confirming layer above
     /// the passive probe: upgrades an unconfirmed `ssh-only` classification.
     Fingerprint {
@@ -590,7 +593,7 @@ fn cmd_fingerprint(
             return ExitCode::from(2);
         }
     };
-    let mut store = MemoryTrustStore::new();
+    let mut store = FileTrustStore::new(FileTrustStore::default_path());
     let session = match runtime.block_on(connect(
         &target,
         &mut store,
@@ -711,7 +714,7 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let mut store = MemoryTrustStore::new();
+    let mut store = FileTrustStore::new(FileTrustStore::default_path());
     let session = match runtime.block_on(connect(
         &target,
         &mut store,

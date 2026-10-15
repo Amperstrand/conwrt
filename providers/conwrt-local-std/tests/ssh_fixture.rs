@@ -7,7 +7,7 @@
 mod common;
 
 use common::{FIXTURE_PASSWORD, Fixture};
-use conwrt_core::ssh::{MemoryTrustStore, RefusalReason, TrustMode};
+use conwrt_core::ssh::{MemoryTrustStore, Refusal, RefusalReason, TrustMode, TrustStore};
 use conwrt_local_std::ssh::{SshAuth, SshError, SshOptions, SshTarget, connect};
 
 fn target(addr: &str) -> SshTarget {
@@ -73,6 +73,64 @@ async fn strict_mode_refuses_unknown_host_with_pin_hint() {
         }
         other => panic!("expected refusal, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn first_use_refusal_sends_zero_auth_attempts() {
+    // #125 regression: the structural guarantee — on a FirstUse refusal
+    // (Strict), authentication must NEVER have been attempted. The
+    // fixture counts every auth callback; a regression that reorders the
+    // ladder after the handshake would send credentials first.
+    let fixture = Fixture::start().await;
+    let mut store = MemoryTrustStore::new();
+    let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        SshError::HostKeyRefused(Refusal {
+            reason: RefusalReason::FirstUse,
+            ..
+        })
+    ));
+    assert_eq!(
+        fixture.auth_attempts(),
+        0,
+        "credentials must not be sent before host-key approval"
+    );
+}
+
+#[tokio::test]
+async fn changed_key_refusal_sends_zero_auth_attempts() {
+    // #125 regression: ChangedKey (MITM/reimage signature) must refuse
+    // with zero auth attempts — a stored same-algorithm key differs, so
+    // the ladder stops at the handshake.
+    let fixture = Fixture::start().await;
+    let mut store = MemoryTrustStore::new();
+    // Seed the store with a DIFFERENT ed25519 key for this exact host:
+    // the fixture's freshly generated key then presents as ChangedKey.
+    store.remember(
+        &fixture.addr,
+        &conwrt_core::ssh::HostKeyView {
+            key_algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:0000000000000000000000000000000000000000000".into(),
+        },
+    );
+    let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        SshError::HostKeyRefused(Refusal {
+            reason: RefusalReason::ChangedKey,
+            ..
+        })
+    ));
+    assert_eq!(
+        fixture.auth_attempts(),
+        0,
+        "credentials must not be sent to a host whose key changed"
+    );
 }
 
 #[tokio::test]

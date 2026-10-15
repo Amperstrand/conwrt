@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use conwrt_core::ssh::{
-    HostKeyView, MemoryTrustStore, Refusal, TrustDecision, TrustMode, TrustedHow, evaluate_host_key,
+    HostKeyView, Refusal, TrustDecision, TrustMode, TrustStore, TrustedHow, evaluate_host_key,
 };
 use russh::client::{self, Handle};
 use russh::keys::PrivateKeyWithHashAlg;
@@ -176,9 +176,9 @@ impl std::fmt::Debug for SshSession {
 /// Connect, evaluate the host-key ladder, authenticate, and return the
 /// session. On [`TrustMode::TrustOnFirstUse`] first use, the key is
 /// remembered in `store` only after authentication succeeds.
-pub async fn connect(
+pub async fn connect<S: TrustStore>(
     target: &SshTarget,
-    store: &mut MemoryTrustStore,
+    store: &mut S,
     options: &SshOptions,
 ) -> Result<SshSession, SshError> {
     let stored = store.entries(&target.addr);
