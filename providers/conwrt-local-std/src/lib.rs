@@ -16,8 +16,10 @@
 //! - Other OSes: those probes return `Ok(None)` (unknown), TCP probes work
 //!   everywhere std does.
 
+pub mod block;
 pub mod execute;
 pub mod fingerprint;
+pub mod maas;
 pub mod ssh;
 pub mod trust;
 pub mod v6;

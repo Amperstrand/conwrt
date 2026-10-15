@@ -1,0 +1,288 @@
+//! Host [`BlockWriter`] for the MAAS lab disk pipeline (issue #169):
+//! the real dd-equivalent file I/O behind `conwrt_maas::flash`.
+//!
+//! CI-provable parts run against a temp file (`tempfile`): write, read-back,
+//! and error surfacing. Two operations need lab-side system utilities and
+//! fail with actionable errors when absent — this is deliberate honesty,
+//! not a stub: a `growpart`/`mkfs.vfat` dance can only be proven on the
+//! bench (owner-gated), never in CI.
+//!
+//! - `grow_partition` shells out to `growpart <path> <partition>` (the
+//!   util-linux/cloud-guestutils tool the lab recipe's Phase-3 resize uses).
+//! - `write_seed` stages the cloud-init trio into `<path>.seed/` as
+//!   `user-data`, `meta-data`, `network-config`; assembling the FAT
+//!   CIDATA volume from the staging dir is the lab-side step.
+//!
+//! **Safety**: the writer opens exactly the path it is given. Pointing it
+//! at a whole-disk device node (`/dev/sdX`) rewrites that device — the
+//! caller owns that decision (AGENTS.md specimen/serial gates apply).
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use conwrt_maas::flash::{BlockWriter, CloudInitSeed};
+use thiserror::Error;
+
+/// Failures of the host block writer.
+#[derive(Debug, Error)]
+pub enum BlockWriterError {
+    /// Filesystem-level failure on the target path.
+    #[error("block I/O failed on {path}: {source}")]
+    Io {
+        /// The target path.
+        path: PathBuf,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+    /// A lab-side utility (`growpart`) is not installed.
+    #[error("grow_partition needs the `growpart` utility (cloud-guestutils) installed")]
+    GrowpartMissing,
+    /// `growpart` ran and failed.
+    #[error("growpart failed for {path} partition {partition}: {stderr}")]
+    GrowpartFailed {
+        /// The target path.
+        path: PathBuf,
+        /// 1-based partition number.
+        partition: u8,
+        /// Truncated stderr from the utility.
+        stderr: String,
+    },
+}
+
+/// File-backed [`BlockWriter`]: the image target is a regular file (or a
+/// loop-device path in the lab); the seed stages next to it.
+#[derive(Debug)]
+pub struct FileBlockWriter {
+    path: PathBuf,
+    partition: Option<u8>,
+    growpart: Option<PathBuf>,
+}
+
+impl FileBlockWriter {
+    /// Writer for the image target at `path` (no partition growing).
+    #[must_use]
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            partition: None,
+            growpart: None,
+        }
+    }
+
+    /// Builder: grow this 1-based partition after write verification
+    /// (requires `growpart` at the given or default PATH location).
+    #[must_use]
+    pub fn with_growpart(mut self, partition: u8, growpart: impl Into<PathBuf>) -> Self {
+        self.partition = Some(partition);
+        self.growpart = Some(growpart.into());
+        self
+    }
+
+    /// Where the cloud-init seed stages (`<target>.seed/`).
+    fn seed_dir(&self) -> PathBuf {
+        let mut s = self.path.clone().into_os_string();
+        s.push(".seed");
+        PathBuf::from(s)
+    }
+}
+
+fn io_err(path: &Path) -> impl Fn(std::io::Error) -> BlockWriterError + '_ {
+    move |source| BlockWriterError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+impl BlockWriter for FileBlockWriter {
+    type Error = BlockWriterError;
+
+    async fn write_image(&mut self, image: &[u8]) -> Result<(), Self::Error> {
+        // std::fs inside async: the lab flow calls this from a host
+        // runner, not a shared reactor; keep the I/O synchronous and
+        // simple (the mock-era pipeline has no concurrency requirement).
+        std::fs::write(&self.path, image).map_err(io_err(&self.path))
+    }
+
+    async fn read_back(&mut self, len: usize) -> Result<Vec<u8>, Self::Error> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(&self.path).map_err(io_err(&self.path))?;
+        let mut buf = vec![0u8; len];
+        f.read_exact(&mut buf).map_err(io_err(&self.path))?;
+        Ok(buf)
+    }
+
+    async fn grow_partition(&mut self) -> Result<(), Self::Error> {
+        let partition = self.partition.ok_or(BlockWriterError::GrowpartMissing)?;
+        let growpart = self.growpart.clone().unwrap_or_else(|| "growpart".into());
+        let out = Command::new(&growpart)
+            .arg(&self.path)
+            .arg(partition.to_string())
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    BlockWriterError::GrowpartMissing
+                } else {
+                    BlockWriterError::Io {
+                        path: self.path.clone(),
+                        source: e,
+                    }
+                }
+            })?;
+        if !out.status.success() {
+            return Err(BlockWriterError::GrowpartFailed {
+                path: self.path.clone(),
+                partition,
+                stderr: String::from_utf8_lossy(&out.stderr)
+                    .chars()
+                    .take(200)
+                    .collect(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn write_seed(&mut self, seed: &CloudInitSeed) -> Result<(), Self::Error> {
+        let dir = self.seed_dir();
+        std::fs::create_dir_all(&dir).map_err(io_err(&dir))?;
+        let user_data_path = dir.join("user-data");
+        std::fs::write(&user_data_path, &seed.user_data).map_err(io_err(&user_data_path))?;
+        let meta_path = dir.join("meta-data");
+        std::fs::write(&meta_path, &seed.meta_data).map_err(io_err(&meta_path))?;
+        if let Some(nc) = &seed.network_config {
+            let nc_path = dir.join("network-config");
+            std::fs::write(&nc_path, nc).map_err(io_err(&nc_path))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conwrt_maas::flash::{CloudInitSeed, DiskFlashPlan, Sha256, execute_flash};
+
+    const IMAGE: &[u8] = b"lab disk image stand-in bytes";
+
+    fn seed() -> CloudInitSeed {
+        CloudInitSeed {
+            user_data: "#cloud-config\n".into(),
+            meta_data: "instance-id: pi-lab".into(),
+            network_config: Some("network: {}".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn file_writer_roundtrips_write_and_read_back() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w = FileBlockWriter::new(tmp.path());
+
+        w.write_image(IMAGE).await.unwrap();
+        assert_eq!(w.read_back(IMAGE.len()).await.unwrap(), IMAGE);
+    }
+
+    #[tokio::test]
+    async fn full_pipeline_against_a_real_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w = FileBlockWriter::new(tmp.path());
+        let plan = DiskFlashPlan::new(Sha256::hash(IMAGE)).with_seed(seed());
+
+        let report = execute_flash(&plan, IMAGE, &mut w).await.unwrap();
+
+        assert_eq!(report.bytes_written, IMAGE.len());
+        assert!(report.seed_injected);
+        let seed_dir = {
+            let mut s = tmp.path().as_os_str().to_os_string();
+            s.push(".seed");
+            PathBuf::from(s)
+        };
+        assert_eq!(
+            std::fs::read_to_string(seed_dir.join("user-data")).unwrap(),
+            "#cloud-config\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(seed_dir.join("meta-data")).unwrap(),
+            "instance-id: pi-lab"
+        );
+        assert_eq!(
+            std::fs::read_to_string(seed_dir.join("network-config")).unwrap(),
+            "network: {}"
+        );
+    }
+
+    /// Seam-level tampering: flip file contents between write and
+    /// read-back — only the writer sits between those two pipeline steps.
+    struct TamperingWriter {
+        path: PathBuf,
+        inner: FileBlockWriter,
+    }
+
+    impl conwrt_maas::flash::BlockWriter for TamperingWriter {
+        type Error = BlockWriterError;
+
+        async fn write_image(&mut self, image: &[u8]) -> Result<(), Self::Error> {
+            self.inner.write_image(image).await?;
+            let mut tampered = image.to_vec();
+            tampered[0] ^= 0xff; // same length, different content
+            std::fs::write(&self.path, tampered).map_err(io_err(&self.path))?;
+            Ok(())
+        }
+
+        async fn read_back(&mut self, len: usize) -> Result<Vec<u8>, Self::Error> {
+            self.inner.read_back(len).await
+        }
+
+        async fn grow_partition(&mut self) -> Result<(), Self::Error> {
+            self.inner.grow_partition().await
+        }
+
+        async fn write_seed(&mut self, seed: &CloudInitSeed) -> Result<(), Self::Error> {
+            self.inner.write_seed(seed).await
+        }
+    }
+
+    #[tokio::test]
+    async fn corrupt_target_file_fails_read_back_verification() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w = TamperingWriter {
+            path: tmp.path().to_path_buf(),
+            inner: FileBlockWriter::new(tmp.path()),
+        };
+        let plan = DiskFlashPlan::new(Sha256::hash(IMAGE)).with_seed(seed());
+
+        let err = execute_flash(&plan, IMAGE, &mut w).await.unwrap_err();
+        assert!(matches!(
+            err,
+            conwrt_maas::flash::FlashError::WrittenChecksum { .. }
+        ));
+        let seed_dir = {
+            let mut s = tmp.path().as_os_str().to_os_string();
+            s.push(".seed");
+            PathBuf::from(s)
+        };
+        assert!(!seed_dir.exists(), "no seed after failed verification");
+    }
+
+    #[tokio::test]
+    async fn unwritable_path_surfaces_io_error() {
+        let mut w = FileBlockWriter::new("/nonexistent-dir-does-not-exist/disk.img");
+        let err = w.write_image(IMAGE).await.unwrap_err();
+        assert!(matches!(err, BlockWriterError::Io { .. }));
+    }
+
+    #[tokio::test]
+    async fn grow_partition_without_configuration_is_actionable() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w = FileBlockWriter::new(tmp.path());
+        let err = w.grow_partition().await.unwrap_err();
+        assert!(matches!(err, BlockWriterError::GrowpartMissing));
+    }
+
+    #[tokio::test]
+    async fn grow_partition_missing_binary_is_actionable() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w =
+            FileBlockWriter::new(tmp.path()).with_growpart(1, "/nonexistent-growpart-binary");
+        let err = w.grow_partition().await.unwrap_err();
+        assert!(matches!(err, BlockWriterError::GrowpartMissing));
+    }
+}
