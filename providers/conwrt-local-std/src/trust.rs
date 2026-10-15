@@ -142,6 +142,42 @@ impl FileTrustStore {
     }
 }
 
+impl FileTrustStore {
+    /// Rewrite the store without `host`'s lines (lock-guarded, atomic).
+    fn forget_impl(&mut self, host: &str) {
+        if !self.path.exists() {
+            return;
+        }
+        let lock_path = {
+            let mut s = self.path.as_os_str().to_os_string();
+            s.push(".lock");
+            PathBuf::from(s)
+        };
+        let _lock = match LockGuard::acquire(&lock_path) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let kept: Vec<_> = self
+            .read_entries()
+            .into_iter()
+            .filter(|(h, _)| h != host)
+            .collect();
+        let tmp_path = {
+            let mut s = self.path.as_os_str().to_os_string();
+            s.push(".tmp");
+            PathBuf::from(s)
+        };
+        let Ok(mut tmp) = File::create(&tmp_path) else {
+            return;
+        };
+        for (h, k) in &kept {
+            let _ = writeln!(tmp, "{} {} {}", h, k.key_algo, k.fingerprint);
+        }
+        let _ = tmp.sync_all();
+        let _ = fs::rename(&tmp_path, &self.path);
+    }
+}
+
 impl TrustStore for FileTrustStore {
     fn entries(&self, host: &str) -> Vec<HostKeyView> {
         self.read_entries()
@@ -186,6 +222,10 @@ impl TrustStore for FileTrustStore {
         }
         let _ = tmp.sync_all();
         let _ = fs::rename(&tmp_path, &self.path);
+    }
+
+    fn forget(&mut self, host: &str) {
+        self.forget_impl(host);
     }
 }
 
@@ -288,6 +328,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn forget_removes_only_that_host_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let mut store = FileTrustStore::new(&path);
+        store.remember("h1:22", &key("ssh-ed25519", "SHA256:aaa"));
+        store.remember("h2:22", &key("ssh-ed25519", "SHA256:bbb"));
+        store.forget("h1:22");
+        assert!(store.entries("h1:22").is_empty());
+        assert_eq!(store.entries("h2:22").len(), 1);
+        // Absent host: no-op, other entries intact, no error.
+        store.forget("never-seen:22");
+        assert_eq!(store.entries("h2:22").len(), 1);
+        // Persists across instances.
+        let reopened = FileTrustStore::new(&path);
+        assert!(reopened.entries("h1:22").is_empty());
+        assert_eq!(reopened.entries("h2:22").len(), 1);
+    }
+
+    #[test]
+    fn forget_on_absent_file_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = FileTrustStore::new(dir.path().join("nope"));
+        store.forget("h:22"); // must not panic or create the file
+        assert!(store.entries("h:22").is_empty());
     }
 
     #[test]

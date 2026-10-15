@@ -206,6 +206,11 @@ pub trait TrustStore {
 
     /// Trust `key` for `host` going forward (implementations dedupe).
     fn remember(&mut self, host: &str, key: &HostKeyView);
+
+    /// Drop every stored key for `host` — the explicit relearn escape
+    /// hatch after a reflash (host keys legitimately change). Callers
+    /// must make this an operator-visible action, never silent.
+    fn forget(&mut self, host: &str);
 }
 
 /// An in-memory [`TrustStore`] for tests and single-session TOFU flows.
@@ -235,6 +240,10 @@ impl TrustStore for MemoryTrustStore {
         if !self.entries.iter().any(|(h, k)| h == host && *k == *key) {
             self.entries.push((host.to_string(), key.clone()));
         }
+    }
+
+    fn forget(&mut self, host: &str) {
+        self.entries.retain(|(h, _)| h != host);
     }
 }
 

@@ -14,13 +14,18 @@ use std::sync::Arc;
 use conwrt_core::ssh::{
     HostKeyView, Refusal, TrustDecision, TrustMode, TrustStore, TrustedHow, evaluate_host_key,
 };
+use std::path::Path;
+
 use russh::client::{self, Handle};
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::keys::ssh_key::HashAlg;
 use russh::{Channel, ChannelMsg};
 
 /// How to authenticate.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is manual and redacts every secret: passwords and key
+/// passphrases must never reach logs (#125).
+#[derive(Clone)]
 pub enum SshAuth {
     /// Password authentication.
     Password(String),
@@ -31,6 +36,63 @@ pub enum SshAuth {
         /// Passphrase for encrypted keys.
         passphrase: Option<String>,
     },
+}
+
+impl std::fmt::Debug for SshAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Password(_) => f.write_str("Password(<redacted>)"),
+            Self::KeyFile { path, passphrase } => f
+                .debug_struct("KeyFile")
+                .field("path", path)
+                .field("passphrase", &passphrase.as_ref().map(|_| "<redacted>"))
+                .finish(),
+        }
+    }
+}
+
+/// Credential resolution with the documented precedence (#125):
+/// explicit CLI arguments first, then `CONWRT_SSH_KEY` /
+/// `CONWRT_SSH_PASSWORD`, else a usage error. A key wins over a
+/// password at the same precedence level (key auth is the hardening
+/// direction).
+pub fn resolve_auth(
+    key_flag: Option<&Path>,
+    password_flag: Option<&str>,
+) -> Result<SshAuth, String> {
+    resolve_auth_with(&|name| std::env::var(name).ok(), key_flag, password_flag)
+}
+
+/// Testable core of [`resolve_auth`]: `getenv` stands in for the process
+/// environment (edition-2024 env mutation is unsafe, so tests inject).
+pub fn resolve_auth_with(
+    getenv: &dyn Fn(&str) -> Option<String>,
+    key_flag: Option<&Path>,
+    password_flag: Option<&str>,
+) -> Result<SshAuth, String> {
+    if let Some(path) = key_flag {
+        return Ok(SshAuth::KeyFile {
+            path: path.to_path_buf(),
+            passphrase: None,
+        });
+    }
+    if let Some(password) = password_flag {
+        return Ok(SshAuth::Password(password.to_string()));
+    }
+    if let Some(path) = getenv("CONWRT_SSH_KEY").filter(|p| !p.is_empty()) {
+        return Ok(SshAuth::KeyFile {
+            path: PathBuf::from(path),
+            passphrase: None,
+        });
+    }
+    if let Some(password) = getenv("CONWRT_SSH_PASSWORD").filter(|p| !p.is_empty()) {
+        return Ok(SshAuth::Password(password));
+    }
+    Err(
+        "no credentials: pass --key <path> or --password <secret>, or set \
+         CONWRT_SSH_KEY / CONWRT_SSH_PASSWORD"
+            .into(),
+    )
 }
 
 /// Where and how to connect.
