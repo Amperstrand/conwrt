@@ -1,0 +1,40 @@
+[package]
+name = "conwrt-esp32s3"
+description = "Conwrt MCU agent for the ESP32-S3 (M5, #111): USB-CDC transport, COBS frames, shared Tier-A agent core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Tier-C firmware crate (ADR-0002): excluded from the root workspace so host
+# tooling never builds it (see root Cargo.toml). Unlike the STM32 app (#110),
+# the S3 is Xtensa: builds need the esp-rs fork toolchain (`cargo +esp`,
+# espup version 1.98.1.0) — strategy + evidence in ADR-0012. Build with:
+#   cargo +esp build --release            # target from .cargo/config.toml
+# Size gate (GCC size; cargo-binutils has no llvm-tools on the fork):
+#   xtensa-esp32s3-elf-size target/xtensa-esp32s3-none-elf/release/conwrt-esp32s3
+# Board: ESP32-S3 native USB (OTG-FS): DP = GPIO20, DM = GPIO19.
+
+[dependencies]
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
+
+esp-hal = { version = "~1.2", features = ["esp32s3"] }
+esp-rtos = { version = "0.4", features = ["embassy", "esp32s3"] }
+esp-backtrace = { version = "0.20", features = ["panic-handler", "println", "esp32s3"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32s3"] }
+esp-println = { version = "0.18", features = ["esp32s3"] }
+esp-alloc = { version = "0.11", features = ["esp32s3", "global-allocator"] }
+
+embassy-executor = "0.10"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+embassy-usb = { version = "0.6", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
