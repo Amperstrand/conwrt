@@ -180,6 +180,15 @@ rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
 	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
 
+parity-check: ## #118: Python(jsonschema) and Rust(types) must agree on corpus + negatives
+	@python3 -m pytest tests/test_model_schema_parity.py -q
+	@cargo run --quiet -p conwrt-cli -- models --dir models >/dev/null
+	@for d in tests/fixtures/schema-negative/*/; do \
+	  if cargo run --quiet -p conwrt-cli -- models --dir "$$d" >/dev/null 2>&1; then \
+	    echo "PARITY DRIFT: Rust accepted a schema-negative fixture: $$d"; exit 1; fi; \
+	done
+	@echo "parity OK: both validators agree on the corpus and every negative fixture"
+
 rust-test: ## Run Rust workspace tests only
 	cargo test --workspace
 

@@ -125,6 +125,30 @@ pub fn validate_model(model: &DeviceModel, filename_stem: Option<&str>) -> Vec<S
         }
     }
 
+    // serial_console: dual-typed section (#118) — the baud range the JSON
+    // schema also enforces. Same numbers, both languages, parity-tested.
+    if let Some(sc) = &model.serial_console {
+        if !(1200..=921_600).contains(&sc.baud) {
+            problems.push(format!(
+                "serial_console.baud: {} outside 1200-921600 (the NR7101 lesson:                  a wrong baud in prose costs hours — here it must not parse)",
+                sc.baud
+            ));
+        }
+        if sc.console_device.is_empty() {
+            problems.push("serial_console.console_device: must not be empty".to_string());
+        }
+    }
+
+    // warnings: dual-typed (#118) — typed as array of strings by the parse
+    // itself; nothing further to check beyond non-empty entries.
+    if let Some(warnings) = &model.warnings {
+        for w in warnings {
+            if w.trim().is_empty() {
+                problems.push("warnings: entries must not be empty".to_string());
+            }
+        }
+    }
+
     problems
 }
 
@@ -179,6 +203,7 @@ mod tests {
                 version: "24".into(),
                 board_name: None,
                 default_ip: None,
+                extras: Default::default(),
             },
             capabilities: Some(vec!["ethernet".into()]),
             flash_methods: Some(BTreeMap::from([(
@@ -190,10 +215,67 @@ mod tests {
                     upload_endpoint: None,
                     flash_time_seconds: None,
                     silence_timeout: None,
+                    extras: Default::default(),
                 },
             )])),
             mac_oui: vec![],
+            serial_console: None,
+            warnings: None,
+            extras: crate::ordered_map::OrderedMap::new(),
         }
+    }
+
+    #[test]
+    fn serial_console_baud_range_is_enforced_like_the_schema() {
+        let mut m = base_model();
+        m.serial_console = Some(crate::model::SerialConsole {
+            baud: 115_200,
+            console_device: "ttyS0".into(),
+            parity: Some("n81".into()),
+            bootloader: None,
+            verified_from: None,
+            note: None,
+        });
+        assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
+
+        m.serial_console.as_mut().expect("set").baud = 12;
+        assert!(
+            validate_model(&m, Some("vendor-model-1"))
+                .iter()
+                .any(|p| p.contains("serial_console.baud"))
+        );
+
+        m.serial_console.as_mut().expect("set").baud = 4_000_000;
+        assert!(
+            validate_model(&m, Some("vendor-model-1"))
+                .iter()
+                .any(|p| p.contains("serial_console.baud"))
+        );
+
+        m.serial_console.as_mut().expect("set").baud = 57_600;
+        m.serial_console
+            .as_mut()
+            .expect("set")
+            .console_device
+            .clear();
+        assert!(
+            validate_model(&m, Some("vendor-model-1"))
+                .iter()
+                .any(|p| p.contains("console_device"))
+        );
+    }
+
+    #[test]
+    fn empty_warnings_entries_are_problems() {
+        let mut m = base_model();
+        m.warnings = Some(vec!["real warning".into()]);
+        assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
+        m.warnings = Some(vec!["ok".into(), "  ".into()]);
+        assert!(
+            validate_model(&m, Some("vendor-model-1"))
+                .iter()
+                .any(|p| p.contains("warnings"))
+        );
     }
 
     #[test]
@@ -271,6 +353,7 @@ mod tests {
                 upload_endpoint: None,
                 flash_time_seconds: None,
                 silence_timeout: None,
+                extras: Default::default(),
             },
         );
         m.flash_methods = Some(methods);

@@ -9,13 +9,14 @@ repository.workspace = true
 
 [features]
 default = ["json"]
-# JSON parsing + filesystem registry loading (requires std).
-json = ["dep:serde_json", "std"]
+# Filesystem registry loading (requires std). JSON *parsing* is always on:
+# the lossless `extras` representation (#118) made serde_json structural.
+json = ["std"]
 std = []
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { version = "1", optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

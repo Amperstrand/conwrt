@@ -41,6 +41,10 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
           cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto --no-default-features --target thumbv7em-none-eabihf
+      - name: Model-schema parity (#118)
+        run: |
+          python3 -m pip install --quiet pytest jsonschema
+          make parity-check
       # Tier-C firmware (apps/conwrt-stm32, excluded from the workspace).
       # Must run with CWD inside the app: its .cargo/config.toml carries the
       # cortex-m linker flags, and cargo resolves config from the CWD.
