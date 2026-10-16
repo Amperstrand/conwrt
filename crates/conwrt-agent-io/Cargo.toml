@@ -14,13 +14,16 @@ embassy-usb = ["dep:embassy-usb"]
 # Blanket `StreamIo` impl for embassy-net 0.9's TcpSocket — for firmware
 # that attaches the agent over Ethernet (#215 slice 4+). embedded-io-async
 # is version-matched to embassy-net's own requirement so the impl calls
-# resolve against the same copy the socket implements.
+# resolve against the same copy the socket implements. embassy-net has NO
+# default smoltcp feature set: tcp + proto-ipv4 + medium-ethernet is the
+# minimal Ethernet-attached-agent profile (stack-level extras like DHCP
+# are the firmware's concern, not the trait's).
 embassy-net = ["dep:embassy-net", "dep:embedded-io-async"]
 
 [dependencies]
 conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
 embassy-usb = { version = "0.6", default-features = false, optional = true }
-embassy-net = { version = "0.9", default-features = false, optional = true }
+embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"], optional = true }
 embedded-io-async = { version = "0.7.0", optional = true }
 
 [dev-dependencies]
