@@ -17,6 +17,7 @@ publish = false
 
 [dependencies]
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
+conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-usb"] }
 
 esp-hal = { version = "~1.2", features = ["esp32s3"] }
 esp-rtos = { version = "0.4", features = ["embassy", "esp32s3"] }
