@@ -1,0 +1,44 @@
+[package]
+name = "conwrt-stm32f746"
+description = "Conwrt MCU agent for the STM32F746G-DISCO (#215 slice 2): USB CDC-ACM transport via the shared conwrt-agent-io session loop, diag capability, mock-first"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Tier-C firmware crate (ADR-0002): excluded from the root workspace so host
+# tooling never builds it (see root Cargo.toml). Build with:
+#   cargo build --release --target thumbv7em-none-eabihf
+# Size gate:
+#   cargo size --release --target thumbv7em-none-eabihf
+# Board: STM32F746G-DISCO — USB OTG-FS on PA12 (DP) / PA11 (DM); HSE 8 MHz
+# crystal; Ethernet MAC + LAN8742 PHY (embassy-net TCP transport is #215
+# slice 3, bench bring-up slice 4); USART6 on PG14/PG9 for the router-side
+# UART (later slice).
+
+[dependencies]
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
+conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-usb"] }
+
+embassy-stm32 = { version = "0.6.0", features = ["stm32f746ng", "memory-x", "time-driver-any", "exti"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-usb = "0.6.0"
+embassy-time = { version = "0.5.1", features = ["tick-hz-32_768"] }
+embassy-futures = "0.1.2"
+
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+embedded-alloc = "0.7"
+
+defmt = "1.0"
+defmt-rtt = "1.0"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,149 @@
+//! Conwrt MCU agent — STM32F746G-DISCO (#215 slice 2).
+//!
+//! Third firmware on the shared transport stack: USB CDC-ACM via the
+//! [`conwrt_agent_io`] session loop (identical wire semantics to the
+//! F469 (#110) and ESP32-S3 (#111) agents), COBS frames carry the Tier-A
+//! protocol ([`conwrt_agent_proto`]), and the agent brain is
+//! [`ServerCore`] — the same core as the std TCP agent.
+//!
+//! This slice is mock-first per the epic: handshake + diag capability
+//! over USB-CDC, no hardware assumptions exercised (bench Ethernet
+//! bring-up is the authorization-gated slice 4). The board's Ethernet
+//! MAC + LAN8742 PHY and USART6 land in later slices.
+//!
+//! Connection lifecycle drives lease lifecycle: a dropped CDC connection
+//! (host unplug, port close) resets the session and expires every lease.
+
+#![no_std]
+#![no_main]
+
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use defmt_rtt as _;
+use embassy_executor::Spawner;
+use embassy_stm32::time::Hertz;
+use embassy_stm32::usb::{self, Driver, Instance};
+use embassy_stm32::{Config as ChipConfig, Peripherals, bind_interrupts, peripherals, rcc};
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
+use embassy_usb::{Builder as UsbBuilder, Config as UsbDevConfig};
+use panic_probe as _;
+
+use conwrt_agent_io::{CDC_FS_PACKET, agent_session};
+use conwrt_agent_proto::protocol::CapabilityInfo;
+use conwrt_agent_proto::server::ServerCore;
+
+bind_interrupts!(struct Irqs {
+    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+});
+
+/// Heap size for the [`HEAP`] allocator (protocol Vec allocations), in
+/// internal SRAM — the DISCO's SDRAM (FMC) stays untouched this slice.
+const HEAP_SIZE: usize = 32 * 1024;
+
+#[global_allocator]
+static HEAP: embedded_alloc::LlffHeap = embedded_alloc::LlffHeap::empty();
+
+static mut HEAP_MEM: [core::mem::MaybeUninit<u8>; HEAP_SIZE] =
+    [core::mem::MaybeUninit::uninit(); HEAP_SIZE];
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    unsafe {
+        HEAP.init(core::ptr::addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE);
+    }
+
+    let p: Peripherals = embassy_stm32::init(usb_clock_config());
+    defmt::info!("conwrt-stm32f746 agent up");
+
+    let mut server = ServerCore::new("conwrt-stm32f746 0.1.0", Vec::from([diag_capability()]));
+
+    let mut ep_out_buffer = [0u8; 256];
+    let mut usb_cfg = usb::Config::default();
+    // The DISCO's OTG-FS connector has no VBUS sense line wired to the MCU.
+    usb_cfg.vbus_detection = false;
+    let driver = Driver::new_fs(
+        p.USB_OTG_FS,
+        Irqs,
+        p.PA12,
+        p.PA11,
+        &mut ep_out_buffer,
+        usb_cfg,
+    );
+
+    let mut dev_cfg = UsbDevConfig::new(0xc0de, 0xcafe);
+    dev_cfg.manufacturer = Some("Amperstrand");
+    dev_cfg.product = Some("conwrt agent");
+    dev_cfg.serial_number = Some("f746g-disco-01");
+
+    let mut config_descriptor = [0u8; 256];
+    let mut bos_descriptor = [0u8; 256];
+    let mut control_buf = [0u8; 64];
+    let mut state = CdcState::new();
+
+    let mut builder = UsbBuilder::new(
+        driver,
+        dev_cfg,
+        &mut config_descriptor,
+        &mut bos_descriptor,
+        &mut [], // no MS OS descriptor
+        &mut control_buf,
+    );
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, CDC_FS_PACKET as u16);
+    let mut usb = builder.build();
+
+    let usb_fut = usb.run();
+    let agent_fut = session_loop(&mut class, &mut server);
+    embassy_futures::join::join(usb_fut, agent_fut).await;
+}
+
+fn diag_capability() -> CapabilityInfo {
+    CapabilityInfo {
+        name: String::from("diag"),
+        detail: Vec::from([
+            (String::from("chip"), String::from("stm32f746ng")),
+            (String::from("fw"), String::from("conwrt-stm32f746 0.1.0")),
+            (String::from("heap_bytes"), String::from("32768")),
+        ]),
+    }
+}
+
+/// HSE 8 MHz crystal → PLL1: 168 MHz sysclk, 48 MHz on PLL1_Q for USB
+/// (the same integer PLL math as the F469 BSP config; the F746's 216 MHz
+/// ceiling is not needed for the CDC agent).
+fn usb_clock_config() -> ChipConfig {
+    let mut config = ChipConfig::default();
+    config.rcc.hse = Some(rcc::Hse {
+        freq: Hertz(8_000_000),
+        mode: rcc::HseMode::Oscillator,
+    });
+    config.rcc.pll_src = rcc::PllSource::HSE;
+    config.rcc.pll = Some(rcc::Pll {
+        prediv: rcc::PllPreDiv::DIV4,
+        mul: rcc::PllMul::MUL168,
+        divp: Some(rcc::PllPDiv::DIV2),
+        divq: Some(rcc::PllQDiv::DIV7),
+        divr: None,
+    });
+    config.rcc.ahb_pre = rcc::AHBPrescaler::DIV1;
+    config.rcc.apb1_pre = rcc::APBPrescaler::DIV4;
+    config.rcc.apb2_pre = rcc::APBPrescaler::DIV2;
+    config.rcc.sys = rcc::Sysclk::PLL1_P;
+    config.rcc.mux.clk48sel = rcc::mux::Clk48sel::PLL1_Q;
+    config
+}
+
+async fn session_loop<'d, T: Instance + 'd>(
+    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
+    server: &mut ServerCore,
+) {
+    loop {
+        class.wait_connection().await;
+        defmt::info!("controller connected");
+        server.reset_session();
+        agent_session(class, server, CDC_FS_PACKET).await;
+        defmt::info!("controller disconnected — leases expired");
+    }
+}
