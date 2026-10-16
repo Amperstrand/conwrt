@@ -120,6 +120,15 @@ impl ServerCore {
         core
     }
 
+    /// Attach an image-transfer sink to an existing core (consumed
+    /// builder) — the firmware chains this after [`ServerCore::with_uart`]
+    /// (#226 slice 3: one agent, UART console AND executor stream).
+    #[must_use]
+    pub fn attach_transfer(mut self, transfer: Box<dyn TransferSink>) -> Self {
+        self.transfer = Some(transfer);
+        self
+    }
+
     /// Drop all session state — call on connection loss. Leases die with
     /// their controller (the `Abort` default); parking `Complete` work
     /// across reconnects is an M6 concern. Queued outbound events SURVIVE:

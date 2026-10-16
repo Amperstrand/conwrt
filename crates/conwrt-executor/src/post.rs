@@ -42,7 +42,10 @@ pub trait HttpIo {
     /// Transport failure mid-body — a burned window (see module docs).
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 
-    /// Read the response body to EOF (the server FINs when done).
+    /// Read the response body to EOF (the server FINs when done),
+    /// retaining at most [`MAX_VERDICT_BYTES`] via
+    /// [`retain_verdict_bytes`] — drain past the cap, never grow
+    /// past it (firmware heap safety after the irreversible POST).
     ///
     /// # Errors
     /// Transport failure before EOF.
@@ -134,6 +137,29 @@ pub struct PostOutcome {
 /// Response text the model JSONs mark as acceptance
 /// (`upload_response_pattern`, dlink-covr-x1860-a1).
 pub const ACCEPT_PATTERN: &str = "Upgrade successfully!";
+
+/// Verdict-buffer retention cap for [`HttpIo::read_response`] impls.
+///
+/// A real recovery-server verdict is a tiny HTML/size-line page; a
+/// response larger than this is by definition not a U-Boot verdict
+/// (an unexpected HTTP server sat on the configured address). Impls
+/// must keep `out` at or below this bound — the firmware heap is
+/// 32 KiB and the POST is already irreversible when the response
+/// arrives, so an unbounded read must never become an allocation
+/// failure. Bytes beyond the cap are drained-and-discarded to EOF so
+/// the FIN path still terminates.
+pub const MAX_VERDICT_BYTES: usize = 8 * 1024;
+
+/// Retain `segment` in `out` up to [`MAX_VERDICT_BYTES`] — the shared
+/// bounded-retention rule for every [`HttpIo::read_response`] impl
+/// (firmware socket, test transport, host twin: identical wire
+/// behavior). Returns the number of bytes retained.
+pub fn retain_verdict_bytes(out: &mut Vec<u8>, segment: &[u8]) -> usize {
+    let room = MAX_VERDICT_BYTES.saturating_sub(out.len());
+    let take = segment.len().min(room);
+    out.extend_from_slice(&segment[..take]);
+    take
+}
 
 /// The staged recovery POST.
 pub struct RecoveryPost<'a> {
@@ -327,6 +353,23 @@ impl<'a> RecoveryPost<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verdict_retention_caps_at_max_verdict_bytes() {
+        let mut out = Vec::new();
+        assert_eq!(retain_verdict_bytes(&mut out, &[0u8; 6000]), 6000);
+        assert_eq!(
+            retain_verdict_bytes(&mut out, &[0u8; 6000]),
+            MAX_VERDICT_BYTES - 6000
+        );
+        assert_eq!(out.len(), MAX_VERDICT_BYTES);
+        assert_eq!(
+            retain_verdict_bytes(&mut out, &[1, 2, 3]),
+            0,
+            "a full buffer retains nothing further"
+        );
+        assert_eq!(out.len(), MAX_VERDICT_BYTES);
+    }
 
     /// In-memory IO: records writes, replays a canned response.
     struct MemIo {

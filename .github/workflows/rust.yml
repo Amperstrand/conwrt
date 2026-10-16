@@ -44,6 +44,9 @@ jobs:
           # The embassy-net StreamIo impl only compiles under its feature;
           # cross-check it for the firmware targets too (#215 slice 3).
           cargo check -p conwrt-agent-io --no-default-features --features embassy-net --target thumbv7em-none-eabihf
+          # Same cross-check for the executor's embassy-net TcpHttpIo
+          # (#226 slice 3) — the F746 app builds it, host CI must too.
+          cargo check -p conwrt-executor --no-default-features --features embassy-net --target thumbv7em-none-eabihf
       - name: Model-schema parity (#118)
         run: |
           python3 -m pip install --quiet pytest jsonschema

@@ -179,6 +179,8 @@ rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	cargo test --workspace
 	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
 	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto -p conwrt-agent-io -p conwrt-executor --no-default-features --target thumbv7em-none-eabihf
+	cargo check -p conwrt-agent-io --no-default-features --features embassy-net --target thumbv7em-none-eabihf
+	cargo check -p conwrt-executor --no-default-features --features embassy-net --target thumbv7em-none-eabihf
 
 parity-check: ## #118: Python(jsonschema) and Rust(types) must agree on corpus + negatives
 	@python3 -m pytest tests/test_model_schema_parity.py -q

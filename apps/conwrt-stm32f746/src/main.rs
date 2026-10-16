@@ -44,6 +44,7 @@ use conwrt_agent_io::{EventSource, agent_session_stream_events};
 use conwrt_agent_proto::dispatch::WireError;
 use conwrt_agent_proto::protocol::CapabilityInfo;
 use conwrt_agent_proto::server::{ServerCore, UartSink};
+use conwrt_executor::ExecutorTransfer;
 
 bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler;
@@ -63,6 +64,10 @@ const AGENT_PORT: u16 = 8400;
 
 /// Router console: OpenWrt GS1900 console default.
 const UART_BAUD: u32 = 115_200;
+
+/// Executor transfer window (undrained bytes) — the #226 firmware
+/// profile; heap-allocated at first chunk, so no static footprint.
+const EXECUTOR_WINDOW: usize = 8 * 1024;
 
 /// Heap size for the [`HEAP`] allocator (protocol Vec allocations), in
 /// internal SRAM — the DISCO's SDRAM (FMC) stays untouched.
@@ -132,10 +137,14 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_task(runner).expect("spawn net"));
 
     let server = ServerCore::with_uart(
-        "conwrt-stm32f746 0.2.0",
+        "conwrt-stm32f746 0.3.0",
         capabilities(),
         Box::new(Usart6Sink { tx: uart_tx }),
-    );
+    )
+    // #226 slice 3: StreamChunk/StreamStatus land in the executor's
+    // bounded window (the recovery POST pump is a later, bench-gated
+    // slice — this wiring makes the stream endpoints live).
+    .attach_transfer(Box::new(ExecutorTransfer::new(EXECUTOR_WINDOW)));
     spawner.spawn(agent_task(stack, server, UartRxSource(uart_rx)).expect("spawn agent"));
 }
 
@@ -215,10 +224,22 @@ fn capabilities() -> Vec<CapabilityInfo> {
             detail: Vec::from([(String::from("uarts"), String::from("1"))]),
         },
         CapabilityInfo {
+            name: String::from("executor"),
+            detail: Vec::from([
+                (String::from("window_bytes"), String::from("8192")),
+                (
+                    String::from("wire"),
+                    // the controller selects the target; the POST pump
+                    // itself is the bench-gated slice (#226)
+                    String::from("stream-only"),
+                ),
+            ]),
+        },
+        CapabilityInfo {
             name: String::from("diag"),
             detail: Vec::from([
                 (String::from("chip"), String::from("stm32f746ng")),
-                (String::from("fw"), String::from("conwrt-stm32f746 0.2.0")),
+                (String::from("fw"), String::from("conwrt-stm32f746 0.3.0")),
                 (String::from("heap_bytes"), String::from("32768")),
             ]),
         },

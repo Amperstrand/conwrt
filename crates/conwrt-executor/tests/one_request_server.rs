@@ -60,6 +60,10 @@ struct Expected {
     content_len: usize,
     header: Vec<u8>,
     footer: Vec<u8>,
+    /// The exact response bytes served after the good POST (default:
+    /// the standard verdict page; oversized variants for the
+    /// bounded-retention regression).
+    response: Vec<u8>,
 }
 
 /// Spawn the one-request mock; returns `(address, shared)`.
@@ -153,12 +157,7 @@ fn serve_one(stream: &mut TcpStream, expected: &Expected) -> Result<(), RequestR
         });
     }
 
-    let resp = b"HTTP/1.0 200 OK\r\n\
-                 Content-Type: text/html\r\n\
-                 Connection: close\r\n\
-                 \r\n\
-                 <html><body>Upgrade successfully!</body></html>";
-    let _ = stream.write_all(resp);
+    let _ = stream.write_all(&expected.response);
     let _ = stream.flush();
     let _ = stream.shutdown(std::net::Shutdown::Write);
     Ok(())
@@ -185,7 +184,18 @@ impl HttpIo for TokioIo {
         AsyncWriteExt::write_all(&mut self.0, data).await
     }
     async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), std::io::Error> {
-        self.0.read_to_end(out).await.map(|_| ())
+        // bounded retention like the firmware socket (review round 2):
+        // drain to EOF, keep only the first MAX_VERDICT_BYTES
+        let mut buf = [0u8; 512];
+        loop {
+            match self.0.read(&mut buf).await {
+                Ok(0) => return Ok(()),
+                Ok(n) => {
+                    conwrt_executor::post::retain_verdict_bytes(out, &buf[..n]);
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -216,8 +226,45 @@ fn framing(image_len: usize) -> (Multipart<'static>, Expected) {
         content_len: mp.content_len().expect("sane test sizes") as usize,
         header: mp.header(),
         footer: mp.footer(),
+        response: verdict_page(b"<html><body>Upgrade successfully!</body></html>"),
     };
     (mp, expected)
+}
+
+fn verdict_page(body: &[u8]) -> Vec<u8> {
+    let mut page = b"HTTP/1.0 200 OK\r\n\
+                     Content-Type: text/html\r\n\
+                     Connection: close\r\n\
+                     \r\n"
+        .to_vec();
+    page.extend_from_slice(body);
+    page
+}
+
+/// Drive one full POST (start → pump → finish) against the mock and
+/// return the outcome — shared by the bounded-retention regressions.
+async fn run_one_post(addr: std::net::SocketAddr, img: &[u8]) -> conwrt_executor::PostOutcome {
+    let (mp, _) = framing(img.len());
+    let mut xfer = TransferState::new(1, 8 * 1024);
+    let mut io = connect(addr).await;
+    let mut post = RecoveryPost::new(mp, "192.168.0.1", "/upload");
+    let mut sent = 0usize;
+    while sent < img.len() {
+        let end = (sent + 4096).min(img.len());
+        xfer.accept(&StreamChunk {
+            transfer_id: 1,
+            offset: sent as u64,
+            total: Some(img.len() as u64),
+            data: img[sent..end].to_vec(),
+        })
+        .expect("accept");
+        if !post.committed() {
+            post.start(&mut io, &xfer).await.expect("start");
+        }
+        post.pump(&mut io, &mut xfer).await.expect("pump");
+        sent = end;
+    }
+    post.finish(&mut io, &xfer).await.expect("finish")
 }
 
 /// Wait until the mock thread has recorded `n` requests (the record is
@@ -457,4 +504,49 @@ async fn replay_from_stale_ack_before_post_is_clean() {
         }],
         "the replay cost exactly one POST of the full image"
     );
+}
+
+#[tokio::test]
+async fn oversized_response_with_early_pattern_accepts_with_bounded_retention() {
+    // review round 2: a wrong-scale response (64 KiB) with the verdict
+    // at its head must not grow the verdict buffer unbounded — drain
+    // to EOF, retain the first MAX_VERDICT_BYTES, classify Accepted.
+    let img = image(2048);
+    let (_, mut expected) = framing(img.len());
+    expected.image = img.clone();
+    let mut body = b"<html><body>Upgrade successfully!</body></html>".to_vec();
+    body.extend_from_slice(&vec![b'x'; 64 * 1024]);
+    expected.response = verdict_page(&body);
+    let (addr, shared) = spawn_mock(expected);
+
+    let outcome = run_one_post(addr, &img).await;
+    assert_eq!(outcome.verdict, Verdict::Accepted);
+
+    await_records(&shared, 1).await;
+    let rec = shared.lock().expect("mock lock");
+    assert!(matches!(
+        rec.requests[0],
+        RequestRecord::PostAccepted { .. }
+    ));
+}
+
+#[tokio::test]
+async fn oversized_response_with_pattern_beyond_cap_degrades_to_rejected() {
+    // the accept pattern lands PAST the retention cap (the
+    // unexpected-HTTP-server shape): the retained prefix classifies
+    // Rejected with a snippet — the reader never hunts for the
+    // pattern by growing past the bound.
+    let img = image(2048);
+    let (_, mut expected) = framing(img.len());
+    expected.image = img.clone();
+    let mut body = vec![b'x'; 64 * 1024];
+    body.extend_from_slice(b"<html>Upgrade successfully!</html>");
+    expected.response = verdict_page(&body);
+    let (addr, _shared) = spawn_mock(expected);
+
+    let outcome = run_one_post(addr, &img).await;
+    match outcome.verdict {
+        Verdict::Rejected { snippet } => assert!(snippet.starts_with('x')),
+        other => panic!("pattern beyond the cap must not be hunted: {other:?}"),
+    }
 }

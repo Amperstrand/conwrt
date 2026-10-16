@@ -15,6 +15,12 @@
 //!   headers → bounded-window body streaming → footer → verdict, over
 //!   an owned async IO trait (AFIT, per ADR-0002 — no embedded-io in
 //!   the public surface).
+//! - [`bridge`] — [`TransferSink`](conwrt_agent_proto::server::TransferSink)
+//!   over [`TransferState`] (slice 3): what the firmware attaches to
+//!   `ServerCore` so stream frames land in the window.
+//! - [`embassy_net`] (feature `embassy-net`, firmware-only) —
+//!   [`TcpHttpIo`] over embassy-net 0.9's `TcpSocket`: the wire side of
+//!   [`post::RecoveryPost`] on the MCU.
 //!
 //! The one-request rule (AGENTS.md, model JSONs): a U-Boot recovery
 //! httpd serves exactly one HTTP request. Never GET the page — the POST
@@ -31,10 +37,16 @@
 
 extern crate alloc;
 
+pub mod bridge;
+#[cfg(feature = "embassy-net")]
+pub mod embassy_net;
 pub mod multipart;
 pub mod post;
 pub mod transfer;
 
+pub use bridge::ExecutorTransfer;
+#[cfg(feature = "embassy-net")]
+pub use embassy_net::TcpHttpIo;
 pub use multipart::Multipart;
 pub use post::{HttpIo, PostError, PostOutcome, RecoveryPost, Verdict};
 pub use transfer::{TransferError, TransferState};

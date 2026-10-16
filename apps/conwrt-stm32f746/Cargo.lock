@@ -173,11 +173,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "conwrt-executor"
+version = "0.1.0"
+dependencies = [
+ "conwrt-agent-proto",
+ "embassy-net",
+ "embedded-io-async 0.7.0",
+]
+
+[[package]]
 name = "conwrt-stm32f746"
 version = "0.1.0"
 dependencies = [
  "conwrt-agent-io",
  "conwrt-agent-proto",
+ "conwrt-executor",
  "cortex-m",
  "cortex-m-rt",
  "defmt",

@@ -12,12 +12,25 @@ repository.workspace = true
 # integration tests can pull the proto std runtime if needed.
 default = []
 std = ["conwrt-agent-proto/std"]
+# `TcpHttpIo` — an `HttpIo` impl over embassy-net 0.9's `TcpSocket` — for
+# firmware that runs the recovery POST over Ethernet (#226 slice 3).
+# Mirrors conwrt-agent-io's `embassy-net` feature exactly: embedded-io-async
+# is version-matched to embassy-net's own requirement so the write-side
+# impl calls resolve against the same copy the socket implements.
+# embassy-net has NO default smoltcp feature set: tcp + proto-ipv4 +
+# medium-ethernet is the minimal Ethernet-attached profile.
+embassy-net = ["dep:embassy-net", "dep:embedded-io-async"]
 
 [dependencies]
 conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
+embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"], optional = true }
+embedded-io-async = { version = "0.7.0", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# recovery-post example: image sha256 in the confirmation banner (the
+# fleet hash — matches on-device BusyBox sha256sum).
+sha2 = "0.10"
 
 [lints]
 workspace = true
