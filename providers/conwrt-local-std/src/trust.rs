@@ -45,13 +45,31 @@ impl std::fmt::Debug for FileTrustStore {
     }
 }
 
-/// A held exclusive lock file. Removing it on drop is the release.
+/// A held exclusive lock file, identified by an ownership token written
+/// into it at acquire time.
+///
+/// Release is ownership-checked: after a stale takeover (a crashed or
+/// wedged holder), the ORIGINAL holder's guard must not delete the
+/// SUCCESSOR's lockfile — that would admit a second writer mid-write and
+/// lose entries (the CI-runner race this token exists for).
 struct LockGuard {
     path: PathBuf,
+    token: String,
+}
+
+fn next_lock_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 impl LockGuard {
     fn acquire(lock_path: &Path) -> std::io::Result<Self> {
+        let token = next_lock_token();
         let deadline = Instant::now() + LOCK_WAIT;
         loop {
             match OpenOptions::new()
@@ -59,9 +77,13 @@ impl LockGuard {
                 .create_new(true)
                 .open(lock_path)
             {
-                Ok(_) => {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    let _ = file.write_all(token.as_bytes());
+                    let _ = file.sync_all();
                     return Ok(Self {
                         path: lock_path.to_path_buf(),
+                        token,
                     });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -69,6 +91,8 @@ impl LockGuard {
                         // Stale holder (crashed process). Take over: the
                         // atomic-rename write below means a racing writer
                         // can lose an entry but never corrupt the store.
+                        // Ownership tokens keep the deposed holder's
+                        // release from unlocking the successor.
                         let _ = fs::remove_file(lock_path);
                         continue;
                     }
@@ -82,7 +106,12 @@ impl LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let still_ours = fs::read_to_string(&self.path)
+            .map(|contents| contents == self.token)
+            .unwrap_or(false);
+        if still_ours {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
