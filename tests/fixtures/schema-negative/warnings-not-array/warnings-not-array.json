@@ -1,0 +1,37 @@
+{
+  "id": "warnings-not-array",
+  "vendor": "Test Vendor",
+  "description": "Minimal valid model for parity fixtures",
+  "openwrt": {
+    "target": "test/test",
+    "device": "test,dev",
+    "profile": "test_dev",
+    "version": "24.10.2"
+  },
+  "capabilities": [
+    "ethernet"
+  ],
+  "mac_oui": [
+    "00:11:22"
+  ],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "test method"
+    }
+  },
+  "signatures": {
+    "boot": {
+      "source": "fixture",
+      "pattern": "test pattern"
+    }
+  },
+  "partition_layout": {
+    "note": "fixture layout"
+  },
+  "warnings": "a plain string",
+  "serial_console": {
+    "baud": 115200,
+    "console_device": "ttyS0",
+    "parity": "n81"
+  }
+}

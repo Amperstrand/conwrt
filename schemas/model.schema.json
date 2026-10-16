@@ -58,10 +58,16 @@
         },
         "board_names": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "Optional additional exact-match board_name aliases (e.g. SMBIOS/DMI-derived names on x86_64: OpenWrt >= 24.10 reports '<manufacturer>-<product>' instead of 'generic')"
         },
-        "version": {"type": "string", "minLength": 1},
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
         "release": {
           "type": "string",
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
@@ -71,7 +77,10 @@
           "type": "string",
           "description": "Optional vanilla image flavour suffix after the profile (e.g. squashfs-sysupgrade.bin, squashfs-factory.bin, initramfs-kernel.bin); defaults to squashfs-sysupgrade.bin"
         },
-        "default_ip": {"type": "string", "minLength": 1}
+        "default_ip": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "capabilities": {
@@ -205,7 +214,9 @@
       "type": "object"
     },
     "signatures": {
-      "type": "object"
+      "type": "object",
+      "description": "Evidence-shaped boot/traffic signatures: categories map to prose, scalars, or nested evidence objects. Deliberately loose (corpus-honest, 2026-10-15 audit: bare ints, nested dicts, bools all occur) — preserved-extra in the Rust projection, never dropped (#118).",
+      "additionalProperties": true
     },
     "hardware": {
       "type": "object"
@@ -215,6 +226,79 @@
       "items": {
         "type": "string"
       }
+    },
+    "serial_console": {
+      "type": "object",
+      "description": "Serial console coordinates (dual-typed with the Rust projection, #118).",
+      "properties": {
+        "baud": {
+          "type": "integer",
+          "minimum": 1200,
+          "maximum": 921600
+        },
+        "console_device": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parity": {
+          "type": "string"
+        },
+        "bootloader": {
+          "type": "string"
+        },
+        "verified_from": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baud",
+        "console_device"
+      ],
+      "additionalProperties": true
+    },
+    "serial_configuration": {
+      "type": "object",
+      "description": "Serial-based configuration procedure evidence (loose; preserved-extra in Rust).",
+      "properties": {
+        "verified": {
+          "type": "boolean"
+        },
+        "date": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "partition_layout": {
+      "type": "object",
+      "description": "Flash partition layout evidence (loose; preserved-extra in Rust).",
+      "additionalProperties": true
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Operator-facing hard warnings (dual-typed with the Rust projection, #118).",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "switch_initiated_flashing": {
+      "type": "object",
+      "description": "Flashing orchestrated from an OpenWrt switch (loose; preserved-extra in Rust).",
+      "additionalProperties": true
     }
   }
 }
