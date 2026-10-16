@@ -15,6 +15,7 @@ use crate::dispatch::{AgentEvent, WireEndpoint, WireError, WireFrame, WireResult
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
     CapabilityInfo, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse, PROTOCOL_VERSION,
+    StreamAck, StreamChunk,
 };
 
 /// Missed-heartbeats-to-expiry budget granted per lease.
@@ -39,6 +40,31 @@ pub trait UartSink: Send {
     fn uart_write(&mut self, port: u8, data: &[u8]) -> Result<usize, WireError>;
 }
 
+/// Where image-stream chunks actually go (#226 slice 1): an executor's
+/// bounded transfer window. The firmware attaches a sink backed by
+/// [`conwrt_executor::TransferState`] (the executor crate); host tests
+/// attach mocks. Same `Send` rationale as [`UartSink`].
+pub trait TransferSink: Send {
+    /// Feed one chunk; the returned [`StreamAck`] carries the resume
+    /// token (contiguous received bytes — see the executor crate).
+    ///
+    /// # Errors
+    /// Window-level failures (gap, backpressure, wrong transfer) as
+    /// [`WireError`] for the controller.
+    fn stream_chunk(&mut self, chunk: &StreamChunk) -> Result<StreamAck, WireError>;
+
+    /// Query a transfer's status (the resume token).
+    ///
+    /// # Errors
+    /// [`WireError::UnknownTransfer`] when the sink tracks no such
+    /// transfer.
+    fn stream_status(&mut self, transfer_id: u64) -> Result<StreamAck, WireError>;
+}
+
+/// The resource whose exclusive lease gates image-stream endpoints
+/// (`"executor"` — the standalone-executor workflow, #226).
+pub const EXECUTOR_RESOURCE: &str = "executor";
+
 /// The protocol state machine: what an agent IS, independent of how bytes
 /// arrive (tokio TCP, USB CDC, …).
 pub struct ServerCore {
@@ -48,6 +74,7 @@ pub struct ServerCore {
     controller: Option<String>,
     leases: LeaseTable,
     uart: Option<Box<dyn UartSink>>,
+    transfer: Option<Box<dyn TransferSink>>,
     outbound_events: VecDeque<AgentEvent>,
 }
 
@@ -62,6 +89,7 @@ impl ServerCore {
             controller: None,
             leases: LeaseTable::new(),
             uart: None,
+            transfer: None,
             outbound_events: VecDeque::new(),
         }
     }
@@ -76,6 +104,19 @@ impl ServerCore {
     ) -> Self {
         let mut core = Self::new(agent_version, capabilities);
         core.uart = Some(uart);
+        core
+    }
+
+    /// New agent core with an image-transfer sink attached (enables
+    /// lease-gated `StreamChunk`/`StreamStatus` handling, #226 slice 1).
+    #[must_use]
+    pub fn with_transfer(
+        agent_version: &str,
+        capabilities: Vec<CapabilityInfo>,
+        transfer: Box<dyn TransferSink>,
+    ) -> Self {
+        let mut core = Self::new(agent_version, capabilities);
+        core.transfer = Some(transfer);
         core
     }
 
@@ -168,19 +209,39 @@ impl ServerCore {
                 Err(_) => WireResult::Error(WireError::Internal(String::from("heartbeat refused"))),
             },
             WireEndpoint::StreamChunk(chunk) => {
-                WireResult::Error(WireError::UnknownTransfer(chunk.transfer_id))
+                if !self.holds_resource(EXECUTOR_RESOURCE) {
+                    return WireResult::Error(WireError::LeaseRequired(
+                        EXECUTOR_RESOURCE.to_string(),
+                    ));
+                }
+                match self.transfer.as_mut() {
+                    Some(sink) => match sink.stream_chunk(&chunk) {
+                        Ok(ack) => WireResult::StreamAck(ack),
+                        Err(WireError::UnknownTransfer(id)) => {
+                            WireResult::Error(WireError::UnknownTransfer(id))
+                        }
+                        Err(e) => WireResult::Error(e),
+                    },
+                    None => WireResult::Error(WireError::UnknownTransfer(chunk.transfer_id)),
+                }
             }
             WireEndpoint::StreamStatus { transfer_id } => {
-                WireResult::Error(WireError::UnknownTransfer(transfer_id))
+                if !self.holds_resource(EXECUTOR_RESOURCE) {
+                    return WireResult::Error(WireError::LeaseRequired(
+                        EXECUTOR_RESOURCE.to_string(),
+                    ));
+                }
+                match self.transfer.as_mut() {
+                    Some(sink) => match sink.stream_status(transfer_id) {
+                        Ok(ack) => WireResult::StreamAck(ack),
+                        Err(e) => WireResult::Error(e),
+                    },
+                    None => WireResult::Error(WireError::UnknownTransfer(transfer_id)),
+                }
             }
             WireEndpoint::UartWrite { port, data } => {
                 let resource = alloc::format!("uart{port}");
-                let controller = self.controller.clone().unwrap_or_default();
-                let held = self
-                    .leases
-                    .leases()
-                    .any(|lease| lease.resource == resource && lease.controller == controller);
-                if !held {
+                if !self.holds_resource(&resource) {
                     return WireResult::Error(WireError::LeaseRequired(resource));
                 }
                 match self.uart.as_mut() {
@@ -194,6 +255,15 @@ impl ServerCore {
                 }
             }
         }
+    }
+
+    /// Whether the current controller holds any lease on `resource`
+    /// (the gate for resource-bound endpoints, M5 #110 / M6 #226).
+    fn holds_resource(&self, resource: &str) -> bool {
+        let controller = self.controller.clone().unwrap_or_default();
+        self.leases
+            .leases()
+            .any(|lease| lease.resource == resource && lease.controller == controller)
     }
 
     /// Advance lease expiry by one heartbeat interval; returns the expiry
@@ -484,6 +554,109 @@ mod tests {
         );
         assert_eq!(result, WireResult::UartWritten(3));
         assert_eq!(*written.lock().unwrap(), vec![(0u8, b"AT\r".to_vec())]);
+    }
+
+    /// Recording transfer sink for the executor-stream dispatch tests.
+    struct RecordingTransferSink {
+        acks: Vec<StreamAck>,
+    }
+
+    impl TransferSink for RecordingTransferSink {
+        fn stream_chunk(&mut self, chunk: &StreamChunk) -> Result<StreamAck, WireError> {
+            let contiguous = chunk.offset + chunk.data.len() as u64;
+            let ack = StreamAck {
+                transfer_id: chunk.transfer_id,
+                contiguous,
+                done: chunk.total.is_some_and(|t| t == contiguous),
+            };
+            self.acks.push(ack);
+            Ok(ack)
+        }
+        fn stream_status(&mut self, transfer_id: u64) -> Result<StreamAck, WireError> {
+            Err(WireError::UnknownTransfer(transfer_id))
+        }
+    }
+
+    fn transfer_core() -> (ServerCore, &'static str) {
+        // leak-free enough for tests: the sink is owned by the core
+        let core = ServerCore::with_transfer(
+            "test-agent 0.1",
+            alloc::vec![],
+            Box::new(RecordingTransferSink {
+                acks: alloc::vec![],
+            }),
+        );
+        (core, "executor")
+    }
+
+    fn lease_executor(core: &mut ServerCore) {
+        request(
+            core,
+            2,
+            WireEndpoint::LeaseAcquire(LeaseRequestShape {
+                resource: String::from(EXECUTOR_RESOURCE),
+                exclusive: true,
+                on_disconnect: DisconnectPolicy::Complete,
+            }),
+        );
+    }
+
+    fn sample_chunk() -> StreamChunk {
+        StreamChunk {
+            transfer_id: 42,
+            offset: 0,
+            total: Some(3),
+            data: Vec::from(&b"abc"[..]),
+        }
+    }
+
+    #[test]
+    fn stream_chunk_without_lease_is_refused() {
+        let (mut c, _) = transfer_core();
+        handshake(&mut c);
+        let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
+        assert_eq!(
+            result,
+            WireResult::Error(WireError::LeaseRequired(String::from("executor")))
+        );
+    }
+
+    #[test]
+    fn stream_chunk_with_lease_reaches_sink_and_acks() {
+        let (mut c, _) = transfer_core();
+        handshake(&mut c);
+        lease_executor(&mut c);
+        let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
+        assert_eq!(
+            result,
+            WireResult::StreamAck(StreamAck {
+                transfer_id: 42,
+                contiguous: 3,
+                done: true,
+            })
+        );
+    }
+
+    #[test]
+    fn stream_status_with_lease_routes_to_sink() {
+        let (mut c, _) = transfer_core();
+        handshake(&mut c);
+        lease_executor(&mut c);
+        let result = request(&mut c, 3, WireEndpoint::StreamStatus { transfer_id: 42 });
+        assert_eq!(result, WireResult::Error(WireError::UnknownTransfer(42)));
+    }
+
+    #[test]
+    fn stream_chunk_without_sink_stays_unknown_transfer() {
+        // pre-#226 behavior preserved: no sink attached -> UnknownTransfer
+        let mut c = core();
+        handshake(&mut c);
+        lease_uart0(&mut c); // any lease: the executor gate must pass only on executor leases
+        let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
+        assert_eq!(
+            result,
+            WireResult::Error(WireError::LeaseRequired(String::from("executor")))
+        );
     }
 
     #[test]

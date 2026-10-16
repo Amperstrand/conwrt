@@ -753,6 +753,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "conwrt-executor"
+version = "0.1.0"
+dependencies = [
+ "conwrt-agent-proto",
+ "tokio",
+]
+
+[[package]]
 name = "conwrt-image"
 version = "0.1.0"
 dependencies = [

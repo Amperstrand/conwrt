@@ -1,0 +1,23 @@
+[package]
+name = "conwrt-executor"
+description = "Conwrt standalone-executor core (#226 slice 1): resumable image-transfer window (chunk acks, resume tokens), bounded-RAM U-Boot recovery HTTP POST pump, WebKit-shaped multipart writer — Tier-A no_std, host-tested against a one-request mock recovery server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# No default features beyond the no_std core; `std` exists so host
+# integration tests can pull the proto std runtime if needed.
+default = []
+std = ["conwrt-agent-proto/std"]
+
+[dependencies]
+conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
