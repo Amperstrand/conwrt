@@ -11,6 +11,7 @@ on:
       - ".github/workflows/rust.yml"
       - "Makefile"
       - "models/**"
+      - "scripts/rust_nostd_parity.py"
   push:
     branches: [master]
     paths:
@@ -20,6 +21,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust.yml"
+      - "scripts/rust_nostd_parity.py"
 
 jobs:
   rust:
@@ -35,6 +37,12 @@ jobs:
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
       - uses: Swatinem/rust-cache@v2
+      # #227 round-1 class guard: Makefile rust-ci and this workflow must
+      # list the SAME -p crates for the thumbv7em-none-eabihf cross-check
+      # (drift let a no_std break pass locally while CI failed). Checker +
+      # seeded-divergence self-test; fails before any cargo step.
+      - name: no_std crate-list parity (Makefile vs rust.yml)
+        run: make rust-nostd-parity
       - name: fmt + clippy + test + no_std gate
         run: |
           cargo fmt --all -- --check
