@@ -35,8 +35,11 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::{Ipv4Address, Stack, StackResources, StaticConfigV4};
 use embassy_stm32::eth::{self, PacketQueue};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::usart::{BufferedUart, BufferedUartRx, BufferedUartTx, Config as UartConfig};
+use embassy_stm32::usart::BufferedUartRx;
+use embassy_stm32::usart::{BufferedUart, BufferedUartTx, Config as UartConfig};
 use embassy_stm32::{Config as ChipConfig, Peripherals, bind_interrupts, peripherals, rcc, usart};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use panic_probe as _;
 use static_cell::StaticCell;
 
@@ -54,9 +57,11 @@ bind_interrupts!(struct Irqs {
 /// poison the controller's ARP cache).
 const AGENT_MAC: [u8; 6] = [0x02, 0x43, 0x57, 0x46, 0x37, 0x34];
 
-/// Bench DUT VLAN address — set to the assigned bay VLAN before flashing.
-const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 104, 2);
-const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 104, 1);
+/// Bench DUT VLAN address — the F746 sits in bay lan8 (VLAN 1008,
+/// 192.168.108.0/24; it displaced the GS108T chain). .52 = DUT range
+/// (.2 collides with a stale alias on the controller host).
+const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 108, 52);
+const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 108, 1);
 
 /// The agent's TCP port (the HIL mock's conventional port).
 const AGENT_PORT: u16 = 8400;
@@ -80,6 +85,10 @@ static UART_TX_RING: StaticCell<[u8; 1024]> = StaticCell::new();
 static UART_RX_RING: StaticCell<[u8; 1024]> = StaticCell::new();
 static TCP_TX_BUF: StaticCell<[u8; 4096]> = StaticCell::new();
 static TCP_RX_BUF: StaticCell<[u8; 4096]> = StaticCell::new();
+
+/// Console chunks: uart task → agent session. Bounded; drops when no
+/// controller is connected (RTT already recorded every chunk).
+static CONSOLE_CH: Channel<CriticalSectionRawMutex, Vec<u8>, 16> = Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -136,7 +145,10 @@ async fn main(spawner: Spawner) {
         capabilities(),
         Box::new(Usart6Sink { tx: uart_tx }),
     );
-    spawner.spawn(agent_task(stack, server, UartRxSource(uart_rx)).expect("spawn agent"));
+    spawner.spawn(uart_task(uart_rx, CONSOLE_CH.sender()).expect("spawn uart"));
+    spawner.spawn(
+        agent_task(stack, server, ConsoleSource(CONSOLE_CH.receiver())).expect("spawn agent"),
+    );
 }
 
 type EthDevice = embassy_stm32::eth::Ethernet<
@@ -151,7 +163,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, EthDevice>) {
 }
 
 #[task]
-async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: UartRxSource) {
+async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: ConsoleSource) {
     // One socket, reused per connection (StaticCell buffers init once;
     // abort() returns it to Closed and accept() listens again).
     let mut socket = TcpSocket::new(
@@ -175,14 +187,42 @@ async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: 
     }
 }
 
-/// USART6 RX half as the agent's event source (newtype: orphan rule).
-struct UartRxSource(BufferedUartRx<'static>);
+/// Always-on console reader — independent of any TCP connection, so a
+/// boot banner is captured (to RTT and the channel) even while the
+/// network is down or no controller is attached. This is the flight
+/// recorder for the switch's self-reboot quirk.
+#[task]
+async fn uart_task(
+    mut rx: BufferedUartRx<'static>,
+    console: Sender<'static, CriticalSectionRawMutex, Vec<u8>, 16>,
+) {
+    let mut buf = [0u8; 64];
+    loop {
+        match embedded_io_async::Read::read(&mut rx, &mut buf).await {
+            Ok(0) | Err(_) => {
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(50)).await
+            }
+            Ok(n) => {
+                defmt::info!("console: {=[u8]:a}", &buf[..n]);
+                let _ = console.try_send(Vec::from(&buf[..n]));
+            }
+        }
+    }
+}
 
-impl EventSource for UartRxSource {
-    type Error = usart::Error;
+/// Console channel receive end as the agent's event source (newtype:
+/// orphan rule). Never yields Ok(0) — the session ends only via the
+/// stream side.
+struct ConsoleSource(Receiver<'static, CriticalSectionRawMutex, Vec<u8>, 16>);
+
+impl EventSource for ConsoleSource {
+    type Error = core::convert::Infallible;
 
     async fn wait_data(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        embedded_io_async::Read::read(&mut self.0, buf).await
+        let chunk = self.0.receive().await;
+        let n = chunk.len().min(buf.len());
+        buf[..n].copy_from_slice(&chunk[..n]);
+        Ok(n)
     }
 }
 
