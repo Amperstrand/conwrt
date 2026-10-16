@@ -706,6 +706,7 @@ name = "conwrt-agent-io"
 version = "0.1.0"
 dependencies = [
  "conwrt-agent-proto",
+ "embassy-futures",
  "embassy-net",
  "embassy-usb",
  "embedded-io-async 0.7.0",
