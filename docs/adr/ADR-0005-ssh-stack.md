@@ -63,3 +63,41 @@ Research findings (2026-10-12, source-verified):
 - **openssh crate (shells out)**: rejected — wrong shape for a framework,
   no host-key control at the level we need.
 - **thrussh**: rejected — predecessor, lives on Pijul, effectively legacy.
+
+## Spike results — sunset on MCU (#112, 2026-10-16)
+
+Measurements, raw outputs, harness source and interop transcripts:
+[docs/sunset-mcu-ssh-spike.md](../sunset-mcu-ssh-spike.md).
+
+**Decision: MCU agents stay USB/COBS-only through M5 and M6.** Network
+SSH via sunset is deferred beyond the current roadmap; re-adopt only when
+all three hold: (a) a milestone needs MCU-initiated SSH (a standalone
+sysupgrade executor is the plausible case — M6's recovery-http/TFTP paths
+do not need SSH), (b) the F746's embassy-net transport (#215 slice 3/4)
+gives a real network path to run it over, and (c) for the ESP32-S3 the
+256 KiB fleet flash gate is consciously raised or SSH is feature-gated
+out of the S3 image. Deferred ≠ blocked on merit; the numbers below say
+the *algorithm* choice was sound and the cost is known.
+
+Evidence summary (sunset 0.6.0 + sunset-async 0.6.0 linked into the
+actual agent skeletons, full-stack "hello-exec" session, release
+profile, static `size` only — nothing flashed):
+
+| Target | Δ flash (floor / mlkem) | Δ RAM | Fits? |
+|---|---|---|---|
+| STM32F746G-DISCO (1 MiB / 320 KiB) | +134.2 / +148.5 KiB | +18.7 KiB | yes, comfortably |
+| STM32F469I-DISCO (secondary) | +134.4 / +148.7 KiB | +18.7 KiB | yes |
+| ESP32-S3 (fleet gate 256/128 KiB) | +207.1 / +227.4 KiB | +19.1 KiB | **breaks the flash gate** (383 KiB total) |
+
+- **Interop floor closed**: against a real Dropbear **2024.86** (OpenWrt
+  24.10's version, built from upstream source), sunset 0.6 negotiates
+  `curve25519-sha256` / `chacha20-poly1305@openssh.com` /
+  `ssh-ed25519`, host-key verify + ed25519 pubkey auth + exec all pass —
+  exactly this ADR's floor, no ssh-rsa/SHA-1 anywhere.
+- **Caveats for the revisit**: sunset-async's dependency edge re-enables
+  sunset's mlkem default (feature unification) — floor builds need a
+  patched sunset-async; sunset's mlkem768x25519 hybrid kex fails in-harness
+  (`BadKex` in ml-kem 0.3.2 key validation, floor kex unaffected); getrandom
+  0.4 on no_std needs the `custom` backend cfg. All detailed in the spike
+  doc.
+
