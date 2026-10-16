@@ -246,7 +246,14 @@ impl<'a> RecoveryPost<'a> {
                 verdict: Verdict::NoResponse,
             }),
             Ok(()) => {
-                let text = String::from_utf8_lossy(&response).into_owned();
+                // Verdict on the response BODY: U-Boot sends real HTTP
+                // status headers before the HTML/size line — skip them
+                // (fall back to the whole stream when absent).
+                let raw = String::from_utf8_lossy(&response).into_owned();
+                let text = match raw.find("\r\n\r\n") {
+                    Some(at) => String::from(&raw[at + 4..]),
+                    None => raw,
+                };
                 let verdict = if text.contains(ACCEPT_PATTERN) {
                     Verdict::Accepted
                 } else if text
@@ -470,6 +477,23 @@ mod tests {
             Err(PostError::Write { op: "head" })
         ));
         assert!(post.committed());
+    }
+
+    #[tokio::test]
+    async fn verdict_skips_http_response_headers() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n\
+                        <html>Upgrade successfully!</html>"
+                .to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
     }
 
     #[tokio::test]

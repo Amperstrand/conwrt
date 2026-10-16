@@ -50,7 +50,8 @@ enum RequestRecord {
 #[derive(Debug, Default)]
 struct Shared {
     requests: Vec<RequestRecord>,
-    /// Whether the one request has been served or burned.
+    /// Whether the one request window has been consumed — by the good
+    /// POST or by a violation/burn. Further connections are dropped.
     burned: bool,
 }
 
@@ -80,18 +81,16 @@ fn serve_forever(listener: TcpListener, expected: Expected, shared: Arc<Mutex<Sh
             let _ = stream.shutdown(std::net::Shutdown::Both);
             continue;
         }
-        match serve_one(&mut stream, &expected) {
-            Ok(()) => shared.lock().expect("mock lock").requests.push(
-                // serve_one records via return; placeholder replaced below
-                RequestRecord::PostAccepted {
-                    payload_bytes: expected.image.len(),
-                },
-            ),
-            Err(rec) => {
-                shared.lock().expect("mock lock").requests.push(rec);
-                shared.lock().expect("mock lock").burned = true;
-            }
+        let outcome = serve_one(&mut stream, &expected);
+        let mut shared = shared.lock().expect("mock lock");
+        match outcome {
+            Ok(()) => shared.requests.push(RequestRecord::PostAccepted {
+                payload_bytes: expected.image.len(),
+            }),
+            Err(rec) => shared.requests.push(rec),
         }
+        // the one request window is consumed either way
+        shared.burned = true;
     }
 }
 
@@ -276,14 +275,23 @@ async fn full_image_streams_through_bounded_window_to_one_post() {
     assert_eq!(outcome.verdict, Verdict::Accepted);
 
     await_records(&shared, 1).await;
-    let rec = shared.lock().expect("mock lock");
-    assert_eq!(
-        rec.requests,
-        vec![RequestRecord::PostAccepted {
-            payload_bytes: img.len()
-        }]
-    );
-    assert!(!rec.burned, "the one request was the good POST");
+    {
+        let rec = shared.lock().expect("mock lock");
+        assert_eq!(
+            rec.requests,
+            vec![RequestRecord::PostAccepted {
+                payload_bytes: img.len()
+            }]
+        );
+        assert!(rec.burned, "the good POST consumed the one-request window");
+    }
+
+    // a second connection finds the window closed: dropped before any
+    // request can be served
+    let mut second = connect(addr).await;
+    let mut sink = Vec::new();
+    second.0.read_to_end(&mut sink).await.expect("EOF");
+    assert!(sink.is_empty(), "no second serving");
 }
 
 #[tokio::test]
