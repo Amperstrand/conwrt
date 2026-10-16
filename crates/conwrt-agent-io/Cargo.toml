@@ -1,0 +1,23 @@
+[package]
+name = "conwrt-agent-io"
+description = "Conwrt agent transport-session layer (#215 slice 1): the packet-shaped COBS session loop shared by every MCU agent firmware — ServerCore behind one PacketIo trait, host-testable with an in-memory mock pipe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Blanket `PacketIo` impl for embassy-usb 0.6's CdcAcmClass — enabled by
+# the Tier-C firmware apps (their own lockfiles), never by host builds.
+embassy-usb = ["dep:embassy-usb"]
+
+[dependencies]
+conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
+embassy-usb = { version = "0.6", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
