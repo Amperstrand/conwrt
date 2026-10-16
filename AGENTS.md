@@ -726,8 +726,11 @@ merely discourage them:
    commit from the shared checkout; create
    `git worktree add ../conwrt-<session> -b <session>/feat-x origin/master`
    (or run `scripts/dev-session.sh start <name>`, which also registers the
-   session). Worktrees share the object store and remotes; each has its own
-   HEAD/index/files, so branch switches and stashes cannot collide.
+   session and writes a worktree-local `.cargo/config.toml` so cargo
+   targets stay inside the lane even when the host has a global
+   `~/.cargo/config.toml` target-dir pin). Worktrees share the object
+   store and remotes; each has its own HEAD/index/files, so branch
+   switches and stashes cannot collide.
 2. **Kill only what you own.** Every background process an agent starts
    (QEMU, TFTP, recorders, daemons) writes its PID to a session-scoped
    pidfile dir (`/tmp/opencode/<session>/pids/` or a per-session tmp dir).
@@ -802,9 +805,10 @@ Worktrees are the unit of cleanup.
 1. **Retire on merge.** When your PR merges (or the session ends), run
    `scripts/dev-session.sh stop <name>` — it drops the ledger entry,
    refuses on leftover pidfiles, reaps `target/`, removes the worktree,
-   deletes the branch if it is merged into `origin/master`, and prunes
-   stale registrations. A merged lane that leaves its worktree behind is
-   debris, not a fallback.
+   deletes the branch if it is merged into `origin/master`, prunes stale
+   registrations, and batch-deletes merged local branches whose remote
+   is gone (unmerged-gone branches are only reported). A merged lane
+   that leaves its worktree behind is debris, not a fallback.
 2. **Idle lanes lose their build cache, not their work.**
    `scripts/dev-session.sh sweep` classifies every worktree: PRUNABLE
    registrations are pruned, MERGED lanes are retired (worktree + branch),

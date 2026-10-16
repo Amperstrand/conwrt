@@ -7,9 +7,13 @@
 # teardown kills only what this session started.
 #
 # Usage:
-#   scripts/dev-session.sh start <name> [base-ref]   # default base: origin/master
+#   scripts/dev-session.sh start <name> [base-ref]   # default base: origin/master;
+#                                                     # writes worktree-local
+#                                                     # .cargo/config.toml
 #   scripts/dev-session.sh stop <name>                # reap target/, remove worktree,
-#                                                     # drop merged branch, prune
+#                                                     # drop merged branch, prune,
+#                                                     # delete merged [gone]-remote
+#                                                     # branches
 #   scripts/dev-session.sh list
 #   scripts/dev-session.sh sweep [--apply] [--days N] [name ...]
 #                                                     # classify every worktree:
@@ -56,6 +60,31 @@ ledger_drop_worktree() {
     ledger_drop "\"worktree\":\"$REPO_ROOT/../$(basename "$1")\","
 }
 
+# Structural target isolation (AGENTS.md multi-agent rules): a host-global
+# ~/.cargo/config.toml may pin one shared target-dir for every checkout on
+# the machine — concurrent lanes would then interleave artifacts in one
+# cache. This per-worktree config wins (nearest .cargo dir takes
+# precedence), so each lane builds into <worktree>/target and `stop`/`sweep`
+# reclaim it with the lane. Git-invisible via the bare `config.toml`
+# ignore pattern in .gitignore.
+ensure_cargo_isolation() { # worktree
+    local cfg="$1/.cargo/config.toml"
+    if [ -e "$cfg" ]; then
+        [ -f "$cfg" ] \
+            || echo "WARNING: $cfg exists and is not a regular file" >&2
+        return 0
+    fi
+    mkdir -p "$1/.cargo"
+    cat > "$cfg" <<'TOML'
+# Written by scripts/dev-session.sh start. Overrides any host-global
+# ~/.cargo/config.toml target-dir pin: this lane's build artifacts stay
+# inside the worktree and are reclaimed with it.
+[build]
+target-dir = "target"
+TOML
+    echo "cargo target isolation: $cfg"
+}
+
 case "$cmd" in
   start)
     name="${1:?usage: dev-session.sh start <name> [base-ref]}"
@@ -69,10 +98,12 @@ case "$cmd" in
     else
         git -C "$REPO_ROOT" worktree add "$worktree" -b "$name/feat" "$base"
     fi
+    ensure_cargo_isolation "$worktree"
     mkdir -p "$(pid_dir "$name")"
     ledger_add "$name" "$worktree" ""
     cat <<EOF
 worktree: $worktree  (branch $name/feat from $base)
+cargo:    worktree-local target/ (isolated from any host-global pin)
 pid dir:  $(pid_dir "$name")   — write PIDs here; kill ONLY these
 next:
   cd $worktree
@@ -98,7 +129,7 @@ EOF
         done
         exit 1
     fi
-    git -C "$REPO_ROOT" fetch origin master >/dev/null 2>&1 \
+    git -C "$REPO_ROOT" fetch --prune origin >/dev/null 2>&1 \
         || echo "WARNING: fetch failed — merge checks use the last-known origin/master"
     registered=no
     git -C "$REPO_ROOT" worktree list --porcelain \
@@ -119,6 +150,20 @@ EOF
         echo "branch $branch kept (not merged into origin/master)"
     fi
     git -C "$REPO_ROOT" worktree prune
+    # An unmerged branch whose remote is gone may hold someone's unpushed
+    # work — report it, never destroy it. Only merged-gone branches are
+    # safe to batch-delete.
+    git -C "$REPO_ROOT" for-each-ref \
+        --format='%(refname:short) %(upstream:track)' refs/heads \
+        | awk '$2 == "[gone]" {print $1}' \
+        | while IFS= read -r br; do
+            if git -C "$REPO_ROOT" merge-base --is-ancestor "$br" origin/master 2>/dev/null; then
+                git -C "$REPO_ROOT" branch -d "$br" >/dev/null 2>&1 \
+                    && echo "branch $br deleted (merged, remote gone)"
+            else
+                echo "branch $br kept (remote gone, not merged into origin/master)"
+            fi
+          done
     echo "session '$name' stopped"
     ;;
   list)
