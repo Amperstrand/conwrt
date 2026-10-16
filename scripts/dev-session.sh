@@ -8,8 +8,16 @@
 #
 # Usage:
 #   scripts/dev-session.sh start <name> [base-ref]   # default base: origin/master
-#   scripts/dev-session.sh stop <name>
+#   scripts/dev-session.sh stop <name>                # reap target/, remove worktree,
+#                                                     # drop merged branch, prune
 #   scripts/dev-session.sh list
+#   scripts/dev-session.sh sweep [--apply] [--days N] [name ...]
+#                                                     # classify every worktree:
+#                                                     # retire merged, reap idle
+#                                                     # target/ dirs (default N=4
+#                                                     # days without PR activity),
+#                                                     # protect dirty/unpushed.
+#                                                     # Dry-run unless --apply.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,6 +58,9 @@ EOF
     ;;
   stop)
     name="${1:?usage: dev-session.sh stop <name>}"
+    worktree="$REPO_ROOT/../conwrt-$name"
+    branch="$(git -C "$REPO_ROOT" worktree list --porcelain \
+        | awk -v wt="$worktree" '$1=="worktree"{p=substr($0,10)} $1=="branch" && p==wt{print substr($2,12); exit}')"
     if [ -f "$LEDGER" ]; then
         grep -v "\"session\":\"$name\"" "$LEDGER" > "$LEDGER.tmp" || true
         mv "$LEDGER.tmp" "$LEDGER"
@@ -67,13 +78,124 @@ EOF
         done
         exit 1
     fi
-    git -C "$REPO_ROOT" worktree remove "$REPO_ROOT/../conwrt-$name" 2>/dev/null \
-        && echo "worktree removed (branch kept)" \
+    rm -rf "$worktree/target" 2>/dev/null || true
+    git -C "$REPO_ROOT" worktree remove "$worktree" 2>/dev/null \
+        && echo "worktree removed" \
         || echo "worktree kept (unmerged work or missing)"
+    if [ -n "$branch" ] \
+        && git -C "$REPO_ROOT" merge-base --is-ancestor "$branch" origin/master 2>/dev/null; then
+        git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null \
+            && echo "branch $branch deleted (merged into origin/master)" \
+            || echo "branch $branch kept (delete manually if done)"
+    elif [ -n "$branch" ]; then
+        echo "branch $branch kept (not merged into origin/master)"
+    fi
+    git -C "$REPO_ROOT" worktree prune
     echo "session '$name' stopped"
     ;;
   list)
     [ -f "$LEDGER" ] && cat "$LEDGER" || echo "(no active sessions)"
+    ;;
+  sweep)
+    # Worktree reaper (AGENTS.md "Worktree lifecycle and disk reaping"):
+    # retire merged lanes, reclaim target/ from idle ones, never touch
+    # dirty or unpushed work. Dry-run by default; --apply acts.
+    apply=0; idle_days=4; filter=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --apply) apply=1 ;;
+        --days) idle_days="${2:?--days needs a number}"; shift ;;
+        -*) echo "unknown option: $1" >&2; exit 1 ;;
+        *) filter+=("$1") ;;
+      esac
+      shift
+    done
+    now=$(date +%s)
+    hub="$(git -C "$REPO_ROOT" worktree list --porcelain \
+        | awk '$1=="worktree"{print substr($0,10); exit}')"
+    current="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+    # One lookup for all open PRs: "branch|updatedAt|number". gh failure
+    # degrades to "unknown PR state" — sweep then never reaps.
+    pr_map="$(gh pr list -R Amperstrand/conwrt --state open \
+        --json headRefName,updatedAt,number --limit 200 2>/dev/null \
+        | python3 -c '
+import json, sys
+for pr in json.load(sys.stdin):
+    print(pr["headRefName"] + "|" + pr["updatedAt"] + "|" + str(pr["number"]))
+' || true)"
+    remote_branches="$(git -C "$REPO_ROOT" for-each-ref \
+        --format='%(refname:short)' refs/remotes/origin)"
+
+    matches_filter() { # name (conwrt-<session> or <session>)
+      [ ${#filter[@]} -eq 0 ] && return 0
+      local n; for n in "${filter[@]}"; do
+        [ "$n" = "$1" ] || [ "conwrt-$n" = "$1" ] && return 0
+      done; return 1
+    }
+
+    printf '%-22s %-38s %-16s %10s  %s\n' \
+        WORKTREE BRANCH STATE TARGET-MB ACTION
+    git -C "$REPO_ROOT" worktree list --porcelain \
+      | awk '$1=="worktree"{print substr($0,10)}' \
+      | while IFS= read -r wt; do
+        name="$(basename "$wt")"
+        matches_filter "$name" || continue
+        branch="$(git -C "$REPO_ROOT" worktree list --porcelain \
+            | awk -v w="$wt" '$1=="worktree"{p=substr($0,10)} $1=="branch" && p==w{print substr($2,12); exit}')"
+        mb=0
+        [ -d "$wt" ] && mb=$(du -sm "$wt/target" 2>/dev/null | cut -f1 || echo 0)
+        if [ ! -d "$wt" ]; then
+            state=PRUNABLE; action="prune registration"
+            [ "$apply" = 1 ] && git -C "$REPO_ROOT" worktree prune
+        elif [ -z "$branch" ]; then
+            state=DETACHED; action="report only"
+        elif [ "$wt" = "$hub" ]; then
+            state=HUB; action="report only"
+        elif [ -n "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ]; then
+            state=DIRTY; action="PROTECTED (uncommitted work)"
+        elif git -C "$REPO_ROOT" merge-base --is-ancestor "$branch" origin/master 2>/dev/null; then
+            state=MERGED; action="retire (remove worktree + branch)"
+            if [ "$apply" = 1 ] && [ "$wt" != "$current" ]; then
+                rm -rf "$wt/target" 2>/dev/null || true
+                git -C "$REPO_ROOT" worktree remove --force "$wt" 2>/dev/null \
+                    && git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null \
+                    && action="RETIRED" \
+                    || action="retire FAILED (manual review)"
+            elif [ "$apply" = 1 ]; then
+                action="skip (current worktree)"
+            fi
+            if [ "$apply" = 1 ] && [ -f "$LEDGER" ] && grep -q "\"worktree\":\"$wt" "$LEDGER" 2>/dev/null; then
+                grep -v "\"worktree\":\"$wt" "$LEDGER" > "$LEDGER.tmp" || true
+                mv "$LEDGER.tmp" "$LEDGER"
+            fi
+        elif ! printf '%s\n' "$remote_branches" | grep -qxF "origin/$branch"; then
+            state=UNPUSHED; action="PROTECTED (branch not on remote)"
+        else
+            pr_line="$(printf '%s\n' "$pr_map" | grep -F "$branch|" | head -1 || true)"
+            if [ -z "$pr_line" ] && [ -z "$pr_map" ]; then
+                state=UNKNOWN; action="report only (gh unavailable)"
+            elif [ -z "$pr_line" ]; then
+                state=NO-OPEN-PR; action="report only"
+            else
+                updated="$(printf '%s' "$pr_line" | cut -d'|' -f2)"
+                age=$(( (now - $(date -d "$updated" +%s)) / 86400 ))
+                if [ "$age" -ge "$idle_days" ]; then
+                    state="IDLE-${age}d"
+                    action="reap target/ (PR idle >= ${idle_days}d)"
+                    if [ "$apply" = 1 ]; then
+                        rm -rf "$wt/target" 2>/dev/null || true
+                        action="REAPED target/"
+                    fi
+                else
+                    state="ACTIVE-${age}d"
+                    action="leave alone"
+                fi
+            fi
+        fi
+        printf '%-22s %-38s %-16s %10s  %s\n' \
+            "$name" "${branch:-—}" "$state" "$mb" "$action"
+      done
+    [ "$apply" = 0 ] && echo "(dry-run — pass --apply to act; --days N sets the idle threshold, default 4)"
     ;;
   *)
     sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 1 ;;

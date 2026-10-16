@@ -790,3 +790,38 @@ scripts (`/tmp/*.sh`) started with `setsid nohup … < /dev/null &`, write
 logs to files, and have supervisors/tunnels re-established by idempotent
 launchers rather than trusted to survive. If a log file "was never
 created", that is this rule, not a mystery.
+## Worktree Lifecycle and Disk Reaping (2026-10-15)
+
+A full disk is a shared-host outage: every lane's tooling dies at ENOSPC
+before commands execute (2026-10-15 incident — `conwrt-esp32` mid-PR lost
+its shell to a disk filled by N worktrees × `target/` + toolchains).
+Worktrees are the unit of cleanup.
+
+**Rules:**
+
+1. **Retire on merge.** When your PR merges (or the session ends), run
+   `scripts/dev-session.sh stop <name>` — it drops the ledger entry,
+   refuses on leftover pidfiles, reaps `target/`, removes the worktree,
+   deletes the branch if it is merged into `origin/master`, and prunes
+   stale registrations. A merged lane that leaves its worktree behind is
+   debris, not a fallback.
+2. **Idle lanes lose their build cache, not their work.**
+   `scripts/dev-session.sh sweep` classifies every worktree: PRUNABLE
+   registrations are pruned, MERGED lanes are retired (worktree + branch),
+   and a worktree whose open PR has had **no activity for 4 days**
+   (`--days N` to change) has its `target/` reaped — the worktree, branch,
+   and uncommitted-safe classification are untouched; a resumed lane pays
+   a rebuild, nothing more.
+3. **Hard guards, always.** Sweep never touches a worktree with
+   uncommitted changes (DIRTY), a branch that exists nowhere on the remote
+   (UNPUSHED), the hub checkout, or the worktree it runs from. Dry-run is
+   the default; `--apply` acts. If `gh` is unavailable, PR-idle states are
+   unknown and nothing is reaped.
+4. **Check before you build big.** Before esp-toolchain installs, OpenWrt
+   image builds, or any multi-GB step: `df -h /` and
+   `scripts/dev-session.sh sweep` (dry-run). Free space proactively —
+   `rm -rf <idle-worktree>/target` is always safe for a lane you own.
+5. **ENOSPC discipline.** If commands start failing with "No space left
+   on device", STOP writing immediately — even `rm` through agent tooling
+   may fail to run. Report the blocker with your reclaimable artifacts;
+   do not thrash the host with retries.
