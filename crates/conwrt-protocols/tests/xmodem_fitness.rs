@@ -367,3 +367,218 @@ fn whole_transfer_restart_after_failure_succeeds() {
     handle.join().expect("receiver thread");
     assert_eq!(sent, 100);
 }
+
+// ─── #124 driver-level retry policy ─────────────────────────────────────────
+
+mod verified_retry {
+    use super::*;
+    use conwrt_protocols::xmodem_transfer::{RetryPolicy, VerifiedError, send_firmware_verified};
+
+    fn policy() -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: 3,
+            restart_delay_ms: 0,
+        }
+    }
+
+    /// Scripted XMODEM receiver. `nak_blocks` lists block numbers to NAK
+    /// mid-stream (the crate limitation: it advances WITHOUT
+    /// retransmitting — the block is silently lost receiver-side, and the
+    /// sender still reports success). It keeps ACKing the remaining
+    /// blocks, exactly like a lenient bootloader does; the LOST bytes are
+    /// what receiver-side verification must catch.
+    struct ScriptedReceiver {
+        peer: UnixStream,
+        /// Block numbers to NAK on the FIRST attempt only.
+        nak_blocks_first_attempt: Vec<u8>,
+        /// Block numbers to NAK on every attempt.
+        nak_blocks_always: Vec<u8>,
+    }
+
+    impl ScriptedReceiver {
+        fn run(mut self, payload_len: usize, max_transfers: u32) -> ReceiverReport {
+            let mut report = ReceiverReport::default();
+            loop {
+                // The receiver initiates each attempt by sending the CRC
+                // start byte, and stops inviting once the expected number
+                // of transfers has run (a further 'C' would go unread —
+                // the sender is done and the socket is about to close).
+                if report.transfers_seen >= max_transfers
+                    || self.peer.write_all(&[CRC_START]).is_err()
+                {
+                    break;
+                }
+                report.transfers_seen += 1;
+                let nak_blocks = if report.transfers_seen == 1 {
+                    &self.nak_blocks_first_attempt
+                } else {
+                    &self.nak_blocks_always
+                };
+                let blocks = payload_len.div_ceil(128).max(1);
+                for block_no in 1..=blocks as u8 {
+                    let _frame = recv_frame(&mut self.peer, 128, 2, block_no);
+                    let reply = if nak_blocks.contains(&block_no) {
+                        NAK
+                    } else {
+                        ACK
+                    };
+                    self.peer.write_all(&[reply]).expect("block reply");
+                }
+                recv_eot_and_ack(&mut self.peer);
+                report.eots_seen += 1;
+            }
+            report
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ReceiverReport {
+        transfers_seen: u32,
+        eots_seen: u32,
+    }
+
+    #[test]
+    fn sender_ok_is_not_success_verification_is() {
+        // The #124 regression pin: attempt 1 loses block 2 to a mid-stream
+        // NAK (the sender still completes and claims success — the pinned
+        // crate limitation), verification refuses, the whole transfer
+        // restarts and attempt 2 is clean + verified.
+        let payload = vec![0xABu8; 300];
+        let (mut dev, peer) = UnixStream::pair().expect("socketpair");
+
+        let receiver = std::thread::spawn(move || {
+            ScriptedReceiver {
+                peer,
+                nak_blocks_first_attempt: vec![2],
+                nak_blocks_always: vec![],
+            }
+            .run(300, 2)
+        });
+
+        let bytes_src = payload.clone();
+        let factory = move || std::io::Cursor::new(bytes_src.clone());
+        let mut verify_calls = 0;
+        let bytes = send_firmware_verified(
+            &mut dev,
+            factory,
+            BlockLength::Standard,
+            &policy(),
+            &mut || {
+                verify_calls += 1;
+                verify_calls > 1 // attempt 1 lost a block; attempt 2 landed
+            },
+            |_| {},
+        )
+        .expect("verified transfer");
+        drop(dev);
+        let report = receiver.join().expect("receiver");
+
+        assert_eq!(bytes, 300);
+        assert_eq!(verify_calls, 2, "each claimed success must be verified");
+        assert_eq!(report.transfers_seen, 2, "whole transfer restarted once");
+        assert_eq!(report.eots_seen, 2, "both attempts ran to EOT");
+    }
+
+    #[test]
+    fn never_verified_is_never_ok() {
+        // Sender succeeds every attempt; verification never passes →
+        // Unverified, with the sender's byte claim surfaced for diagnosis.
+        let payload = vec![1u8; 100];
+        let (mut dev, peer) = UnixStream::pair().expect("socketpair");
+
+        let receiver = std::thread::spawn(move || {
+            ScriptedReceiver {
+                peer,
+                nak_blocks_first_attempt: vec![],
+                nak_blocks_always: vec![1],
+            }
+            .run(100, 3)
+        });
+
+        let bytes_src = payload.clone();
+        let factory = move || std::io::Cursor::new(bytes_src.clone());
+        let err = send_firmware_verified(
+            &mut dev,
+            factory,
+            BlockLength::Standard,
+            &policy(),
+            &mut || false,
+            |_| {},
+        )
+        .unwrap_err();
+        drop(dev);
+        receiver.join().expect("receiver");
+
+        match err {
+            VerifiedError::Unverified {
+                attempts,
+                bytes_claimed,
+            } => {
+                assert_eq!(attempts, 3);
+                assert_eq!(bytes_claimed, 100);
+            }
+            other => panic!("expected Unverified, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sender_failure_exhausts_attempts() {
+        // Receiver never speaks: every sender attempt dies at startup.
+        let (mut dev, peer) = UnixStream::pair().expect("socketpair");
+        drop(peer); // silence — reads hit EOF, the crate errors fast
+
+        let bytes_src = vec![5u8; 50];
+        let factory = move || std::io::Cursor::new(bytes_src.clone());
+        let err = send_firmware_verified(
+            &mut dev,
+            factory,
+            BlockLength::Standard,
+            &policy(),
+            &mut || true,
+            |_| {},
+        )
+        .unwrap_err();
+
+        match err {
+            VerifiedError::AttemptsExhausted { attempts, .. } => assert_eq!(attempts, 3),
+            other => panic!("expected AttemptsExhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn happy_path_verifies_once() {
+        let payload = vec![9u8; 200];
+        let (mut dev, peer) = UnixStream::pair().expect("socketpair");
+        let receiver = std::thread::spawn(move || {
+            ScriptedReceiver {
+                peer,
+                nak_blocks_first_attempt: vec![],
+                nak_blocks_always: vec![],
+            }
+            .run(200, 1)
+        });
+
+        let bytes_src = payload.clone();
+        let factory = move || std::io::Cursor::new(bytes_src.clone());
+        let mut verify_calls = 0;
+        let bytes = send_firmware_verified(
+            &mut dev,
+            factory,
+            BlockLength::Standard,
+            &policy(),
+            &mut || {
+                verify_calls += 1;
+                true
+            },
+            |_| {},
+        )
+        .expect("clean transfer");
+        drop(dev);
+        let report = receiver.join().expect("receiver");
+
+        assert_eq!(bytes, 200);
+        assert_eq!(verify_calls, 1);
+        assert_eq!(report.transfers_seen, 1);
+        assert_eq!(report.eots_seen, 1);
+    }
+}
