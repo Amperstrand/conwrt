@@ -26,12 +26,30 @@ pid_dir() { echo "${TMPDIR:-/tmp}/opencode/conwrt-$1/pids"; }
 
 cmd="${1:-}"; shift || true
 
+ledger_lock() { echo "$REPO_ROOT/data/.sessions.lock"; }
+
+# All ledger rewrites run under an flock so a concurrent `start` append
+# can never be lost to a filter-rewrite (lost-update race, review finding).
 ledger_add() { # name worktree ports
     mkdir -p "$REPO_ROOT/data"
-    printf '{"session":"%s","worktree":"%s","ports":"%s","started":"%s"}\n' \
-        "$1" "$2" "${3:-}" "$(date -u +%FT%TZ)" >> "$LEDGER"
+    (
+      flock 9
+      printf '{"session":"%s","worktree":"%s","ports":"%s","started":"%s"}\n' \
+          "$1" "$2" "${3:-}" "$(date -u +%FT%TZ)" >> "$LEDGER"
+    ) 9>"$(ledger_lock)"
     echo "ledger: $LEDGER"
 }
+
+ledger_drop() { # -F pattern (exact fixed string, e.g. '"worktree":"/p/conwrt-esp32",')
+    [ -f "$LEDGER" ] || return 0
+    (
+      flock 9
+      grep -v -F "$1" "$LEDGER" > "$LEDGER.tmp" || true
+      mv "$LEDGER.tmp" "$LEDGER"
+    ) 9>"$(ledger_lock)"
+}
+
+ledger_drop_worktree() { ledger_drop "\"worktree\":\"$1\","; }
 
 case "$cmd" in
   start)
@@ -61,10 +79,7 @@ EOF
     worktree="$REPO_ROOT/../conwrt-$name"
     branch="$(git -C "$REPO_ROOT" worktree list --porcelain \
         | awk -v wt="$worktree" '$1=="worktree"{p=substr($0,10)} $1=="branch" && p==wt{print substr($2,12); exit}')"
-    if [ -f "$LEDGER" ]; then
-        grep -v "\"session\":\"$name\"" "$LEDGER" > "$LEDGER.tmp" || true
-        mv "$LEDGER.tmp" "$LEDGER"
-    fi
+    ledger_drop "\"session\":\"$name\","
     pids="$(pid_dir "$name")"
     if compgen -G "$pids/*.pid" >/dev/null; then
         echo "WARNING: leftover pidfiles in $pids — verify and kill before removing:"
@@ -165,6 +180,8 @@ for pr in json.load(sys.stdin):
             state=UNKNOWN; action="PROTECTED (git status failed)"
         elif [ -n "$status_out" ]; then
             state=DIRTY; action="PROTECTED (uncommitted work)"
+        elif [ "$branch" = "master" ] || [ "$(git -C "$REPO_ROOT" rev-parse "$branch" 2>/dev/null)" = "$(git -C "$REPO_ROOT" rev-parse origin/master 2>/dev/null)" ]; then
+            state=NO-COMMITS; action="PROTECTED (fresh lane, no unique commits)"
         elif git -C "$REPO_ROOT" merge-base --is-ancestor "$branch" origin/master 2>/dev/null; then
             state=MERGED
             if compgen -G "$(pid_dir "${name#conwrt-}")/*.pid" >/dev/null; then
@@ -174,7 +191,11 @@ for pr in json.load(sys.stdin):
                 retired=0
                 if [ "$apply" = 1 ] && [ "$wt" != "$current" ]; then
                     rm -rf "$wt/target" 2>/dev/null || true
-                    if git -C "$REPO_ROOT" worktree remove --force "$wt" 2>/dev/null \
+                    git -C "$wt" clean -qfdx 2>/dev/null || true
+                    # No --force: git re-checks cleanliness atomically at
+                    # removal time, so files created after our status check
+                    # abort the retirement instead of being deleted.
+                    if git -C "$REPO_ROOT" worktree remove "$wt" 2>/dev/null \
                         && git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null; then
                         action="RETIRED"; retired=1
                     else
@@ -183,10 +204,8 @@ for pr in json.load(sys.stdin):
                 elif [ "$apply" = 1 ]; then
                     action="skip (current worktree)"
                 fi
-                if [ "$retired" = 1 ] && [ -f "$LEDGER" ] \
-                    && grep -q "\"worktree\":\"$wt" "$LEDGER" 2>/dev/null; then
-                    grep -v "\"worktree\":\"$wt" "$LEDGER" > "$LEDGER.tmp" || true
-                    mv "$LEDGER.tmp" "$LEDGER"
+                if [ "$retired" = 1 ]; then
+                    ledger_drop_worktree "$wt"
                 fi
             fi
         elif ! printf '%s\n' "$remote_branches" | grep -qxF "origin/$branch"; then
@@ -203,7 +222,9 @@ for pr in json.load(sys.stdin):
                 if [ "$age" -ge "$idle_days" ]; then
                     state="IDLE-${age}d"
                     action="reap target/ (PR idle >= ${idle_days}d)"
-                    if [ "$apply" = 1 ]; then
+                    if [ "$apply" = 1 ] && [ "$wt" = "$current" ]; then
+                        action="skip (current worktree)"
+                    elif [ "$apply" = 1 ]; then
                         rm -rf "$wt/target" 2>/dev/null || true
                         action="REAPED target/"
                     fi
