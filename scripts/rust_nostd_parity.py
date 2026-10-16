@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rust_nostd_parity — guard against Makefile/rust.yml no_std crate-list drift.
+"""rust_nostd_parity — guard against Makefile/rust.yml no_std check drift.
 
 PR #227 round 1 shipped a no_std-only break (`to_string` needing `ToString`
 in scope) that passed local `make rust-ci` because the Makefile's
@@ -8,13 +8,17 @@ in scope) that passed local `make rust-ci` because the Makefile's
 cross-check, while CI's `.github/workflows/rust.yml` listed the fresh set
 (incl. the new crate). Local green, CI red — the lists had drifted.
 
-This guard makes that drift a hard failure on BOTH sides: it parses the
+This guard makes that drift a hard failure on BOTH sides. It parses the
 real `Makefile` and `.github/workflows/rust.yml` as text (dependency-free),
-collects the union of `-p <crate>` / `--package <crate>` arguments over
-every line that is a no_std cross-check (`cargo check` + `--no-default-features`
-+ the `thumbv7em-none-eabihf` target), and fails when the two unions differ
-— including when the cross-check line disappears from either file (an empty
-union is an error, not a silent pass).
+finds every `cargo check` line that is a no_std cross-check
+(`--no-default-features` + the `thumbv7em-none-eabihf` target), reduces
+each line to an invocation signature — (sorted `-p`/`--package` crate
+set, sorted `--features` set) — and requires both files to run the SAME
+multiset of signatures. Per-invocation, not unioned: a crate dropped from
+the featureless check while a `--features` check still names it changes
+what actually gets built and must fail (Codex review, PR #231 round 1).
+An empty signature list (all cross-check lines deleted) is an error, not
+a silent pass. Line order between the files is irrelevant.
 
 Wired in twice: `make rust-nostd-parity` (called first by `make rust-ci`)
 and as a dedicated step in the `rust` job of `.github/workflows/rust.yml`.
@@ -23,9 +27,9 @@ Modes:
   (default)      check the real repo files; exit 1 on drift
   --self-test    additionally prove the detector: run the real-files check,
                  then deliberately diverge fixture COPIES of both files in a
-                 temp dir (extra crate in rust.yml / missing crate in
-                 Makefile / cross-check line deleted) and assert each
-                 divergence is caught with a message naming both files.
+                 temp dir (extra crate / crate removed everywhere / crate
+                 removed from only the featureless check / cross-check lines
+                 deleted) and assert each divergence is caught.
 """
 
 from __future__ import annotations
@@ -35,8 +39,10 @@ import re
 import shutil
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = REPO_ROOT / "Makefile"
@@ -45,26 +51,31 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rust.yml"
 NO_STD_TARGET = "thumbv7em-none-eabihf"
 # A no_std cross-check line: cargo check ... --no-default-features ...
 # --target thumbv7em-none-eabihf (feature-specific variants such as the
-# embassy-net check count too — their -p crates join the union).
+# embassy-net check count as their own invocations).
 NEEDLES = ("cargo check", "--no-default-features", NO_STD_TARGET)
 # `-p crate`, `--package crate`, `--package=crate`
 PACKAGE_RE = re.compile(r"(?:^|\s)(?:-p|--package)(?:\s+|=)([A-Za-z0-9_-]+)")
+# `--features a,b` / `--features=a,b`
+FEATURES_RE = re.compile(r"(?:^|\s)--features(?:\s+|=)([^\s]+)")
 
 EXTRA_CRATE = "conwrt-image"  # not in the real lists; the self-test's imposter
 DROPPED_CRATE = "conwrt-executor"  # the exact crate the #227 round-1 drift lost
 
 
 class ParityError(Exception):
-    """Raised when the no_std crate lists cannot be compared or have drifted."""
+    """Raised when the no_std checks cannot be compared or have drifted."""
+
+
+#: One normalized cross-check invocation: (crates, features), both sorted.
+Signature = tuple[tuple[str, ...], tuple[str, ...]]
 
 
 @dataclass(frozen=True)
 class Lists:
-    """Extracted `-p` crate unions for one side."""
+    """Extracted cross-check signatures for one side, in file order."""
 
     source: Path
-    crates: set[str]
-    matching_lines: int
+    signatures: tuple[Signature, ...]
 
 
 def logical_lines(text: str, join_continuations: bool) -> list[str]:
@@ -91,22 +102,37 @@ def logical_lines(text: str, join_continuations: bool) -> list[str]:
     return joined
 
 
+def line_signature(line: str) -> Signature | None:
+    """`(crates, features)` for a no_std cross-check line, else None."""
+    if not all(needle in line for needle in NEEDLES):
+        return None
+    crates = tuple(sorted(PACKAGE_RE.findall(line)))
+    features = tuple(
+        sorted({f for group in FEATURES_RE.findall(line) for f in group.split(",")})
+    )
+    return crates, features
+
+
 def extract(text: str, source: Path, join_continuations: bool) -> Lists:
-    """Union of -p crates over every no_std cross-check line in `text`."""
-    crates: set[str] = set()
-    matching = 0
+    """Signatures of every no_std cross-check line in `text`, in file order."""
+    signatures: list[Signature] = []
     for line in logical_lines(text, join_continuations):
-        if all(needle in line for needle in NEEDLES):
-            matching += 1
-            crates.update(PACKAGE_RE.findall(line))
-    if not matching or not crates:
+        sig = line_signature(line)
+        if sig is None:
+            continue
+        if not sig[0]:
+            raise ParityError(
+                f"{source}: a `{NO_STD_TARGET}` cross-check line carries no -p "
+                "crates — a bare check would drift silently; name the crates"
+            )
+        signatures.append(sig)
+    if not signatures:
         raise ParityError(
             f"{source}: no `cargo check ... --no-default-features ... "
-            f"--target {NO_STD_TARGET}` line with -p crates found — "
-            "the no_std cross-check was deleted or renamed; this guard "
-            "refuses to pass silently"
+            f"--target {NO_STD_TARGET}` line found — the no_std cross-check "
+            "was deleted or renamed; this guard refuses to pass silently"
         )
-    return Lists(source=source, crates=crates, matching_lines=matching)
+    return Lists(source=source, signatures=tuple(signatures))
 
 
 def load(path: Path, join_continuations: bool) -> Lists:
@@ -117,24 +143,36 @@ def load(path: Path, join_continuations: bool) -> Lists:
     return extract(text, path, join_continuations)
 
 
+def describe(sig: Signature) -> str:
+    """One-line rendering of an invocation signature."""
+    crates, features = sig
+    feat = f" (features: {', '.join(features)})" if features else ""
+    return f"[{', '.join(crates)}]{feat}"
+
+
 def diff_report(mk: Lists, wf: Lists) -> list[str]:
-    """Human-readable failure lines; empty when the unions agree."""
-    if mk.crates == wf.crates:
+    """Human-readable failure lines; empty when the invocations agree."""
+    mk_multi = Counter(mk.signatures)
+    wf_multi = Counter(wf.signatures)
+    if mk_multi == wf_multi:
         return []
-    only_mk = mk.crates - wf.crates
-    only_wf = wf.crates - mk.crates
+    only_mk = list((mk_multi - wf_multi).elements())
+    only_wf = list((wf_multi - mk_multi).elements())
     return [
         "no_std parity drift: the Makefile and .github/workflows/rust.yml "
-        f"`-p` crate sets for the {NO_STD_TARGET} no_std cross-check differ",
-        f"  (this exact drift let a no_std break pass local `make rust-ci` "
+        f"run different {NO_STD_TARGET} cross-checks "
+        "(this exact drift let a no_std break pass local `make rust-ci` "
         "while CI failed — PR #227 review round 1)",
-        f"  Makefile                  ({mk.matching_lines} line(s)): "
-        + " ".join(sorted(mk.crates)),
-        f"  .github/workflows/rust.yml ({wf.matching_lines} line(s)): "
-        + " ".join(sorted(wf.crates)),
-        f"  only in Makefile                  : {' '.join(sorted(only_mk)) or '-'}",
-        f"  only in .github/workflows/rust.yml: {' '.join(sorted(only_wf)) or '-'}",
-        "Fix BOTH sides to carry the same -p crate set.",
+        f"  Makefile invocations ({len(mk.signatures)}):",
+        *(f"    {describe(s)}" for s in mk.signatures),
+        f"  .github/workflows/rust.yml invocations ({len(wf.signatures)}):",
+        *(f"    {describe(s)}" for s in wf.signatures),
+        "  checks only in Makefile                  : "
+        + ("; ".join(describe(s) for s in only_mk) or "-"),
+        "  checks only in .github/workflows/rust.yml: "
+        + ("; ".join(describe(s) for s in only_wf) or "-"),
+        "Fix BOTH sides to run the same cross-checks (same -p crate sets "
+        "and features, per check).",
     ]
 
 
@@ -155,55 +193,102 @@ def run_check(makefile: Path, workflow: Path) -> int:
         for line in failures:
             print(f"FAIL: {line}", file=sys.stderr)
         return 1
+    crates = {c for sig in mk.signatures for c in sig[0]}
     print(
-        f"no_std parity OK: {len(mk.crates)} crates on both sides "
-        f"(Makefile: {mk.matching_lines} line(s), rust.yml: {wf.matching_lines} line(s)): "
-        + " ".join(sorted(mk.crates))
+        f"no_std parity OK: {len(mk.signatures)} cross-check(s) covering "
+        f"{len(crates)} crates agree on both sides "
+        "(Makefile + .github/workflows/rust.yml): " + " ".join(sorted(crates))
     )
     return 0
 
 
-def diverge_workflow_text(text: str) -> str:
-    """Add an imposter crate to the first no_std cross-check line."""
+def mutate_first_matching_line(text: str, mutation: Callable[[str], str]) -> str:
+    """Apply `mutation` to the first line matching the no_std needles."""
     out = []
-    injected = False
+    mutated = False
     for line in text.splitlines():
-        if not injected and all(needle in line for needle in NEEDLES):
-            line = line.replace(" -p conwrt-types", f" -p {EXTRA_CRATE} -p conwrt-types", 1)
-            injected = True
+        if not mutated and all(needle in line for needle in NEEDLES):
+            line = mutation(line)
+            mutated = True
         out.append(line)
-    if not injected:
-        raise ParityError("self-test: could not find a no_std line in the workflow copy")
+    if not mutated:
+        raise ParityError("self-test: no no_std line found to mutate")
     return "\n".join(out) + "\n"
 
 
-def drop_crate_from_makefile_text(text: str) -> str:
-    """Remove the round-1 crate from EVERY no_std cross-check line.
-
-    Several no_std lines may carry the same crate (the multi-crate gate
-    plus feature-specific checks) — dropping it from only one line can
-    be masked by the others in the union, which would make this seeded
-    divergence a non-divergence (caught live when #232 added the
-    embassy-net lines).
-    """
+def mutate_every_matching_line(text: str, mutation: Callable[[str], str]) -> str:
+    """Apply `mutation` to every line matching the no_std needles."""
     out = []
-    dropped = False
+    mutated = False
     for line in text.splitlines():
-        if all(needle in line for needle in NEEDLES) and f" -p {DROPPED_CRATE}" in line:
-            line = line.replace(f" -p {DROPPED_CRATE}", "", 1)
-            dropped = True
+        if all(needle in line for needle in NEEDLES):
+            line = mutation(line)
+            mutated = True
         out.append(line)
-    if not dropped:
-        raise ParityError("self-test: no no_std line carrying the dropped crate found")
+    if not mutated:
+        raise ParityError("self-test: no no_std line found to mutate")
+    return "\n".join(out) + "\n"
+
+
+def diverge_workflow_text(text: str) -> str:
+    """Add an imposter crate to the first no_std cross-check line."""
+    return mutate_first_matching_line(
+        text,
+        lambda line: line.replace(
+            " -p conwrt-types", f" -p {EXTRA_CRATE} -p conwrt-types", 1
+        ),
+    )
+
+
+def drop_crate_everywhere_text(text: str) -> str:
+    """Remove the round-1 crate from EVERY no_std cross-check line."""
+    return mutate_every_matching_line(
+        text, lambda line: line.replace(f" -p {DROPPED_CRATE}", "", 1)
+    )
+
+
+def drop_crate_from_featureless_check_text(text: str) -> str:
+    """Remove the round-1 crate from only the check without --features.
+
+    The PR #231 review-round-1 repro: the crate stays on the
+    `--features embassy-net` lines, so a union comparison would still
+    pass — the per-invocation comparison must catch it.
+    """
+
+    def drop_if_featureless(line: str) -> str:
+        return line.replace(f" -p {DROPPED_CRATE}", "", 1)
+
+    out = []
+    mutated = False
+    for line in text.splitlines():
+        if all(needle in line for needle in NEEDLES) and not FEATURES_RE.search(line):
+            line = drop_if_featureless(line)
+            mutated = True
+        out.append(line)
+    if not mutated:
+        raise ParityError("self-test: no featureless no_std line found")
     return "\n".join(out) + "\n"
 
 
 def delete_nostd_line_text(text: str) -> str:
-    """Delete the no_std cross-check line entirely (silent-pass hazard)."""
+    """Delete the no_std cross-check lines entirely (silent-pass hazard)."""
     out = [line for line in text.splitlines() if not all(n in line for n in NEEDLES)]
     if len(out) == len(text.splitlines()):
         raise ParityError("self-test: no no_std line found to delete")
     return "\n".join(out) + "\n"
+
+
+def drift_detected(makefile: Path, workflow: Path) -> bool:
+    """True when the comparison reports drift or refuses to compare.
+
+    A refusal (ParityError: unparseable/deleted/bare checks) is a caught
+    divergence — the guard never passes silently on a broken state.
+    """
+    try:
+        _, _, failures = check(makefile, workflow)
+    except ParityError:
+        return True
+    return bool(failures)
 
 
 def run_self_test(makefile: Path, workflow: Path) -> int:
@@ -217,32 +302,53 @@ def run_self_test(makefile: Path, workflow: Path) -> int:
         shutil.copy(makefile, mk_copy)
         shutil.copy(workflow, wf_copy)
 
+        def variant(name: str, base: Path, transform: Callable[[str], str]) -> Path:
+            path = tmpdir / name
+            path.write_text(transform(base.read_text(encoding="utf-8")), encoding="utf-8")
+            return path
+
         # Step 0 — positive control: the untouched copies must PASS.
-        _, _, failures = check(mk_copy, wf_copy)
-        steps.append(("control: unmodified copies pass", False, bool(failures)))
+        steps.append(
+            ("control: unmodified copies pass", False, drift_detected(mk_copy, wf_copy))
+        )
 
-        # Step 1 — rust.yml gains an extra crate: drift must be caught.
-        wf_bad = tmpdir / "rust.yml-extra-crate"
-        wf_bad.write_text(diverge_workflow_text(wf_copy.read_text(encoding="utf-8")), encoding="utf-8")
-        _, _, failures = check(mk_copy, wf_bad)
-        steps.append((f"rust.yml +extra -p {EXTRA_CRATE} is detected", True, bool(failures)))
+        # Step 1 — rust.yml gains an extra crate on one check.
+        wf_bad = variant("rust.yml-extra-crate", wf_copy, diverge_workflow_text)
+        steps.append(
+            (f"rust.yml +extra -p {EXTRA_CRATE} is detected", True, drift_detected(mk_copy, wf_bad))
+        )
 
-        # Step 2 — Makefile loses the round-1 crate: drift must be caught.
-        mk_bad = tmpdir / "Makefile-missing-crate"
-        mk_bad.write_text(drop_crate_from_makefile_text(mk_copy.read_text(encoding="utf-8")), encoding="utf-8")
-        _, _, failures = check(mk_bad, wf_copy)
-        steps.append((f"Makefile -p {DROPPED_CRATE} removed is detected", True, bool(failures)))
+        # Step 2 — Makefile loses the round-1 crate everywhere (the
+        # embassy-net line drops to bare and the guard refuses it).
+        mk_bad = variant("Makefile-missing-crate", mk_copy, drop_crate_everywhere_text)
+        steps.append(
+            (
+                f"Makefile -p {DROPPED_CRATE} removed everywhere is detected",
+                True,
+                drift_detected(mk_bad, wf_copy),
+            )
+        )
 
-        # Step 3 — cross-check line deleted from the workflow: must be an
+        # Step 3 — crate removed from ONLY the featureless check while the
+        # --features checks keep it (PR #231 review round 1 repro).
+        mk_masked = variant(
+            "Makefile-masked-crate", mk_copy, drop_crate_from_featureless_check_text
+        )
+        steps.append(
+            (
+                f"Makefile -p {DROPPED_CRATE} removed from only the featureless "
+                "check is detected (union-masking repro)",
+                True,
+                drift_detected(mk_masked, wf_copy),
+            )
+        )
+
+        # Step 4 — cross-check lines deleted from the workflow: must be an
         # error, not a silent pass.
-        wf_gone = tmpdir / "rust.yml-line-deleted"
-        wf_gone.write_text(delete_nostd_line_text(wf_copy.read_text(encoding="utf-8")), encoding="utf-8")
-        try:
-            _, _, failures = check(mk_copy, wf_gone)
-            detected = bool(failures)
-        except ParityError:
-            detected = True
-        steps.append(("rust.yml cross-check line deleted is an error", True, detected))
+        wf_gone = variant("rust.yml-line-deleted", wf_copy, delete_nostd_line_text)
+        steps.append(
+            ("rust.yml cross-check lines deleted is an error", True, drift_detected(mk_copy, wf_gone))
+        )
 
         ok = True
         for i, (name, want, got) in enumerate(steps):
