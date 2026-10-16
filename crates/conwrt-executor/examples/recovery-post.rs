@@ -40,6 +40,7 @@ use std::net::{SocketAddr, TcpStream};
 
 use conwrt_agent_proto::protocol::StreamChunk;
 use conwrt_executor::multipart::{BOUNDARY_PREFIX, Multipart, UPLOAD_FIELD};
+use conwrt_executor::post::retain_verdict_bytes;
 use conwrt_executor::transfer::TransferState;
 use conwrt_executor::{HttpIo, PostError, PostOutcome, RecoveryPost, Verdict};
 
@@ -149,7 +150,11 @@ impl HttpIo for StdIo {
         loop {
             match self.0.read(&mut buf) {
                 Ok(0) => return Ok(()), // server FIN: verdict complete
-                Ok(n) => out.extend_from_slice(&buf[..n]),
+                // same bounded retention as the firmware: the twin
+                // reproduces the MCU's read behavior exactly
+                Ok(n) => {
+                    retain_verdict_bytes(out, &buf[..n]);
+                }
                 Err(e) => return Err(e),
             }
         }

@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use embassy_net::tcp::TcpSocket;
 
-use crate::post::HttpIo;
+use crate::post::{HttpIo, retain_verdict_bytes};
 
 /// Recovery-POST transport over an **established** embassy-net TCP
 /// connection to the recovery server (U-Boot at `192.168.0.1:80`).
@@ -50,7 +50,12 @@ impl HttpIo for TcpHttpIo<'_> {
         loop {
             match TcpSocket::read(&mut self.socket, &mut buf).await {
                 Ok(0) => return Ok(()), // server FIN: verdict complete
-                Ok(n) => out.extend_from_slice(&buf[..n]),
+                // beyond MAX_VERDICT_BYTES: drain, discard — a huge
+                // response is not a verdict, and the 32 KiB heap must
+                // survive the read (review round 2)
+                Ok(n) => {
+                    retain_verdict_bytes(out, &buf[..n]);
+                }
                 Err(e) => return Err(e),
             }
         }
