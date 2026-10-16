@@ -328,8 +328,18 @@ async fn get_before_post_burns_the_window() {
     .expect("accept");
     let mut io = connect(addr).await;
     let mut post = RecoveryPost::new(mp, "192.168.0.1", "/upload");
-    let err = post.start(&mut io, &xfer).await.expect_err("burned window");
-    assert_eq!(err, conwrt_executor::PostError::Write { op: "head" });
+    // Transport-level outcome races with the server's RST: the head
+    // write may fail outright, or land in the socket buffer and only
+    // the response read reveals the burn. Both mean the same thing.
+    match post.start(&mut io, &xfer).await {
+        Err(conwrt_executor::PostError::Write { op: "head" }) => {}
+        Ok(()) => {
+            post.pump(&mut io, &mut xfer).await.expect("pump");
+            let outcome = post.finish(&mut io, &xfer).await.expect("finish");
+            assert_eq!(outcome.verdict, Verdict::NoResponse, "burned window");
+        }
+        other => panic!("unexpected start outcome: {other:?}"),
+    }
 
     let rec = shared.lock().expect("mock lock");
     assert!(rec.burned);

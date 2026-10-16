@@ -171,14 +171,20 @@ impl ServerCore {
             WireEndpoint::LeaseAcquire(req) => {
                 // #226 lease semantics: an in-flight recovery POST must
                 // survive controller loss (the one-request window cannot
-                // be aborted mid-body) — executor leases are
-                // Complete-policy only (review round 4).
-                if req.resource == EXECUTOR_RESOURCE
-                    && req.on_disconnect != DisconnectPolicy::Complete
-                {
-                    return WireResult::Error(WireError::Internal(String::from(
-                        "executor leases require Complete disconnect policy",
-                    )));
+                // be aborted mid-body) — executor leases are exclusive
+                // and Complete-policy only, refused at acquisition
+                // (review rounds 4+5).
+                if req.resource == EXECUTOR_RESOURCE {
+                    if !req.exclusive {
+                        return WireResult::Error(WireError::Internal(String::from(
+                            "executor leases are exclusive-only",
+                        )));
+                    }
+                    if req.on_disconnect != DisconnectPolicy::Complete {
+                        return WireResult::Error(WireError::Internal(String::from(
+                            "executor leases require Complete disconnect policy",
+                        )));
+                    }
                 }
                 let controller = self.controller.clone().unwrap_or_default();
                 match self.leases.acquire(
@@ -648,24 +654,23 @@ mod tests {
     }
 
     #[test]
-    fn stream_chunk_shared_lease_is_refused() {
-        // #226: the executor resource is exclusive-only
+    fn executor_shared_lease_refused_at_acquisition() {
+        // #226: the executor resource is exclusive-only (review round 5)
         let (mut c, _) = transfer_core();
         handshake(&mut c);
-        request(
+        let result = request(
             &mut c,
             2,
             WireEndpoint::LeaseAcquire(LeaseRequestShape {
                 resource: String::from(EXECUTOR_RESOURCE),
                 exclusive: false,
-                on_disconnect: DisconnectPolicy::Abort,
+                on_disconnect: DisconnectPolicy::Complete,
             }),
         );
-        let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
-        assert_eq!(
+        assert!(matches!(
             result,
-            WireResult::Error(WireError::LeaseRequired(String::from("executor")))
-        );
+            WireResult::Error(WireError::Internal(msg)) if msg.contains("exclusive-only")
+        ));
     }
 
     #[test]
