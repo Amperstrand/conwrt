@@ -1,6 +1,6 @@
 [package]
 name = "conwrt-agent-io"
-description = "Conwrt agent transport-session layer (#215 slice 1): the packet-shaped COBS session loop shared by every MCU agent firmware — ServerCore behind one PacketIo trait, host-testable with an in-memory mock pipe"
+description = "Conwrt agent transport-session layer (#215): the packet-shaped COBS session loop (USB CDC) and its TCP stream twin behind PacketIo/StreamIo — ServerCore behind two byte pipes, host-testable with in-memory mocks and the HIL parity suite"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,12 +11,26 @@ repository.workspace = true
 # Blanket `PacketIo` impl for embassy-usb 0.6's CdcAcmClass — enabled by
 # the Tier-C firmware apps (their own lockfiles), never by host builds.
 embassy-usb = ["dep:embassy-usb"]
+# Blanket `StreamIo` impl for embassy-net 0.9's TcpSocket — for firmware
+# that attaches the agent over Ethernet (#215 slice 4+). embedded-io-async
+# is version-matched to embassy-net's own requirement so the impl calls
+# resolve against the same copy the socket implements. embassy-net has NO
+# default smoltcp feature set: tcp + proto-ipv4 + medium-ethernet is the
+# minimal Ethernet-attached-agent profile (stack-level extras like DHCP
+# are the firmware's concern, not the trait's).
+embassy-net = ["dep:embassy-net", "dep:embedded-io-async"]
 
 [dependencies]
 conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
 embassy-usb = { version = "0.6", default-features = false, optional = true }
+embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"], optional = true }
+embedded-io-async = { version = "0.7.0", optional = true }
 
 [dev-dependencies]
+# HIL parity suite drives the real controller (AgentClient) through the
+# stream session — controller modules live behind proto's `std` feature;
+# dev-deps keep that host-only, firmware consumers stay no_std.
+conwrt-agent-proto = { path = "../conwrt-agent-proto", features = ["std"] }
 tokio = { workspace = true }
 
 [lints]
