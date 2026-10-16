@@ -59,9 +59,9 @@ so std users are unchanged, and embedded users can write
 mlkem out of the binary. Happy to send the PR either way if a different
 shape is preferred.
 
-## Workaround we use today
+## Where we carry it today
 
-```toml
-[patch.crates-io]
-sunset-async = { path = "../patched-sunset-async" }  # same crate, sunset edge with default-features = false
-```
+Our org fork (`Amperstrand/sunset`, branch `ai-experiments`, based on the
+`sunset-0.6.0` tag) implements exactly the suggested forwarded feature and
+carries a negotiated-mlkem regression test. We'd happily retire the fork in
+favor of an upstream release containing this.
