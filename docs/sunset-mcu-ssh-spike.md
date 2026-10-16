@@ -172,6 +172,59 @@ default features are on, which Dropbear 2024.86 simply doesn't pick);
 negotiation, host-key verify, pubkey auth and exec all pass against the
 exact OpenWrt 24.10 Dropbear version.
 
+### Closing move: Dropbear 2026.94 (OpenWrt main) — 2026-10-16
+
+The same harness against OpenWrt main's Dropbear (closing the second
+version in ADR-0005's matrix):
+
+```sh
+curl -O https://matt.ucc.asn.au/dropbear/releases/dropbear-2026.94.tar.bz2
+# sha256 e098034a843699200c8c977a991fff73159735bf795d5f72ef672c41a6b1ae81
+tar xf dropbear-2026.94.tar.bz2 && cd dropbear-2026.94
+./configure && make -j4 dropbear dropbearkey
+# same throwaway-user setup; server on 127.0.0.1:2201
+# same sunsetc build (tag sunset-0.6.0), port 2201
+```
+
+Client log (verbatim — note the kex line):
+
+```
+sunset::kex: Negotiated algorithms {
+kex mlkem768x25519-sha256
+hostkey ssh-ed25519
+cipher c->s chacha20-poly1305@openssh.com
+cipher s->c chacha20-poly1305@openssh.com
+mac c->s chacha20-poly1305@openssh.com
+mac s->c chacha20-poly1305@openssh.com
+}
+sunset_stdasync::knownhosts: Line 1, found matching key
+sunset::kex: Hostkey signature is valid
+sunset_stdasync::cmdline_client: Authentication succeeded
+hello-main-interop            <- exec stdout, exit 0
+```
+
+Dropbear server log (verbatim):
+
+```
+Child connection from 127.0.0.1:47098
+Pubkey auth succeeded for 'db294' with ssh-ed25519 key SHA256:QqRl...
+Exit (db294) from <127.0.0.1:47098>: Exited normally
+```
+
+Both sides negotiated the **mlkem768x25519-sha256** hybrid (Dropbear
+2026.94 offers it, sunset prefers it) and the full session passed. Two
+consequences:
+
+- The ADR-0005 floor holds on *both* OpenWrt branches (24.10 and main)
+  — post-quantum falls out of the intersection for 24.10 and is
+  additionally verified working on main.
+- **Finding 2 is isolated to sunset's server side**: a real Dropbear
+  2026.94 server accepts sunset's client mlkem encapsulation key and
+  completes KEX — the same client code path our in-memory harness uses —
+  so the in-harness `BadKex` comes from sunset-as-server
+  (`secret_encap_server`'s key validation), not from the client key
+  generation or our transport.
+
 ## Findings & caveats (recorded for the revisit)
 
 1. **`sunset-async` re-enables sunset's `mlkem` default via feature
@@ -180,13 +233,17 @@ exact OpenWrt 24.10 Dropbear version.
    The floor builds here use a patched sunset-async (one-line
    `default-features = false`, appendix A). Any real MCU adoption should
    carry that patch (or get upstream to flip its edge).
+   Upstream draft: `docs/upstream-drafts/sunset-async-feature-unification-mlkem.md`.
 2. **mlkem768x25519 hybrid kex fails in-harness (BadKex).** With default
    features (mlkem preferred), the in-memory server fails
    `KexMlkemX25519::secret_encap_server` — the ml-kem 0.3.2
    `EncapsulationKey::new()` validation rejects the client's
-   encapsulation key — error `BadKex`. Not investigated further: the
-   floor kex is what Dropbear 2024.86 negotiates anyway. Anyone adopting
-   sunset for Post-Quantum paths must re-test against a PQ-capable peer.
+   encapsulation key — error `BadKex`. **Isolated to sunset-as-server**
+   by the 2026.94 run above: a real Dropbear server accepts sunset's
+   client mlkem key and completes KEX, so the client key generation is
+   fine. Anyone adopting sunset for Post-Quantum paths should treat
+   sunset-as-*server* mlkem as broken until fixed.
+   Upstream draft: `docs/upstream-drafts/sunset-mlkem-server-encap-badkex.md`.
 3. **getrandom 0.4 on no_std needs `--cfg getrandom_backend="custom"`**
    plus a `__getrandom_v03_custom` symbol. The spike's hook is a
    deterministic xorshift (measurement only — never flash); real
@@ -212,6 +269,7 @@ exact OpenWrt 24.10 Dropbear version.
    serve shells until the client disconnects). A real conwrt
    agent-over-SSH server needs this upstream, or client-side payload
    framing as a workaround.
+   Upstream draft: `docs/upstream-drafts/sunset-server-exec-close-exit-status.md`.
 
 ## Appendix A — harness source (identical for host check and both MCUs)
 
