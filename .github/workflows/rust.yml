@@ -29,7 +29,7 @@ jobs:
       # Follows rust-toolchain.toml (pinned 1.99.0 since #149); installing
       # components/targets for the PINNED toolchain keeps the no_std gate
       # working (broken by the @stable-vs-pin mismatch after #149 merged).
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.99.0
           components: rustfmt, clippy
