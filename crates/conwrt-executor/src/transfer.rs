@@ -60,6 +60,10 @@ pub enum TransferError {
         /// The new, conflicting total.
         changed: u64,
     },
+    /// The transfer announced a zero-byte image — no firmware selected.
+    /// An empty multipart body would still burn the one-request
+    /// recovery window (review round 4).
+    EmptyTransfer,
 }
 
 /// A bounded window over one image transfer; the resume-token source.
@@ -143,6 +147,9 @@ impl TransferState {
         }) else {
             return Err(TransferError::MissingTotal);
         };
+        if total == 0 {
+            return Err(TransferError::EmptyTransfer);
+        }
         if self.total.is_none() {
             self.total = Some(total);
         }
@@ -297,6 +304,15 @@ mod tests {
         assert_eq!(
             t.accept(&chunk(0, b"abcdef", Some(3))),
             Err(TransferError::Overflow { total: 3, end: 6 })
+        );
+    }
+
+    #[test]
+    fn zero_total_rejected() {
+        let mut t = TransferState::new(7, 1024);
+        assert_eq!(
+            t.accept(&chunk(0, b"", Some(0))),
+            Err(TransferError::EmptyTransfer)
         );
     }
 

@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use crate::dispatch::{AgentEvent, WireEndpoint, WireError, WireFrame, WireResult};
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
-    CapabilityInfo, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse, PROTOCOL_VERSION,
-    StreamAck, StreamChunk,
+    CapabilityInfo, DisconnectPolicy, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse,
+    PROTOCOL_VERSION, StreamAck, StreamChunk,
 };
 
 /// Missed-heartbeats-to-expiry budget granted per lease.
@@ -169,6 +169,17 @@ impl ServerCore {
             }
             WireEndpoint::Capabilities => WireResult::Capabilities(self.capabilities.clone()),
             WireEndpoint::LeaseAcquire(req) => {
+                // #226 lease semantics: an in-flight recovery POST must
+                // survive controller loss (the one-request window cannot
+                // be aborted mid-body) — executor leases are
+                // Complete-policy only (review round 4).
+                if req.resource == EXECUTOR_RESOURCE
+                    && req.on_disconnect != DisconnectPolicy::Complete
+                {
+                    return WireResult::Error(WireError::Internal(String::from(
+                        "executor leases require Complete disconnect policy",
+                    )));
+                }
                 let controller = self.controller.clone().unwrap_or_default();
                 match self.leases.acquire(
                     &req.resource,
@@ -209,6 +220,11 @@ impl ServerCore {
                 Err(_) => WireResult::Error(WireError::Internal(String::from("heartbeat refused"))),
             },
             WireEndpoint::StreamChunk(chunk) => {
+                // sink presence first: bare cores keep their historical
+                // UnknownTransfer contract (review round 4)
+                if self.transfer.is_none() {
+                    return WireResult::Error(WireError::UnknownTransfer(chunk.transfer_id));
+                }
                 if !self.holds_exclusive(EXECUTOR_RESOURCE) {
                     return WireResult::Error(WireError::LeaseRequired(String::from(
                         EXECUTOR_RESOURCE,
@@ -217,15 +233,15 @@ impl ServerCore {
                 match self.transfer.as_mut() {
                     Some(sink) => match sink.stream_chunk(&chunk) {
                         Ok(ack) => WireResult::StreamAck(ack),
-                        Err(WireError::UnknownTransfer(id)) => {
-                            WireResult::Error(WireError::UnknownTransfer(id))
-                        }
                         Err(e) => WireResult::Error(e),
                     },
                     None => WireResult::Error(WireError::UnknownTransfer(chunk.transfer_id)),
                 }
             }
             WireEndpoint::StreamStatus { transfer_id } => {
+                if self.transfer.is_none() {
+                    return WireResult::Error(WireError::UnknownTransfer(transfer_id));
+                }
                 if !self.holds_exclusive(EXECUTOR_RESOURCE) {
                     return WireResult::Error(WireError::LeaseRequired(String::from(
                         EXECUTOR_RESOURCE,
@@ -679,15 +695,32 @@ mod tests {
 
     #[test]
     fn stream_chunk_without_sink_stays_unknown_transfer() {
-        // pre-#226 behavior preserved: no sink attached -> UnknownTransfer
+        // pre-#226 contract preserved: no sink attached -> UnknownTransfer,
+        // lease gate not even consulted (review round 4)
         let mut c = core();
         handshake(&mut c);
-        lease_uart0(&mut c); // any lease: the executor gate must pass only on executor leases
         let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
-        assert_eq!(
-            result,
-            WireResult::Error(WireError::LeaseRequired(String::from("executor")))
+        assert_eq!(result, WireResult::Error(WireError::UnknownTransfer(42)));
+    }
+
+    #[test]
+    fn executor_lease_with_abort_policy_is_refused() {
+        let (mut c, _) = transfer_core();
+        handshake(&mut c);
+        let result = request(
+            &mut c,
+            2,
+            WireEndpoint::LeaseAcquire(LeaseRequestShape {
+                resource: String::from(EXECUTOR_RESOURCE),
+                exclusive: true,
+                on_disconnect: DisconnectPolicy::Abort,
+            }),
         );
+        assert!(matches!(
+            result,
+            WireResult::Error(WireError::Internal(msg))
+                if msg.contains("Complete disconnect policy")
+        ));
     }
 
     #[test]
