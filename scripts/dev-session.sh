@@ -78,7 +78,15 @@ EOF
         done
         exit 1
     fi
-    rm -rf "$worktree/target" 2>/dev/null || true
+    git -C "$REPO_ROOT" fetch origin master >/dev/null 2>&1 \
+        || echo "WARNING: fetch failed — merge checks use the last-known origin/master"
+    registered=no
+    git -C "$REPO_ROOT" worktree list --porcelain \
+        | awk -v w="$worktree" '$1=="worktree" && substr($0,10)==w{found=1} END{exit !found}' \
+        && registered=yes
+    if [ "$registered" = yes ]; then
+        rm -rf "$worktree/target" 2>/dev/null || true
+    fi
     git -C "$REPO_ROOT" worktree remove "$worktree" 2>/dev/null \
         && echo "worktree removed" \
         || echo "worktree kept (unmerged work or missing)"
@@ -111,6 +119,8 @@ EOF
       shift
     done
     now=$(date +%s)
+    git -C "$REPO_ROOT" fetch origin master >/dev/null 2>&1 \
+        || echo "WARNING: fetch failed — MERGED classification uses the last-known origin/master"
     hub="$(git -C "$REPO_ROOT" worktree list --porcelain \
         | awk '$1=="worktree"{print substr($0,10); exit}')"
     current="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -151,27 +161,38 @@ for pr in json.load(sys.stdin):
             state=DETACHED; action="report only"
         elif [ "$wt" = "$hub" ]; then
             state=HUB; action="report only"
-        elif [ -n "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ]; then
+        elif ! status_out="$(git -C "$wt" status --porcelain 2>/dev/null)"; then
+            state=UNKNOWN; action="PROTECTED (git status failed)"
+        elif [ -n "$status_out" ]; then
             state=DIRTY; action="PROTECTED (uncommitted work)"
         elif git -C "$REPO_ROOT" merge-base --is-ancestor "$branch" origin/master 2>/dev/null; then
-            state=MERGED; action="retire (remove worktree + branch)"
-            if [ "$apply" = 1 ] && [ "$wt" != "$current" ]; then
-                rm -rf "$wt/target" 2>/dev/null || true
-                git -C "$REPO_ROOT" worktree remove --force "$wt" 2>/dev/null \
-                    && git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null \
-                    && action="RETIRED" \
-                    || action="retire FAILED (manual review)"
-            elif [ "$apply" = 1 ]; then
-                action="skip (current worktree)"
-            fi
-            if [ "$apply" = 1 ] && [ -f "$LEDGER" ] && grep -q "\"worktree\":\"$wt" "$LEDGER" 2>/dev/null; then
-                grep -v "\"worktree\":\"$wt" "$LEDGER" > "$LEDGER.tmp" || true
-                mv "$LEDGER.tmp" "$LEDGER"
+            state=MERGED
+            if compgen -G "$(pid_dir "${name#conwrt-}")/*.pid" >/dev/null; then
+                action="PROTECTED (leftover pidfiles — run stop)"
+            else
+                action="retire (remove worktree + branch)"
+                retired=0
+                if [ "$apply" = 1 ] && [ "$wt" != "$current" ]; then
+                    rm -rf "$wt/target" 2>/dev/null || true
+                    if git -C "$REPO_ROOT" worktree remove --force "$wt" 2>/dev/null \
+                        && git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null; then
+                        action="RETIRED"; retired=1
+                    else
+                        action="retire FAILED (manual review)"
+                    fi
+                elif [ "$apply" = 1 ]; then
+                    action="skip (current worktree)"
+                fi
+                if [ "$retired" = 1 ] && [ -f "$LEDGER" ] \
+                    && grep -q "\"worktree\":\"$wt" "$LEDGER" 2>/dev/null; then
+                    grep -v "\"worktree\":\"$wt" "$LEDGER" > "$LEDGER.tmp" || true
+                    mv "$LEDGER.tmp" "$LEDGER"
+                fi
             fi
         elif ! printf '%s\n' "$remote_branches" | grep -qxF "origin/$branch"; then
             state=UNPUSHED; action="PROTECTED (branch not on remote)"
         else
-            pr_line="$(printf '%s\n' "$pr_map" | grep -F "$branch|" | head -1 || true)"
+            pr_line="$(printf '%s\n' "$pr_map" | awk -F'|' -v b="$branch" '$1==b{print; exit}')"
             if [ -z "$pr_line" ] && [ -z "$pr_map" ]; then
                 state=UNKNOWN; action="report only (gh unavailable)"
             elif [ -z "$pr_line" ]; then
