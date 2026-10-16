@@ -87,6 +87,7 @@ mod tests {
                 version: "24".into(),
                 board_name: None,
                 default_ip: None,
+                extras: Default::default(),
             },
             capabilities: Some(vec!["ethernet".into()]),
             flash_methods: Some(BTreeMap::from([(
@@ -98,9 +99,13 @@ mod tests {
                     upload_endpoint: None,
                     flash_time_seconds: None,
                     silence_timeout: None,
+                    extras: Default::default(),
                 },
             )])),
             mac_oui: ouis.iter().map(|s| s.to_string()).collect(),
+            serial_console: None,
+            warnings: None,
+            extras: Default::default(),
         }
     }
 

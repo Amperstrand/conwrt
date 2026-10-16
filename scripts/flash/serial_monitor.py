@@ -113,6 +113,12 @@ class SerialBootMonitor:
         self._seen: set[Event] = set()
         self._buf = ""
         self._break_logged = False
+        self._is_tcp = port.startswith(TCP_PREFIX)
+        # True while the reads following a break recovery may still carry
+        # the NUL tail of the power-off window (relayed by the bridge after
+        # the fresh connection came up): consume it instead of treating it
+        # as another break.
+        self._consuming_break_tail = False
 
     def stop(self) -> None:
         self._stop.set()
@@ -157,12 +163,22 @@ class SerialBootMonitor:
         except (SerialConnectionError, pyserial.SerialException) as e:
             log(f"WARNING: serial line lost after break ({e}) — continuing pcap-only")
             return False
-        self._transport.reset_input_buffer()
+        if not self._is_tcp:
+            # A local adapter's OS buffer still holds the power-off window's
+            # break garbage — drain it (and a NUL-leading read afterwards is
+            # a fresh break: the drain consumed any stale tail, so recovery
+            # must re-trigger). A fresh TCP connection is different: its
+            # first bytes are never stale (the bridge relays the live stream
+            # from the moment it accepts), so draining there races away
+            # milestone bytes that already landed during the reopen (#202).
+            # The NUL tail is consumed by the read loop instead.
+            self._transport.reset_input_buffer()
+        else:
+            self._consuming_break_tail = True
         return True
 
     def run(self) -> None:
-        is_tcp = self.port.startswith(TCP_PREFIX)
-        baud_note = "" if is_tcp else f" @ {self.baud} baud"
+        baud_note = "" if self._is_tcp else f" @ {self.baud} baud"
         log(f"Serial monitor starting: {self.port}{baud_note}")
         try:
             self._open_transport()
@@ -181,11 +197,21 @@ class SerialBootMonitor:
                 if not chunk:
                     continue
                 if chunk[0:1] == b"\x00":
-                    if not self._reopen_after_break():
-                        return
-                    chunk = chunk.lstrip(b"\x00")
-                    if not chunk:
-                        continue
+                    if self._consuming_break_tail:
+                        # the NUL tail of the power-off window, relayed after
+                        # the fresh connection came up — not a new break
+                        chunk = chunk.lstrip(b"\x00")
+                        if not chunk:
+                            continue
+                        self._consuming_break_tail = False
+                    else:
+                        if not self._reopen_after_break():
+                            return
+                        chunk = chunk.lstrip(b"\x00")
+                        if not chunk:
+                            continue
+                else:
+                    self._consuming_break_tail = False
                 self._feed(chunk)
         finally:
             self._close_transport()

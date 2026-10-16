@@ -41,6 +41,10 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
           cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto --no-default-features --target thumbv7em-none-eabihf
+      - name: Model-schema parity (#118)
+        run: |
+          python3 -m pip install --quiet pytest jsonschema
+          make parity-check
       # Tier-C firmware (apps/conwrt-stm32, excluded from the workspace).
       # Must run with CWD inside the app: its .cargo/config.toml carries the
       # cortex-m linker flags, and cargo resolves config from the CWD.
@@ -58,3 +62,47 @@ jobs:
           SIZE=$(echo "$SIZE_OUT" | awk '{print $1 + $2}')
           RAM=$(echo "$SIZE_OUT" | awk '{print $3}')
           test "$SIZE" -le 131072 && test "$RAM" -le 98304
+
+  # Tier-C firmware (apps/conwrt-esp32s3, excluded from the workspace).
+  # Xtensa needs the esp-rs fork — installed by espup under the hood, pinned
+  # to the same version as the local dev toolchain (ADR-0012). Every cargo
+  # invocation is explicit `+esp` so the repo's rust-toolchain.toml pin
+  # (1.99.0) keeps governing everything else. Must run with CWD inside the
+  # app: its .cargo/config.toml carries the target, build-std table, and
+  # Xtensa linker flags. cargo-binutils is NOT usable on the fork (no
+  # llvm-tools component) — the size gate uses the GCC binutils binary the
+  # toolchain ships, on SysV-format section sizes:
+  # - flash = every loaded section (excludes the NOLOAD .stack filler and
+  #   .bss), incl. esp-hal's alignment dummies
+  # - ram   = .data + .bss + .rwdata* + .rwtext (IRAM-resident code —
+  #   matches esp-hal's own binary-size accounting; excludes .stack: esp-hal
+  #   1.2 grows the stack to fill free DRAM, so it is not a consumption)
+  # Budget: flash <= 256 KiB, ram <= 128 KiB (S3: 8 MB flash / 512 KiB SRAM,
+  # 48 KiB of the ram number is the esp-alloc protocol heap).
+  firmware-esp32s3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install esp-rs Xtensa toolchain (espup 1.98.1.0, esp32s3 only)
+        uses: esp-rs/xtensa-toolchain@v1.7.0
+        with:
+          default: false
+          buildtargets: esp32s3
+          version: "1.98.1.0"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/conwrt-esp32s3
+      - name: Firmware fmt + clippy + build + size gate
+        working-directory: apps/conwrt-esp32s3
+        run: |
+          cargo +esp fmt -- --check
+          cargo +esp clippy --release -- -D warnings
+          cargo +esp build --release
+          SIZE_OUT=$(xtensa-esp32s3-elf-size -A target/xtensa-esp32s3-none-elf/release/conwrt-esp32s3)
+          echo "$SIZE_OUT"
+          FLASH=$(echo "$SIZE_OUT" | awk '$1 ~ /^\./ && $1 != ".stack" && $1 != ".bss" && $1 != ".comment" {sum += $2} END {print sum+0}')
+          RAM=$(echo "$SIZE_OUT" | awk '$1 == ".data" || $1 == ".bss" || $1 ~ /^\.rwdata/ || $1 == ".rwtext" {sum += $2} END {print sum+0}')
+          echo "flash-bytes: $FLASH  ram-bytes: $RAM"
+          test "$FLASH" -le 262144 && test "$RAM" -le 131072

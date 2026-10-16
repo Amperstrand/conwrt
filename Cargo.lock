@@ -715,8 +715,13 @@ dependencies = [
  "conwrt-agent-proto",
  "conwrt-core",
  "conwrt-local-std",
+ "conwrt-maas",
  "conwrt-types",
+ "httpmock",
  "pollster",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
 ]
 
@@ -748,13 +753,28 @@ name = "conwrt-local-std"
 version = "0.1.0"
 dependencies = [
  "conwrt-core",
+ "conwrt-maas",
  "conwrt-types",
  "httparse",
+ "httpmock",
  "rand",
+ "reqwest",
  "russh",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "conwrt-maas"
+version = "0.1.0"
+dependencies = [
+ "conwrt-core",
+ "pollster",
+ "sha2 0.10.9",
 ]
 
 [[package]]

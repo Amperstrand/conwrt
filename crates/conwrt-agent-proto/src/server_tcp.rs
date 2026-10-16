@@ -15,7 +15,9 @@
 //! ```
 //!
 //! …then every TCP client (these tests, the CLI) addresses the board
-//! unchanged. That is the on-device bring-up recipe for #110's bench stage.
+//! unchanged. That is the on-device bring-up recipe for #110's bench stage;
+//! the ESP32-S3 agent (#111) enumerates as a CDC-ACM `ttyACM` device too —
+//! same recipe, same frames (`s3_diag_mock` is its scripted peer).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -76,6 +78,27 @@ fn serial_caps(uarts: u32) -> Vec<CapabilityInfo> {
         name: String::from("serial"),
         detail: vec![(String::from("uarts"), uarts.to_string())],
     }]
+}
+
+/// Convenience mock mirroring the ESP32-S3 firmware's `diag` capability
+/// (#111): chip identity, firmware version, and heap size in the
+/// advertisement — the mock-first stage of that issue's acceptance
+/// ("mock-first; bench when authorized"). Serve it with [`run_mock_on`];
+/// the firmware (`apps/conwrt-esp32s3`) drives the same [`ServerCore`]
+/// over USB-CDC with the identical advertisement.
+#[must_use]
+pub fn s3_diag_mock(agent_version: &str, heap_bytes: usize) -> ServerCore {
+    ServerCore::new(
+        agent_version,
+        vec![CapabilityInfo {
+            name: String::from("diag"),
+            detail: vec![
+                (String::from("chip"), String::from("esp32s3")),
+                (String::from("fw"), agent_version.to_string()),
+                (String::from("heap_bytes"), heap_bytes.to_string()),
+            ],
+        }],
+    )
 }
 
 /// The scripted peer of #110's acceptance criterion: every byte the

@@ -9,6 +9,7 @@
 use russh::ChannelId;
 use russh::server::{self, Auth, Session};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
@@ -49,6 +50,9 @@ pub struct ChannelRole {
 pub struct FixtureServer {
     pub files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     pub exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>>,
+    /// Total authentication attempts seen (any method) — the #125
+    /// regression probe: a host-key refusal must leave this at zero.
+    pub auth_attempts: Arc<AtomicUsize>,
     roles: HashMap<ChannelId, ChannelRole>,
 }
 
@@ -56,6 +60,7 @@ impl russh::server::Handler for FixtureServer {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.auth_attempts.fetch_add(1, Ordering::SeqCst);
         if password == FIXTURE_PASSWORD {
             Ok(Auth::Accept)
         } else {
@@ -274,12 +279,14 @@ pub struct Fixture {
     pub addr: String,
     pub files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     pub exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>>,
+    pub auth_attempts: Arc<AtomicUsize>,
 }
 
 impl Fixture {
     pub async fn start() -> Self {
         let files: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
         let exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>> = Arc::default();
+        let auth_attempts: Arc<AtomicUsize> = Arc::default();
         let config = Arc::new(server::Config {
             auth_rejection_time: std::time::Duration::ZERO,
             keys: vec![
@@ -296,11 +303,13 @@ impl Fixture {
         let addr = listener.local_addr().expect("addr").to_string();
         let server_files = Arc::clone(&files);
         let server_exec = Arc::clone(&exec_responses);
+        let server_auth = Arc::clone(&auth_attempts);
         tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 let handler = FixtureServer {
                     files: Arc::clone(&server_files),
                     exec_responses: Arc::clone(&server_exec),
+                    auth_attempts: Arc::clone(&server_auth),
                     roles: HashMap::new(),
                 };
                 let config = Arc::clone(&config);
@@ -313,7 +322,13 @@ impl Fixture {
             addr,
             files,
             exec_responses,
+            auth_attempts,
         }
+    }
+
+    /// Authentication attempts the server has seen (any method).
+    pub fn auth_attempts(&self) -> usize {
+        self.auth_attempts.load(Ordering::SeqCst)
     }
 
     pub fn set_exec_response(&self, command: &str, exit_code: u32, stdout: &str) {

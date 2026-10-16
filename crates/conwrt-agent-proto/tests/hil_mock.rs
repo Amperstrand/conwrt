@@ -10,7 +10,7 @@ use conwrt_agent_proto::controller::{AgentClient, ClientError};
 use conwrt_agent_proto::dispatch::{AgentEvent, WireError};
 use conwrt_agent_proto::protocol::{DisconnectPolicy, LeaseRequest, LeaseResponse};
 use conwrt_agent_proto::server::{ServerCore, UartSink};
-use conwrt_agent_proto::server_tcp::{run_echo_mock_on, run_mock_on, serial_mock};
+use conwrt_agent_proto::server_tcp::{run_echo_mock_on, run_mock_on, s3_diag_mock, serial_mock};
 
 use tokio::net::TcpListener;
 use tokio::task;
@@ -248,4 +248,28 @@ async fn uart_echo_round_trips_through_the_scripted_peer() {
             data: b"ping".to_vec(),
         })
     );
+}
+
+#[tokio::test]
+async fn s3_diag_capability_is_served_mock_first() {
+    // #111's acceptance shape, mock stage: the agent answers the
+    // controller handshake and serves its diagnostic capability — the
+    // same ServerCore the ESP32-S3 firmware drives over USB-CDC, with
+    // the identical advertisement.
+    let addr = spawn_mock_with(s3_diag_mock("conwrt-esp32s3 0.1.0", 48 * 1024)).await;
+    let mut client = AgentClient::connect(&addr).await.expect("connect");
+
+    let caps = client.handshake("laptop-s3").await.expect("handshake");
+    let expected = vec![
+        ("chip".to_string(), "esp32s3".to_string()),
+        ("fw".to_string(), "conwrt-esp32s3 0.1.0".to_string()),
+        ("heap_bytes".to_string(), (48 * 1024).to_string()),
+    ];
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0].name, "diag");
+    assert_eq!(caps[0].detail, expected);
+
+    let caps = client.capabilities().await.expect("capabilities");
+    assert_eq!(caps[0].name, "diag");
+    assert_eq!(caps[0].detail, expected);
 }
