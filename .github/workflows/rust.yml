@@ -63,6 +63,22 @@ jobs:
           RAM=$(echo "$SIZE_OUT" | awk '{print $3}')
           test "$SIZE" -le 131072 && test "$RAM" -le 98304
 
+      # Tier-C firmware (apps/conwrt-stm32f746, #215 slice 2): the F746
+      # twin of the step above — same 32F746G-DISCO USB-CDC agent on the
+      # shared conwrt-agent-io loop. Same conservative size budget
+      # (text+data <= 128 KiB, bss <= 96 KiB) even though the F746NG has
+      # 1 MiB flash / 320 KiB SRAM — the fleet gate stays uniform.
+      - name: MCU firmware build + size gate (stm32f746)
+        working-directory: apps/conwrt-stm32f746
+        run: |
+          cargo fmt -- --check
+          cargo build --release
+          SIZE_OUT=$(cargo size --release | tail -1)
+          echo "size: $SIZE_OUT"
+          SIZE=$(echo "$SIZE_OUT" | awk '{print $1 + $2}')
+          RAM=$(echo "$SIZE_OUT" | awk '{print $3}')
+          test "$SIZE" -le 131072 && test "$RAM" -le 98304
+
   # Tier-C firmware (apps/conwrt-esp32s3, excluded from the workspace).
   # Xtensa needs the esp-rs fork — installed by espup under the hood, pinned
   # to the same version as the local dev toolchain (ADR-0012). Every cargo

@@ -15,7 +15,7 @@ members = [
 # Tier-C firmware (ADR-0002): no_std MCU builds that must never enter
 # host `cargo test --workspace`. CI builds them explicitly with --target and
 # gates them with cargo size (STM32) / GCC size (ESP32-S3, ADR-0012).
-exclude = ["apps/conwrt-stm32", "apps/conwrt-esp32s3"]
+exclude = ["apps/conwrt-stm32", "apps/conwrt-stm32f746", "apps/conwrt-esp32s3"]
 
 [workspace.package]
 version = "0.1.0"
