@@ -70,6 +70,9 @@ pub enum PostError {
     /// [`start`] called before the first chunk arrived (no `total`,
     /// no `Content-Length`).
     NoTotal,
+    /// The framing overhead overflows the announced image size —
+    /// refused before any wire bytes (review round 6).
+    FramingOverflow,
     /// [`start`] called twice.
     AlreadyStarted,
     /// [`pump`] or [`finish`] called before [`start`] — draining the
@@ -106,6 +109,19 @@ pub enum Verdict {
     NoResponse,
 }
 
+/// `"<size> <md5>"` — the GL.iNet/MediaTek U-Boot acceptance shape,
+/// recognized structurally (no regex on no_std).
+fn is_size_md5_shape(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let (Some(size), Some(md5), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !size.is_empty()
+        && size.bytes().all(|b| b.is_ascii_digit())
+        && md5.len() == 32
+        && md5.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Result of a finished post.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostOutcome {
@@ -124,6 +140,10 @@ pub struct RecoveryPost<'a> {
     mp: Multipart<'a>,
     host: String,
     endpoint: String,
+    /// Model-specific `upload_response_pattern` the verdict matches
+    /// (defaults to the D-Link phrase; GL.iNet-style `<size> <md5>`
+    /// bodies are recognized structurally — review round 6).
+    accept_pattern: String,
     started: bool,
     written: u64,
 }
@@ -140,9 +160,18 @@ impl<'a> RecoveryPost<'a> {
             mp,
             host: String::from(host),
             endpoint: String::from(endpoint),
+            accept_pattern: String::from(ACCEPT_PATTERN),
             started: false,
             written: 0,
         }
+    }
+
+    /// Override the acceptance pattern with the model's
+    /// `upload_response_pattern` (e.g. `"UPDATE IN PROGRESS"`).
+    #[must_use]
+    pub fn with_accept_pattern(mut self, pattern: &str) -> Self {
+        self.accept_pattern = String::from(pattern);
+        self
     }
 
     /// Write the request head. Requires the transfer to know its
@@ -168,6 +197,9 @@ impl<'a> RecoveryPost<'a> {
                 transfer: total,
             });
         }
+        if self.mp.content_len().is_none() {
+            return Err(PostError::FramingOverflow);
+        }
         // committed BEFORE the first write: a partially-landed head is
         // still a burned one-request window (review round 1)
         self.started = true;
@@ -181,7 +213,7 @@ impl<'a> RecoveryPost<'a> {
             self.endpoint,
             self.host,
             self.mp.content_type(),
-            self.mp.content_len(),
+            self.mp.content_len().unwrap_or(u64::MAX),
         );
         io.write_all(head.as_bytes())
             .await
@@ -264,7 +296,11 @@ impl<'a> RecoveryPost<'a> {
                     Some(at) => String::from(&raw[at + 4..]),
                     None => raw,
                 };
-                let verdict = if text.contains(ACCEPT_PATTERN) {
+                let verdict = if text.contains(self.accept_pattern.as_str()) {
+                    Verdict::Accepted
+                } else if is_size_md5_shape(&text) {
+                    // GL.iNet / MediaTek U-Boot: "<size> <md5>" plain
+                    // text (scripts/flash/upload.py::parse_uboot_response)
                     Verdict::Accepted
                 } else if text
                     .trim_start()
@@ -353,7 +389,10 @@ mod tests {
         assert!(head.contains(
             "Content-Type: multipart/form-data; boundary=----WebKitFormBoundary0123456789abcdef\r\n"
         ));
-        assert!(head.contains(&format!("Content-Length: {}\r\n", mp().content_len())));
+        assert!(head.contains(&format!(
+            "Content-Length: {}\r\n",
+            mp().content_len().expect("sane sizes")
+        )));
         assert!(head.contains("Connection: close\r\n"));
         assert!(!head.to_ascii_lowercase().contains("expect:")); // no 100-continue
         assert!(head.ends_with("\r\n\r\n"));
@@ -523,6 +562,67 @@ mod tests {
             Err(PostError::NotStarted),
             "footer before start refused too"
         );
+    }
+
+    #[tokio::test]
+    async fn glinet_size_md5_response_is_accepted() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"4194304 0d7e2f8d5c3b1a9f6e4d2c8b7a6f5e3d".to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn custom_accept_pattern_from_model() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"UPDATE IN PROGRESS".to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post =
+            RecoveryPost::new(mp(), "h", "/upload").with_accept_pattern("UPDATE IN PROGRESS");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn framing_overflow_total_refused_before_wire() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = TransferState::new(1, 64);
+        t.accept(&conwrt_agent_proto::protocol::StreamChunk {
+            transfer_id: 1,
+            offset: 0,
+            total: Some(u64::MAX),
+            data: alloc::vec![0u8; 4],
+        })
+        .unwrap();
+        let mut post = RecoveryPost::new(
+            Multipart {
+                image_len: u64::MAX,
+                ..mp()
+            },
+            "h",
+            "/upload",
+        );
+        assert_eq!(
+            post.start(&mut io, &t).await,
+            Err(PostError::FramingOverflow)
+        );
+        assert!(io.written.is_empty());
     }
 
     #[tokio::test]

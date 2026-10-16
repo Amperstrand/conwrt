@@ -65,9 +65,14 @@ impl Multipart<'_> {
         out
     }
 
-    /// Exact `Content-Length` for the whole body.
-    pub fn content_len(&self) -> u64 {
-        self.header().len() as u64 + self.image_len + self.footer().len() as u64
+    /// Exact `Content-Length` for the whole body; `None` when the
+    /// framing overhead would overflow the announced image size —
+    /// callers must refuse such totals before any wire bytes (a
+    /// wrapped length would send a malformed, irreversible POST).
+    pub fn content_len(&self) -> Option<u64> {
+        (self.header().len() as u64)
+            .checked_add(self.image_len)?
+            .checked_add(self.footer().len() as u64)
     }
 
     /// The `Content-Type` header value.
@@ -104,7 +109,16 @@ mod tests {
         // content_len = header + payload + footer
         assert_eq!(
             mp.content_len(),
-            header.len() as u64 + 3 + mp.footer().len() as u64
+            Some(header.len() as u64 + 3 + mp.footer().len() as u64)
+        );
+        assert_eq!(
+            Multipart {
+                image_len: u64::MAX,
+                ..mp
+            }
+            .content_len(),
+            None,
+            "framing overflow is refuse-able, not wrappable"
         );
         assert_eq!(
             mp.content_type(),

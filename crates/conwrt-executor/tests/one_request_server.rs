@@ -213,7 +213,7 @@ fn framing(image_len: usize) -> (Multipart<'static>, Expected) {
     };
     let expected = Expected {
         image: Vec::new(), // filled by caller
-        content_len: mp.content_len() as usize,
+        content_len: mp.content_len().expect("sane test sizes") as usize,
         header: mp.header(),
         footer: mp.footer(),
     };
