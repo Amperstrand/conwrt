@@ -11,24 +11,30 @@ publish = false
 #   cargo build --release --target thumbv7em-none-eabihf
 # Size gate:
 #   cargo size --release --target thumbv7em-none-eabihf
-# Board: STM32F746G-DISCO — USB OTG-FS on PA12 (DP) / PA11 (DM); HSE 8 MHz
-# crystal; Ethernet MAC + LAN8742 PHY (embassy-net TCP transport is #215
-# slice 3, bench bring-up slice 4); USART6 on PG14/PG9 for the router-side
-# UART (later slice).
+# Board: STM32F746G-DISCO — Ethernet RJ45 via onboard LAN8742 (RMII, PHY
+# supplies the 50 MHz ref clock); USB OTG-FS on PA12/PA11 (CDC variant of
+# the agent); USART6 on Arduino D1 (PC6, TX) / D0 (PC7, RX) — the router
+# console passthrough (#215 slice 4: controller <-LAN-> agent <-UART->
+# bench switch console). HSE 8 MHz crystal.
 
 [dependencies]
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
-conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-usb"] }
+conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-net"] }
 
 embassy-stm32 = { version = "0.6.0", features = ["stm32f746ng", "memory-x", "time-driver-any", "exti"] }
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
 embassy-usb = "0.6.0"
+embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"] }
 embassy-time = { version = "0.5.1", features = ["tick-hz-32_768"] }
 embassy-futures = "0.1.2"
 
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
 embedded-alloc = "0.7"
+embedded-io = "0.7"
+embedded-io-async = "0.7.0"
+heapless = { version = "0.9", default-features = false }
+static_cell = "2"
 
 defmt = "1.0"
 defmt-rtt = "1.0"
