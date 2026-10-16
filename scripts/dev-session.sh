@@ -49,13 +49,18 @@ ledger_drop() { # -F pattern (exact fixed string, e.g. '"worktree":"/p/conwrt-es
     ) 9>"$(ledger_lock)"
 }
 
-ledger_drop_worktree() { ledger_drop "\"worktree\":\"$1\","; }
+ledger_drop_worktree() {
+    # Drop the canonical form and the pre-#213 legacy form
+    # ($REPO_ROOT/../conwrt-<name>) recorded by older `start` runs.
+    ledger_drop "\"worktree\":\"$1\","
+    ledger_drop "\"worktree\":\"$REPO_ROOT/../$(basename "$1")\","
+}
 
 case "$cmd" in
   start)
     name="${1:?usage: dev-session.sh start <name> [base-ref]}"
     base="${2:-origin/master}"
-    worktree="$REPO_ROOT/../conwrt-$name"
+    worktree="$(dirname "$REPO_ROOT")/conwrt-$name"
     [ -e "$worktree" ] && { echo "ERROR: $worktree already exists" >&2; exit 1; }
     git -C "$REPO_ROOT" fetch origin master >/dev/null 2>&1 || true
     if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$name/feat"; then
@@ -76,7 +81,7 @@ EOF
     ;;
   stop)
     name="${1:?usage: dev-session.sh stop <name>}"
-    worktree="$REPO_ROOT/../conwrt-$name"
+    worktree="$(dirname "$REPO_ROOT")/conwrt-$name"
     branch="$(git -C "$REPO_ROOT" worktree list --porcelain \
         | awk -v wt="$worktree" '$1=="worktree"{p=substr($0,10)} $1=="branch" && p==wt{print substr($2,12); exit}')"
     ledger_drop "\"session\":\"$name\","
@@ -184,7 +189,17 @@ for pr in json.load(sys.stdin):
             state=NO-COMMITS; action="PROTECTED (fresh lane, no unique commits)"
         elif git -C "$REPO_ROOT" merge-base --is-ancestor "$branch" origin/master 2>/dev/null; then
             state=MERGED
-            if compgen -G "$(pid_dir "${name#conwrt-}")/*.pid" >/dev/null; then
+            # The local tip may be merged while the remote branch moved on
+            # with unmerged work: verify the remote head too.
+            remote_merged=yes
+            if printf '%s\n' "$remote_branches" | grep -qxF "origin/$branch"; then
+                git -C "$REPO_ROOT" fetch origin "$branch" >/dev/null 2>&1 || true
+                git -C "$REPO_ROOT" merge-base --is-ancestor "origin/$branch" origin/master 2>/dev/null \
+                    || remote_merged=no
+            fi
+            if [ "$remote_merged" = no ]; then
+                action="report only (remote branch ahead of merged local tip)"
+            elif compgen -G "$(pid_dir "${name#conwrt-}")/*.pid" >/dev/null; then
                 action="PROTECTED (leftover pidfiles — run stop)"
             else
                 action="retire (remove worktree + branch)"
