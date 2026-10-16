@@ -1,5 +1,12 @@
 # MAAS Wake-on-LAN Power Management
 
+## SECURITY: bench-VLAN-only
+
+The webhook has **no authentication** (the MAAS webhook power driver sends
+none). Anyone who can reach the port can send WoL broadcasts. Run it on
+the isolated bench VLAN only — never on a shared or production segment
+(see the rogue-service rules in AGENTS.md; same discipline as DHCP).
+
 ## Overview
 
 MAAS removed the built-in WoL power type in 2.x because it can't power off
