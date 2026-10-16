@@ -43,11 +43,21 @@ curve25519/chacha20-poly1305/ed25519 floor cannot opt out of today.
 
 ## Suggested fix
 
-Add `default-features = false` to sunset-async's `sunset` dependency edge
-(`embedded-io` is purely additive, so nothing changes for std users), or
-expose an explicit opt-in feature (e.g. `sunset-async/mlkem` →
-`sunset/mlkem`) so embedded users can choose. Happy to send the one-line PR
-either way.
+A plain `default-features = false` on sunset-async's sunset edge would
+*remove* mlkem from applications that only depend on sunset-async — a
+default-feature regression for current users. Better: keep the default
+behavior and forward an explicit opt-out feature:
+
+```toml
+[features]
+default = ["mlkem"]
+mlkem = ["sunset/mlkem"]
+```
+
+so std users are unchanged, and embedded users can write
+`sunset-async = { version = "0.6", default-features = false }` to keep
+mlkem out of the binary. Happy to send the PR either way if a different
+shape is preferred.
 
 ## Workaround we use today
 
