@@ -759,6 +759,7 @@ dependencies = [
  "conwrt-agent-proto",
  "embassy-net",
  "embedded-io-async 0.7.0",
+ "sha2 0.10.9",
  "tokio",
 ]
 

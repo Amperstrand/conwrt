@@ -16,8 +16,25 @@
 //! ```text
 //! cargo run -p conwrt-executor --example recovery-post -- \
 //!     --target 192.168.0.1:80 --image openwrt.bin \
-//!     [--field firmware] [--accept-pattern "Upgrade successfully!"]
+//!     [--endpoint /upload] [--field firmware] \
+//!     [--accept-pattern "Upgrade successfully!"] [--yes]
 //! ```
+//!
+//! The endpoint and field are flags because recovery httpds disagree
+//! per model (e.g. glinet-gl-ar300m-lite: endpoint `/`, field
+//! `nor__firmware`) — a POST to the wrong path burns the window just
+//! the same. The confirmation gate prints the full identity (target,
+//! image, sha256, endpoint, field) and requires a typed `yes` (or
+//! `--yes`) before touching the network: nothing is sent, not even a
+//! TCP connect, until the operator confirms the specimen behind the
+//! target was verified (MAC/serial against the lab registry — the
+//! AGENTS.md specimen gate is the operator's to run, the twin's to
+//! demand acknowledgment of).
+//!
+//! Scope: this twin exists to exercise the MCU's exact wire path (the
+//! executor state machines). It is NOT the D-Link COVR laptop
+//! flashing procedure — that flow stays on real Chromium per the
+//! AGENTS.md D-Link matrix.
 
 use std::net::{SocketAddr, TcpStream};
 
@@ -26,7 +43,7 @@ use conwrt_executor::multipart::{BOUNDARY_PREFIX, Multipart, UPLOAD_FIELD};
 use conwrt_executor::transfer::TransferState;
 use conwrt_executor::{HttpIo, PostError, PostOutcome, RecoveryPost, Verdict};
 
-const USAGE: &str = "usage: recovery-post --target HOST:PORT --image PATH [--field NAME] [--accept-pattern PATTERN]";
+const USAGE: &str = "usage: recovery-post --target HOST:PORT --image PATH [--endpoint PATH] [--field NAME] [--accept-pattern PATTERN] [--yes]";
 
 /// Undrained window capacity — the F746 firmware profile, so the twin
 /// reproduces the MCU's chunk/pump cadence.
@@ -39,22 +56,31 @@ const TRANSFER_ID: u64 = 1;
 struct Args {
     target: SocketAddr,
     image_path: String,
+    endpoint: String,
     field: String,
     accept_pattern: String,
+    assume_yes: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut target: Option<String> = None;
     let mut image: Option<String> = None;
+    let mut endpoint = String::from("/upload");
     let mut field = String::from(UPLOAD_FIELD);
     let mut accept_pattern = String::from(conwrt_executor::post::ACCEPT_PATTERN);
+    let mut assume_yes = false;
 
     let mut argv = std::env::args().skip(1);
     while let Some(flag) = argv.next() {
+        if flag == "--yes" {
+            assume_yes = true;
+            continue;
+        }
         let value = argv.next().ok_or_else(|| format!("{flag} needs a value"))?;
         match flag.as_str() {
             "--target" => target = Some(value),
             "--image" => image = Some(value),
+            "--endpoint" => endpoint = value,
             "--field" => field = value,
             "--accept-pattern" => accept_pattern = value,
             other => return Err(format!("unknown flag {other:?}")),
@@ -73,11 +99,18 @@ fn parse_args() -> Result<Args, String> {
     let target = target
         .parse()
         .map_err(|e| format!("--target {target:?} is not HOST:PORT ({e})"))?;
+    if !endpoint.starts_with('/') {
+        return Err(format!(
+            "--endpoint {endpoint:?} must be an absolute path (models name it e.g. `/` or `/upload`)"
+        ));
+    }
     Ok(Args {
         target,
         image_path,
+        endpoint,
         field,
         accept_pattern,
+        assume_yes,
     })
 }
 
@@ -132,7 +165,7 @@ async fn run(
     let host = args.target.ip().to_string();
     let mut xfer = TransferState::new(TRANSFER_ID, WINDOW);
     let mut post =
-        RecoveryPost::new(mp, &host, "/upload").with_accept_pattern(&args.accept_pattern);
+        RecoveryPost::new(mp, &host, &args.endpoint).with_accept_pattern(&args.accept_pattern);
 
     let mut sent = 0usize;
     while sent < image.len() {
@@ -177,8 +210,22 @@ fn main() {
         std::process::exit(2);
     }
 
+    let sha256 = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&image);
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+
     eprintln!("target         {}", args.target);
+    eprintln!(
+        "endpoint       {} (must match the model's upload_endpoint)",
+        args.endpoint
+    );
     eprintln!("image          {} ({} bytes)", args.image_path, image.len());
+    eprintln!("sha256         {sha256}");
     eprintln!(
         "window         {WINDOW} bytes (F746 firmware profile), field {:?}, accept {:?}",
         args.field, args.accept_pattern
@@ -187,6 +234,24 @@ fn main() {
         "one-request rule: this POST is the first and only HTTP request; a failure burns\n\
          the recovery window (re-arm = power-cycle the router into recovery)"
     );
+
+    if !args.assume_yes {
+        eprintln!(
+            "confirm the identity pair above: the SPECIMEN behind {} was verified\n\
+             (MAC/serial against the lab registry — AGENTS.md specimen gate), and this\n\
+             image is the right firmware for that exact unit.",
+            args.target
+        );
+        eprint!("type `yes` to burn the window, anything else aborts: ");
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .expect("read confirmation");
+        if answer.trim() != "yes" {
+            eprintln!("aborted before any network IO — the recovery window is intact");
+            std::process::exit(2);
+        }
+    }
 
     let stream = match TcpStream::connect(args.target) {
         Ok(s) => s,
