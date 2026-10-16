@@ -99,8 +99,10 @@ profile, static `size` only — nothing flashed):
   ed25519 pubkey auth + exec all pass — exactly this ADR's floor, no
   ssh-rsa/SHA-1 anywhere. Against real Dropbear **2026.94** (main) the
   same client additionally completed a negotiated
-  `mlkem768x25519-sha256` session end-to-end — which also isolates the
-  spike's in-harness mlkem `BadKex` to sunset-as-server.
+  `mlkem768x25519-sha256` session end-to-end — and the fork
+  investigation later showed sunset 0.6.0 mlkem works client *and*
+  server (the in-harness `BadKex` was the spike's own transport; see
+  the corrected finding in the spike doc).
 - **Caveats for the revisit**: sunset-async's dependency edge re-enables
   sunset's mlkem default (feature unification) — fixed on the org fork
   (forwarded default-on `mlkem` feature; see below); sunset's

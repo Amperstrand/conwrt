@@ -248,10 +248,18 @@ branch, no upstream interaction):
 
   ```toml
   [patch.crates-io]
-  sunset = { git = "https://github.com/Amperstrand/sunset", branch = "ai-experiments" }
-  sunset-async = { git = "https://github.com/Amperstrand/sunset", branch = "ai-experiments" }
+  # rev-pinned to the validated revision; move deliberately and re-run
+  # the fork's regression tests (cargo test -p sunset -p sunset-stdasync)
+  # when bumping.
+  sunset = { git = "https://github.com/Amperstrand/sunset", rev = "5e5f18354781957bd85284a3268793663b82a067" }
+  sunset-async = { git = "https://github.com/Amperstrand/sunset", rev = "5e5f18354781957bd85284a3268793663b82a067" }
   # floor image: sunset-async = { ..., default-features = false }
   ```
+
+  A moving `branch = "ai-experiments"` reference is deliberately NOT
+  used — it would silently resolve to whatever the tip happens to be at
+  the next lockfile refresh, bypassing the validation this document
+  records.
 
 ## Findings & caveats (recorded for the revisit)
 
