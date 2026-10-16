@@ -28,17 +28,13 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbDevConfig};
 use panic_probe as _;
 
-use conwrt_agent_proto::cobs::{CobsPump, encode_frame as cobs_encode};
-use conwrt_agent_proto::dispatch;
+use conwrt_agent_io::{CDC_FS_PACKET, agent_session};
 use conwrt_agent_proto::protocol::CapabilityInfo;
 use conwrt_agent_proto::server::ServerCore;
 
 bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
-
-/// CDC bulk max packet size (full speed).
-const CDC_PACKET: usize = 64;
 
 /// Heap size for the [`HEAP`] allocator (protocol Vec allocations).
 const HEAP_SIZE: usize = 32 * 1024;
@@ -97,7 +93,7 @@ async fn main(_spawner: Spawner) {
         &mut [], // no MS OS descriptor
         &mut control_buf,
     );
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, CDC_PACKET as u16);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, CDC_FS_PACKET as u16);
     let mut usb = builder.build();
 
     let usb_fut = usb.run();
@@ -133,40 +129,11 @@ async fn session_loop<'d, T: Instance + 'd>(
     class: &mut CdcAcmClass<'d, Driver<'d, T>>,
     server: &mut ServerCore,
 ) {
-    let mut buf = [0u8; CDC_PACKET];
     loop {
         class.wait_connection().await;
         defmt::info!("controller connected");
         server.reset_session();
-        let mut pump = CobsPump::new();
-        while let Ok(n) = class.read_packet(&mut buf).await {
-            pump.feed(&buf[..n]);
-            while let Some(frame) = pump.pop_frame() {
-                let Some(response) = dispatch::decode_frame(&frame)
-                    .ok()
-                    .and_then(|decoded| server.handle_frame(decoded))
-                else {
-                    continue;
-                };
-                if let Ok(bytes) = dispatch::encode_frame(&response) {
-                    write_cdc(class, &cobs_encode(&bytes)).await;
-                }
-            }
-        }
+        agent_session(class, server, CDC_FS_PACKET).await;
         defmt::info!("controller disconnected — leases expired");
-    }
-}
-
-/// CDC bulk writes are packet-sized: chunk the frame and append a
-/// zero-length packet when it ends exactly on a packet boundary (the host
-/// cannot tell "done" from "more coming" otherwise).
-async fn write_cdc<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>, data: &[u8]) {
-    for chunk in data.chunks(CDC_PACKET) {
-        if class.write_packet(chunk).await.is_err() {
-            return;
-        }
-    }
-    if !data.is_empty() && data.len() % CDC_PACKET == 0 {
-        let _ = class.write_packet(&[]).await;
     }
 }

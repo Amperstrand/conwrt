@@ -40,7 +40,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
-          cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto --no-default-features --target thumbv7em-none-eabihf
+          cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto -p conwrt-agent-io --no-default-features --target thumbv7em-none-eabihf
       - name: Model-schema parity (#118)
         run: |
           python3 -m pip install --quiet pytest jsonschema
