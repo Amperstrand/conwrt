@@ -1,21 +1,22 @@
 //! # conwrt-agent-io
 //!
 //! The transport-session layer shared by every MCU agent firmware
-//! (#215 slice 1): [`ServerCore`] behind one packet-shaped byte pipe.
+//! (#215): [`ServerCore`] behind two byte pipes.
 //!
-//! Both existing firmware apps (#110 STM32-F469, #111 ESP32-S3) drove the
-//! same copy-pasted loop — CDC read → [`CobsPump`] → [`ServerCore`] →
-//! packetized write. That loop lives here once, generic over [`PacketIo`],
-//! so a third app (STM32-F746, #215 slice 2) is board-init plus a trait
-//! impl instead of another transport fork. The trait is deliberately NOT
-//! `embedded-io-async`: packet-shaped reads/writes map 1:1 onto
-//! embassy-usb 0.6's `CdcAcmClass` on every HAL we use, and owning the
-//! trait avoids the embedded-io-async version-split trap in mixed
-//! embassy-version dependency graphs.
+//! Both firmware transports started as copy-pasted loops — the packet
+//! loop (CDC read → [`CobsPump`] → [`ServerCore`] → packetized write,
+//! #110/#111) and the std TCP pump in `conwrt-agent-proto` (#215 slice 3
+//! twins it here for no_std). [`PacketIo`] covers packet-shaped pipes
+//! (embassy-usb CDC-ACM); [`StreamIo`] covers byte streams (embassy-net
+//! TCP). Owning both traits (AFIT per ADR-0002) instead of depending on
+//! `embedded-io-async` in the public surface sidesteps its version-split
+//! trap in mixed embassy-version dependency graphs.
 //!
-//! Host tests drive the exact session loop with an in-memory mock pipe and
-//! a real `ServerCore` — the firmware transport path has persisted
-//! regression coverage without hardware (ADR-0011 ring 1).
+//! Host tests drive both session loops without hardware: in-memory mocks
+//! pin the loop semantics (ADR-0011 ring 1), and the HIL parity suite
+//! runs the real `AgentClient` against [`agent_session_stream`] over a
+//! localhost socket — the same scenarios the std pump's own HIL suite
+//! runs, so a controller cannot tell the twins apart.
 
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
@@ -23,7 +24,7 @@
 extern crate alloc;
 
 use conwrt_agent_proto::cobs::{CobsPump, encode_frame as cobs_encode};
-use conwrt_agent_proto::dispatch::{decode_frame, encode_frame};
+use conwrt_agent_proto::dispatch::{WireFrame, decode_frame, encode_frame};
 use conwrt_agent_proto::server::ServerCore;
 
 /// Full-speed USB bulk max packet size (the common CDC case).
@@ -95,6 +96,96 @@ pub async fn write_packetized<T: PacketIo>(io: &mut T, data: &[u8], max_packet: 
     }
 }
 
+/// Read chunk size for [`agent_session_stream`]. Streams impose no packet
+/// shape, so any size works; 256 keeps the session's stack footprint
+/// trivial on MCU while amortizing syscall/socket reads on hosts.
+const STREAM_READ_BUF: usize = 256;
+
+/// A byte-stream pipe: the TCP twin of [`PacketIo`]. Reads return
+/// arbitrary chunk sizes (`Ok(0)` is end-of-stream), writes may be
+/// partial. A transport error or end-of-stream is the disconnect signal
+/// that ends the session.
+// AFIT per ADR-0002, same trade as [`PacketIo`].
+#[allow(async_fn_in_trait)]
+pub trait StreamIo {
+    /// Transport error type (mapped by the firmware impl).
+    type Error;
+
+    /// Read one chunk (up to `buf.len()`); `Ok(0)` = the peer closed the
+    /// stream.
+    ///
+    /// # Errors
+    /// Transport failure — the caller ends the session.
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error>;
+
+    /// Write bytes; may write fewer than requested (callers loop, see
+    /// [`write_all_stream`]).
+    ///
+    /// # Errors
+    /// Transport failure — the caller ends the session.
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error>;
+}
+
+/// One connection session of the agent over a byte stream — the no_std
+/// twin of `conwrt-agent-proto`'s std TCP pump (#215 slice 3): pump COBS
+/// frames from `io` through `server`, reply to every request, and drain
+/// queued events after each reply. Wire-identical semantics to the std
+/// agent, so a controller cannot tell them apart; with
+/// [`ServerCore::push_uart_data`] fed by the firmware's UART task, any
+/// MCU agent is Ethernet-attachable (controller ←LAN→ agent ←UART→
+/// router). Returns on transport error or end-of-stream; the caller owns
+/// reconnection and session reset (connection lifecycle drives lease
+/// lifecycle, #110).
+pub async fn agent_session_stream<T: StreamIo>(io: &mut T, server: &mut ServerCore) {
+    let mut buf = [0u8; STREAM_READ_BUF];
+    let mut pump = CobsPump::new();
+    loop {
+        let Ok(n) = io.read(&mut buf).await else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        pump.feed(&buf[..n]);
+        while let Some(frame) = pump.pop_frame() {
+            let Some(response) = decode_frame(&frame)
+                .ok()
+                .and_then(|decoded| server.handle_frame(decoded))
+            else {
+                continue;
+            };
+            if let Ok(bytes) = encode_frame(&response) {
+                write_all_stream(io, &cobs_encode(&bytes)).await;
+            }
+            send_pending_events(io, server).await;
+        }
+    }
+}
+
+/// Stream-write `data` fully, looping over partial writes (the packet
+/// twin is [`write_packetized`]; streams have no packet discipline).
+/// Returns on the first transport error or a zero-byte write (stalled
+/// peer).
+pub async fn write_all_stream<T: StreamIo>(io: &mut T, data: &[u8]) {
+    let mut sent = 0;
+    while sent < data.len() {
+        match io.write(&data[sent..]).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => sent += n,
+        }
+    }
+}
+
+/// Drain events queued on `server` (e.g. UART RX pushed by another task)
+/// to the controller — after each reply, mirroring the std pump.
+async fn send_pending_events<T: StreamIo>(io: &mut T, server: &mut ServerCore) {
+    for event in server.take_events() {
+        if let Ok(bytes) = encode_frame(&WireFrame::Event(event)) {
+            write_all_stream(io, &cobs_encode(&bytes)).await;
+        }
+    }
+}
+
 /// `PacketIo` for embassy-usb 0.6's CDC-ACM class: the packet shapes match
 /// 1:1, so every HAL that hands the firmware a `CdcAcmClass` (STM32 OTG,
 /// ESP32-S3 OTG, the future F746) is plug-in ready.
@@ -113,6 +204,28 @@ mod embassy_cdc {
 
         async fn write_packet(&mut self, data: &[u8]) -> Result<(), Self::Error> {
             CdcAcmClass::write_packet(self, data).await
+        }
+    }
+}
+
+#[cfg(feature = "embassy-net")]
+mod embassy_tcp {
+    use super::StreamIo;
+    use embassy_net::tcp::TcpSocket;
+
+    /// `StreamIo` for embassy-net 0.9's socket: `read` is inherent, the
+    /// write side comes through its `embedded_io_async::Write` impl
+    /// (version-matched to embassy-net's own requirement — see
+    /// Cargo.toml).
+    impl<'d> StreamIo for TcpSocket<'d> {
+        type Error = embassy_net::tcp::Error;
+
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            TcpSocket::read(self, buf).await
+        }
+
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            embedded_io_async::Write::write(self, buf).await
         }
     }
 }
