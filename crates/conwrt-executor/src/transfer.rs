@@ -146,7 +146,14 @@ impl TransferState {
         if self.total.is_none() {
             self.total = Some(total);
         }
-        let chunk_end = chunk.offset + chunk.data.len() as u64;
+        // checked: a hostile offset near u64::MAX must not panic the
+        // executor — it is non-contiguous garbage by definition
+        let Some(chunk_end) = chunk.offset.checked_add(chunk.data.len() as u64) else {
+            return Err(TransferError::Gap {
+                expected_at: self.contiguous,
+                got_at: chunk.offset,
+            });
+        };
         if chunk_end > total {
             return Err(TransferError::Overflow {
                 total,
@@ -291,6 +298,23 @@ mod tests {
             t.accept(&chunk(0, b"abcdef", Some(3))),
             Err(TransferError::Overflow { total: 3, end: 6 })
         );
+    }
+
+    #[test]
+    fn absurd_offset_is_structured_error_not_panic() {
+        let mut t = TransferState::new(7, 1024);
+        t.accept(&chunk(0, b"abc", Some(10))).unwrap();
+        let mut c = chunk(u64::MAX - 1, b"xyz", Some(10));
+        assert_eq!(
+            t.accept(&c),
+            Err(TransferError::Gap {
+                expected_at: 3,
+                got_at: u64::MAX - 1
+            })
+        );
+        c.offset = u64::MAX;
+        c.data.clear();
+        assert!(t.accept(&c).is_err(), "even MAX+0 stays an error");
     }
 
     #[test]

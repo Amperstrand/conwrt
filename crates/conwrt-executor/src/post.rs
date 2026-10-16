@@ -72,6 +72,10 @@ pub enum PostError {
     NoTotal,
     /// [`start`] called twice.
     AlreadyStarted,
+    /// [`pump`] or [`finish`] called before [`start`] — draining the
+    /// window without a request head would put raw image bytes first
+    /// on the wire and burn the one-request window (review round 3).
+    NotStarted,
     /// The multipart framing was built for a different image size than
     /// the transfer announced — a `Content-Length`/body mismatch that
     /// would desync the one-request server. Nothing was written.
@@ -202,6 +206,9 @@ impl<'a> RecoveryPost<'a> {
         io: &mut impl HttpIo,
         xfer: &mut TransferState,
     ) -> Result<u64, PostError> {
+        if !self.started {
+            return Err(PostError::NotStarted);
+        }
         let mut buf = [0u8; 1024];
         let mut moved = 0u64;
         loop {
@@ -225,6 +232,9 @@ impl<'a> RecoveryPost<'a> {
         io: &mut impl HttpIo,
         xfer: &TransferState,
     ) -> Result<PostOutcome, PostError> {
+        if !self.started {
+            return Err(PostError::NotStarted);
+        }
         let Some(total) = xfer.total() else {
             return Err(PostError::NoTotal);
         };
@@ -494,6 +504,25 @@ mod tests {
         post.pump(&mut io, &mut t).await.unwrap();
         let outcome = post.finish(&mut io, &t).await.unwrap();
         assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn pump_before_start_refused_without_draining() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        assert_eq!(post.pump(&mut io, &mut t).await, Err(PostError::NotStarted));
+        assert!(io.written.is_empty());
+        assert_eq!(t.buffered(), 6, "window untouched");
+        assert_eq!(
+            post.finish(&mut io, &t).await,
+            Err(PostError::NotStarted),
+            "footer before start refused too"
+        );
     }
 
     #[tokio::test]
