@@ -209,10 +209,10 @@ impl ServerCore {
                 Err(_) => WireResult::Error(WireError::Internal(String::from("heartbeat refused"))),
             },
             WireEndpoint::StreamChunk(chunk) => {
-                if !self.holds_resource(EXECUTOR_RESOURCE) {
-                    return WireResult::Error(WireError::LeaseRequired(
-                        EXECUTOR_RESOURCE.to_string(),
-                    ));
+                if !self.holds_exclusive(EXECUTOR_RESOURCE) {
+                    return WireResult::Error(WireError::LeaseRequired(String::from(
+                        EXECUTOR_RESOURCE,
+                    )));
                 }
                 match self.transfer.as_mut() {
                     Some(sink) => match sink.stream_chunk(&chunk) {
@@ -226,10 +226,10 @@ impl ServerCore {
                 }
             }
             WireEndpoint::StreamStatus { transfer_id } => {
-                if !self.holds_resource(EXECUTOR_RESOURCE) {
-                    return WireResult::Error(WireError::LeaseRequired(
-                        EXECUTOR_RESOURCE.to_string(),
-                    ));
+                if !self.holds_exclusive(EXECUTOR_RESOURCE) {
+                    return WireResult::Error(WireError::LeaseRequired(String::from(
+                        EXECUTOR_RESOURCE,
+                    )));
                 }
                 match self.transfer.as_mut() {
                     Some(sink) => match sink.stream_status(transfer_id) {
@@ -258,12 +258,22 @@ impl ServerCore {
     }
 
     /// Whether the current controller holds any lease on `resource`
-    /// (the gate for resource-bound endpoints, M5 #110 / M6 #226).
+    /// (the gate for UART writes, M5 #110).
     fn holds_resource(&self, resource: &str) -> bool {
         let controller = self.controller.clone().unwrap_or_default();
         self.leases
             .leases()
             .any(|lease| lease.resource == resource && lease.controller == controller)
+    }
+
+    /// Whether the current controller holds an **exclusive** lease on
+    /// `resource` — the stricter gate for image-stream endpoints
+    /// (#226: the executor resource is exclusive-only; review round 1).
+    fn holds_exclusive(&self, resource: &str) -> bool {
+        let controller = self.controller.clone().unwrap_or_default();
+        self.leases.leases().any(|lease| {
+            lease.resource == resource && lease.controller == controller && lease.exclusive
+        })
     }
 
     /// Advance lease expiry by one heartbeat interval; returns the expiry
@@ -614,6 +624,27 @@ mod tests {
     fn stream_chunk_without_lease_is_refused() {
         let (mut c, _) = transfer_core();
         handshake(&mut c);
+        let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
+        assert_eq!(
+            result,
+            WireResult::Error(WireError::LeaseRequired(String::from("executor")))
+        );
+    }
+
+    #[test]
+    fn stream_chunk_shared_lease_is_refused() {
+        // #226: the executor resource is exclusive-only
+        let (mut c, _) = transfer_core();
+        handshake(&mut c);
+        request(
+            &mut c,
+            2,
+            WireEndpoint::LeaseAcquire(LeaseRequestShape {
+                resource: String::from(EXECUTOR_RESOURCE),
+                exclusive: false,
+                on_disconnect: DisconnectPolicy::Abort,
+            }),
+        );
         let result = request(&mut c, 3, WireEndpoint::StreamChunk(sample_chunk()));
         assert_eq!(
             result,

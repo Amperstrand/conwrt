@@ -51,6 +51,15 @@ pub enum TransferError {
         /// Offset the chunk would reach.
         end: u64,
     },
+    /// A later chunk announced a different total than the first —
+    /// the resume token and Content-Length derive from it, so a
+    /// mid-transfer change is refused outright (review round 1).
+    TotalChanged {
+        /// The originally announced total.
+        announced: u64,
+        /// The new, conflicting total.
+        changed: u64,
+    },
 }
 
 /// A bounded window over one image transfer; the resume-token source.
@@ -121,7 +130,17 @@ impl TransferState {
                 got: chunk.transfer_id,
             });
         }
-        let Some(total) = chunk.total.or(self.total) else {
+        let Some(total) = (match (chunk.total, self.total) {
+            (Some(new), Some(old)) if new != old => {
+                return Err(TransferError::TotalChanged {
+                    announced: old,
+                    changed: new,
+                });
+            }
+            (Some(new), _) => Some(new),
+            (None, Some(old)) => Some(old),
+            (None, None) => None,
+        }) else {
             return Err(TransferError::MissingTotal);
         };
         if self.total.is_none() {
@@ -272,6 +291,21 @@ mod tests {
             t.accept(&chunk(0, b"abcdef", Some(3))),
             Err(TransferError::Overflow { total: 3, end: 6 })
         );
+    }
+
+    #[test]
+    fn total_change_mid_transfer_rejected() {
+        let mut t = TransferState::new(7, 1024);
+        t.accept(&chunk(0, b"abc", Some(10))).unwrap();
+        assert_eq!(
+            t.accept(&chunk(3, b"defg", Some(12))),
+            Err(TransferError::TotalChanged {
+                announced: 10,
+                changed: 12
+            })
+        );
+        // same total on later chunks is fine
+        assert!(t.accept(&chunk(3, b"defg", Some(10))).is_ok());
     }
 
     #[test]

@@ -72,6 +72,15 @@ pub enum PostError {
     NoTotal,
     /// [`start`] called twice.
     AlreadyStarted,
+    /// The multipart framing was built for a different image size than
+    /// the transfer announced — a `Content-Length`/body mismatch that
+    /// would desync the one-request server. Nothing was written.
+    SizeMismatch {
+        /// Size the multipart framing declares.
+        multipart: u64,
+        /// Size the transfer announced.
+        transfer: u64,
+    },
 }
 
 /// The server's verdict on a completed upload.
@@ -149,6 +158,15 @@ impl<'a> RecoveryPost<'a> {
         let Some(total) = xfer.total() else {
             return Err(PostError::NoTotal);
         };
+        if total != self.mp.image_len {
+            return Err(PostError::SizeMismatch {
+                multipart: self.mp.image_len,
+                transfer: total,
+            });
+        }
+        // committed BEFORE the first write: a partially-landed head is
+        // still a burned one-request window (review round 1)
+        self.started = true;
         let head = format!(
             "POST {} HTTP/1.1\r\n\
              Host: {}\r\n\
@@ -168,8 +186,6 @@ impl<'a> RecoveryPost<'a> {
             .await
             .map_err(|_| PostError::Write { op: "head" })?;
         self.written += self.mp.header().len() as u64;
-        self.started = true;
-        let _ = total;
         Ok(())
     }
 
@@ -225,6 +241,10 @@ impl<'a> RecoveryPost<'a> {
 
         let mut response = Vec::new();
         match io.read_response(&mut response).await {
+            Ok(()) if response.is_empty() => Ok(PostOutcome {
+                uploaded: total,
+                verdict: Verdict::NoResponse,
+            }),
             Ok(()) => {
                 let text = String::from_utf8_lossy(&response).into_owned();
                 let verdict = if text.contains(ACCEPT_PATTERN) {
@@ -246,14 +266,6 @@ impl<'a> RecoveryPost<'a> {
                     verdict,
                 })
             }
-            // Distinguish "closed with nothing" (burned window) from a
-            // read error after partial data: read_response only errors
-            // on transport failure; an empty-but-Ok body means the
-            // server hung up silently — same burned-window shape.
-            Err(_) if response.is_empty() => Ok(PostOutcome {
-                uploaded: total,
-                verdict: Verdict::NoResponse,
-            }),
             Err(_) => Err(PostError::Read),
         }
     }
@@ -280,9 +292,8 @@ mod tests {
             Ok(())
         }
         async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), ()> {
-            if self.response.is_empty() {
-                return Err(());
-            }
+            // empty canned response = clean EOF with no body (the
+            // burned-window shape); errors are never injected here
             out.extend_from_slice(&self.response);
             Ok(())
         }
@@ -316,7 +327,7 @@ mod tests {
             response: b"Upgrade successfully!".to_vec(),
             fail_writes: false,
         };
-        let mut t = fed_transfer();
+        let t = fed_transfer();
         let mut post = RecoveryPost::new(mp(), "192.168.0.1", "/upload");
         post.start(&mut io, &t).await.unwrap();
         let head = String::from_utf8_lossy(&io.written).into_owned();
@@ -331,7 +342,6 @@ mod tests {
         assert!(head.ends_with("\r\n\r\n"));
         // head write includes the multipart part header after the blank line
         assert!(io.written.ends_with(b"application/octet-stream\r\n\r\n"));
-        let _ = &mut t;
     }
 
     #[tokio::test]
@@ -415,6 +425,51 @@ mod tests {
             post.start(&mut io, &t2).await,
             Err(PostError::AlreadyStarted)
         );
+    }
+
+    #[tokio::test]
+    async fn size_mismatch_refused_before_any_wire_bytes() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let t = fed_transfer(); // total 6
+        let mut post = RecoveryPost::new(
+            Multipart {
+                image_len: 999,
+                ..mp()
+            },
+            "h",
+            "/upload",
+        );
+        assert_eq!(
+            post.start(&mut io, &t).await,
+            Err(PostError::SizeMismatch {
+                multipart: 999,
+                transfer: 6
+            })
+        );
+        assert!(io.written.is_empty(), "nothing on the wire");
+        assert!(!post.committed());
+    }
+
+    #[tokio::test]
+    async fn failed_head_write_still_counts_as_committed() {
+        // a partially-landed head may have reached the server: the
+        // one-request window is burned either way (review round 1)
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: true,
+        };
+        let t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        assert!(matches!(
+            post.start(&mut io, &t).await,
+            Err(PostError::Write { op: "head" })
+        ));
+        assert!(post.committed());
     }
 
     #[tokio::test]
