@@ -595,7 +595,7 @@ Motivating incident: a bench adoption ran `firstboot` on ap-lan2 (AP3915i UNIT2 
 
 ## Bench operations rules (2026-09-25)
 
-Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network.
+Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network. Labgrid specifics (coordinator, exporter fleet, reservation queueing, exclusion domains, trusted-network model) live in the same repo at `docs/labgrid-coordination.md` — updated 2026-10-14 as the org-wide canon; use `LG_COORDINATOR` (native) and queue with `reserve --wait` rather than poll-acquire.
 
 ## Rogue-DHCP Discipline — exactly one DHCP/RA authority per broadcast domain (2026-09-28)
 
@@ -705,3 +705,88 @@ Rules for code and agents in this repo:
 
 Env: `CONWRT_LAB` (this registry checkout) and `CONWRT_BENCH` (conwrt-bench
 checkout) are the two paths every hardware-touching tool understands.
+
+## Multi-Agent Coordination on the Shared Host (the 2026-10-13 collisions)
+
+Motivating incidents (two AI sessions sharing one checkout and one Linux
+host, 2026-10-12/13): (1) session A switched git branches mid-flight while
+session B was committing — B's commits silently landed on local `master`,
+exactly the "polluted local master" state the branching rule above forbids,
+caused this time by structure, not sloppiness; (2) both sessions' QEMU test
+VMs wanted host port 2222 — the loser got 30 cascading fixture errors with
+no culprit named; (3) while diagnosing (2), session B ran
+`pkill -f "qemu-system-x86_64.*hostfwd"` and killed session A's live
+tollgate VM (recoverable only because it ran snapshot-mode with a boot
+script), and the same pattern self-matched B's own shell and hung it.
+
+Rules — prefer structure that makes collisions impossible over rules that
+merely discourage them:
+
+1. **One worktree per session. The main checkout is a read-only hub.** Never
+   commit from the shared checkout; create
+   `git worktree add ../conwrt-<session> -b <session>/feat-x origin/master`
+   (or run `scripts/dev-session.sh start <name>`, which also registers the
+   session). Worktrees share the object store and remotes; each has its own
+   HEAD/index/files, so branch switches and stashes cannot collide.
+2. **Kill only what you own.** Every background process an agent starts
+   (QEMU, TFTP, recorders, daemons) writes its PID to a session-scoped
+   pidfile dir (`/tmp/opencode/<session>/pids/` or a per-session tmp dir).
+   Teardown kills only PIDs read from YOUR pidfiles, after a
+   `/proc/<pid>/cmdline` sanity check. **`pkill`/`killall` by pattern is
+   FORBIDDEN on this host** — other sessions' processes are indistinguishable
+   in `ps`, and `pkill -f` matches your own shell's command line.
+3. **Ports are claimed, not assumed.** Long-lived listeners must take their
+   port from an env var (`CONWRT_VM_SESSION_PORT`, `CONWRT_VM_FLASH_PORT`,
+   …) so a colliding session can shift, and must fail fast with the holder
+   named (`ss -tlnp` hint) instead of cascading errors. Check
+   `data/active-sessions.jsonl` before claiming.
+4. **Claim before you code.** Branch names carry the owner
+   (`<session>/feat-x`), the PR opens (draft) before the work starts, and
+   `scripts/dev-session.sh` appends `{session, worktree, ports, areas}` to
+   the gitignored `data/active-sessions.jsonl` ledger. Before starting work
+   in an area, check `gh pr list` and the ledger — overlapping streams are
+   a coordination failure even when git itself merges cleanly.
+5. **Expect master to move at machine speed.** Sibling agents merge PRs in
+   minutes. Fetch immediately before merging, rebase instead of resolving
+   surprise conflicts by hand, and never assume the merge-result you tested
+   locally is still current an hour later.
+
+## D-Link Recovery Flashing: One-Request Server, Slow Dual-Image Boots, Stale Keys (2026-10-14/15)
+
+Paid for twice in one session (both dark x1860s, plus the Sept #91 saga).
+Full evidence matrix: `models/dlink-covr-x1860-a1.json` bench_observations
+(PR #198) and the bench registry dossiers.
+
+1. **Never GET the recovery page before uploading.** The U-Boot recovery
+   httpd (uIP stack) serves exactly ONE HTTP request, then RSTs every new
+   SYN. Probe arming by ARP only (`ip neigh` for 192.168.0.1, model-wide
+   soft MAC) — any curl of the page burns the window and costs a
+   power-cycle.
+2. **Upload with a real Chromium** (headless Playwright, local form so the
+   multipart POST is the first request) — but know the limits: the
+   2026-10-14 matrix showed even a byte-perfect Chromium POST can produce
+   accepted-but-no-boot. The client was never the #91 variable; suspect
+   flash-write or dual-image timing. Never blame the client without a pcap.
+3. **The COVR dual-image boot takes 15–20+ minutes** (main→backup copy +
+   double reboot). "5+ minutes" in the recipe is wrong; do not declare a
+   flash failed before ~25 min of silence.
+4. **ASU profile names use DASHES in the model part** —
+   `dlink_covr-x1860-a1`, not the all-underscore registry form. The
+   underscore form returns HTTP 400 "Unsupported profile" and costs a
+   build cycle. Check `openwrt.profile` in the model JSON (or the
+   conwrt-image crate's golden filename logic).
+5. **Baked dropbear keys go stale.** A parked unit flashed with an old
+   ASU image boots fine but locks you out (the key belonged to a
+   decommissioned host). Rebuild via ASU with the CURRENT fleet key
+   before flashing anything that has been dark — case-sealed, no-serial
+   units have no second door.
+
+## Long-Running Remote Work Dies With Its Pane (2026-10-14)
+
+Herdr panes churn (operator closes tabs, sessions restart). Anything
+started as a pane background job — builds, watchers, tunnels, pcaps —
+dies with it, usually silently. Rules: stage work as ON-DISK launcher
+scripts (`/tmp/*.sh`) started with `setsid nohup … < /dev/null &`, write
+logs to files, and have supervisors/tunnels re-established by idempotent
+launchers rather than trusted to survive. If a log file "was never
+created", that is this rule, not a mystery.

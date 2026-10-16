@@ -26,6 +26,8 @@ devices:
     firmware: "..."
     rogue: disabled|unknown       # dhcp/ra discipline state
     keyed: true|false
+    ssh_port: 22              # optional: direct-venue SSH port (default 22)
+    ssh_key: "~/.ssh/id_..."  # optional: direct-venue key (default: agent/default)
     state: adopted|dark|blocked-...
     labgrid_place: place-name     # if enrolled
     notes: "..."

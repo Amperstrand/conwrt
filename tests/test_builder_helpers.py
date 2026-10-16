@@ -16,7 +16,7 @@ from profile.builder import (
     _ssh_key_ops,
     _uc_packages_for_mode,
 )
-from profile.ops import ShellCommand
+from profile.ops import ShellCommand, UciSet
 from profile.plan import StepKind
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
 
@@ -65,11 +65,20 @@ class TestSshKeyFirstboot:
         assert ">>" in key_lines[1]
 
     def test_empty_list_only_mkdir_chmod(self):
+        # Empty keys never reach the step in practice, but the helper must
+        # not bake key-only-auth into an empty step.
         result = _ssh_key_firstboot([])
         lines = result.split("\n")
         assert len(lines) == 2
         assert lines[0].startswith("mkdir -p")
         assert lines[1].startswith("chmod 600")
+
+    def test_keys_bake_key_only_auth(self):
+        # #155: a baked key means key-only dropbear (no password surface).
+        result = _ssh_key_firstboot(["key1"])
+        assert "PasswordAuth='off'" in result
+        assert "RootPasswordAuth='off'" in result
+        assert "uci commit dropbear" in result
 
     def test_contains_dropbear_path(self):
         result = _ssh_key_firstboot(["key1"])
@@ -87,10 +96,18 @@ class TestSshKeyFirstboot:
 # ===================================================================
 
 class TestSshKeyOps:
-    def test_single_key_returns_three_ops(self):
+    def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        assert len(ops) == 3
-        assert all(isinstance(op, ShellCommand) for op in ops)
+        # mkdir, echo, chmod (ShellCommand) + key-only UciSet + commit (#155)
+        shells = [op for op in ops if isinstance(op, ShellCommand)]
+        assert len(shells) == 3
+
+    def test_ops_bake_key_only_auth(self):
+        # #155: ops carry the same key-only dropbear config as firstboot.
+        ops = _ssh_key_ops(["key1"])
+        assert any(isinstance(op, UciSet) for op in ops)
+        uci = next(op for op in ops if isinstance(op, UciSet))
+        assert uci.values == {"PasswordAuth": "off", "RootPasswordAuth": "off"}
 
     def test_single_key_ops_content(self):
         ops = _ssh_key_ops(["key1"])
@@ -98,10 +115,10 @@ class TestSshKeyOps:
         assert "echo 'key1' >" in ops[1].command
         assert "chmod 600" in ops[2].command
 
-    def test_two_keys_returns_four_ops(self):
+    def test_two_keys_returns_six_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        assert len(ops) == 4
-        # mkdir, echo key1 >, echo key2 >>, chmod
+        # mkdir, echo key1 >, echo key2 >>, chmod, UciSet key-only, commit
+        assert len(ops) == 6
         assert ">" in ops[1].command and ">>" not in ops[1].command
         assert ">>" in ops[2].command
 
@@ -110,14 +127,23 @@ class TestSshKeyOps:
         assert len(ops) == 2
         assert "mkdir" in ops[0].command
         assert "chmod" in ops[1].command
+        # Empty keys: NO key-only-auth ops (nothing would unlock).
 
     def test_ops_match_firstboot_lines(self):
         keys = ["ssh-ed25519 AAA", "ssh-ed25519 BBB"]
         fb = _ssh_key_firstboot(keys)
         ops = _ssh_key_ops(keys)
-        # Each op command should appear as a line in the firstboot script
+        # Each SHELL op should appear as a line in the firstboot script; the
+        # UciSet/UciCommit pair mirrors the same uci lines textually.
+        from profile.ops import UciCommit
         for op in ops:
-            assert op.command in fb
+            if isinstance(op, ShellCommand):
+                assert op.command in fb
+            elif isinstance(op, UciSet):
+                for k, v in op.values.items():
+                    assert f"uci set dropbear.{op.section}.{k}='{v}'" in fb
+            elif isinstance(op, UciCommit):
+                assert f"uci commit {op.config}" in fb
 
 
 # ===================================================================

@@ -98,7 +98,12 @@ class ConwrtConfig:
     wifi_disable: bool = False
     lan_ip_mode: str = "mac-hash"      # "mac-hash" (derive from MAC, default) or "static" (use cfg.lan_ip)
     hostname_pattern: str = "static"   # "static", "model_mac", "model_seq"
-    disable_lan_dhcp: bool = False     # set dhcp.lan.ignore=1 (lab/bench rogue-DHCP discipline)
+    # Rogue-DHCP discipline (#155): fresh OpenWrt runs a DHCP server on
+    # br-lan by default — the class that poisoned the house LAN twice
+    # (AGENTS.md) and was armed on the 2026-10-12 x1860 recovery unit.
+    # Default ON: builds/flashes suppress it; isolated-DUT tests that NEED
+    # a DHCP server opt out explicitly (network.disable_lan_dhcp = false).
+    disable_lan_dhcp: bool = True
 
     @property
     def wifi_ap(self) -> Optional[WifiAPConfig]:
@@ -342,7 +347,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         country_code=network_section.get("country_code", "DE"),
         mgmt_wifi=network_section.get("mgmt_wifi", False),
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
-        disable_lan_dhcp=network_section.get("disable_lan_dhcp", False),
+        disable_lan_dhcp=network_section.get("disable_lan_dhcp", True),
         wifi_sta=wifi_sta,
         wifi_aps=wifi_aps,
         wireguard=wg_cfg,

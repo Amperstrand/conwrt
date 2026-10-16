@@ -30,6 +30,14 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
         op = ">" if i == 0 else ">>"
         lines.append(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}")
     lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
+    if keys:
+        # Key baked => key-only auth (#155): the x1860 incident unit came up
+        # with password-attempt surface enabled by default.
+        lines += [
+            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+            "uci commit dropbear",
+        ]
     return "\n".join(lines)
 
 
@@ -39,6 +47,14 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
         op = ">" if i == 0 else ">>"
         ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
+    if keys:
+        ops += [
+            UciSet(config="dropbear", section="@dropbear[0]", values={
+                "PasswordAuth": "off",
+                "RootPasswordAuth": "off",
+            }),
+            UciCommit(config="dropbear"),
+        ]
     return ops
 
 
@@ -490,12 +506,18 @@ def build_plan(
             f"{_mac_src_fb}",
             _hash_derive.replace("; ", "\n"),
             'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
+            # Netmask MUST be explicit: 24.10 netifd defaulted a missing
+            # netmask to /24, but 25.12 defaults to /32 — which leaves the
+            # device receive-only-silent (ARP answers, no on-link replies).
+            # Incident: conwrt-lab x1860-1 incident_2026_10_13_recovery (#151).
+            'uci set network.lan.netmask="255.255.255.0"',
             "uci commit network",
         ])
         _mac_ip_ssh = " ; ".join([
             f"{_mac_src_ssh}",
             _hash_derive,
             'uci set network.lan.ipaddr="10.$_o2.$_o3.1"',
+            'uci set network.lan.netmask="255.255.255.0"',
             "uci commit network",
         ])
         steps.append(ProfileStep(
@@ -513,19 +535,29 @@ def build_plan(
                 ShellCommand("_o3=$(printf '%d' 0x$(printf '%s' \"$_hash\" | cut -c9-16))"),
                 ShellCommand("_o3=$((_o3 % 250 + 1))"),
                 ShellCommand('uci set network.lan.ipaddr="10.$_o2.$_o3.1"'),
+                ShellCommand('uci set network.lan.netmask="255.255.255.0"'),
                 ShellCommand("uci commit network"),
             ],
         ))
     elif cfg.lan_ip:
-        _lan_fb = f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)} && uci commit network"
+        _lan_fb = (
+            f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+            " && uci set network.lan.netmask='255.255.255.0'"
+            " && uci commit network"
+        )
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
             label=f"LAN IP → {cfg.lan_ip}",
             firstboot_script=_lan_fb,
-                configure_script=f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}",
+            configure_script=(
+                f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+                " && uci set network.lan.netmask='255.255.255.0'"
+            ),
             include_in_asu=True,
             ops=[
-                UciSet(config="network", section="lan", values={"ipaddr": cfg.lan_ip}),
+                UciSet(config="network", section="lan", values={
+                    "ipaddr": cfg.lan_ip, "netmask": "255.255.255.0",
+                }),
             ],
         ))
 

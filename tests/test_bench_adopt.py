@@ -184,7 +184,10 @@ class TestResetPostconditions:
 
     def _no_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ba.time, "sleep", lambda s: None)
-        ticks = iter([0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220, 240, 999])
+        # 10s ticks: the persistent-auth-death ladder needs 12 poll
+        # iterations inside stage_reset's 240s deadline (4 auth-dead polls
+        # per round, 2 PoE-heal rounds, then the final verdict round).
+        ticks = iter(list(range(0, 240, 10)) + [999])
         monkeypatch.setattr(ba.time, "monotonic", lambda: next(ticks))
 
     def test_keys_surviving_means_not_wiped(self, tmp_path: Path,
@@ -209,14 +212,32 @@ class TestResetPostconditions:
                  "Remote closed the connection\n")
         ba.stage_reset(_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path))
 
-    @pytest.mark.xfail(reason="bench adoption postcondition drift — see #141", strict=False)
     def test_persistent_auth_death_fails_fast(self, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch) -> None:
+        # Regression note (#141): master's reset postcondition loop (via the
+        # #67 merge) no longer fails fast on auth death — it runs the bounded
+        # jffs2-replay cure first (<=2 deliberate PoE cycles, AGENTS.md
+        # reset-failsafe rule 5) and only then verdicts CONSOLE REQUIRED.
         self._no_sleep(monkeypatch)
         noise = ("dbclient: Connection to root@fe80::...%switch.1002:22 exited: "
                  "Remote closed the connection\n")
-        with pytest.raises(ba.AdoptError, match="console required"):
-            ba.stage_reset(_runner(self.ARM + [noise] * 4, tmp_path))
+        poe_ack = ['{"status":"okay"}\n']
+        canned = self.ARM + ([noise] * 4 + poe_ack        # round 1 -> HEAL 1/2
+                             + [noise] * 4 + poe_ack      # round 2 -> HEAL 2/2
+                             + [noise] * 4)               # round 3 -> verdict
+        with pytest.raises(ba.AdoptError, match="CONSOLE REQUIRED"):
+            ba.stage_reset(_runner(canned, tmp_path))
+
+    def test_auth_death_healed_by_poecycle_passes(self, tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+        # One deliberate PoE cycle re-runs the jffs2 replay and the unit
+        # comes back factory-clean (ap-lan2 + ap-lan5 pattern) — adoption
+        # proceeds instead of verdicting console-required.
+        self._no_sleep(monkeypatch)
+        noise = ("dbclient: Connection to root@fe80::...%switch.1002:22 exited: "
+                 "Remote closed the connection\n")
+        canned = self.ARM + [noise] * 4 + ['{"status":"okay"}\n'] + [RESET_FACTORY]
+        ba.stage_reset(_runner(canned, tmp_path))
 
     def test_reset_refused_for_tftp_dependent_unit(self, tmp_path: Path) -> None:
         lan5 = ba.Place("ap-lan5", "b4:2d:56:24:ad:97", "192.168.105.51",

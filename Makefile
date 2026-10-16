@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -114,8 +114,8 @@ sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, opti
 		$(ARGS)
 ## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
-test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests and hardware bench runs
-	@pytest tests -m "not integration and not bench"
+test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests, live API tests, and hardware bench runs
+	@pytest tests -m "not integration and not bench and not live"
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
@@ -170,12 +170,24 @@ labgrid-check: ## Offline labgrid cross-check: exporter.yaml vs places.json (no 
 labgrid-test: ## Run a labgrid pytest with a full evidence bundle (usage: make labgrid-test T=<pytest args> [DH=<dut-host>])
 	@python3 scripts/bench_run.py --name bench $(if $(DH),--device-host $(DH),) -- $(T)
 
+test-live: ## Live VPN provider API contract tests (read-only; credential-gated tests need env secrets)
+	@pytest tests/live -m live -v
+
 rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
 	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
+
+parity-check: ## #118: Python(jsonschema) and Rust(types) must agree on corpus + negatives
+	@python3 -m pytest tests/test_model_schema_parity.py -q
+	@cargo run --quiet -p conwrt-cli -- models --dir models >/dev/null
+	@for d in tests/fixtures/schema-negative/*/; do \
+	  if cargo run --quiet -p conwrt-cli -- models --dir "$$d" >/dev/null 2>&1; then \
+	    echo "PARITY DRIFT: Rust accepted a schema-negative fixture: $$d"; exit 1; fi; \
+	done
+	@echo "parity OK: both validators agree on the corpus and every negative fixture"
 
 rust-test: ## Run Rust workspace tests only
 	cargo test --workspace

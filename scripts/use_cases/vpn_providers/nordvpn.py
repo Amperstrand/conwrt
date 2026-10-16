@@ -34,6 +34,7 @@ from .base import (
     build_dns_ops,
     build_firewall_ops,
     build_verify_ops,
+    wg0_uci_sh,
     wg_cleanup_sh,
     transport_sh,
 )
@@ -183,33 +184,56 @@ def _country_id_from_list(countries: list[dict[str, Any]], code: str) -> str:
     return ""
 
 
+def _select_server(
+    servers: list[Any], *, station: str = "", hostname: str = "",
+) -> dict[str, Any] | None:
+    """Pick the pinned server out of an API response, client-side.
+
+    NordVPN's /v1/servers ignores unknown filters (e.g. stations[ip]) and
+    returns an arbitrary 100-server page — the pin must never trust
+    server-side filtering.
+    """
+    for server in servers:
+        if station and server.get("station") == station:
+            return server
+        if hostname and server.get("hostname") == hostname:
+            return server
+    return None
+
+
 def _resolve_endpoint(value: str, token: str, tech: str = "wireguard_udp") -> tuple[str, str, str]:
     """Return (endpoint_ip_or_host, port, server_public_key) for a target.
 
-    ``value`` is an IP, a hostname, a "Country" name, or a country code. IPs
-    and hostnames are resolved via the servers API to a full server object
-    (the WireGuard public key lives in its technologies metadata); anything
-    else goes through the recommendations API with a country filter.
+    ``value`` is a hostname, a "Country" name, or a country code. Hostnames
+    are resolved via the servers API to a full server object (the WireGuard
+    public key lives in its technologies metadata); anything else goes
+    through the recommendations API with a country filter. A bare IP is
+    refused: the API no longer supports station-IP lookup, and guessing
+    would configure a random server.
     """
     basic = base64.b64encode(f"token:{token}".encode()).decode()
     parts = value.rsplit(":", 1)
     looks_like_host = len(parts) == 2 and parts[1].isdigit()
     host_value = parts[0] if looks_like_host else value
 
-    if _is_ip(host_value) or host_value.endswith(".nordvpn.com"):
-        if _is_ip(host_value):
-            server_list = _api_get(
-                "https://api.nordvpn.com/v1/servers"
-                f"?filters%5Bstations%5D%5Bip%5D={host_value}", basic,
+    if _is_ip(host_value):
+        raise ValueError(
+            f"cannot resolve pinned NordVPN server IP {host_value}: the API no "
+            f"longer supports station-IP lookup — pin by hostname (e.g. "
+            f"de1507.nordvpn.com) or country instead"
+        )
+    if host_value.endswith(".nordvpn.com"):
+        server_list = _api_get(
+            "https://api.nordvpn.com/v1/servers"
+            f"?filters%5Bhostname%5D={host_value.split('.')[0]}", basic,
+        )
+        server = _select_server(server_list, hostname=host_value)
+        if server is None:
+            raise ValueError(
+                f"could not verify hostname pin {host_value}: NordVPN's servers "
+                f"API currently ignores filters (returns an arbitrary page) — "
+                f"pin by country ('DE', 'germany', or a country id) instead"
             )
-        else:
-            server_list = _api_get(
-                "https://api.nordvpn.com/v1/servers"
-                f"?filters%5Bhostname%5D={host_value.split('.')[0]}", basic,
-            )
-        if not server_list:
-            raise ValueError(f"no NordVPN server found for {host_value}")
-        server = server_list[0]
         key = _server_public_key(server)
         if tech == "wireguard_udp" and not key:
             raise ValueError(f"server {server.get('hostname', host_value)} has no "
@@ -218,22 +242,10 @@ def _resolve_endpoint(value: str, token: str, tech: str = "wireguard_udp") -> tu
         return server.get("station", "") or host_value, port, key
 
     code = host_value.strip().lower()
-    if code.isdigit():
-        country_id = code
-    else:
-        country_id = _country_id_from_list(
-            _api_get("https://api.nordvpn.com/v1/servers/countries", basic), code,
-        )
-    url = (
-        "https://api.nordvpn.com/v1/servers/recommendations?limit=1"
-        f"&filters%5Bservers_technologies%5D%5Bidentifier%5D={tech}"
+    country_id = code if code.isdigit() else _country_id_from_list(
+        _api_get("https://api.nordvpn.com/v1/servers/countries", basic), code,
     )
-    if country_id:
-        url += f"&filters%5Bcountry_id%5D={country_id}"
-    servers = _api_get(url, basic)
-    if not servers:
-        raise ValueError(f"no NordVPN {tech} server found for '{value}'")
-    server = servers[0]
+    server = _recommend_server(country_id, tech, basic)
     key = ""
     if tech == "wireguard_udp":
         key = _server_public_key(server)
@@ -253,17 +265,54 @@ def _api_get(url: str, basic: str) -> Any:
         return _json.loads(resp.read().decode())
 
 
-def _resolve_server(value: str, token: str, tech: str) -> dict[str, Any]:
-    """Full server object (hostname + station) for a country/hostname/IP pick."""
-    basic = base64.b64encode(f"token:{token}".encode()).decode()
-    station_ip = value if _is_ip(value) else _resolve_endpoint(value, token, tech)[0]
-    hit = _api_get(
-        "https://api.nordvpn.com/v1/servers"
-        f"?filters%5Bstations%5D%5Bip%5D={station_ip}", basic,
+def _recommend_server(country_id: str, tech: str, basic: str) -> dict[str, Any]:
+    """Full server object from the (country-filtered) recommendations API."""
+    url = (
+        "https://api.nordvpn.com/v1/servers/recommendations?limit=1"
+        f"&filters%5Bservers_technologies%5D%5Bidentifier%5D={tech}"
     )
-    if not hit:
-        raise ValueError(f"could not resolve server object for station {station_ip}")
-    return hit[0]
+    if country_id:
+        url += f"&filters%5Bcountry_id%5D={country_id}"
+    servers = _api_get(url, basic)
+    if not servers:
+        raise ValueError(f"no NordVPN {tech} server found for the requested country")
+    return servers[0]
+
+
+def _resolve_server(value: str, token: str, tech: str) -> dict[str, Any]:
+    """Full server object (hostname + station) for a hostname/country pick.
+
+    The OpenVPN flavor pins verify-x509-name to the hostname, so hostname and
+    station must come from the same server object. A bare IP is refused (see
+    _resolve_endpoint).
+    """
+    basic = base64.b64encode(f"token:{token}".encode()).decode()
+    host = value.rsplit(":", 1)[0] if value.count(":") == 1 and value.rsplit(":", 1)[1].isdigit() else value
+
+    if _is_ip(host):
+        raise ValueError(
+            f"cannot resolve pinned NordVPN server IP {host}: the API no "
+            f"longer supports station-IP lookup — pin by hostname (e.g. "
+            f"de1507.nordvpn.com) or country instead"
+        )
+    if host.endswith(".nordvpn.com"):
+        server_list = _api_get(
+            "https://api.nordvpn.com/v1/servers"
+            f"?filters%5Bhostname%5D={host.split('.')[0]}", basic,
+        )
+        server = _select_server(server_list, hostname=host)
+        if server is None:
+            raise ValueError(
+                f"could not verify hostname pin {host}: NordVPN's servers API "
+                f"currently ignores filters — pin by country instead"
+            )
+        return server
+
+    code = host.strip().lower()
+    country_id = code if code.isdigit() else _country_id_from_list(
+        _api_get("https://api.nordvpn.com/v1/servers/countries", basic), code,
+    )
+    return _recommend_server(country_id, tech, basic)
 
 
 def _is_ip(value: str) -> bool:
@@ -369,6 +418,8 @@ def _build_nordvpn_ops(params: dict[str, Any]) -> list[Op]:
     else:
         route_block = _GATEWAY_DISCOVER_SH.format(iface=upstream_iface, route_ip=route_ip)
 
+    address_lit = "'" + address + "'"
+    port_lit = "'" + endpoint_port + "'"
     nordvpn_script = f"""{JSON_HELPER_SH}
 WG_PRIV="{priv_key}"
 SERVER_KEY="{peer_key}"
@@ -380,20 +431,7 @@ uci -q delete openvpn.nordvpn
 /etc/init.d/openvpn stop >/dev/null 2>&1 || true
 
 # WireGuard tunnel (NordLynx)
-uci set network.wg0=interface
-uci set network.wg0.proto='wireguard'
-uci set network.wg0.private_key="$WG_PRIV"
-uci add_list network.wg0.addresses='{address}'
-uci set network.wg0.mtu='{mtu}'
-uci set network.wg0.auto='1'
-
-uci add network wireguard_wg0
-uci set network.@wireguard_wg0[0].public_key="$SERVER_KEY"
-uci set network.@wireguard_wg0[0].endpoint_host="$SERVER_IP"
-uci set network.@wireguard_wg0[0].endpoint_port='{endpoint_port}'
-uci add_list network.@wireguard_wg0[0].allowed_ips='{allowed_ips}'
-uci set network.@wireguard_wg0[0].route_allowed_ips='1'
-uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'
+{wg0_uci_sh('"$WG_PRIV"', address_lit, '"$SERVER_KEY"', '"$SERVER_IP"', port_lit, mtu=mtu, keepalive=keepalive, listen_port=False)}
 
 uci -q delete network.nordvpn_server_route
 {route_block}
@@ -681,7 +719,7 @@ register(UseCase(
         "config_file": ParamDef(type=str, required=False, allow_empty=True,
                                 description="Path to a WireGuard .conf — overrides access_token if set"),
         "server": ParamDef(type=str, default="DE",
-                           description="Server/country selection: 'DE', country id, hostname (de1507.nordvpn.com), or IP"),
+                           description="Country selection: 'DE', 'germany', or a NordVPN country id (hostname/IP pins are refused — the API currently ignores server filters)"),
         "technology": ParamDef(type=str, default="nordlynx",
                                description="NordVPN technology: nordlynx (WireGuard, default), openvpn-udp, openvpn-tcp"),
         "openvpn_cipher": ParamDef(type=str, default="AES-256-CBC",
@@ -725,7 +763,7 @@ register(UseCase(
         "technology": ParamDef(type=str, default="openvpn-udp",
                                description="openvpn-udp or openvpn-tcp"),
         "server": ParamDef(type=str, default="DE",
-                           description="Server/country selection: 'DE', country id, hostname, or IP"),
+                           description="Country selection: 'DE', 'germany', or a country id (hostname/IP pins are refused)"),
         "openvpn_cipher": ParamDef(type=str, default="AES-256-CBC",
                                    description="OpenVPN cipher override (e.g. AES-256-GCM); data-ciphers always allows both"),
         "kill_switch": ParamDef(type=bool, default=True,
@@ -892,7 +930,7 @@ register(UseCase(
         "access_token": ParamDef(type=str, required=False, allow_empty=True,
                                  description="NordVPN access token (Nord Account dashboard)"),
         "server": ParamDef(type=str, default="DE",
-                           description="Server/country selection: 'DE', country id, hostname, or IP"),
+                           description="Country selection: 'DE', 'germany', or a country id (hostname/IP pins are refused)"),
         "hw_accel": ParamDef(type=bool, default=True,
                              description="EIP-93 hardware crypto on (false = rmmod+blacklist before any SA)"),
         "kill_switch": ParamDef(type=bool, default=True,

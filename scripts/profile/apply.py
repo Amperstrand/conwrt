@@ -368,6 +368,7 @@ def apply_plan(
             _log(f"  ⚠ Package install failed — use cases may be broken: {', '.join(affected)}")
 
     # Phase 3: Use case configure scripts (packages now installed)
+    failed_use_cases: list[str] = []
     for step in plan.steps:
         if step.skipped_reason or not step.include_in_post_install:
             continue
@@ -381,6 +382,11 @@ def apply_plan(
                 _log(f"  ✓ use case '{step.use_case_name}': applied")
             else:
                 _log(f"  ⚠ use case '{step.use_case_name}': failed")
+                failed_use_cases.append(step.use_case_name)
+
+    if failed_use_cases:
+        _log(f"  ✗ apply aborted: use case(s) failed: {', '.join(failed_use_cases)}")
+        return ""
 
     return ip
 

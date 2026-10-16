@@ -1,0 +1,25 @@
+[package]
+name = "conwrt-agent-proto"
+description = "Conwrt agent protocol (M3, #108): versioned postcard-rpc wire, capability advertisement, resource leases, resumable streams — per ADR-0004 (postcard-rpc ADOPTED, spike verdict 2026-10-12)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+std = ["dep:tokio", "postcard-rpc/use-std"]
+
+[dependencies]
+postcard = { workspace = true }
+postcard-rpc = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, optional = true }
+cobs = { version = "0.4", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+sha2 = "0.10"
+
+[lints]
+workspace = true

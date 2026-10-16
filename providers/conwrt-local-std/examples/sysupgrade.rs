@@ -38,6 +38,7 @@ async fn main() {
         std::process::exit(2);
     };
     let post_flash = flag_value(&mut args, "--post-flash").unwrap_or_else(|| "192.168.1.1".into());
+    let v6_iface = flag_value(&mut args, "--v6-iface");
 
     let image_bytes = std::fs::read(&image).unwrap_or_else(|e| {
         eprintln!("cannot read image {image}: {e}");
@@ -120,11 +121,59 @@ async fn main() {
         Err(e) => panic!("sysupgrade failed unexpectedly: {e}"),
     }
 
-    wait_for_ssh(&post_flash, Duration::from_secs(900)).await;
-    println!(
-        "SUCCESS: post-flash SSH answering at {post_flash}; verify with \
-         `conwrt diagnose --ip {post_flash}`"
-    );
+    match wait_for_ssh(&post_flash, Duration::from_secs(900)).await {
+        Ok(()) => {
+            println!(
+                "SUCCESS: post-flash SSH answering at {post_flash}; verify with \
+                 `conwrt diagnose --ip {post_flash}`"
+            );
+        }
+        Err(timeout_msg) => {
+            eprintln!("{timeout_msg}");
+            if let Some(iface) = v6_iface {
+                dark_device_probe(&iface);
+            } else {
+                eprintln!(
+                    "hint: run `conwrt discover-v6 --interface <iface>` — the device may \
+                     be up on IPv6 while v4 looks dead (x1860 incident lesson L1/L2)"
+                );
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The #156 fallback: ARP-answerable boxes that are "v4-dead" are often
+/// fully up — solicit an RA and probe the router's link-local banner.
+fn dark_device_probe(iface: &str) {
+    eprintln!("-- v4 SSH never returned; running the v6 dark-device probe on {iface} --");
+    let check = conwrt_local_std::v6::self_check(iface);
+    for problem in check.problems() {
+        eprintln!("   !! {problem}");
+    }
+    match conwrt_local_std::v6::solicit_router_advertisement(iface, 2) {
+        Ok(Some(ra)) => {
+            eprintln!("   RA received — the device IS up:");
+            eprintln!("     router link-local: {:?}", ra.router_link_local);
+            eprintln!("     prefixes: {:?}", ra.prefixes);
+            if let (Some(ll), Some(idx)) = (
+                ra.router_link_local,
+                conwrt_local_std::v6::interface_index(iface),
+            ) {
+                if let Some(banner) =
+                    conwrt_local_std::v6::banner_probe_v6(ll, idx, 22, Duration::from_secs(3))
+                {
+                    eprintln!("     :22 banner: {banner:?}");
+                    eprintln!(
+                        "     fix hint: check the target's IPv4 config (netmask/on-link route) \
+                         — x1860 postmortem root cause was a /32 default netmask"
+                    );
+                }
+            }
+        }
+        Ok(None) => eprintln!("   no RA either — device is genuinely not serving"),
+        Err(e) => eprintln!("   probe error: {e}"),
+    }
 }
 
 async fn verify_board(session: &conwrt_local_std::ssh::SshSession, expected: &str) {
@@ -142,7 +191,7 @@ async fn verify_board(session: &conwrt_local_std::ssh::SshSession, expected: &st
     }
 }
 
-async fn wait_for_ssh(ip: &str, timeout: Duration) {
+async fn wait_for_ssh(ip: &str, timeout: Duration) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + timeout;
     println!(
         "waiting for post-flash SSH at {ip}:22 (up to {}s) ...",
@@ -168,7 +217,7 @@ async fn wait_for_ssh(ip: &str, timeout: Duration) {
                 .is_ok_and(|r| r.is_ok_and(|n| n > 0))
                 && banner.starts_with(b"SSH-")
             {
-                return;
+                return Ok(());
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await;

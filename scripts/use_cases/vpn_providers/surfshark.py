@@ -16,6 +16,7 @@ from .base import (
     build_firewall_ops,
     build_verify_ops,
     keypair_sh,
+    wg0_uci_sh,
     static_route_sh,
     transport_sh,
     wg_cleanup_sh,
@@ -54,42 +55,38 @@ PEER_IP=$(echo "$WG_RESP" | json_get ipAddress)
 # Strip CIDR if present
 PEER_IP=${{PEER_IP%%/*}}
 
-# Fetch server list and pick best
+# Fetch server list and pick best (v4 clusters: public endpoint, hostname-only
+# entries — connectionName/pubKey; no IP field, so the endpoint is a DNS name)
 SERVERS=$(curl -s -m 15 \\
-    "https://api.surfshark.com/v3/servers" \\
-    -H "Authorization: Bearer ${{AUTH_TOKEN}}")
+    "https://api.surfshark.com/v4/server/clusters/generic?countryCode=" \\
+    -H "Content-Type: application/json")
 if [ -n "{country_filter}" ]; then
-    SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.servers[] | select(.country | test("{country}";"i"))] | .[0]')
+    SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.[] | select(.country | test("{country}";"i"))] | .[0]')
 else
-    SERVER_ENTRY=$(echo "$SERVERS" | jq -r '.servers[0]')
+    SERVER_ENTRY=$(echo "$SERVERS" | jq -r '.[0]')
 fi
-SERVER_IP=$(echo "$SERVER_ENTRY" | json_get publicIp)
-SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get publicKey)
+SERVER_HOST=$(echo "$SERVER_ENTRY" | json_get connectionName)
+SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get pubKey)
 SERVER_PORT=51820
+# Resolve the endpoint hostname for the static /32 route; skip the route
+# (netifd's wireguard proto installs its own endpoint route) when DNS fails.
+# BusyBox nslookup (OpenWrt 25.12.5, verified live 2026-10-14) prints the
+# resolver as "Address: <ip>:53" and each answer as "Address: <ip>".
+SERVER_IP=$(nslookup "$SERVER_HOST" 2>/dev/null | awk '$1=="Address:" && $2 ~ /^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$/ {{print $2}}' | tail -1)
+[ -n "$SERVER_KEY" ] && [ -n "$SERVER_HOST" ] \\
+    || {{ echo 'Surfshark: server list incomplete — aborting before wg0 cleanup'; exit 1; }}
 
 {wg_cleanup_sh()}
 
 SS_PRIV=$(cat /tmp/vpn_private.key)
 
 # Configure WireGuard interface
-uci set network.wg0=interface
-uci set network.wg0.proto='wireguard'
-uci set network.wg0.private_key="$SS_PRIV"
-uci set network.wg0.listen_port='51820'
-uci add_list network.wg0.addresses="${{PEER_IP}}/32"
-uci set network.wg0.mtu='1280'
-uci set network.wg0.auto='1'
+{wg0_uci_sh('"$SS_PRIV"', '"${PEER_IP}/32"', '"$SERVER_KEY"', '"$SERVER_HOST"', '"$SERVER_PORT"')}
 
-# Add Surfshark peer
-uci add network wireguard_wg0
-uci set network.@wireguard_wg0[0].public_key="$SERVER_KEY"
-uci set network.@wireguard_wg0[0].endpoint_host="$SERVER_IP"
-uci set network.@wireguard_wg0[0].endpoint_port="$SERVER_PORT"
-uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'
-uci set network.@wireguard_wg0[0].route_allowed_ips='1'
-uci set network.@wireguard_wg0[0].persistent_keepalive='25'
-
-{static_route_sh("SERVER_IP", gateway, upstream_iface, "surfshark_server_route")}
+if [ -n "$SERVER_IP" ]; then
+{static_route_sh("SERVER_IP", gateway, upstream_iface, "surfshark_server_route")}else
+    echo "Surfshark: endpoint DNS unresolved — skipping static route (netifd installs its own)"
+fi
 """
 
     ops: list[Op] = [

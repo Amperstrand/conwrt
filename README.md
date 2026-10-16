@@ -80,6 +80,7 @@ Useful targets:
 | `make integration` | Full QEMU OpenWrt VM suite incl. a real `conwrt flash` sysupgrade lifecycle | Yes (local VM) |
 | `make bench` | Bufferbloat benchmark: latency under load before/after SQM | Yes (local VM) |
 | `make e2e` | Tests against a physical router (needs `CONWRT_DEVICE_IP`) | No — real device |
+| `make test-live` | Live VPN provider API contract tests (no router; credential-gated subset needs env secrets) | Yes (network) |
 
 Device flashing targets (these mutate real hardware):
 

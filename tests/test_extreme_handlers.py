@@ -1,7 +1,6 @@
 """Tests for conwrt.extreme state handlers and profile helpers."""
 from __future__ import annotations
 
-import pytest
 
 import json
 import queue
@@ -168,7 +167,6 @@ class TestExtremeStockPreflight(TestCase):
     @patch("conwrt.extreme._prepare_extreme_tftp_root")
     @patch("conwrt.extreme._ssh_with_password")
     @patch("conwrt.extreme.TFTPServerManager")
-    @pytest.mark.xfail(reason="transition-gate vs evolved extreme handlers — see #141", strict=False)
     def test_preflight_success_sets_next_state(
         self, mock_tftp, mock_ssh, mock_prepare_tftp, mock_setup, mock_backup_dir,
         mock_write_json, mock_cfg_ip, mock_isfile,

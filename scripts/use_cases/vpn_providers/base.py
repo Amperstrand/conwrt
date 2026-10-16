@@ -82,6 +82,43 @@ def transport_sh(body: str, script_path: str = "/tmp/vpn_setup.sh") -> str:
     )
 
 
+def wg0_uci_sh(
+    priv_key: str,
+    address: str,
+    peer_key: str,
+    endpoint_host: str,
+    endpoint_port: str,
+    mtu: str = "1280",
+    keepalive: str = "25",
+    listen_port: bool = True,
+) -> str:
+    """The shared WireGuard interface + peer uci stanza.
+
+    Arguments are shell fragments as they appear in the generated script
+    (variable references like '"$WG_PRIV"' or single-quoted literals like
+    "'10.5.0.2/32'") so each provider keeps its own variable names while
+    the stanza itself is defined once.
+    """
+    listen = "uci set network.wg0.listen_port='51820'\n" if listen_port else ""
+    return (
+        f"uci set network.wg0=interface\n"
+        f"uci set network.wg0.proto='wireguard'\n"
+        f"uci set network.wg0.private_key={priv_key}\n"
+        f"{listen}"
+        f"uci add_list network.wg0.addresses={address}\n"
+        f"uci set network.wg0.mtu='{mtu}'\n"
+        f"uci set network.wg0.auto='1'\n"
+        f"\n"
+        f"uci add network wireguard_wg0\n"
+        f"uci set network.@wireguard_wg0[0].public_key={peer_key}\n"
+        f"uci set network.@wireguard_wg0[0].endpoint_host={endpoint_host}\n"
+        f"uci set network.@wireguard_wg0[0].endpoint_port={endpoint_port}\n"
+        f"uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n"
+        f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
+        f"uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'\n"
+    )
+
+
 def static_route_sh(
     server_var: str,
     gateway: str,

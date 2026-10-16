@@ -18,6 +18,7 @@ test-results/
 
 # Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
 data/inventory.jsonl
+data/active-sessions.jsonl
 scripts/data/
 captures/
 scripts/captures/
@@ -85,6 +86,12 @@ tests/integration/.openwrt.img.prepped-*
 # Operator-private conwrt config (README: "config.toml is gitignored") —
 # never commit; tests inject their own via CONWRT_CONFIG
 config.toml
+# …except cargo's build config in firmware apps (linker scripts, [build]
+# target) — required for the cortex-m link, must be committed
+!apps/*/.cargo/config.toml
 
 # Local Python virtualenv (dev setup) — never commit
 .venv/
+
+# Local env/credential files — never commit
+.env*

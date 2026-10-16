@@ -1,0 +1,13 @@
+# conwrt host builds pin ONE numbered stable — Lane A of the toolchain
+# policy (see the 2026-10-13 cargo-cache writeup). A floating "stable"
+# meant every `rustup update` silently recompiled the whole dependency
+# tree into the shared machine-wide target cache, leaving the old
+# artifact universe orphaned behind it.
+#
+# - Bump this pin deliberately (with the workspace `rust-version` MSRV
+#   floor in Cargo.toml as the compatibility guarantee).
+# - Embedded/OpenWrt cross-builds (mips, #109) will pin their own older
+#   lane (1.94.x, matching the OpenWrt SDK) when that work lands.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

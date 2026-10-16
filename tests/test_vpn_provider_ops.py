@@ -371,7 +371,8 @@ class TestIvpnOps:
 
     def test_server_list_fetched(self):
         r = render_shell(_build_ivpn_ops(IVPN_PARAMS))
-        assert "v4/servers" in r
+        assert "v4/servers.json" in r
+        assert ".wireguard[].hosts[]" in r, "current IVPN JSON shape is {wireguard: [{hosts: [...]}]}" 
 
     def test_wireguard_interface_configured(self):
         r = render_shell(_build_ivpn_ops(IVPN_PARAMS))
@@ -394,7 +395,13 @@ SURFSHARK_PARAMS = {
 class TestSurfsharkOps:
     def test_api_endpoint_present(self):
         r = render_shell(_build_surfshark_ops(SURFSHARK_PARAMS))
-        assert "api.surfshark.com" in r
+        assert "api.surfshark.com/v4/server/clusters/generic" in r
+
+    def test_v4_cluster_fields_parsed(self):
+        r = render_shell(_build_surfshark_ops(SURFSHARK_PARAMS))
+        assert "json_get connectionName" in r
+        assert "json_get pubKey" in r
+        assert 'endpoint_host="$SERVER_HOST"' in r
 
     def test_credentials_injected(self):
         r = render_shell(_build_surfshark_ops(SURFSHARK_PARAMS))
@@ -636,26 +643,101 @@ class TestNordvpnPinnedServerKey:
         assert port == "51820"
         assert "hostname" in mock_api.call_args.args[0]
 
-    def test_ip_pin_yields_public_key(self):
+    def test_ip_pin_refuses_with_hostname_guidance(self):
+        """NordVPN's API ignores stations[ip] filters (returns an arbitrary
+        100-server page) — an IP pin must refuse, never pick a random server."""
         from use_cases.vpn_providers import nordvpn as nv
 
-        server = {
-            "hostname": "de1507.nordvpn.com", "station": "187.40.55.114",
-            "technologies": [{"identifier": "wireguard_udp",
-                              "metadata": [{"name": "public_key", "value": "PUBKEY123"}]}],
-        }
-        with patch.object(nv, "_api_get", return_value=[server]) as mock_api:
-            endpoint, port, key = nv._resolve_endpoint("187.40.55.114:51820", "token")
-        assert key == "PUBKEY123"
-        assert endpoint == "187.40.55.114"
-        assert port == "51820"
-        assert "stations" in mock_api.call_args.args[0]
+        with patch.object(nv, "_api_get") as mock_api:
+            import pytest as _pytest
+            with _pytest.raises(ValueError, match="pin by hostname"):
+                nv._resolve_endpoint("187.40.55.114:51820", "token")
+        mock_api.assert_not_called()
+
+    def test_hostname_pin_survives_ignored_filter(self):
+        """Even when the API ignores the filter and returns unrelated servers,
+        the pin resolves client-side or refuses — never a random pick."""
+        from use_cases.vpn_providers import nordvpn as nv
+
+        unrelated = {"hostname": "uk765.nordvpn.com", "station": "89.35.28.131",
+                     "technologies": [{"identifier": "wireguard_udp",
+                                       "metadata": [{"name": "public_key", "value": "WRONG"}]}]}
+        import pytest as _pytest
+        with patch.object(nv, "_api_get", return_value=[unrelated]):
+            with _pytest.raises(ValueError, match="ignores filters"):
+                nv._resolve_endpoint("de1507.nordvpn.com", "token")
+
+    def test_resolve_server_hostname_returns_full_object(self):
+        from use_cases.vpn_providers import nordvpn as nv
+
+        server = {"hostname": "de1507.nordvpn.com", "station": "187.40.55.114"}
+        with patch.object(nv, "_api_get", return_value=[
+            {"hostname": "other.nordvpn.com", "station": "9.9.9.9"}, server,
+        ]):
+            resolved = nv._resolve_server("de1507.nordvpn.com", "token", "openvpn_udp")
+        assert resolved is server, "must select the pinned hostname, not [0]"
 
     def test_pin_without_wg_key_raises(self):
         from use_cases.vpn_providers import nordvpn as nv
 
-        server = {"hostname": "legacy.example", "station": "1.2.3.4", "technologies": []}
+        server = {"hostname": "de1507.nordvpn.com", "station": "1.2.3.4", "technologies": []}
         with patch.object(nv, "_api_get", return_value=[server]):
             import pytest as _pytest
             with _pytest.raises(ValueError, match="wireguard_udp public key"):
-                nv._resolve_endpoint("1.2.3.4", "token")
+                nv._resolve_endpoint("de1507.nordvpn.com", "token")
+
+
+class TestSurfsharkEndpointDnsParse:
+    """The static-route DNS resolution must parse real BusyBox nslookup
+    output (OpenWrt 25.12.5, captured live 2026-10-14) — the first shipped
+    version assumed a GNU format and silently resolved nothing on-device."""
+
+    CAPTURED = (
+        "Server:\t\t127.0.0.1\n"
+        "Address:\t127.0.0.1:53\n"
+        "\n"
+        "Non-authoritative answer:\n"
+        "Name:\tal-tia.prod.surfshark.com\n"
+        "Address: 172.216.15.213\n"
+    )
+
+    @staticmethod
+    def _awk_program() -> str:
+        import re
+        from use_cases.vpn_providers.surfshark import _build_surfshark_ops
+        from profile.ops import render_shell
+        script = render_shell(_build_surfshark_ops(
+            {"username": "u", "password": "p", "upstream_gateway": "192.168.1.1"}))
+        line = next(l for l in script.splitlines() if "Address:" in l and "awk" in l)
+        m = re.search(r"awk '(.*)' \| tail", line)
+        assert m, f"awk program not found in: {line}"
+        return m.group(1)
+
+    def test_parses_busybox_answer_not_resolver(self):
+        import subprocess
+        r = subprocess.run(
+            ["awk", self._awk_program()],
+            input=self.CAPTURED, capture_output=True, text=True, check=True,
+        )
+        assert r.stdout.strip() == "172.216.15.213"
+
+    def test_multiple_answers_takes_last(self):
+        import subprocess
+        out = (
+            "Server:\t\t127.0.0.1\nAddress:\t127.0.0.1:53\n\n"
+            "Name:\thost\nAddress: 1.1.1.1\nAddress: 2.2.2.2\n"
+        )
+        lines = [l for l in subprocess.run(
+            ["awk", self._awk_program()],
+            input=out, capture_output=True, text=True, check=True,
+        ).stdout.splitlines() if l.strip()]
+        assert lines[-1] == "2.2.2.2"
+
+    def test_no_answer_yields_empty(self):
+        import subprocess
+        out = "Server:\t\t127.0.0.1\nAddress:\t127.0.0.1:53\n;; connection timed out\n"
+        r = subprocess.run(
+            ["awk", self._awk_program()],
+            input=out, capture_output=True, text=True, check=True,
+        )
+        assert r.stdout.strip() == ""
