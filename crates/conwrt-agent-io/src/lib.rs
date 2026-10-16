@@ -27,6 +27,8 @@ use conwrt_agent_proto::cobs::{CobsPump, encode_frame as cobs_encode};
 use conwrt_agent_proto::dispatch::{WireFrame, decode_frame, encode_frame};
 use conwrt_agent_proto::server::ServerCore;
 
+use embassy_futures::select::{Either, select};
+
 /// Full-speed USB bulk max packet size (the common CDC case).
 pub const CDC_FS_PACKET: usize = 64;
 
@@ -182,6 +184,80 @@ async fn send_pending_events<T: StreamIo>(io: &mut T, server: &mut ServerCore) {
     for event in server.take_events() {
         if let Ok(bytes) = encode_frame(&WireFrame::Event(event)) {
             write_all_stream(io, &cobs_encode(&bytes)).await;
+        }
+    }
+}
+
+/// UART RX chunk size for [`agent_session_stream_events`] — console lines,
+/// not bulk data.
+const EVENT_BUF: usize = 64;
+
+/// An out-of-band data source feeding the agent's event queue: the
+/// firmware's UART RX half, a channel in host tests. Implementations
+/// backing `wait_data` MUST be cancel-safe (the session selects them
+/// against stream reads and drops the loser mid-await).
+// AFIT per ADR-0002, same trade as [`PacketIo`]/[`StreamIo`].
+#[allow(async_fn_in_trait)]
+pub trait EventSource {
+    /// Transport error type.
+    type Error;
+
+    /// Wait for data; fills `buf`, returns bytes read. `Ok(0)` ends the
+    /// session (source closed).
+    ///
+    /// # Errors
+    /// Transport failure — the caller ends the session.
+    async fn wait_data(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error>;
+}
+
+/// [`agent_session_stream`] plus a live event source: the firmware
+/// shape (#215 slice 4) — controller frames on the stream, UART RX from
+/// [`EventSource`], both driving one [`ServerCore`]. Events flow to the
+/// controller as they arrive (not just after replies), so a passively
+/// listening controller sees a boot banner without sending anything.
+/// Returns when either side errors or reaches end-of-stream; the caller
+/// owns reconnection and session reset.
+pub async fn agent_session_stream_events<T: StreamIo, E: EventSource>(
+    io: &mut T,
+    events: &mut E,
+    server: &mut ServerCore,
+) {
+    let mut buf = [0u8; STREAM_READ_BUF];
+    let mut evbuf = [0u8; EVENT_BUF];
+    let mut pump = CobsPump::new();
+    loop {
+        match select(io.read(&mut buf), events.wait_data(&mut evbuf)).await {
+            Either::First(read) => {
+                let Ok(n) = read else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                pump.feed(&buf[..n]);
+                while let Some(frame) = pump.pop_frame() {
+                    let Some(response) = decode_frame(&frame)
+                        .ok()
+                        .and_then(|decoded| server.handle_frame(decoded))
+                    else {
+                        continue;
+                    };
+                    if let Ok(bytes) = encode_frame(&response) {
+                        write_all_stream(io, &cobs_encode(&bytes)).await;
+                    }
+                    send_pending_events(io, server).await;
+                }
+            }
+            Either::Second(ev) => {
+                let Ok(n) = ev else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                server.push_uart_data(0, &evbuf[..n]);
+                send_pending_events(io, server).await;
+            }
         }
     }
 }
