@@ -89,6 +89,8 @@ config.toml
 # …except cargo's build config in firmware apps (linker scripts, [build]
 # target) — required for the cortex-m link, must be committed
 !apps/*/.cargo/config.toml
+# (the bare `config.toml` pattern also covers the worktree-local
+# .cargo/config.toml that scripts/dev-session.sh start writes — intended)
 
 # Local Python virtualenv (dev setup) — never commit
 .venv/
