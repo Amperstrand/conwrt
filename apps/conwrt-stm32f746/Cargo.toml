@@ -20,6 +20,7 @@ publish = false
 [dependencies]
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
 conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-net"] }
+conwrt-executor = { path = "../../crates/conwrt-executor", features = ["embassy-net"] }
 
 embassy-stm32 = { version = "0.6.0", features = ["stm32f746ng", "memory-x", "time-driver-any", "exti"] }
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }

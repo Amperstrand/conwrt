@@ -757,6 +757,8 @@ name = "conwrt-executor"
 version = "0.1.0"
 dependencies = [
  "conwrt-agent-proto",
+ "embassy-net",
+ "embedded-io-async 0.7.0",
  "tokio",
 ]
 
