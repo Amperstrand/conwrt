@@ -195,7 +195,9 @@ for pr in json.load(sys.stdin):
         printf '%-22s %-38s %-16s %10s  %s\n' \
             "$name" "${branch:-—}" "$state" "$mb" "$action"
       done
-    [ "$apply" = 0 ] && echo "(dry-run — pass --apply to act; --days N sets the idle threshold, default 4)"
+    if [ "$apply" = 0 ]; then
+        echo "(dry-run — pass --apply to act; --days N sets the idle threshold, default 4)"
+    fi
     ;;
   *)
     sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 1 ;;
