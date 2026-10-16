@@ -8,6 +8,7 @@ members = [
     "crates/conwrt-image",
     "crates/conwrt-agent-proto",
     "crates/conwrt-agent-io",
+    "crates/conwrt-executor",
     "providers/conwrt-local-std",
     "apps/conwrt-cli",
     "apps/conwrt-agent",

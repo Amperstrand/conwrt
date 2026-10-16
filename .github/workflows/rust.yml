@@ -40,7 +40,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
-          cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto -p conwrt-agent-io --no-default-features --target thumbv7em-none-eabihf
+          cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto -p conwrt-agent-io -p conwrt-executor --no-default-features --target thumbv7em-none-eabihf
           # The embassy-net StreamIo impl only compiles under its feature;
           # cross-check it for the firmware targets too (#215 slice 3).
           cargo check -p conwrt-agent-io --no-default-features --features embassy-net --target thumbv7em-none-eabihf
