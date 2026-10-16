@@ -92,15 +92,21 @@ profile, static `size` only — nothing flashed):
 | STM32F469I-DISCO (secondary) | +134.7 / +149.4 KiB | +18.7 KiB | fits comfortably | **flash gate blown** (same gates) |
 | ESP32-S3 (8 MiB / 512 KiB) | +207.2 / +227.4 KiB | +19.1 KiB | fits | **flash gate blown** (383 KiB vs 256 KiB; ram ok) |
 
-- **Interop floor closed**: against a real Dropbear **2024.86** (OpenWrt
-  24.10's version, built from upstream source), sunset 0.6 negotiates
-  `curve25519-sha256` / `chacha20-poly1305@openssh.com` /
-  `ssh-ed25519`, host-key verify + ed25519 pubkey auth + exec all pass —
-  exactly this ADR's floor, no ssh-rsa/SHA-1 anywhere.
+- **Interop floor closed on both OpenWrt branches**: against a real
+  Dropbear **2024.86** (OpenWrt 24.10, built from upstream source),
+  sunset 0.6 negotiates `curve25519-sha256` /
+  `chacha20-poly1305@openssh.com` / `ssh-ed25519`, host-key verify +
+  ed25519 pubkey auth + exec all pass — exactly this ADR's floor, no
+  ssh-rsa/SHA-1 anywhere. Against real Dropbear **2026.94** (main) the
+  same client additionally completed a negotiated
+  `mlkem768x25519-sha256` session end-to-end — which also isolates the
+  spike's in-harness mlkem `BadKex` to sunset-as-server.
 - **Caveats for the revisit**: sunset-async's dependency edge re-enables
   sunset's mlkem default (feature unification) — floor builds need a
-  patched sunset-async; sunset's mlkem768x25519 hybrid kex fails in-harness
-  (`BadKex` in ml-kem 0.3.2 key validation, floor kex unaffected); getrandom
+  patched sunset-async; sunset's mlkem768x25519 hybrid kex fails
+  in-harness when sunset is the server (`BadKex` in ml-kem 0.3.2 key
+  validation; sunset-as-client works against Dropbear 2026.94); getrandom
   0.4 on no_std needs the `custom` backend cfg. All detailed in the spike
-  doc.
+  doc; human-submission upstream report drafts for these three live in
+  `docs/upstream-drafts/` (external-repo etiquette: filed by humans only).
 
