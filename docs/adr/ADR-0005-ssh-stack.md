@@ -74,20 +74,23 @@ SSH via sunset is deferred beyond the current roadmap; re-adopt only when
 all three hold: (a) a milestone needs MCU-initiated SSH (a standalone
 sysupgrade executor is the plausible case — M6's recovery-http/TFTP paths
 do not need SSH), (b) the F746's embassy-net transport (#215 slice 3/4)
-gives a real network path to run it over, and (c) for the ESP32-S3 the
-256 KiB fleet flash gate is consciously raised or SSH is feature-gated
-out of the S3 image. Deferred ≠ blocked on merit; the numbers below say
-the *algorithm* choice was sound and the cost is known.
+gives a real network path to run it over, and (c) the fleet CI size gates
+are consciously re-budgeted for an SSH-carrying image — **every** current
+MCU gate is exceeded by a floor sunset build (128 KiB STM32 flash gates
+at 194 KiB; 256 KiB S3 flash gate at 383 KiB; RAM gates all still pass).
+Deferred ≠ blocked on merit; the numbers below say the *algorithm* choice
+was sound and the cost is known — the blockers are policy (gates) and a
+missing network transport, not the silicon.
 
 Evidence summary (sunset 0.6.0 + sunset-async 0.6.0 linked into the
 actual agent skeletons, full-stack "hello-exec" session, release
 profile, static `size` only — nothing flashed):
 
-| Target | Δ flash (floor / mlkem) | Δ RAM | Fits? |
-|---|---|---|---|
-| STM32F746G-DISCO (1 MiB / 320 KiB) | +134.2 / +148.5 KiB | +18.7 KiB | yes, comfortably |
-| STM32F469I-DISCO (secondary) | +134.4 / +148.7 KiB | +18.7 KiB | yes |
-| ESP32-S3 (fleet gate 256/128 KiB) | +207.1 / +227.4 KiB | +19.1 KiB | **breaks the flash gate** (383 KiB total) |
+| Target | Δ flash (floor / mlkem) | Δ RAM | Silicon | Fleet CI gate |
+|---|---|---|---|---|
+| STM32F746G-DISCO (1 MiB / 320 KiB) | +134.3 / +149.1 KiB | +18.7 KiB | fits comfortably | **flash gate blown** (194 KiB vs 128 KiB; bss ok) |
+| STM32F469I-DISCO (secondary) | +134.7 / +149.4 KiB | +18.7 KiB | fits comfortably | **flash gate blown** (same gates) |
+| ESP32-S3 (8 MiB / 512 KiB) | +207.2 / +227.4 KiB | +19.1 KiB | fits | **flash gate blown** (383 KiB vs 256 KiB; ram ok) |
 
 - **Interop floor closed**: against a real Dropbear **2024.86** (OpenWrt
   24.10's version, built from upstream source), sunset 0.6 negotiates

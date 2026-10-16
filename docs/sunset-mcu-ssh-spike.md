@@ -14,13 +14,15 @@ same `thumbv7em-none-eabihf` class) as secondary, and
 run client↔server over an in-memory duplex (two embassy channels standing in
 for the TCP socket). One invocation exercises ident exchange, KEX, host-key
 sign/verify, NEWKEYS cipher switch, password userauth, session-channel open,
-`exec "hello"`, payload round-trip and channel close — so every algorithm
-sunset offers is linked and counted.
+`exec "hello"` and the payload round-trip (client-verified) — so every
+algorithm sunset offers is linked and counted.
 
 The harness runs **identical source on host (std) and both MCU targets**;
-it was verified live on the host (full session, `got_hello: true`) before
-cross-building. Session buffers follow upstream demo sizing (2 KiB in/out
-per side → 8 KiB of the RAM delta is the two per-session buffer pairs).
+it was verified live on the host (full session, client-reported
+`got_hello: true, exit_zero: false` — the client's exact-payload match is
+the completion criterion; see finding 6) before cross-building. Session
+buffers follow upstream demo sizing (2 KiB in/out per side → 8 KiB of the
+RAM delta is the two per-session buffer pairs).
 
 Variants per target:
 
@@ -40,25 +42,31 @@ protocol heap). ESP32-S3 = the fleet CI size-gate formula.
 | Target | Variant | Flash | Δ flash | RAM | Δ RAM |
 |---|---|---|---|---|---|
 | STM32F746G-DISCO (`stm32f746ng`, 1 MiB flash / 320 KiB SRAM) | baseline | 59.6 KiB | — | 43.7 KiB | — |
-| | + sunset floor | 193.9 KiB | **+134.2 KiB** | 62.3 KiB | +18.7 KiB |
-| | + sunset mlkem | 208.2 KiB | +148.5 KiB | 62.5 KiB | +18.8 KiB |
+| | + sunset floor | 193.9 KiB | **+134.3 KiB** | 62.3 KiB | +18.7 KiB |
+| | + sunset mlkem | 208.7 KiB | +149.1 KiB | 62.5 KiB | +18.8 KiB |
 | STM32F469I-DISCO (`stm32f469ni`, secondary data point) | baseline | 57.8 KiB | — | 43.6 KiB | — |
-| | + sunset floor | 192.3 KiB | +134.4 KiB | 62.3 KiB | +18.7 KiB |
-| | + sunset mlkem | 206.6 KiB | +148.7 KiB | 62.4 KiB | +18.8 KiB |
+| | + sunset floor | 192.5 KiB | +134.7 KiB | 62.3 KiB | +18.7 KiB |
+| | + sunset mlkem | 207.3 KiB | +149.4 KiB | 62.4 KiB | +18.8 KiB |
 | ESP32-S3 (`xtensa-esp32s3-none-elf`, 8 MiB flash / 512 KiB SRAM) | baseline | 176.0 KiB | — | 80.7 KiB | — |
-| | + sunset floor | 383.1 KiB | **+207.1 KiB** | 99.8 KiB | +19.1 KiB |
+| | + sunset floor | 383.2 KiB | **+207.2 KiB** | 99.8 KiB | +19.1 KiB |
 | | + sunset mlkem | 403.4 KiB | +227.4 KiB | 100.0 KiB | +19.2 KiB |
 
-Reading:
+Reading (silicon vs fleet CI gate — the two tell different stories):
 
-- **STM32F746 (the issue's target): affordable.** +134 KiB floor /
-  +149 KiB mlkem of 1 MiB flash (~15%), +19 KiB RAM of 320 KiB (~6%).
-  Roughly reproduces upstream's "~150 kB flash on Pico W" claim on the
-  M7 and beats it with the floor config.
-- **ESP32-S3: breaks the fleet size gate.** Baseline 176 KiB + floor
-  207 KiB = 383 KiB > the 256 KiB flash budget in
-  `.github/workflows/rust.yml` (the S3's physical 8 MiB flash is not the
-  constraint — the gate is a policy budget). RAM stays inside the 128 KiB
+- **STM32F746 (the issue's target): fine on silicon, over the fleet
+  gate.** +134 KiB floor / +149 KiB mlkem of 1 MiB flash (~15%), +19 KiB
+  RAM of 320 KiB (~6%) — affordable on the chip, and roughly reproduces
+  upstream's "~150 kB flash on Pico W" claim on the M7. BUT the fleet CI
+  gates in `.github/workflows/rust.yml` are uniform and conservative:
+  **text+data ≤ 128 KiB and bss ≤ 96 KiB for both `apps/conwrt-stm32`
+  and `apps/conwrt-stm32f746`** — a floor sunset build (198,600 B
+  text+data) exceeds the 131,072-byte flash budget by ~52% (RAM gates
+  still pass: bss 62.5 KiB ≤ 96 KiB). Adopting SSH on any STM32 image
+  therefore also needs a deliberate per-app gate change, exactly like
+  the S3.
+- **ESP32-S3: breaks its fleet gate.** Baseline 176 KiB + floor 207 KiB =
+  383 KiB > the 256 KiB flash budget (the S3's physical 8 MiB flash is
+  not the constraint — the gate is policy). RAM stays inside the 128 KiB
   gate. The Xtensa delta is ~1.5× the Cortex-M7 delta (no AES/SHA
   hardware use via RustCrypto on Xtensa; same `opt-level = "s"` + LTO).
 - Per-session runtime RAM on top of the static delta is ~13 KiB
@@ -192,6 +200,18 @@ exact OpenWrt 24.10 Dropbear version.
 5. **ESP32-S3 gate**: SSH-on-S3 (+207 KiB floor) exceeds the 256 KiB
    fleet flash budget on its own; adopting SSH there requires raising
    the gate for a dedicated profile or keeping the S3 image SSH-free.
+6. **sunset 0.6 has no server-side active close/exit-status path in the
+   async API.** `ChannelEof`/`ChannelClose` are only emitted in response
+   to the peer's (passive close — `handle_eof`/`handle_close` in
+   `src/channel.rs`), and no `ServEvent`/`ChanIO` method sends an exec
+   `exit-status`. A hello-exec server cannot actively signal completion,
+   so the harness's success criterion is the client's exact-payload
+   match (`hello\n` received verbatim, reported by the client side
+   only), and the client outcome honestly reports `exit_zero: false`.
+   Upstream demos never exercise server-initiated exec completion (they
+   serve shells until the client disconnects). A real conwrt
+   agent-over-SSH server needs this upstream, or client-side payload
+   framing as a workaround.
 
 ## Appendix A — harness source (identical for host check and both MCUs)
 
@@ -345,6 +365,9 @@ pub async fn run() -> Result<HelloOutcome> {
     let serv = SSHServer::new(&mut serv_rxbuf, &mut serv_txbuf);
 
     let cli_io = client_session(&cli);
+    // The server's own view ("payload buffered") proves nothing about
+    // client receipt — only the client outcome (pump EOF after full
+    // read + channel close) does.
     let serv_io = server_session(&serv);
 
     // Transport: client reads s2c / writes c2s; server the opposite.
@@ -355,19 +378,19 @@ pub async fn run() -> Result<HelloOutcome> {
     let cli_transport = cli.run(&mut cli_rd, &mut cli_wr);
     let serv_transport = serv.run(&mut serv_rd, &mut serv_wr);
 
-    // Sessions and transports run concurrently; the first session to
-    // finish (success or error) ends the run — dropping the losing
-    // futures is safe for a one-shot hello (the client only finishes
-    // after the payload arrived).
+    // The CLIENT outcome is the truth: its pump only completes on EOF
+    // after the full payload round-trip. The server keeps polling until
+    // dropped (sunset only flushes a channel close from inside
+    // progress() — clear_refcounts), so on the success path the client
+    // always finishes first; a server result here means it errored (or
+    // the client vanished), which fails the run.
     let sessions = async {
         match embassy_futures::select::select(cli_io, serv_io).await {
-            embassy_futures::select::Either::First(r) => {
-                log::info!("client session finished first: {r:?}");
-                r
-            }
-            embassy_futures::select::Either::Second(r) => {
-                log::info!("server session finished first: {r:?}");
-                r
+            embassy_futures::select::Either::First(cli_outcome) => cli_outcome,
+            embassy_futures::select::Either::Second(serv_r) => {
+                log::error!("server session ended first: {serv_r:?}");
+                serv_r?;
+                Error::bug()
             }
         }
     };
@@ -380,7 +403,7 @@ pub async fn run() -> Result<HelloOutcome> {
             let _ = st?;
             Error::bug()
         }
-        embassy_futures::select::Either::Second(outcome) => outcome,
+        embassy_futures::select::Either::Second(cli_outcome) => cli_outcome,
     }
 }
 
@@ -472,6 +495,13 @@ async fn client_session<'b, 'a>(cli: &'b SSHClient<'a>) -> Result<HelloOutcome> 
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let _ = collected.extend_from_slice(&buf[..n]);
+                    // sunset 0.6 has no server-side active EOF/close API
+                    // (ChannelEof/Close are only sent in response to the
+                    // peer's), so the payload round-trip itself is the
+                    // completion criterion — exact match on "hello\n".
+                    if collected.as_slice() == b"hello\n" {
+                        break;
+                    }
                 }
             }
         }
@@ -495,7 +525,9 @@ async fn client_session<'b, 'a>(cli: &'b SSHClient<'a>) -> Result<HelloOutcome> 
 }
 
 /// Server: host key, password auth (spike/pw), exec "hello" → "hello\n".
-async fn server_session(serv: &SSHServer<'_>) -> Result<HelloOutcome> {
+/// Completes after buffering the payload write; the client's outcome is
+/// the authoritative one.
+async fn server_session(serv: &SSHServer<'_>) -> Result<()> {
     let hostkey = SignKey::generate(KeyType::Ed25519, None)?;
     let mut chan: Option<ChanHandle> = None;
 
@@ -550,16 +582,18 @@ async fn server_session(serv: &SSHServer<'_>) -> Result<HelloOutcome> {
                     let mut io = serv.stdio(ch).await?;
                     io.write_all(b"hello\n").await?;
                 }
-                // Payload delivered and channel close sent when `io` drops
-                // at the end of this block — session complete.
-                break;
+                // Payload buffered. Do NOT break: sunset flushes the
+                // channel EOF/close (refcount-zero handling) only from
+                // inside progress() — keep polling so the client
+                // actually receives it; the run loop drops this task
+                // once the client has completed its read.
             }
             ServAct::Done => break,
             ServAct::None => (),
         }
     }
 
-    Ok(HelloOutcome { got_hello: true, exit_zero: true })
+    Ok(())
 }
 ```
 
@@ -630,16 +664,16 @@ Total              105654
 conwrt-stm32f746  :
 section              size        addr
 .vector_table         456   0x8000000
-.text               175772   0x80001c8
-.rodata             21976   0x802b068
+.text               175844   0x80001c8
+.rodata             21976   0x802b0b0
 .data                 324   0x20000000
-.gnu.sgstubs            0   0x80307a0
+.gnu.sgstubs            0   0x80307e0
 .bss                62480   0x20000148
 .uninit              1024   0x2000f558
 .defmt                  6         0x0
 .comment              139         0x0
 .ARM.attributes        58       0x0
-Total              262235
+Total              262307
 ```
 
 ### conwrt-stm32f746, + sunset mlkem
@@ -648,16 +682,16 @@ Total              262235
 conwrt-stm32f746  :
 section              size        addr
 .vector_table         456   0x8000000
-.text               188984   0x80001c8
-.rodata             23408   0x802e400
+.text               189520   0x80001c8
+.rodata             23408   0x802e618
 .data                 324   0x20000000
-.gnu.sgstubs            0   0x80340c0
+.gnu.sgstubs            0   0x80342e0
 .bss                62624   0x20000148
 .uninit              1024   0x2000f5e8
 .defmt                  6         0x0
 .comment              139         0x0
 .ARM.attributes        58       0x0
-Total              277023
+Total              277559
 ```
 
 ### conwrt-esp32s3, baseline (xtensa-esp32s3-elf-size -A, excerpt)
@@ -689,16 +723,16 @@ section                  size         addr
 .rodata                 28720   1006633248
 .vectors                 1024   1077379072
 .rotext_dummy           65536   1107296288
-.text                  274005   1107361824
+.text                  274041   1107361824
 .stack                 248140   1070198196
-Total                  719969
-# CI formula: flash-bytes: 392314 (383 KiB)  ram-bytes: 102204 (100 KiB)
+Total                  720005
+# CI formula: flash-bytes: 392350 (383 KiB)  ram-bytes: 102204 (100 KiB)
 ```
 
 ### conwrt-esp32s3, + sunset mlkem (CI formula only)
 
 ```
-flash-bytes: 413062 (403 KiB)  ram-bytes: 102356 (100 KiB)
+flash-bytes: 413102 (403 KiB)  ram-bytes: 102356 (100 KiB)
 ```
 
 (F469I-DISCO raw outputs are byte-for-byte analogous to the F746 ones —
