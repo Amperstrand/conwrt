@@ -218,12 +218,48 @@ consequences:
 - The ADR-0005 floor holds on *both* OpenWrt branches (24.10 and main)
   — post-quantum falls out of the intersection for 24.10 and is
   additionally verified working on main.
-- **Finding 2 is isolated to sunset's server side**: a real Dropbear
-  2026.94 server accepts sunset's client mlkem encapsulation key and
-  completes KEX — the same client code path our in-memory harness uses —
-  so the in-harness `BadKex` comes from sunset-as-server
-  (`secret_encap_server`'s key validation), not from the client key
-  generation or our transport.
+- The client mlkem path is interoperable with a real server (a Dropbear
+  2026.94 server accepts sunset's client encapsulation key and completes
+  KEX). **Correction (2026-10-16, fork investigation): the in-harness
+  `BadKex` was never a sunset bug** — see finding 2 below: the spike's
+  own in-memory transport corrupted large writes; sunset 0.6.0 mlkem
+  works client *and* server.
+
+## Fork (Amperstrand/sunset @ ai-experiments)
+
+External-repo etiquette (AGENTS.md) forbids filing PRs/issues upstream,
+so conwrt-relevant patches are carried on an org fork instead — same
+pattern as Amperstrand/realtek-poe (pristine `main`, work on the side
+branch, no upstream interaction):
+
+- **Repo**: `https://github.com/Amperstrand/sunset` — branch
+  `ai-experiments`, based on the `sunset-0.6.0` tag (the version this
+  spike measured and validated; base deliberately pinned, not floating
+  upstream main).
+- **Carries**: (a) forwarded default-on `mlkem` feature on
+  `sunset-async` (embedded opt-out for finding 1); (b) regression
+  tests — a full client↔server hello-exec session over tokio duplex
+  (negotiates `mlkem768x25519-sha256` with default features) and a
+  100× ml-kem 0.3.2 ek roundtrip.
+- **Validated**: mlkem session green on host (fork + the fixed harness
+  below); floor build green with `sunset-async` default-features=false
+  and ml-kem absent from the dependency tree.
+- **Future adoption pin** (M7+ revisit):
+
+  ```toml
+  [patch.crates-io]
+  # rev-pinned to the validated revision; move deliberately and re-run
+  # the fork's regression tests (cargo test -p sunset -p sunset-stdasync)
+  # when bumping.
+  sunset = { git = "https://github.com/Amperstrand/sunset", rev = "5e5f18354781957bd85284a3268793663b82a067" }
+  sunset-async = { git = "https://github.com/Amperstrand/sunset", rev = "5e5f18354781957bd85284a3268793663b82a067" }
+  # floor image: sunset-async = { ..., default-features = false }
+  ```
+
+  A moving `branch = "ai-experiments"` reference is deliberately NOT
+  used — it would silently resolve to whatever the tip happens to be at
+  the next lockfile refresh, bypassing the validation this document
+  records.
 
 ## Findings & caveats (recorded for the revisit)
 
@@ -231,29 +267,45 @@ consequences:
    unification.** A `sunset = { default-features = false }` app edge is
    not enough — sunset-async's dependency edge contributes the defaults.
    The floor builds here use a patched sunset-async (one-line
-   `default-features = false`, appendix A). Any real MCU adoption should
-   carry that patch (or get upstream to flip its edge).
-   Upstream draft: `docs/upstream-drafts/sunset-async-feature-unification-mlkem.md`.
-2. **mlkem768x25519 hybrid kex fails in-harness (BadKex).** With default
-   features (mlkem preferred), the in-memory server fails
-   `KexMlkemX25519::secret_encap_server` — the ml-kem 0.3.2
-   `EncapsulationKey::new()` validation rejects the client's
-   encapsulation key — error `BadKex`. **Isolated to sunset-as-server**
-   by the 2026.94 run above: a real Dropbear server accepts sunset's
-   client mlkem key and completes KEX, so the client key generation is
-   fine. Anyone adopting sunset for Post-Quantum paths should treat
-   sunset-as-*server* mlkem as broken until fixed.
-   Upstream draft: `docs/upstream-drafts/sunset-mlkem-server-encap-badkex.md`.
+   `default-features = false`, appendix A). **Carried on the fork now**
+   (see "Fork" below) as a forwarded default-on `mlkem` feature, so
+   `sunset-async = { default-features = false }` alone opts mlkem out —
+   validated: ml-kem fully absent from the dependency tree, session
+   green. Upstream draft (still worth filing):
+   `docs/upstream-drafts/sunset-async-feature-unification-mlkem.md`.
+2. **[CORRECTED 2026-10-16] The mlkem in-harness `BadKex` was the spike's
+   own transport bug — sunset 0.6.0 mlkem is fully functional.** The
+   original report blamed sunset-as-server; the fork investigation
+   (Amperstrand/sunset `ai-experiments`, regression tests) disproved it:
+   sunset's `output_loop` recreates the `write` future on every repoll,
+   and the harness's channel-backed `Write` was not restart-safe — any
+   write larger than the channel capacity (8 × 64 B = 512 B) parked
+   mid-write, then restarted from offset 0 on wake, duplicating its
+   prefix. curve25519's small KexDHInit never hit the limit; mlkem's
+   1240-byte one did (first corruption at byte 503 of the 1184-byte
+   encapsulation key). Evidence: client-emitted and server-received
+   bytes matched for the first 512 bytes and diverged after; upstream's
+   `test_each_kex` (mlkem) passes; a tokio-duplex regression test
+   passes; and the fixed harness (restart-safe `Tx` with a resume
+   offset, appendix A) completes a full negotiated-mlkem session on
+   host. Adopting sunset for Post-Quantum paths is fine — but any
+   in-memory `Write` handed to `SSHClient`/`SSHServer`::run MUST be
+   restart-safe (or return short writes instead of parking mid-buffer):
+   that sharp edge is worth an upstream doc note
+   (`docs/upstream-drafts/sunset-write-restart-safety-docs.md`).
 3. **getrandom 0.4 on no_std needs `--cfg getrandom_backend="custom"`**
    plus a `__getrandom_v03_custom` symbol. The spike's hook is a
    deterministic xorshift (measurement only — never flash); real
    hardware wires the SoC TRNG (F746 TRNG / S3 hardware RNG).
-4. **Embassy API notes**: `embassy-sync` 0.8 channels split via
+4. **Embassy/sunset API notes**: `embassy-sync` 0.8 channels split via
    `.sender()`/`.receiver()` (no `split()`); sunset's
    `ProgressHolder` mutex must be dropped before awaiting other
    `SSHClient`/`SSHServer` calls; reading a client channel before the
    server confirms CHANNEL_OPEN panics in sunset (`by_handle_mut`) —
-   hand channel IO to reader tasks only after `SessionOpened`.
+   hand channel IO to reader tasks only after `SessionOpened`;
+   `Write` impls passed to `SSHClient`/`SSHServer`::run must be
+   restart-safe (see finding 2 — sunset's output_loop recreates the
+   write future on every repoll).
 5. **ESP32-S3 gate**: SSH-on-S3 (+207 KiB floor) exceeds the 256 KiB
    fleet flash budget on its own; adopting SSH there requires raising
    the gate for a dedicated profile or keeping the S3 image SSH-free.
@@ -328,7 +380,17 @@ impl embedded_io_async::Error for LinkError {
 }
 
 /// Write half of one direction.
-struct Tx<'a>(Sender<'a, RawMutex, Chunk, 8>);
+///
+/// RESTART-SAFE by design: sunset's `output_loop` recreates the `write`
+/// future on every repoll, so a `write` that parks mid-buffer (channel
+/// full) must resume where it stopped — restarting from offset 0 would
+/// duplicate the prefix of any write larger than the channel capacity
+/// (the #112 spike's mlkem BadKex, now understood).
+struct Tx<'a> {
+    tx: Sender<'a, RawMutex, Chunk, 8>,
+    /// Offset of the current write already queued (0 = fresh call).
+    sent: usize,
+}
 
 impl embedded_io_async::ErrorType for Tx<'_> {
     type Error = LinkError;
@@ -336,12 +398,16 @@ impl embedded_io_async::ErrorType for Tx<'_> {
 
 impl Write for Tx<'_> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, LinkError> {
-        for piece in buf.chunks(64) {
+        while self.sent < buf.len() {
+            let end = (self.sent + 64).min(buf.len());
             let mut chunk = Chunk::new();
-            chunk.extend_from_slice(piece).map_err(|_| LinkError)?;
-            self.0.send(chunk).await;
+            chunk.extend_from_slice(&buf[self.sent..end]).map_err(|_| LinkError)?;
+            self.tx.send(chunk).await;
+            self.sent = end;
         }
-        Ok(buf.len())
+        let n = self.sent;
+        self.sent = 0;
+        Ok(n)
     }
 
     async fn flush(&mut self) -> Result<(), LinkError> {
@@ -430,9 +496,9 @@ pub async fn run() -> Result<HelloOutcome> {
 
     // Transport: client reads s2c / writes c2s; server the opposite.
     let mut cli_rd = Rx { rx: s2c_rx, leftover: Chunk::new(), pos: 0 };
-    let mut cli_wr = Tx(c2s_tx);
+    let mut cli_wr = Tx { tx: c2s_tx, sent: 0 };
     let mut serv_rd = Rx { rx: c2s_rx, leftover: Chunk::new(), pos: 0 };
-    let mut serv_wr = Tx(s2c_tx);
+    let mut serv_wr = Tx { tx: s2c_tx, sent: 0 };
     let cli_transport = cli.run(&mut cli_rd, &mut cli_wr);
     let serv_transport = serv.run(&mut serv_rd, &mut serv_wr);
 
@@ -796,3 +862,8 @@ flash-bytes: 413102 (403 KiB)  ram-bytes: 102356 (100 KiB)
 (F469I-DISCO raw outputs are byte-for-byte analogous to the F746 ones —
 same target triple, same profile — and are omitted for brevity; the
 deltas differ by <1 KiB.)
+
+*Note:* the raw outputs above were captured with the pre-correction
+harness (finding 2). Rebuilding the F746 floor variant with the
+restart-safe `Tx` from appendix A moves the needle by +76 B
+(flash 198,600 → 198,676) — the deltas and conclusions are unaffected.
