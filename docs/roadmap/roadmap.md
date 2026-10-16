@@ -12,6 +12,15 @@ M0 design ──► M1 foundation ──► M2 native CLI ──► M3 agent ─
                                               └► M8 labgrid/HIL ──► M9 legacy retirement
 ```
 
+## M9 — Legacy Python retirement: parity matrix live
+
+The component-by-component parity matrix (Python component × Rust
+coverage × evidence link) is maintained at [parity-matrix.md](parity-matrix.md)
+(issue #117). A Python twin retires ONLY when its Rust replacement's
+parity tests are green and the removal PR cites its matrix row.
+Sanctioned permanent Python (bench/labgrid/packaging glue) is listed
+there too.
+
 ## M0 — Architecture and research 📦 (draft PR #119)
 
 Audit of 1.x (engine map, model schema reality, safety mechanisms, test
