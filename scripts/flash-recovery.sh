@@ -25,6 +25,15 @@
 #   FORCE_HTTP_PROBE=1 scripts/flash-recovery.sh glinet-mt3000  # legacy GET probe
 #                                                             # (multi-request
 #                                                             # recovery servers)
+#   ASSUME_YES=1 scripts/flash-recovery.sh glinet-mt3000    # non-interactive:
+#                                                             # auto-continue at
+#                                                             # the "not armed"
+#                                                             # prompt (bench panes)
+#   ARP_ATTEMPTS=15 scripts/flash-recovery.sh glinet-mt3000 # ARP poll rounds
+#                                                             # (default 5; a
+#                                                             # round can take
+#                                                             # up to ~10s while
+#                                                             # ARP is unanswered)
 #
 set -euo pipefail
 
@@ -32,6 +41,8 @@ MODEL="${1:-${MODEL:-}}"
 IFACE="${2:-${IFACE:-}}"
 FORCE_UBOOT="${FORCE_UBOOT:-0}"
 FORCE_HTTP_PROBE="${FORCE_HTTP_PROBE:-0}"
+ASSUME_YES="${ASSUME_YES:-0}"
+ARP_ATTEMPTS="${ARP_ATTEMPTS:-5}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 info() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -62,7 +73,9 @@ try:
     from flash.device_profile import build_profile_from_model as b
     p = b(sys.argv[1])
     print(getattr(p, "recovery_ip", "") or "", getattr(p, "client_ip", "") or "")
-except Exception:
+except Exception as e:  # noqa: BLE001 — empty result is handled by the caller
+    # Loud on stderr so a model/schema drift cannot silently skip the probe.
+    print(f"model_recovery: lookup failed for {sys.argv[1]}: {e}", file=sys.stderr)
     print("", "")
 ' "$1"
 }
@@ -88,12 +101,20 @@ CLIENT_IP=""
 if [[ -n "$MODEL" ]]; then
   read -r RECOVERY_IP CLIENT_IP < <(model_recovery "$MODEL")
 fi
+if [[ -n "$MODEL" && -z "$RECOVERY_IP" ]]; then
+  # Serial/TFTP-only models legitimately have none — but so does a broken
+  # model lookup (see model_recovery stderr). Either way say it out loud:
+  # a silent probe skip would hand off to conwrt blind.
+  warn "Model '$MODEL' exposes no recovery_ip — no arming detection will run."
+fi
 
 # ---------------------------------------------------------------------------
 # sudo + cleanup trap
 # ---------------------------------------------------------------------------
 info "Requesting sudo (needed to configure $IFACE for recovery)…"
-sudo -v || die "sudo failed or was cancelled."
+# Non-interactive validate first so tty-less bench panes work when sudo is
+# passwordless or cached; fall back to the interactive prompt otherwise.
+sudo -n true 2>/dev/null || sudo -v || die "sudo failed or was cancelled."
 
 net_down() {
   [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]] || return 0
@@ -153,7 +174,7 @@ if [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]]; then
     # session against stock firmware on the same address.
     sudo ip neigh del "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true
     info "Waiting for ARP from $RECOVERY_IP (armed = it answers ARP)…"
-    for _ in 1 2 3 4 5; do
+    for _ in $(seq 1 "$ARP_ATTEMPTS"); do
       ping -c 1 -W 1 "$RECOVERY_IP" >/dev/null 2>&1 || true
       NEIGH="$(ip neigh show "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true)"
       # MAC present + live-ish state (not INCOMPLETE/FAILED/absent) = armed.
@@ -175,9 +196,13 @@ if [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]]; then
     warn "No ARP response from $RECOVERY_IP (no HTTP response in FORCE_HTTP_PROBE mode)."
     warn "The device may not be in recovery mode. Enter it (see the model's"
     warn "reset instructions), then retry."
-    read -r -p "Continue anyway and let conwrt guide the power cycle? [y/N] " ans || ans=""
-    if [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]]; then
-      die "Aborted — nothing was flashed."
+    if [[ "$ASSUME_YES" == "1" ]]; then
+      warn "ASSUME_YES=1 — continuing without asking."
+    else
+      read -r -p "Continue anyway and let conwrt guide the power cycle? [y/N] " ans || ans=""
+      if [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]]; then
+        die "Aborted — nothing was flashed."
+      fi
     fi
   fi
 fi

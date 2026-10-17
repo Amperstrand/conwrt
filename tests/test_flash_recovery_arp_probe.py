@@ -42,9 +42,9 @@ fi
 exec "$@"
 """,
     "python3": """#!/bin/sh
-# model_recovery / conwrt handoff — all succeed with the test IPs.
+# model_recovery / conwrt handoff — succeed with the test IPs (or py.reply content).
 printf '%s\\n' "$*" >> "${STUB_LOGS}/python3.args"
-echo "192.168.0.1 192.168.0.10"
+if [ -s "${STUB_LOGS}/py.reply" ]; then cat "${STUB_LOGS}/py.reply"; else echo "192.168.0.1 192.168.0.10"; fi
 exit 0
 """,
     "ip": """#!/bin/sh
@@ -87,6 +87,10 @@ def rig(tmp_path: Path):
     def set_curl_reply(body: str) -> None:
         (tmp_path / "logs" / "curl.reply").write_text(body)
 
+    def set_py_reply(line: str) -> None:
+        # Always non-empty file (stub's -s gate) — an empty line means "no IPs".
+        (tmp_path / "logs" / "py.reply").write_text(line + "\n" if line else "\n")
+
     fake_repo = tmp_path / "repo"
     (fake_repo / "scripts").mkdir(parents=True)
     (fake_repo / "models").mkdir()
@@ -123,7 +127,10 @@ def rig(tmp_path: Path):
         path = logs_dir / f"{log}.args"
         return path.read_text().splitlines() if path.exists() else []
 
-    return SimpleNamespace(run=run, lines=lines, set_neigh_reply=set_neigh_reply, set_curl_reply=set_curl_reply)
+    return SimpleNamespace(
+        run=run, lines=lines, set_neigh_reply=set_neigh_reply,
+        set_curl_reply=set_curl_reply, set_py_reply=set_py_reply,
+    )
 
 
 @pytest.mark.parametrize("state", ARMED_STATES)
@@ -187,3 +194,31 @@ def test_force_http_probe_with_dry_run_still_never_gets(rig):
     assert "Recovery server armed (ARP REACHABLE" in out.stdout
     assert rig.lines("curl") == []
     assert rig.lines("ping")
+
+
+def test_assume_yes_continues_without_prompt(rig):
+    """ASSUME_YES=1 auto-continues at the not-armed prompt (bench panes)."""
+    rig.set_neigh_reply("")
+    out = rig.run({"DRY_RUN": "1", "ASSUME_YES": "1"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "ASSUME_YES=1 — continuing without asking." in out.stderr
+    assert "DRY_RUN=1 — probe done; not flashing." in out.stdout
+    assert rig.lines("curl") == []
+
+
+def test_arp_attempts_tunable(rig):
+    """ARP_ATTEMPTS=N bounds the poll rounds (timing knob for the bench)."""
+    rig.set_neigh_reply("")  # never armed
+    out = rig.run({"DRY_RUN": "1", "ASSUME_YES": "1", "ARP_ATTEMPTS": "2"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert len(rig.lines("ping")) == 2
+
+
+def test_model_without_recovery_ip_warns(rig):
+    """A model yielding no recovery IPs skips the probe — but never silently."""
+    rig.set_py_reply("")  # empty recovery_ip + client_ip
+    out = rig.run({"DRY_RUN": "1"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "exposes no recovery_ip — no arming detection will run." in out.stderr
+    assert "Waiting for ARP" not in out.stdout
+    assert rig.lines("curl") == [] and rig.lines("ping") == []
