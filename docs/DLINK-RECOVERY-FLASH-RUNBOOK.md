@@ -136,26 +136,34 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
       "Lab Single Source of Truth").
 - [ ] Close the loop: pcap byte count matches the image size (evidence trail).
 
-### The #229 pitfall — SSH lockout with a CORRECT key (OPEN issue)
+### The #229 pitfall — SSH lockout with a CORRECT key (root-caused; fix in PR #235)
 
 Recovery-flashed bare-config images boot, ARP+ICMP answer, and SSH still
 rejects the exact key that was baked in (`Permission denied (publickey)`;
-issue #229). Suspects: uci-defaults not executing after recovery flash,
-dropbear not restarting after `uci commit dropbear`, or overlay timing.
+issue #229). Root cause (source-level, PR #235): the ASU firstboot script's
+exit status was `uci commit dropbear` (its last line), and OpenWrt's
+`uci_apply_defaults` deletes a uci-defaults script only when it exits 0 —
+so a lost authorized_keys write was masked by the successful commit, the
+script was deleted instead of retried, and the #155 key-only hardening made
+the half-applied state a permanent lockout. The recovery flow has no
+post-flash SSH repair pass (unlike sysupgrade), which is why only this
+path showed it. Fix: verify-gate (`grep -qF <key> || exit 1`) before the
+hardening lines — failure now retains the script for a next-boot retry.
 
-Operational mitigation ladder (each step from the #229 thread; **none
-bench-verified yet** — NEEDS-BENCH-VERIFY as a set):
+Mitigation ladder (updated):
 
-1. Build WITHOUT `PasswordAuth='off'` in the image's uci-defaults until #229
-   is root-caused — keeps the password path (and the empty-root-password
-   telnet:23 default) as candidate doors.
-2. After boot, check whether dropbear restarted with fresh host keys
-   (`ssh -v`; host-key change indicates a restart).
+1. **Images built after PR #235 self-heal**: a failed key write leaves the
+   password door open (hardening unreached) and the script retries next
+   boot — power-cycle once before diagnosing further.
+2. Older images: build WITHOUT `PasswordAuth='off'` in the image's
+   uci-defaults until the unit is verified in (keeps the password path and
+   the empty-root-password telnet:23 default as candidate doors).
 3. If any shell is reached: `ls -ld /etc/dropbear` — non-root-owned or
    group-writable makes dropbear silently refuse ALL keys (AGENTS.md
    Dark-Device rule 7, seen in the wild on image-build artifacts).
-4. Definitive debug requires comparing squashfs contents of a working vs
-   non-working image (#229 step 4) — bench work, not runbook work.
+4. Post-boot forensics on a locked unit (serial or next flash cycle):
+   check whether `/etc/uci-defaults/` still contains the script — a deleted
+   script with a missing key is the pre-fix failure signature.
 
 **If locked out**: there is no on-device door without opening the sealed case
 (serial header exists on the board — labeled, 3.3 V, 115200 8n1; recipes notes
@@ -183,7 +191,7 @@ Serial procedure: `docs/serial-console.md`, prompts `serial-01`…`serial-06`.
 | # | Item | Source of doubt |
 |---|---|---|
 | 1 | ARP-only arming probe variant for `scripts/flash-recovery.sh` (current curl probe burns one-request windows) | `flash-recovery.sh:121` vs AGENTS.md rule 1 |
-| 2 | #229 mitigation ladder (§6): no-password build, telnet:23 fallback, dropbear restart check | issue #229 hypotheses, unexecuted debugging steps |
+| 2 | #229 on-device confirmation: recovery-flash an image built after PR #235 and observe the verify-gate behavior (self-heal on next boot, or lockout-free harden) | root-caused at source level; the physical flash is bench work |
 | 3 | serial-flash NAND bypass on this species | never exercised; case-sealed |
 | 4 | Stock-image accepted-but-no-boot root cause (NAND write corruption vs bootloader-variant reject) | Sept elimination matrix + Oct matrix attempt (1) |
 | 5 | Exact boot-latency distribution beyond "17 min observed, 45+ min watch" | two data points |
