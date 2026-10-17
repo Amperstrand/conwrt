@@ -33,6 +33,13 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     if keys:
         # Key baked => key-only auth (#155): the x1860 incident unit came up
         # with password-attempt surface enabled by default.
+        # The verify gate is load-bearing (#229): uci-defaults scripts are
+        # sourced by uci_apply_defaults, whose exit status is the LAST
+        # command — without the gate, a lost authorized_keys write is
+        # masked by a successful `uci commit dropbear`, the script is
+        # deleted (rm -f $applied), and publickey-only lockout becomes
+        # permanent. exit 1 keeps the script for retry on the next boot.
+        lines.append(f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH} || exit 1")
         lines += [
             "uci set dropbear.@dropbear[0].PasswordAuth='off'",
             "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
@@ -48,6 +55,9 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
         ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
     if keys:
+        ops.append(ShellCommand(
+            f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH}"
+        ))  # #229: harden only after the key provably landed
         ops += [
             UciSet(config="dropbear", section="@dropbear[0]", values={
                 "PasswordAuth": "off",
