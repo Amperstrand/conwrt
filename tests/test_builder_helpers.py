@@ -80,6 +80,86 @@ class TestSshKeyFirstboot:
         assert "RootPasswordAuth='off'" in result
         assert "uci commit dropbear" in result
 
+    def test_hardening_gated_on_key_verification(self):
+        # #229: the script's exit status is its LAST command (uci commit).
+        # If the key write is lost but commit succeeds, uci_apply_defaults
+        # deletes the script (base-files /etc/init.d/boot: rm -f $applied)
+        # and publickey-only lockout becomes permanent. The verify gate must
+        # sit between the key write and the hardening uci lines.
+        result = _ssh_key_firstboot(["ssh-ed25519 KEYBODY"])
+        verify_idx = result.index("grep -qF 'ssh-ed25519 KEYBODY'")
+        assert "|| exit 1" in result[verify_idx:verify_idx + 100]
+        harden_idx = result.index("PasswordAuth='off'")
+        commit_idx = result.index("uci commit dropbear")
+        assert result.index("chmod 600") < verify_idx < harden_idx < commit_idx
+
+    def test_failed_key_write_keeps_script_nonzero(self):
+        # Simulate the #229 failure class: the authorized_keys write does not
+        # land (unwritable fs at uci-defaults time). The script must exit
+        # non-zero so base-files RETAINS it and retries next boot — never
+        # reaching the password-off hardening.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        # Neutralize uci for the dry run: the contract under test is the
+        # gate ordering around it, not uci itself.
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line if line.startswith("uci ") else line
+            for line in dry.splitlines()
+        )
+        ro_dir = os.path.join(sandbox, "ro", "dropbear")
+        os.makedirs(ro_dir)
+        ro_target = os.path.join(ro_dir, "authorized_keys")
+        os.chmod(ro_dir, 0o555)
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry.replace(target, ro_target)],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode != 0, (
+                "script must fail (and be retained) when the key write fails"
+            )
+            assert not os.path.exists(ro_target)
+        finally:
+            os.chmod(ro_dir, 0o755)
+            shutil.rmtree(sandbox)
+
+    def test_successful_key_write_exits_zero(self):
+        # Happy path dry-run: key lands, mode 600, script exits 0 (deleted,
+        # hardening applied — exactly once).
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line if line.startswith("uci ") else line
+            for line in dry.splitlines()
+        )
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry], capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode == 0
+            with open(target) as fh:
+                assert fh.read().strip() == key
+            assert os.stat(target).st_mode & 0o777 == 0o600
+        finally:
+            shutil.rmtree(sandbox)
+
+
     def test_contains_dropbear_path(self):
         result = _ssh_key_firstboot(["key1"])
         assert DROPBEAR_AUTH_KEYS_PATH in result
@@ -98,9 +178,9 @@ class TestSshKeyFirstboot:
 class TestSshKeyOps:
     def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        # mkdir, echo, chmod (ShellCommand) + key-only UciSet + commit (#155)
+        # mkdir, echo, chmod, verify-gate (ShellCommand) + UciSet + commit
         shells = [op for op in ops if isinstance(op, ShellCommand)]
-        assert len(shells) == 3
+        assert len(shells) == 4
 
     def test_ops_bake_key_only_auth(self):
         # #155: ops carry the same key-only dropbear config as firstboot.
@@ -117,8 +197,8 @@ class TestSshKeyOps:
 
     def test_two_keys_returns_six_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        # mkdir, echo key1 >, echo key2 >>, chmod, UciSet key-only, commit
-        assert len(ops) == 6
+        # mkdir, echo key1 >, echo key2 >>, chmod, verify, UciSet, commit
+        assert len(ops) == 7
         assert ">" in ops[1].command and ">>" not in ops[1].command
         assert ">>" in ops[2].command
 
@@ -572,9 +652,11 @@ class TestExtraSshKeys:
         )
         steps = [s for s in plan.steps if s.kind == StepKind.SSH_KEY]
         fb = steps[0].firstboot_script
-        # Count occurrences of the key (stripped)
+        # Dedup applies to the baked key LIST: one echo line per unique key
+        # (the verify-gate grep repeats the primary key by design, #229).
         stripped = "ssh-ed25519 SAMEKEY"
-        assert fb.count(stripped) == 1
+        echo_lines = [l for l in fb.splitlines() if l.startswith("echo")]
+        assert sum(stripped in l for l in echo_lines) == 1
 
     def test_keys_stripped_of_comments(self):
         cfg = ConwrtConfig(ssh_public_key_text="ssh-ed25519 BASEKEY user@host")
