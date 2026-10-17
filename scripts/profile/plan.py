@@ -27,6 +27,7 @@ class StepKind(Enum):
     LAN_IP_MAC_HASH = "lan_ip_mac_hash"
     LAN_IP = "lan_ip"
     CELLULAR = "cellular"
+    TOFB = "tofb"
 
 
 @dataclass

@@ -290,3 +290,42 @@ def test_wifi_sta_firstboot_expands_radio_variable() -> None:
     assert 'device="$_r"' in script
     assert "exit 0" not in script, "early exit would skip later ASU default steps"
     assert "break" in script
+
+
+# --- TOFB opt-in image flag (#228 / ADR-0013, follow-up to PR #236) -------
+
+def test_build_plan_tofb_step_present() -> None:
+    plan = build_plan(ConwrtConfig(), mode="asu_build", tofb=True)
+    steps = [s for s in plan.steps if s.kind == StepKind.TOFB]
+    assert len(steps) == 1
+    step = steps[0]
+    assert step.include_in_asu is True
+    # Image-only feature: no SSH/post-install side (scripts/tofb.py is the
+    # operator side against a running unit).
+    assert step.include_in_post_install is False
+    assert step.configure_script == ""
+
+
+def test_build_plan_tofb_default_absent() -> None:
+    # Opt-in only: default builds must not change the ASU payload at all.
+    plan = build_plan(ConwrtConfig(), mode="asu_build")
+    assert not any(s.kind == StepKind.TOFB for s in plan.steps)
+    assert "tofb" not in plan.asu_defaults_script().lower()
+
+
+def test_build_plan_tofb_step_is_last_for_retention() -> None:
+    # uci_apply_defaults deletes the defaults file based on the LAST
+    # command's status, so the TOFB step must close the file: a failed
+    # install then retains every step for next-boot retry (#229/#235).
+    cfg = ConwrtConfig(lan_ip_mode="mac-hash")
+    plan = build_plan(cfg, mode="asu_build", tofb=True, model_id="asus-lyra-map-ac2200")
+    assert plan.steps[-1].kind == StepKind.TOFB
+
+
+def test_build_plan_tofb_fragment_in_defaults_script() -> None:
+    plan = build_plan(ConwrtConfig(), mode="asu_build", tofb=True)
+    defaults = plan.asu_defaults_script()
+    assert "sha256sum /etc/conwrt/tofb-device.sh" in defaults
+    assert "/etc/init.d/tofb enable || exit 1" in defaults
+    # Standard subshell isolation like every other step, and last block.
+    assert defaults.rstrip().endswith(")")

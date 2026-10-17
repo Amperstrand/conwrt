@@ -162,3 +162,45 @@ class TestCli:
         assert proc.returncode == 0
         assert "long blink" in proc.stdout
         assert "5 blinks" in proc.stdout
+
+
+class TestShippingContract:
+    """The opt-in profile flag ships THIS script into ASU builds (#228
+    follow-up to PR #236): fragment mechanics live in
+    tests/test_builder_helpers.py; these tie the shipped artifact to the
+    script's own contract."""
+
+    SCRIPT = "scripts/tofb-device.sh"
+
+    def read(self) -> str:
+        with open(self.SCRIPT) as fh:
+            return fh.read()
+
+    def test_shipped_destination_agrees_with_script_namespace(self):
+        import sys
+        sys.path.insert(0, "scripts")
+        try:
+            from profile.builder import TOFB_DEVICE_DEST, TOFB_INITD_DEST
+        finally:
+            sys.path.pop(0)
+        s = self.read()
+        assert "TOFB_DIR=/etc/conwrt" in s
+        assert TOFB_DEVICE_DEST == "/etc/conwrt/tofb-device.sh"
+        assert TOFB_INITD_DEST == "/etc/init.d/tofb"
+
+    def test_shipped_payload_is_this_file_verbatim(self):
+        import base64
+        import re
+        import sys
+        sys.path.insert(0, "scripts")
+        try:
+            from profile.builder import _tofb_firstboot
+        finally:
+            sys.path.pop(0)
+        frag = _tofb_firstboot()
+        m = re.search(
+            r"echo '([A-Za-z0-9+/=]+)' \| base64 -d > /etc/conwrt/tofb-device.sh",
+            frag,
+        )
+        assert m is not None
+        assert base64.b64decode(m.group(1)) == self.read().encode()
