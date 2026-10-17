@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 import base64
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
 from unittest.mock import MagicMock
+
+import pytest
 
 from config import ConwrtConfig, WifiAPConfig
 from profile import build_plan
@@ -14,7 +21,6 @@ from profile.builder import (
     _password_ops,
     _ssh_key_firstboot,
     _ssh_key_ops,
-    _tofb_firstboot,
     _uc_packages_for_mode,
 )
 from profile.ops import ShellCommand, UciSet
@@ -50,17 +56,18 @@ def _make_uc(
 class TestSshKeyFirstboot:
     def test_single_key_uses_redirect(self):
         result = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
-        assert "echo 'ssh-ed25519 AAAA' >" in result
+        assert "printf '%s\\n' 'ssh-ed25519 AAAA' >" in result
 
     def test_single_key_has_mkdir_and_chmod(self):
         result = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
         assert result.startswith("mkdir -p")
+        assert "chmod 700" in result  # dir: dropbear rejects keys on loose dirs
         assert "chmod 600" in result
 
     def test_two_keys_first_redirect_second_append(self):
         result = _ssh_key_firstboot(["key1", "key2"])
         lines = result.split("\n")
-        key_lines = [l for l in lines if l.startswith("echo")]
+        key_lines = [l for l in lines if l.startswith("printf")]
         assert len(key_lines) == 2
         assert ">" in key_lines[0] and ">>" not in key_lines[0]
         assert ">>" in key_lines[1]
@@ -72,7 +79,7 @@ class TestSshKeyFirstboot:
         lines = result.split("\n")
         assert len(lines) == 2
         assert lines[0].startswith("mkdir -p")
-        assert lines[1].startswith("chmod 600")
+        assert lines[1].startswith("chmod 700")
 
     def test_keys_bake_key_only_auth(self):
         # #155: a baked key means key-only dropbear (no password surface).
@@ -80,86 +87,6 @@ class TestSshKeyFirstboot:
         assert "PasswordAuth='off'" in result
         assert "RootPasswordAuth='off'" in result
         assert "uci commit dropbear" in result
-
-    def test_hardening_gated_on_key_verification(self):
-        # #229: the script's exit status is its LAST command (uci commit).
-        # If the key write is lost but commit succeeds, uci_apply_defaults
-        # deletes the script (base-files /etc/init.d/boot: rm -f $applied)
-        # and publickey-only lockout becomes permanent. The verify gate must
-        # sit between the key write and the hardening uci lines.
-        result = _ssh_key_firstboot(["ssh-ed25519 KEYBODY"])
-        verify_idx = result.index("grep -qF 'ssh-ed25519 KEYBODY'")
-        assert "|| exit 1" in result[verify_idx:verify_idx + 100]
-        harden_idx = result.index("PasswordAuth='off'")
-        commit_idx = result.index("uci commit dropbear")
-        assert result.index("chmod 600") < verify_idx < harden_idx < commit_idx
-
-    def test_failed_key_write_keeps_script_nonzero(self):
-        # Simulate the #229 failure class: the authorized_keys write does not
-        # land (unwritable fs at uci-defaults time). The script must exit
-        # non-zero so base-files RETAINS it and retries next boot — never
-        # reaching the password-off hardening.
-        import os
-        import shutil
-        import subprocess
-        import tempfile
-
-        key = "ssh-ed25519 AAAATESTBODY"
-        script = _ssh_key_firstboot([key])
-        sandbox = tempfile.mkdtemp()
-        target = os.path.join(sandbox, "authorized_keys")
-        # Neutralize uci for the dry run: the contract under test is the
-        # gate ordering around it, not uci itself.
-        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
-        dry = "\n".join(
-            "true # " + line if line.startswith("uci ") else line
-            for line in dry.splitlines()
-        )
-        ro_dir = os.path.join(sandbox, "ro", "dropbear")
-        os.makedirs(ro_dir)
-        ro_target = os.path.join(ro_dir, "authorized_keys")
-        os.chmod(ro_dir, 0o555)
-        try:
-            proc = subprocess.run(
-                ["sh", "-c", dry.replace(target, ro_target)],
-                capture_output=True, text=True, timeout=10,
-            )
-            assert proc.returncode != 0, (
-                "script must fail (and be retained) when the key write fails"
-            )
-            assert not os.path.exists(ro_target)
-        finally:
-            os.chmod(ro_dir, 0o755)
-            shutil.rmtree(sandbox)
-
-    def test_successful_key_write_exits_zero(self):
-        # Happy path dry-run: key lands, mode 600, script exits 0 (deleted,
-        # hardening applied — exactly once).
-        import os
-        import shutil
-        import subprocess
-        import tempfile
-
-        key = "ssh-ed25519 AAAATESTBODY"
-        script = _ssh_key_firstboot([key])
-        sandbox = tempfile.mkdtemp()
-        target = os.path.join(sandbox, "authorized_keys")
-        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
-        dry = "\n".join(
-            "true # " + line if line.startswith("uci ") else line
-            for line in dry.splitlines()
-        )
-        try:
-            proc = subprocess.run(
-                ["sh", "-c", dry], capture_output=True, text=True, timeout=10,
-            )
-            assert proc.returncode == 0
-            with open(target) as fh:
-                assert fh.read().strip() == key
-            assert os.stat(target).st_mode & 0o777 == 0o600
-        finally:
-            shutil.rmtree(sandbox)
-
 
     def test_contains_dropbear_path(self):
         result = _ssh_key_firstboot(["key1"])
@@ -179,9 +106,10 @@ class TestSshKeyFirstboot:
 class TestSshKeyOps:
     def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        # mkdir, echo, chmod, verify-gate (ShellCommand) + UciSet + commit
+        # mkdir, chmod 700, printf, chmod 600, verify-gate (ShellCommand)
+        # + key-only UciSet + commit (#155) + dropbear restart (#229)
         shells = [op for op in ops if isinstance(op, ShellCommand)]
-        assert len(shells) == 4
+        assert len(shells) == 5
 
     def test_ops_bake_key_only_auth(self):
         # #155: ops carry the same key-only dropbear config as firstboot.
@@ -193,21 +121,24 @@ class TestSshKeyOps:
     def test_single_key_ops_content(self):
         ops = _ssh_key_ops(["key1"])
         assert "mkdir -p" in ops[0].command
-        assert "echo 'key1' >" in ops[1].command
-        assert "chmod 600" in ops[2].command
+        assert "chmod 700" in ops[1].command
+        assert "printf" in ops[2].command and "'key1'" in ops[2].command
+        assert "chmod 600" in ops[3].command
+        assert "grep -qF 'key1'" in ops[4].command
+        assert "|| exit 1" in ops[4].command
 
-    def test_two_keys_returns_six_ops(self):
+    def test_two_keys_returns_nine_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        # mkdir, echo key1 >, echo key2 >>, chmod, verify, UciSet, commit
-        assert len(ops) == 7
-        assert ">" in ops[1].command and ">>" not in ops[1].command
-        assert ">>" in ops[2].command
+        # mkdir, chmod 700, printf x2, chmod 600, gate, UciSet, commit, restart
+        assert len(ops) == 9
+        assert ">" in ops[2].command and ">>" not in ops[2].command
+        assert ">>" in ops[3].command
 
     def test_empty_keys_returns_mkdir_chmod(self):
         ops = _ssh_key_ops([])
         assert len(ops) == 2
         assert "mkdir" in ops[0].command
-        assert "chmod" in ops[1].command
+        assert "chmod 700" in ops[1].command
         # Empty keys: NO key-only-auth ops (nothing would unlock).
 
     def test_ops_match_firstboot_lines(self):
@@ -216,10 +147,17 @@ class TestSshKeyOps:
         ops = _ssh_key_ops(keys)
         # Each SHELL op should appear as a line in the firstboot script; the
         # UciSet/UciCommit pair mirrors the same uci lines textually.
-        from profile.ops import UciCommit
+        from profile.ops import UciCommit, ServiceAction
         for op in ops:
             if isinstance(op, ShellCommand):
+                if "|| exit 1" in op.command:
+                    # gate: fb uses the verbose { echo >&2; exit 1; } form
+                    assert "grep -qF" in op.command
+                    assert "grep -qF" in fb and "exit 1" in fb
+                    continue
                 assert op.command in fb
+            elif isinstance(op, ServiceAction):
+                assert f"/etc/init.d/{op.name} {op.action}" in fb
             elif isinstance(op, UciSet):
                 for k, v in op.values.items():
                     assert f"uci set dropbear.{op.section}.{k}='{v}'" in fb
@@ -653,11 +591,11 @@ class TestExtraSshKeys:
         )
         steps = [s for s in plan.steps if s.kind == StepKind.SSH_KEY]
         fb = steps[0].firstboot_script
-        # Dedup applies to the baked key LIST: one echo line per unique key
-        # (the verify-gate grep repeats the primary key by design, #229).
+        # Count occurrences of the key across the WRITE lines only — the
+        # #229 verify-gate legitimately re-references the key in its grep.
         stripped = "ssh-ed25519 SAMEKEY"
-        echo_lines = [l for l in fb.splitlines() if l.startswith("echo")]
-        assert sum(stripped in l for l in echo_lines) == 1
+        write_lines = [l for l in fb.split("\n") if l.startswith("printf")]
+        assert sum(l.count(stripped) for l in write_lines) == 1
 
     def test_keys_stripped_of_comments(self):
         cfg = ConwrtConfig(ssh_public_key_text="ssh-ed25519 BASEKEY user@host")
@@ -700,164 +638,7 @@ class TestModelHostnamePrefix:
 
 
 # ===================================================================
-# 15. _tofb_firstboot (opt-in TOFB image feature, #228 / ADR-0013)
-# ===================================================================
-
-TOFB_DEVICE_SRC = "scripts/tofb-device.sh"
-TOFB_DEVICE_DEST = "/etc/conwrt/tofb-device.sh"
-TOFB_INITD_DEST = "/etc/init.d/tofb"
-
-
-def _tofb_digests(fragment: str) -> list[str]:
-    """The two baked SHA-256 gates, in fragment order (device, init.d)."""
-    import re
-    return re.findall(r"= '([0-9a-f]{64})' \] \|\| exit 1", fragment)
-
-
-def _tofb_payload(fragment: str, dest: str) -> str:
-    """Extract the base64 payload written to dest."""
-    import re
-    m = re.search(
-        rf"echo '([A-Za-z0-9+/=]+)' \| base64 -d > {re.escape(dest)}", fragment,
-    )
-    assert m is not None, f"no base64 payload for {dest}"
-    return m.group(1)
-
-
-class TestTofbFirstboot:
-    def _fragment(self) -> str:
-        return _tofb_firstboot()
-
-    def _sandbox_fragment(self, sandbox: str) -> str:
-        """Fragment with destinations moved into sandbox; enable lines off."""
-        frag = self._fragment()
-        frag = frag.replace("mkdir -p /etc/conwrt", f"mkdir -p {sandbox}")
-        frag = frag.replace(TOFB_DEVICE_DEST, f"{sandbox}/tofb-device.sh")
-        frag = frag.replace(TOFB_INITD_DEST, f"{sandbox}/tofb-initd")
-        return "\n".join(
-            line for line in frag.splitlines()
-            if not line.endswith("enable || exit 1")
-            and not line.endswith("enabled || exit 1")
-        )
-
-    def test_creates_destination_dir_before_write(self):
-        frag = self._fragment()
-        assert frag.index("mkdir -p /etc/conwrt") < frag.index(f"> {TOFB_DEVICE_DEST}")
-
-    def test_ships_device_script_payload(self):
-        # The embedded payload decodes to the exact bytes of the repo
-        # device script — build-time source of truth, no transformation.
-        import hashlib
-        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_DEVICE_DEST))
-        with open(TOFB_DEVICE_SRC, "rb") as fh:
-            assert payload == fh.read()
-        digests = _tofb_digests(self._fragment())
-        assert len(digests) == 2
-        assert digests[0] == hashlib.sha256(payload).hexdigest()
-
-    def test_device_sha_matches_sha256sum_cli(self):
-        # BusyBox parity: the baked digest must equal what the on-device
-        # `sha256sum /etc/conwrt/tofb-device.sh` prints for the shipped
-        # bytes — host sha256sum uses the identical format.
-        import subprocess
-        digests = _tofb_digests(self._fragment())
-        proc = subprocess.run(
-            ["sha256sum", TOFB_DEVICE_SRC], capture_output=True, text=True, check=True,
-        )
-        assert proc.stdout.split()[0] == digests[0]
-
-    def test_checksum_gate_precedes_chmod_and_enable(self):
-        # #229/#235 discipline: verify-then-commit. Each write is gated
-        # before anything depends on it; enable only after BOTH gates.
-        frag = self._fragment()
-        gate1 = frag.index(f"sha256sum {TOFB_DEVICE_DEST}")
-        chmod1 = frag.index(f"chmod 700 {TOFB_DEVICE_DEST}")
-        gate2 = frag.index(f"sha256sum {TOFB_INITD_DEST}")
-        chmod2 = frag.index(f"chmod 755 {TOFB_INITD_DEST}")
-        enable = frag.index("enable || exit 1")
-        assert gate1 < chmod1 < gate2 < chmod2 < enable
-        assert frag.index("enabled || exit 1") > enable
-
-    def test_syntax_check_before_chmod(self):
-        frag = self._fragment()
-        assert frag.index(f"sh -n {TOFB_DEVICE_DEST}") < frag.index(f"chmod 700 {TOFB_DEVICE_DEST}")
-
-    def test_every_gate_fails_closed(self):
-        # Every mutation carries an explicit `|| exit 1` retention path.
-        frag = self._fragment()
-        gates = [l for l in frag.splitlines() if "exit 1" in l]
-        assert gates, "no fail-closed gates in fragment"
-        assert all(l.rstrip().endswith("|| exit 1") for l in gates)
-
-    def test_initd_payload_is_valid_sh(self, tmp_path):
-        import subprocess
-        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_INITD_DEST))
-        f = tmp_path / "tofb-initd"
-        f.write_bytes(payload)
-        proc = subprocess.run(["sh", "-n", str(f)], capture_output=True)
-        assert proc.returncode == 0, proc.stderr.decode()
-
-    def test_initd_payload_procd_contract(self):
-        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_INITD_DEST)).decode()
-        assert payload.startswith("#!/bin/sh /etc/rc.common")
-        assert "USE_PROCD=1" in payload
-        assert f"command {TOFB_DEVICE_DEST}" in payload
-        # No respawn directive: endpoint-death semantics (3 wrong codes ->
-        # down until power cycle, ADR-0013 failure modes) outrank restarts.
-        assert "procd_set_param respawn" not in payload
-
-    def test_happy_path_install_sandbox(self, tmp_path):
-        # Dry-run the whole fragment (enable lines neutralized): files
-        # land byte-exact with the promised modes, exit 0.
-        import os
-        import subprocess
-        script = self._sandbox_fragment(str(tmp_path))
-        proc = subprocess.run(
-            ["sh", "-c", script], capture_output=True, text=True, timeout=30,
-        )
-        assert proc.returncode == 0, proc.stderr
-        dev = tmp_path / "tofb-device.sh"
-        with open(TOFB_DEVICE_SRC, "rb") as fh:
-            assert dev.read_bytes() == fh.read()
-        assert os.stat(dev).st_mode & 0o777 == 0o700
-        assert os.stat(tmp_path / "tofb-initd").st_mode & 0o777 == 0o755
-
-    def test_tampered_digest_fails_closed(self, tmp_path):
-        # Verify-then-commit, not trust-the-write: the write succeeds but
-        # the digest gate must still fail the install (retained for
-        # next-boot retry, never half-applied/enabled).
-        import subprocess
-        script = self._sandbox_fragment(str(tmp_path))
-        digests = _tofb_digests(script)
-        script = script.replace(digests[0], "0" * 64)
-        proc = subprocess.run(
-            ["sh", "-c", script], capture_output=True, text=True, timeout=30,
-        )
-        assert proc.returncode != 0
-
-    def test_failed_write_retained_nonzero(self, tmp_path):
-        # The #229 failure class: destination unwritable at uci-defaults
-        # time. The fragment must exit non-zero (uci_apply_defaults keeps
-        # the script; nothing gets enabled).
-        import os
-        import shutil
-        import subprocess
-        ro = tmp_path / "ro"
-        ro.mkdir()
-        ro.chmod(0o555)
-        script = self._sandbox_fragment(str(ro))
-        try:
-            proc = subprocess.run(
-                ["sh", "-c", script], capture_output=True, text=True, timeout=30,
-            )
-            assert proc.returncode != 0
-        finally:
-            ro.chmod(0o755)
-            shutil.rmtree(ro)
-
-
-# ===================================================================
-# 16. Model LAN subnet parsing
+# 14. Model LAN subnet parsing
 # ===================================================================
 
 class TestModelLanSubnet:
@@ -877,3 +658,117 @@ class TestModelLanSubnet:
         lan_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP]
         assert len(lan_steps) == 1
         assert "192.168.50.1" in lan_steps[0].configure_script
+
+
+# ===================================================================
+# #229: recovery-flash authorized_keys lockout regressions
+# ===================================================================
+
+class TestSshKey229LockoutSafety:
+    """The defaults script must (a) verify the key landed before disabling
+    password auth, and (b) exit non-zero on failure so uci_apply_defaults
+    retains it for retry instead of consuming a half-applied boot."""
+
+    def test_gate_precedes_password_auth(self):
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("grep -qF") < result.index("PasswordAuth='off'")
+
+    def test_gate_exits_nonzero(self):
+        result = _ssh_key_firstboot(["key1"])
+        gate = next(l for l in result.split("\n") if l.startswith("grep -qF"))
+        assert "exit 1" in gate
+
+    def test_dropbear_dir_700(self):
+        # dropbear silently refuses authorized_keys when the dir is loose
+        result = _ssh_key_firstboot(["key1"])
+        assert "chmod 700" in result
+
+    def test_dropbear_restart_after_commit(self):
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("uci commit dropbear") < result.index("/etc/init.d/dropbear restart")
+
+
+def _unshare_available() -> bool:
+    try:
+        return subprocess.run(
+            ["unshare", "-rm", "true"], capture_output=True, timeout=10
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def _run_defaults_in_sandbox(script: str, dropbear_is_file: bool):
+    """Execute the generated defaults script under a private mount namespace
+    with a fake /etc and PATH-stubbed uci — the #229 local reproduction.
+
+    dropbear_is_file=True injects the failure mode: a stale overlay artifact
+    occupying /etc/dropbear makes every write fail.
+    """
+    root = tempfile.mkdtemp(prefix="conwrt-229-")
+    try:
+        os.makedirs(f"{root}/bin")
+        os.makedirs(f"{root}/etc/init.d")
+        if dropbear_is_file:
+            open(f"{root}/etc/dropbear", "w").close()
+        else:
+            os.makedirs(f"{root}/etc/dropbear")
+        with open(f"{root}/bin/uci", "w") as f:
+            f.write(f"#!/bin/sh\necho \"$@\" >> {shlex.quote(root + '/uci.log')}\nexit 0\n")
+        os.chmod(f"{root}/bin/uci", 0o755)
+        with open(f"{root}/etc/init.d/dropbear", "w") as f:
+            f.write(f"#!/bin/sh\necho restarted >> {shlex.quote(root + '/restart.log')}\nexit 0\n")
+        os.chmod(f"{root}/etc/init.d/dropbear", 0o755)
+        wrapper = (
+            f"mount --bind {shlex.quote(root + '/etc')} /etc && "
+            f"export PATH={shlex.quote(root + '/bin')}:/usr/bin:/bin && "
+            f"sh -c {shlex.quote(script)}; "
+            f"echo $? > {shlex.quote(root + '/exitcode')}"
+        )
+        subprocess.run(
+            ["unshare", "-rm", "sh", "-c", wrapper], capture_output=True, timeout=30
+        )
+        code = None
+        if os.path.exists(root + "/exitcode"):
+            code = int(open(root + "/exitcode").read().strip() or -1)
+        uci = open(root + "/uci.log").read() if os.path.exists(root + "/uci.log") else ""
+        restarted = os.path.exists(root + "/restart.log")
+        keyfile = root + "/etc/dropbear/authorized_keys"
+        keydata = open(keyfile).read() if os.path.isfile(keyfile) else None
+        keymode = oct(os.stat(keyfile).st_mode & 0o777) if os.path.isfile(keyfile) else None
+        return code, uci, restarted, keydata, keymode
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.skipif(not _unshare_available(), reason="unshare -rm unavailable (user namespaces off)")
+class TestSshDefaultsSandbox229:
+    KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIc229test conwrt@test"
+
+    def test_failed_write_keeps_password_auth_and_retries(self):
+        code, uci, restarted, keydata, _ = _run_defaults_in_sandbox(
+            _ssh_key_firstboot([self.KEY]), dropbear_is_file=True
+        )
+        # The lockout scenario: every write fails. The script must fail
+        # (retained + retried next boot) and must NOT disable password auth.
+        assert code == 1
+        assert "PasswordAuth" not in uci
+        assert restarted is False
+        assert keydata is None
+
+    def test_successful_write_applies_key_and_key_only_auth(self):
+        code, uci, restarted, keydata, keymode = _run_defaults_in_sandbox(
+            _ssh_key_firstboot([self.KEY]), dropbear_is_file=False
+        )
+        assert code == 0
+        assert keydata is not None and self.KEY in keydata
+        assert keymode == "0o600"
+        assert "dropbear.@dropbear[0].PasswordAuth=off" in uci
+        assert "commit dropbear" in uci
+        assert restarted is True
+
+    def test_idempotent_rerun_succeeds(self):
+        script = _ssh_key_firstboot([self.KEY])
+        first = _run_defaults_in_sandbox(script, dropbear_is_file=False)
+        second = _run_defaults_in_sandbox(script, dropbear_is_file=False)
+        assert first[0] == second[0] == 0
+        assert second[3] == first[3]  # same key content (overwrite, not append)

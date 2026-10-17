@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
-from pathlib import Path
 from typing import Optional
 
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
-from profile.ops import Op, ShellCommand, UciCommit, UciSet
+from profile.ops import Op, ServiceAction, ShellCommand, UciCommit, UciSet
 from profile.uci_helpers import uci_cleanup_sections
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
@@ -27,46 +25,67 @@ _VALID_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
 
 
 def _ssh_key_firstboot(keys: list[str]) -> str:
-    lines = [f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}"]
+    # Runs inside ONE /etc/uci-defaults script consumed by uci_apply_defaults
+    # (base-files: `( . file ) && applied` -> rm -f on success). Two #229 rules:
+    #  - exit non-zero unless the key provably landed: a failed script is
+    #    retained and retried next boot; a consumed one never runs again.
+    #  - never disable password auth before the key file is verified —
+    #    a half-applied script must not brick SSH.
+    dropbear_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit("/", 1)[0]
+    lines = [f"mkdir -p {dropbear_dir}", f"chmod 700 {dropbear_dir}"]
     for i, key in enumerate(keys):
         op = ">" if i == 0 else ">>"
-        lines.append(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}")
+        lines.append(f"printf '%s\\n' {sh_quote(key)} {op} {DROPBEAR_AUTH_KEYS_PATH}")
+    if not keys:
+        return "\n".join(lines)
     lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
-    if keys:
-        # Key baked => key-only auth (#155): the x1860 incident unit came up
-        # with password-attempt surface enabled by default.
-        # The verify gate is load-bearing (#229): uci-defaults scripts are
-        # sourced by uci_apply_defaults, whose exit status is the LAST
-        # command — without the gate, a lost authorized_keys write is
-        # masked by a successful `uci commit dropbear`, the script is
-        # deleted (rm -f $applied), and publickey-only lockout becomes
-        # permanent. exit 1 keeps the script for retry on the next boot.
-        lines.append(f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH} || exit 1")
-        lines += [
-            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
-            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
-            "uci commit dropbear",
-        ]
+    lines.append(
+        f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null"
+        " || { echo 'conwrt-ssh: authorized_keys not applied;"
+        " keeping password auth, will retry next boot' >&2; exit 1; }"
+    )
+    # Key verified => key-only auth (#155): the x1860 incident unit came up
+    # with password-attempt surface enabled by default.
+    lines += [
+        "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+        "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+        "uci commit dropbear",
+        # Defensive: uci-defaults normally run before dropbear starts, but a
+        # re-executed (retained) script may meet a running dropbear (#229).
+        "/etc/init.d/dropbear restart >/dev/null 2>&1 || true",
+    ]
     return "\n".join(lines)
 
 
 def _ssh_key_ops(keys: list[str]) -> list[Op]:
-    ops: list[Op] = [ShellCommand(f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}")]
+    # Ops mirror of _ssh_key_firstboot, incl. the #229 verify-gate: the
+    # grep op carries its own `|| exit 1` because render_shell joins ops
+    # as plain lines — without it a failed gate would not stop the uci
+    # ops from disabling password auth.
+    dropbear_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit("/", 1)[0]
+    ops: list[Op] = [
+        ShellCommand(f"mkdir -p {dropbear_dir}"),
+        ShellCommand(f"chmod 700 {dropbear_dir}"),
+    ]
     for i, key in enumerate(keys):
         op = ">" if i == 0 else ">>"
-        ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
+        ops.append(ShellCommand(f"printf '%s\\n' {sh_quote(key)} {op} {DROPBEAR_AUTH_KEYS_PATH}"))
+    if not keys:
+        return ops
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
-    if keys:
-        ops.append(ShellCommand(
-            f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH}"
-        ))  # #229: harden only after the key provably landed
-        ops += [
-            UciSet(config="dropbear", section="@dropbear[0]", values={
-                "PasswordAuth": "off",
-                "RootPasswordAuth": "off",
-            }),
-            UciCommit(config="dropbear"),
-        ]
+    ops.append(
+        ShellCommand(
+            f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || exit 1"
+        )
+    )
+    ops += [
+        UciSet(config="dropbear", section="@dropbear[0]", values={
+            "PasswordAuth": "off",
+            "RootPasswordAuth": "off",
+        }),
+        UciCommit(config="dropbear"),
+        ServiceAction(name="dropbear", action="restart"),
+    ]
     return ops
 
 
@@ -196,64 +215,6 @@ _DHCP_DISABLE_OPS: list[Op] = [
 ]
 
 
-# conwrt#228 (ADR-0013): opt-in TOFB image feature. The device script is
-# NOT a one-shot uci-defaults shape — TOFB is marker-gated
-# (/etc/conwrt/tofb.done absent) and must run at EVERY boot until enrolled,
-# so the fragment installs a procd init service that carries the loop; the
-# script self-no-ops (exit 0 on the marker) once enrolled.
-TOFB_DEVICE_DEST = "/etc/conwrt/tofb-device.sh"
-TOFB_INITD_DEST = "/etc/init.d/tofb"
-
-_TOFB_DEVICE_SRC = Path(__file__).resolve().parent.parent / "tofb-device.sh"
-
-_TOFB_INITD = """#!/bin/sh /etc/rc.common
-# conwrt#228 — TOFB procd service (ADR-0013), installed by the profile
-# uci-defaults fragment. Runs the marker-gated device script at every
-# boot; after enrollment it is a cheap no-op exec. No respawn on purpose:
-# endpoint-death semantics (3 wrong codes -> down until power cycle,
-# ADR-0013 failure modes) outrank transient-restart comfort.
-START=95
-STOP=10
-USE_PROCD=1
-
-start_service() {
-    procd_open_instance
-    procd_set_param command /etc/conwrt/tofb-device.sh
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
-}
-"""
-
-
-def _tofb_firstboot() -> str:
-    """Build the uci-defaults fragment that installs + enables TOFB (#228).
-
-    Verify-then-commit (#229/#235): each file write is checksum-gated
-    against a digest baked at build time (sha256 of the exact bytes; host
-    `sha256sum scripts/tofb-device.sh` prints the shipped device digest),
-    and `enable` runs only after both files are proven intact. Any failure
-    exits 1 so the uci-defaults script is retained and retried on the next
-    boot instead of half-applying. On-device behaviors (init timing at
-    START=95 vs link-local/dropbearkey availability, rc.common `enabled`
-    semantics) are NEEDS-BENCH per ADR-0013.
-    """
-    device = _TOFB_DEVICE_SRC.read_bytes()
-    initd = _TOFB_INITD.encode()
-    return "\n".join([
-        "mkdir -p /etc/conwrt",
-        f"echo '{base64.b64encode(device).decode()}' | base64 -d > {TOFB_DEVICE_DEST}",
-        f"[ \"$(sha256sum {TOFB_DEVICE_DEST} | awk '{{print $1}}')\" = '{hashlib.sha256(device).hexdigest()}' ] || exit 1",
-        f"sh -n {TOFB_DEVICE_DEST} || exit 1",
-        f"chmod 700 {TOFB_DEVICE_DEST}",
-        f"echo '{base64.b64encode(initd).decode()}' | base64 -d > {TOFB_INITD_DEST}",
-        f"[ \"$(sha256sum {TOFB_INITD_DEST} | awk '{{print $1}}')\" = '{hashlib.sha256(initd).hexdigest()}' ] || exit 1",
-        f"chmod 755 {TOFB_INITD_DEST}",
-        f"{TOFB_INITD_DEST} enable || exit 1",
-        f"{TOFB_INITD_DEST} enabled || exit 1",
-    ])
-
-
 def build_plan(
     cfg: ConwrtConfig,
     mode: ProfileMode = "preview",
@@ -261,7 +222,6 @@ def build_plan(
     ssh_key_path: Optional[str] = None,
     password: Optional[str] = None,
     wan_ssh: bool = False,
-    tofb: bool = False,
     extra_pub_keys: Optional[list[str]] = None,
     disable_dhcp: bool = False,
     hostname: str = "",
@@ -630,19 +590,6 @@ def build_plan(
                     "ipaddr": cfg.lan_ip, "netmask": "255.255.255.0",
                 }),
             ],
-        ))
-
-    if tofb:
-        # Appended LAST on purpose: uci_apply_defaults deletes the whole
-        # defaults file based on the LAST command's exit status, so a
-        # failed TOFB install here retains every step for next-boot retry
-        # (all earlier steps are idempotent re-runs) — the #229/#235
-        # retention discipline.
-        steps.append(ProfileStep(
-            kind=StepKind.TOFB,
-            label="TOFB first-boot enrollment service (opt-in)",
-            firstboot_script=_tofb_firstboot(),
-            include_in_post_install=False,
         ))
 
     plan.steps = steps
