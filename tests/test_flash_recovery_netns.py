@@ -110,6 +110,8 @@ def test_real_kernel_arp_arming_never_gets(netns):
     assert "DRY_RUN=1 — probe done; not flashing." in out.stdout
     attempts = curl_log.read_text() if curl_log.exists() else ""
     assert attempts == ""  # the one-request window was never touched
-    # The script must have cleaned up its temporary address/route (trap intact).
-    leftover = _sh("ip", "addr", "show", "dev", iface)
-    assert "192.168.0.10" not in leftover.stdout
+    # The script must have cleaned up its temporary address AND route (trap intact).
+    leftover_addr = _sh("ip", "addr", "show", "dev", iface)
+    assert "192.168.0.10" not in leftover_addr.stdout
+    leftover_route = _sh("ip", "route", "show", "dev", iface)
+    assert RECOVERY_IP not in leftover_route.stdout

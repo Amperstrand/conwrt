@@ -174,6 +174,12 @@ if [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]]; then
     # session against stock firmware on the same address.
     sudo ip neigh del "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true
     info "Waiting for ARP from $RECOVERY_IP (armed = it answers ARP)…"
+    # A non-numeric ARP_ATTEMPTS makes seq emit nothing — the loop would run
+    # zero rounds and silently collapse the wait window. Clamp, loudly.
+    if ! [[ "$ARP_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+      warn "ARP_ATTEMPTS='$ARP_ATTEMPTS' is not a positive integer — using 5."
+      ARP_ATTEMPTS=5
+    fi
     for _ in $(seq 1 "$ARP_ATTEMPTS"); do
       ping -c 1 -W 1 "$RECOVERY_IP" >/dev/null 2>&1 || true
       NEIGH="$(ip neigh show "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true)"

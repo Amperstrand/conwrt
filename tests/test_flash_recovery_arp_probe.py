@@ -214,6 +214,15 @@ def test_arp_attempts_tunable(rig):
     assert len(rig.lines("ping")) == 2
 
 
+def test_arp_attempts_garbage_clamps_to_default(rig):
+    """Non-numeric ARP_ATTEMPTS must not collapse the wait window to zero."""
+    rig.set_neigh_reply("")  # never armed
+    out = rig.run({"DRY_RUN": "1", "ASSUME_YES": "1", "ARP_ATTEMPTS": "abc"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "ARP_ATTEMPTS='abc' is not a positive integer — using 5." in out.stderr
+    assert len(rig.lines("ping")) == 5  # default window, not zero rounds
+
+
 def test_model_without_recovery_ip_warns(rig):
     """A model yielding no recovery IPs skips the probe — but never silently."""
     rig.set_py_reply("")  # empty recovery_ip + client_ip
