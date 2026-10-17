@@ -444,7 +444,9 @@ documentation that claimed serial was required.
 
 ## 12. Recovery Decision Tree
 
-When a device is inaccessible, try methods in order of reliability:
+When a device is inaccessible, try methods in order of reliability.
+Model-specific consolidated runbook: `docs/DLINK-RECOVERY-FLASH-RUNBOOK.md`
+(D-Link COVR-X1860 recovery-flash — one-request server class).
 
 ```
 Device inaccessible?
