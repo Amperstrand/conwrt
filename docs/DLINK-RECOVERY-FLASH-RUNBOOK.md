@@ -100,11 +100,10 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
       recovery server uses the model-wide soft MAC `3e:85:be:87:55:42`
       (locally administered). NEVER GET the page (rule 1).
       (`bench_switch_recovery_rig_2026_10_14`)
-- [ ] **Do NOT run `scripts/flash-recovery.sh` against this species**: its
-      probe GETs the recovery page (`scripts/flash-recovery.sh:121`) — on a
-      one-request server that burns the window and costs a power cycle. The
-      generic helper is for multi-request recovery servers (GL.iNet class).
-      NEEDS-BENCH-VERIFY: an ARP-only arming variant of the probe.
+- [ ] `scripts/flash-recovery.sh` now probes ARP-only by default
+      (`FORCE_HTTP_PROBE=1` restores the GET probe for GL.iNet-class
+      multi-request servers) — still NEEDS-BENCH-VERIFY on this species
+      (§8 reg#1) before it replaces the manual `ip neigh` check above.
 - [ ] Fire headless Chromium (Playwright) against a LOCAL form so the multipart
       POST is the first and only HTTP request (rule 2). Post the
       `squashfs-recovery.bin` to the upload endpoint.
@@ -190,7 +189,7 @@ Serial procedure: `docs/serial-console.md`, prompts `serial-01`…`serial-06`.
 
 | # | Item | Source of doubt |
 |---|---|---|
-| 1 | ARP-only arming probe variant for `scripts/flash-recovery.sh` (current curl probe burns one-request windows) | `flash-recovery.sh:121` vs AGENTS.md rule 1 |
+| 1 | ARP-only arming probe in `scripts/flash-recovery.sh` — **code-done** (ARP default, `FORCE_HTTP_PROBE=1` escape hatch for GL.iNet-class servers); on-device confirmation still NEEDS-BENCH | AGENTS.md rule 1; arming verdict unproven on a live one-request unit |
 | 2 | #229 on-device confirmation: recovery-flash an image built after PR #235 and observe the verify-gate behavior (self-heal on next boot, or lockout-free harden) | root-caused at source level; the physical flash is bench work |
 | 3 | serial-flash NAND bypass on this species | never exercised; case-sealed |
 | 4 | Stock-image accepted-but-no-boot root cause (NAND write corruption vs bootloader-variant reject) | Sept elimination matrix + Oct matrix attempt (1) |
