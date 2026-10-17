@@ -14,6 +14,7 @@ from profile.builder import (
     _password_ops,
     _ssh_key_firstboot,
     _ssh_key_ops,
+    _tofb_firstboot,
     _uc_packages_for_mode,
 )
 from profile.ops import ShellCommand, UciSet
@@ -699,7 +700,164 @@ class TestModelHostnamePrefix:
 
 
 # ===================================================================
-# 14. Model LAN subnet parsing
+# 15. _tofb_firstboot (opt-in TOFB image feature, #228 / ADR-0013)
+# ===================================================================
+
+TOFB_DEVICE_SRC = "scripts/tofb-device.sh"
+TOFB_DEVICE_DEST = "/etc/conwrt/tofb-device.sh"
+TOFB_INITD_DEST = "/etc/init.d/tofb"
+
+
+def _tofb_digests(fragment: str) -> list[str]:
+    """The two baked SHA-256 gates, in fragment order (device, init.d)."""
+    import re
+    return re.findall(r"= '([0-9a-f]{64})' \] \|\| exit 1", fragment)
+
+
+def _tofb_payload(fragment: str, dest: str) -> str:
+    """Extract the base64 payload written to dest."""
+    import re
+    m = re.search(
+        rf"echo '([A-Za-z0-9+/=]+)' \| base64 -d > {re.escape(dest)}", fragment,
+    )
+    assert m is not None, f"no base64 payload for {dest}"
+    return m.group(1)
+
+
+class TestTofbFirstboot:
+    def _fragment(self) -> str:
+        return _tofb_firstboot()
+
+    def _sandbox_fragment(self, sandbox: str) -> str:
+        """Fragment with destinations moved into sandbox; enable lines off."""
+        frag = self._fragment()
+        frag = frag.replace("mkdir -p /etc/conwrt", f"mkdir -p {sandbox}")
+        frag = frag.replace(TOFB_DEVICE_DEST, f"{sandbox}/tofb-device.sh")
+        frag = frag.replace(TOFB_INITD_DEST, f"{sandbox}/tofb-initd")
+        return "\n".join(
+            line for line in frag.splitlines()
+            if not line.endswith("enable || exit 1")
+            and not line.endswith("enabled || exit 1")
+        )
+
+    def test_creates_destination_dir_before_write(self):
+        frag = self._fragment()
+        assert frag.index("mkdir -p /etc/conwrt") < frag.index(f"> {TOFB_DEVICE_DEST}")
+
+    def test_ships_device_script_payload(self):
+        # The embedded payload decodes to the exact bytes of the repo
+        # device script — build-time source of truth, no transformation.
+        import hashlib
+        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_DEVICE_DEST))
+        with open(TOFB_DEVICE_SRC, "rb") as fh:
+            assert payload == fh.read()
+        digests = _tofb_digests(self._fragment())
+        assert len(digests) == 2
+        assert digests[0] == hashlib.sha256(payload).hexdigest()
+
+    def test_device_sha_matches_sha256sum_cli(self):
+        # BusyBox parity: the baked digest must equal what the on-device
+        # `sha256sum /etc/conwrt/tofb-device.sh` prints for the shipped
+        # bytes — host sha256sum uses the identical format.
+        import subprocess
+        digests = _tofb_digests(self._fragment())
+        proc = subprocess.run(
+            ["sha256sum", TOFB_DEVICE_SRC], capture_output=True, text=True, check=True,
+        )
+        assert proc.stdout.split()[0] == digests[0]
+
+    def test_checksum_gate_precedes_chmod_and_enable(self):
+        # #229/#235 discipline: verify-then-commit. Each write is gated
+        # before anything depends on it; enable only after BOTH gates.
+        frag = self._fragment()
+        gate1 = frag.index(f"sha256sum {TOFB_DEVICE_DEST}")
+        chmod1 = frag.index(f"chmod 700 {TOFB_DEVICE_DEST}")
+        gate2 = frag.index(f"sha256sum {TOFB_INITD_DEST}")
+        chmod2 = frag.index(f"chmod 755 {TOFB_INITD_DEST}")
+        enable = frag.index("enable || exit 1")
+        assert gate1 < chmod1 < gate2 < chmod2 < enable
+        assert frag.index("enabled || exit 1") > enable
+
+    def test_syntax_check_before_chmod(self):
+        frag = self._fragment()
+        assert frag.index(f"sh -n {TOFB_DEVICE_DEST}") < frag.index(f"chmod 700 {TOFB_DEVICE_DEST}")
+
+    def test_every_gate_fails_closed(self):
+        # Every mutation carries an explicit `|| exit 1` retention path.
+        frag = self._fragment()
+        gates = [l for l in frag.splitlines() if "exit 1" in l]
+        assert gates, "no fail-closed gates in fragment"
+        assert all(l.rstrip().endswith("|| exit 1") for l in gates)
+
+    def test_initd_payload_is_valid_sh(self, tmp_path):
+        import subprocess
+        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_INITD_DEST))
+        f = tmp_path / "tofb-initd"
+        f.write_bytes(payload)
+        proc = subprocess.run(["sh", "-n", str(f)], capture_output=True)
+        assert proc.returncode == 0, proc.stderr.decode()
+
+    def test_initd_payload_procd_contract(self):
+        payload = base64.b64decode(_tofb_payload(self._fragment(), TOFB_INITD_DEST)).decode()
+        assert payload.startswith("#!/bin/sh /etc/rc.common")
+        assert "USE_PROCD=1" in payload
+        assert f"command {TOFB_DEVICE_DEST}" in payload
+        # No respawn directive: endpoint-death semantics (3 wrong codes ->
+        # down until power cycle, ADR-0013 failure modes) outrank restarts.
+        assert "procd_set_param respawn" not in payload
+
+    def test_happy_path_install_sandbox(self, tmp_path):
+        # Dry-run the whole fragment (enable lines neutralized): files
+        # land byte-exact with the promised modes, exit 0.
+        import os
+        import subprocess
+        script = self._sandbox_fragment(str(tmp_path))
+        proc = subprocess.run(
+            ["sh", "-c", script], capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        dev = tmp_path / "tofb-device.sh"
+        with open(TOFB_DEVICE_SRC, "rb") as fh:
+            assert dev.read_bytes() == fh.read()
+        assert os.stat(dev).st_mode & 0o777 == 0o700
+        assert os.stat(tmp_path / "tofb-initd").st_mode & 0o777 == 0o755
+
+    def test_tampered_digest_fails_closed(self, tmp_path):
+        # Verify-then-commit, not trust-the-write: the write succeeds but
+        # the digest gate must still fail the install (retained for
+        # next-boot retry, never half-applied/enabled).
+        import subprocess
+        script = self._sandbox_fragment(str(tmp_path))
+        digests = _tofb_digests(script)
+        script = script.replace(digests[0], "0" * 64)
+        proc = subprocess.run(
+            ["sh", "-c", script], capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode != 0
+
+    def test_failed_write_retained_nonzero(self, tmp_path):
+        # The #229 failure class: destination unwritable at uci-defaults
+        # time. The fragment must exit non-zero (uci_apply_defaults keeps
+        # the script; nothing gets enabled).
+        import os
+        import shutil
+        import subprocess
+        ro = tmp_path / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        script = self._sandbox_fragment(str(ro))
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", script], capture_output=True, text=True, timeout=30,
+            )
+            assert proc.returncode != 0
+        finally:
+            ro.chmod(0o755)
+            shutil.rmtree(ro)
+
+
+# ===================================================================
+# 16. Model LAN subnet parsing
 # ===================================================================
 
 class TestModelLanSubnet:

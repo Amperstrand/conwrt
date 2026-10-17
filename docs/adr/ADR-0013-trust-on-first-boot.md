@@ -147,3 +147,43 @@ script in the ASU build); default images are unchanged.
 - AGENTS.md Dark-Device discipline (zone-scoped v6 transport as the
   house-standard first-contact channel).
 - `docs/DARK-DEVICE-PLAYBOOK.md` (the discovery ladder TOFB terminates in).
+
+## Follow-up note: the opt-in shipping vehicle (2026-10-17)
+
+The flag from "What is explicitly NOT in v1" landed as `[network] tofb =
+true` in config.toml or `firmware-manager.py request --tofb`, mirroring
+the `wan_ssh` precedent end to end (config attr + CLI flag OR-ed in
+`cmd_request`, passed as the `tofb` build_plan kwarg —
+`scripts/firmware-manager.py`, `scripts/profile/builder.py`). Default
+builds are unchanged: flag off → no step → identical ASU `defaults`
+payload, build request, and cache key.
+
+**Vehicle: a uci-defaults fragment that installs + enables a procd init
+service carrying the loop.** TOFB is marker-gated and must run at EVERY
+boot until enrolled, so a one-shot uci-defaults shape cannot carry it;
+ASU `files` shipping was rejected because our ASU client transports
+`defaults` only (no file channel). The fragment base64-embeds the exact
+bytes of `scripts/tofb-device.sh` at build time, writes it to
+`/etc/conwrt/tofb-device.sh`, gates it on a baked SHA-256 (BusyBox
+`sha256sum` — the baked digest equals host `sha256sum
+scripts/tofb-device.sh`, so the shipped value is debuggable from the
+checkout) plus `sh -n`, installs `/etc/init.d/tofb` (procd, `START=95`)
+the same way, and only then enables it — every step `|| exit 1`.
+
+**Failed installs retain, never half-apply.** Nothing is enabled until
+everything verifies, and the TOFB step is appended LAST in the plan
+because uci_apply_defaults deletes the defaults file based on the LAST
+command's exit status — a failing TOFB subshell therefore retains the
+whole file for next-boot retry (earlier steps are idempotent re-runs).
+
+**No respawn** on the procd instance: the endpoint-death semantics
+(3 wrong codes → down until power cycle) outrank transient-restart
+comfort; an early-boot transient death means one power cycle restarts
+TOFB, which the bench operator is positioned to do.
+
+NEEDS-BENCH (on-device, gated before any default-on debate): `START=95`
+vs link-local address/dropbearkey availability, rc.common `enabled`
+semantics across variants, LED paths and httpd CGI wiring (inherited
+from the device script), and whether a bounded procd respawn
+(threshold/timeout/retry) can coexist with the 3-failure endpoint
+budget.

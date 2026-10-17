@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
+from pathlib import Path
 from typing import Optional
 
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
@@ -194,6 +196,64 @@ _DHCP_DISABLE_OPS: list[Op] = [
 ]
 
 
+# conwrt#228 (ADR-0013): opt-in TOFB image feature. The device script is
+# NOT a one-shot uci-defaults shape — TOFB is marker-gated
+# (/etc/conwrt/tofb.done absent) and must run at EVERY boot until enrolled,
+# so the fragment installs a procd init service that carries the loop; the
+# script self-no-ops (exit 0 on the marker) once enrolled.
+TOFB_DEVICE_DEST = "/etc/conwrt/tofb-device.sh"
+TOFB_INITD_DEST = "/etc/init.d/tofb"
+
+_TOFB_DEVICE_SRC = Path(__file__).resolve().parent.parent / "tofb-device.sh"
+
+_TOFB_INITD = """#!/bin/sh /etc/rc.common
+# conwrt#228 — TOFB procd service (ADR-0013), installed by the profile
+# uci-defaults fragment. Runs the marker-gated device script at every
+# boot; after enrollment it is a cheap no-op exec. No respawn on purpose:
+# endpoint-death semantics (3 wrong codes -> down until power cycle,
+# ADR-0013 failure modes) outrank transient-restart comfort.
+START=95
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /etc/conwrt/tofb-device.sh
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+"""
+
+
+def _tofb_firstboot() -> str:
+    """Build the uci-defaults fragment that installs + enables TOFB (#228).
+
+    Verify-then-commit (#229/#235): each file write is checksum-gated
+    against a digest baked at build time (sha256 of the exact bytes; host
+    `sha256sum scripts/tofb-device.sh` prints the shipped device digest),
+    and `enable` runs only after both files are proven intact. Any failure
+    exits 1 so the uci-defaults script is retained and retried on the next
+    boot instead of half-applying. On-device behaviors (init timing at
+    START=95 vs link-local/dropbearkey availability, rc.common `enabled`
+    semantics) are NEEDS-BENCH per ADR-0013.
+    """
+    device = _TOFB_DEVICE_SRC.read_bytes()
+    initd = _TOFB_INITD.encode()
+    return "\n".join([
+        "mkdir -p /etc/conwrt",
+        f"echo '{base64.b64encode(device).decode()}' | base64 -d > {TOFB_DEVICE_DEST}",
+        f"[ \"$(sha256sum {TOFB_DEVICE_DEST} | awk '{{print $1}}')\" = '{hashlib.sha256(device).hexdigest()}' ] || exit 1",
+        f"sh -n {TOFB_DEVICE_DEST} || exit 1",
+        f"chmod 700 {TOFB_DEVICE_DEST}",
+        f"echo '{base64.b64encode(initd).decode()}' | base64 -d > {TOFB_INITD_DEST}",
+        f"[ \"$(sha256sum {TOFB_INITD_DEST} | awk '{{print $1}}')\" = '{hashlib.sha256(initd).hexdigest()}' ] || exit 1",
+        f"chmod 755 {TOFB_INITD_DEST}",
+        f"{TOFB_INITD_DEST} enable || exit 1",
+        f"{TOFB_INITD_DEST} enabled || exit 1",
+    ])
+
+
 def build_plan(
     cfg: ConwrtConfig,
     mode: ProfileMode = "preview",
@@ -201,6 +261,7 @@ def build_plan(
     ssh_key_path: Optional[str] = None,
     password: Optional[str] = None,
     wan_ssh: bool = False,
+    tofb: bool = False,
     extra_pub_keys: Optional[list[str]] = None,
     disable_dhcp: bool = False,
     hostname: str = "",
@@ -569,6 +630,19 @@ def build_plan(
                     "ipaddr": cfg.lan_ip, "netmask": "255.255.255.0",
                 }),
             ],
+        ))
+
+    if tofb:
+        # Appended LAST on purpose: uci_apply_defaults deletes the whole
+        # defaults file based on the LAST command's exit status, so a
+        # failed TOFB install here retains every step for next-boot retry
+        # (all earlier steps are idempotent re-runs) — the #229/#235
+        # retention discipline.
+        steps.append(ProfileStep(
+            kind=StepKind.TOFB,
+            label="TOFB first-boot enrollment service (opt-in)",
+            firstboot_script=_tofb_firstboot(),
+            include_in_post_install=False,
         ))
 
     plan.steps = steps
