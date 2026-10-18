@@ -39,6 +39,10 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     if not keys:
         return "\n".join(lines)
     lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
+    # P1 (#253 review): dropbear rejects ALL keys when /etc/dropbear (or the
+    # file) is non-root-owned — a preserved-overlay incident left it
+    # 1000:1000 in the field, and chmod alone would not fix that.
+    lines.append(f"chown 0:0 {dropbear_dir} {DROPBEAR_AUTH_KEYS_PATH}")
     lines.append(
         f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null"
         " || { echo 'conwrt-ssh: authorized_keys not applied;"
@@ -50,6 +54,12 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
         "uci set dropbear.@dropbear[0].PasswordAuth='off'",
         "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
         "uci commit dropbear",
+        # P2 (#253 review): gate on a VALUE READBACK, not the uci exit codes
+        # — a failed commit must fail the script so uci_apply_defaults
+        # retains it for retry instead of consuming a half-applied boot.
+        "[ \"$(uci get dropbear.@dropbear[0].PasswordAuth 2>/dev/null)\" = 'off' ]"
+        " || { echo 'conwrt-ssh: PasswordAuth readback failed;"
+        " keeping script for retry' >&2; exit 1; }",
         # Defensive: uci-defaults normally run before dropbear starts, but a
         # re-executed (retained) script may meet a running dropbear (#229).
         "/etc/init.d/dropbear restart >/dev/null 2>&1 || true",
@@ -75,6 +85,11 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
     ops.append(
         ShellCommand(
+            f"chown 0:0 {dropbear_dir} {DROPBEAR_AUTH_KEYS_PATH}"
+        )
+    )
+    ops.append(
+        ShellCommand(
             f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || exit 1"
         )
     )
@@ -84,6 +99,10 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
             "RootPasswordAuth": "off",
         }),
         UciCommit(config="dropbear"),
+        ShellCommand(
+            "[ \"$(uci get dropbear.@dropbear[0].PasswordAuth 2>/dev/null)\" = 'off' ]"
+            " || exit 1"
+        ),
         ServiceAction(name="dropbear", action="restart"),
     ]
     return ops

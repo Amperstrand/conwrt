@@ -106,10 +106,10 @@ class TestSshKeyFirstboot:
 class TestSshKeyOps:
     def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        # mkdir, chmod 700, printf, chmod 600, verify-gate (ShellCommand)
-        # + key-only UciSet + commit (#155) + dropbear restart (#229)
+        # mkdir, chmod 700, printf, chmod 600, chown, verify-gate, readback
+        # (ShellCommand) + key-only UciSet + commit (#155) + restart (#229)
         shells = [op for op in ops if isinstance(op, ShellCommand)]
-        assert len(shells) == 5
+        assert len(shells) == 7
 
     def test_ops_bake_key_only_auth(self):
         # #155: ops carry the same key-only dropbear config as firstboot.
@@ -124,13 +124,15 @@ class TestSshKeyOps:
         assert "chmod 700" in ops[1].command
         assert "printf" in ops[2].command and "'key1'" in ops[2].command
         assert "chmod 600" in ops[3].command
-        assert "grep -qF 'key1'" in ops[4].command
-        assert "|| exit 1" in ops[4].command
+        assert "chown 0:0" in ops[4].command
+        assert "grep -qF 'key1'" in ops[5].command
+        assert "|| exit 1" in ops[5].command
 
-    def test_two_keys_returns_nine_ops(self):
+    def test_two_keys_returns_eleven_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        # mkdir, chmod 700, printf x2, chmod 600, gate, UciSet, commit, restart
-        assert len(ops) == 9
+        # mkdir, chmod 700, printf x2, chmod 600, chown, gate, readback,
+        # UciSet, commit, restart
+        assert len(ops) == 11
         assert ">" in ops[2].command and ">>" not in ops[2].command
         assert ">>" in ops[3].command
 
@@ -150,10 +152,12 @@ class TestSshKeyOps:
         from profile.ops import UciCommit, ServiceAction
         for op in ops:
             if isinstance(op, ShellCommand):
-                if "|| exit 1" in op.command:
-                    # gate: fb uses the verbose { echo >&2; exit 1; } form
-                    assert "grep -qF" in op.command
-                    assert "grep -qF" in fb and "exit 1" in fb
+                if "grep -qF" in op.command or "uci get dropbear" in op.command:
+                    # gate + readback: fb uses the verbose { echo; exit 1; }
+                    # forms for both, so compare by keyword, not verbatim
+                    keyword = "grep -qF" if "grep -qF" in op.command else "uci get dropbear"
+                    assert keyword in op.command and keyword in fb
+                    assert "exit 1" in fb
                     continue
                 assert op.command in fb
             elif isinstance(op, ServiceAction):
@@ -669,6 +673,16 @@ class TestSshKey229LockoutSafety:
     password auth, and (b) exit non-zero on failure so uci_apply_defaults
     retains it for retry instead of consuming a half-applied boot."""
 
+    def test_chown_precedes_gate(self):
+        # P1: non-root-owned /etc/dropbear makes dropbear reject ALL keys
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("chown 0:0") < result.index("grep -qF")
+
+    def test_readback_gates_restart(self):
+        # P2: PasswordAuth must read back 'off' before the tolerant restart
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("uci get dropbear") < result.index("/etc/init.d/dropbear restart")
+
     def test_gate_precedes_password_auth(self):
         result = _ssh_key_firstboot(["key1"])
         assert result.index("grep -qF") < result.index("PasswordAuth='off'")
@@ -713,7 +727,15 @@ def _run_defaults_in_sandbox(script: str, dropbear_is_file: bool):
         else:
             os.makedirs(f"{root}/etc/dropbear")
         with open(f"{root}/bin/uci", "w") as f:
-            f.write(f"#!/bin/sh\necho \"$@\" >> {shlex.quote(root + '/uci.log')}\nexit 0\n")
+            f.write(
+                "#!/bin/sh\n"
+                f'echo "$@" >> {shlex.quote(root + "/uci.log")}\n'
+                'case "$1 $2" in '
+                '"get dropbear.@dropbear[0].PasswordAuth") echo off;; '
+                '"get dropbear.@dropbear[0].RootPasswordAuth") echo off;; '
+                "esac\n"
+                "exit 0\n"
+            )
         os.chmod(f"{root}/bin/uci", 0o755)
         with open(f"{root}/etc/init.d/dropbear", "w") as f:
             f.write(f"#!/bin/sh\necho restarted >> {shlex.quote(root + '/restart.log')}\nexit 0\n")
