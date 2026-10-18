@@ -361,4 +361,7 @@ def test_build_plan_tofb_fragment_in_defaults_script() -> None:
     assert "sha256sum /etc/conwrt/tofb-device.sh" in defaults
     assert "/etc/init.d/tofb enable || exit 1" in defaults
     # Standard subshell isolation like every other step, and last block.
-    assert defaults.rstrip().endswith(")")
+    # (#229: every block carries a `) || exit 1` failure-propagation tail,
+    # so assert on the last BLOCK's content, not the literal suffix.)
+    last_block = defaults.rstrip().rsplit("\n(", 1)[-1]
+    assert "/etc/init.d/tofb enabled" in last_block

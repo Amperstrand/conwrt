@@ -673,6 +673,91 @@ class TestSshKey229LockoutSafety:
     password auth, and (b) exit non-zero on failure so uci_apply_defaults
     retains it for retry instead of consuming a half-applied boot."""
 
+    def test_hardening_gated_on_key_verification(self):
+        # #229: the script's exit status is its LAST command (uci commit).
+        # If the key write is lost but commit succeeds, uci_apply_defaults
+        # deletes the script (base-files /etc/init.d/boot: rm -f $applied)
+        # and publickey-only lockout becomes permanent. The verify gate must
+        # sit between the key write and the hardening uci lines.
+        result = _ssh_key_firstboot(["ssh-ed25519 KEYBODY"])
+        verify_idx = result.index("grep -qF 'ssh-ed25519 KEYBODY'")
+        gate_line = result[verify_idx:verify_idx + 200]
+        assert "exit 1" in gate_line  # verbose { echo; exit 1; } or || exit 1
+        harden_idx = result.index("PasswordAuth='off'")
+        commit_idx = result.index("uci commit dropbear")
+        assert result.index("chmod 600") < verify_idx < harden_idx < commit_idx
+
+    def test_failed_key_write_keeps_script_nonzero(self):
+        # Simulate the #229 failure class: the authorized_keys write does not
+        # land (unwritable fs at uci-defaults time). The script must exit
+        # non-zero so base-files RETAINS it and retries next boot — never
+        # reaching the password-off hardening.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        # Neutralize uci for the dry run: the contract under test is the
+        # gate ordering around it, not uci itself.
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line
+            if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            else line
+            for line in dry.splitlines()
+        )
+        ro_dir = os.path.join(sandbox, "ro", "dropbear")
+        os.makedirs(ro_dir)
+        ro_target = os.path.join(ro_dir, "authorized_keys")
+        os.chmod(ro_dir, 0o555)
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry.replace(target, ro_target)],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode != 0, (
+                "script must fail (and be retained) when the key write fails"
+            )
+            assert not os.path.exists(ro_target)
+        finally:
+            os.chmod(ro_dir, 0o755)
+            shutil.rmtree(sandbox)
+
+    def test_successful_key_write_exits_zero(self):
+        # Happy path dry-run: key lands, mode 600, script exits 0 (deleted,
+        # hardening applied — exactly once).
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line
+            if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            else line
+            for line in dry.splitlines()
+        )
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry], capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode == 0
+            with open(target) as fh:
+                assert fh.read().strip() == key
+            assert os.stat(target).st_mode & 0o777 == 0o600
+        finally:
+            shutil.rmtree(sandbox)
+
+
     def test_chown_precedes_gate(self):
         # P1: non-root-owned /etc/dropbear makes dropbear reject ALL keys
         result = _ssh_key_firstboot(["key1"])
