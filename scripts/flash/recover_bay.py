@@ -34,26 +34,37 @@ FRESH_STATES = ("REACHABLE", "DELAY", "PROBE")
 
 
 class BayPcap:
-    """Stream a switch-side tcpdump of the bay into a local pcap file.
+    """Record the bay wire into a local pcap file.
 
     The #91 rule: never blame the client without a pcap. Five recovery POSTs
     on 2026-10-19 produced five no-boots and zero wire evidence — this makes
     the evidence automatic. One file per run holds every phase: the arming
     ARP polls, the multipart POST byte stream, the server vanish, and any
     boot traffic (DHCP discovers / RAs / ARP) during the door watch.
+
+    Two transports: switch mode streams a remote tcpdump over ssh; direct
+    mode (``direct_iface``) records a locally-attached interface — the
+    historically clean path (every fast clean flash of this model ran from
+    a host directly on the recovery link; every tunneled attempt since
+    October no-booted).
     """
 
-    def __init__(self, switch: str, key: str, svi: str, pcap_dir: str):
+    def __init__(self, switch: str, key: str, svi: str, pcap_dir: str,
+                 direct_iface: str | None = None):
         self.switch, self.key, self.svi = switch, key, svi
-        self.path = Path(pcap_dir) / f"recover-{svi}-{time.strftime('%Y%m%d-%H%M%S')}.pcap"
+        self.direct_iface = direct_iface
+        name = direct_iface or svi
+        self.path = Path(pcap_dir) / f"recover-{name}-{time.strftime('%Y%m%d-%H%M%S')}.pcap"
 
     def __enter__(self) -> "BayPcap":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.fh = open(self.path, "wb")
-        self.proc = subprocess.Popen(
-            ["ssh", *ssh_opts(self.key), self.switch,
-             f"tcpdump -i {self.svi} -U -n -s 0 -w - 2>/dev/null"],
-            stdout=self.fh, stderr=subprocess.DEVNULL)
+        if self.direct_iface:
+            cmd = ["tcpdump", "-i", self.direct_iface, "-U", "-n", "-s", "0", "-w", "-"]
+        else:
+            cmd = ["ssh", *ssh_opts(self.key), self.switch,
+                   f"tcpdump -i {self.svi} -U -n -s 0 -w - 2>/dev/null"]
+        self.proc = subprocess.Popen(cmd, stdout=self.fh, stderr=subprocess.DEVNULL)
         print(f"[pcap] recording bay wire to {self.path}")
         return self
 
@@ -152,26 +163,39 @@ def wait_consumption(proc, gate_timeout: float) -> bool:
     return False
 
 
-def watch_door(switch: str, key: str, svi: str, door_ip: str, timeout: float) -> str | None:
-    print(f"[door] watching {door_ip} on {svi} for up to {int(timeout / 60)} min "
+def watch_door(switch: str, key: str, svi: str, door_ip: str, timeout: float,
+               direct_iface: str | None = None) -> str | None:
+    iface = direct_iface or svi
+    print(f"[door] watching {door_ip} on {iface} for up to {int(timeout / 60)} min "
           f"(dual-image boot: expect two reboots)")
-    ssh_run(switch, key, "ip addr del 192.168.1.254/24 dev switch.1 2>/dev/null; true")
-    arm_alias(switch, key, svi, "192.168.1.2", present=True)
+    if direct_iface:
+        def ssh_or_local(cmd: str) -> str:
+            return subprocess.run(["sh", "-c", cmd], capture_output=True,
+                                  text=True, check=False).stdout.strip()
+        ssh_or_local(f"ip addr add 192.168.1.2/24 dev {iface} 2>/dev/null; true")
+    else:
+        def ssh_or_local(cmd: str) -> str:
+            return ssh_run(switch, key, cmd)
+        ssh_or_local("ip addr del 192.168.1.254/24 dev switch.1 2>/dev/null; true")
+        ssh_or_local(f"ip addr add 192.168.1.2/24 dev {svi} 2>/dev/null; true")
     deadline = time.monotonic() + timeout
     mac = None
     try:
         while time.monotonic() < deadline:
-            out = ssh_run(switch, key,
-                          f"ping -c1 -W1 {door_ip} >/dev/null 2>&1; "
-                          f"ip neigh show {door_ip} dev {svi} 2>/dev/null | head -1")
+            out = ssh_or_local(
+                f"ping -c1 -W1 {door_ip} >/dev/null 2>&1; "
+                f"ip neigh show {door_ip} dev {iface} 2>/dev/null | head -1")
             if out and "FAILED" not in out and "INCOMPLETE" not in out:
                 mac = out.split("lladdr")[1].split()[0] if "lladdr" in out else "?"
                 print(f"[door] UP: {out}")
                 break
             time.sleep(5)
     finally:
-        arm_alias(switch, key, svi, "192.168.1.2", present=False)
-        ssh_run(switch, key, "ip addr add 192.168.1.254/24 dev switch.1 2>/dev/null; true")
+        if direct_iface:
+            ssh_or_local(f"ip addr del 192.168.1.2/24 dev {iface} 2>/dev/null; true")
+        else:
+            ssh_or_local(f"ip addr del 192.168.1.2/24 dev {svi} 2>/dev/null; true")
+            ssh_or_local("ip addr add 192.168.1.254/24 dev switch.1 2>/dev/null; true")
     return mac
 
 
@@ -192,25 +216,44 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pcap-dir", default="/tmp/conwrt-recovery-pcaps",
                    help="where bay-wire pcaps land (default-on; see BayPcap)")
     p.add_argument("--no-pcap", action="store_true", help="disable the wire recording")
+    p.add_argument("--direct-iface", default=None,
+                   help="direct mode: IFACE is locally attached to the unit "
+                        "(recovery subnet pre-configured, e.g. 192.168.0.10/24). "
+                        "No switch, no tunnel, no SVI aliases — the historically "
+                        "clean path. Overrides --switch/--svi/--port transport.")
     args = p.parse_args(argv)
+    direct = args.direct_iface
 
-    ensure_tunnel(args.switch, args.key, args.local_port, args.recovery_ip)
-    arm_alias(args.switch, args.key, args.svi, args.client_ip, present=True)
-    print(f"[setup] tunnel :{args.local_port} + alias {args.client_ip} on {args.svi}")
+    if direct:
+        have = subprocess.run(["sh", "-c", f"ip -4 addr show dev {direct} | grep -c 'inet '"],
+                              capture_output=True, text=True).stdout.strip()
+        print(f"[setup] direct mode on {direct} (IPv4 addrs: {have}); "
+              f"endpoint http://{args.recovery_ip}/upload")
+    else:
+        ensure_tunnel(args.switch, args.key, args.local_port, args.recovery_ip)
+        arm_alias(args.switch, args.key, args.svi, args.client_ip, present=True)
+        print(f"[setup] tunnel :{args.local_port} + alias {args.client_ip} on {args.svi}")
     print("[watch] power-cycle the unit whenever ready (plain cycle; no button)")
 
     capture = nullcontext() if args.no_pcap else \
-        BayPcap(args.switch, args.key, args.svi, args.pcap_dir)
+        BayPcap(args.switch, args.key, args.svi, args.pcap_dir, direct_iface=direct)
     with capture:
-        proc = subprocess.Popen(
-            ["ssh", *ssh_opts(args.key), args.switch, poller_cmd(args.svi, args.port, args.recovery_ip)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        poll_cmd = poller_cmd(direct or args.svi, direct or args.port, args.recovery_ip)
+        if direct:
+            proc = subprocess.Popen(["sh", "-c", poll_cmd],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, bufsize=1)
+        else:
+            proc = subprocess.Popen(
+                ["ssh", *ssh_opts(args.key), args.switch, poll_cmd],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
         try:
             if not wait_fresh_arming(proc, time.monotonic() + args.watch_timeout):
                 print("[verdict] WINDOW TIMEOUT — no fresh arming seen; rerun after a power-cycle")
                 return 2
-            accepted, verdict = upload(args.image, f"http://127.0.0.1:{args.local_port}/upload",
-                                       "firmware", 300)
+            endpoint = (f"http://{args.recovery_ip}/upload" if direct
+                        else f"http://127.0.0.1:{args.local_port}/upload")
+            accepted, verdict = upload(args.image, endpoint, "firmware", 300)
             print(f"[fire] {verdict}")
             if not wait_consumption(proc, args.gate_timeout):
                 print("[verdict] NOT CONSUMED — server never vanished (idle-dead or rejected); "
@@ -218,9 +261,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
         finally:
             proc.terminate()
-            arm_alias(args.switch, args.key, args.svi, args.client_ip, present=False)
+            if not direct:
+                arm_alias(args.switch, args.key, args.svi, args.client_ip, present=False)
 
-        mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout)
+        mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout,
+                         direct_iface=direct)
         if mac:
             print(f"[verdict] RECOVERED — door {args.door_ip} MAC {mac} "
                   f"(record it: this settles bay<->unit identity)")
