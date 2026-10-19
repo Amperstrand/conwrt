@@ -86,3 +86,67 @@ class TestSig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHttpBootMode(unittest.TestCase):
+    def test_decode_http(self):
+        self.assertEqual(decode_boot_order("0xf7"), ["http", "restart"])
+
+    def test_encode_http(self):
+        self.assertEqual(encode_boot_order(["http", "usb"]), "0xf47")
+
+    def test_roundtrip_http(self):
+        modes = decode_boot_order("0xf27")
+        self.assertEqual(modes, ["http", "network", "restart"])
+        self.assertEqual(encode_boot_order(modes), "0xf27")
+
+
+class TestResolveRecovery(unittest.TestCase):
+    def test_local_file_copied_into_package(self):
+        import tempfile
+        from pi_eeprom import resolve_recovery
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "my-recovery.bin"
+            src.write_bytes(b"RECOVERY")
+            out_dir = Path(td) / "pkg"
+            out_dir.mkdir()
+            dest = resolve_recovery(str(src), out_dir)
+            self.assertEqual(dest, out_dir / "recovery.bin")
+            self.assertEqual((out_dir / "recovery.bin").read_bytes(), b"RECOVERY")
+
+    def test_local_file_missing_refuses(self):
+        import tempfile
+        from pi_eeprom import resolve_recovery
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit):
+                resolve_recovery(str(Path(td) / "nope.bin"), Path(td))
+
+
+class TestCmdBuildNameFormBootOrder(unittest.TestCase):
+    def test_name_form_build_exits_zero(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest import mock
+        import pi_eeprom
+
+        def fake_fetch(url, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"eeprom-image")
+            return dest
+
+        def fake_run(cmd, **kwargs):
+            upd = Path(cmd[cmd.index("--out") + 1])
+            upd.write_bytes(b"upd-data")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as td:
+            tool = Path(td) / "rpi-eeprom-config"
+            tool.write_text("#!/bin/sh\n")
+            args = SimpleNamespace(boot_order="network usb sd", set=[],
+                                   boot_uart=False, pieeprom=None,
+                                   recovery=None, out=td)
+            with mock.patch.object(pi_eeprom, "fetch", fake_fetch), \
+                 mock.patch.object(pi_eeprom, "find_tool",
+                                   lambda out_dir, name: tool), \
+                 mock.patch("subprocess.run", fake_run):
+                self.assertEqual(pi_eeprom.cmd_build(args), 0)

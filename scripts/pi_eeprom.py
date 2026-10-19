@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import sys
 import time
 import urllib.request
@@ -47,6 +48,7 @@ BOOT_MODES: dict[str, int] = {
     "usb": 0x4,
     "bcm-usb-msd": 0x5,
     "nvme": 0x6,
+    "http": 0x7,
     "stop": 0xE,
     "restart": 0xF,
 }
@@ -139,6 +141,31 @@ def fetch(url: str, dest: Path) -> Path:
     return dest
 
 
+def resolve_pieeprom(pieeprom_arg: str | None, out_dir: Path) -> Path:
+    """Local path is used in place; URLs/default are fetched into the cache."""
+    if pieeprom_arg and not pieeprom_arg.startswith("http"):
+        local = Path(pieeprom_arg).expanduser()
+        if not local.is_file():
+            raise SystemExit(f"pieeprom image not found: {local}")
+        return local
+    return fetch(pieeprom_arg or f"{DEFAULT_BASE}/{DEFAULT_PIEEPROM}",
+                 out_dir / DEFAULT_PIEEPROM)
+
+
+def resolve_recovery(recovery_arg: str | None, out_dir: Path) -> Path:
+    """recovery.bin must END UP in the package: copy local, fetch URL/default."""
+    if recovery_arg and not recovery_arg.startswith("http"):
+        local = Path(recovery_arg).expanduser()
+        if not local.is_file():
+            raise SystemExit(f"recovery image not found: {local}")
+        dest = out_dir / "recovery.bin"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local, dest)
+        return dest
+    return fetch(recovery_arg or f"{DEFAULT_BASE}/recovery.bin",
+                 out_dir / "recovery.bin")
+
+
 def find_tool(out_dir: Path, name: str) -> Path:
     """Locate an upstream helper script (rpi-eeprom-config), download if needed."""
     local = Path(__file__).resolve().parent.parent / "scripts" / name
@@ -176,16 +203,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     if args.boot_uart:
         settings["BOOT_UART"] = "1"
 
-    pieeprom = (Path(args.pieeprom) if args.pieeprom and not
-                args.pieeprom.startswith("http") else
-                fetch(args.pieeprom or f"{DEFAULT_BASE}/{DEFAULT_PIEEPROM}",
-                      out_dir / (Path(args.pieeprom).name if args.pieeprom
-                                 and not args.pieeprom.startswith("http")
-                                 else DEFAULT_PIEEPROM)))
-    recovery = (Path(args.recovery) if args.recovery and not
-                args.recovery.startswith("http") else
-                fetch(args.recovery or f"{DEFAULT_BASE}/recovery.bin",
-                      out_dir / "recovery.bin"))
+    pieeprom = resolve_pieeprom(args.pieeprom, out_dir)
+    recovery = resolve_recovery(args.recovery, out_dir)
 
     boot_conf = out_dir / "boot.conf"
     boot_conf.write_text(render_boot_conf(settings))
@@ -210,7 +229,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     for name in ("recovery.bin", "pieeprom.upd", "pieeprom.sig"):
         f = out_dir / name
         print(f"  {name:14} {f.stat().st_size:>8} bytes")
-    print(f"boot order : {' -> '.join(decode_boot_order(args.boot_order))}")
+    print(f"boot order : {' -> '.join(modes)}")
     print(f"settings   : {settings}")
     return 0
 
