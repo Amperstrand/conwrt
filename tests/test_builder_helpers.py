@@ -713,7 +713,9 @@ class TestSshKey229LockoutSafety:
         ro_dir = os.path.join(sandbox, "ro", "dropbear")
         os.makedirs(ro_dir)
         ro_target = os.path.join(ro_dir, "authorized_keys")
-        os.chmod(ro_dir, 0o555)
+        # Root bypasses mode-based write protection (review of #253): occupy
+        # the target with a directory so the write fails for EVERY uid.
+        os.makedirs(ro_target)
         try:
             proc = subprocess.run(
                 ["sh", "-c", dry.replace(target, ro_target)],
@@ -722,9 +724,8 @@ class TestSshKey229LockoutSafety:
             assert proc.returncode != 0, (
                 "script must fail (and be retained) when the key write fails"
             )
-            assert not os.path.exists(ro_target)
+            assert not os.path.isfile(ro_target)
         finally:
-            os.chmod(ro_dir, 0o755)
             shutil.rmtree(sandbox)
 
     def test_successful_key_write_exits_zero(self):
