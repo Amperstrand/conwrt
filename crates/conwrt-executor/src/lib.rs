@@ -42,6 +42,7 @@ pub mod bridge;
 pub mod embassy_net;
 pub mod multipart;
 pub mod post;
+pub mod pump;
 pub mod transfer;
 
 pub use bridge::ExecutorTransfer;
@@ -49,4 +50,5 @@ pub use bridge::ExecutorTransfer;
 pub use embassy_net::TcpHttpIo;
 pub use multipart::Multipart;
 pub use post::{HttpIo, PostError, PostOutcome, RecoveryPost, Verdict};
+pub use pump::{PostPump, PumpStep};
 pub use transfer::{TransferError, TransferState};

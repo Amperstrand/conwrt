@@ -44,6 +44,14 @@ impl ExecutorTransfer {
     pub fn transfer_id(&self) -> Option<u64> {
         self.state.as_ref().map(|s| s.ack().transfer_id)
     }
+
+    /// The bound window, mutably — the drain side for the POST pump
+    /// ([`crate::PostPump`]). Single-task composition: the borrow ends
+    /// before the next `stream_chunk` lands (the firmware loop is
+    /// accept-chunk → pump-step, never interleaved).
+    pub fn window(&mut self) -> Option<&mut TransferState> {
+        self.state.as_mut()
+    }
 }
 
 /// Window-level failures surfaced as `Internal` wire errors — the
