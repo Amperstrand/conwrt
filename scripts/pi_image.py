@@ -192,7 +192,12 @@ def serve_file(path: Path, port: int = 0) -> tuple[HTTPServer, int]:
     return server, port
 
 
-def preflight(host: str, device: str, min_gb: int) -> None:
+def preflight(host: str, device: str, min_gb: int) -> str:
+    """Verify the target is eligible and return the device path to write.
+
+    For ``--device auto`` the resolved ``/dev/...`` path is returned so the
+    caller never passes the literal string "auto" to ``dd``.
+    """
     rc, out, err = _ssh(host, "lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL")
     if rc != 0:
         raise SystemExit(f"cannot lsblk {host}: {err}")
@@ -201,6 +206,7 @@ def preflight(host: str, device: str, min_gb: int) -> None:
     if target != device and device != "auto":
         raise SystemExit(f"refusing: {device} not eligible (choose {target})")
     print(f"target: {target}")
+    return target
 
 
 def _check_explicit(lsblk_json: str, device: str, min_gb: int) -> str:
@@ -283,13 +289,13 @@ def cmd_provision(args: argparse.Namespace) -> int:
                 for k in args.ssh_key]
 
     password = args.password or secrets.token_urlsafe(12)
-    preflight(args.host, args.device, args.min_gb)
+    target = preflight(args.host, args.device, args.min_gb)
     remote_path = f"/tmp/{image.name}"
     transfer_image(args.host, image, args.sha256, remote_path)
-    write_image(args.host, remote_path, args.device)
+    write_image(args.host, remote_path, target)
     _ssh(args.host, f"rm -f {remote_path}")
     if not args.no_inject:
-        inject_cloud_init(args.host, args.device, args.user,
+        inject_cloud_init(args.host, target, args.user,
                           args.hostname, ssh_keys, password)
         creds = Path(str(image) + ".credentials.txt")
         creds.write_text(
@@ -302,7 +308,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -313,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="target disk on the Pi (e.g. /dev/sda) or 'auto'")
     sp.add_argument("--image", required=True, help="local .img.xz file")
     sp.add_argument("--sha256", default=None, help="expected image checksum")
+    sp.add_argument("--password", default=None,
+                    help="break-glass console password (default: generated, "
+                         "recorded in <image>.credentials.txt)")
     sp.add_argument("--hostname", default="pi4")
     sp.add_argument("--user", default="ubuntu")
     sp.add_argument("--ssh-key", action="append", default=[],
@@ -321,8 +330,11 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--no-inject", action="store_true",
                     help="skip cloud-init injection")
     sp.set_defaults(func=cmd_provision)
+    return p
 
-    args = p.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

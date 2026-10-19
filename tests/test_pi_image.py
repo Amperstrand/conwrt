@@ -103,3 +103,40 @@ class TestCloudInitRendering(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProvisionParser(unittest.TestCase):
+    def test_password_argument_defined(self):
+        from pi_image import build_parser
+        args = build_parser().parse_args(
+            ["provision", "--host", "h", "--device", "auto",
+             "--image", "i.img.xz", "--password", "s3cret"])
+        self.assertEqual(args.password, "s3cret")
+
+    def test_password_defaults_to_none(self):
+        from pi_image import build_parser
+        args = build_parser().parse_args(
+            ["provision", "--host", "h", "--device", "auto", "--image", "i.img.xz"])
+        self.assertIsNone(args.password)
+
+
+class TestPreflightResolvesAuto(unittest.TestCase):
+    def test_auto_returns_resolved_device(self):
+        import pi_image
+        canned = lsblk(disk("sda", 1000))
+        orig = pi_image._ssh
+        pi_image._ssh = lambda host, cmd, timeout=60, input_text=None: (0, canned, "")
+        try:
+            self.assertEqual(pi_image.preflight("h", "auto", 8), "/dev/sda")
+        finally:
+            pi_image._ssh = orig
+
+    def test_explicit_returns_device(self):
+        import pi_image
+        canned = lsblk(disk("sda", 1000))
+        orig = pi_image._ssh
+        pi_image._ssh = lambda host, cmd, timeout=60, input_text=None: (0, canned, "")
+        try:
+            self.assertEqual(pi_image.preflight("h", "/dev/sda", 8), "/dev/sda")
+        finally:
+            pi_image._ssh = orig
