@@ -321,24 +321,43 @@ def cmd_arm(args: argparse.Namespace) -> int:
     print(f"macs        : {', '.join(macs)}"
           + (f" pinned to {args.ip}" if pin else ""))
 
-    upload_tree(args.router, tree_dir, tftp_root)
-
     old_conf = read_remote_config(args.router)
     was_armed = is_armed(old_conf)
     base = strip_block(old_conf)[0] if was_armed else old_conf
+
+    if was_armed:
+        # Re-arming is a TRANSITION (#267): stop serving the old allowlist
+        # BEFORE the live tree is overwritten — a Pi rebooting mid-copy must
+        # not fetch a truncated or wrong-specimen kernel. Disarmed is the
+        # designed safe state (network-first Pis fall through to their next
+        # boot medium), and the tree still matches the old allowlist here.
+        write_remote_config(args.router, base)
+        restart_dnsmasq(args.router)
+        if not dnsmasq_healthy(args.router):
+            # tree untouched — the old armed config is still consistent
+            write_remote_config(args.router, old_conf)
+            restart_dnsmasq(args.router)
+            print("disarm step failed — restored the previous armed config",
+                  file=sys.stderr)
+            return 1
+
+    upload_tree(args.router, tree_dir, tftp_root)
+
     new_conf = base.rstrip() + "\n\n" + render_block(
         args.router, macs, tftp_root, args.bootfile, pin_ips=pin) + "\n"
-
     write_remote_config(args.router, new_conf)
     restart_dnsmasq(args.router)
 
     if not dnsmasq_healthy(args.router, tftp_root):
         print("dnsmasq unhealthy after reconfig — ROLLING BACK", file=sys.stderr)
-        _, log, _ = _ssh(args.router, "logread | grep -i dnsmasq | tail -5")
-        write_remote_config(args.router, old_conf)
+        # roll back to DISARMED, never to old_conf: the old allowlist plus
+        # the freshly uploaded tree is exactly the hazard #267 closes
+        write_remote_config(args.router, base)
         restart_dnsmasq(args.router)
+        _, log, _ = _ssh(args.router, "logread | grep -i dnsmasq | tail -5")
         print(log, file=sys.stderr)
-        print("rollback complete; dnsmasq restored", file=sys.stderr)
+        print("rollback to DISARMED complete; dnsmasq healthy — re-arm when "
+              "the tree is fixed", file=sys.stderr)
         return 1
 
     print(f"ARMED ({'updated' if was_armed else 'new block'}): "
