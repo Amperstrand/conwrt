@@ -236,6 +236,23 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
     return "uboot"
 
 
+def _resolve_flash_mode_or_refuse(profile: object, boot_state: str,
+                                  args: argparse.Namespace,
+                                  use_sysupgrade: bool) -> str:
+    """_resolve_flash_mode with refusals surfaced as an operator error.
+
+    Review of #294: the netboot-rescue ValueError is raised past cmd_flash's
+    earlier ValueError handling and the CLI entry does not catch — without
+    this the refusal reaches the operator as a traceback. Returns "" when
+    refusing.
+    """
+    try:
+        return _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return ""
+
+
 def _resolve_initial_state(mode: str, profile: object, boot_state: str,
                            interface: str | None = None) -> State:
     """Resolve the initial state for the state machine."""
@@ -854,7 +871,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
             return 1
         log(f"  ✓ identity: {detail}")
 
-    mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    # Review of #294: the refusal must reach the operator as an error, not
+    # as a traceback — this call site is past cmd_flash's earlier ValueError
+    # handling and the CLI entry does not catch.
+    mode = _resolve_flash_mode_or_refuse(profile, boot_state, args,
+                                         use_sysupgrade)
+    if not mode:
+        return 1
     config = FLASH_MODES[mode]
 
     # Bring up the recovery interface (client alias + /32 host route) BEFORE

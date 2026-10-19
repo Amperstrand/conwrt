@@ -175,7 +175,12 @@ def resolve_recovery(recovery_arg: str | None, out_dir: Path) -> Path:
             raise SystemExit(f"recovery image not found: {local}")
         dest = out_dir / "recovery.bin"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local, dest)
+        # The local copy is NOT a URL fetch: drop any stale .origin sidecar
+        # (review of #294), or a later default/URL build would treat the
+        # custom binary as an origin hit and silently package it (#263).
+        dest.with_name(dest.name + ".origin").unlink(missing_ok=True)
+        if local.resolve() != dest.resolve():
+            shutil.copyfile(local, dest)
         return dest
     return fetch(recovery_arg or f"{DEFAULT_BASE}/recovery.bin",
                  out_dir / "recovery.bin")

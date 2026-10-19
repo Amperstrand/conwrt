@@ -122,6 +122,36 @@ class TestResolveRecovery(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 resolve_recovery(str(Path(td) / "nope.bin"), Path(td))
 
+    def test_local_copy_invalidates_stale_origin_sidecar(self):
+        """Review of #294: a leftover .origin from a previous URL fetch must
+        not make a later default build reuse the custom local binary."""
+        import tempfile
+        from pi_eeprom import resolve_recovery
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "pkg"
+            dest = out_dir / "recovery.bin"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"from-url")
+            dest.with_name(dest.name + ".origin").write_text("http://old/recovery.bin\n")
+            src = Path(td) / "custom.bin"
+            src.write_bytes(b"CUSTOM")
+            got = resolve_recovery(str(src), out_dir)
+            self.assertEqual(got, dest)
+            self.assertEqual(dest.read_bytes(), b"CUSTOM")
+            self.assertFalse(dest.with_name(dest.name + ".origin").exists())
+
+    def test_local_path_equal_to_dest_is_reused_not_copied(self):
+        """Review of #294: --recovery <out>/recovery.bin is a valid local
+        path; shutil.copyfile onto itself would raise SameFileError."""
+        import tempfile
+        from pi_eeprom import resolve_recovery
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "recovery.bin"
+            dest.write_bytes(b"ALREADY")
+            got = resolve_recovery(str(dest), Path(td))
+            self.assertEqual(got, dest)
+            self.assertEqual(dest.read_bytes(), b"ALREADY")
+
 
 class TestCmdBuildNameFormBootOrder(unittest.TestCase):
     def test_name_form_build_exits_zero(self):

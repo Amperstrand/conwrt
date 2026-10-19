@@ -237,6 +237,21 @@ class TestResolveFlashMode(TestCase):
             self.resolve(profile, "unknown", self.args, use_sysupgrade=False)
         self.assertIn("pi_netboot", str(cm.exception))
 
+    def test_netboot_rescue_refusal_is_operator_error_not_traceback(self):
+        """Review of #294: cmd_flash surfaces the refusal on stderr and
+        returns "" (caller exits 1) instead of leaking a ValueError."""
+        import contextlib
+        import io
+        from conwrt.flash_dispatcher import _resolve_flash_mode_or_refuse
+        profile = _make_profile(flash_method="netboot-rescue")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            mode = _resolve_flash_mode_or_refuse(
+                profile, "unknown", self.args, use_sysupgrade=False)
+        self.assertEqual(mode, "")
+        self.assertIn("ERROR:", err.getvalue())
+        self.assertIn("pi_netboot", err.getvalue())
+
     def test_netboot_rescue_sysupgrade_state_still_sysupgrades(self):
         profile = _make_profile(flash_method="netboot-rescue")
         result = self.resolve(profile, "openwrt", self.args, use_sysupgrade=True)
