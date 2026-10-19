@@ -8,8 +8,13 @@ def find_recovery_flash_method(model: dict, method_hint: str = "") -> tuple[str,
     methods = model.get("flash_methods", {})
     if method_hint and method_hint in methods:
         return method_hint, methods[method_hint]
-    # edgeos-kernel-swap, extreme-rdwr-tftp-initramfs, and oem-http are preferred for initial install from stock firmware
-    for method_name in ("edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http", "oem-ftp", "netboot-rescue"):
+    # edgeos-kernel-swap, extreme-rdwr-tftp-initramfs, and oem-http are preferred for initial install from stock firmware.
+    # netboot-rescue is deliberately NOT here (#266): the flash dispatcher has
+    # no unattended mode for it — auto-selecting it made `conwrt flash` fall
+    # through to uboot and wait on a recovery HTTP server that never comes.
+    # It stays resolvable via an explicit --flash-method hint, and the
+    # dispatcher then refuses with a pointer to pi_netboot.py.
+    for method_name in ("edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http", "oem-ftp"):
         if method_name in methods:
             return method_name, methods[method_name]
     for method_name, method_cfg in methods.items():

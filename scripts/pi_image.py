@@ -13,8 +13,9 @@ attached to it, and this tool:
 
 Requires SSH on the target: the conwrt netboot rescue shell only runs telnetd,
 so a rescue-shell flash is a manual procedure — see
-recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick on the
-workstation, use the Rescue Kit flash script instead.
+recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick attached to
+the workstation, write it with Raspberry Pi Imager or dd, then inject the
+cloud-init files onto the boot FAT manually (same layout this tool writes).
 
 Usage:
     pi_image.py provision --host 192.168.1.240 --device /dev/sdb \

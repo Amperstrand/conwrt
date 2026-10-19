@@ -31,10 +31,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import sys
 import time
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from pi_netboot import armed_macs, is_armed, read_remote_config  # noqa: E402
 
 DEFAULT_BASE = ("https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/"
                 "master/firmware-2711/default")
@@ -47,6 +52,7 @@ BOOT_MODES: dict[str, int] = {
     "usb": 0x4,
     "bcm-usb-msd": 0x5,
     "nvme": 0x6,
+    "http": 0x7,
     "stop": 0xE,
     "restart": 0xF,
 }
@@ -128,15 +134,56 @@ def parse_boot_order_arg(value: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def fetch(url: str, dest: Path) -> Path:
+    """Cache-aware download keyed by ORIGIN URL, not just filename.
+
+    Every URL used to share one cache name (DEFAULT_PIEEPROM / recovery.bin):
+    reusing --out with a different --pieeprom silently built and later flashed
+    STALE firmware (#263). A sidecar `<name>.origin` records the source URL;
+    a cached file fetched from a different URL is refetched.
+    """
+    origin = dest.with_name(dest.name + ".origin")
     if dest.is_file() and dest.stat().st_size > 0:
-        return dest
+        if origin.is_file() and origin.read_text().strip() == url:
+            return dest
+        print(f"cache: {dest.name} holds a different origin — refetching")
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"fetching {url}")
     with urllib.request.urlopen(url, timeout=120) as resp, \
             dest.open("wb") as fh:
         while chunk := resp.read(1 << 16):
             fh.write(chunk)
+    origin.write_text(url + "\n")
     return dest
+
+
+def resolve_pieeprom(pieeprom_arg: str | None, out_dir: Path) -> Path:
+    """Local path is used in place; URLs/default are fetched into the cache."""
+    if pieeprom_arg and not pieeprom_arg.startswith("http"):
+        local = Path(pieeprom_arg).expanduser()
+        if not local.is_file():
+            raise SystemExit(f"pieeprom image not found: {local}")
+        return local
+    return fetch(pieeprom_arg or f"{DEFAULT_BASE}/{DEFAULT_PIEEPROM}",
+                 out_dir / DEFAULT_PIEEPROM)
+
+
+def resolve_recovery(recovery_arg: str | None, out_dir: Path) -> Path:
+    """recovery.bin must END UP in the package: copy local, fetch URL/default."""
+    if recovery_arg and not recovery_arg.startswith("http"):
+        local = Path(recovery_arg).expanduser()
+        if not local.is_file():
+            raise SystemExit(f"recovery image not found: {local}")
+        dest = out_dir / "recovery.bin"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # The local copy is NOT a URL fetch: drop any stale .origin sidecar
+        # (review of #294), or a later default/URL build would treat the
+        # custom binary as an origin hit and silently package it (#263).
+        dest.with_name(dest.name + ".origin").unlink(missing_ok=True)
+        if local.resolve() != dest.resolve():
+            shutil.copyfile(local, dest)
+        return dest
+    return fetch(recovery_arg or f"{DEFAULT_BASE}/recovery.bin",
+                 out_dir / "recovery.bin")
 
 
 def find_tool(out_dir: Path, name: str) -> Path:
@@ -176,16 +223,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     if args.boot_uart:
         settings["BOOT_UART"] = "1"
 
-    pieeprom = (Path(args.pieeprom) if args.pieeprom and not
-                args.pieeprom.startswith("http") else
-                fetch(args.pieeprom or f"{DEFAULT_BASE}/{DEFAULT_PIEEPROM}",
-                      out_dir / (Path(args.pieeprom).name if args.pieeprom
-                                 and not args.pieeprom.startswith("http")
-                                 else DEFAULT_PIEEPROM)))
-    recovery = (Path(args.recovery) if args.recovery and not
-                args.recovery.startswith("http") else
-                fetch(args.recovery or f"{DEFAULT_BASE}/recovery.bin",
-                      out_dir / "recovery.bin"))
+    pieeprom = resolve_pieeprom(args.pieeprom, out_dir)
+    recovery = resolve_recovery(args.recovery, out_dir)
 
     boot_conf = out_dir / "boot.conf"
     boot_conf.write_text(render_boot_conf(settings))
@@ -210,9 +249,33 @@ def cmd_build(args: argparse.Namespace) -> int:
     for name in ("recovery.bin", "pieeprom.upd", "pieeprom.sig"):
         f = out_dir / name
         print(f"  {name:14} {f.stat().st_size:>8} bytes")
-    print(f"boot order : {' -> '.join(decode_boot_order(args.boot_order))}")
+    print(f"boot order : {' -> '.join(modes)}")
     print(f"settings   : {settings}")
     return 0
+
+
+def verify_push_target(router: str, expect_mac: str) -> None:
+    """AGENTS.md specimen gate for EEPROM staging (AGENTS.md:33-42).
+
+    The updater lands in the SHARED TFTP root: any Pi whose bootloader
+    netboots while it is staged will consume and apply it. The target unit
+    is typically powered off (that is why we push over netboot), so identity
+    is verified via the armed dnsmasq allowlist instead of a live read: the
+    router must be armed for EXACTLY the expected MAC.
+    """
+    conf = read_remote_config(router)
+    if not is_armed(conf):
+        raise SystemExit(
+            "refusing: netboot server not armed — arm it for exactly the "
+            "expected specimen first (pi_netboot.py arm --router ... "
+            "--mac <MAC>) so no other Pi can consume this EEPROM update")
+    armed = armed_macs(conf)
+    want = expect_mac.strip().lower()
+    if armed != [want]:
+        raise SystemExit(
+            f"refusing: armed allowlist {armed} is not exactly the expected "
+            f"specimen [{want}] — re-arm for just this unit before staging "
+            "(any other armed Pi that reboots would apply this update)")
 
 
 def cmd_push(args: argparse.Namespace) -> int:
@@ -222,6 +285,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                if not (pkg / n).is_file()]
     if missing:
         raise SystemExit(f"missing files in {pkg}: {missing}")
+    verify_push_target(args.router, args.expect_mac)
     proc = subprocess.run(
         ["scp", "-O", "-o", "BatchMode=yes",
          str(pkg / "recovery.bin"), str(pkg / "pieeprom.upd"),
@@ -268,6 +332,10 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--router", required=True)
     sp.add_argument("--tftp-root", required=True)
     sp.add_argument("--package-dir", required=True)
+    sp.add_argument("--expect-mac", required=True,
+                    help="specimen gate: the netboot server must be armed "
+                         "for EXACTLY this MAC before staging (any other "
+                         "armed Pi would apply the update)")
     sp.set_defaults(func=cmd_push)
 
     args = p.parse_args(argv)

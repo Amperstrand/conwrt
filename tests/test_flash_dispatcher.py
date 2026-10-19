@@ -230,6 +230,33 @@ class TestResolveFlashMode(TestCase):
         result = self.resolve(profile, "unknown", self.args, use_sysupgrade=False)
         self.assertEqual(result, "uboot")
 
+    def test_netboot_rescue_refuses_with_pi_netboot_pointer(self):
+        """#266: never fall through to uboot for a netboot-rescue profile."""
+        profile = _make_profile(flash_method="netboot-rescue")
+        with self.assertRaises(ValueError) as cm:
+            self.resolve(profile, "unknown", self.args, use_sysupgrade=False)
+        self.assertIn("pi_netboot", str(cm.exception))
+
+    def test_netboot_rescue_refusal_is_operator_error_not_traceback(self):
+        """Review of #294: cmd_flash surfaces the refusal on stderr and
+        returns "" (caller exits 1) instead of leaking a ValueError."""
+        import contextlib
+        import io
+        from conwrt.flash_dispatcher import _resolve_flash_mode_or_refuse
+        profile = _make_profile(flash_method="netboot-rescue")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            mode = _resolve_flash_mode_or_refuse(
+                profile, "unknown", self.args, use_sysupgrade=False)
+        self.assertEqual(mode, "")
+        self.assertIn("ERROR:", err.getvalue())
+        self.assertIn("pi_netboot", err.getvalue())
+
+    def test_netboot_rescue_sysupgrade_state_still_sysupgrades(self):
+        profile = _make_profile(flash_method="netboot-rescue")
+        result = self.resolve(profile, "openwrt", self.args, use_sysupgrade=True)
+        self.assertEqual(result, "sysupgrade")
+
     def test_priority_edgeos_over_extreme(self):
         """edgeos checked before extreme."""
         profile = _make_profile(is_edgeos_kernel_swap=True, is_extreme_rdwr_tftp=True)

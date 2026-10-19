@@ -215,6 +215,16 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
 
     if use_sysupgrade:
         return "sysupgrade"
+    if getattr(profile, "flash_method", "") == "netboot-rescue":
+        # #266: netboot-rescue has no unattended state machine — falling
+        # through to uboot made `conwrt flash` wait on a recovery HTTP server
+        # that never comes. Refuse with the operator-driven workflow instead.
+        raise ValueError(
+            f"'{getattr(profile, 'name', 'model')}' recovers via netboot-rescue, "
+            "which is operator-driven, not an unattended flash mode: arm the "
+            "rescue server with scripts/pi_netboot.py (arm --tree ... --mac ...), "
+            "power-cycle the Pi, then deploy/provision — see "
+            "recipes/raspberry-pi/netboot-rescue.md")
     if is_edgeos_ks:
         return "edgeos"
     if is_extreme_rdwr_tftp:
@@ -224,6 +234,23 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
     if is_zycast:
         return "zycast"
     return "uboot"
+
+
+def _resolve_flash_mode_or_refuse(profile: object, boot_state: str,
+                                  args: argparse.Namespace,
+                                  use_sysupgrade: bool) -> str:
+    """_resolve_flash_mode with refusals surfaced as an operator error.
+
+    Review of #294: the netboot-rescue ValueError is raised past cmd_flash's
+    earlier ValueError handling and the CLI entry does not catch — without
+    this the refusal reaches the operator as a traceback. Returns "" when
+    refusing.
+    """
+    try:
+        return _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return ""
 
 
 def _resolve_initial_state(mode: str, profile: object, boot_state: str,
@@ -844,7 +871,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
             return 1
         log(f"  ✓ identity: {detail}")
 
-    mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    # Review of #294: the refusal must reach the operator as an error, not
+    # as a traceback — this call site is past cmd_flash's earlier ValueError
+    # handling and the CLI entry does not catch.
+    mode = _resolve_flash_mode_or_refuse(profile, boot_state, args,
+                                         use_sysupgrade)
+    if not mode:
+        return 1
     config = FLASH_MODES[mode]
 
     # Bring up the recovery interface (client alias + /32 host route) BEFORE
