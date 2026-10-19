@@ -223,3 +223,68 @@ class TestFetchOriginRecord(unittest.TestCase):
         dest.write_bytes(b"LEGACY")
         self.pi.fetch("http://x/pieeprom.bin", dest)
         self.assertEqual(self.fetched_urls, ["http://x/pieeprom.bin"])
+
+
+class TestPushSpecimenGate(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        import pi_eeprom
+        self.pi = pi_eeprom
+        self._tmp = tempfile.TemporaryDirectory()
+        pkg = Path(self._tmp.name)
+        for name in ("recovery.bin", "pieeprom.upd", "pieeprom.sig"):
+            (pkg / name).write_bytes(b"x")
+        self.pkg = pkg
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _args(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(router="192.168.1.1", tftp_root="/tmp/tftp",
+                               package_dir=str(self.pkg),
+                               expect_mac="E4:5F:01:12:34:56")
+
+    def test_not_armed_refuses(self):
+        with mock.patch.object(self.pi, "read_remote_config",
+                               return_value=""), \
+             mock.patch.object(self.pi, "is_armed", return_value=False):
+            with self.assertRaises(SystemExit):
+                self.pi.cmd_push(self._args())
+
+    def test_multiple_armed_macs_refuse(self):
+        conf = "dhcp-host=e4:5f:01:12:34:56,set:pinetboot\ndhcp-host=dc:a6:32:11:22:33,set:pinetboot\n"
+        with mock.patch.object(self.pi, "read_remote_config",
+                               return_value=conf), \
+             mock.patch.object(self.pi, "is_armed", return_value=True), \
+             mock.patch.object(self.pi, "armed_macs",
+                               return_value=["e4:5f:01:12:34:56",
+                                             "dc:a6:32:11:22:33"]):
+            with self.assertRaises(SystemExit):
+                self.pi.cmd_push(self._args())
+
+    def test_wrong_mac_refuses(self):
+        with mock.patch.object(self.pi, "read_remote_config",
+                               return_value="dhcp-host=dc:a6:32:11:22:33,set:pinetboot\n"), \
+             mock.patch.object(self.pi, "is_armed", return_value=True), \
+             mock.patch.object(self.pi, "armed_macs",
+                               return_value=["dc:a6:32:11:22:33"]):
+            with self.assertRaises(SystemExit):
+                self.pi.cmd_push(self._args())
+
+    def test_exact_mac_match_stages(self):
+        from types import SimpleNamespace
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.pi, "read_remote_config",
+                               return_value="dhcp-host=e4:5f:01:12:34:56,set:pinetboot\n"), \
+             mock.patch.object(self.pi, "is_armed", return_value=True), \
+             mock.patch.object(self.pi, "armed_macs",
+                               return_value=["e4:5f:01:12:34:56"]), \
+             mock.patch("subprocess.run", fake_run):
+            self.assertEqual(self.pi.cmd_push(self._args()), 0)
+        self.assertIn("root@192.168.1.1:/tmp/tftp/", " ".join(seen["cmd"]))

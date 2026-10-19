@@ -37,6 +37,10 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from pi_netboot import armed_macs, is_armed, read_remote_config  # noqa: E402
+
 DEFAULT_BASE = ("https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/"
                 "master/firmware-2711/default")
 DEFAULT_PIEEPROM = "pieeprom-2026-09-23.bin"
@@ -245,6 +249,30 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def verify_push_target(router: str, expect_mac: str) -> None:
+    """AGENTS.md specimen gate for EEPROM staging (AGENTS.md:33-42).
+
+    The updater lands in the SHARED TFTP root: any Pi whose bootloader
+    netboots while it is staged will consume and apply it. The target unit
+    is typically powered off (that is why we push over netboot), so identity
+    is verified via the armed dnsmasq allowlist instead of a live read: the
+    router must be armed for EXACTLY the expected MAC.
+    """
+    conf = read_remote_config(router)
+    if not is_armed(conf):
+        raise SystemExit(
+            "refusing: netboot server not armed — arm it for exactly the "
+            "expected specimen first (pi_netboot.py arm --router ... "
+            "--mac <MAC>) so no other Pi can consume this EEPROM update")
+    armed = armed_macs(conf)
+    want = expect_mac.strip().lower()
+    if armed != [want]:
+        raise SystemExit(
+            f"refusing: armed allowlist {armed} is not exactly the expected "
+            f"specimen [{want}] — re-arm for just this unit before staging "
+            "(any other armed Pi that reboots would apply this update)")
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     import subprocess
     pkg = Path(args.package_dir)
@@ -252,6 +280,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                if not (pkg / n).is_file()]
     if missing:
         raise SystemExit(f"missing files in {pkg}: {missing}")
+    verify_push_target(args.router, args.expect_mac)
     proc = subprocess.run(
         ["scp", "-O", "-o", "BatchMode=yes",
          str(pkg / "recovery.bin"), str(pkg / "pieeprom.upd"),
@@ -298,6 +327,10 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--router", required=True)
     sp.add_argument("--tftp-root", required=True)
     sp.add_argument("--package-dir", required=True)
+    sp.add_argument("--expect-mac", required=True,
+                    help="specimen gate: the netboot server must be armed "
+                         "for EXACTLY this MAC before staging (any other "
+                         "armed Pi would apply the update)")
     sp.set_defaults(func=cmd_push)
 
     args = p.parse_args(argv)
