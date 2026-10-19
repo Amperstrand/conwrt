@@ -109,13 +109,21 @@ class TestProfileForExtreme(TestCase):
 
 class TestProfileDefaults(TestCase):
     def test_all_models_build_without_error(self):
-        from model_loader import list_models
+        from model_loader import list_models, load_model
         for model_info in list_models():
-            profile = build_profile_from_model(model_info["id"])
+            model_id = model_info["id"]
+            try:
+                profile = build_profile_from_model(model_id)
+            except ValueError:
+                # #266: a netboot-rescue-only model (raspberrypi-4b) has no
+                # unattended default method — its profile must still build
+                # when a method is chosen explicitly
+                first = next(iter(load_model(model_id)["flash_methods"]))
+                profile = build_profile_from_model(model_id, flash_method=first)
             self.assertTrue(hasattr(profile, "flash_method"))
             self.assertTrue(hasattr(profile, "recovery_ip"))
             self.assertTrue(hasattr(profile, "openwrt_ip"))
-            self.assertEqual(profile.name, model_info["id"])
+            self.assertEqual(profile.name, model_id)
 
     def test_default_client_subnet(self):
         profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
