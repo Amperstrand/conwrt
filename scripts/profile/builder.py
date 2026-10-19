@@ -9,7 +9,7 @@ from typing import Optional
 
 from config import ConwrtConfig, read_ssh_pubkey, strip_key_comment
 from model_loader import load_model
-from profile.ops import Op, ShellCommand, UciCommit, UciSet
+from profile.ops import Op, ServiceAction, ShellCommand, UciCommit, UciSet
 from profile.uci_helpers import uci_cleanup_sections
 from profile.plan import ProfileMode, ProfilePlan, ProfileStep, StepKind
 from profile.wifi import (
@@ -27,46 +27,86 @@ _VALID_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
 
 
 def _ssh_key_firstboot(keys: list[str]) -> str:
-    lines = [f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}"]
+    # Runs inside ONE /etc/uci-defaults script consumed by uci_apply_defaults
+    # (base-files: `( . file ) && applied` -> rm -f on success). Two #229 rules:
+    #  - exit non-zero unless the key provably landed: a failed script is
+    #    retained and retried next boot; a consumed one never runs again.
+    #  - never disable password auth before the key file is verified —
+    #    a half-applied script must not brick SSH.
+    dropbear_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit("/", 1)[0]
+    lines = [f"mkdir -p {dropbear_dir}", f"chmod 700 {dropbear_dir}"]
     for i, key in enumerate(keys):
         op = ">" if i == 0 else ">>"
-        lines.append(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}")
+        lines.append(f"printf '%s\\n' {sh_quote(key)} {op} {DROPBEAR_AUTH_KEYS_PATH}")
+    if not keys:
+        return "\n".join(lines)
     lines.append(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}")
-    if keys:
-        # Key baked => key-only auth (#155): the x1860 incident unit came up
-        # with password-attempt surface enabled by default.
-        # The verify gate is load-bearing (#229): uci-defaults scripts are
-        # sourced by uci_apply_defaults, whose exit status is the LAST
-        # command — without the gate, a lost authorized_keys write is
-        # masked by a successful `uci commit dropbear`, the script is
-        # deleted (rm -f $applied), and publickey-only lockout becomes
-        # permanent. exit 1 keeps the script for retry on the next boot.
-        lines.append(f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH} || exit 1")
-        lines += [
-            "uci set dropbear.@dropbear[0].PasswordAuth='off'",
-            "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
-            "uci commit dropbear",
-        ]
+    # P1 (#253 review): dropbear rejects ALL keys when /etc/dropbear (or the
+    # file) is non-root-owned — a preserved-overlay incident left it
+    # 1000:1000 in the field, and chmod alone would not fix that.
+    lines.append(f"chown 0:0 {dropbear_dir} {DROPBEAR_AUTH_KEYS_PATH}")
+    lines.append(
+        f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null"
+        " || { echo 'conwrt-ssh: authorized_keys not applied;"
+        " keeping password auth, will retry next boot' >&2; exit 1; }"
+    )
+    # Key verified => key-only auth (#155): the x1860 incident unit came up
+    # with password-attempt surface enabled by default.
+    lines += [
+        "uci set dropbear.@dropbear[0].PasswordAuth='off'",
+        "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
+        "uci commit dropbear",
+        # P2 (#253 review): gate on a VALUE READBACK, not the uci exit codes
+        # — a failed commit must fail the script so uci_apply_defaults
+        # retains it for retry instead of consuming a half-applied boot.
+        "[ \"$(uci get dropbear.@dropbear[0].PasswordAuth 2>/dev/null)\" = 'off' ]"
+        " || { echo 'conwrt-ssh: PasswordAuth readback failed;"
+        " keeping script for retry' >&2; exit 1; }",
+        # Defensive: uci-defaults normally run before dropbear starts, but a
+        # re-executed (retained) script may meet a running dropbear (#229).
+        "/etc/init.d/dropbear restart >/dev/null 2>&1 || true",
+    ]
     return "\n".join(lines)
 
 
 def _ssh_key_ops(keys: list[str]) -> list[Op]:
-    ops: list[Op] = [ShellCommand(f"mkdir -p {DROPBEAR_AUTH_KEYS_PATH.rsplit('/', 1)[0]}")]
+    # Ops mirror of _ssh_key_firstboot, incl. the #229 verify-gate: the
+    # grep op carries its own `|| exit 1` because render_shell joins ops
+    # as plain lines — without it a failed gate would not stop the uci
+    # ops from disabling password auth.
+    dropbear_dir = DROPBEAR_AUTH_KEYS_PATH.rsplit("/", 1)[0]
+    ops: list[Op] = [
+        ShellCommand(f"mkdir -p {dropbear_dir}"),
+        ShellCommand(f"chmod 700 {dropbear_dir}"),
+    ]
     for i, key in enumerate(keys):
         op = ">" if i == 0 else ">>"
-        ops.append(ShellCommand(f"echo '{key}' {op} {DROPBEAR_AUTH_KEYS_PATH}"))
+        ops.append(ShellCommand(f"printf '%s\\n' {sh_quote(key)} {op} {DROPBEAR_AUTH_KEYS_PATH}"))
+    if not keys:
+        return ops
     ops.append(ShellCommand(f"chmod 600 {DROPBEAR_AUTH_KEYS_PATH}"))
-    if keys:
-        ops.append(ShellCommand(
-            f"grep -qF '{keys[0]}' {DROPBEAR_AUTH_KEYS_PATH}"
-        ))  # #229: harden only after the key provably landed
-        ops += [
-            UciSet(config="dropbear", section="@dropbear[0]", values={
-                "PasswordAuth": "off",
-                "RootPasswordAuth": "off",
-            }),
-            UciCommit(config="dropbear"),
-        ]
+    ops.append(
+        ShellCommand(
+            f"chown 0:0 {dropbear_dir} {DROPBEAR_AUTH_KEYS_PATH}"
+        )
+    )
+    ops.append(
+        ShellCommand(
+            f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || exit 1"
+        )
+    )
+    ops += [
+        UciSet(config="dropbear", section="@dropbear[0]", values={
+            "PasswordAuth": "off",
+            "RootPasswordAuth": "off",
+        }),
+        UciCommit(config="dropbear"),
+        ShellCommand(
+            "[ \"$(uci get dropbear.@dropbear[0].PasswordAuth 2>/dev/null)\" = 'off' ]"
+            " || exit 1"
+        ),
+        ServiceAction(name="dropbear", action="restart"),
+    ]
     return ops
 
 

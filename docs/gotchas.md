@@ -24,6 +24,12 @@ Using `set -eu` in uci-defaults scripts is dangerous. If any command fails (like
 ### Script self-deletion
 OpenWrt deletes uci-defaults scripts only on successful `exit 0`. If a script fails partway, it remains in `/etc/uci-defaults/` and runs again on next boot. Check with `ls /etc/uci-defaults/` after first boot.
 
+### Recovery-flash keeps the old overlay (#229)
+Vendor-recovery flashes write kernel+squashfs but not rootfs_data. The surviving overlay carries whiteouts for the previous install's consumed `/etc/uci-defaults/*` — and ASU bakes every build's defaults into the same filename — so the new image's script is born invisible and never runs. Stale overlay files (e.g. an old `/etc/dropbear/authorized_keys`) also shadow anything baked into the new squashfs. Symptom: unit boots, answers ARP/ICMP, then SSH refuses the correct baked key.
+
+**Fix (code):** lockout-critical uci-defaults must exit non-zero on failure (the script is retained and retried next boot) and must verify their effect before disabling password auth — see `_ssh_key_firstboot` in `scripts/profile/builder.py` and the mount-namespace sandbox test in `tests/test_builder_helpers.py`.
+**Fix (ops):** after a recovery flash, `ls /etc/uci-defaults/` is the first thing to check (serial/failsafe); a wiped overlay (`firstboot`) is the only sure cure for stale-overlay shadows.
+
 ## ASU (Attended Sysupgrade) API
 
 ### User-Agent blocking
