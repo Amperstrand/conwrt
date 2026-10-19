@@ -140,3 +140,63 @@ class TestPreflightResolvesAuto(unittest.TestCase):
             self.assertEqual(pi_image.preflight("h", "/dev/sda", 8), "/dev/sda")
         finally:
             pi_image._ssh = orig
+
+
+class TestSpecimenGate(unittest.TestCase):
+    def test_no_expectation_given_refuses(self):
+        from pi_image import verify_specimen
+        with self.assertRaises(SystemExit):
+            verify_specimen("10000000abc", ["e4:5f:01:12:34:56"])
+
+    def test_mac_match_passes(self):
+        from pi_image import verify_specimen
+        verify_specimen("10000000abc", ["e4:5f:01:12:34:56"],
+                        expect_mac="E4:5F:01:12:34:56")
+
+    def test_mac_mismatch_refuses(self):
+        from pi_image import verify_specimen
+        with self.assertRaises(SystemExit):
+            verify_specimen("10000000abc", ["e4:5f:01:12:34:56"],
+                            expect_mac="dc:a6:32:11:22:33")
+
+    def test_serial_match_passes_case_insensitive(self):
+        from pi_image import verify_specimen
+        verify_specimen("10000000ABCD1234", ["e4:5f:01:12:34:56"],
+                        expect_serial="10000000abcd1234")
+
+    def test_serial_mismatch_refuses(self):
+        from pi_image import verify_specimen
+        with self.assertRaises(SystemExit):
+            verify_specimen("10000000abcd1234", [], expect_serial="deadbeef")
+
+    def test_both_given_both_must_match(self):
+        from pi_image import verify_specimen
+        with self.assertRaises(SystemExit):
+            verify_specimen("10000000abcd1234", ["e4:5f:01:12:34:56"],
+                            expect_mac="e4:5f:01:12:34:56",
+                            expect_serial="wrong")
+
+    def test_missing_remote_evidence_refuses(self):
+        from pi_image import verify_specimen
+        with self.assertRaises(SystemExit):
+            verify_specimen(None, [], expect_serial="10000000abcd1234")
+        with self.assertRaises(SystemExit):
+            verify_specimen(None, [], expect_mac="e4:5f:01:12:34:56")
+
+
+class TestSpecimenParsing(unittest.TestCase):
+    def test_parse_cpuinfo_serial(self):
+        from pi_image import parse_cpuinfo_serial
+        text = ("Hardware\t: BCM2711\n"
+                "Revision\t: d03114\n"
+                "Serial\t\t: 10000000abcd1234\n")
+        self.assertEqual(parse_cpuinfo_serial(text), "10000000abcd1234")
+
+    def test_parse_cpuinfo_serial_absent(self):
+        from pi_image import parse_cpuinfo_serial
+        self.assertIsNone(parse_cpuinfo_serial("Hardware\t: BCM2711\n"))
+
+    def test_parse_iface_macs(self):
+        from pi_image import parse_iface_macs
+        self.assertEqual(parse_iface_macs("e4:5f:01:12:34:56\n\ndc:a6:32:11:22:33\n"),
+                         ["e4:5f:01:12:34:56", "dc:a6:32:11:22:33"])

@@ -19,7 +19,8 @@ workstation, use the Rescue Kit flash script instead.
 Usage:
     pi_image.py provision --host 192.168.1.240 --device /dev/sdb \
         --image ubuntu.img.xz --sha256 <hash> --hostname pi4 \
-        --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub
+        --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub \
+        --expect-serial 10000000abcd1234
 
 Wipes the target disk. Never points --device at the Pi's boot medium.
 """
@@ -140,6 +141,61 @@ def render_network_config() -> str:
         "    dhcp4: true\n"
         "    optional: true\n"
     )
+
+
+def parse_cpuinfo_serial(cpuinfo_text: str) -> str | None:
+    """Serial line from /proc/cpuinfo ('Serial\t\t: 1000...') or None."""
+    for line in cpuinfo_text.splitlines():
+        if line.strip().lower().startswith("serial"):
+            fields = line.split(":", 1)
+            if len(fields) == 2 and fields[1].strip():
+                return fields[1].strip()
+    return None
+
+
+def parse_iface_macs(sysfs_listing: str) -> list[str]:
+    """Non-empty lines of `for f in /sys/class/net/*/address; do cat $f; done`."""
+    return [ln.strip().lower() for ln in sysfs_listing.splitlines() if ln.strip()]
+
+
+def verify_specimen(remote_serial: str | None, remote_macs: list[str],
+                    expect_mac: str | None = None,
+                    expect_serial: str | None = None) -> None:
+    """AGENTS.md 'Verify the SPECIMEN, Not Just the Model' gate (AGENTS.md:36-42).
+
+    The destructive provision path must confirm it is talking to the expected
+    physical Pi — DHCP address reuse or identical bench units otherwise put a
+    valid-looking /dev/sda on the wrong machine. At least one expectation is
+    required; when both are given, both must match.
+    """
+    if not expect_mac and not expect_serial:
+        raise SystemExit(
+            "refusing: specimen gate requires --expect-mac and/or "
+            "--expect-serial (AGENTS.md: verify the specimen, not just the "
+            "model — DHCP reuse makes an IP insufficient identity)")
+    if expect_serial:
+        if not remote_serial:
+            raise SystemExit("refusing: target reports no board serial — "
+                             "cannot verify --expect-serial")
+        if remote_serial.lower() != expect_serial.strip().lower():
+            raise SystemExit(
+                f"refusing: serial mismatch (target {remote_serial} != "
+                f"expected {expect_serial}) — wrong Pi, STOP")
+    if expect_mac:
+        want = expect_mac.strip().lower()
+        if not remote_macs or want not in remote_macs:
+            found = ", ".join(remote_macs) or "none"
+            raise SystemExit(
+                f"refusing: MAC {want} not present on target "
+                f"(found: {found}) — wrong Pi, STOP")
+
+
+def remote_specimen(host: str) -> tuple[str | None, list[str]]:
+    """Read live identity evidence from the Pi over SSH."""
+    _, serial_out, _ = _ssh(host, "cat /proc/cpuinfo")
+    _, macs_out, _ = _ssh(host,
+                          "for f in /sys/class/net/*/address; do cat $f; done")
+    return parse_cpuinfo_serial(serial_out), parse_iface_macs(macs_out)
 
 
 def sha256_of(path: Path, chunk: int = 1 << 20) -> str:
@@ -290,6 +346,12 @@ def cmd_provision(args: argparse.Namespace) -> int:
 
     password = args.password or secrets.token_urlsafe(12)
     target = preflight(args.host, args.device, args.min_gb)
+    serial, macs = remote_specimen(args.host)
+    verify_specimen(serial, macs,
+                    expect_mac=args.expect_mac,
+                    expect_serial=args.expect_serial)
+    print(f"specimen ok: serial={serial or 'n/a'}, "
+          f"macs={', '.join(macs) or 'n/a'}")
     remote_path = f"/tmp/{image.name}"
     transfer_image(args.host, image, args.sha256, remote_path)
     write_image(args.host, remote_path, target)
@@ -319,6 +381,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="target disk on the Pi (e.g. /dev/sda) or 'auto'")
     sp.add_argument("--image", required=True, help="local .img.xz file")
     sp.add_argument("--sha256", default=None, help="expected image checksum")
+    sp.add_argument("--expect-mac", default=None,
+                    help="specimen gate: MAC that must be present on the "
+                         "target Pi (AGENTS.md MAC/serial rule)")
+    sp.add_argument("--expect-serial", default=None,
+                    help="specimen gate: /proc/cpuinfo Serial that must "
+                         "match the target Pi")
     sp.add_argument("--password", default=None,
                     help="break-glass console password (default: generated, "
                          "recorded in <image>.credentials.txt)")
