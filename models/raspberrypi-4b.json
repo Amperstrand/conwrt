@@ -100,7 +100,7 @@
       ]
     },
     "usb-image": {
-      "description": "Write an OS image (Ubuntu Server, Raspberry Pi OS, OpenWrt) to a USB disk / SD card and boot it natively. conwrt pi_image.py provisions a Pi-attached disk over SSH; scripts/pi_rescue/flash-rescue.sh writes a local stick. Headless via cloud-init (user-data/network-config/meta-data on the boot FAT) or Raspberry Pi OS boot-marker + authorized_keys injection.",
+      "description": "Write an OS image (Ubuntu Server, Raspberry Pi OS, OpenWrt) to a USB disk / SD card and boot it natively. conwrt pi_image.py provisions a Pi-ATTACHED disk over SSH (from a booted OS or per recipes/raspberry-pi/netboot-rescue.md); for a workstation-attached stick use Raspberry Pi Imager or plain dd — headless setup then goes through the same cloud-inject (user-data/network-config/meta-data on the boot FAT) or Raspberry Pi OS boot-marker + authorized_keys injection.",
       "requires": "Pi with USB-MSD-capable EEPROM (all 2020+ bootloaders), writable medium",
       "tested_hardware": {
         "tested": true,
