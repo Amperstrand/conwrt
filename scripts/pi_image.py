@@ -30,10 +30,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import socket
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -244,9 +246,36 @@ def local_ip_for(host: str) -> str:
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(Path(kwargs.pop("directory"))),
-                        **kwargs)
+    """Serves exactly one filename from the directory — nothing else.
+
+    The directory also holds <image>.credentials.txt (the break-glass
+    password); an unrestricted handler would hand it to any host on the
+    segment for the duration of the transfer (#262).
+    """
+
+    allowed_name: str = ""
+
+    def __init__(self, *args, directory=None, allowed_name="", **kwargs):
+        # must be set before super().__init__: the base class processes the
+        # request during construction
+        self.allowed_name = allowed_name
+        super().__init__(*args, directory=str(directory), **kwargs)
+
+    def _path_allowed(self) -> bool:
+        name = urllib.parse.urlsplit(self.path).path.lstrip("/")
+        return name == self.allowed_name
+
+    def do_GET(self):
+        if not self._path_allowed():
+            self.send_error(404)
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if not self._path_allowed():
+            self.send_error(404)
+            return
+        super().do_HEAD()
 
     def log_message(self, *args):  # silence request log
         pass
@@ -254,8 +283,10 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 def serve_file(path: Path, port: int = 0) -> tuple[HTTPServer, int]:
     directory = str(path.parent)
+    allowed = path.name
 
     def handler(*a, **kw):
+        kw["allowed_name"] = allowed
         return _QuietHandler(*a, directory=directory, **kw)
 
     server = HTTPServer(("0.0.0.0", port), handler)
@@ -395,6 +426,17 @@ def inject_cloud_init(host: str, device: str, user: str, hostname: str,
     print(f"cloud-init injected (user={user}, hostname={hostname})")
 
 
+def write_credentials(path: Path, content: str) -> None:
+    """Write the break-glass credentials file with mode 0600 from creation.
+
+    Path.write_text() would create it 0644 under the usual umask, exposing
+    the sole password to other local users (#262).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
+
+
 def cmd_provision(args: argparse.Namespace) -> int:
     import secrets
     image = Path(args.image).expanduser().resolve()
@@ -421,7 +463,8 @@ def cmd_provision(args: argparse.Namespace) -> int:
         inject_cloud_init(args.host, target, args.user,
                           args.hostname, ssh_keys, password)
         creds = Path(str(image) + ".credentials.txt")
-        creds.write_text(
+        write_credentials(
+            creds,
             f"host={args.hostname}\nuser={args.user}\npassword={password}\n"
             f"break-glass: console login, or rescue shell + mount rootfs\n")
         print(f"credentials written to {creds} — store this file, "
