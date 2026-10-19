@@ -349,9 +349,14 @@ def transfer_image(host: str, image: Path, sha256: str | None,
 
 
 def reread_pt_cmd(device: str) -> str:
-    """Ask the kernel to drop the stale partition table after a whole-disk dd."""
+    """Ask the kernel to drop the stale partition table after a whole-disk dd.
+
+    No `|| true`: if BOTH tools fail the caller must refuse — the stale
+    partition node may still exist and `test -b` would then accept the OLD
+    geometry (review of #293: the masked failure made the error path dead).
+    """
     return (f"partprobe {device} 2>/dev/null || "
-            f"blockdev --rereadpt {device} 2>/dev/null || true")
+            f"blockdev --rereadpt {device} 2>/dev/null")
 
 
 def wait_for_part_cmd(part: str, tries: int = 10) -> str:
@@ -433,6 +438,9 @@ def write_credentials(path: Path, content: str) -> None:
     the sole password to other local users (#262).
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_CREAT's mode only applies to NEW inodes: an existing 0644 file from
+    # an older run would keep its mode (review of #293) — re-assert 0600.
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(content)
 

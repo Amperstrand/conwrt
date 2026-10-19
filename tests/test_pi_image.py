@@ -253,6 +253,24 @@ class TestWritePathCommands(unittest.TestCase):
         self.assertIn("partprobe /dev/sda", cmd)
         self.assertIn("blockdev --rereadpt /dev/sda", cmd)
 
+    def test_reread_pt_cmd_does_not_mask_failure(self):
+        """Review of #293: `|| true` made the rc!=0 refusal unreachable —
+        a stale partition node was then accepted by `test -b`."""
+        from pi_image import reread_pt_cmd
+        cmd = reread_pt_cmd("/dev/sda")
+        self.assertNotIn("|| true", cmd)
+
+    def test_reread_partition_table_reread_failure_refuses(self):
+        import pi_image
+        orig = pi_image._ssh
+        pi_image._ssh = lambda host, cmd, timeout=60, input_text=None: (1, "", "")
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                pi_image.reread_partition_table("h", "/dev/sda", "/dev/sda1")
+            self.assertIn("partition reread failed", str(cm.exception))
+        finally:
+            pi_image._ssh = orig
+
     def test_wait_for_part_cmd_waits_for_block_node(self):
         from pi_image import wait_for_part_cmd
         cmd = wait_for_part_cmd("/dev/sda1", tries=5)
@@ -295,6 +313,19 @@ class TestCredentialsFile(unittest.TestCase):
             write_credentials(creds, "host=pi4\nuser=ubuntu\npassword=x\n")
             self.assertEqual(creds.stat().st_mode & 0o777, 0o600)
             self.assertIn("password=x", creds.read_text())
+
+    def test_existing_0644_file_is_hardened_to_0600(self):
+        """Review of #293: O_TRUNC keeps the old inode's mode — a leftover
+        0644 credentials file must not silently stay world-readable."""
+        import tempfile
+        from pi_image import write_credentials
+        with tempfile.TemporaryDirectory() as td:
+            creds = Path(td) / "img.img.xz.credentials.txt"
+            creds.write_text("stale")
+            creds.chmod(0o644)
+            write_credentials(creds, "host=pi4\nuser=ubuntu\npassword=rotated\n")
+            self.assertEqual(creds.stat().st_mode & 0o777, 0o600)
+            self.assertIn("password=rotated", creds.read_text())
 
 
 class TestServeFileAllowlist(unittest.TestCase):
