@@ -213,6 +213,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gate-timeout", type=int, default=150)
     p.add_argument("--door-ip", default="192.168.1.1")
     p.add_argument("--door-timeout", type=int, default=1500)
+    p.add_argument("--max-cycles", type=int, default=3,
+                   help="door-watch rounds across power cycles — boots on marginal "
+                        "units are nondeterministic (bench_observations."
+                        "recovery_boot_nondeterminism_2026_10_19); after each round "
+                        "with no door, the operator power-cycles and watching continues")
     p.add_argument("--pcap-dir", default="/tmp/conwrt-recovery-pcaps",
                    help="where bay-wire pcaps land (default-on; see BayPcap)")
     p.add_argument("--no-pcap", action="store_true", help="disable the wire recording")
@@ -264,13 +269,22 @@ def main(argv: list[str] | None = None) -> int:
             if not direct:
                 arm_alias(args.switch, args.key, args.svi, args.client_ip, present=False)
 
-        mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout,
-                         direct_iface=direct)
+        mac = None
+        for cycle in range(1, args.max_cycles + 1):
+            mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout,
+                             direct_iface=direct)
+            if mac:
+                break
+            if cycle < args.max_cycles:
+                print(f"[door] no door after round {cycle}/{args.max_cycles} — boots are "
+                      f"nondeterministic on marginal units; POWER-CYCLE the unit now, "
+                      f"watching continues")
         if mac:
             print(f"[verdict] RECOVERED — door {args.door_ip} MAC {mac} "
                   f"(record it: this settles bay<->unit identity)")
             return 0
-        print("[verdict] CONSUMED but no door — accepted-no-boot class; capture, do not blind-retry")
+        print(f"[verdict] CONSUMED but no door across {args.max_cycles} door-watch rounds — "
+              f"capture the pcap, do not blind-retry")
         return 4
 
 
