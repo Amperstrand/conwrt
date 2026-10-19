@@ -59,6 +59,17 @@ def _is_mounted(entry: dict) -> bool:
     return any(bool(m) for m in mp)
 
 
+def _subtree_mounted(entry: dict) -> bool:
+    """Recursively inspect the disk AND every descendant (parts, lvm, crypt).
+
+    A dm-crypt/LVM rootfs mounts as a GRANDCHILD of the physical disk; a
+    one-level children check sees the running system disk as 'unmounted'.
+    """
+    if _is_mounted(entry):
+        return True
+    return any(_subtree_mounted(c) for c in (entry.get("children") or []))
+
+
 def pick_target_device(lsblk_json: str, min_gb: int = MIN_DEVICE_GB,
                        allow_mounted: bool = False) -> str:
     """Choose the target disk from `lsblk -b -J -o ...` output.
@@ -74,8 +85,7 @@ def pick_target_device(lsblk_json: str, min_gb: int = MIN_DEVICE_GB,
             continue
         size = int(dev.get("size", 0))
         name = f"/dev/{dev['name']}"
-        mounted = (_is_mounted(dev)
-                   or any(_is_mounted(c) for c in (dev.get("children") or [])))
+        mounted = _subtree_mounted(dev)
         if mounted and not allow_mounted:
             continue
         if size >= min_gb * (1 << 30):
@@ -273,8 +283,7 @@ def _check_explicit(lsblk_json: str, device: str, min_gb: int) -> str:
                 raise SystemExit(f"refusing: {device} is not a whole disk")
             if int(dev.get("size", 0)) < min_gb * (1 << 30):
                 raise SystemExit(f"refusing: {device} smaller than {min_gb}GB")
-            if (_is_mounted(dev)
-                    or any(_is_mounted(c) for c in (dev.get("children") or []))):
+            if _subtree_mounted(dev):
                 raise SystemExit(f"refusing: {device} has mounted partitions")
             return device
     raise SystemExit(f"refusing: {device} not found on host")
@@ -299,6 +308,49 @@ def transfer_image(host: str, image: Path, sha256: str | None,
         if actual != sha256:
             raise SystemExit(f"checksum MISMATCH: {actual} != {sha256}")
         print("checksum ok")
+
+
+def reread_pt_cmd(device: str) -> str:
+    """Ask the kernel to drop the stale partition table after a whole-disk dd."""
+    return (f"partprobe {device} 2>/dev/null || "
+            f"blockdev --rereadpt {device} 2>/dev/null || true")
+
+
+def wait_for_part_cmd(part: str, tries: int = 10) -> str:
+    """Bounded wait for the boot-partition node to (re)appear."""
+    return (f"i=0; while [ $i -lt {tries} ] && [ ! -b {part} ]; do "
+            f"sleep 1; i=$((i+1)); done; test -b {part}")
+
+
+def reread_partition_table(host: str, device: str, part: str) -> None:
+    """Re-read the partition table and wait for the boot node before mounting.
+
+    After overwriting a whole disk Linux can keep the previous table until
+    rescanned: on a blank target the partition may not exist yet, on a
+    previously partitioned one it can point at the old offset.
+    """
+    rc, _, err = _ssh(host, reread_pt_cmd(device))
+    if rc != 0:
+        raise SystemExit(f"partition reread failed on {device}: {err}")
+    rc, _, _ = _ssh(host, wait_for_part_cmd(part))
+    if rc != 0:
+        raise SystemExit(
+            f"boot partition {part} did not appear after rereading the "
+            f"partition table on {device}")
+
+
+def validate_archive(host: str, remote_path: str) -> None:
+    """Verify the downloaded archive is intact xz data BEFORE dd touches the disk.
+
+    Without this, a corrupt download (especially with --sha256 omitted) lets
+    xz die mid-stream while dd happily consumes the partial output — the
+    pipeline reports dd's status and a truncated image is declared written.
+    """
+    rc, _, err = _ssh(host, f"xz -t {remote_path}", timeout=300)
+    if rc != 0:
+        raise SystemExit(
+            f"image archive failed xz integrity check on {host}: "
+            f"{err.strip() or 'corrupt or not xz data'}")
 
 
 def write_image(host: str, remote_path: str, device: str) -> None:
@@ -354,9 +406,11 @@ def cmd_provision(args: argparse.Namespace) -> int:
           f"macs={', '.join(macs) or 'n/a'}")
     remote_path = f"/tmp/{image.name}"
     transfer_image(args.host, image, args.sha256, remote_path)
+    validate_archive(args.host, remote_path)
     write_image(args.host, remote_path, target)
     _ssh(args.host, f"rm -f {remote_path}")
     if not args.no_inject:
+        reread_partition_table(args.host, target, boot_partition(target))
         inject_cloud_init(args.host, target, args.user,
                           args.hostname, ssh_keys, password)
         creds = Path(str(image) + ".credentials.txt")
