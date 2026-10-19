@@ -68,14 +68,21 @@ class TestBuildLocalForm:
 
 
 class TestClassifyOutcome:
+    def test_real_response_body_is_accepted(self):
+        accepted, verdict = classify_outcome("Upgrade successfully!")
+        assert accepted, verdict
+
     @pytest.mark.parametrize("tail", [
         "click: pending-navigation timeout (known behavior)",
         "post-upload wait: Page.content: Unable to retrieve content because the page is navigating",
-        "Upgrade successfully!",
     ])
-    def test_accepted_markers(self, tail):
+    def test_hang_endings_are_pending_not_accepted(self, tail):
+        # 2026-10-19 live evidence: an idle-dead recovery server hangs the
+        # TCP connection exactly like an accepted POST — only the recovery
+        # server vanishing (ARP) proves consumption.
         accepted, verdict = classify_outcome(tail)
-        assert accepted, verdict
+        assert not accepted
+        assert "PENDING" in verdict
 
     def test_window_dead(self):
         accepted, verdict = classify_outcome("net::ERR_CONNECTION_REFUSED")

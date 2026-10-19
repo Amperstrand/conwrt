@@ -94,14 +94,23 @@ def build_local_form(endpoint: str, field: str = "firmware") -> str:
     )
 
 
-# Known-good endings, in check order. The device flashes right after the
-# POST, so the browser side ends mid-navigation — that IS the accepted shape
-# (the "pending-navigation timeout" class from the 2026-09/10 owner dances).
+# The device responds with "Upgrade successfully!" only when it can — most
+# POSTs end mid-navigation because flashing starts immediately. A hung
+# navigation is therefore NOT proof of acceptance: an idle-dead recovery
+# server (window > ~5-8 min since arming) ACCEPTS THE TCP CONNECTION and
+# never responds, which looks identical from the browser side (seen live
+# 2026-10-19: two "page is navigating" verdicts while the recovery server
+# stayed ARP-present — the POSTs never consumed). The only in-band proof
+# is a real response body; everything else is PENDING until the caller
+# verifies the recovery server VANISHED (ARP for the recovery IP).
 _ACCEPTED_MARKERS = (
     "upgrade successfully",
+)
+_PENDING_MARKERS = (
     "pending-navigation timeout",
     "page is navigating",
     "net::err_aborted",  # server drops the connection once flashing starts
+    "click accepted",
 )
 _WINDOW_DEAD_MARKERS = (
     "net::err_connection_refused",
@@ -114,8 +123,11 @@ _WINDOW_DEAD_MARKERS = (
 def classify_outcome(transcript: str) -> tuple[bool, str]:
     """Classify an upload transcript into (accepted, verdict).
 
-    ``accepted`` is True only for the marker classes that mean the POST was
-    consumed by the device (or ended in the known mid-navigation way).
+    ``accepted`` is True only when the device produced a real success
+    response. Hang-class endings return False with a PENDING verdict —
+    the caller must confirm consumption (recovery server gone from ARP)
+    before trusting the upload; an idle-dead window hangs exactly like
+    an accepted POST.
     """
     lowered = transcript.lower()
     for marker in _ACCEPTED_MARKERS:
@@ -124,6 +136,13 @@ def classify_outcome(transcript: str) -> tuple[bool, str]:
     for marker in _WINDOW_DEAD_MARKERS:
         if marker in lowered:
             return False, f"WINDOW DEAD ({marker})"
+    for marker in _PENDING_MARKERS:
+        if marker in lowered:
+            return False, (
+                f"PENDING ({marker}) — navigation hung; indistinguishable from an "
+                "accepted POST until the recovery server vanishes. ARP-check the "
+                "recovery IP: still present = NOT consumed (idle-dead window)"
+            )
     return False, "UNRECOGNIZED — capture a pcap before blaming the client"
 
 
