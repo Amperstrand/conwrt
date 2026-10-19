@@ -87,8 +87,21 @@ class TestCloudInitRendering(unittest.TestCase):
     def test_user_data_break_glass_password(self):
         ud = render_user_data("ubuntu", "pi4", ["ssh-ed25519 AAAA me@host"],
                               password="s3cret!")
-        self.assertIn("password: s3cret!\n", ud)
+        # password must arrive UNLOCKED via chpasswd, never as a locked
+        # `password:` stanza (lock_passwd:true made it unusable — #269)
+        self.assertIn("lock_passwd: false\n", ud)
+        self.assertIn("list: |\n      ubuntu:s3cret!\n", ud)
+        self.assertNotIn("password: s3cret!\n", ud)
         self.assertIn("ssh_authorized_keys:\n", ud)
+
+    def test_user_data_no_password_locks_account(self):
+        ud = render_user_data("ubuntu", "pi4", ["ssh-ed25519 AAAA me@host"])
+        self.assertIn("lock_passwd: true\n", ud)
+        self.assertNotIn("list: |\n", ud)
+
+    def test_user_data_no_keys_omits_authorized_keys_stanza(self):
+        ud = render_user_data("ubuntu", "pi4", [])
+        self.assertNotIn("ssh_authorized_keys:\n", ud)
 
     def test_meta_data(self):
         md = render_meta_data("pi4")
@@ -271,3 +284,39 @@ class TestWritePathCommands(unittest.TestCase):
                 pi_image.validate_archive("h", "/tmp/img.img.xz")
         finally:
             pi_image._ssh = orig
+
+
+class TestCredentialsFile(unittest.TestCase):
+    def test_written_mode_0600(self):
+        import tempfile
+        from pi_image import write_credentials
+        with tempfile.TemporaryDirectory() as td:
+            creds = Path(td) / "img.img.xz.credentials.txt"
+            write_credentials(creds, "host=pi4\nuser=ubuntu\npassword=x\n")
+            self.assertEqual(creds.stat().st_mode & 0o777, 0o600)
+            self.assertIn("password=x", creds.read_text())
+
+
+class TestServeFileAllowlist(unittest.TestCase):
+    def test_only_requested_filename_served(self):
+        import tempfile
+        import urllib.request
+        import urllib.error
+        from pi_image import serve_file
+        with tempfile.TemporaryDirectory() as td:
+            image = Path(td) / "img.img.xz"
+            image.write_bytes(b"IMAGEDATA")
+            (Path(td) / "img.img.xz.credentials.txt").write_text("password=x")
+            server, port = serve_file(image)
+            try:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/{image.name}", timeout=5) as r:
+                    self.assertEqual(r.status, 200)
+                    self.assertEqual(r.read(), b"IMAGEDATA")
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/img.img.xz.credentials.txt",
+                        timeout=5)
+                self.assertEqual(cm.exception.code, 404)
+            finally:
+                server.shutdown()

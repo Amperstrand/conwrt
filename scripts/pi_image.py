@@ -115,7 +115,10 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
 
     Forces ssh on at boot (runcmd) — some raspi images ship sshd disabled and
     would lock out a headless box. `password` (if set) is the account's
-    break-glass password; callers must record it in a credentials file.
+    break-glass console password; it is delivered via chpasswd with
+    lock_passwd:false — a `password:` stanza under lock_passwd:true is set but
+    LOCKED, and with ssh_pwauth:false + no key the box would be unreachable
+    (#269). Callers must record the password in a credentials file.
     """
     sudo_rule = "ALL=(ALL) NOPASSWD:ALL" if sudo_nopass else "ALL=(ALL):ALL"
     stanza = [
@@ -123,12 +126,17 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
         "    groups: [adm, sudo]",
         "    shell: /bin/bash",
         f"    sudo: {sudo_rule}",
-        "    lock_passwd: true",
+        "    lock_passwd: true" if not password else "    lock_passwd: false",
     ]
+    if ssh_keys:
+        stanza.append("    ssh_authorized_keys:")
+        stanza += [f"      - {key}" for key in ssh_keys]
+    chpasswd = ""
     if password:
-        stanza.append(f"    password: {password}")
-    stanza.append("    ssh_authorized_keys:")
-    stanza += [f"      - {key}" for key in ssh_keys]
+        chpasswd = (f"chpasswd:\n"
+                    f"  expire: false\n"
+                    f"  list: |\n"
+                    f"      {user}:{password}\n")
     return (
         "#cloud-config\n"
         f"hostname: {hostname}\n"
@@ -136,8 +144,7 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
         "users:\n"
         + "\n".join(stanza) + "\n"
         "ssh_pwauth: false\n"
-        "chpasswd:\n"
-        "  expire: false\n"
+        + chpasswd +
         "runcmd:\n"
         "  - systemctl enable --now ssh || systemctl enable --now sshd || true\n"
     )
