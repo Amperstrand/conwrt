@@ -215,6 +215,16 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
 
     if use_sysupgrade:
         return "sysupgrade"
+    if getattr(profile, "flash_method", "") == "netboot-rescue":
+        # #266: netboot-rescue has no unattended state machine — falling
+        # through to uboot made `conwrt flash` wait on a recovery HTTP server
+        # that never comes. Refuse with the operator-driven workflow instead.
+        raise ValueError(
+            f"'{getattr(profile, 'name', 'model')}' recovers via netboot-rescue, "
+            "which is operator-driven, not an unattended flash mode: arm the "
+            "rescue server with scripts/pi_netboot.py (arm --tree ... --mac ...), "
+            "power-cycle the Pi, then deploy/provision — see "
+            "recipes/raspberry-pi/netboot-rescue.md")
     if is_edgeos_ks:
         return "edgeos"
     if is_extreme_rdwr_tftp:

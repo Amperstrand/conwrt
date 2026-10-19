@@ -124,3 +124,18 @@ class TestProfileDefaults(TestCase):
     def test_default_silence_timeout(self):
         profile = build_profile_from_model("zyxel-gs1920-24", flash_method="oem-ftp")
         self.assertEqual(profile.silence_timeout, 30)
+
+
+class TestNetbootRescueNotAutoSelected(TestCase):
+    """The generic selector must not hand netboot-rescue to the state machine (#266)."""
+
+    def test_pi_model_does_not_auto_select_netboot_rescue(self):
+        model = load_model("raspberrypi-4b")
+        with self.assertRaises(ValueError) as cm:
+            find_recovery_flash_method(model)
+        self.assertIn("netboot-rescue", str(cm.exception))
+
+    def test_explicit_hint_still_resolves_netboot_rescue(self):
+        model = load_model("raspberrypi-4b")
+        name, _ = find_recovery_flash_method(model, method_hint="netboot-rescue")
+        self.assertEqual(name, "netboot-rescue")
