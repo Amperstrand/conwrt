@@ -2,6 +2,7 @@
 import hashlib
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -150,3 +151,75 @@ class TestCmdBuildNameFormBootOrder(unittest.TestCase):
                                    lambda out_dir, name: tool), \
                  mock.patch("subprocess.run", fake_run):
                 self.assertEqual(pi_eeprom.cmd_build(args), 0)
+
+
+class TestFetchOriginRecord(unittest.TestCase):
+    def _fake_urlopen(self, url, timeout=0):
+        from types import SimpleNamespace
+
+        class Resp:
+            def __init__(self, data):
+                self._data = data
+                self._done = False
+
+            def read(self, n=-1):
+                if self._done:
+                    return b""
+                self._done = True
+                return self._data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        self.fetched_urls.append(url)
+        return Resp(b"FRESH-" + url.encode())
+
+    def setUp(self):
+        import tempfile
+        import pi_eeprom
+        self.pi = pi_eeprom
+        self.fetched_urls = []
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.patcher = mock.patch.object(pi_eeprom.urllib.request,
+                                         "urlopen", self._fake_urlopen)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self._tmp.cleanup()
+
+    def test_same_url_uses_cache(self):
+        dest = self.dir / "pieeprom.bin"
+        dest.write_bytes(b"CACHED")
+        (self.dir / "pieeprom.bin.origin").write_text("http://x/pieeprom.bin\n")
+        result = self.pi.fetch("http://x/pieeprom.bin", dest)
+        self.assertEqual(result.read_bytes(), b"CACHED")
+        self.assertEqual(self.fetched_urls, [])
+
+    def test_different_url_refetches_and_rewrites_origin(self):
+        dest = self.dir / "pieeprom.bin"
+        dest.write_bytes(b"STALE")
+        (self.dir / "pieeprom.bin.origin").write_text("http://old/pieeprom.bin\n")
+        result = self.pi.fetch("http://new/pieeprom.bin", dest)
+        self.assertEqual(self.fetched_urls, ["http://new/pieeprom.bin"])
+        self.assertEqual(result.read_bytes(), b"FRESH-http://new/pieeprom.bin")
+        self.assertEqual(
+            (self.dir / "pieeprom.bin.origin").read_text().strip(),
+            "http://new/pieeprom.bin")
+
+    def test_fresh_fetch_records_origin(self):
+        dest = self.dir / "recovery.bin"
+        self.pi.fetch("http://x/recovery.bin", dest)
+        self.assertEqual(
+            (self.dir / "recovery.bin.origin").read_text().strip(),
+            "http://x/recovery.bin")
+
+    def test_legacy_cache_without_origin_refetches(self):
+        dest = self.dir / "pieeprom.bin"
+        dest.write_bytes(b"LEGACY")
+        self.pi.fetch("http://x/pieeprom.bin", dest)
+        self.assertEqual(self.fetched_urls, ["http://x/pieeprom.bin"])

@@ -130,14 +130,25 @@ def parse_boot_order_arg(value: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def fetch(url: str, dest: Path) -> Path:
+    """Cache-aware download keyed by ORIGIN URL, not just filename.
+
+    Every URL used to share one cache name (DEFAULT_PIEEPROM / recovery.bin):
+    reusing --out with a different --pieeprom silently built and later flashed
+    STALE firmware (#263). A sidecar `<name>.origin` records the source URL;
+    a cached file fetched from a different URL is refetched.
+    """
+    origin = dest.with_name(dest.name + ".origin")
     if dest.is_file() and dest.stat().st_size > 0:
-        return dest
+        if origin.is_file() and origin.read_text().strip() == url:
+            return dest
+        print(f"cache: {dest.name} holds a different origin — refetching")
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"fetching {url}")
     with urllib.request.urlopen(url, timeout=120) as resp, \
             dest.open("wb") as fh:
         while chunk := resp.read(1 << 16):
             fh.write(chunk)
+    origin.write_text(url + "\n")
     return dest
 
 
