@@ -24,12 +24,49 @@ import argparse
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from flash.chromium_upload import upload  # noqa: E402
 
 FRESH_STATES = ("REACHABLE", "DELAY", "PROBE")
+
+
+class BayPcap:
+    """Stream a switch-side tcpdump of the bay into a local pcap file.
+
+    The #91 rule: never blame the client without a pcap. Five recovery POSTs
+    on 2026-10-19 produced five no-boots and zero wire evidence — this makes
+    the evidence automatic. One file per run holds every phase: the arming
+    ARP polls, the multipart POST byte stream, the server vanish, and any
+    boot traffic (DHCP discovers / RAs / ARP) during the door watch.
+    """
+
+    def __init__(self, switch: str, key: str, svi: str, pcap_dir: str):
+        self.switch, self.key, self.svi = switch, key, svi
+        self.path = Path(pcap_dir) / f"recover-{svi}-{time.strftime('%Y%m%d-%H%M%S')}.pcap"
+
+    def __enter__(self) -> "BayPcap":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "wb")
+        self.proc = subprocess.Popen(
+            ["ssh", *ssh_opts(self.key), self.switch,
+             f"tcpdump -i {self.svi} -U -n -s 0 -w - 2>/dev/null"],
+            stdout=self.fh, stderr=subprocess.DEVNULL)
+        print(f"[pcap] recording bay wire to {self.path}")
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.fh.close()
+        size = self.path.stat().st_size if self.path.exists() else 0
+        print(f"[pcap] saved {self.path} ({size} bytes)")
+        return False
 
 
 def ssh_opts(key: str) -> list[str]:
@@ -152,6 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gate-timeout", type=int, default=150)
     p.add_argument("--door-ip", default="192.168.1.1")
     p.add_argument("--door-timeout", type=int, default=1500)
+    p.add_argument("--pcap-dir", default="/tmp/conwrt-recovery-pcaps",
+                   help="where bay-wire pcaps land (default-on; see BayPcap)")
+    p.add_argument("--no-pcap", action="store_true", help="disable the wire recording")
     args = p.parse_args(argv)
 
     ensure_tunnel(args.switch, args.key, args.local_port, args.recovery_ip)
@@ -159,31 +199,34 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[setup] tunnel :{args.local_port} + alias {args.client_ip} on {args.svi}")
     print("[watch] power-cycle the unit whenever ready (plain cycle; no button)")
 
-    proc = subprocess.Popen(
-        ["ssh", *ssh_opts(args.key), args.switch, poller_cmd(args.svi, args.port, args.recovery_ip)],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    try:
-        if not wait_fresh_arming(proc, time.monotonic() + args.watch_timeout):
-            print("[verdict] WINDOW TIMEOUT — no fresh arming seen; rerun after a power-cycle")
-            return 2
-        accepted, verdict = upload(args.image, f"http://127.0.0.1:{args.local_port}/upload",
-                                   "firmware", 300)
-        print(f"[fire] {verdict}")
-        if not wait_consumption(proc, args.gate_timeout):
-            print("[verdict] NOT CONSUMED — server never vanished (idle-dead or rejected); "
-                  "power-cycle and rerun")
-            return 3
-    finally:
-        proc.terminate()
-        arm_alias(args.switch, args.key, args.svi, args.client_ip, present=False)
+    capture = nullcontext() if args.no_pcap else \
+        BayPcap(args.switch, args.key, args.svi, args.pcap_dir)
+    with capture:
+        proc = subprocess.Popen(
+            ["ssh", *ssh_opts(args.key), args.switch, poller_cmd(args.svi, args.port, args.recovery_ip)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        try:
+            if not wait_fresh_arming(proc, time.monotonic() + args.watch_timeout):
+                print("[verdict] WINDOW TIMEOUT — no fresh arming seen; rerun after a power-cycle")
+                return 2
+            accepted, verdict = upload(args.image, f"http://127.0.0.1:{args.local_port}/upload",
+                                       "firmware", 300)
+            print(f"[fire] {verdict}")
+            if not wait_consumption(proc, args.gate_timeout):
+                print("[verdict] NOT CONSUMED — server never vanished (idle-dead or rejected); "
+                      "power-cycle and rerun")
+                return 3
+        finally:
+            proc.terminate()
+            arm_alias(args.switch, args.key, args.svi, args.client_ip, present=False)
 
-    mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout)
-    if mac:
-        print(f"[verdict] RECOVERED — door {args.door_ip} MAC {mac} "
-              f"(record it: this settles bay<->unit identity)")
-        return 0
-    print("[verdict] CONSUMED but no door — accepted-no-boot class; capture, do not blind-retry")
-    return 4
+        mac = watch_door(args.switch, args.key, args.svi, args.door_ip, args.door_timeout)
+        if mac:
+            print(f"[verdict] RECOVERED — door {args.door_ip} MAC {mac} "
+                  f"(record it: this settles bay<->unit identity)")
+            return 0
+        print("[verdict] CONSUMED but no door — accepted-no-boot class; capture, do not blind-retry")
+        return 4
 
 
 if __name__ == "__main__":
