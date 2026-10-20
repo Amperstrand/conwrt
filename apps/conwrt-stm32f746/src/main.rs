@@ -57,11 +57,12 @@ bind_interrupts!(struct Irqs {
 /// poison the controller's ARP cache).
 const AGENT_MAC: [u8; 6] = [0x02, 0x43, 0x57, 0x46, 0x37, 0x34];
 
-/// Bench DUT VLAN address — the F746 sits in bay lan8 (VLAN 1008,
-/// 192.168.108.0/24; it displaced the GS108T chain). .52 = DUT range
-/// (.2 collides with a stale alias on the controller host).
-const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 108, 52);
-const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 108, 1);
+/// Bench DUT VLAN address. Species-level placeholder only: resolve the
+/// actual bay VLAN/address/gateway from the lab registry at build time and
+/// set them here before flashing (AGENTS.md: never hardcode bench IPs —
+/// the bench DUT-bay convention is VLAN 100N, 192.168.100N.0/24).
+const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 100, 2);
+const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 100, 1);
 
 /// The agent's TCP port (the HIL mock's conventional port).
 const AGENT_PORT: u16 = 8400;
