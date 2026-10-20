@@ -261,8 +261,13 @@ def verify_push_target(router: str, expect_mac: str) -> None:
     netboots while it is staged will consume and apply it. The target unit
     is typically powered off (that is why we push over netboot), so identity
     is verified via the armed dnsmasq allowlist instead of a live read: the
-    router must be armed for EXACTLY the expected MAC.
+    router must be armed for EXACTLY the expected MAC. That check alone can
+    share one mistake with the flag (wrong adjacent unit armed + the same
+    MAC passed) — so #296 adds the local specimen ledger as an independent
+    second source: the MAC must also be a KNOWN specimen (recorded from a
+    live read by pi_image provision or `specimens read`).
     """
+    from specimens import known_macs
     conf = read_remote_config(router)
     if not is_armed(conf):
         raise SystemExit(
@@ -276,6 +281,15 @@ def verify_push_target(router: str, expect_mac: str) -> None:
             f"refusing: armed allowlist {armed} is not exactly the expected "
             f"specimen [{want}] — re-arm for just this unit before staging "
             "(any other armed Pi that reboots would apply this update)")
+    known = known_macs()
+    if want not in known:
+        raise SystemExit(
+            f"refusing: {want} is not a known specimen in the local ledger "
+            "(#296: the armed allowlist and --expect-mac can share one "
+            "mistake — the ledger is the independent record). Bootstrap it "
+            "from a live read (python3 scripts/specimens.py read --host "
+            "<pi-ip> while the unit runs, or `specimens add --mac ...` from "
+            "the unit's label), then retry the push")
 
 
 def cmd_push(args: argparse.Namespace) -> int:
