@@ -137,3 +137,36 @@ GS1900-8HP A1 (OpenWrt + realtek-poe fork), three times in one session:
   directions usually means GND is missing. Verify by watching a full
   boot BEFORE the day you need it; a wedge produces no console output
   after the hang, so capture the boot that leads INTO it.
+
+### 8. L3-offload wedge: overlapping subnets kill the stack (kernel alive)
+
+Root-caused 2026-10-20 on GS1900-8HP (OpenWrt snapshot r33051, kernel
+6.12.94): adding a subnet that OVERLAPS an already-routed prefix — e.g.
+`ip addr add 192.168.13.2/24 dev switch.1008` while 192.168.13.0/24 is
+routed elsewhere — wedges the whole network stack within seconds
+(openwrt/openwrt#26061). The earlier "PoE activity bursts" trigger theory
+for pattern 7 is RETIRED: the PoE daemon is exonerated (healthy counters
+through the kill); every incident coincided with netdev/L3 config events.
+
+- **Signature upgrade**: "brain dead, spine alive" splits further —
+  kernel-alive (printk keeps flowing, timers run, PHY polling continues,
+  console input echoes briefly) vs network-dead (ICMP/SSH/ubus). Serial
+  console is the discriminator; keep a timestamped journal running.
+- **Prevention**: never re-use a routed subnet on a second SVI/alias.
+  Guard tooling belongs at the operator layer (preflight before any
+  SVI add: lab prefix inventory + live addr/route/neigh tables).
+- **Recovery**: power cycle only. No watchdog fires by default on this
+  platform (DT node present, driver not enabled in image) and
+  MAGIC_SYSRQ over serial did not respond — enable both in custom
+  images: CONFIG_REALTEK_OTTO_WDT + CONFIG_MAGIC_SYSRQ_SERIAL.
+
+### 9. MCU crash survives soft reboots (PoE manager class)
+
+GS1900-8HP: a crashed PoE management MCU (UART silent, ports down,
+daemon spins "No response / Trying a reset" every 30 s) does NOT
+recover from a warm reboot — the PoE domain is not reset by REBOOT.
+Only a full power cycle restores it (clean handshake on cold boot).
+Detection: `replies_ok` frozen at 0 with `no_response` incrementing in
+lockstep with `resyncs` in the daemon's mcu_comm counters. One
+"request-bad-checksum" exchange ~9 s after a COLD boot is benign MCU
+reset noise, not a fault.
