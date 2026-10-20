@@ -89,7 +89,7 @@
         "serverip": "192.168.1.2",
         "ipaddr": "192.168.1.1",
         "baudrate": "115200",
-        "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP."
+        "note": "bootdelay=1 set by OEM. Dual-partition device \u2014 use 'setsys bootpartition 0' and 'savesys' before TFTP."
       }
     }
   },
@@ -278,30 +278,45 @@
         "note": "PoE port IDs match interface numbers: lan1=1, lan2=2, ..., lan8=8"
       }
     },
-    "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default."
+    "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default.",
+    "control_plane_wedge_class": {
+      "observed": "2026-10-20, three occurrences in one session (25.12.x + realtek-poe fork r5-era)",
+      "trigger_pattern": "PoE daemon activity bursts \u2014 service restarts AND rapid port-toggle (set_port_config) sequences; each control-plane death followed within minutes",
+      "symptoms": "CPU plane dies (ICMP/SSH/ubus unresponsive) while ASIC forwarding and PoE delivery KEEP WORKING \u2014 powered DUTs stay up through the outage",
+      "recovery": "power cycle (mains); config survives; all PoE DUTs cold-cycle and self-recover",
+      "detection": "a DUT behind the switch still answers while the switch's own mgmt IP does not = this class",
+      "mitigations": [
+        "batch PoE changes; ONE service restart maximum, never bursts",
+        "space port toggles; avoid rapid same-session enable/disable cycles",
+        "keep the serial console attached and EXPORTED \u2014 it is the only diagnostic door when the CPU plane hangs (and console wiring needs TX, RX AND GND verified before you need it)",
+        "the on-box wedge-guard timer cannot help when the whole CPU plane hangs \u2014 external liveness watch required"
+      ],
+      "see_also": "recipes/detection-and-recovery.md \u00a78"
+    }
   },
   "safety": {
     "serial_number_warning": "Devices with serial numbers starting S21 or higher MUST run stock firmware v2.70+ before any firmware changes. Older stock firmware can irreversibly brick PoE capabilities.",
-    "dual_partition_note": "Dual-partition device. Keep OEM on backup partition for recovery."
+    "dual_partition_note": "Dual-partition device. Keep OEM on backup partition for recovery.",
+    "console_wiring": "Console needs TX, RX AND GND. A silent console with TX/RX swapped in BOTH directions usually means GND is missing. Verify the console path by watching a boot BEFORE you depend on it."
   },
   "tested_hardware": {
     "oem-stock-upgrade": {
       "tested": true,
       "date": "2026-05-21",
-      "verified_with": "V2.00(AAHI.2) → V2.90(AAHI.0) via Playwright HTTP upload, cmd=5903, partition=0 (Active)",
+      "verified_with": "V2.00(AAHI.2) \u2192 V2.90(AAHI.0) via Playwright HTTP upload, cmd=5903, partition=0 (Active)",
       "notes": "Firmware upgrade via OEM web UI. 5.8MB .bix file uploaded via httpupload.cgi. Flash write + reboot took ~90s. V2.90 forces mandatory password change from default 1234. Hardware revision A1 confirmed by v2.90 dashboard. New credentials: admin/Zyxel2026!."
     },
     "oem-http": {
       "tested": true,
       "date": "2026-05-21",
       "verified_with": "Uploaded OpenWrt 25.12.1 initramfs via OEM HTTP to V2.90 OEM firmware, device booted into initramfs in ~24s",
-      "notes": "Initramfs upload via same cmd=5903/httpupload.cgi endpoint as stock firmware update. Filename must be ≤64 chars (v2.90 limit). OpenWrt default filename (75 chars) rejected — renamed to openwrt-initramfs.bin. Login with admin/Zyxel2026! (changed from default by v2.90 mandatory password change). Initramfs booted in ~24s (very fast, RAM-only)."
+      "notes": "Initramfs upload via same cmd=5903/httpupload.cgi endpoint as stock firmware update. Filename must be \u226464 chars (v2.90 limit). OpenWrt default filename (75 chars) rejected \u2014 renamed to openwrt-initramfs.bin. Login with admin/Zyxel2026! (changed from default by v2.90 mandatory password change). Initramfs booted in ~24s (very fast, RAM-only)."
     },
     "sysupgrade": {
       "tested": true,
       "date": "2026-05-21",
       "verified_with": "sysupgrade -n from 25.12.1 initramfs to 25.12.1 squashfs permanent install, SSH access after ~105s boot",
-      "notes": "SCP requires -O flag (legacy protocol) — OpenWrt initramfs lacks sftp-server. sysupgrade completed successfully, ~105s boot time. MTD layout merged from dual 6976K+6976K partitions to single 13824K firmware partition. JFFS2 overlay init takes ~30s during first boot. All 8 PoE ports enabled by default in /etc/config/poe."
+      "notes": "SCP requires -O flag (legacy protocol) \u2014 OpenWrt initramfs lacks sftp-server. sysupgrade completed successfully, ~105s boot time. MTD layout merged from dual 6976K+6976K partitions to single 13824K firmware partition. JFFS2 overlay init takes ~30s during first boot. All 8 PoE ports enabled by default in /etc/config/poe."
     },
     "serial-tftp-openwrt": {
       "tested": false,
@@ -419,13 +434,13 @@
         "1. Upload OpenWrt initramfs image via stock V2.90 web UI (cmd=5903, httpupload.cgi)",
         "2. Switch reboots into OpenWrt running entirely from RAM (~24s boot)",
         "3. Upload conwrt-lite + firmware image via SCP to /tmp",
-        "4. Run conwrt-lite: PoE control, TFTP serve, SSH verify — all from the switch",
-        "5. Reboot switch → returns to stock V2.90, untouched"
+        "4. Run conwrt-lite: PoE control, TFTP serve, SSH verify \u2014 all from the switch",
+        "5. Reboot switch \u2192 returns to stock V2.90, untouched"
       ],
       "advantages": [
-        "Self-contained — no external host needed during flash",
-        "Non-destructive — stock firmware on flash is preserved",
-        "Full Linux environment — busybox, dropbear, realtek-poe, tftp",
+        "Self-contained \u2014 no external host needed during flash",
+        "Non-destructive \u2014 stock firmware on flash is preserved",
+        "Full Linux environment \u2014 busybox, dropbear, realtek-poe, tftp",
         "128MB RAM is plenty for initramfs + tools + firmware image"
       ],
       "requirements": [
@@ -435,14 +450,14 @@
         "Initial web UI access to upload initramfs (one-time per session)"
       ],
       "limitations": [
-        "PoE power lost during switch reboot (MCU reinit) — target device power-cycles with the switch",
+        "PoE power lost during switch reboot (MCU reinit) \u2014 target device power-cycles with the switch",
         "Must re-upload initramfs via web UI after each power cycle of the switch",
-        "No persistent changes to switch — all RAM-only"
+        "No persistent changes to switch \u2014 all RAM-only"
       ],
       "target_architecture": {
         "soc": "Realtek RTL8380M MIPS 4KEc @ 500MHz",
         "go_cross_compile": "GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0",
-        "go_version_note": "Use Go 1.22 — Go 1.23+ has MIPS async preemption hang bug (golang/go#71591)",
+        "go_version_note": "Use Go 1.22 \u2014 Go 1.23+ has MIPS async preemption hang bug (golang/go#71591)",
         "nan2008_patch": "May need to patch ELF e_flags at offset 36 for NaN2008 kernel compatibility"
       }
     }
@@ -456,8 +471,8 @@
     "dsa_topology": {
       "port_names": "lan1 through lan8 (physical ports 1-8, DSA switch port numbers 8-15)",
       "cpu_port": "port@28 (internal, fixed-link 1Gbps, handles CPU-bound traffic)",
-      "default_bridge": "br-lan — all lan1-lan8 members, untagged, no explicit bridge-vlan sections by default",
-      "source": "OpenWrt DTS rtl8380_zyxel_gs1900.dtsi — SWITCH_PORT(8, 1, internal) through SWITCH_PORT(15, 8, internal)"
+      "default_bridge": "br-lan \u2014 all lan1-lan8 members, untagged, no explicit bridge-vlan sections by default",
+      "source": "OpenWrt DTS rtl8380_zyxel_gs1900.dtsi \u2014 SWITCH_PORT(8, 1, internal) through SWITCH_PORT(15, 8, internal)"
     },
     "isolation_vlan_id": 999,
     "isolate_commands": {
@@ -474,14 +489,14 @@
       ],
       "assign_ip_on_isolated_vlan": "ip addr add 192.168.1.2/24 dev br-lan.999",
       "port_suffix_meaning": {
-        "u": "untagged egress — packets sent to the wire without VLAN tag",
-        "u*": "untagged + primary VLAN (PVID) — untagged egress AND untagged ingress tagged as this VLAN",
-        "t": "tagged egress — packets carry VLAN tag on the wire"
+        "u": "untagged egress \u2014 packets sent to the wire without VLAN tag",
+        "u*": "untagged + primary VLAN (PVID) \u2014 untagged egress AND untagged ingress tagged as this VLAN",
+        "t": "tagged egress \u2014 packets carry VLAN tag on the wire"
       },
       "local_flag": {
-        "1": "CPU port is member of this VLAN → creates br-lan.999 sub-interface → switch can route to isolated device",
-        "0": "CPU port NOT a member → isolated port cannot talk to switch CPU → NO SSH access to target device",
-        "required": "MUST be 1 for conwrt flashing — the switch needs SSH/TFTP access to the target"
+        "1": "CPU port is member of this VLAN \u2192 creates br-lan.999 sub-interface \u2192 switch can route to isolated device",
+        "0": "CPU port NOT a member \u2192 isolated port cannot talk to switch CPU \u2192 NO SSH access to target device",
+        "required": "MUST be 1 for conwrt flashing \u2014 the switch needs SSH/TFTP access to the target"
       }
     },
     "restore_commands": {
@@ -497,27 +512,27 @@
     },
     "gotchas": [
       "A port can only be untagged member of ONE bridge VLAN. If an explicit bridge-vlan for VLAN 1 already exists, the target port must be removed from it before adding to VLAN 999.",
-      "DEVICE_CLAIM_FAILED error if a port is assigned to multiple bridges — each port can belong to only one bridge device.",
-      "Network restart causes ~10 second connectivity loss on ALL ports — plan accordingly if other devices depend on this switch.",
-      "After network restart, the switch's br-lan.999 interface gets an IP only if the isolated device provides DHCP — otherwise assign a static IP manually (ip addr add 192.168.1.2/24 dev br-lan.999).",
-      "DSA VLAN filtering is enabled by default for Realtek RTL838x in OpenWrt 24.10+/25.x — no extra packages or kernel modules needed.",
-      "The known DSA FDB bug (openwrt/openwrt#11650) affects VLAN-tagged + WiFi roaming — irrelevant for pure Ethernet port isolation on a switch with no WiFi."
+      "DEVICE_CLAIM_FAILED error if a port is assigned to multiple bridges \u2014 each port can belong to only one bridge device.",
+      "Network restart causes ~10 second connectivity loss on ALL ports \u2014 plan accordingly if other devices depend on this switch.",
+      "After network restart, the switch's br-lan.999 interface gets an IP only if the isolated device provides DHCP \u2014 otherwise assign a static IP manually (ip addr add 192.168.1.2/24 dev br-lan.999).",
+      "DSA VLAN filtering is enabled by default for Realtek RTL838x in OpenWrt 24.10+/25.x \u2014 no extra packages or kernel modules needed.",
+      "The known DSA FDB bug (openwrt/openwrt#11650) affects VLAN-tagged + WiFi roaming \u2014 irrelevant for pure Ethernet port isolation on a switch with no WiFi."
     ],
     "integration_with_conwrt": {
       "flow": [
         "1. Isolate target port into VLAN 999 (before PoE power-on)",
         "2. Add secondary IP on br-lan.999 for flash subnet (e.g. 192.168.1.2/24)",
-        "3. Enable PoE on target port — device boots in isolated VLAN",
+        "3. Enable PoE on target port \u2014 device boots in isolated VLAN",
         "4. Flash device via SSH/TFTP within isolated VLAN (DHCP offers cannot escape)",
         "5. Post-flash: configure SSH keys, disable DHCP, set IP",
-        "6. Restore port to default VLAN — device joins production network"
+        "6. Restore port to default VLAN \u2014 device joins production network"
       ],
       "benefits_over_overlay": [
         "Works with ALL flash methods (sysupgrade, recovery-http, TFTP, OEM-HTTP, extreme-rdwr-tftp)",
-        "No race condition — port is isolated BEFORE device powers on",
-        "Device's DHCP offers never leave the isolated VLAN — broadcast domain is contained",
-        "Transparent to the target device — no config changes needed on it",
-        "No overlay tarball generation needed — simpler code path"
+        "No race condition \u2014 port is isolated BEFORE device powers on",
+        "Device's DHCP offers never leave the isolated VLAN \u2014 broadcast domain is contained",
+        "Transparent to the target device \u2014 no config changes needed on it",
+        "No overlay tarball generation needed \u2014 simpler code path"
       ]
     }
   }
