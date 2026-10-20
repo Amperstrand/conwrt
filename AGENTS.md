@@ -670,14 +670,18 @@ way; PRs #67/#81/#36 were later audited to clean it up).
 
 ### Pre-merge gate: EVERY automated-review finding gets an explicit response (2026-10-20)
 
-Before a PR merges, every Codex (or other bot) finding on the final head
-must carry a visible response — **👍** (fixing it), **👎** (refuting it,
-with an evidence comment), or **a comment naming the disposition**:
+Before a PR merges, every Codex (or other bot) finding **across the PR's
+review history** — including findings raised on earlier heads, re-located
+at the final head — must be closed by exactly one of:
 
 1. **fixed as part of this merge** (name the commit), or
 2. **lifted out** to a follow-up PR/issue (linked — a deferral with no
    destination is a blocker, not a pass), or
 3. **refuted with evidence in-thread** (never silently dropped).
+
+A 👍 reaction is acknowledgment, not a disposition — pair it with the fix,
+link, or refutation that closes the finding. A 👎 must carry its evidence
+comment.
 
 Rationale: the 2026-10-19 fleet scan found **314 merged PRs across
 Amperstrand/OpenTollGate carrying never-answered bot findings** — every
