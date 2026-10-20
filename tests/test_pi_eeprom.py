@@ -265,15 +265,29 @@ class TestPushSpecimenGate(unittest.TestCase):
         for name in ("recovery.bin", "pieeprom.upd", "pieeprom.sig"):
             (pkg / name).write_bytes(b"x")
         self.pkg = pkg
+        # #296: the push gate consults the local specimen ledger — point it
+        # at a tmp ledger seeded with the known good MAC.
+        import os
+        self._old_env = os.environ.get("CONWRT_SPECIMENS")
+        self.ledger = pkg / "ledgers" / "s.json"
+        os.environ["CONWRT_SPECIMENS"] = str(self.ledger)
+        import specimens
+        specimens.record(mac="e4:5f:01:12:34:56", serial="known-1",
+                          label="gate-fixture", path=self.ledger)
 
     def tearDown(self):
+        import os
+        if self._old_env is None:
+            os.environ.pop("CONWRT_SPECIMENS", None)
+        else:
+            os.environ["CONWRT_SPECIMENS"] = self._old_env
         self._tmp.cleanup()
 
-    def _args(self):
+    def _args(self, expect_mac="E4:5F:01:12:34:56"):
         from types import SimpleNamespace
         return SimpleNamespace(router="192.168.1.1", tftp_root="/tmp/tftp",
                                package_dir=str(self.pkg),
-                               expect_mac="E4:5F:01:12:34:56")
+                               expect_mac=expect_mac)
 
     def test_not_armed_refuses(self):
         with mock.patch.object(self.pi, "read_remote_config",
@@ -318,3 +332,18 @@ class TestPushSpecimenGate(unittest.TestCase):
              mock.patch("subprocess.run", fake_run):
             self.assertEqual(self.pi.cmd_push(self._args()), 0)
         self.assertIn("root@192.168.1.1:/tmp/tftp/", " ".join(seen["cmd"]))
+
+    def test_unknown_mac_refuses_even_when_armed_exactly(self):
+        """#296: the armed allowlist and --expect-mac can share one mistake
+        (wrong adjacent unit armed + same MAC passed) — the ledger is the
+        independent second source, so an unknown MAC refuses."""
+        stranger = "de:ad:be:ef:00:01"
+        with mock.patch.object(self.pi, "read_remote_config",
+                               return_value="dhcp-host=" + stranger + ",set:pinetboot\n"), \
+             mock.patch.object(self.pi, "is_armed", return_value=True), \
+             mock.patch.object(self.pi, "armed_macs",
+                               return_value=[stranger]):
+            with self.assertRaises(SystemExit) as cm:
+                self.pi.cmd_push(self._args(expect_mac=stranger))
+            self.assertIn("not a known specimen", str(cm.exception))
+            self.assertIn("specimens.py read", str(cm.exception))
