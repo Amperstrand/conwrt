@@ -342,8 +342,26 @@ class TestReadBackVerification(unittest.TestCase):
             pi_image.verify_written("h", "/dev/sda", len(payload), want)
         finally:
             pi_image._ssh = orig
+        self.assertIn("blockdev --flushbufs /dev/sda", seen["cmd"])
         self.assertIn("head -c 4096 /dev/sda", seen["cmd"])
         self.assertIn("sha256sum", seen["cmd"])
+
+    def test_verify_written_evicts_cache_before_reading(self):
+        """Review of #381 (P1): a buffered read-back can be served from the
+        page cache dd just filled — hashing the SENT bytes, not the media.
+        The command must evict first; eviction failure must fail closed."""
+        import hashlib
+        import pi_image
+        want = hashlib.sha256(b"z").hexdigest()
+        orig = pi_image._ssh
+        pi_image._ssh = (lambda host, cmd, timeout=60, input_text=None:
+                         (1, "", "blockdev: not found"))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                pi_image.verify_written("h", "/dev/sda", 1, want)
+            self.assertIn("cache eviction", str(cm.exception))
+        finally:
+            pi_image._ssh = orig
 
     def test_verify_written_mismatch_refuses(self):
         import hashlib
@@ -371,7 +389,6 @@ class TestReadBackVerification(unittest.TestCase):
             self.assertIn("sha256sum", str(cm.exception))
         finally:
             pi_image._ssh = orig
-
     def test_maybe_verify_skip_warns_and_stays_off_device(self):
         import tempfile
         from pi_image import maybe_verify_written

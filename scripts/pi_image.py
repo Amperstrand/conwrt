@@ -434,18 +434,24 @@ def verify_written(host: str, device: str, size: int, expect_sha: str) -> None:
     dd success is NOT byte correctness: on the silently-corrupting
     VL711/JMS578 USB bridges and marginal cables documented in the recipe,
     the write pipeline reports dd's status while the disk holds wrong
-    bytes. Fails closed (SystemExit) on ssh failure, missing target tools
-    (busybox without sha256sum/head), empty output, or hash mismatch.
+    bytes. \`blockdev --flushbufs\` evicts the page cache FIRST (review of
+    #381: buffered dd leaves its own writes cached, and a cached read-back
+    would hash the bytes we SENT, not the bytes the media holds). Fails
+    closed (SystemExit) on eviction failure, ssh failure, missing target
+    tools (busybox without blockdev/sha256sum/head), empty output, or
+    hash mismatch.
     """
     print(f"verifying {size} bytes read-back from {device} "
-          "(sha256 over ssh)...")
+          "(cache-evicted, sha256 over ssh)...")
     rc, out, err = _ssh(
         host,
+        f"blockdev --flushbufs {device} && "
         f"head -c {size} {device} | sha256sum",
         timeout=1800)
     if rc != 0:
         raise SystemExit(
-            f"read-back failed on {device}: {err.strip() or 'target may lack head/sha256sum'}")
+            f"read-back failed on {device} (cache eviction or read): "
+            f"{err.strip() or 'target may lack blockdev/head/sha256sum'}")
     got = out.split()[0] if out.strip() else ""
     if got != expect_sha:
         raise SystemExit(
