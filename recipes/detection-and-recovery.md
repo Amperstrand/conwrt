@@ -113,3 +113,27 @@ answers with documented default credentials, the standard two-stage
 flash (SSH → rdwr_boot_cfg → TFTP initramfs → sysupgrade) onboards it
 without ever opening the case. Keep the seat isolated until the first
 OpenWrt boot — stock images may run their own DHCP server.
+
+## 8. Infrastructure-switch wedge class (bench switch as a DUT)
+
+A PoE switch running a vendor-fork daemon can wedge its CONTROL PLANE
+while its forwarding ASIC and PoE MCU keep working autonomously. Seen on
+GS1900-8HP A1 (OpenWrt + realtek-poe fork), three times in one session:
+
+- **Trigger pattern**: bursts of PoE-daemon activity — service restarts
+  and rapid `set_port_config` toggle sequences. Death follows within
+  minutes; single spaced toggles are usually tolerated.
+- **Signature** (diagnostic gold): a powered DUT behind the switch still
+  answers while the switch's own management IP does not. Brain dead,
+  spine alive.
+- **Recovery**: power cycle. Config survives; all PoE DUTs cold-cycle —
+  make every DUT self-healing (init-enabled services) so a switch
+  recovery costs nothing but time.
+- **Discipline**: batch PoE changes, one restart maximum, never burst;
+  keep the serial console physically attached and VERIFIED (see below);
+  run the liveness watch OFF the switch — an on-box guard cannot fire
+  when the whole CPU plane hangs.
+- **Console wiring rule**: a console silent with TX/RX swapped in both
+  directions usually means GND is missing. Verify by watching a full
+  boot BEFORE the day you need it; a wedge produces no console output
+  after the hang, so capture the boot that leads INTO it.
