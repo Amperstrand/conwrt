@@ -304,7 +304,140 @@ class TestWritePathCommands(unittest.TestCase):
             pi_image._ssh = orig
 
 
-class TestCredentialsFile(unittest.TestCase):
+class TestReadBackVerification(unittest.TestCase):
+    """#295: default-ON read-back hash of the written byte range."""
+
+    @staticmethod
+    def _make_xz(path, payload: bytes) -> None:
+        import lzma
+        with lzma.open(path, "wb") as fh:
+            fh.write(payload)
+
+    def test_digest_and_size_streaming(self):
+        import tempfile
+        from pi_image import digest_and_size
+        payload = b"PI-IMAGE-" * 1000
+        with tempfile.TemporaryDirectory() as td:
+            img = Path(td) / "img.img.xz"
+            self._make_xz(img, payload)
+            sha, size = digest_and_size(img)
+            self.assertEqual(size, len(payload))
+            import hashlib
+            self.assertEqual(sha, hashlib.sha256(payload).hexdigest())
+
+    def test_verify_written_matching_hash_passes(self):
+        import hashlib
+        import pi_image
+        payload = b"X" * 4096
+        want = hashlib.sha256(payload).hexdigest()
+        seen = {}
+
+        def fake_ssh(host, cmd, timeout=60, input_text=None):
+            seen["cmd"] = cmd
+            return (0, f"{want}  -\n", "")
+
+        orig = pi_image._ssh
+        pi_image._ssh = fake_ssh
+        try:
+            pi_image.verify_written("h", "/dev/sda", len(payload), want)
+        finally:
+            pi_image._ssh = orig
+        self.assertIn("blockdev --flushbufs /dev/sda", seen["cmd"])
+        self.assertIn("head -c 4096 /dev/sda", seen["cmd"])
+        self.assertIn("sha256sum", seen["cmd"])
+
+    def test_verify_written_evicts_cache_before_reading(self):
+        """Review of #381 (P1): a buffered read-back can be served from the
+        page cache dd just filled — hashing the SENT bytes, not the media.
+        The command must evict first; eviction failure must fail closed."""
+        import hashlib
+        import pi_image
+        want = hashlib.sha256(b"z").hexdigest()
+        orig = pi_image._ssh
+        pi_image._ssh = (lambda host, cmd, timeout=60, input_text=None:
+                         (1, "", "blockdev: not found"))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                pi_image.verify_written("h", "/dev/sda", 1, want)
+            self.assertIn("cache eviction", str(cm.exception))
+        finally:
+            pi_image._ssh = orig
+
+    def test_verify_written_mismatch_refuses(self):
+        import hashlib
+        import pi_image
+        want = hashlib.sha256(b"good").hexdigest()
+        orig = pi_image._ssh
+        pi_image._ssh = (lambda host, cmd, timeout=60, input_text=None:
+                         (0, "deadbeef" * 8 + "  -\n", ""))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                pi_image.verify_written("h", "/dev/sda", 4, want)
+            self.assertIn("VERIFICATION FAILED", str(cm.exception))
+        finally:
+            pi_image._ssh = orig
+
+    def test_verify_written_ssh_or_tool_failure_refuses(self):
+        import pi_image
+        orig = pi_image._ssh
+        pi_image._ssh = (lambda host, cmd, timeout=60, input_text=None:
+                         (127, "", "sh: sha256sum: not found"))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                pi_image.verify_written("h", "/dev/sda", 4, "a" * 64)
+            self.assertIn("read-back failed", str(cm.exception))
+            self.assertIn("sha256sum", str(cm.exception))
+        finally:
+            pi_image._ssh = orig
+    def test_maybe_verify_skip_warns_and_stays_off_device(self):
+        import tempfile
+        from pi_image import maybe_verify_written
+        import pi_image
+        calls = []
+        orig = pi_image._ssh
+        pi_image._ssh = (lambda host, cmd, timeout=60, input_text=None:
+                         calls.append(cmd) or (0, "", ""))
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                img = Path(td) / "img.img.xz"
+                self._make_xz(img, b"data")
+                maybe_verify_written("h", "/dev/sda", img, skip=True)
+        finally:
+            pi_image._ssh = orig
+        self.assertEqual(calls, [])
+
+    def test_maybe_verify_default_verifies(self):
+        import tempfile
+        import pi_image
+        from pi_image import maybe_verify_written, digest_and_size
+        with tempfile.TemporaryDirectory() as td:
+            img = Path(td) / "img.img.xz"
+            self._make_xz(img, b"VERIFY-ME" * 10)
+            want, size = digest_and_size(img)
+            seen = {}
+
+            def fake_ssh(host, cmd, timeout=60, input_text=None):
+                seen["cmd"] = cmd
+                return (0, f"{want}  -\n", "")
+
+            orig = pi_image._ssh
+            pi_image._ssh = fake_ssh
+            try:
+                maybe_verify_written("h", "/dev/sda", img, skip=False)
+            finally:
+                pi_image._ssh = orig
+            self.assertIn(f"head -c {size} /dev/sda", seen["cmd"])
+
+    def test_provision_parser_has_skip_verify(self):
+        from pi_image import build_parser
+        args = build_parser().parse_args([
+            "provision", "--host", "h", "--device", "/dev/sda",
+            "--image", "i.img.xz"])
+        self.assertFalse(args.skip_verify)
+        args2 = build_parser().parse_args([
+            "provision", "--host", "h", "--device", "/dev/sda",
+            "--image", "i.img.xz", "--skip-verify"])
+        self.assertTrue(args2.skip_verify)
     def test_written_mode_0600(self):
         import tempfile
         from pi_image import write_credentials

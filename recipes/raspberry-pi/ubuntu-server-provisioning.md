@@ -36,6 +36,13 @@ write without one. Read the specimen's MAC live from the running Pi
 by `/sys/class/net/*/address`), or take the serial from `/proc/cpuinfo`
 (`Serial:` line) / the unit's label — never from a guess or a port number.
 
+After `dd` the provision **reads the written bytes back and compares the
+sha256 of the exact decompressed range** before touching cloud-init (#295) —
+on the silently-corrupting USB bridges below this is the only signal that
+the disk actually holds the image. `--skip-verify` skips it for repeat
+provisions on known-good bridges; a mismatch aborts BEFORE injection and
+tells you not to boot the disk.
+
 If the Pi is in the netboot rescue shell (busybox + telnetd, no sshd), the
 same steps run manually over telnet — this is what was actually done
 (2026-10-08):
