@@ -139,6 +139,49 @@ class TestSpecimensCLI(unittest.TestCase):
                 specimens.main(["--ledger", str(self.ledger), "list"]), 0)
         self.assertIn("specimens read", out.getvalue())
 
+    def test_usable_macs_filters_loopback_and_empty(self):
+        """Review of #384: `lo` reads as 00:00:00:00:00:00 — recording it
+        would bind the null MAC to one unit's serial and conflate every
+        later unit (aborting the record loop before wlan0)."""
+        self.assertEqual(
+            specimens.usable_macs(["00:00:00:00:00:00", "",
+                                   "DC:A6:32:11:22:33"]),
+            ["DC:A6:32:11:22:33"])
+        self.assertEqual(specimens.usable_macs(
+            ["00:00:00:00:00:00", ""]), [])
+
+    def test_read_with_only_null_macs_refuses(self):
+        """Serial-only bootstrap must not advertise success: the push gate
+        consumes MACs, so nothing-usable is an error (review of #384)."""
+        import contextlib
+        import io
+        import pi_image
+        orig = pi_image.remote_specimen
+        pi_image.remote_specimen = (
+            lambda host: ("10000000abcd1234",
+                          ["00:00:00:00:00:00", ""]))
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = specimens.main([
+                    "--ledger", str(self.ledger), "read",
+                    "--host", "192.168.4.52"])
+        finally:
+            pi_image.remote_specimen = orig
+        self.assertEqual(rc, 1)
+        self.assertIn("no usable MAC", err.getvalue())
+        self.assertFalse(self.ledger.exists())
+
+    def test_provision_records_only_usable_macs_and_never_blocks(self):
+        """The provision record loop filters null MACs and downgrades both
+        conflation refusals (SystemExit) and ledger I/O failures (OSError)
+        to warnings (review of #384)."""
+        import inspect
+        import pi_image
+        src = inspect.getsource(pi_image.cmd_provision)
+        self.assertIn("usable_macs(macs)", src)
+        self.assertIn("(SystemExit, OSError)", src)
+
     def test_read_records_live_identity(self):
         import contextlib
         import io

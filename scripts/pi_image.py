@@ -463,15 +463,17 @@ def cmd_provision(args: argparse.Namespace) -> int:
     print(f"specimen ok: serial={serial or 'n/a'}, "
           f"macs={', '.join(macs) or 'n/a'}")
     try:
-        from specimens import record
-        for _mac in macs:
+        from specimens import record, usable_macs
+        for _mac in usable_macs(macs):
             record(mac=_mac, serial=serial or "", label=args.hostname,
                    host=args.host, source="pi_image.provision")
         print("specimen recorded in the local ledger "
               "(pi_eeprom push will accept it)")
-    except SystemExit as exc:
-        # a conflated-MAC/serial refusal is information, not a provision
-        # blocker — the gate above already verified this live identity
+    except (SystemExit, OSError) as exc:
+        # ledger bookkeeping is never allowed to kill a provision whose
+        # live identity the gate above already verified — a conflated
+        # MAC/serial refusal (SystemExit) or a ledger I/O failure (OSError)
+        # both downgrade to a warning (review of #384)
         print(f"warning: specimen not recorded in ledger: {exc}")
     remote_path = f"/tmp/{image.name}"
     transfer_image(args.host, image, args.sha256, remote_path)

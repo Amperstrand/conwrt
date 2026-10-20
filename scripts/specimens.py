@@ -51,6 +51,18 @@ def norm_serial(serial: str) -> str:
     return serial.strip().lower()
 
 
+NULL_MACS = {"", "00:00:00:00:00:00"}
+
+
+def usable_macs(macs: list[str]) -> list[str]:
+    """Filter non-specimen addresses (loopback reads as 00:00:00:00:00:00).
+
+    Recording the null MAC would bind it to the first unit's serial and
+    conflate every later unit (review of #384).
+    """
+    return [m for m in macs if m.strip().lower() not in NULL_MACS]
+
+
 def _resolve(path: Path | str | None) -> Path:
     return Path(path).expanduser() if path else default_ledger_path()
 
@@ -185,15 +197,23 @@ def cmd_add(args: argparse.Namespace) -> int:
 def cmd_read(args: argparse.Namespace) -> int:
     from pi_image import remote_specimen
     serial, macs = remote_specimen(args.host)
+    macs = usable_macs(macs)
     if not serial and not macs:
         print(f"no identity readable at {args.host} "
               "(is it up? root SSH?)", file=sys.stderr)
+        return 1
+    if not macs:
+        # the push gate consumes MACs — a serial-only bootstrap would
+        # advertise success while leaving the ledger unusable (#384 review)
+        print(f"serial readable at {args.host} but no usable MAC "
+              "(interfaces down?) — nothing recorded; the push gate "
+              "matches on MAC", file=sys.stderr)
         return 1
     for mac in macs:
         record(mac=mac, serial=serial or "", label=args.label or "",
                host=args.host, source="specimens.read", path=args.ledger)
     print(f"recorded from {args.host}: serial={serial or 'n/a'} "
-          f"macs={', '.join(macs) or 'n/a'}")
+          f"macs={', '.join(macs)}")
     return 0
 
 
