@@ -668,6 +668,25 @@ way; PRs #67/#81/#36 were later audited to clean it up).
   `Amperstrand/pr-review-audit`). Never re-litigate from memory: re-locate
   each finding at current HEAD before classifying it.
 
+### Pre-merge gate: EVERY automated-review finding gets an explicit response (2026-10-20)
+
+Before a PR merges, every Codex (or other bot) finding on the final head
+must carry a visible response — **👍** (fixing it), **👎** (refuting it,
+with an evidence comment), or **a comment naming the disposition**:
+
+1. **fixed as part of this merge** (name the commit), or
+2. **lifted out** to a follow-up PR/issue (linked — a deferral with no
+   destination is a blocker, not a pass), or
+3. **refuted with evidence in-thread** (never silently dropped).
+
+Rationale: the 2026-10-19 fleet scan found **314 merged PRs across
+Amperstrand/OpenTollGate carrying never-answered bot findings** — every
+one of them merged through review rounds whose feedback was simply never
+read. The audit campaign of 2026-10-19/20 cleared the top tier (16 PRs,
+~310 threads dispositioned; reports in `Amperstrand/pr-review-audit`,
+batches `d7ae193`..`80c9d12` + tail batches) and the `pr-review-audit`
+skill remains the sweep path for anything that slips this gate.
+
 ## Rogue-DHCP Discipline — never ship or deploy a competing DHCP server (2026-09-28)
 
 conwrt flashes devices that land on shared bench and house segments. The authority map and enforcement live in conwrt-bench (`docs/NETWORK-SEGMENTATION.md`, issue #28): house LAN VLAN 13 and lab island VLAN 12 are served by the ERX ONLY; bench DUT VLANs 100N are served by the bench switch ONLY.
