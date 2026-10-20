@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import lzma
 import os
 import socket
 import subprocess
@@ -407,6 +408,69 @@ def write_image(host: str, remote_path: str, device: str) -> None:
     print(f"image written to {device}")
 
 
+def digest_and_size(archive: Path) -> tuple[str, int]:
+    """Local decompressed sha256 + exact byte count of an .img.xz (#295).
+
+    One streaming pass with lzma — no temp files, no shell plumbing. The
+    size feeds the remote `head -c` bound so the read-back covers EXACTLY
+    the bytes dd wrote (a whole-disk sha256 would depend on trailing
+    sectors that were never written).
+    """
+    h = hashlib.sha256()
+    n = 0
+    with lzma.open(archive, "rb") as fh:
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+            n += len(chunk)
+    return h.hexdigest(), n
+
+
+def verify_written(host: str, device: str, size: int, expect_sha: str) -> None:
+    """Read the written byte range back from the target and compare (#295).
+
+    dd success is NOT byte correctness: on the silently-corrupting
+    VL711/JMS578 USB bridges and marginal cables documented in the recipe,
+    the write pipeline reports dd's status while the disk holds wrong
+    bytes. Fails closed (SystemExit) on ssh failure, missing target tools
+    (busybox without sha256sum/head), empty output, or hash mismatch.
+    """
+    print(f"verifying {size} bytes read-back from {device} "
+          "(sha256 over ssh)...")
+    rc, out, err = _ssh(
+        host,
+        f"head -c {size} {device} | sha256sum",
+        timeout=1800)
+    if rc != 0:
+        raise SystemExit(
+            f"read-back failed on {device}: {err.strip() or 'target may lack head/sha256sum'}")
+    got = out.split()[0] if out.strip() else ""
+    if got != expect_sha:
+        raise SystemExit(
+            f"VERIFICATION FAILED: bytes on {device} do not match the image\n"
+            f"  expected {expect_sha}\n"
+            f"  read     {got or '<empty>'}\n"
+            "The write path is silently corrupting (bridge/cable/media) — "
+            "do NOT boot this disk; re-provision on a trusted path "
+            "(--skip-verify exists for repeat provisions on known-good "
+            "bridges only).")
+    print(f"read-back ok: {device}[0:{size}] sha256 matches")
+
+
+def maybe_verify_written(host: str, device: str, archive: Path,
+                         skip: bool) -> None:
+    """#295 wiring: default-ON read-back, explicit --skip-verify escape."""
+    if skip:
+        print("warning: --skip-verify — written bytes NOT read back; "
+              "silent write-path corruption would go undetected "
+              "(only for repeat provisions on trusted bridges)")
+        return
+    expect_sha, size = digest_and_size(archive)
+    verify_written(host, device, size, expect_sha)
+
+
 def inject_cloud_init(host: str, device: str, user: str, hostname: str,
                       ssh_keys: list[str], password: str | None = None) -> None:
     part = boot_partition(device)
@@ -466,6 +530,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     transfer_image(args.host, image, args.sha256, remote_path)
     validate_archive(args.host, remote_path)
     write_image(args.host, remote_path, target)
+    maybe_verify_written(args.host, target, image, skip=args.skip_verify)
     _ssh(args.host, f"rm -f {remote_path}")
     if not args.no_inject:
         reread_partition_table(args.host, target, boot_partition(target))
@@ -510,6 +575,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-gb", type=int, default=MIN_DEVICE_GB)
     sp.add_argument("--no-inject", action="store_true",
                     help="skip cloud-init injection")
+    sp.add_argument("--skip-verify", action="store_true",
+                    help="skip the post-write read-back hash (#295) — "
+                         "repeat provisions on known-good bridges only")
     sp.set_defaults(func=cmd_provision)
     return p
 
