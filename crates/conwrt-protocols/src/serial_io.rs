@@ -95,6 +95,36 @@ mod std_bridge {
     /// steps.
     pub const DEFAULT_MAX_CHUNK: usize = 256;
 
+    /// Cloneable readiness handle for [`ChunkedSerialIo`] (#124 review:
+    /// the wake path must be callable while the adapter is exclusively
+    /// borrowed by an in-flight read/write future — an IRQ cannot take
+    /// `&mut`).
+    ///
+    /// The handle holds the waker registered by the adapter's last
+    /// `Pending` poll; `wake()` rouses it from any context (UART IRQ,
+    /// worker thread, harness tick). Last registration wins; the driver
+    /// keeps at most one adapter operation in flight at a time.
+    #[derive(Clone)]
+    pub struct Readiness(Arc<std::sync::Mutex<Option<Waker>>>);
+
+    impl Readiness {
+        fn new() -> Self {
+            Self(Arc::new(std::sync::Mutex::new(None)))
+        }
+
+        fn register(&self, waker: &Waker) {
+            *self.0.lock().unwrap() = Some(waker.clone());
+        }
+
+        /// Wake the task registered by the last `Pending` poll (no-op if
+        /// none). Idempotent and callable from any thread.
+        pub fn wake(&self) {
+            if let Some(w) = self.0.lock().unwrap().as_ref() {
+                w.wake_by_ref();
+            }
+        }
+    }
+
     /// Async-over-blocking serial adapter with the anti-starvation
     /// contract (#124).
     ///
@@ -106,9 +136,10 @@ mod std_bridge {
     /// between steps every other task runs.
     ///
     /// Readiness is external by design: the adapter stores the waker of
-    /// the last poll and exposes [`Self::wake`] — a device-side UART IRQ
-    /// (or a host test harness tick) calls it; the adapter never spins on
-    /// its own.
+    /// the last poll, exposed as a cloneable [`Self::readiness`] handle
+    /// (and a convenience [`Self::wake`]) — a device-side UART IRQ (or a
+    /// host test harness tick) calls it while a future holds the adapter;
+    /// the adapter never spins on its own.
     ///
     /// Cancellation-safe: a read/write future that is dropped between
     /// polls leaves no partial state — each poll is an independent
@@ -117,7 +148,7 @@ mod std_bridge {
     pub struct ChunkedSerialIo<S> {
         inner: S,
         max_chunk: usize,
-        waker: Option<Waker>,
+        readiness: Readiness,
     }
 
     impl<S> ChunkedSerialIo<S> {
@@ -127,13 +158,20 @@ mod std_bridge {
             Self {
                 inner,
                 max_chunk,
-                waker: None,
+                readiness: Readiness::new(),
             }
         }
 
         /// The chunk bound: maximum bytes one poll may move.
         pub fn max_chunk(&self) -> usize {
             self.max_chunk
+        }
+
+        /// A cloneable readiness handle: wake the adapter's pending
+        /// operation from any context (IRQ, worker, harness) — including
+        /// while a read/write future exclusively borrows the adapter.
+        pub fn readiness(&self) -> Readiness {
+            self.readiness.clone()
         }
 
         /// Borrow the underlying blocking transport (e.g. to switch it
@@ -150,11 +188,11 @@ mod std_bridge {
         /// Wake the waker registered by the last `Pending` poll.
         ///
         /// The device-side readiness path: call from the UART IRQ (or a
-        /// host harness tick) when data may have arrived.
+        /// host harness tick) when data may have arrived. Equivalent to
+        /// [`Self::readiness`]`.wake()`; prefer the handle from IRQ
+        /// context where the adapter is mutably borrowed.
         pub fn wake(&self) {
-            if let Some(w) = &self.waker {
-                w.wake_by_ref();
-            }
+            self.readiness.wake();
         }
     }
 
@@ -174,7 +212,7 @@ mod std_bridge {
             poll_fn(|cx| match self.inner.read(&mut buf[..max]) {
                 Ok(n) => Poll::Ready(Ok(n)),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    self.waker = Some(cx.waker().clone());
+                    self.readiness.register(cx.waker());
                     Poll::Pending
                 }
                 Err(e) => Poll::Ready(Err(e)),
@@ -189,12 +227,12 @@ mod std_bridge {
             let max = buf.len().min(self.max_chunk);
             poll_fn(|cx| match self.inner.write(&buf[..max]) {
                 Ok(0) => {
-                    self.waker = Some(cx.waker().clone());
+                    self.readiness.register(cx.waker());
                     Poll::Pending
                 }
                 Ok(n) => Poll::Ready(Ok(n)),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    self.waker = Some(cx.waker().clone());
+                    self.readiness.register(cx.waker());
                     Poll::Pending
                 }
                 Err(e) => Poll::Ready(Err(e)),
@@ -206,7 +244,7 @@ mod std_bridge {
             poll_fn(|cx| match self.inner.flush() {
                 Ok(()) => Poll::Ready(Ok(())),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    self.waker = Some(cx.waker().clone());
+                    self.readiness.register(cx.waker());
                     Poll::Pending
                 }
                 Err(e) => Poll::Ready(Err(e)),
@@ -292,33 +330,49 @@ mod std_bridge {
     /// - Each attempt clones `payload` and runs [`send_firmware`] (the
     ///   blocking engine) on a **dedicated OS thread** mounted on
     ///   [`SerialSemantics`] — the async executor is never parked by the
-    ///   engine (review finding G).
+    ///   engine (review finding G). The worker signals a shared
+    ///   [`Readiness`] when it hands the result home, so wake-driven
+    ///   executors progress without polling.
     /// - After a sender-claimed success, `check` runs on the async side
     ///   over a [`ChunkedSerialIo`] view of the same transport; only a
     ///   passing check completes the transfer.
-    /// - Between attempts, `policy.restart_delay_ms` passes on the async
-    ///   clock (a [`Delay`] future, driven by the executor's tick — no
-    ///   timer dependency).
+    /// - Before every attempt after the first, `rearm` runs over the
+    ///   same view: a real receiver does NOT re-enter receive mode by
+    ///   itself — U-Boot returns to its prompt after an aborted `loadx`
+    ///   and must be told to receive again. The hook issues the
+    ///   receiver command (e.g. `loadx <addr>`) and waits for the ready
+    ///   banner. Between attempts, `policy.restart_delay_ms` passes on
+    ///   the async clock (a [`Delay`] future — no timer dependency).
     ///
     /// **Cancellation**: dropping the returned future mid-attempt detaches
-    /// the in-flight worker — it drains to its bounded end (the
-    /// transport's read deadline; configure one before calling), then
-    /// closes the transport and exits. The peer observes EOF. This is the
+    /// the in-flight worker — it drains to its bounded end, then closes
+    /// the transport and exits. The peer observes EOF. This is the
     /// intended abort semantics for a flash in trouble: close the line,
     /// let the bootloader time out back to its prompt.
     ///
+    /// **Transport deadlines (both required)**: a READ deadline bounds
+    /// the engine's ACK waits (budget-consumed as `TimedOut`, see
+    /// [`SerialSemantics`]); a WRITE deadline bounds the engine's
+    /// writes — if the peer stops draining mid-transfer, the blocking
+    /// write fails fatally and the worker ends promptly. Without a
+    /// write deadline a stalled peer could wedge the worker
+    /// indefinitely, breaking the bounded-cancellation promise for
+    /// firmware-sized payloads.
+    ///
     /// The transport must be `Send + 'static` because attempts run on
     /// another thread; it is handed back in the return value.
-    pub async fn send_firmware_verified_async<S, C>(
+    pub async fn send_firmware_verified_async<S, C, R>(
         transport: S,
         payload: &[u8],
         block_length: BlockLength,
         policy: RetryPolicy,
         mut check: C,
+        mut rearm: R,
     ) -> (S, Result<usize, VerifiedError>)
     where
         S: std::io::Read + std::io::Write + Send + 'static,
         C: AcceptanceCheck<S>,
+        R: ReceiverReArm<S>,
     {
         let mut transport = Some(transport);
         let mut attempts = 0u32;
@@ -329,14 +383,20 @@ mod std_bridge {
         while attempts < policy.max_attempts {
             if attempts > 0 {
                 Delay::from_millis(policy.restart_delay_ms).await;
+                let mut io = ChunkedSerialIo::new(
+                    transport.take().expect("transport present between phases"),
+                    DEFAULT_MAX_CHUNK,
+                );
+                rearm.rearm(&mut io).await;
+                transport = Some(io.into_inner());
             }
             attempts += 1;
-            let (rx, _exited) = spawn_attempt(
+            let (rx, _exited, done) = spawn_attempt(
                 transport.take().expect("transport present between phases"),
                 payload,
                 block_length,
             );
-            let (t, result) = recv_attempt(rx).await;
+            let (t, result) = recv_attempt(rx, done).await;
             transport = Some(t);
             match result {
                 Ok(bytes) => {
@@ -378,6 +438,32 @@ mod std_bridge {
         (transport.expect("transport present at completion"), outcome)
     }
 
+    /// Between-attempts receiver re-arm (#124 review: a real receiver
+    /// does not re-enter receive mode by itself).
+    ///
+    /// After a failed (or refused) attempt most bootloaders sit at their
+    /// prompt: U-Boot prints `## Binary (xmodem) download aborted` and
+    /// waits for a command — it will never emit a fresh `C`. The driver
+    /// runs this hook over the transport view before every subsequent
+    /// attempt; the implementation issues the receiver's load command
+    /// (e.g. `loadx <addr>`) and waits for its ready banner.
+    pub trait ReceiverReArm<S> {
+        /// Put the receiver back into XMODEM receive mode.
+        fn rearm<'a>(
+            &'a mut self,
+            io: &'a mut ChunkedSerialIo<S>,
+        ) -> impl Future<Output = ()> + Send + 'a;
+    }
+
+    /// No-op [`ReceiverReArm`] for receivers that DO re-enter receive
+    /// mode on their own (scripted test receivers; a bootloader still
+    /// looping inside its receive-timeout window).
+    pub struct NoReArm;
+
+    impl<S: Send> ReceiverReArm<S> for NoReArm {
+        async fn rearm(&mut self, _io: &mut ChunkedSerialIo<S>) {}
+    }
+
     /// One whole-transfer engine attempt on a dedicated thread (#124).
     ///
     /// The engine is blocking by nature; running it inline on an async
@@ -388,7 +474,7 @@ mod std_bridge {
     /// the port home whatever happens. If the async side is gone
     /// (cancelled), the send fails and the transport is dropped: the peer
     /// sees EOF, the line closes — the documented abort semantics.
-    type AttemptHandoff<S> = (mpsc::Receiver<AttemptReturn<S>>, Arc<AtomicBool>);
+    type AttemptHandoff<S> = (mpsc::Receiver<AttemptReturn<S>>, Arc<AtomicBool>, Readiness);
 
     /// The transport comes home in every case — even on engine failure or
     /// worker panic — paired with the engine's verdict.
@@ -405,6 +491,8 @@ mod std_bridge {
         let (tx, rx) = mpsc::channel();
         let exited = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&exited);
+        let done = Readiness::new();
+        let done_wake = done.clone();
         let payload = payload.to_vec();
         thread::spawn(move || {
             let mut transport = transport;
@@ -424,16 +512,33 @@ mod std_bridge {
                 }
             };
             let _ = tx.send((transport, result));
+            done_wake.wake();
             flag.store(true, Ordering::Release);
         });
-        (rx, exited)
+        (rx, exited, done)
     }
 
-    /// Channel receive as a future: one non-blocking `try_recv` per poll.
-    async fn recv_attempt<S>(rx: mpsc::Receiver<AttemptReturn<S>>) -> AttemptReturn<S> {
-        poll_fn(move |_| match rx.try_recv() {
+    /// Channel receive as a future: one non-blocking `try_recv` per
+    /// poll, with the waker registered for the worker's post-send wake
+    /// (register, then re-check — a send landing between the two
+    /// cannot be missed).
+    async fn recv_attempt<S>(
+        rx: mpsc::Receiver<AttemptReturn<S>>,
+        done: Readiness,
+    ) -> AttemptReturn<S> {
+        poll_fn(move |cx| match rx.try_recv() {
             Ok(v) => Poll::Ready(v),
-            Err(mpsc::TryRecvError::Empty) => Poll::Pending,
+            Err(mpsc::TryRecvError::Empty) => {
+                done.register(cx.waker());
+                match rx.try_recv() {
+                    Ok(v) => Poll::Ready(v),
+                    Err(mpsc::TryRecvError::Empty) => Poll::Pending,
+                    Err(mpsc::TryRecvError::Disconnected) => panic!(
+                        "engine worker vanished without returning the transport — \
+                         this is a bug in the offload bridge, not a transfer failure"
+                    ),
+                }
+            }
             Err(mpsc::TryRecvError::Disconnected) => panic!(
                 "engine worker vanished without returning the transport — \
                  this is a bug in the offload bridge, not a transfer failure"
@@ -472,6 +577,6 @@ mod std_bridge {
 
 #[cfg(feature = "std")]
 pub use std_bridge::{
-    AcceptanceCheck, ChunkedSerialIo, DEFAULT_MAX_CHUNK, SerialSemantics,
-    send_firmware_verified_async,
+    AcceptanceCheck, ChunkedSerialIo, DEFAULT_MAX_CHUNK, NoReArm, Readiness, ReceiverReArm,
+    SerialSemantics, send_firmware_verified_async,
 };
