@@ -16,7 +16,6 @@
 //! performs the actual probe I/O; the scheduler decides which probes
 //! are live and when their budgets expire.
 
-use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -57,15 +56,17 @@ pub enum ProbeKind {
 }
 
 /// One stage of the plan: a probe alone, or a group whose members all
-/// start together and must all conclude before the next stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// start together and must all conclude before the next stage. The
+/// group OWNS its steps — plans are built per detection run and must
+/// free with the scheduler (no leaked `'static` slices on MCU heaps).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stage {
     /// A single probe; the next stage starts when it concludes.
     Alone(ProbeStep),
     /// Probes started together (the passive capture quad) — the
     /// source runs them in one thread pool so no listener misses its
     /// transient boot-window packets by starting late.
-    Concurrent(&'static [ProbeStep]),
+    Concurrent(Vec<ProbeStep>),
 }
 
 /// What the scheduler wants the driver to do. One event per
@@ -183,8 +184,8 @@ impl ProbeScheduler {
 
     /// Fill `pending` from stage `index` and mark the stage entered.
     fn enter_stage(&mut self, index: usize, now_ms: u64) {
-        match self.stages[index] {
-            Stage::Alone(step) => self.pending = vec![(step, now_ms)],
+        match &self.stages[index] {
+            Stage::Alone(step) => self.pending = vec![(*step, now_ms)],
             Stage::Concurrent(steps) => {
                 self.pending = steps.iter().map(|&step| (step, now_ms)).collect();
             }
@@ -201,7 +202,7 @@ impl ProbeScheduler {
 #[must_use]
 pub fn default_plan(passive_timeout_ms: u64) -> Vec<Stage> {
     let ra_budget = passive_timeout_ms.min(5_000);
-    let captures: &'static [ProbeStep] = Box::leak(Box::new([
+    let captures = vec![
         ProbeStep {
             kind: ProbeKind::FailsafeBroadcast,
             timeout_ms: passive_timeout_ms,
@@ -218,7 +219,7 @@ pub fn default_plan(passive_timeout_ms: u64) -> Vec<Stage> {
             kind: ProbeKind::Tftp,
             timeout_ms: passive_timeout_ms,
         },
-    ]));
+    ];
     vec![
         Stage::Alone(ProbeStep {
             kind: ProbeKind::LinkState,
@@ -395,7 +396,7 @@ mod tests {
         assert_eq!(sched.poll(0), ProbeEvent::Complete);
     }
 
-    fn capture_quad(plan: &[Stage]) -> &'static [ProbeStep] {
+    fn capture_quad(plan: &[Stage]) -> &[ProbeStep] {
         let Stage::Concurrent(captures) = &plan[2] else {
             panic!("stage 3 must be the capture quad");
         };
@@ -403,8 +404,33 @@ mod tests {
     }
 
     #[test]
+    fn plans_own_their_steps_and_free_with_the_scheduler() {
+        // review round 3: a detection loop rebuilds the plan per run —
+        // the capture quad must not be a leaked 'static allocation
+        // (a few hundred runs would exhaust a 32 KiB MCU heap)
+        for _ in 0..1000 {
+            let mut sched = ProbeScheduler::new(default_plan(10_000));
+            assert_eq!(sched.poll(0), ProbeEvent::Start(ProbeKind::LinkState));
+        }
+        let owned = Stage::Concurrent(vec![ProbeStep {
+            kind: ProbeKind::Dhcp,
+            timeout_ms: 1_000,
+        }]);
+        let copied = owned.clone();
+        drop(owned);
+        assert_eq!(
+            copied,
+            Stage::Concurrent(vec![ProbeStep {
+                kind: ProbeKind::Dhcp,
+                timeout_ms: 1_000,
+            }])
+        );
+    }
+
+    #[test]
     fn ra_budget_is_capped_at_five_seconds() {
-        let captures = capture_quad(&default_plan(10_000));
+        let plan = default_plan(10_000);
+        let captures = capture_quad(&plan);
         assert_eq!(
             captures
                 .iter()
@@ -413,7 +439,8 @@ mod tests {
                 .timeout_ms,
             5_000
         );
-        let short = capture_quad(&default_plan(2_000));
+        let short_plan = default_plan(2_000);
+        let short = capture_quad(&short_plan);
         assert_eq!(
             short
                 .iter()
@@ -429,7 +456,8 @@ mod tests {
         // review round 1: the Python call site passes passive_timeout
         // to BOTH probes — the 30s in their signatures is a default
         // probe_router never uses
-        let captures = capture_quad(&default_plan(10_000));
+        let plan = default_plan(10_000);
+        let captures = capture_quad(&plan);
         for kind in [ProbeKind::Dhcp, ProbeKind::Tftp] {
             assert_eq!(
                 captures.iter().find(|s| s.kind == kind).unwrap().timeout_ms,
@@ -437,7 +465,8 @@ mod tests {
                 "{kind:?} must use the passive timeout"
             );
         }
-        let custom = capture_quad(&default_plan(45_000));
+        let custom_plan = default_plan(45_000);
+        let custom = capture_quad(&custom_plan);
         assert_eq!(
             custom
                 .iter()
