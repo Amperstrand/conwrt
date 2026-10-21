@@ -335,3 +335,100 @@ class TestKeyAuthProof:
         assert "DROPBEAR_PASSWORD=" in proof_line, (
             "key proof must poison password fallback (bare -i passes on the "
             "blank/known password — NR7101 2026-09-23 lesson)")
+
+
+class TestOverlayKeepsKeyAuthEvidence:
+    """#288: on an adopted unit key auth SUCCEEDS but `dmesg | grep
+    jffs2_build_xattr` never prints the board name — the old fallback
+    discarded that evidence, retried over the (failing) empty-password
+    channel, and the overlay gate read the auth error as 'no debris' =>
+    false PASS right before firstboot."""
+
+    DEBRIS_KEYAUTH = ("jffs2_scan_xattr: 3 unchecked, 1 orphan\n" + ba.PROBE_DONE)
+    CLEAN_KEYAUTH = ba.PROBE_DONE
+    AUTH_ERROR = "dbclient: Remote closed the connection"
+
+    @staticmethod
+    def _runner_seq(outputs: list[str], tmp_path: Path, place: ba.Place = PLACE):
+        calls: list[str] = []
+        canned = iter(outputs)
+
+        def transport(script: str) -> str:
+            calls.append(script)
+            return next(canned)
+
+        return ba.Runner(transport, place, tmp_path / "ev"), calls
+
+    def test_keyauth_debris_never_passes_overlay(self, tmp_path, capsys) -> None:
+        # THE #288 finding: debris via key auth + failing password channel
+        r, calls = self._runner_seq([self.DEBRIS_KEYAUTH, self.AUTH_ERROR], tmp_path)
+        with pytest.raises(ba.AdoptError, match="DIRTY jffs2 overlay"):
+            ba.stage_overlay(r)
+        assert "[PASS] overlay" not in capsys.readouterr().out
+
+    def test_keyauth_evidence_not_discarded_no_retry(self, tmp_path) -> None:
+        # key-auth output bearing the marker is authoritative: no password
+        # retry may even be attempted (the retry is what destroyed evidence)
+        r, calls = self._runner_seq([self.DEBRIS_KEYAUTH], tmp_path)
+        with pytest.raises(ba.AdoptError, match="DIRTY"):
+            ba.stage_overlay(r)
+        assert len(calls) == 1, "marker-bearing key-auth output must not trigger a retry"
+
+    def test_keyauth_clean_overlay_passes(self, tmp_path, capsys) -> None:
+        r, _ = self._runner_seq([self.CLEAN_KEYAUTH], tmp_path)
+        ba.stage_overlay(r)
+        assert "no jffs2 xattr debris" in capsys.readouterr().out
+
+    def test_zero_counts_passes(self, tmp_path, capsys) -> None:
+        r, _ = self._runner_seq(
+            ["jffs2_scan_xattr: 0 unchecked, 0 orphan\n" + ba.PROBE_DONE], tmp_path)
+        ba.stage_overlay(r)
+        assert "clean overlay" in capsys.readouterr().out
+
+    def test_fallback_still_used_for_never_adopted_unit(self, tmp_path, capsys) -> None:
+        # factory unit: key auth errors, empty-password channel works
+        r, _ = self._runner_seq(
+            [self.AUTH_ERROR, "jffs2: no xattrs\n" + ba.PROBE_DONE], tmp_path)
+        ba.stage_overlay(r)
+        assert "no jffs2 xattr debris" in capsys.readouterr().out
+
+    def test_both_channels_dead_refuses_instead_of_passing(self, tmp_path) -> None:
+        r, _ = self._runner_seq([self.AUTH_ERROR, self.AUTH_ERROR], tmp_path)
+        with pytest.raises(ba.AdoptError, match="never completed"):
+            ba.stage_overlay(r)
+
+
+class TestDutWithFallbackPreservesEvidence:
+    def _runner(self, outputs: list[str], tmp_path: Path):
+        canned = iter(outputs)
+        calls: list[str] = []
+
+        def transport(script: str) -> str:
+            calls.append(script)
+            return next(canned)
+
+        return ba.Runner(transport, PLACE, tmp_path / "ev"), calls
+
+    def test_board_bearing_output_returned_directly(self, tmp_path) -> None:
+        r, calls = self._runner([PREFLIGHT_OK], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "cat /tmp/sysinfo/board_name")
+        assert "ws-ap3915i" in out
+        assert len(calls) == 1
+
+    def test_marker_bearing_output_returned_without_retry(self, tmp_path) -> None:
+        # #288 core: no board name, but the probe demonstrably ran
+        r, calls = self._runner([ba.PROBE_DONE], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "dmesg | grep xattr; echo PROBE-DONE")
+        assert ba.PROBE_DONE in out
+        assert len(calls) == 1, "successful key-auth evidence must not be discarded"
+
+    def test_dead_key_channel_falls_back(self, tmp_path) -> None:
+        r, calls = self._runner(["auth error", PREFLIGHT_OK], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "cat /tmp/sysinfo/board_name")
+        assert "ws-ap3915i" in out
+        assert len(calls) == 2
+
+    def test_both_dead_returns_combined_for_the_caller_to_judge(self, tmp_path) -> None:
+        r, _ = self._runner(["key died", "pw died"], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "true")
+        assert "key died" in out and "pw died" in out
