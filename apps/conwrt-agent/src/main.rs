@@ -13,7 +13,7 @@
 //! refused unless `--insecure-allow-non-loopback` explicitly accepts
 //! the exposure (isolated test guests/VMs only).
 
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use clap::Parser;
 use conwrt_agent_proto::agent::{AgentConfig, run_agent};
@@ -49,8 +49,11 @@ struct Cli {
 }
 
 /// Refuse non-loopback listeners until the protocol grows transport
-/// authentication (pairing + session encryption, ADR-0004 §§4/8).
-fn validate_listen(listen: &str, allow_non_loopback: bool) -> Result<(), String> {
+/// authentication (pairing + session encryption, ADR-0004 §§4/8), and
+/// return the concrete address to bind: `run_agent` must bind THIS
+/// address, not re-resolve the name (a second DNS lookup can drift to
+/// a different answer between validation and bind).
+fn validate_listen(listen: &str, allow_non_loopback: bool) -> Result<SocketAddr, String> {
     let addrs: Vec<_> = listen
         .to_socket_addrs()
         .map_err(|e| format!("invalid --listen {listen:?}: {e}"))?
@@ -66,7 +69,13 @@ fn validate_listen(listen: &str, allow_non_loopback: bool) -> Result<(), String>
              risk on an isolated network"
         ));
     }
-    Ok(())
+    // Deterministic single-address bind: prefer IPv4 (the common lab
+    // shape) when a name resolves to both families.
+    Ok(addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .copied()
+        .unwrap_or(addrs[0]))
 }
 
 fn parse_capabilities(specs: &[String]) -> Result<Vec<CapabilityInfo>, String> {
@@ -120,10 +129,13 @@ fn parse_capabilities(specs: &[String]) -> Result<Vec<CapabilityInfo>, String> {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    if let Err(e) = validate_listen(&cli.listen, cli.insecure_allow_non_loopback) {
-        eprintln!("conwrt-agent: {e}");
-        std::process::exit(2);
-    }
+    let listen_addr = match validate_listen(&cli.listen, cli.insecure_allow_non_loopback) {
+        Ok(addr) => addr,
+        Err(e) => {
+            eprintln!("conwrt-agent: {e}");
+            std::process::exit(2);
+        }
+    };
     let capabilities = match parse_capabilities(&cli.capabilities) {
         Ok(caps) => caps,
         Err(e) => {
@@ -132,7 +144,7 @@ async fn main() {
         }
     };
     let config = AgentConfig {
-        listen: cli.listen.clone(),
+        listen: listen_addr.to_string(),
         capabilities,
         ..Default::default()
     };
@@ -205,7 +217,10 @@ mod tests {
     #[test]
     fn loopback_listens_are_accepted() {
         for good in ["127.0.0.1:8400", "[::1]:8400", "localhost:8400"] {
-            assert!(validate_listen(good, false).is_ok(), "{good} should pass");
+            assert!(
+                validate_listen(good, false).is_ok_and(|addr| addr.ip().is_loopback()),
+                "{good} should pass with a loopback bind address"
+            );
         }
     }
 
@@ -219,7 +234,10 @@ mod tests {
 
     #[test]
     fn non_loopback_listen_requires_explicit_opt_in() {
-        assert!(validate_listen("0.0.0.0:8400", true).is_ok());
+        assert!(
+            validate_listen("0.0.0.0:8400", true)
+                .is_ok_and(|addr| addr.ip().to_string() == "0.0.0.0")
+        );
     }
 
     #[test]
