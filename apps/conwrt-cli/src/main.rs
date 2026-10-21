@@ -1167,7 +1167,7 @@ fn cmd_maas_flash(
                 "written:   {} bytes (read-back verified)",
                 report.bytes_written
             );
-            if report.seed_injected {
+            if report.seed_staged {
                 println!(
                     "seed:      staged at {}.seed/ (user-data, meta-data{})",
                     target.display(),
