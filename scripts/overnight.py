@@ -132,9 +132,23 @@ def adopt_unit(dut_ip: str, mac: str, vlan: int) -> bool:
     ll = eui64(mac)
     gw = f"192.168.{vlan - 900}.1"
 
+    # Read the switch's pubkey SWITCH-side and embed it in the payload: the
+    # payload runs on a factory-fresh DUT where /root/.ssh/id_ed25519.pub
+    # does not exist, so appending that DUT-side path installed nothing
+    # (#291 — same defect as bench_adopt's adopt-keys stage).
+    rc, key_out = switch_ssh("cat /root/.ssh/id_ed25519.pub")
+    switch_key = next((line.strip() for line in key_out.splitlines()
+                       if line.strip().startswith("ssh-")), "")
+    if not switch_key:
+        print(f"[adopt] {dut_ip}: no switch pubkey at /root/.ssh/id_ed25519.pub "
+              f"(switch-side) — refusing to adopt without the key we will need back")
+        return False
+    marker = switch_key.split()[1][:24]
+
     rc, out = switch_ssh(
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
-        f"'mkdir -p /etc/dropbear; cat /root/.ssh/id_ed25519.pub >> /etc/dropbear/authorized_keys; "
+        f"'mkdir -p /etc/dropbear; grep -q \"{marker}\" /etc/dropbear/authorized_keys 2>/dev/null "
+        f"|| echo \"{switch_key}\" >> /etc/dropbear/authorized_keys; "
         f"chmod 600 /etc/dropbear/authorized_keys; echo KEYS-OK' </dev/null 2>&1 | grep -v Caution")
     if "KEYS-OK" not in out:
         return False
