@@ -24,7 +24,7 @@
 //! # Agent A on the router (deploy once per boot, dropbear needs scp -O):
 //! scp -O ~/.cargo-target/mipsel-unknown-linux-musl/release/conwrt-agent \
 //!   root@<router>:/tmp/conwrt-agent
-//! ssh root@<router> 'setsid /tmp/conwrt-agent --listen 0.0.0.0:8400 \
+//! ssh root@<router> 'setsid /tmp/conwrt-agent --listen 0.0.0.0:8400 --insecure-allow-non-loopback \
 //!   --capability serial:uarts=2 --capability link-probe \
 //!   > /tmp/agent.log 2>&1 &'
 //! ```

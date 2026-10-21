@@ -8,6 +8,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use conwrt_probe_core::vocab;
 use conwrt_types::MacAddress;
 
 /// The classified boot/management state of a probed target.
@@ -229,41 +230,31 @@ impl RecoveryMatch {
 
 /// A recovery fingerprint matches if a header hint hits the `Server` header
 /// **or** a body hint hits the page title or body snippet (issue #131:
-/// headerless recovery servers).
+/// headerless recovery servers). Matching delegates to the shared
+/// probe-core vocabulary primitives (#215 slice 5) — one matcher for
+/// the host classifier and the firmware detect mode.
 fn find_recovery_match(
     http: &crate::capability::HttpProbeResult,
     recovery_hints: &[&str],
 ) -> Option<RecoveryMatch> {
-    let server = http
-        .server_header
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let server = http.server_header.as_deref().unwrap_or_default();
     if recovery_hints
         .iter()
-        .any(|hint| server.contains(&hint.to_ascii_lowercase()))
+        .any(|hint| vocab::contains_ci(server.as_bytes(), hint.as_bytes()))
     {
         return Some(RecoveryMatch::ServerHeader);
     }
-    let title = http
-        .title
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let title = http.title.as_deref().unwrap_or_default();
     if DEFAULT_RECOVERY_BODY_HINTS
         .iter()
-        .any(|hint| title.contains(&hint.to_ascii_lowercase()))
+        .any(|hint| vocab::contains_ci(title.as_bytes(), hint.as_bytes()))
     {
         return Some(RecoveryMatch::Title);
     }
-    let body = http
-        .body_snippet
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let body = http.body_snippet.as_deref().unwrap_or_default();
     if DEFAULT_RECOVERY_BODY_HINTS
         .iter()
-        .any(|hint| body.contains(&hint.to_ascii_lowercase()))
+        .any(|hint| vocab::contains_ci(body.as_bytes(), hint.as_bytes()))
     {
         return Some(RecoveryMatch::Body);
     }
@@ -272,20 +263,12 @@ fn find_recovery_match(
 
 /// OpenWrt HTTP fingerprints (uhttpd or a LuCI/OpenWrt title).
 fn is_openwrt_http(http: &crate::capability::HttpProbeResult) -> bool {
-    let server = http
-        .server_header
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let title = http
-        .title
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    server.contains("uhttpd")
-        || title.contains("openwrt")
-        || title.contains("luci")
-        || title.contains("openwrt")
+    let server = http.server_header.as_deref().unwrap_or_default();
+    let title = http.title.as_deref().unwrap_or_default();
+    vocab::contains_ci(server.as_bytes(), b"uhttpd")
+        || vocab::contains_ci(title.as_bytes(), b"openwrt")
+        || vocab::contains_ci(title.as_bytes(), b"luci")
+        || vocab::contains_ci(title.as_bytes(), b"openwrt")
 }
 
 #[cfg(test)]

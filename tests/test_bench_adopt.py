@@ -72,6 +72,10 @@ class TestPlaceDerivation:
         assert PLACE.linklocal == "fe80::b62d:56ff:fe25:79b1"
 
 
+SWITCH_KEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJb4PBnGmVcWqX0OZ8pT"
+              "+3QMq7dH2iWc1Rk0vKqZf1kQ root@switch")
+
+
 class TestAdoptFullFlow:
     @pytest.fixture(autouse=True)
     def _no_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +85,7 @@ class TestAdoptFullFlow:
     def test_value_readback_flow_passes(self, tmp_path: Path) -> None:
         canned = [
             "extreme-networks,ws-ap3915i",                          # adopt-ready
+            SWITCH_KEY,                                            # adopt-switchkey
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",  # adopt-keys
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED\nRESTARTED",
@@ -90,6 +95,7 @@ class TestAdoptFullFlow:
     def test_wrong_readback_value_refuses_commit(self, tmp_path: Path) -> None:
         canned = [
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",
             "---READBACK---\nstatic\n192.168.1.1/24\n192.168.104.1\n192.168.104.1",
         ]
@@ -100,6 +106,7 @@ class TestAdoptFullFlow:
         scripts: list[str] = []
         canned = iter([
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED",
@@ -320,6 +327,7 @@ class TestKeyAuthProof:
         scripts: list[str] = []
         canned = iter([
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED",
@@ -335,3 +343,178 @@ class TestKeyAuthProof:
         assert "DROPBEAR_PASSWORD=" in proof_line, (
             "key proof must poison password fallback (bare -i passes on the "
             "blank/known password — NR7101 2026-09-23 lesson)")
+
+
+class TestOverlayKeepsKeyAuthEvidence:
+    """#288: on an adopted unit key auth SUCCEEDS but `dmesg | grep
+    jffs2_build_xattr` never prints the board name — the old fallback
+    discarded that evidence, retried over the (failing) empty-password
+    channel, and the overlay gate read the auth error as 'no debris' =>
+    false PASS right before firstboot."""
+
+    DEBRIS_KEYAUTH = ("jffs2_scan_xattr: 3 unchecked, 1 orphan\n" + ba.PROBE_DONE)
+    CLEAN_KEYAUTH = ba.PROBE_DONE
+    AUTH_ERROR = "dbclient: Remote closed the connection"
+
+    @staticmethod
+    def _runner_seq(outputs: list[str], tmp_path: Path, place: ba.Place = PLACE):
+        calls: list[str] = []
+        canned = iter(outputs)
+
+        def transport(script: str) -> str:
+            calls.append(script)
+            return next(canned)
+
+        return ba.Runner(transport, place, tmp_path / "ev"), calls
+
+    def test_keyauth_debris_never_passes_overlay(self, tmp_path, capsys) -> None:
+        # THE #288 finding: debris via key auth + failing password channel
+        r, calls = self._runner_seq([self.DEBRIS_KEYAUTH, self.AUTH_ERROR], tmp_path)
+        with pytest.raises(ba.AdoptError, match="DIRTY jffs2 overlay"):
+            ba.stage_overlay(r)
+        assert "[PASS] overlay" not in capsys.readouterr().out
+
+    def test_keyauth_evidence_not_discarded_no_retry(self, tmp_path) -> None:
+        # key-auth output bearing the marker is authoritative: no password
+        # retry may even be attempted (the retry is what destroyed evidence)
+        r, calls = self._runner_seq([self.DEBRIS_KEYAUTH], tmp_path)
+        with pytest.raises(ba.AdoptError, match="DIRTY"):
+            ba.stage_overlay(r)
+        assert len(calls) == 1, "marker-bearing key-auth output must not trigger a retry"
+
+    def test_keyauth_clean_overlay_passes(self, tmp_path, capsys) -> None:
+        r, _ = self._runner_seq([self.CLEAN_KEYAUTH], tmp_path)
+        ba.stage_overlay(r)
+        assert "no jffs2 xattr debris" in capsys.readouterr().out
+
+    def test_zero_counts_passes(self, tmp_path, capsys) -> None:
+        r, _ = self._runner_seq(
+            ["jffs2_scan_xattr: 0 unchecked, 0 orphan\n" + ba.PROBE_DONE], tmp_path)
+        ba.stage_overlay(r)
+        assert "clean overlay" in capsys.readouterr().out
+
+    def test_fallback_still_used_for_never_adopted_unit(self, tmp_path, capsys) -> None:
+        # factory unit: key auth errors, empty-password channel works
+        r, _ = self._runner_seq(
+            [self.AUTH_ERROR, "jffs2: no xattrs\n" + ba.PROBE_DONE], tmp_path)
+        ba.stage_overlay(r)
+        assert "no jffs2 xattr debris" in capsys.readouterr().out
+
+    def test_both_channels_dead_refuses_instead_of_passing(self, tmp_path) -> None:
+        r, _ = self._runner_seq([self.AUTH_ERROR, self.AUTH_ERROR], tmp_path)
+        with pytest.raises(ba.AdoptError, match="never completed"):
+            ba.stage_overlay(r)
+
+
+class TestDutWithFallbackPreservesEvidence:
+    def _runner(self, outputs: list[str], tmp_path: Path):
+        canned = iter(outputs)
+        calls: list[str] = []
+
+        def transport(script: str) -> str:
+            calls.append(script)
+            return next(canned)
+
+        return ba.Runner(transport, PLACE, tmp_path / "ev"), calls
+
+    def test_board_bearing_output_returned_directly(self, tmp_path) -> None:
+        r, calls = self._runner([PREFLIGHT_OK], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "cat /tmp/sysinfo/board_name")
+        assert "ws-ap3915i" in out
+        assert len(calls) == 1
+
+    def test_marker_bearing_output_returned_without_retry(self, tmp_path) -> None:
+        # #288 core: no board name, but the probe demonstrably ran
+        r, calls = self._runner([ba.PROBE_DONE], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "dmesg | grep xattr; echo PROBE-DONE")
+        assert ba.PROBE_DONE in out
+        assert len(calls) == 1, "successful key-auth evidence must not be discarded"
+
+    def test_dead_key_channel_falls_back(self, tmp_path) -> None:
+        r, calls = self._runner(["auth error", PREFLIGHT_OK], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "cat /tmp/sysinfo/board_name")
+        assert "ws-ap3915i" in out
+        assert len(calls) == 2
+
+    def test_both_dead_returns_combined_for_the_caller_to_judge(self, tmp_path) -> None:
+        r, _ = self._runner(["key died", "pw died"], tmp_path)
+        out = ba.dut_with_fallback(r, "x", "true")
+        assert "key died" in out and "pw died" in out
+
+
+class TestSwitchKeyInstalledSwitchSide:
+    """#291: the adopt-keys payload must embed the switch pubkey (read
+    SWITCH-side), never reference /root/.ssh/id_ed25519.pub DUT-side — that
+    file does not exist on a factory unit, so the switch key was never
+    installed and the KEY-AUTH-OK gate could only pass by other means."""
+
+    @pytest.fixture(autouse=True)
+    def _no_time(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(ba.time, "sleep", lambda s: None)
+        monkeypatch.setattr(ba.time, "monotonic", lambda: 0)
+        # deterministic mac_keys: none (isolates the switch-key path)
+        monkeypatch.setattr(ba.Path, "home", classmethod(lambda cls: tmp_path))
+
+    def _run_and_capture(self, tmp_path: Path) -> list[str]:
+        scripts: list[str] = []
+        canned = iter([
+            "extreme-networks,ws-ap3915i",       # adopt-ready
+            SWITCH_KEY,                          # adopt-switchkey
+            "KEYS-PUSHED\nKEY-AUTH-OK\n1",       # adopt-keys
+            "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
+            "COMMITTED\nRESTARTED",
+        ])
+
+        def capture(script: str) -> str:
+            scripts.append(script)
+            return next(canned)
+
+        ba.stage_adopt(ba.Runner(capture, PLACE, tmp_path / "ev"))
+        return scripts
+
+    def test_switch_key_fetched_switch_side_first(self, tmp_path: Path) -> None:
+        scripts = self._run_and_capture(tmp_path)
+        fetch = next(s for s in scripts if "cat /root/.ssh/id_ed25519.pub" in s)
+        assert "dbclient" not in fetch, "key fetch must run on the switch, not via DUT"
+
+    def test_payload_has_no_dut_side_key_read(self, tmp_path: Path) -> None:
+        scripts = self._run_and_capture(tmp_path)
+        keys_line = next(ln for s in scripts for ln in s.splitlines()
+                         if "KEYS-PUSHED" in ln)
+        assert "$(head -c 24" not in keys_line
+        assert "cat /root/.ssh/id_ed25519.pub" not in keys_line, \
+            "payload runs on a factory DUT where that file does not exist"
+        assert SWITCH_KEY in keys_line, "switch key content must be embedded"
+
+    def test_missing_switch_key_fails_loudly(self, tmp_path: Path) -> None:
+        canned = iter([
+            "extreme-networks,ws-ap3915i",
+            "",  # switch-side fetch returned nothing
+        ])
+
+        def capture(script: str) -> str:
+            return next(canned)
+
+        with pytest.raises(ba.AdoptError, match="cannot read the switch pubkey"):
+            ba.stage_adopt(ba.Runner(capture, PLACE, tmp_path / "ev"))
+
+    @staticmethod
+    def _payload(scripts: list[str]) -> str:
+        keys_line = next(ln for s in scripts for ln in s.splitlines()
+                         if "KEYS-PUSHED" in ln)
+        # payload rides inside double quotes on the dbclient line
+        return keys_line.split('"', 1)[1].rsplit('"', 1)[0]
+
+    def test_factory_fresh_stub_installs_key_exactly_once(self, tmp_path: Path) -> None:
+        import subprocess
+        scripts = self._run_and_capture(tmp_path)
+        payload = self._payload(scripts)
+        # simulate the factory DUT: rewrite /etc/dropbear into the sandbox
+        # (the factory unit has NO /root/.ssh — which is the whole bug)
+        dut_etc = tmp_path / "factory-dut/etc/dropbear"
+        payload = payload.replace("/etc/dropbear", str(dut_etc))
+        for _ in range(2):  # idempotent across two runs
+            subprocess.run(["/bin/sh", "-c", payload], check=True)
+        installed = (dut_etc / "authorized_keys").read_text()
+        assert installed.count(SWITCH_KEY) == 1, \
+            "switch key must land exactly once, not duplicate across runs"

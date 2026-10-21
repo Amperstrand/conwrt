@@ -78,7 +78,7 @@ fn deploy_and_start() -> Option<AgentOnVm> {
 
     // 2. Start the agent on the VM
     if !ssh(
-        "chmod +x /tmp/conwrt-agent && /tmp/conwrt-agent --listen 0.0.0.0:8400 --capability serial:uarts=2 --capability link-probe --capability tftp-server > /tmp/agent.log 2>&1 &",
+        "chmod +x /tmp/conwrt-agent && /tmp/conwrt-agent --listen 0.0.0.0:8400 --insecure-allow-non-loopback --capability serial:uarts=2 --capability link-probe --capability tftp-server > /tmp/agent.log 2>&1 &",
     ) {
         eprintln!("agent start failed");
         return None;
