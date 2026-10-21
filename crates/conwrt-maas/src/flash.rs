@@ -229,8 +229,11 @@ pub struct FlashReport {
     pub bytes_written: usize,
     /// Whether the partition was grown.
     pub partition_grown: bool,
-    /// Whether a cloud-init seed was injected.
-    pub seed_injected: bool,
+    /// Whether a cloud-init seed was STAGED next to the target
+    /// (providers stage `<target>.seed/`); assembling the FAT CIDATA
+    /// volume onto the boot partition is the lab-side step tracked in
+    /// #303 (owner-gated bench validation) — staging is NOT injection.
+    pub seed_staged: bool,
 }
 
 /// Execute `plan` against `writer` with `image` in memory.
@@ -275,7 +278,7 @@ pub async fn execute_flash<W: BlockWriter>(
             .map_err(|e| FlashError::Writer(e.to_string()))?;
     }
 
-    let seed_injected = if let Some(seed) = &plan.seed {
+    let seed_staged = if let Some(seed) = &plan.seed {
         writer
             .write_seed(seed)
             .await
@@ -288,6 +291,6 @@ pub async fn execute_flash<W: BlockWriter>(
     Ok(FlashReport {
         bytes_written: image.len(),
         partition_grown: plan.grow_partition,
-        seed_injected,
+        seed_staged,
     })
 }
