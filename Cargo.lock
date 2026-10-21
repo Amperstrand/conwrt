@@ -733,6 +733,7 @@ dependencies = [
  "clap",
  "conwrt-agent-proto",
  "conwrt-core",
+ "conwrt-image",
  "conwrt-local-std",
  "conwrt-maas",
  "conwrt-types",

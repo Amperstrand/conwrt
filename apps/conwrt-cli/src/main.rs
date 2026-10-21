@@ -103,6 +103,32 @@ enum Command {
         #[command(subcommand)]
         command: MaasCommand,
     },
+    /// Request a custom ASU firmware build and cache the verified image
+    /// (#117 parity slice for firmware-manager.py `request`).
+    Image {
+        /// Model id from `conwrt models` (resolves target/profile/version).
+        #[arg(long)]
+        model_id: String,
+        /// OpenWrt release; defaults to the model's `openwrt.version`.
+        #[arg(long)]
+        release: Option<String>,
+        /// Comma-separated extra packages baked into the image.
+        #[arg(long, value_delimiter = ',')]
+        packages: Vec<String>,
+        /// First-boot defaults script file (uci commands), baked in.
+        #[arg(long)]
+        defaults: Option<PathBuf>,
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+        /// ASU base URL (default: the public instance; env
+        /// CONWRT_ASU_BASE overrides; tests point this at a mock).
+        #[arg(long, env = "CONWRT_ASU_BASE")]
+        asu_base: Option<String>,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
         /// Target address (used for reporting; the mock answers anything).
@@ -384,6 +410,23 @@ fn main() -> ExitCode {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
+        Command::Image {
+            model_id,
+            release,
+            packages,
+            defaults,
+            images_root,
+            asu_base,
+            dir,
+        } => cmd_image(
+            &model_id,
+            release.as_deref(),
+            &packages,
+            defaults.as_deref(),
+            &images_root,
+            asu_base.as_deref(),
+            &dir,
+        ),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
         Command::DiscoverV6 {
             interface,
@@ -1369,6 +1412,101 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+    }
+}
+
+fn cmd_image(
+    model_id: &str,
+    release: Option<&str>,
+    packages: &[String],
+    defaults: Option<&Path>,
+    images_root: &Path,
+    asu_base: Option<&str>,
+    dir: &Path,
+) -> ExitCode {
+    use conwrt_image::client::PollConfig;
+    use conwrt_image::http::ReqwestAsuClient;
+    use conwrt_image::types::BuildRequest;
+    use conwrt_image::workflow::request_and_cache;
+
+    let (registry, _) = load_registry(dir);
+    let Some(model) = registry.models().iter().find(|m| m.id == model_id) else {
+        eprintln!("unknown model id {model_id:?} (see `conwrt models`)");
+        return ExitCode::from(2);
+    };
+    let version = release
+        .map(str::to_string)
+        .unwrap_or_else(|| model.openwrt.version.clone());
+    let packages = if packages.is_empty() {
+        None
+    } else {
+        Some(packages.to_vec())
+    };
+    let defaults_script = defaults.map(|p| {
+        std::fs::read_to_string(p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+    });
+    let mut request = BuildRequest::openwrt(
+        version,
+        model.openwrt.target.clone(),
+        model.openwrt.profile.clone(),
+    );
+    request.packages = packages;
+    request.defaults = defaults_script;
+
+    let client = match asu_base.map(conwrt_image::client::AsuEndpoints::from_base) {
+        Some(e) => ReqwestAsuClient::with_endpoints(e).expect("ASU client"),
+        None => ReqwestAsuClient::new().expect("ASU client"),
+    };
+    // Tests and private instances want fast polls; the default keeps
+    // firmware-manager.py parity (10 s flat).
+    let poll = match std::env::var("CONWRT_ASU_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        Some(ms) => PollConfig {
+            initial_interval: std::time::Duration::from_millis(ms),
+            max_interval: std::time::Duration::from_millis(ms),
+            ..PollConfig::default()
+        },
+        None => PollConfig::default(),
+    };
+    println!(
+        "request: {} {} for {}",
+        request.distro, request.version, model.id
+    );
+    if let Some(pkgs) = &request.packages {
+        println!("packages ({})", pkgs.len());
+    }
+    if request.defaults.is_some() {
+        println!("defaults: first-boot script attached");
+    }
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match runtime.block_on(request_and_cache(
+        &client,
+        images_root,
+        &request,
+        &poll,
+        &Default::default(),
+    )) {
+        Ok(outcome) => {
+            if outcome.already_cached {
+                println!("cached:  {} (short-circuit)", outcome.cache_dir.display());
+            } else {
+                println!("built:   {}", outcome.cache_dir.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("image request failed: {e}");
+            ExitCode::FAILURE
         }
     }
 }
