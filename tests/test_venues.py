@@ -153,3 +153,56 @@ class TestDirectDevice:
                                      RuntimeError("coordinator must not be queried")),
                                  protected_places=lambda: set())
         assert [v.key for v in venues] == ["direct:x1860-desk"]
+
+
+class TestProtectedPlacesResolution:
+    def test_missing_registry_fails_closed(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CONWRT_LAB", str(tmp_path / "no-such-checkout"))
+        monkeypatch.setattr("venues.LAB_YAML", tmp_path / "no-lab.yaml")
+        with pytest.raises(RuntimeError, match="no lab registry"):
+            venues_from_env(
+                env={"CONWRT_VENUES": "labgrid:ap-lan2"},
+                place_list=lambda: "ap-lan2\n",
+            )
+
+    def test_conwrt_lab_registry_is_preferred(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+
+        reg = tmp_path / "conwrt-lab"
+        reg.mkdir()
+        (reg / "lab.yaml").write_text(
+            _yaml.safe_dump(
+                {"devices": {"house-ap": {"protected": True, "labgrid_place": "ap-lan2"}}}
+            )
+        )
+        monkeypatch.setenv("CONWRT_LAB", str(reg))
+        monkeypatch.setattr("venues.LAB_YAML", tmp_path / "no-repo-copy.yaml")
+
+        with pytest.raises(ValueError, match="protected"):
+            venues_from_env(
+                env={"CONWRT_VENUES": "labgrid:ap-lan2"},
+                place_list=lambda: "ap-lan2\n",
+            )
+
+    def test_repo_local_registry_still_used_when_no_env(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+
+        monkeypatch.delenv("CONWRT_LAB", raising=False)
+        local = tmp_path / "lab.yaml"
+        local.write_text(_yaml.safe_dump({"places": [{"name": "ap-lan9", "protected": True}]}))
+        monkeypatch.setattr("venues.LAB_YAML", local)
+
+        with pytest.raises(ValueError, match="protected"):
+            venues_from_env(
+                env={"CONWRT_VENUES": "labgrid:ap-lan9"},
+                place_list=lambda: "ap-lan9\n",
+            )
+
+
+class TestSeparatorOnlyVenues:
+    def test_separator_only_conwrt_venues_is_rejected(self):
+        for raw in [",,", " , , ", ","]:
+            with pytest.raises(ValueError, match="no venue"):
+                venues_from_env(env={"CONWRT_VENUES": raw},
+                                place_list=lambda: "",
+                                protected_places=lambda: set())
