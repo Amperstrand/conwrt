@@ -60,12 +60,21 @@ FIXTURE_DIR = REPO / "tests" / "fixtures" / "parity"
 # guard (present in both renderers in various spots).
 _DROP_WORDS = {"2>/dev/null"}
 
+# 2.x-only package-install preamble (EnsurePackage apk/opkg blocks) — a
+# deliberate Rust-side extension; 1.x Python bakes packages into the
+# image, so its configure render carries no install lines. Same
+# exclusion as crates/conwrt-core/src/parity.rs::command_lines and
+# tests/use_case_goldens.rs.
+_DROP_LINE_PREFIXES = ("opkg install ", "if command -v apk ", "&& apk add ")
+
 
 def _normalize_line(line: str) -> list[str] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
         return None
     if stripped == "set -e" or stripped.startswith("#!"):
+        return None
+    if stripped.startswith(_DROP_LINE_PREFIXES):
         return None
     try:
         tokens = shlex.split(stripped)

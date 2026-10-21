@@ -57,10 +57,10 @@ fn sqm_plan_ops_are_typed_and_ordered() {
             PlanOp::UciDeleteOption { .. } => "delete-option",
             PlanOp::UciAddList { .. } => "add-list",
             PlanOp::ResetUciConfig { .. } => "reset-config",
+            PlanOp::CleanupUciSections { .. } => "cleanup",
             PlanOp::CommitUci { .. } => "commit",
             PlanOp::Service { .. } => "service",
-            PlanOp::ShellCommand { .. } => "shell",
-            PlanOp::CleanupUciSections { .. } => "cleanup",
+            PlanOp::Shell { .. } => "shell",
         })
         .collect();
     assert_eq!(

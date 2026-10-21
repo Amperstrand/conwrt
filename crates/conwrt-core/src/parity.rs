@@ -19,9 +19,10 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::plan::{DohProfile, Profile, SqmProfile, render_shell};
+use crate::plan::{
+    DohProfile, Profile, SqmProfile, WireguardClientProfile, WireguardServerProfile, render_shell,
+};
 use crate::state::DeviceState;
-use crate::wireguard::{WireguardClientProfile, WireguardServerProfile};
 use conwrt_types::DeviceModel;
 
 /// Model id used for parity plans (the model only labels the plan header).
@@ -72,7 +73,7 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
         .unwrap_or(serde_json::Value::Null);
     match use_case {
         "wireguard-client" => {
-            let mut p = WireguardClientProfile::defaults();
+            let mut p = WireguardClientProfile::default();
             if let Some(v) = get_str(&params, "private_key") {
                 p.private_key = v;
             }
@@ -99,7 +100,7 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             Ok(Profile::WireguardClient(p))
         }
         "wireguard-server" => {
-            let mut p = WireguardServerProfile::defaults();
+            let mut p = WireguardServerProfile::default();
             if let Some(v) = get_str(&params, "private_key") {
                 p.private_key = v;
             }
@@ -182,15 +183,27 @@ pub fn render_fixture_file(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// Strip presentation-only lines shared by both renderers: shebang,
-/// `set -e`, comment lines, and blank lines. What remains is the pure
-/// command stream — the level at which parity is asserted on the Rust
-/// side (EQUAL fixtures must match the Python golden byte-for-byte
-/// after this filter).
+/// `set -e`, comment lines, blank lines, and the 2.x-only package-install
+/// preamble (`EnsurePackage` apk/opkg blocks — a deliberate Rust-side
+/// extension; 1.x Python bakes packages into the image, so its configure
+/// render has no install lines; same exclusion as
+/// `tests/use_case_goldens.rs`). What remains is the pure command stream
+/// — the level at which parity is asserted on the Rust side (EQUAL
+/// fixtures must match the Python golden byte-for-byte after this
+/// filter).
 pub fn command_lines(script: &str) -> Vec<String> {
     script
         .lines()
         .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && *l != "set -e" && !l.starts_with("#!"))
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with('#')
+                && *l != "set -e"
+                && !l.starts_with("#!")
+                && !l.starts_with("opkg install ")
+                && !l.starts_with("if command -v apk ")
+                && !l.starts_with("&& apk add ")
+        })
         .map(String::from)
         .collect()
 }

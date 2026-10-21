@@ -733,6 +733,7 @@ dependencies = [
  "clap",
  "conwrt-agent-proto",
  "conwrt-core",
+ "conwrt-image",
  "conwrt-local-std",
  "conwrt-maas",
  "conwrt-types",
@@ -830,8 +831,11 @@ dependencies = [
 name = "conwrt-serial"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "conwrt-probe-core",
  "nix 0.29.0",
  "serialport",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
 ]
 

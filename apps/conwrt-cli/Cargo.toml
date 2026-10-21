@@ -23,6 +23,7 @@ conwrt-types = { path = "../../crates/conwrt-types" }
 conwrt-core = { path = "../../crates/conwrt-core", features = ["parity-fixture"] }
 conwrt-local-std = { path = "../../providers/conwrt-local-std" }
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
+conwrt-image = { path = "../../crates/conwrt-image" }
 conwrt-maas = { path = "../../crates/conwrt-maas" }
 clap = { workspace = true }
 pollster = { workspace = true }
