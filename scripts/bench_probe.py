@@ -40,7 +40,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLACES_JSON = REPO_ROOT / "data" / "bench" / "places.json"
-SWITCH = "root@192.168.13.2"
+SWITCH = os.environ.get("CONWRT_SWITCH", "root@192.168.0.2")  # AGENTS.md: no bench IPs in-repo — operator supplies via env
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
 PROBE_TIMEOUT = 20

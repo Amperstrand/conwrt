@@ -13,10 +13,10 @@ import pytest
 
 import bench_probe as bp
 
-PLACE = {"name": "ap-lan5", "mac": "b4:2d:56:24:ad:97", "vlan": 1005}
+PLACE = {"name": "ap-lan5", "mac": "02:11:22:33:44:55", "vlan": 1005}
 ZONE = f"switch.{PLACE['vlan']}"
 
-NEIGH_PRESENT = ("192.168.105.51 dev switch.1005 lladdr b4:2d:56:24:ad:97 "
+NEIGH_PRESENT = ("192.168.105.51 dev switch.1005 lladdr 02:11:22:33:44:55 "
                  "ref 1 used 0/0/0 probes 1 REACHABLE")
 
 LINK_UP = (f"17: {ZONE}@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 "
