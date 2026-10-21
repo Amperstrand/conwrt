@@ -16,9 +16,14 @@
 //! - Other OSes: those probes return `Ok(None)` (unknown), TCP probes work
 //!   everywhere std does.
 
+pub mod block;
 pub mod execute;
 pub mod fingerprint;
+pub mod maas;
+pub mod specimen;
 pub mod ssh;
+pub mod trust;
+pub mod v6;
 
 use conwrt_core::capability::{HttpProbeResult, LinkProbe, ProbeError, SshBanner};
 use conwrt_types::MacAddress;
@@ -32,6 +37,8 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// Maximum response bytes parsed (headers + a title window).
 const RESPONSE_LIMIT: usize = 16 * 1024;
+/// Body bytes kept in `HttpProbeResult::body_snippet` (recovery markers).
+const BODY_SNIPPET_LIMIT: usize = 256;
 
 /// Local-std `LinkProbe`/`Time` provider over a concrete network interface.
 #[derive(Debug, Clone)]
@@ -266,10 +273,16 @@ pub fn parse_http_response(raw: &[u8]) -> HttpProbeResult {
         .find(|h| h.name.eq_ignore_ascii_case("server"))
         .map(|h| String::from_utf8_lossy(h.value).trim().to_string());
     let title = extract_title(&String::from_utf8_lossy(body)).map(str::to_string);
+    let body_snippet = if body.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&body[..body.len().min(BODY_SNIPPET_LIMIT)]).into_owned())
+    };
     HttpProbeResult {
         status,
         server_header,
         title,
+        body_snippet,
     }
 }
 
@@ -345,6 +358,32 @@ mod tests {
         let parsed = parse_http_response(b"\x00\x01not-http");
         assert_eq!(parsed.status, 0);
         assert!(parsed.server_header.is_none());
+    }
+
+    #[test]
+    fn body_snippet_captured_from_response_body() {
+        let raw = b"HTTP/1.0 200 OK\r\n\r\n<html><body><h1>Firmware Upgrade</h1></body></html>";
+        let parsed = parse_http_response(raw);
+        assert_eq!(
+            parsed.body_snippet.as_deref(),
+            Some("<html><body><h1>Firmware Upgrade</h1></body></html>")
+        );
+    }
+
+    #[test]
+    fn body_snippet_truncated_to_limit_and_lossy() {
+        let raw = [b"HTTP/1.0 200 OK\r\n\r\n".as_slice(), &[0xffu8; 600][..]].concat();
+        let parsed = parse_http_response(&raw);
+        let snippet = parsed.body_snippet.expect("non-empty body has a snippet");
+        // 256 source bytes, each lossy-decoded to one replacement char.
+        assert_eq!(snippet.chars().count(), 256);
+        assert!(snippet.chars().all(|c| c == char::REPLACEMENT_CHARACTER));
+    }
+
+    #[test]
+    fn empty_body_yields_no_snippet() {
+        let parsed = parse_http_response(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(parsed.body_snippet, None);
     }
 
     #[test]

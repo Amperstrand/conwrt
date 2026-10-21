@@ -2,10 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-MODEL ?=
-RELEASE ?=
-
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run detect flash flash-uboot source-image recovery sta test smoke ci rust-ci rust-test ipk clean integration bench e2e
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -32,7 +29,7 @@ lint: ## Run ruff and shell script syntax checks
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
 
 typecheck: ## Run Python static type checking
-	@pyright scripts tests
+	@python3 -m pyright scripts tests
 
 validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 	@echo "Validating schemas..."
@@ -117,8 +114,8 @@ sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, opti
 		$(ARGS)
 ## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
-test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests
-	@pytest tests -m "not integration"
+test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests, live API tests, and hardware bench runs
+	@pytest tests -m "not integration and not bench and not live"
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \
@@ -144,6 +141,10 @@ stability5: ## Fire-and-forget: 5 consecutive integration runs for stability ban
 integration: ## Run full QEMU OpenWrt VM integration suite locally (results in test-results/)
 	@bash scripts/local-tests.sh integration
 
+bench-vpn: ## VPN technology benchmark on the bench router (env-gated, see tests/bench/conftest.py)
+	@CONWRT_BENCH_ROUTER=$${CONWRT_BENCH_ROUTER:-192.168.1.1} \
+		python3 -m pytest tests/bench -v -s --timeout=1200
+
 bench: ## Run bufferbloat benchmark against local QEMU VM (results in test-results/)
 	@bash scripts/local-tests.sh bench
 
@@ -163,12 +164,37 @@ ci: ## Run all hardware-safe CI checks
 	@$(MAKE) validate-models
 	@$(MAKE) test
 
+labgrid-check: ## Offline labgrid cross-check: exporter.yaml vs places.json (no network; CI-safe; NOT part of ci)
+	@python3 scripts/bench_doctor.py crosscheck
+
+labgrid-test: ## Run a labgrid pytest with a full evidence bundle (usage: make labgrid-test T=<pytest args> [DH=<dut-host>])
+	@python3 scripts/bench_run.py --name bench $(if $(DH),--device-host $(DH),) -- $(T)
+
+test-live: ## Live VPN provider API contract tests (read-only; credential-gated tests need env secrets)
+	@pytest tests/live -m live -v
+
+rust-nostd-parity: ## #227: Makefile and rust.yml must list the SAME -p crates for the no_std cross-check (guard + self-test)
+	@python3 scripts/rust_nostd_parity.py
+	@python3 scripts/rust_nostd_parity.py --self-test
+
 rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
+	@$(MAKE) --no-print-directory rust-nostd-parity
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
-	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols --no-default-features --target thumbv7em-none-eabihf
+	cargo check -p conwrt-types -p conwrt-core -p conwrt-protocols -p conwrt-agent-proto -p conwrt-agent-io -p conwrt-executor -p conwrt-probe-core --no-default-features --target thumbv7em-none-eabihf
+	cargo check -p conwrt-agent-io --no-default-features --features embassy-net --target thumbv7em-none-eabihf
+	cargo check -p conwrt-executor --no-default-features --features embassy-net --target thumbv7em-none-eabihf
+
+parity-check: ## #118: Python(jsonschema) and Rust(types) must agree on corpus + negatives
+	@python3 -m pytest tests/test_model_schema_parity.py -q
+	@cargo run --quiet -p conwrt-cli -- models --dir models >/dev/null
+	@for d in tests/fixtures/schema-negative/*/; do \
+	  if cargo run --quiet -p conwrt-cli -- models --dir "$$d" >/dev/null 2>&1; then \
+	    echo "PARITY DRIFT: Rust accepted a schema-negative fixture: $$d"; exit 1; fi; \
+	done
+	@echo "parity OK: both validators agree on the corpus and every negative fixture"
 
 rust-test: ## Run Rust workspace tests only
 	cargo test --workspace

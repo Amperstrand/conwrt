@@ -1,0 +1,21 @@
+[package]
+name = "conwrt-probe-core"
+description = "Conwrt shared detection core (#215 slice 5): the PURE detection state machines — port-probe classification, HTTP banner/boot vocabularies, serial boot-milestone patterns, probe scheduling — extracted from the Python source of truth (scripts/router-probe.py, scripts/flash/serial_monitor.py) so the host CLI and MCU firmware run ONE detector (ADR-0002 Tier-A)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+# Host conveniences (currently none beyond std prelude access); mirrors
+# conwrt-agent-proto's tiering so MCU apps build with
+# --no-default-features and share the crate verbatim.
+std = []
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

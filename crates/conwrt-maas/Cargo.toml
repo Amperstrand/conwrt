@@ -1,0 +1,23 @@
+[package]
+name = "conwrt-maas"
+description = "MAAS portable-lab components (issue #169): typed disk-flash pipeline (verify → write → verify → inject) and the MaasProvider compute lifecycle over a client seam (Tier-A: no_std + alloc)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+# Host conveniences only; the engine logic stays no_std-compatible (ADR-0002).
+std = []
+
+[dependencies]
+conwrt-core = { path = "../conwrt-core", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[lints]
+workspace = true

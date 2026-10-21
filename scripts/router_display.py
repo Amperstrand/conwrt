@@ -5,9 +5,9 @@ Extracted from auto_detect for modularity.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
-from model_loader import load_model
 from model_match import match_models_by_oui
 
 
@@ -79,6 +79,24 @@ def _print_router(router) -> None:
     print(f"{SEPARATOR}")
 
 
+def _run_flash(extra_args: list[str]) -> None:
+    """Execute `conwrt flash` with the given arguments, streaming output."""
+    from pathlib import Path
+
+    conwrt_py = Path(__file__).resolve().parent / "conwrt.py"
+    cmd = [sys.executable, str(conwrt_py), "flash"] + extra_args
+    print(f"\n  $ {' '.join(cmd)}")
+    confirm = input("  Execute now? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print("  (cancelled)")
+        return
+    rc = subprocess.run(cmd).returncode
+    if rc == 0:
+        print("\n  ✓ flash flow completed")
+    else:
+        print(f"\n  ✗ flash exited with code {rc}")
+
+
 def interactive_menu(routers: list) -> None:
     """Interactive menu for selecting and acting on detected routers."""
     if not routers:
@@ -120,37 +138,24 @@ def interactive_menu(routers: list) -> None:
         choice = input("Choice: ").strip().lower()
 
         if choice == "1":
-            model_flag = f"--model-id {router.model_id}" if router.model_id else ""
-            iface = ""
-            print(f"\n  conwrt flash {model_flag} {iface}--request-image")
-            print("  (Edit config.toml for SSH keys, passwords, and use case presets)")
-            input("\nPress Enter to continue...")
+            args = []
+            if router.model_id:
+                args += ["--model-id", router.model_id]
+            _run_flash(args + ["--request-image"])
 
         elif choice == "2":
             image_path = input("Path to firmware image: ").strip()
             if image_path:
-                model_flag = f"--model-id {router.model_id}" if router.model_id else ""
-                print(f"\n  conwrt flash {model_flag} --image {image_path}")
-            input("\nPress Enter to continue...")
+                args = []
+                if router.model_id:
+                    args += ["--model-id", router.model_id]
+                _run_flash(args + ["--image", image_path])
 
         elif choice == "3":
-            model_flag = f"--model-id {router.model_id}" if router.model_id else ""
-            print(f"\n  conwrt flash {model_flag} --force-uboot")
+            args = []
             if router.model_id:
-                model_def = None
-                try:
-                    model_def = load_model(router.model_id)
-                except FileNotFoundError:
-                    pass
-                if model_def:
-                    for method_name, method_cfg in model_def.get("flash_methods", {}).items():
-                        if "reset_instructions" in method_cfg:
-                            print(f"\n  Recovery instructions ({method_name}):")
-                            for line in method_cfg["reset_instructions"].split(". "):
-                                if line.strip():
-                                    print(f"    {line.strip()}")
-                            break
-            input("\nPress Enter to continue...")
+                args += ["--model-id", router.model_id]
+            _run_flash(args + ["--force-uboot", "--request-image"])
 
         elif choice == "4":
             print(f"\n{'─' * 45}")

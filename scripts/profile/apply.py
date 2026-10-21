@@ -93,6 +93,12 @@ _CONTROL_FLOW_RE = re.compile(
 )
 
 
+def _shell_lines_without_comments(script: str) -> list[str]:
+    """Non-blank, non-comment lines — only safe for &&-chained one-liners."""
+    return [ln for ln in script.strip().splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+
+
 def _run_step_script(
     ip: str,
     script: str,
@@ -100,16 +106,17 @@ def _run_step_script(
     log: LogFn,
     timeout: int = 300,
 ) -> bool:
-    lines = [ln for ln in script.strip().splitlines()
-             if ln.strip() and not ln.strip().startswith("#")]
-    if not lines:
-        return True
     if _HEREDOC_RE.search(script):
-        payload = "set -e\n" + "\n".join(lines) + "\n"
+        # Heredoc payloads carry file content (keys, certs) where '#' lines
+        # and blank lines are DATA — must be transported verbatim. VPN steps
+        # run several settle loops through one exec: allow generous time.
+        payload = "set -e\n" + script.strip() + "\n"
+        timeout = max(timeout, 600)
     elif _CONTROL_FLOW_RE.search(script):
+        lines = _shell_lines_without_comments(script)
         payload = " && ".join(lines) + "\n"
     else:
-        chain = " && ".join(lines)
+        chain = " && ".join(_shell_lines_without_comments(script))
         return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)
     r = subprocess.run(
         ssh_cmd(ip, "sh -s", key=ssh_key or None, connect_timeout=10),
@@ -361,6 +368,7 @@ def apply_plan(
             _log(f"  ⚠ Package install failed — use cases may be broken: {', '.join(affected)}")
 
     # Phase 3: Use case configure scripts (packages now installed)
+    failed_use_cases: list[str] = []
     for step in plan.steps:
         if step.skipped_reason or not step.include_in_post_install:
             continue
@@ -374,6 +382,11 @@ def apply_plan(
                 _log(f"  ✓ use case '{step.use_case_name}': applied")
             else:
                 _log(f"  ⚠ use case '{step.use_case_name}': failed")
+                failed_use_cases.append(step.use_case_name)
+
+    if failed_use_cases:
+        _log(f"  ✗ apply aborted: use case(s) failed: {', '.join(failed_use_cases)}")
+        return ""
 
     return ip
 

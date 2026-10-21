@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Sequence
 
@@ -17,12 +18,25 @@ DROPBEAR_SSH_OPTIONS: list[str] = [
 ]
 
 
+def _resolved_port(port: int | None) -> int | None:
+    """Explicit port wins; else CONWRT_SSH_PORT (set by `configure --port`
+    so every nested ssh/scp call reaches a venue on a shifted port without
+    threading a parameter through the whole apply stack)."""
+    if port is not None:
+        return port
+    env_port = os.environ.get("CONWRT_SSH_PORT", "").strip()
+    if env_port.isdigit() and 1 <= int(env_port) <= 65535:
+        return int(env_port)
+    return None
+
+
 def ssh_cmd(
     ip: str,
     command: str | Sequence[str],
     key: str | None = None,
     connect_timeout: int = 10,
     dropbear_target: bool = False,
+    port: int | None = None,
 ) -> list[str]:
     cmd: list[str] = [
         "ssh",
@@ -34,6 +48,9 @@ def ssh_cmd(
     ]
     if dropbear_target:
         cmd.extend(DROPBEAR_SSH_OPTIONS)
+    resolved = _resolved_port(port)
+    if resolved is not None:
+        cmd += ["-p", str(resolved)]
     if key:
         cmd += ["-i", key]
     cmd.append(f"root@{ip}")
@@ -51,6 +68,7 @@ def scp_cmd(
     key: str | None = None,
     connect_timeout: int = 10,
     dropbear_target: bool = False,
+    port: int | None = None,
 ) -> list[str]:
     cmd: list[str] = [
         "scp",
@@ -62,6 +80,9 @@ def scp_cmd(
     ]
     if dropbear_target:
         cmd.extend(DROPBEAR_SSH_OPTIONS)
+    resolved = _resolved_port(port)
+    if resolved is not None:
+        cmd += ["-P", str(resolved)]
     if key:
         cmd += ["-i", key]
     cmd += [src, dst]

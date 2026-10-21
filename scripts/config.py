@@ -65,6 +65,18 @@ class WireguardConfig:
 
 
 @dataclass
+class LabgridConfig:
+    """Optional [labgrid] section — the persistent form of the bench-backend
+    switch (scripts/bench_session.py). Absent section = no labgrid anywhere;
+    labgrid is only selected when enabled=true. exporter_host is the ssh alias
+    of the labgrid exporter (where loopback-bound serial bridges live) — used
+    by bench_doctor's bridge probes, not by the session backends."""
+    coordinator: str = ""
+    enabled: bool = False
+    exporter_host: str = ""
+
+
+@dataclass
 class ConwrtConfig:
     ssh_public_key_text: str = ""
     ssh_public_key_path: str = ""
@@ -74,17 +86,28 @@ class ConwrtConfig:
     password_mode: str = "random"
     lan_ip: str = ""
     wan_ssh: bool = False
+    # Opt-in TOFB image feature (#228, ADR-0013): bake the first-boot
+    # enrollment service into ASU builds. Off by default — images without
+    # it are byte-identical to pre-TOFB builds.
+    tofb: bool = False
     country_code: str = "DE"
     mgmt_wifi: bool = False
     mgmt_wifi_txpower: Optional[int] = None
     wifi_sta: Optional[WifiSTAConfig] = None
     wifi_aps: list[WifiAPConfig] = field(default_factory=list)
     wireguard: Optional[WireguardConfig] = None
+    labgrid: Optional[LabgridConfig] = None
     use_cases: list[UseCaseConfig] = field(default_factory=list)
     hostname: str = ""
     wifi_disable: bool = False
     lan_ip_mode: str = "mac-hash"      # "mac-hash" (derive from MAC, default) or "static" (use cfg.lan_ip)
     hostname_pattern: str = "static"   # "static", "model_mac", "model_seq"
+    # Rogue-DHCP discipline (#155): fresh OpenWrt runs a DHCP server on
+    # br-lan by default — the class that poisoned the house LAN twice
+    # (AGENTS.md) and was armed on the 2026-10-12 x1860 recovery unit.
+    # Default ON: builds/flashes suppress it; isolated-DUT tests that NEED
+    # a DHCP server opt out explicitly (network.disable_lan_dhcp = false).
+    disable_lan_dhcp: bool = True
 
     @property
     def wifi_ap(self) -> Optional[WifiAPConfig]:
@@ -307,6 +330,15 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
             wg_interface=wg_section.get("wg_interface", "wg0"),
         )
 
+    lg_section = raw.get("labgrid", {})
+    lg_cfg = None
+    if lg_section:
+        lg_cfg = LabgridConfig(
+            coordinator=str(lg_section.get("coordinator", "")),
+            enabled=bool(lg_section.get("enabled", False)),
+            exporter_host=str(lg_section.get("exporter_host", "")),
+        )
+
     return ConwrtConfig(
         ssh_public_key_text=pub_text,
         ssh_public_key_path=pub_path,
@@ -316,12 +348,15 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         password_mode=password_mode,
         lan_ip=network_section.get("lan_ip", ""),
         wan_ssh=network_section.get("wan_ssh", False),
+        tofb=network_section.get("tofb", False),
         country_code=network_section.get("country_code", "DE"),
         mgmt_wifi=network_section.get("mgmt_wifi", False),
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
+        disable_lan_dhcp=network_section.get("disable_lan_dhcp", True),
         wifi_sta=wifi_sta,
         wifi_aps=wifi_aps,
         wireguard=wg_cfg,
+        labgrid=lg_cfg,
         use_cases=use_cases_list,
         hostname=raw.get("device", {}).get("hostname", ""),
         wifi_disable=raw.get("device", {}).get("wifi_disable", False),

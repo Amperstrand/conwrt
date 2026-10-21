@@ -1,0 +1,193 @@
+- generic [ref=e2]:
+  - banner:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - link "OpenWrt Wiki" [ref=e6] [cursor=pointer]:
+          - /url: /start
+          - img "OpenWrt Wiki" [ref=e7]
+        - generic [ref=e9]:
+          - search [ref=e10]:
+            - generic [ref=e11]:
+              - searchbox "[F]" [ref=e12]
+              - button "Search" [ref=e14] [cursor=pointer]:
+                - img [ref=e15]
+          - list [ref=e17]:
+            - listitem [ref=e18]:
+              - button [ref=e19] [cursor=pointer]:
+                - img [ref=e20]
+          - list [ref=e23]:
+            - listitem [ref=e24]:
+              - button "Translations of this page" [ref=e25] [cursor=pointer]:
+                - img [ref=e26]
+          - list [ref=e29]:
+            - listitem [ref=e30]:
+              - link "Log In" [ref=e32] [cursor=pointer]:
+                - /url: /docs/guide-user/networking/start?do=login&sectok=
+                - img [ref=e33]
+                - text: Log In
+  - main [ref=e35]:
+    - generic [ref=e36]:
+      - navigation [ref=e37]:
+        - separator [ref=e38]
+        - list [ref=e40]:
+          - listitem [ref=e41]: You are here
+          - listitem [ref=e42]:
+            - text: /
+            - link "Home" [ref=e43] [cursor=pointer]:
+              - /url: /start
+              - generic [ref=e44]:
+                - img [ref=e45]
+                - generic [ref=e47]: Home
+          - listitem [ref=e48]:
+            - text: /
+            - link "Documentation" [ref=e50] [cursor=pointer]:
+              - /url: /docs/start
+          - listitem [ref=e51]:
+            - text: /
+            - link "User guide" [ref=e53] [cursor=pointer]:
+              - /url: /docs/guide-user/start
+          - listitem [ref=e54]:
+            - text: /
+            - link "networking" [ref=e56] [cursor=pointer]:
+              - /url: /docs/guide-user/networking/start
+        - separator [ref=e57]
+      - paragraph
+    - generic [ref=e58]:
+      - complementary [ref=e59]:
+        - generic [ref=e61]:
+          - heading "Learn about OpenWrt" [level=4] [ref=e62]
+          - list [ref=e64]:
+            - listitem [ref=e65]:
+              - link "Supported devices" [ref=e66] [cursor=pointer]:
+                - /url: /supported_devices
+            - listitem [ref=e67]:
+              - link "Packages" [ref=e68] [cursor=pointer]:
+                - /url: /packages/start
+            - listitem [ref=e69]:
+              - link "Downloads" [ref=e70] [cursor=pointer]:
+                - /url: /downloads
+            - listitem [ref=e71]:
+              - link "Documentation" [ref=e72] [cursor=pointer]:
+                - /url: /docs/start
+              - list [ref=e73]:
+                - listitem [ref=e74]:
+                  - link "Quick start guide" [ref=e75] [cursor=pointer]:
+                    - /url: /docs/guide-quick-start/start
+                - listitem [ref=e76]:
+                  - link "User guide" [ref=e77] [cursor=pointer]:
+                    - /url: /docs/guide-user/start
+                - listitem [ref=e78]:
+                  - link "Developer guide" [ref=e79] [cursor=pointer]:
+                    - /url: /docs/guide-developer/start
+            - listitem [ref=e80]:
+              - link "Security" [ref=e81] [cursor=pointer]:
+                - /url: /docs/guide-developer/security
+            - listitem [ref=e82]:
+              - link "FAQ" [ref=e83] [cursor=pointer]:
+                - /url: /faq
+            - listitem [ref=e84]:
+              - link "Forum" [ref=e85] [cursor=pointer]:
+                - /url: https://forum.openwrt.org/
+          - heading "Contributing" [level=4] [ref=e86]
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "Submitting patches" [ref=e90] [cursor=pointer]:
+                - /url: /submitting-patches
+            - listitem [ref=e91]:
+              - link "Reporting bugs" [ref=e92] [cursor=pointer]:
+                - /url: /bugs
+            - listitem [ref=e93]:
+              - link "Contributing to wiki" [ref=e94] [cursor=pointer]:
+                - /url: /wiki/wikirules
+          - heading "Project" [level=4] [ref=e95]
+          - list [ref=e97]:
+            - listitem [ref=e98]:
+              - link "About OpenWrt" [ref=e99] [cursor=pointer]:
+                - /url: /about
+            - listitem [ref=e100]:
+              - link "Rules" [ref=e101] [cursor=pointer]:
+                - /url: /rules
+            - listitem [ref=e102]:
+              - link "Infrastructure" [ref=e103] [cursor=pointer]:
+                - /url: /infrastructure
+            - listitem [ref=e104]:
+              - link "Mirrors" [ref=e105] [cursor=pointer]:
+                - /url: /mirrors
+            - listitem [ref=e106]:
+              - link "Donate" [ref=e107] [cursor=pointer]:
+                - /url: /donate
+            - listitem [ref=e108]:
+              - link "Merchandise" [ref=e109] [cursor=pointer]:
+                - /url: /merchandise
+            - listitem [ref=e110]:
+              - link "Website" [ref=e111] [cursor=pointer]:
+                - /url: /wiki/start
+            - listitem [ref=e112]:
+              - link "Trademark policy" [ref=e113] [cursor=pointer]:
+                - /url: /trademark
+            - listitem [ref=e114]:
+              - link "License" [ref=e115] [cursor=pointer]:
+                - /url: /license
+            - listitem [ref=e116]:
+              - link "Contacts" [ref=e117] [cursor=pointer]:
+                - /url: /contact
+      - article [ref=e118]:
+        - navigation:
+          - list [ref=e120]:
+            - listitem [ref=e121]:
+              - link "Show pagesource [v]" [ref=e122] [cursor=pointer]:
+                - /url: /docs/guide-user/networking/start?do=edit
+                - img [ref=e123]
+            - listitem [ref=e125]:
+              - link "Old revisions [o]" [ref=e126] [cursor=pointer]:
+                - /url: /docs/guide-user/networking/start?do=revisions
+                - img [ref=e127]
+            - listitem [ref=e129]:
+              - link "Backlinks" [ref=e130] [cursor=pointer]:
+                - /url: /docs/guide-user/networking/start?do=backlink
+                - img [ref=e131]
+            - listitem [ref=e133]:
+              - link "Back to top [t]" [ref=e134] [cursor=pointer]:
+                - /url: "#dokuwiki__top"
+                - img [ref=e135]
+        - generic [ref=e138]:
+          - generic:
+            - list
+          - generic [ref=e141]:
+            - 'heading "This topic does not exist yetAnchor link for: this_topic_does_not_exist_yet" [level=1] [ref=e142]':
+              - img [ref=e143]
+              - text: This topic does not exist yet
+              - 'link "Anchor link for: this_topic_does_not_exist_yet" [ref=e145] [cursor=pointer]':
+                - /url: "#this_topic_does_not_exist_yet"
+                - text: 
+            - paragraph [ref=e147]:
+              - text: You've followed a link to a topic that doesn't exist yet. If permissions allow, you may create it by clicking on
+              - strong [ref=e148]: Create this page
+              - text: .
+            - generic [ref=e149]:
+              - text: This website uses cookies. By using the website, you agree with storing cookies on your computer. Also you acknowledge that you have read and understand our Privacy Policy. If you do not agree leave the website.
+              - button "OK" [ref=e150] [cursor=pointer]
+              - link "More information about cookies" [ref=e151] [cursor=pointer]:
+                - /url: https://en.wikipedia.org/wiki/HTTP_cookie
+  - contentinfo [ref=e152]:
+    - generic [ref=e153]:
+      - paragraph [ref=e156]:
+        - strong [ref=e157]:
+          - text: Self-registration in the wiki has been disabled.
+          - text: If you want to contribute to the OpenWrt wiki, please post
+          - link "HERE" [ref=e158] [cursor=pointer]:
+            - /url: https://forum.openwrt.org/t/applying-for-openwrt-wiki-account/101671
+          - text: in the forum or ask on IRC for access.
+      - generic [ref=e159]:
+        - separator [ref=e160]
+        - generic [ref=e161]:
+          - paragraph [ref=e162]:
+            - link "cc by sa" [ref=e163] [cursor=pointer]:
+              - /url: https://creativecommons.org/licenses/by-sa/4.0/deed.en
+              - img "cc" [ref=e164]
+              - img "by" [ref=e165]
+              - img "sa" [ref=e166]
+          - paragraph [ref=e167]:
+            - text: "Except where otherwise noted, content on this wiki is licensed under the following license:"
+            - link "CC Attribution-Share Alike 4.0 International" [ref=e168] [cursor=pointer]:
+              - /url: https://creativecommons.org/licenses/by-sa/4.0/deed.en

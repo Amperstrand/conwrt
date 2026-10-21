@@ -290,3 +290,35 @@ class TestRunStepScript:
         script = "cat > /x << 'EOF'\nbody\nEOF\n"
         with patch("profile.apply.subprocess.run", return_value=self._completed(1)):
             assert _run_step_script("1.2.3.4", script, "", log) is False
+
+
+def test_apply_plan_use_case_failure_returns_empty_ip() -> None:
+    """A failed use-case script must abort the apply (falsy IP → configure
+    exits 1) — previously the failure was logged as a warning while
+    configure reported success ("Configuration complete", rc 0)."""
+    cfg = ConwrtConfig(
+        use_cases=[UseCaseConfig(name="sqm", params={"download_kbps": 1000, "upload_kbps": 500})],
+    )
+    from profile import build_plan
+    plan = build_plan(cfg, mode="post_install")
+
+    def track_run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        stdin_payload = kwargs.get("input", "") or ""
+        if "opkg" in cmd_str or "ping" in cmd_str:
+            return _mock_run(0, stdout="")
+        if "sqm" in cmd_str.lower() or "cake" in cmd_str.lower() or "sqm" in stdin_payload:
+            return _mock_run(1, stdout="")  # the use case script fails
+        return _mock_run(0, stdout="")
+
+    log = MagicMock()
+    with patch("profile.apply.subprocess.run", side_effect=track_run), \
+         patch("profile.apply._wait_for_internet", return_value=True), \
+         patch("profile.apply._scp_install_packages", return_value=False), \
+         patch("profile.apply.time.sleep"):
+        result = apply_plan(plan, ip="1.2.3.4", ssh_key="", log=log)
+
+    assert result == "", "failed use case must abort apply with falsy IP"
+    assert any("failed" in str(c) and "use case" in str(c).lower() for c in log.call_args_list), \
+        "failure must be logged"

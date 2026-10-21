@@ -1,0 +1,12 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+# cortex-m-rt's build script makes link.x findable; the consumer passes it.
+# defmt.x places the RTT control block; --nmagic disables page alignment of
+# sections (required by link.x). Same setup as the org's other F469 firmware.
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+rustflags = [
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+  "-C", "link-arg=--nmagic",
+]

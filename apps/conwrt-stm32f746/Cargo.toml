@@ -1,0 +1,52 @@
+[package]
+name = "conwrt-stm32f746"
+description = "Conwrt MCU agent for the STM32F746G-DISCO (#215 slice 2): USB CDC-ACM transport via the shared conwrt-agent-io session loop, diag capability, mock-first"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Tier-C firmware crate (ADR-0002): excluded from the root workspace so host
+# tooling never builds it (see root Cargo.toml). Build with:
+#   cargo build --release --target thumbv7em-none-eabihf
+# Size gate:
+#   cargo size --release --target thumbv7em-none-eabihf
+# Board: STM32F746G-DISCO — Ethernet RJ45 via onboard LAN8742 (RMII, PHY
+# supplies the 50 MHz ref clock); USB OTG-FS on PA12/PA11 (CDC variant of
+# the agent); USART6 on Arduino D1 (PC6, TX) / D0 (PC7, RX) — the router
+# console passthrough (#215 slice 4: controller <-LAN-> agent <-UART->
+# bench switch console). HSE 8 MHz crystal.
+
+[dependencies]
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto", default-features = false }
+conwrt-agent-io = { path = "../../crates/conwrt-agent-io", features = ["embassy-net"] }
+conwrt-executor = { path = "../../crates/conwrt-executor", features = ["embassy-net"] }
+
+embassy-stm32 = { version = "0.6.0", features = ["stm32f746ng", "memory-x", "time-driver-any", "exti"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-usb = "0.6.0"
+embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"] }
+embassy-sync = "0.8"
+embassy-time = { version = "0.5.1", features = ["tick-hz-32_768"] }
+embassy-futures = "0.1.2"
+
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+embedded-alloc = "0.7"
+embedded-io = "0.7"
+embedded-io-async = "0.7.0"
+heapless = { version = "0.9", default-features = false }
+static_cell = "2"
+
+defmt = "1.0"
+defmt-rtt = "1.0"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

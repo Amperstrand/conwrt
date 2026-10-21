@@ -1,11 +1,39 @@
 """Boot state detection."""
 from __future__ import annotations
 import subprocess
+from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Optional
+from typing import Iterator, Optional
 from flash.context import log
 from flash.upload import detect_uboot_http
+from flash.preflight import get_interface_ips
+from platform_utils import configure_interface_ip, remove_interface_ip
 from ssh_utils import check_ssh
+
+
+@contextmanager
+def _probe_subnet(interface: Optional[str], client_ip: str) -> Iterator[None]:
+    """Temporarily place the host in the target /24 so probes can reach it.
+
+    Probe IPs (192.168.1.1, 192.168.0.1, ...) are unreachable without a
+    local address in their subnet. The alias is removed on exit unless it
+    (or a sibling address in the same /24) pre-existed — boot-state
+    detection runs before preflight, which requires a clean interface.
+    """
+    if not interface or not client_ip:
+        yield
+        return
+    subnet = client_ip.rsplit(".", 1)[0]
+    preexisting = any(
+        ip.rsplit(".", 1)[0] == subnet for ip in get_interface_ips(interface)
+    )
+    if not preexisting:
+        configure_interface_ip(interface, client_ip, "24")
+    try:
+        yield
+    finally:
+        if not preexisting:
+            remove_interface_ip(interface, client_ip, "24")
 
 
 def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None, timeout: int = 10) -> str:
@@ -15,13 +43,16 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
     """
     openwrt_ip = profile.openwrt_ip if profile else "192.168.1.1"
     recovery_ip = profile.recovery_ip if profile else "192.168.0.1"
+    openwrt_client = getattr(profile, "openwrt_client_ip", "") if profile else ""
+    recovery_client = getattr(profile, "client_ip", "") if profile else ""
 
-    try:
-        if check_ssh(openwrt_ip):
-            log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
-            return "openwrt"
-    except OSError as e:
-        log(f"SSH probe failed for {openwrt_ip}: {e}")
+    with _probe_subnet(interface, openwrt_client or "192.168.1.254"):
+        try:
+            if check_ssh(openwrt_ip):
+                log(f"SSH reachable at {openwrt_ip} — device is running OpenWrt")
+                return "openwrt"
+        except OSError as e:
+            log(f"SSH probe failed for {openwrt_ip}: {e}")
 
     # When flash_method is dlink-hnap, check HNAP FIRST — the stock firmware
     # also responds with HTML at the recovery IP, so detect_uboot_http would
@@ -112,13 +143,14 @@ def detect_boot_state(interface: str, profile: Optional[SimpleNamespace] = None,
         except (subprocess.SubprocessError, OSError) as e:
             log(f"OEM probe failed for {stock_ip}: {e}")
 
-    try:
-        found, detail = detect_uboot_http(recovery_ip)
-        if found:
-            log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
-            return "uboot"
-    except OSError as e:
-        log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
+    with _probe_subnet(interface, recovery_client or "192.168.0.10"):
+        try:
+            found, detail = detect_uboot_http(recovery_ip)
+            if found:
+                log(f"Recovery HTTP at {recovery_ip} — device is in U-Boot mode ({detail})")
+                return "uboot"
+        except OSError as e:
+            log(f"U-Boot HTTP probe failed for {recovery_ip}: {e}")
 
     if profile and profile.openwrt_ip and profile.recovery_ip:
         if profile.openwrt_ip != "192.168.1.1" or profile.recovery_ip != "192.168.0.1":

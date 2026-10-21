@@ -18,6 +18,11 @@ test-results/
 
 # Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
 data/inventory.jsonl
+data/active-sessions.jsonl
+scripts/data/
+captures/
+scripts/captures/
+*.pcap
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub
@@ -27,6 +32,21 @@ tests/integration/.openwrt-session.qcow2
 # OpenCode / Playwright internal
 .omo/
 .playwright-mcp/
+.sisyphus/
+.cursor/
+
+# Local-only operational artifacts — never publish (operator rule 2026-09-22)
+# Session records, inventory, backups, captures, running rig configs.
+data/*
+!data/.gitkeep
+captures/*
+!captures/.gitkeep
+backups/
+config.toml
+labgrid/exporter.yaml
+serial/
+conwrt.egg-info/
+__pycache__/
 
 # OS junk
 .DS_Store
@@ -44,6 +64,16 @@ tests/integration/.openwrt.img
 tests/integration/.openwrt-flash-session.qcow2
 tests/integration/.venv-cashu/
 
+# Vendor firmware blobs — too big / licensing-unclear for git (keep local)
+firmware/
+# Runtime artifacts misplaced under scripts/ (tool path bug — top-level dirs are canonical)
+scripts/captures/
+scripts/data/
+# Real labgrid console config carries live credentials (header rule: local-only)
+labgrid/console.yaml
+
+# local operator-profile backup (same rule as config.toml)
+config.toml.bak
 # Python bytecode caches
 __pycache__/
 *.pyc
@@ -52,3 +82,20 @@ __pycache__/
 target/
 *.egg-info/
 tests/integration/.openwrt.img.prepped-*
+
+# Operator-private conwrt config (README: "config.toml is gitignored") —
+# never commit; tests inject their own via CONWRT_CONFIG
+config.toml
+# …except cargo's build config in firmware apps (linker scripts, [build]
+# target) — required for the cortex-m link, must be committed
+!apps/*/.cargo/config.toml
+# (the bare `config.toml` pattern also covers the worktree-local
+# .cargo/config.toml that scripts/dev-session.sh start writes — intended)
+
+# Local Python virtualenv (dev setup) — never commit
+.venv/
+
+# Local env/credential files — never commit
+.env*
+# pi_image break-glass password files (mode 0600, never commit)
+*.credentials.txt

@@ -1,4 +1,5 @@
 """Tests for Extreme Networks AP391x flash method support."""
+
 import json
 import queue
 import struct

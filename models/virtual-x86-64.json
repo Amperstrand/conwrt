@@ -8,6 +8,7 @@
     "profile": "generic",
     "version": "24",
     "board_name": "generic",
+    "board_names": ["generic", "conwrt-conwrt-test-vm"],
     "default_ip": "192.168.1.1"
   },
   "mac_oui": [],
@@ -25,7 +26,13 @@
   "flash_methods": {
     "sysupgrade": {
       "description": "SSH sysupgrade (for updating running OpenWrt VM)",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "boot_signatures": {},

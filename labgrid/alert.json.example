@@ -1,0 +1,9 @@
+## bench_alert config — copy to data/bench/alert.json (gitignored).
+## Empty file = file-sink only (alerts.jsonl); add ntfy/mac when ready.
+{
+  "ntfy_url": "",
+  "topics": {"critical": "bench-critical", "warning": "bench-warnings",
+             "info": "bench-info"},
+  "mac_notify": false,
+  "cooldown_s": 300
+}

@@ -11,16 +11,24 @@ a break condition and stops delivering data.
 Usage:
     python3 scripts/serial-boot-capture2.py [PORT] [BAUD] [OPTIONS]
 
+PORT is a local /dev serial adapter (e.g. /dev/cu.usbserial-BG02QAPG) or a
+remote serial-console bridge of the form tcp://HOST:PORT (baud is a property
+of the remote line and is ignored). From a Mac, forward the bridge port
+first: ssh -N -L 4002:127.0.0.1:4002 ai-legion, then capture with
+tcp://127.0.0.1:4002. Over TCP the break byte relayed by the bridge triggers
+the same close → wait → reopen recovery (reopen = reconnect).
+
 Options:
     --session NAME     Session name for log directory
     --timeout SECS     Silence timeout after boot data starts
     --recovery-wait S  Seconds to wait after break before reopening (default: 3)
 """
 import argparse
-import serial
 import sys
 import time
 from pathlib import Path
+
+from serial_transport import SerialConnectionError, open_serial
 
 BOOT_MARKERS = [
     ("DDR3_CAL_START",   b"do DDR setting"),
@@ -43,7 +51,7 @@ BOOT_MARKERS = [
 
 def wait_for_break(port, baud, max_wait=0):
     """Phase 1: Wait for the power-off break byte."""
-    s = serial.Serial(port, baud, timeout=0.5)
+    s = open_serial(port, baud, timeout=0.5)
     print("Phase 1: Waiting for power cycle (break byte)...")
     print(">>> POWER CYCLE THE DEVICE NOW <<<")
     start = time.time()
@@ -74,10 +82,10 @@ def capture_boot(port, baud, log_dir, silence_timeout, recovery_wait, existing_p
     if existing_port:
         s = existing_port
     else:
-        # Reopen serial port fresh — resets FT232R internal state
+        # Reopen serial port fresh — resets FT232R internal state (reconnects for tcp://)
         time.sleep(recovery_wait)
         print(f"Reopening serial port (after {recovery_wait}s recovery wait)...")
-        s = serial.Serial(port, baud, timeout=0.5)
+        s = open_serial(port, baud, timeout=0.5)
         s.reset_input_buffer()  # Clear any stale data
         print("✓ Port reopened, buffers flushed")
 
@@ -160,8 +168,10 @@ def capture_boot(port, baud, log_dir, silence_timeout, recovery_wait, existing_p
 
 def main():
     parser = argparse.ArgumentParser(description="Serial boot capture with power-transition recovery")
-    parser.add_argument("port", nargs="?", default="/dev/cu.usbserial-BG02QAPG")
-    parser.add_argument("baud", nargs="?", type=int, default=57600)
+    parser.add_argument("port", nargs="?", default="/dev/cu.usbserial-BG02QAPG",
+                        help="serial port (local /dev path or tcp://HOST:PORT)")
+    parser.add_argument("baud", nargs="?", type=int, default=57600,
+                        help="baud rate (default: 57600; ignored for tcp://)")
     parser.add_argument("--session", default="boot-capture")
     parser.add_argument("--timeout", type=int, default=15)
     parser.add_argument("--recovery-wait", type=float, default=3.0)
@@ -170,21 +180,25 @@ def main():
 
     log_dir = Path("serial") / args.session
 
-    # Phase 1: Wait for power transition
-    result = wait_for_break(args.port, args.baud, args.max_wait)
-    if result is None:
-        sys.exit(1)
+    try:
+        # Phase 1: Wait for power transition
+        result = wait_for_break(args.port, args.baud, args.max_wait)
+        if result is None:
+            sys.exit(1)
 
-    # Phase 2: Capture boot
-    if isinstance(result, tuple):
-        # Got data without break — device already on
-        existing_port, first_byte = result
-        capture_boot(args.port, args.baud, log_dir, args.timeout,
-                     args.recovery_wait, existing_port, first_byte)
-    else:
-        # Break detected — close, wait, reopen
-        capture_boot(args.port, args.baud, log_dir, args.timeout,
-                     args.recovery_wait)
+        # Phase 2: Capture boot
+        if isinstance(result, tuple):
+            # Got data without break — device already on
+            existing_port, first_byte = result
+            capture_boot(args.port, args.baud, log_dir, args.timeout,
+                         args.recovery_wait, existing_port, first_byte)
+        else:
+            # Break detected — close, wait, reopen
+            capture_boot(args.port, args.baud, log_dir, args.timeout,
+                         args.recovery_wait)
+    except SerialConnectionError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

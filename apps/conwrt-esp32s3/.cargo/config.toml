@@ -1,0 +1,17 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+# Xtensa core/alloc are not shipped prebuilt: compile them from rust-src
+# (present in the esp fork toolchain) — esp-hal's own CI recipe (ADR-0012).
+[unstable]
+build-std = ["core", "alloc"]
+
+# esp-hal's no_std link template: xtensa-lx-rt's linkall.x (placed on the
+# linker path by its build script, like cortex-m-rt's link.x) plus the
+# bare-metal C runtime suppression. The GCC cross-linker ships inside the
+# `esp` toolchain — no PATH setup required.
+[target.'cfg(all(target_arch = "xtensa", target_os = "none"))']
+rustflags = [
+  "-C", "link-arg=-nostartfiles",
+  "-C", "link-arg=-Wl,-Tlinkall.x",
+]

@@ -30,15 +30,25 @@ Examples:
 
     # Show device state
     python3 scripts/serial-configure.py /dev/cu.usbserial-XXXX 57600 --show-config --show-firmware
+
+PORT may also be a remote serial-console bridge of the form tcp://HOST:PORT
+(baud is a property of the remote line and is ignored). From a Mac, forward
+the bridge port first: ssh -N -L 4002:127.0.0.1:4002 ai-legion, then use
+tcp://127.0.0.1:4002 as PORT.
 """
 import argparse
-import serial
 import sys
 import time
 from pathlib import Path
 
+from serial_transport import (
+    SerialConnectionError,
+    SerialLike,
+    open_serial,
+)
 
-def send_and_read(s: serial.Serial, command: str, wait: float = 2.0) -> str:
+
+def send_and_read(s: SerialLike, command: str, wait: float = 2.0) -> str:
     """Send a command via serial and read the response."""
     s.write((command + "\r\n").encode())
     time.sleep(wait)
@@ -60,7 +70,7 @@ def send_and_read(s: serial.Serial, command: str, wait: float = 2.0) -> str:
     return "\n".join(lines) if lines else "(ok)"
 
 
-def break_to_prompt(s: serial.Serial):
+def break_to_prompt(s: SerialLike):
     """Send Ctrl-C and Enter to get a clean shell prompt."""
     s.write(b"\x03")
     time.sleep(0.5)
@@ -74,9 +84,9 @@ def main():
         description="Configure OpenWrt device via serial console"
     )
     parser.add_argument("port", nargs="?", default="/dev/cu.usbserial-BG02QAPG",
-                        help="Serial port")
+                        help="serial port (local /dev path or tcp://HOST:PORT)")
     parser.add_argument("baud", nargs="?", type=int, default=57600,
-                        help="Baud rate (default: 57600)")
+                        help="baud rate (default: 57600; ignored for tcp://)")
     parser.add_argument("--set-ip", metavar="IP",
                         help="Set LAN IP address")
     parser.add_argument("--enable-password", action="store_true",
@@ -93,7 +103,11 @@ def main():
                         help="Print firmware version")
     args = parser.parse_args()
 
-    s = serial.Serial(args.port, args.baud, timeout=1)
+    try:
+        s = open_serial(args.port, args.baud, timeout=1)
+    except SerialConnectionError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     break_to_prompt(s)
 
     if args.show_firmware:

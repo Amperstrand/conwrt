@@ -17,6 +17,7 @@ from .base import (
     build_firewall_ops,
     build_verify_ops,
     keypair_sh,
+    wg0_uci_sh,
     static_route_sh,
     transport_sh,
     wg_cleanup_sh,
@@ -49,14 +50,14 @@ PEER_IP=$(echo "$RESPONSE" | json_get ipv4_address)
 PEER_IP=${{PEER_IP%%/*}}
 
 # Fetch server list and pick best server
-SERVERS=$(curl -s -m 15 "https://api.mullvad.net/public/relays/wireguard/")
+SERVERS=$(curl -s -m 15 -H "Accept: application/json" "https://api.mullvad.net/www/relays/wireguard/")
 if [ -n "{country_filter}" ]; then
     SERVER_ENTRY=$(echo "$SERVERS" | jq -r '[.[] | select(.country_code=="{country}")] | .[0]')
 else
     SERVER_ENTRY=$(echo "$SERVERS" | jq -r '.[0]')
 fi
 SERVER_IP=$(echo "$SERVER_ENTRY" | json_get ipv4_addr_in)
-SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get public_key)
+SERVER_KEY=$(echo "$SERVER_ENTRY" | json_get pubkey)
 SERVER_HOST=$(echo "$SERVER_ENTRY" | json_get hostname)
 SERVER_PORT=51820
 
@@ -64,24 +65,7 @@ SERVER_PORT=51820
 
 MULLVAD_PRIV=$(cat /tmp/vpn_private.key)
 
-# Configure WireGuard interface
-uci set network.wg0=interface
-uci set network.wg0.proto='wireguard'
-uci set network.wg0.private_key="$MULLVAD_PRIV"
-uci set network.wg0.listen_port='51820'
-uci add_list network.wg0.addresses="${{PEER_IP}}/32"
-uci set network.wg0.mtu='1280'
-uci set network.wg0.auto='1'
-
-# Add Mullvad peer
-uci add network wireguard_wg0
-uci set network.@wireguard_wg0[0].public_key="$SERVER_KEY"
-uci set network.@wireguard_wg0[0].endpoint_host="$SERVER_IP"
-uci set network.@wireguard_wg0[0].endpoint_port="$SERVER_PORT"
-uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'
-uci set network.@wireguard_wg0[0].route_allowed_ips='1'
-uci set network.@wireguard_wg0[0].persistent_keepalive='25'
-
+{wg0_uci_sh('"$MULLVAD_PRIV"', '"${PEER_IP}/32"', '"$SERVER_KEY"', '"$SERVER_IP"', '"$SERVER_PORT"')}
 {static_route_sh("SERVER_IP", gateway, upstream_iface, "mullvad_server_route")}
 """
 

@@ -43,6 +43,14 @@ def _print_timeline(ctx: RecoveryContext) -> None:
     log(f"  First OpenWrt pkt: {elapsed(tl.first_openwrt_packet)}")
     log(f"  SSH available:     {elapsed(tl.ssh_available)}")
 
+    if any((tl.serial_uboot_banner, tl.serial_kernel_start, tl.serial_procd_preinit,
+            tl.serial_procd_init, tl.serial_login_prompt)):
+        log(f"  Serial U-Boot:     {elapsed(tl.serial_uboot_banner)}")
+        log(f"  Serial kernel:     {elapsed(tl.serial_kernel_start)}")
+        log(f"  Serial preinit:    {elapsed(tl.serial_procd_preinit)}")
+        log(f"  Serial init:       {elapsed(tl.serial_procd_init)}")
+        log(f"  Serial login:      {elapsed(tl.serial_login_prompt)}")
+
     if tl.ssh_available and start:
         total = int(tl.ssh_available - start)
         log(f"  TOTAL TIME:        {total}s ({total // 60}m {total % 60}s)")

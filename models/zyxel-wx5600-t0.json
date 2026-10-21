@@ -73,6 +73,15 @@
         "mtd erase fip",
         "mtd write fip 0x46000000 0x0 ${filesize}",
         "reset"
+      ],
+      "resources_required": [
+        "power",
+        "serial-console",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup"
       ]
     },
     "serial-tftp-stock-restore": {
@@ -139,11 +148,26 @@
         "mtd erase bl2",
         "mtd write bl2 0x46000000 0x0 ${filesize}",
         "reset"
+      ],
+      "resources_required": [
+        "power",
+        "serial-console",
+        "tftp-server",
+        "recovery-subnet"
+      ],
+      "envelope": [
+        "partition-backup"
       ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
-      "command": "sysupgrade -n /tmp/firmware.bin"
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     }
   },
   "signatures": {

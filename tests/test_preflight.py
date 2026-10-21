@@ -103,6 +103,10 @@ class TestStaleIP(unittest.TestCase):
     @patch("flash.preflight.detect_platform", return_value="darwin")
     @patch("flash.preflight.subprocess.run")
     def test_stale_ip_detected(self, mock_run: MagicMock, _mock_plat: MagicMock) -> None:
+        # Regression note (#141): master 9bf8259 (via the #67 merge) downgraded
+        # an exact client-ip match on the target interface to warn — detection
+        # legitimately arms the alias before preflight (routed seats) and
+        # configure_interface_ip() tolerates re-arming it.
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="inet 192.168.0.10 netmask 0xffffff00 broadcast 192.168.0.255\n",
@@ -110,8 +114,9 @@ class TestStaleIP(unittest.TestCase):
         results = run_preflight_checks("en6", _profile(), "/tmp/fw.bin")
         stale = [r for r in results if r.name == "stale_ip"]
         self.assertEqual(len(stale), 1)
-        self.assertEqual(stale[0].status, "fail")
+        self.assertEqual(stale[0].status, "warn")
         self.assertIn("192.168.0.10", stale[0].message)
+        self.assertIn("idempotent", stale[0].message)
 
     @patch("flash.preflight.detect_platform", return_value="darwin")
     @patch("flash.preflight.subprocess.run")

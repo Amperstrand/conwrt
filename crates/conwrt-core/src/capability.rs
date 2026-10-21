@@ -53,6 +53,10 @@ pub struct HttpProbeResult {
     pub server_header: Option<String>,
     /// `<title>` contents, if any (used for stock-UI heuristics).
     pub title: Option<String>,
+    /// First ~256 bytes of the response body, lossy-decoded. Recovery-page
+    /// markers live here when the server sends no `Server` header and an
+    /// empty title (issue #131) — the classifier never needs more.
+    pub body_snippet: Option<String>,
 }
 
 /// The SSH identification banner (`SSH-2.0-<software>`).

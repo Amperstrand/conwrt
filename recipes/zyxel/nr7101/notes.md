@@ -67,8 +67,8 @@ The `sleep` values matter — the modem needs 2-3 seconds between command and re
 |------|---------|-----------------|
 | Model | `ATI` | Quectel / RG502Q-EA / Revision: RG502QEAACR13A03M4G_ZYXEL |
 | SIM status | `AT+CPIN?` | `+CPIN: READY` |
-| ICCID | `AT+CCID` | `+CCID: 89470715000046815804` |
-| IMSI | `AT+CIMI` | `242140003511580` |
+| ICCID | `AT+CCID` | `+CCID: <sim-iccid-local-only>` |
+| IMSI | `AT+CIMI` | `<sim-imsi-local-only>` |
 | Operator | `AT+COPS?` | `+COPS: 0,0,"ice+",13` |
 | Signal | `AT+CSQ` | `+CSQ: 19,99` (RSSI 19 = ~-77 dBm) |
 | Serving cell | `AT+QENG="servingcell"` | LTE FDD, MCC/MNC, EARFCN, RSRP, RSRQ, SNR |

@@ -131,7 +131,9 @@ def _env_ready() -> bool:
         return False
     if not credentials_available():
         return False
-    return Path(CASHU_BIN).exists()
+    # A bare command name is executable via PATH by subprocess; resolve
+    # it the same way before deciding the module is unavailable.
+    return bool(shutil.which(CASHU_BIN) or Path(CASHU_BIN).exists())
 
 
 if not _env_ready():
@@ -163,7 +165,10 @@ def _build_tollgate_wrt() -> Path:
         subprocess.run(["git", "clone", "--depth", "5", "--branch", TOLLGATE_REF,
                         TOLLGATE_REPO, str(src)], check=True, capture_output=True)
     env = {**os.environ, "PATH": f"{Path(go).parent}:{os.environ['PATH']}",
-           "CGO_ENABLED": "0"}
+           "CGO_ENABLED": "0",
+           # The binary must run on the OpenWrt VM regardless of the
+           # host building it (the docstring's amd64 build).
+           "GOOS": "linux", "GOARCH": "amd64"}
     subprocess.run([go, "get", "-C", str(src / "src"),
                     f"github.com/cashubtc/cdk-go@{CDK_GO_PIN}"],
                    check=True, capture_output=True, timeout=300, env=env)
@@ -297,7 +302,12 @@ def _mint_token() -> str:
         env=env, bufsize=1,
     )
     bolt = quote_id = None
+    parse_deadline = time.monotonic() + 60
     while True:
+        if time.monotonic() > parse_deadline:
+            proc.kill()
+            pytest.fail("nutshell invoice output stalled (no bolt11/quote "
+                        "within 60s) — refusing to hang the hardware job")
         line = proc.stdout.readline()
         if not line:
             break

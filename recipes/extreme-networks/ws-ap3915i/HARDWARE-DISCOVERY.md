@@ -176,7 +176,7 @@ The switch's dnsmasq will serve the initramfs. From initramfs, re-run sysupgrade
 - MAC: (stock switch MAC)
 - Zyxel GS1900-8HP A1 running V2.90 firmware
 - Web UI FULLY UNLOCKED. Mandatory password change resolved.
-- Web credentials: admin/Conwrt2026!
+- Web credentials: admin/<bench-password-2026>
 - SSH credentials: admin/1234 (separate from web, read-only CLI)
 - URL: http://192.168.1.1/cgi-bin/dispatcher.cgi
 - Password change: POST cmd=31 (not 30), requires XSSID from form and

@@ -15,9 +15,18 @@ path = "src/main.rs"
 conwrt-types = { path = "../../crates/conwrt-types" }
 conwrt-core = { path = "../../crates/conwrt-core" }
 conwrt-local-std = { path = "../../providers/conwrt-local-std" }
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
+conwrt-maas = { path = "../../crates/conwrt-maas" }
 clap = { workspace = true }
 pollster = { workspace = true }
 tokio = { workspace = true }
+
+xz2 = { version = "0.1", features = ["static"] }
+[dev-dependencies]
+httpmock = "0.7"
+serde_json = { workspace = true }
+sha2 = "0.10"
+tempfile = "3"
 
 [lints]
 workspace = true

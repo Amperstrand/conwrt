@@ -1,0 +1,41 @@
+## labgrid QEMU VM place for OpenWrt x86-64 — copy to ai-legion and run the
+## labgrid client THERE (QEMUDriver executes where the client runs; the
+## exporter does not run QEMU). Pristine per-acquire boots via disk_opts
+## snapshot=on (pattern proven by aparcar/openwrt-tests and Home Assistant OS).
+## Real image path is a local concern — keep it out of the repo.
+targets:
+  main:
+    resources:
+      NetworkService:
+        address: 127.0.0.1
+        port: 2222
+        username: root
+
+    drivers:
+      - QEMUDriver:
+          qemu_bin: qemu_x86_64
+          machine: pc
+          cpu: max
+          memory: 256M
+          disk: openwrt_image
+          disk_opts: snapshot=on
+          extra_args: >-
+            -nographic
+            -serial mon:stdio
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22
+            -device virtio-net-pci,netdev=net0
+          nic: ""
+      - ShellDriver:
+          login_prompt: 'Please press Enter to activate this console.'
+          prompt: 'root@[\w()]+:[^ ]+ '
+          await_login_timeout: 15
+          username: root
+      - SSHDriver:
+          connection_timeout: 120.0
+          explicit_scp_mode: true
+
+tools:
+  qemu_x86_64: /usr/bin/qemu-system-x86_64
+
+images:
+  openwrt_image: /srv/labgrid/images/openwrt-x86-64-generic-ext4-combined.img

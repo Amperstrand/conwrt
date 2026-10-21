@@ -1,0 +1,96 @@
+#!/bin/sh
+# PIA VPN watchdog (cron: every minute).
+# Functional health -> restart / rotate -> phased fail-open (validation) -> fail-closed (enforced).
+STATE=/tmp/pia
+LOG=/tmp/pia-watchdog.log
+PROFILE=/etc/openvpn/pia.ovpn
+mkdir -p "$STATE"
+exec >>"$LOG" 2>&1
+
+now=$(date +%s)
+enabled=$(uci -q get pia.settings.enabled 2>/dev/null || echo 1)
+phase=$(uci -q get pia.settings.phase 2>/dev/null || echo validation)
+fail_open_timeout=$(uci -q get pia.settings.fail_open_timeout 2>/dev/null || echo 180)
+require_stable=$(uci -q get pia.settings.require_stable_seconds 2>/dev/null || echo 86400)
+
+[ "$enabled" = 1 ] || exit 0
+
+last_run=$(cat "$STATE/last_run" 2>/dev/null || echo "$now")
+stable_total=$(cat "$STATE/stable_total" 2>/dev/null || echo 0)
+last_healthy=$(cat "$STATE/last_healthy" 2>/dev/null || echo "$now")
+restart_count=$(cat "$STATE/restart_count" 2>/dev/null || echo 0)
+restart_window=$(cat "$STATE/restart_window" 2>/dev/null || echo "$now")
+failed_open=0
+[ -f "$STATE/failopen" ] && failed_open=1
+
+verdict=$(/usr/bin/pia-health 2>&1)
+rc=$?
+echo "----- $(date) phase=$phase rc=$rc failopen=$failed_open :: $verdict"
+
+if [ "$rc" -eq 0 ]; then
+	echo "$now" > "$STATE/last_healthy"
+	# recover from fail-open once healthy for 60s
+	if [ "$failed_open" = 1 ]; then
+		fo_since=$(cat "$STATE/failopen_since" 2>/dev/null || echo "$now")
+		if [ $((now - fo_since)) -ge 60 ]; then
+			/usr/bin/pia-enforce
+			failed_open=0
+		fi
+	fi
+	# accumulate cumulative healthy time
+	prev=$(cat "$STATE/last_verdict" 2>/dev/null || echo healthy)
+	if [ "$prev" = healthy ]; then
+		dt=$((now - last_run))
+		if [ "$dt" -gt 0 ] && [ "$dt" -lt 300 ]; then
+			stable_total=$((stable_total + dt))
+		fi
+	fi
+	echo "$stable_total" > "$STATE/stable_total"
+	echo healthy > "$STATE/last_verdict"
+	# phase switch validation -> enforced
+	if [ "$phase" = validation ] && [ "$stable_total" -ge "$require_stable" ]; then
+		uci -q set pia.settings.phase=enforced
+		uci -q commit pia
+		logger -t pia-watchdog "phase -> enforced after ${stable_total}s healthy"
+		echo "PHASE SWITCH -> enforced (${stable_total}s)"
+		/usr/bin/pia-enforce
+	fi
+	echo "$now" > "$STATE/last_run"
+	exit 0
+fi
+
+# ---- unhealthy ----
+echo unhealthy > "$STATE/last_verdict"
+down=$((now - last_healthy))
+echo "$now" > "$STATE/last_run"
+echo "down for ${down}s"
+
+if [ "$down" -gt 60 ]; then
+	if [ $((now - restart_window)) -gt 300 ]; then restart_count=0; restart_window=$now; fi
+	restart_count=$((restart_count + 1))
+	echo "$restart_count" > "$STATE/restart_count"
+	echo "$restart_window" > "$STATE/restart_window"
+	logger -t pia-watchdog "unhealthy ${down}s -> restarting openvpn (attempt $restart_count)"
+	# on repeated failure, drop the unreliable endpoint from the pool
+	if [ "$restart_count" -ge 3 ]; then
+		bad=$(logread 2>/dev/null | grep 'Peer Connection Initiated with' | tail -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+		[ -z "$bad" ] && bad=$(logread 2>/dev/null | grep 'UDPv4 link remote' | tail -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+		if [ -n "$bad" ]; then
+			remaining=$(grep -c '^remote ' "$PROFILE")
+			if [ "$remaining" -gt 3 ]; then
+				cp "$PROFILE" "$PROFILE.bak"
+				grep -v "^remote $bad " "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
+				logger -t pia-watchdog "removed unreliable remote $bad (was $remaining)"
+			fi
+		fi
+	fi
+	/etc/init.d/openvpn restart 2>/dev/null
+fi
+
+# fail open only during validation phase
+if [ "$phase" = validation ] && [ "$down" -gt "$fail_open_timeout" ] && [ "$failed_open" = 0 ]; then
+	logger -t pia-watchdog "down ${down}s > timeout ${fail_open_timeout}s -> FAIL OPEN"
+	/usr/bin/pia-failopen
+	echo "$now" > "$STATE/failopen_since"
+fi
+exit 0

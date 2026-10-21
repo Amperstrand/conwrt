@@ -1,0 +1,20 @@
+[package]
+name = "conwrt-agent"
+description = "The conwrt agent binary — runs on OpenWrt/any Linux, exports capabilities to controllers (#108)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "conwrt-agent"
+path = "src/main.rs"
+
+[dependencies]
+conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
+tokio = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

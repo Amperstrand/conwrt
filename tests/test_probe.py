@@ -106,52 +106,75 @@ class TestSubnetHelpers:
 
 
 class TestConfigureInterface:
-    @patch("conwrt.cmd_probe.subprocess.run")
-    def test_assigns_new_alias(self, mock_run):
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=False)
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=True)
+    def test_assigns_new_alias(self, mock_add, mock_has):
         added = []
         result = _configure_interface("en6", "192.168.0.1", "", added)
         assert result == "192.168.0"
         assert "192.168.0.10" in added
-        # One call for assign (alias), no removal since no previous
-        assert mock_run.call_count == 1
-        call_args = mock_run.call_args[0][0]
-        assert call_args == ["ifconfig", "en6", "inet", "192.168.0.10", "netmask", "255.255.255.0", "alias"]
+        mock_add.assert_called_once_with("en6", "192.168.0.10", "24")
 
-    @patch("conwrt.cmd_probe.subprocess.run")
-    def test_same_subnet_no_reconfiguration(self, mock_run):
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=False)
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=True)
+    def test_same_subnet_no_reconfiguration(self, mock_add, mock_has):
         added = []
         result = _configure_interface("en6", "192.168.0.5", "192.168.0", added)
         assert result == "192.168.0"
-        assert mock_run.call_count == 0
+        assert mock_add.call_count == 0
 
-    @patch("conwrt.cmd_probe.subprocess.run")
-    def test_different_subnet_reconfigures(self, mock_run):
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=False)
+    @patch("conwrt.cmd_probe.remove_interface_ip", return_value=True)
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=True)
+    def test_different_subnet_reconfigures(self, mock_add, mock_remove, mock_has):
         added = ["192.168.0.10"]
         result = _configure_interface("en6", "10.0.0.1", "192.168.0", added)
         assert result == "10.0.0"
         assert "10.0.0.10" in added
         assert "192.168.0.10" not in added
-        # Two calls: remove old alias + assign new alias
-        assert mock_run.call_count == 2
-        remove_call = mock_run.call_args_list[0][0][0]
-        assert remove_call == ["ifconfig", "en6", "inet", "192.168.0.10", "-alias"]
-        assign_call = mock_run.call_args_list[1][0][0]
-        assert assign_call == ["ifconfig", "en6", "inet", "10.0.0.10", "netmask", "255.255.255.0", "alias"]
+        mock_remove.assert_called_once_with("en6", "192.168.0.10", "24")
+        mock_add.assert_called_once_with("en6", "10.0.0.10", "24")
+
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=False)
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=False)
+    def test_failed_alias_not_tracked(self, mock_add, mock_has):
+        added = []
+        result = _configure_interface("en6", "192.168.0.1", "", added)
+        assert result == "192.168.0"
+        assert added == [], "failed alias must not be tracked for cleanup"
+
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=True)
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=True)
+    def test_preexisting_address_not_tracked_for_cleanup(self, mock_has, mock_add):
+        added = []
+        result = _configure_interface("en6", "192.168.0.1", "", added)
+        assert result == "192.168.0"
+        assert added == [], "an address the operator already owns must never be queued for removal"
+        mock_add.assert_not_called()
+
+    @patch("conwrt.cmd_probe.remove_interface_ip", return_value=True)
+    @patch("conwrt.cmd_probe.interface_has_ip", return_value=False)
+    @patch("conwrt.cmd_probe.configure_interface_ip", return_value=True)
+    def test_old_alias_not_removed_when_not_ours(self, mock_add, mock_has, mock_remove):
+        added = []
+        result = _configure_interface("en6", "10.0.0.1", "192.168.0", added)
+        assert result == "10.0.0"
+        mock_remove.assert_not_called(), "previous-subnet address we did not add must survive"
 
 
 class TestCleanupAliases:
-    @patch("conwrt.cmd_probe.subprocess.run")
-    def test_removes_all_aliases(self, mock_run):
+    @patch("conwrt.cmd_probe.remove_interface_ip", return_value=True)
+    def test_removes_all_aliases(self, mock_remove):
         added = ["192.168.0.10", "10.0.0.10"]
         _cleanup_aliases("en6", added)
         assert len(added) == 0
-        assert mock_run.call_count == 2
+        assert mock_remove.call_count == 2
 
-    @patch("conwrt.cmd_probe.subprocess.run")
-    def test_empty_list_no_calls(self, mock_run):
+    @patch("conwrt.cmd_probe.remove_interface_ip", return_value=True)
+    def test_empty_list_no_calls(self, mock_remove):
         added = []
         _cleanup_aliases("en6", added)
-        assert mock_run.call_count == 0
+        assert mock_remove.call_count == 0
 
 
 class TestClassifyHttpState:

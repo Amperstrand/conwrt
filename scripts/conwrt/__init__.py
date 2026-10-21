@@ -37,7 +37,10 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
+        "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
+        "-h", "--help", "--version", "-V",
         "probe", "flow", "lan-migrate", "image", "-h", "--help", "--version", "-V",
+        "probe", "watch", "flow", "lan-migrate", "image", "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
@@ -72,8 +75,12 @@ def main() -> int:
         "setup-nor-recovery": ("conwrt.cmd_nor_recovery", "cmd_setup_nor_recovery"),
         "reset": ("conwrt.cmd_reset", "cmd_reset"),
         "probe": ("conwrt.cmd_probe", "cmd_probe"),
+        "watch": ("conwrt.cmd_watch", "cmd_watch"),
         "flow": ("conwrt.cmd_flow", "cmd_flow"),
         "lan-migrate": ("conwrt.cmd_lan_migrate", "cmd_lan_migrate"),
+        "bench-doctor": ("bench_doctor", "cmd_bench_doctor"),
+        "recovery-probe": ("conwrt.cmd_recovery_probe", "cmd_recovery_probe"),
+        "boot-watch": ("conwrt.cmd_boot_watch", "cmd_boot_watch"),
         "image": ("conwrt.cmd_image", "cmd_image"),
     }
 

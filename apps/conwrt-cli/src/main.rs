@@ -13,19 +13,21 @@
 //!   diagnosed device: typed, inspectable operations, verification intent,
 //!   and a hard refusal for anything but a confirmed OpenWrt identity
 //!   (I/O-free dry-run; the M7 executor applies plans later).
+//! - `conwrt maas flash …` / `conwrt maas vm …` — MAAS portable-lab
+//!   operations (#169): the verify→write→verify→inject disk pipeline and
+//!   the VM lifecycle (create/list/describe/destroy) over a region API.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{DohProfile, SqmProfile};
-use conwrt_core::ssh::{HostKeyView, TrustMode};
+use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
-use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
+use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
+use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-mod trust_store;
 
 #[derive(Parser)]
 #[command(
@@ -38,7 +40,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand)]
 enum Command {
     /// Validate device model JSON files against the model schema.
@@ -75,6 +76,33 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
+    /// IPv6 dark-device discovery (#156): probe-host self-check, active
+    /// Router Solicitation (rdisc6), RA decode, EUI-64 derivation, banner
+    /// probes. The tool that would have turned the 2026-10-12 x1860
+    /// incident into a ten-second diagnosis.
+    DiscoverV6 {
+        /// Interface to probe (e.g. enp5s0).
+        #[arg(long)]
+        interface: String,
+        /// Optionally derive the EUI-64 link-local for a MAC seen on the
+        /// wire (ARP/dump) and banner-probe it — works even with NO RA.
+        #[arg(long)]
+        mac: Option<String>,
+        /// Also probe these TCP ports on the discovered router link-local.
+        #[arg(long, value_delimiter = ',', default_value = "22,80")]
+        ports: Vec<u16>,
+    },
+    /// Agent controller subcommands (#108).
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+    /// MAAS portable-lab operations (#169): lab disk flashing and the VM
+    /// lifecycle (compose/deploy/list/describe/destroy) over the region API.
+    Maas {
+        #[command(subcommand)]
+        command: MaasCommand,
+    },
     /// Run the read-only diagnostic workflow against a scripted provider.
     Probe {
         /// Target address (used for reporting; the mock answers anything).
@@ -94,6 +122,10 @@ enum Command {
         /// Desired-state profile to apply.
         #[arg(long)]
         profile: ProfileChoice,
+        /// Explicitly forget the stored host key before connecting
+        /// (reflash/reimage escape hatch; logged, never silent).
+        #[arg(long)]
+        relearn_host_key: bool,
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
@@ -124,9 +156,10 @@ enum Command {
         /// Private key file for auth (omit to use password auth).
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Password for auth (ignored when --key is given).
-        #[arg(long, default_value = "")]
-        password: String,
+        /// Password for auth (ignored when --key is given; env
+        /// CONWRT_SSH_PASSWORD as fallback).
+        #[arg(long)]
+        password: Option<String>,
         /// Actually execute the mutating script (default is dry-run).
         #[arg(long)]
         execute: bool,
@@ -135,12 +168,19 @@ enum Command {
         dir: PathBuf,
     },
     /// Fingerprint a device over SSH with authenticated, read-only evidence
+    /// (TOFU host keys persist in ~/.config/conwrt/known_hosts —
+    /// $CONWRT_KNOWN_HOSTS overrides)
     /// (OpenWrt release, board name, hostname) — the confirming layer above
     /// the passive probe: upgrades an unconfirmed `ssh-only` classification.
     Fingerprint {
         /// Target address of the device.
         #[arg(long)]
         ip: IpAddr,
+        /// Explicitly forget the stored host key for this device before
+        /// connecting (the reflash/reimage escape hatch). TOFU re-learns
+        /// on success. Never silent: the action is logged.
+        #[arg(long)]
+        relearn_host_key: bool,
         /// SSH port.
         #[arg(long, default_value_t = 22)]
         port: u16,
@@ -150,9 +190,10 @@ enum Command {
         /// Private key file for auth (omit to use password auth).
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Password for auth (ignored when --key is given).
-        #[arg(long, default_value = "")]
-        password: String,
+        /// Password for auth (ignored when --key is given; env
+        /// CONWRT_SSH_PASSWORD as fallback).
+        #[arg(long)]
+        password: Option<String>,
     },
     Plan {
         /// Desired-state profile to plan.
@@ -187,7 +228,6 @@ enum Command {
         dir: PathBuf,
     },
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ScenarioChoice {
     Off,
@@ -197,7 +237,6 @@ enum ScenarioChoice {
     SshOnly,
     Stock,
 }
-
 impl ScenarioChoice {
     fn named(self) -> NamedScenario {
         match self {
@@ -210,18 +249,147 @@ impl ScenarioChoice {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ProfileChoice {
     Sqm,
     Doh,
 }
-
+#[derive(Subcommand)]
+enum MaasCommand {
+    /// Run the lab disk pipeline (verify → write → verify → inject) on a
+    /// target file or device. The image is checksum-gated before ANY
+    /// write; a seed is injected only after read-back verification.
+    Flash {
+        /// Image file to write.
+        #[arg(long)]
+        image: PathBuf,
+        /// Published SHA-256 of the image (64 hex chars).
+        #[arg(long)]
+        sha256: String,
+        /// Target file or block device to write. Block-device targets
+        /// must pass the specimen gate (USB transport, unmounted,
+        /// writable, ≥30GB; serial must match --serial-whitelist when
+        /// given) before any write.
+        #[arg(long)]
+        target: PathBuf,
+        /// Comma-separated USB serials allowed as block-device targets
+        /// (specimen gate, AGENTS.md MAC/serial rule).
+        #[arg(long, value_delimiter = ',')]
+        serial_whitelist: Option<Vec<String>>,
+        /// cloud-init user-data file (required with --meta-data).
+        #[arg(long, requires = "meta_data")]
+        user_data: Option<PathBuf>,
+        /// cloud-init meta-data file (required with --user-data).
+        #[arg(long, requires = "user_data")]
+        meta_data: Option<PathBuf>,
+        /// Optional cloud-init network-config file (requires the seed
+        /// pair --user-data/--meta-data).
+        #[arg(long, requires = "user_data")]
+        network_config: Option<PathBuf>,
+    },
+    /// VM lifecycle over the MAAS region API.
+    Vm {
+        #[command(subcommand)]
+        command: VmCommand,
+    },
+}
+#[derive(Subcommand)]
+enum VmCommand {
+    /// Compose, commission, allocate, and deploy a VM (resolves when
+    /// Deployed).
+    Create {
+        /// Instance hostname (DNS label).
+        #[arg(long)]
+        name: String,
+        /// Virtual CPUs.
+        #[arg(long, default_value_t = 2)]
+        cores: u16,
+        /// Memory in MiB.
+        #[arg(long, default_value_t = 2048)]
+        memory_mib: u32,
+        /// Root disk in GiB.
+        #[arg(long, default_value_t = 20)]
+        disk_gib: u32,
+        /// Region API base, e.g. http://maas-host:5240/MAAS/api/2.0.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+        /// VM host id to compose on.
+        #[arg(long, env = "CONWRT_MAAS_VM_HOST")]
+        vm_host: String,
+        /// Poll interval while awaiting lifecycle states (ms).
+        #[arg(long, default_value_t = 1000)]
+        poll_ms: u64,
+        /// Maximum poll attempts per awaited state.
+        #[arg(long, default_value_t = 60)]
+        max_polls: u32,
+    },
+    /// List all machines the region knows.
+    List {
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+    /// Describe one machine by system_id.
+    Describe {
+        /// MAAS system_id.
+        #[arg(long)]
+        system_id: String,
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+    /// Release and delete a machine.
+    Destroy {
+        /// MAAS system_id.
+        #[arg(long)]
+        system_id: String,
+        /// Region API base.
+        #[arg(long, env = "CONWRT_MAAS_REGION")]
+        region: String,
+    },
+}
+#[derive(Subcommand)]
+enum AgentCommand {
+    /// Connect to an agent: handshake + list capabilities.
+    Info {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+    },
+    /// Acquire a resource lease.
+    Lease {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+        /// Resource to lease (e.g. uart0, eth0).
+        #[arg(long)]
+        resource: String,
+        /// Shared (non-exclusive) lease.
+        #[arg(long)]
+        shared: bool,
+    },
+    /// Query a stream transfer's status (the resume token).
+    Status {
+        /// Agent address (host:port).
+        #[arg(long)]
+        addr: String,
+        /// Transfer to query.
+        #[arg(long)]
+        transfer_id: u64,
+    },
+}
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Models { dir } => cmd_models_validate(&dir),
+        Command::Agent { command } => cmd_agent(command),
+        Command::Maas { command } => cmd_maas(command),
         Command::Identify { mac, dir } => cmd_identify(&mac, &dir),
+        Command::DiscoverV6 {
+            interface,
+            mac,
+            ports,
+        } => cmd_discover_v6(&interface, mac.as_deref(), &ports),
         Command::Diagnose {
             ip,
             interface,
@@ -232,12 +400,21 @@ fn main() -> ExitCode {
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
         Command::Fingerprint {
             ip,
+            relearn_host_key,
             port,
             user,
             key,
             password,
-        } => cmd_fingerprint(ip, port, &user, key.as_deref(), &password),
+        } => cmd_fingerprint(
+            ip,
+            relearn_host_key,
+            port,
+            &user,
+            key.as_deref(),
+            password.as_deref(),
+        ),
         Command::Apply {
+            relearn_host_key,
             profile,
             model_id,
             download_kbps,
@@ -253,6 +430,7 @@ fn main() -> ExitCode {
             execute,
             dir,
         } => cmd_apply(
+            relearn_host_key,
             profile,
             &model_id,
             download_kbps,
@@ -264,7 +442,7 @@ fn main() -> ExitCode {
             port,
             &user,
             key.as_deref(),
-            &password,
+            password.as_deref(),
             execute,
             &dir,
         ),
@@ -293,7 +471,6 @@ fn main() -> ExitCode {
         ),
     }
 }
-
 fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf) {
     match conwrt_types::registry::ModelRegistry::load_dir(dir) {
         Ok((registry, invalid)) if invalid.is_empty() => (registry, dir.to_path_buf()),
@@ -310,7 +487,6 @@ fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf)
         }
     }
 }
-
 fn cmd_models_validate(dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
     let models = registry.models();
@@ -334,7 +510,6 @@ fn cmd_models_validate(dir: &Path) -> ExitCode {
     println!("\n{} model(s) valid in {}", models.len(), dir.display());
     ExitCode::SUCCESS
 }
-
 fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
     let mac = match conwrt_types::MacAddress::parse(mac) {
         Ok(m) => m,
@@ -365,7 +540,6 @@ fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
     }
     ExitCode::SUCCESS
 }
-
 fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
     let mut prober = MockProber::responding(ip, scenario.named());
@@ -380,7 +554,6 @@ fn cmd_probe(ip: IpAddr, scenario: ScenarioChoice, dir: &Path) -> ExitCode {
     println!("\n(provider: scripted mock — `conwrt diagnose` uses the local provider)");
     ExitCode::SUCCESS
 }
-
 fn cmd_diagnose(
     ip: IpAddr,
     interface: Option<String>,
@@ -412,7 +585,6 @@ fn cmd_diagnose(
     println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
     ExitCode::SUCCESS
 }
-
 fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
     println!("target:     {}", diagnosis.ip);
     if let Some(mac) = diagnosis.mac {
@@ -436,7 +608,6 @@ fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_plan(
     profile: ProfileChoice,
@@ -512,7 +683,6 @@ fn cmd_plan(
         }
     }
 }
-
 fn default_sqm() -> SqmProfile {
     SqmProfile {
         download_kbps: 10_000,
@@ -524,22 +694,18 @@ fn default_sqm() -> SqmProfile {
         overhead: 0,
     }
 }
-
 fn cmd_fingerprint(
     ip: IpAddr,
+    relearn_host_key: bool,
     port: u16,
     user: &str,
     key: Option<&Path>,
-    password: &str,
+    password: Option<&str>,
 ) -> ExitCode {
-    let auth = match key {
-        Some(path) => SshAuth::KeyFile {
-            path: path.to_path_buf(),
-            passphrase: None,
-        },
-        None if !password.is_empty() => SshAuth::Password(password.to_string()),
-        None => {
-            eprintln!("provide --key <path> or --password <secret> for authentication");
+    let auth = match resolve_auth(key, password) {
+        Ok(auth) => auth,
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::from(2);
         }
     };
@@ -548,6 +714,10 @@ fn cmd_fingerprint(
         user: user.to_string(),
         auth,
     };
+    if relearn_host_key {
+        eprintln!("# relearn-host-key: forgetting stored key for {ip}:{port}");
+        store_forget(&target.addr);
+    }
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -555,8 +725,8 @@ fn cmd_fingerprint(
             return ExitCode::from(2);
         }
     };
-    let kh_path = trust_store::known_hosts_path();
-    let mut store = trust_store::load(&kh_path);
+    let kh_path = FileTrustStore::default_path();
+    let mut store = FileTrustStore::new(kh_path.clone());
     let known_before = store.entries(&target.addr);
     let session = match runtime.block_on(connect(
         &target,
@@ -615,20 +785,13 @@ fn cmd_fingerprint(
     );
     ExitCode::SUCCESS
 }
-
-fn ssh_auth(key: Option<&Path>, password: &str) -> Result<SshAuth, String> {
-    match key {
-        Some(path) => Ok(SshAuth::KeyFile {
-            path: path.to_path_buf(),
-            passphrase: None,
-        }),
-        None if !password.is_empty() => Ok(SshAuth::Password(password.to_string())),
-        None => Err("provide --key <path> or --password <secret> for authentication".into()),
-    }
+fn store_forget(addr: &str) {
+    use conwrt_core::ssh::TrustStore;
+    FileTrustStore::new(FileTrustStore::default_path()).forget(addr);
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_apply(
+    relearn_host_key: bool,
     profile: ProfileChoice,
     model_id: &str,
     download_kbps: Option<u32>,
@@ -640,7 +803,7 @@ fn cmd_apply(
     port: u16,
     user: &str,
     key: Option<&Path>,
-    password: &str,
+    password: Option<&str>,
     execute: bool,
     dir: &Path,
 ) -> ExitCode {
@@ -667,7 +830,7 @@ fn cmd_apply(
         }
     };
 
-    let auth = match ssh_auth(key, password) {
+    let auth = match resolve_auth(key, password) {
         Ok(auth) => auth,
         Err(msg) => {
             eprintln!("{msg}");
@@ -679,6 +842,10 @@ fn cmd_apply(
         user: user.to_string(),
         auth,
     };
+    if relearn_host_key {
+        eprintln!("# relearn-host-key: forgetting stored key for {ip}:{port}");
+        store_forget(&target.addr);
+    }
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -686,8 +853,8 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let kh_path = trust_store::known_hosts_path();
-    let mut store = trust_store::load(&kh_path);
+    let kh_path = FileTrustStore::default_path();
+    let mut store = FileTrustStore::new(kh_path.clone());
     let known_before = store.entries(&target.addr);
     let session = match runtime.block_on(connect(
         &target,
@@ -736,7 +903,6 @@ fn cmd_apply(
             return ExitCode::FAILURE;
         }
     }
-
     let plan = match plan_profile(&confirmed, &model, &profile) {
         Ok(plan) => plan,
         Err(reason) => {
@@ -756,7 +922,6 @@ fn cmd_apply(
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
         return ExitCode::SUCCESS;
     }
-
     eprintln!("# executing on {ip} ...");
     match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
         Ok(outcome) if outcome.fully_verified() => {
@@ -767,14 +932,6 @@ fn cmd_apply(
             ExitCode::SUCCESS
         }
         Ok(outcome) => {
-            // The executor deliberately skips verification when the apply
-            // script failed; its collected stderr is the only actionable
-            // diagnostic (e.g. an unreachable package feed) — surface it
-            // before the (empty) failing-check list.
-            if !outcome.stderr.is_empty() {
-                eprintln!("apply stderr:");
-                eprintln!("{}", outcome.stderr);
-            }
             eprintln!(
                 "apply incomplete: applied={} — failing checks:",
                 outcome.applied
@@ -816,6 +973,570 @@ fn build_profile(
     }
 }
 
+fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCode {
+    use conwrt_local_std::v6;
+
+    println!("=== probe-host self-check ({}):", interface);
+    let check = v6::self_check(interface);
+    println!(
+        "  exists={} carrier={:?} ipv6_disabled={:?} link_local={}",
+        check.exists,
+        check.carrier,
+        check.ipv6_disabled,
+        check
+            .link_local
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "none".into())
+    );
+    for problem in check.problems() {
+        println!("  !! {problem}");
+    }
+    if !check.ready() {
+        println!("\nfix the problems above first — the prober itself cannot speak v6.");
+    }
+    println!("\n=== soliciting router advertisement (rdisc6):");
+    match v6::solicit_router_advertisement(interface, 2) {
+        Ok(Some(ra)) => {
+            println!(
+                "  router mac      : {:?}",
+                ra.router_mac.map(|m| m.to_string())
+            );
+            println!(
+                "  router link-local: {}",
+                ra.router_link_local
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "?".into())
+            );
+            println!("  prefixes        : {:?}", ra.prefixes);
+            println!("  dns             : {:?}", ra.dns_servers);
+            println!(
+                "  stateful addr/other: {}/{}",
+                ra.stateful_address, ra.stateful_other
+            );
+            println!("  mtu             : {:?}", ra.mtu);
+            println!("\n  ready commands:");
+            for cmd in ra.commands(interface) {
+                println!("    {cmd}");
+            }
+            if let (Some(ll), Some(idx)) = (ra.router_link_local, v6::interface_index(interface)) {
+                for port in ports {
+                    if let Some(banner) =
+                        v6::banner_probe_v6(ll, idx, *port, std::time::Duration::from_secs(3))
+                    {
+                        println!("    :{port} banner: {banner:?}");
+                    }
+                }
+            }
+        }
+        Ok(None) => {
+            println!("  no router answered — try --mac for EUI-64 derivation without an RA")
+        }
+        Err(e) => println!("  {e}"),
+    }
+    if let Some(mac_str) = mac {
+        match conwrt_types::MacAddress::parse(mac_str) {
+            Ok(mac) => {
+                let ll = v6::derive_eui64_link_local(&mac);
+                println!("\n=== EUI-64 for {mac}: {ll}");
+                if let Some(idx) = v6::interface_index(interface) {
+                    for port in ports {
+                        match v6::banner_probe_v6(ll, idx, *port, std::time::Duration::from_secs(3))
+                        {
+                            Some(banner) => println!("    :{port} banner: {banner:?}"),
+                            None => println!("    :{port} no answer"),
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_maas(command: MaasCommand) -> ExitCode {
+    match command {
+        MaasCommand::Flash {
+            image,
+            sha256,
+            target,
+            user_data,
+            meta_data,
+            network_config,
+            serial_whitelist,
+        } => cmd_maas_flash(
+            &image,
+            &sha256,
+            &target,
+            user_data,
+            meta_data,
+            network_config,
+            serial_whitelist,
+        ),
+        MaasCommand::Vm { command } => cmd_maas_vm(command),
+    }
+}
+
+fn cmd_maas_flash(
+    image_path: &Path,
+    sha256: &str,
+    target: &Path,
+    user_data: Option<PathBuf>,
+    meta_data: Option<PathBuf>,
+    network_config: Option<PathBuf>,
+    serial_whitelist: Option<Vec<String>>,
+) -> ExitCode {
+    use conwrt_local_std::block::FileBlockWriter;
+    use conwrt_maas::flash::{CloudInitSeed, DiskFlashPlan, Sha256, execute_flash};
+    use std::str::FromStr;
+
+    let image = match std::fs::read(image_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("cannot read image {}: {e}", image_path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let digest = match Sha256::from_str(sha256) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("--sha256: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // #305: the documented MAAS artifact is *.img.xz — verify the
+    // ARCHIVE checksum against --sha256, then flash the DECOMPRESSED
+    // image (the Python original's xzcat flow). Writing the archive
+    // bytes verbatim leaves the disk starting with an XZ stream.
+    let published_sha = sha256;
+    const XZ_MAGIC: &[u8] = b"\xfd7zXZ\x00";
+    let (image, digest) = if image.starts_with(XZ_MAGIC) {
+        if Sha256::hash(&image) != digest {
+            eprintln!(
+                "archive checksum mismatch: refusing to decompress or write {}",
+                image_path.display()
+            );
+            return ExitCode::from(2);
+        }
+        let mut decompressed = Vec::new();
+        use std::io::Read;
+        if let Err(e) = xz2::read::XzDecoder::new(&image[..]).read_to_end(&mut decompressed) {
+            eprintln!("cannot decompress {}: {e}", image_path.display());
+            return ExitCode::from(2);
+        }
+        let decompressed_sha = Sha256::hash(&decompressed);
+        (decompressed, decompressed_sha)
+    } else {
+        (image, digest)
+    };
+    let had_network_config = network_config.is_some();
+    let mut plan = DiskFlashPlan::new(digest);
+    if let (Some(ud_path), Some(md_path)) = (&user_data, &meta_data) {
+        let user_data = match std::fs::read_to_string(ud_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot read user-data {}: {e}", ud_path.display());
+                return ExitCode::from(2);
+            }
+        };
+        let meta_data = match std::fs::read_to_string(md_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot read meta-data {}: {e}", md_path.display());
+                return ExitCode::from(2);
+            }
+        };
+        let network_config = match network_config {
+            Some(p) => match std::fs::read_to_string(&p) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("cannot read network-config {}: {e}", p.display());
+                    return ExitCode::from(2);
+                }
+            },
+            None => None,
+        };
+        plan = plan.with_seed(CloudInitSeed {
+            user_data,
+            meta_data,
+            network_config,
+        });
+    }
+
+    // Specimen gate (AGENTS.md MAC/serial rule, #302): block-device
+    // targets need identity evidence — an explicit serial whitelist is
+    // REQUIRED (an unnamed "any USB disk" pass is a wrong-unit flash) —
+    // and the verified device is opened read+write immediately so the
+    // destructive write goes through the pinned inode, not a later
+    // re-resolution of the /dev/sdX name. Regular files (CI, lab
+    // staging) pass through.
+    let is_device = match std::fs::metadata(target) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            meta.file_type().is_block_device()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            eprintln!("cannot stat target {}: {e}", target.display());
+            return ExitCode::from(2);
+        }
+    };
+    let mut writer = if is_device {
+        let whitelist = serial_whitelist.as_deref().unwrap_or(&[]);
+        if whitelist.is_empty() {
+            eprintln!(
+                "flash refused: block-device targets require --serial-whitelist \
+                 (specimen gate, AGENTS.md serial rule)"
+            );
+            return ExitCode::from(2);
+        }
+        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => println!(
+                "verified:  {} usb serial={} {}GB rw",
+                target.display(),
+                id.serial.as_deref().unwrap_or("?"),
+                id.size_bytes.unwrap_or(0) / 1_000_000_000
+            ),
+            Err(msg) => {
+                eprintln!("flash refused: {msg}");
+                return ExitCode::from(2);
+            }
+        }
+        match FileBlockWriter::open_device(target) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("cannot pin target {}: {e}", target.display());
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        FileBlockWriter::new(target)
+    };
+    match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
+        Ok(report) => {
+            println!("image:     {}", image_path.display());
+            println!("sha256:    {published_sha} (verified before write)");
+            println!("target:    {}", target.display());
+            println!(
+                "written:   {} bytes (read-back verified)",
+                report.bytes_written
+            );
+            if report.seed_staged {
+                println!(
+                    "seed:      staged at {}.seed/ (user-data, meta-data{})",
+                    target.display(),
+                    if had_network_config {
+                        ", network-config"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("flash refused: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Real clock for provider polling (tokio sleep — the CLI owns a runtime).
+struct RealTime;
+
+impl conwrt_core::Time for RealTime {
+    async fn sleep_ms(&mut self, ms: u64) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+}
+
+fn maas_runtime() -> Result<tokio::runtime::Runtime, ExitCode> {
+    tokio::runtime::Runtime::new().map_err(|e| {
+        eprintln!("cannot start async runtime: {e}");
+        ExitCode::from(2)
+    })
+}
+
+fn cmd_maas_vm(command: VmCommand) -> ExitCode {
+    use conwrt_local_std::maas::HttpMaasClient;
+    use conwrt_maas::provider::{ComputeProvider, MaasProvider, VmSpec};
+
+    let rt = match maas_runtime() {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+
+    fn http_client(region: &str, vm_host: &str) -> Result<HttpMaasClient, ExitCode> {
+        let mut client = HttpMaasClient::new(region, vm_host).map_err(|e| {
+            eprintln!("{e}");
+            ExitCode::from(2)
+        })?;
+        if let Ok(key) = std::env::var("CONWRT_MAAS_AUTH") {
+            client = match client.with_api_key(&key) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return Err(ExitCode::from(2));
+                }
+            };
+            // RFC 5849 §3.4.4: PLAINTEXT credentials need TLS; the
+            // opt-in exists for isolated http lab regions only.
+            if std::env::var("CONWRT_MAAS_INSECURE_HTTP").ok().as_deref() == Some("1") {
+                client = client.allow_insecure_http();
+            }
+        }
+        Ok(client)
+    }
+
+    match command {
+        VmCommand::Create {
+            name,
+            cores,
+            memory_mib,
+            disk_gib,
+            region,
+            vm_host,
+            poll_ms,
+            max_polls,
+        } => {
+            let spec = VmSpec {
+                name,
+                cores,
+                memory_mib,
+                disk_gib,
+            };
+            let client = match http_client(&region, &vm_host) {
+                Ok(c) => c,
+                Err(code) => return code,
+            };
+            let mut provider = MaasProvider::new(client, RealTime).with_polling(poll_ms, max_polls);
+            match rt.block_on(provider.create_vm(&spec)) {
+                Ok(vm) => {
+                    println!("created:   {} ({})", vm.system_id, vm.hostname);
+                    println!("state:     {}", vm.state);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("create failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::List { region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.list_vms()) {
+                Ok(vms) => {
+                    if vms.is_empty() {
+                        println!("no machines");
+                    }
+                    for vm in vms {
+                        println!("{:<10} {:<20} {}", vm.system_id, vm.hostname, vm.state);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("list failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::Describe { system_id, region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.describe_vm(&system_id)) {
+                Ok(vm) => {
+                    println!("system_id: {}", vm.system_id);
+                    println!("hostname:  {}", vm.hostname);
+                    println!("state:     {}", vm.state);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("describe failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        VmCommand::Destroy { system_id, region } => {
+            let mut provider = MaasProvider::new(
+                {
+                    match http_client(&region, "unused") {
+                        Ok(c) => c,
+                        Err(code) => return code,
+                    }
+                },
+                RealTime,
+            );
+            match rt.block_on(provider.destroy_vm(&system_id)) {
+                Ok(()) => {
+                    println!("destroyed: {system_id} (released and deleted)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("destroy failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    }
+}
+
+fn cmd_agent(command: AgentCommand) -> ExitCode {
+    use conwrt_agent_proto::controller::AgentClient;
+    use conwrt_agent_proto::protocol::DisconnectPolicy;
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match command {
+        AgentCommand::Info { addr } => {
+            let caps = rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await
+            });
+            match caps {
+                Ok(caps) => {
+                    println!("connected to {addr}");
+                    println!("capabilities ({}):", caps.len());
+                    for c in &caps {
+                        let detail = if c.detail.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                " [{}]",
+                                c.detail
+                                    .iter()
+                                    .map(|(k, v)| format!("{k}={v}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        };
+                        println!("  {}{}", c.name, detail);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        AgentCommand::Lease {
+            addr,
+            resource,
+            shared,
+        } => {
+            // #378: the lease is held for the process lifetime — a
+            // heartbeat loop keeps it alive and Ctrl-C releases it. An
+            // acquired-then-abandoned lease pins the resource until
+            // agent restart.
+            let result: Result<conwrt_agent_proto::protocol::LeaseResponse, _> =
+                rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await?;
+                let resp = client
+                    .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+                        resource,
+                        exclusive: !shared,
+                        on_disconnect: DisconnectPolicy::Abort,
+                    })
+                    .await?;
+                let conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                } = resp
+                else {
+                    return Ok::<_, conwrt_agent_proto::controller::ClientError>(resp);
+                };
+                println!(
+                    "lease {lease_id} granted (heartbeat every {heartbeat_ms}ms; Ctrl-C to release)"
+                );
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(
+                            heartbeat_ms.into(),
+                        )) => {
+                            client.heartbeat(lease_id).await?;
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            let released = client.release_lease(lease_id).await?;
+                            if released {
+                                println!("lease {lease_id} released");
+                            } else {
+                                eprintln!("lease {lease_id} was already gone");
+                            }
+                            break;
+                        }
+                    }
+                }
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                })
+            });
+            match result {
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { .. }) => {
+                    ExitCode::SUCCESS
+                }
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Denied { holder }) => {
+                    eprintln!("denied (holder: {holder:?})");
+                    ExitCode::from(1)
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        AgentCommand::Status { addr, transfer_id } => {
+            let result = rt.block_on(async {
+                let mut client = AgentClient::connect(&addr).await?;
+                client.handshake("conwrt-cli").await?;
+                client.stream_status(transfer_id).await
+            });
+            match result {
+                Ok(ack) => {
+                    // Offset and state are separate fields: the old
+                    // "{contiguous}/{state} bytes" printed nonsense like
+                    // "4096/in progress bytes" (#378).
+                    println!(
+                        "transfer {transfer_id}: {} bytes (state: {})",
+                        ack.contiguous,
+                        if ack.done { "done" } else { "in progress" },
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("agent error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
+}
+
 /// After a successful connection, persist a first-use host key so the
 /// trust ladder's changed-key refusal protects *later* invocations
 /// (TOFU with a throwaway store accepts any spoofed endpoint once).
@@ -828,18 +1549,14 @@ fn persist_new_host_key(
     if known_before.iter().any(|k| k == key) {
         return; // already pinned in the persistent store
     }
-    match trust_store::remember_host_key(kh_path, addr, key) {
-        Ok(true) => println!(
-            "host key:   {} (first use; recorded in {})",
-            key.fingerprint,
-            kh_path.display()
-        ),
-        Ok(false) => {}
-        Err(e) => eprintln!(
-            "warning: could not record host key in {}: {e}",
-            kh_path.display()
-        ),
-    }
+    use conwrt_core::ssh::TrustStore;
+    let mut store = FileTrustStore::new(kh_path.to_path_buf());
+    store.remember(addr, key);
+    println!(
+        "host key:   {} (first use; recorded in {})",
+        key.fingerprint,
+        kh_path.display()
+    );
 }
 
 /// The modeled board name: `/tmp/sysinfo/board_name` reports the
@@ -879,10 +1596,14 @@ mod tests {
                 version: "24".into(),
                 board_name: board_name.map(str::to_string),
                 default_ip: None,
+                extras: Default::default(),
             },
             capabilities: None,
             flash_methods: None,
             mac_oui: Vec::new(),
+            serial_console: None,
+            warnings: None,
+            extras: Default::default(),
         }
     }
 

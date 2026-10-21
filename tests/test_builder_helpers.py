@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 import base64
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
 from unittest.mock import MagicMock
+
+import pytest
 
 from config import ConwrtConfig, WifiAPConfig
 from profile import build_plan
@@ -16,7 +23,7 @@ from profile.builder import (
     _ssh_key_ops,
     _uc_packages_for_mode,
 )
-from profile.ops import ShellCommand
+from profile.ops import ShellCommand, UciSet
 from profile.plan import StepKind
 from ssh_utils import DROPBEAR_AUTH_KEYS_PATH
 
@@ -49,27 +56,37 @@ def _make_uc(
 class TestSshKeyFirstboot:
     def test_single_key_uses_redirect(self):
         result = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
-        assert "echo 'ssh-ed25519 AAAA' >" in result
+        assert "printf '%s\\n' 'ssh-ed25519 AAAA' >" in result
 
     def test_single_key_has_mkdir_and_chmod(self):
         result = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
         assert result.startswith("mkdir -p")
+        assert "chmod 700" in result  # dir: dropbear rejects keys on loose dirs
         assert "chmod 600" in result
 
     def test_two_keys_first_redirect_second_append(self):
         result = _ssh_key_firstboot(["key1", "key2"])
         lines = result.split("\n")
-        key_lines = [l for l in lines if l.startswith("echo")]
+        key_lines = [l for l in lines if l.startswith("printf")]
         assert len(key_lines) == 2
         assert ">" in key_lines[0] and ">>" not in key_lines[0]
         assert ">>" in key_lines[1]
 
     def test_empty_list_only_mkdir_chmod(self):
+        # Empty keys never reach the step in practice, but the helper must
+        # not bake key-only-auth into an empty step.
         result = _ssh_key_firstboot([])
         lines = result.split("\n")
         assert len(lines) == 2
         assert lines[0].startswith("mkdir -p")
-        assert lines[1].startswith("chmod 600")
+        assert lines[1].startswith("chmod 700")
+
+    def test_keys_bake_key_only_auth(self):
+        # #155: a baked key means key-only dropbear (no password surface).
+        result = _ssh_key_firstboot(["key1"])
+        assert "PasswordAuth='off'" in result
+        assert "RootPasswordAuth='off'" in result
+        assert "uci commit dropbear" in result
 
     def test_contains_dropbear_path(self):
         result = _ssh_key_firstboot(["key1"])
@@ -87,37 +104,69 @@ class TestSshKeyFirstboot:
 # ===================================================================
 
 class TestSshKeyOps:
-    def test_single_key_returns_three_ops(self):
+    def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        assert len(ops) == 3
-        assert all(isinstance(op, ShellCommand) for op in ops)
+        # mkdir, chmod 700, printf, chmod 600, chown, verify-gate, readback
+        # (ShellCommand) + key-only UciSet + commit (#155) + restart (#229)
+        shells = [op for op in ops if isinstance(op, ShellCommand)]
+        assert len(shells) == 7
+
+    def test_ops_bake_key_only_auth(self):
+        # #155: ops carry the same key-only dropbear config as firstboot.
+        ops = _ssh_key_ops(["key1"])
+        assert any(isinstance(op, UciSet) for op in ops)
+        uci = next(op for op in ops if isinstance(op, UciSet))
+        assert uci.values == {"PasswordAuth": "off", "RootPasswordAuth": "off"}
 
     def test_single_key_ops_content(self):
         ops = _ssh_key_ops(["key1"])
         assert "mkdir -p" in ops[0].command
-        assert "echo 'key1' >" in ops[1].command
-        assert "chmod 600" in ops[2].command
+        assert "chmod 700" in ops[1].command
+        assert "printf" in ops[2].command and "'key1'" in ops[2].command
+        assert "chmod 600" in ops[3].command
+        assert "chown 0:0" in ops[4].command
+        assert "grep -qF 'key1'" in ops[5].command
+        assert "|| exit 1" in ops[5].command
 
-    def test_two_keys_returns_four_ops(self):
+    def test_two_keys_returns_eleven_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        assert len(ops) == 4
-        # mkdir, echo key1 >, echo key2 >>, chmod
-        assert ">" in ops[1].command and ">>" not in ops[1].command
-        assert ">>" in ops[2].command
+        # mkdir, chmod 700, printf x2, chmod 600, chown, gate, readback,
+        # UciSet, commit, restart
+        assert len(ops) == 11
+        assert ">" in ops[2].command and ">>" not in ops[2].command
+        assert ">>" in ops[3].command
 
     def test_empty_keys_returns_mkdir_chmod(self):
         ops = _ssh_key_ops([])
         assert len(ops) == 2
         assert "mkdir" in ops[0].command
-        assert "chmod" in ops[1].command
+        assert "chmod 700" in ops[1].command
+        # Empty keys: NO key-only-auth ops (nothing would unlock).
 
     def test_ops_match_firstboot_lines(self):
         keys = ["ssh-ed25519 AAA", "ssh-ed25519 BBB"]
         fb = _ssh_key_firstboot(keys)
         ops = _ssh_key_ops(keys)
-        # Each op command should appear as a line in the firstboot script
+        # Each SHELL op should appear as a line in the firstboot script; the
+        # UciSet/UciCommit pair mirrors the same uci lines textually.
+        from profile.ops import UciCommit, ServiceAction
         for op in ops:
-            assert op.command in fb
+            if isinstance(op, ShellCommand):
+                if "grep -qF" in op.command or "uci get dropbear" in op.command:
+                    # gate + readback: fb uses the verbose { echo; exit 1; }
+                    # forms for both, so compare by keyword, not verbatim
+                    keyword = "grep -qF" if "grep -qF" in op.command else "uci get dropbear"
+                    assert keyword in op.command and keyword in fb
+                    assert "exit 1" in fb
+                    continue
+                assert op.command in fb
+            elif isinstance(op, ServiceAction):
+                assert f"/etc/init.d/{op.name} {op.action}" in fb
+            elif isinstance(op, UciSet):
+                for k, v in op.values.items():
+                    assert f"uci set dropbear.{op.section}.{k}='{v}'" in fb
+            elif isinstance(op, UciCommit):
+                assert f"uci commit {op.config}" in fb
 
 
 # ===================================================================
@@ -546,9 +595,11 @@ class TestExtraSshKeys:
         )
         steps = [s for s in plan.steps if s.kind == StepKind.SSH_KEY]
         fb = steps[0].firstboot_script
-        # Count occurrences of the key (stripped)
+        # Count occurrences of the key across the WRITE lines only — the
+        # #229 verify-gate legitimately re-references the key in its grep.
         stripped = "ssh-ed25519 SAMEKEY"
-        assert fb.count(stripped) == 1
+        write_lines = [l for l in fb.split("\n") if l.startswith("printf")]
+        assert sum(l.count(stripped) for l in write_lines) == 1
 
     def test_keys_stripped_of_comments(self):
         cfg = ConwrtConfig(ssh_public_key_text="ssh-ed25519 BASEKEY user@host")
@@ -611,3 +662,221 @@ class TestModelLanSubnet:
         lan_steps = [s for s in plan.steps if s.kind == StepKind.LAN_IP]
         assert len(lan_steps) == 1
         assert "192.168.50.1" in lan_steps[0].configure_script
+
+
+# ===================================================================
+# #229: recovery-flash authorized_keys lockout regressions
+# ===================================================================
+
+class TestSshKey229LockoutSafety:
+    """The defaults script must (a) verify the key landed before disabling
+    password auth, and (b) exit non-zero on failure so uci_apply_defaults
+    retains it for retry instead of consuming a half-applied boot."""
+
+    def test_hardening_gated_on_key_verification(self):
+        # #229: the script's exit status is its LAST command (uci commit).
+        # If the key write is lost but commit succeeds, uci_apply_defaults
+        # deletes the script (base-files /etc/init.d/boot: rm -f $applied)
+        # and publickey-only lockout becomes permanent. The verify gate must
+        # sit between the key write and the hardening uci lines.
+        result = _ssh_key_firstboot(["ssh-ed25519 KEYBODY"])
+        verify_idx = result.index("grep -qF 'ssh-ed25519 KEYBODY'")
+        gate_line = result[verify_idx:verify_idx + 200]
+        assert "exit 1" in gate_line  # verbose { echo; exit 1; } or || exit 1
+        harden_idx = result.index("PasswordAuth='off'")
+        commit_idx = result.index("uci commit dropbear")
+        assert result.index("chmod 600") < verify_idx < harden_idx < commit_idx
+
+    def test_failed_key_write_keeps_script_nonzero(self):
+        # Simulate the #229 failure class: the authorized_keys write does not
+        # land (unwritable fs at uci-defaults time). The script must exit
+        # non-zero so base-files RETAINS it and retries next boot — never
+        # reaching the password-off hardening.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        # Neutralize uci for the dry run: the contract under test is the
+        # gate ordering around it, not uci itself.
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line
+            if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            else line
+            for line in dry.splitlines()
+        )
+        ro_dir = os.path.join(sandbox, "ro", "dropbear")
+        os.makedirs(ro_dir)
+        ro_target = os.path.join(ro_dir, "authorized_keys")
+        # Root bypasses mode-based write protection (review of #253): occupy
+        # the target with a directory so the write fails for EVERY uid.
+        os.makedirs(ro_target)
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry.replace(target, ro_target)],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode != 0, (
+                "script must fail (and be retained) when the key write fails"
+            )
+            assert not os.path.isfile(ro_target)
+        finally:
+            shutil.rmtree(sandbox)
+
+    def test_successful_key_write_exits_zero(self):
+        # Happy path dry-run: key lands, mode 600, script exits 0 (deleted,
+        # hardening applied — exactly once).
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        key = "ssh-ed25519 AAAATESTBODY"
+        script = _ssh_key_firstboot([key])
+        sandbox = tempfile.mkdtemp()
+        target = os.path.join(sandbox, "authorized_keys")
+        dry = script.replace(DROPBEAR_AUTH_KEYS_PATH, target)
+        dry = "\n".join(
+            "true # " + line
+            if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            else line
+            for line in dry.splitlines()
+        )
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", dry], capture_output=True, text=True, timeout=10,
+            )
+            assert proc.returncode == 0
+            with open(target) as fh:
+                assert fh.read().strip() == key
+            assert os.stat(target).st_mode & 0o777 == 0o600
+        finally:
+            shutil.rmtree(sandbox)
+
+
+    def test_chown_precedes_gate(self):
+        # P1: non-root-owned /etc/dropbear makes dropbear reject ALL keys
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("chown 0:0") < result.index("grep -qF")
+
+    def test_readback_gates_restart(self):
+        # P2: PasswordAuth must read back 'off' before the tolerant restart
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("uci get dropbear") < result.index("/etc/init.d/dropbear restart")
+
+    def test_gate_precedes_password_auth(self):
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("grep -qF") < result.index("PasswordAuth='off'")
+
+    def test_gate_exits_nonzero(self):
+        result = _ssh_key_firstboot(["key1"])
+        gate = next(l for l in result.split("\n") if l.startswith("grep -qF"))
+        assert "exit 1" in gate
+
+    def test_dropbear_dir_700(self):
+        # dropbear silently refuses authorized_keys when the dir is loose
+        result = _ssh_key_firstboot(["key1"])
+        assert "chmod 700" in result
+
+    def test_dropbear_restart_after_commit(self):
+        result = _ssh_key_firstboot(["key1"])
+        assert result.index("uci commit dropbear") < result.index("/etc/init.d/dropbear restart")
+
+
+def _unshare_available() -> bool:
+    try:
+        return subprocess.run(
+            ["unshare", "-rm", "true"], capture_output=True, timeout=10
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def _run_defaults_in_sandbox(script: str, dropbear_is_file: bool):
+    """Execute the generated defaults script under a private mount namespace
+    with a fake /etc and PATH-stubbed uci — the #229 local reproduction.
+
+    dropbear_is_file=True injects the failure mode: a stale overlay artifact
+    occupying /etc/dropbear makes every write fail.
+    """
+    root = tempfile.mkdtemp(prefix="conwrt-229-")
+    try:
+        os.makedirs(f"{root}/bin")
+        os.makedirs(f"{root}/etc/init.d")
+        if dropbear_is_file:
+            open(f"{root}/etc/dropbear", "w").close()
+        else:
+            os.makedirs(f"{root}/etc/dropbear")
+        with open(f"{root}/bin/uci", "w") as f:
+            f.write(
+                "#!/bin/sh\n"
+                f'echo "$@" >> {shlex.quote(root + "/uci.log")}\n'
+                'case "$1 $2" in '
+                '"get dropbear.@dropbear[0].PasswordAuth") echo off;; '
+                '"get dropbear.@dropbear[0].RootPasswordAuth") echo off;; '
+                "esac\n"
+                "exit 0\n"
+            )
+        os.chmod(f"{root}/bin/uci", 0o755)
+        with open(f"{root}/etc/init.d/dropbear", "w") as f:
+            f.write(f"#!/bin/sh\necho restarted >> {shlex.quote(root + '/restart.log')}\nexit 0\n")
+        os.chmod(f"{root}/etc/init.d/dropbear", 0o755)
+        wrapper = (
+            f"mount --bind {shlex.quote(root + '/etc')} /etc && "
+            f"export PATH={shlex.quote(root + '/bin')}:/usr/bin:/bin && "
+            f"sh -c {shlex.quote(script)}; "
+            f"echo $? > {shlex.quote(root + '/exitcode')}"
+        )
+        subprocess.run(
+            ["unshare", "-rm", "sh", "-c", wrapper], capture_output=True, timeout=30
+        )
+        code = None
+        if os.path.exists(root + "/exitcode"):
+            code = int(open(root + "/exitcode").read().strip() or -1)
+        uci = open(root + "/uci.log").read() if os.path.exists(root + "/uci.log") else ""
+        restarted = os.path.exists(root + "/restart.log")
+        keyfile = root + "/etc/dropbear/authorized_keys"
+        keydata = open(keyfile).read() if os.path.isfile(keyfile) else None
+        keymode = oct(os.stat(keyfile).st_mode & 0o777) if os.path.isfile(keyfile) else None
+        return code, uci, restarted, keydata, keymode
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.skipif(not _unshare_available(), reason="unshare -rm unavailable (user namespaces off)")
+class TestSshDefaultsSandbox229:
+    KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIc229test conwrt@test"
+
+    def test_failed_write_keeps_password_auth_and_retries(self):
+        code, uci, restarted, keydata, _ = _run_defaults_in_sandbox(
+            _ssh_key_firstboot([self.KEY]), dropbear_is_file=True
+        )
+        # The lockout scenario: every write fails. The script must fail
+        # (retained + retried next boot) and must NOT disable password auth.
+        assert code == 1
+        assert "PasswordAuth" not in uci
+        assert restarted is False
+        assert keydata is None
+
+    def test_successful_write_applies_key_and_key_only_auth(self):
+        code, uci, restarted, keydata, keymode = _run_defaults_in_sandbox(
+            _ssh_key_firstboot([self.KEY]), dropbear_is_file=False
+        )
+        assert code == 0
+        assert keydata is not None and self.KEY in keydata
+        assert keymode == "0o600"
+        assert "dropbear.@dropbear[0].PasswordAuth=off" in uci
+        assert "commit dropbear" in uci
+        assert restarted is True
+
+    def test_idempotent_rerun_succeeds(self):
+        script = _ssh_key_firstboot([self.KEY])
+        first = _run_defaults_in_sandbox(script, dropbear_is_file=False)
+        second = _run_defaults_in_sandbox(script, dropbear_is_file=False)
+        assert first[0] == second[0] == 0
+        assert second[3] == first[3]  # same key content (overwrite, not append)

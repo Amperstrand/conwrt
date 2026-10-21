@@ -37,18 +37,42 @@
       "flash_time_seconds": 300,
       "silence_timeout": 30,
       "reset_instructions": "Unplug power. Hold reset button. Plug in USB-C power. Wait for green LED to flash 5 times, release reset. Do NOT hold past 7 flashes (triggers U-Boot netconsole instead).",
-      "led_pattern": "green LED flashes 5 times"
+      "led_pattern": "green LED flashes 5 times",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "packet-observer"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 246
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
     },
     "tftp": {
       "description": "U-Boot TFTP recovery (hold reset >7s while powering on)",
       "recovery_ip": "192.168.1.1",
       "client_ip": "192.168.1.254",
-      "client_subnet": "255.255.255.0"
+      "client_subnet": "255.255.255.0",
+      "resources_required": [
+        "power",
+        "button",
+        "recovery-subnet",
+        "tftp-server"
+      ],
+      "envelope": [
+        "image-type-factory"
+      ]
     }
   },
   "signatures": {

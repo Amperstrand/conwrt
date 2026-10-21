@@ -10,6 +10,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from platform_utils import (
     add_host_route,
+    interface_addr_is_alias as interface_addr_is_alias_fn,
+    interface_has_ip as interface_has_ip_fn,
+    list_interface_ips as list_interface_ips_fn,
     check_external_deps,
     configure_interface_ip,
     detect_platform,
@@ -352,3 +355,48 @@ class TestRestoreWifi:
     def test_device_token(self, mock_run):
         restore_wifi("en0")
         assert mock_run.call_args[0][0] == ["networksetup", "-setairportpower", "en0", "on"]
+
+
+class TestListInterfaceIps:
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_linux_parses_inet_lines_primary_first(self, mock_run, mock_plat):
+        mock_run.return_value = _completed(
+            stdout="inet 10.0.0.5/24 brd 10.0.0.255 scope global enp5s0\n"
+                   "inet 192.168.0.10/24 brd 192.168.0.255 scope global secondary enp5s0\n")
+        assert list_interface_ips_fn("enp5s0") == ["10.0.0.5", "192.168.0.10"]
+
+    @patch("platform_utils.detect_platform", return_value="linux")
+    @patch("platform_utils.subprocess.run")
+    def test_ipv6_ignored(self, mock_run, mock_plat):
+        mock_run.return_value = _completed(
+            stdout="inet6 fe80::1/64\ninet 10.0.0.5/24\n")
+        assert list_interface_ips_fn("enp5s0") == ["10.0.0.5"]
+
+
+class TestInterfaceHasIp:
+    @patch("platform_utils.list_interface_ips", return_value=["10.0.0.5", "192.168.0.10"])
+    def test_present(self, mock_list):
+        assert interface_has_ip_fn("enp5s0", "192.168.0.10") is True
+
+    @patch("platform_utils.list_interface_ips", return_value=["10.0.0.5"])
+    def test_absent(self, mock_list):
+        assert interface_has_ip_fn("enp5s0", "192.168.0.10") is False
+
+
+class TestInterfaceAddrIsAlias:
+    @patch("platform_utils.list_interface_ips", return_value=["10.0.0.5", "192.168.0.10"])
+    def test_secondary_address_is_alias(self, mock_list):
+        assert interface_addr_is_alias_fn("enp5s0", "192.168.0.10") is True
+
+    @patch("platform_utils.list_interface_ips", return_value=["10.0.0.5", "192.168.0.10"])
+    def test_primary_among_others_is_not_alias(self, mock_list):
+        assert interface_addr_is_alias_fn("enp5s0", "10.0.0.5") is False
+
+    @patch("platform_utils.list_interface_ips", return_value=["192.168.0.10"])
+    def test_sole_address_is_alias(self, mock_list):
+        assert interface_addr_is_alias_fn("enp5s0", "192.168.0.10") is True
+
+    @patch("platform_utils.list_interface_ips", return_value=["10.0.0.5"])
+    def test_absent_address_is_not_alias(self, mock_list):
+        assert interface_addr_is_alias_fn("enp5s0", "192.168.0.10") is False

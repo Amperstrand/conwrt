@@ -82,6 +82,43 @@ def transport_sh(body: str, script_path: str = "/tmp/vpn_setup.sh") -> str:
     )
 
 
+def wg0_uci_sh(
+    priv_key: str,
+    address: str,
+    peer_key: str,
+    endpoint_host: str,
+    endpoint_port: str,
+    mtu: str = "1280",
+    keepalive: str = "25",
+    listen_port: bool = True,
+) -> str:
+    """The shared WireGuard interface + peer uci stanza.
+
+    Arguments are shell fragments as they appear in the generated script
+    (variable references like '"$WG_PRIV"' or single-quoted literals like
+    "'10.5.0.2/32'") so each provider keeps its own variable names while
+    the stanza itself is defined once.
+    """
+    listen = "uci set network.wg0.listen_port='51820'\n" if listen_port else ""
+    return (
+        f"uci set network.wg0=interface\n"
+        f"uci set network.wg0.proto='wireguard'\n"
+        f"uci set network.wg0.private_key={priv_key}\n"
+        f"{listen}"
+        f"uci add_list network.wg0.addresses={address}\n"
+        f"uci set network.wg0.mtu='{mtu}'\n"
+        f"uci set network.wg0.auto='1'\n"
+        f"\n"
+        f"uci add network wireguard_wg0\n"
+        f"uci set network.@wireguard_wg0[0].public_key={peer_key}\n"
+        f"uci set network.@wireguard_wg0[0].endpoint_host={endpoint_host}\n"
+        f"uci set network.@wireguard_wg0[0].endpoint_port={endpoint_port}\n"
+        f"uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n"
+        f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
+        f"uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'\n"
+    )
+
+
 def static_route_sh(
     server_var: str,
     gateway: str,
@@ -107,11 +144,22 @@ def static_route_sh(
 
 # -- Op list builders (shared across all providers) -----------------------------
 
-def build_firewall_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
+def build_firewall_ops(
+    iface: str = "wg0",
+    kill_switch: bool = True,
+    allow_management: bool = True,
+) -> list[Op]:
     """Firewall zone, LAN→VPN forwarding, and optional kill switch.
 
     Uses named sections (vpn_zone, vpn_fwd, vpn_killswitch) with stale-section
     cleanup for idempotent reconfiguration.
+
+    ``allow_management`` opens SSH/LuCI ports from the VPN zone to the router
+    itself (input chain, evaluated before the zone reject policy). The zone
+    policy stays REJECT: without the rule, the router is unreachable through
+    the tunnel; with it, remote management works over the VPN exit — which
+    also means the router's SSH is reachable from the VPN exit IP, protected
+    only by key-only auth.
     """
     ops: list[Op] = [
         BlankLine(),
@@ -119,6 +167,7 @@ def build_firewall_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]
         uci_cleanup_sections("firewall", "name='vpn'"),
         uci_cleanup_sections("firewall", "dest='vpn'"),
         uci_cleanup_sections("firewall", "name='KillSwitch-Reject-NonVPN'"),
+        uci_cleanup_sections("firewall", "name='Allow-VPN-Management'"),
         ShellCommand(command="uci set firewall.vpn_zone=zone"),
         UciSet(config="firewall", section="vpn_zone", values={
             "name": "vpn",
@@ -135,6 +184,19 @@ def build_firewall_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]
             "dest": "vpn",
         }),
     ]
+    if allow_management:
+        ops.extend([
+            BlankLine(),
+            Comment(text="--- Management (SSH/LuCI) from the VPN zone ---"),
+            ShellCommand(command="uci set firewall.vpn_mgmt=rule"),
+            UciSet(config="firewall", section="vpn_mgmt", values={
+                "name": "Allow-VPN-Management",
+                "src": "vpn",
+                "proto": "tcp",
+                "dest_port": "22 80 443",
+                "target": "ACCEPT",
+            }),
+        ])
     if kill_switch:
         ops.extend([
             BlankLine(),
@@ -169,8 +231,14 @@ def build_dns_ops(dns_servers: list[str]) -> list[Op]:
     return ops
 
 
-def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
-    """Commit, restart network, verify handshake. Auto-remove kill switch on failure."""
+def build_verify_ops(iface: str = "wg0", kill_switch: bool = True,
+                     kind: str = "wireguard") -> list[Op]:
+    """Commit, restart network, verify tunnel. Auto-remove kill switch on failure.
+
+    kind="wireguard": success = `wg show` handshake within 30s.
+    kind="openvpn": success = tun iface up with an address (traffic check is
+    left to the caller — OpenVPN has no equivalent single probe).
+    """
     ops: list[Op] = [
         UciCommit(config="network"),
         UciCommit(config="firewall"),
@@ -178,18 +246,34 @@ def build_verify_ops(iface: str = "wg0", kill_switch: bool = True) -> list[Op]:
         ServiceAction(name="network", action="restart"),
         ServiceAction(name="dnsmasq", action="restart"),
     ]
-    if kill_switch:
+    if not kill_switch:
+        return ops
+    if kind == "openvpn":
         ops.append(ShellCommand(
             command=(
-                "i=0; while [ $i -lt 30 ]; do"
-                f" if wg show {iface} 2>/dev/null | grep -q 'latest handshake'; then"
-                " echo 'VPN: tunnel verified'; exit 0;"
+                "i=0; while [ $i -lt 45 ]; do"
+                f" if ip -4 addr show dev {iface} 2>/dev/null | grep -q inet; then"
+                " echo 'VPN: tun interface verified'; exit 0;"
                 " fi; sleep 1; i=$((i+1));"
                 " done;"
-                " echo 'VPN: tunnel failed — removing kill switch to restore WAN';"
+                " echo 'VPN: tun interface failed — removing kill switch to restore WAN';"
                 " uci delete firewall.vpn_killswitch;"
                 " uci commit firewall;"
                 " fw4 restart"
             ),
         ))
+        return ops
+    ops.append(ShellCommand(
+        command=(
+            "i=0; while [ $i -lt 30 ]; do"
+            f" if wg show {iface} 2>/dev/null | grep -q 'latest handshake'; then"
+            " echo 'VPN: tunnel verified'; exit 0;"
+            " fi; sleep 1; i=$((i+1));"
+            " done;"
+            " echo 'VPN: tunnel failed — removing kill switch to restore WAN';"
+            " uci delete firewall.vpn_killswitch;"
+            " uci commit firewall;"
+            " fw4 restart"
+        ),
+    ))
     return ops

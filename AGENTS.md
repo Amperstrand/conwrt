@@ -10,7 +10,7 @@ sessions.** PR #119 originally carried ~16 unrelated VPN/nordvpn commits this
 way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
 (2026-10-12 external review, P0).
 
-- Before branching: `git fetch origin && git diff origin/master..master` must be empty
+- Before branching: `git fetch origin && git rev-list --count origin/master..master` must be `0` (the ancestry form — a tree diff alone passes cancel-out histories: a change+revert pair, or tree-convergent local commits, still carries unwanted history into branches)
 - If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
 - Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
 
@@ -90,6 +90,7 @@ Any shell script that modifies device state (uci set, network config, IP changes
 
 **Specific rules:**
 - Never `uci commit` a network IP change without verifying `uci get` returns the expected value first
+- Uncommitted uci changes live in `/tmp/.uci` (RAM): they SURVIVE separate SSH sessions (shared /tmp), are shown merged by `uci get`/`uci show`, and aborted runs leave staging debris that poisons later diffs and can merge into later commits. Always `uci revert <config>` to a clean baseline before staging; gate commits on value readbacks, never on textual `uci changes` shapes (factory config shapes differ across OpenWrt release families)
 - Shell variables in uci commands MUST use double quotes (not single quotes) for expansion
 - On-device shell scripts use BusyBox tools only (`sha256sum`, not `md5sum`; no `chpasswd`, no `hostname`). SHA-256 is universally available on OpenWrt (base-files depends on it since 2018)
 - Python-side hash algorithms MUST match what BusyBox provides (sha256, matching on-device `sha256sum`)
@@ -133,6 +134,34 @@ repo):
   `<bench subnet>`).
 - `data/inventory.jsonl` stays local and gitignored — treat it as a cache of
   your private project's data, never as the system of record.
+
+## Never rmmod Crypto/Kernel Drivers With Live References (2026-10-08)
+
+`rmmod crypto_hw_eip93` while a strongSwan SA held live crypto transforms
+wedged the x1860 kernel (network stack dead, wifi still beaconing, SSH
+impossible — power cycle required). Unloading a driver is only safe after
+its reference count is zero; check `lsmod` usage counts and tear down every
+consumer first. When a driver misbehaves, prefer blacklisting it for the
+next boot over rmmod on a live system.
+
+## Never Switch the AI Host Off Its Working Internet
+
+The computer running opencode depends on its live connection to reach the AI
+provider. Switching that machine's network (joining a test AP, changing WiFi,
+moving VLANs, flashing-adjacent interface churn) can silently replace a
+working uplink with a dead one and kill the session mid-task.
+
+1. **Never disconnect the AI host's working internet to test a new one.**
+   This includes joining a router's WiFi (e.g. a freshly flashed VPN/guest
+   AP) from the AI host while it is the machine's only uplink.
+2. Test new networks from a different client first, or verify the new path
+   passes real traffic BEFORE dropping the old connection. Association plus
+   a DHCP lease is not proof — check an actual internet round-trip.
+3. If the AI host must move networks, keep a verified fallback ready (the
+   wired interface with confirmed internet, a second WiFi, serial) and know
+   how to get back (nmcli/route commands written down before the switch).
+4. DHCP timeouts and "connected, no internet" states on the AI host are an
+   immediate abort: restore the last working connection before continuing.
 
 ## Related Projects
 
@@ -365,12 +394,266 @@ Use `scripts/serial-configure.py` for structured configuration. See `prompts/ser
 
 **Pitfall**: Long SSH keys sent via serial may wrap across lines, causing the shell to enter continuation mode (`>`). Send Ctrl-C (`\x03`) to break out, then retry or use a shorter method.
 
+## U-Boot Env Writes: Fallback Bootcmd, Cold-Boot Verify, Record Before Shelving
+
+**Any bootloader environment change must leave the device able to boot itself out of a bad flash — and must be proven with a cold power cycle before the device is left unattended.**
+
+Motivating incident (AP3915i bench, found 2026-09-21): three Extreme AP3915i units were shelved after OpenWrt setup with a `bootcmd` that ran the STOCK boot script (`run boot_flash` / `bootx`). The stock script's watchdog/nboot/failover logic is incompatible with OpenWrt FIT images: `bootm` fails and the unit either boot-loops (Unit 1, documented in the model JSON) or drops to a silent U-Boot prompt and sits there indefinitely. Found months later on GS1900 ports lan6-8: powered, PHY linked, network stack never initializes, flat PoE draw — no remote control path left except serial. The model JSON's CRITICAL warnings were written after the first incident, but process gaps still let three more units go dark.
+
+**Rules:**
+
+1. **bootcmd MUST include a network fallback**: `run boot_openwrt; run boot_net` (semicolon, NOT `||` — semicolon doesn't depend on U-Boot operator support). If flash boot fails, the device still TFTP-tries. A bootcmd without a fallback is a dead end waiting to happen.
+2. **Cold power-cycle verification before walking away**: after ANY U-Boot env write, cut power entirely (not just `reboot` — some env/boot errors only manifest from a cold start), watch the device come up fully (serial banner or network reachable), and only then call it done. "The write succeeded" ≠ "the device boots".
+3. **Read back the env after writing**: `rdwr_boot_cfg` was broken (exit 255) on AP3915i variant 1 and returned empty on variant 2. An unreliable write path means the device may be running bootcmd defaults you never intended. Verify with `printenv` / read_all / fw_printenv and diff against what you meant to set.
+4. **Hardware variants are different devices**: the two AP3915i variants ship different U-Boot builds with different default bootcmds (`run boot_flash` vs `bootx`) and different tool reliability. Never assume variant N's defaults from variant M's. Check per-unit before writing.
+5. **Write env from stock firmware, not OpenWrt initramfs**: the OpenWrt DTS marks CFG partitions read-only; stock firmware's flashcp path is writable. If you must write from initramfs, install kmod-mtd-rw deliberately and know you're in brick-risk territory.
+6. **No unit gets shelved without an inventory record**: if a device ends a session in ANY non-default state (env changed, half-flashed, bootloader-only, bricked), append it to `data/inventory.jsonl` immediately with the exact state and recovery path (e.g. "parked at U-Boot, 115200, fix bootcmd per model JSON"). Three AP3915i units had ZERO inventory entries — we only reconstructed what happened from the model JSON's warnings. A unit that goes silent with no record is indistinguishable from air.
+7. **Strip known-bad args during env review**: e.g. `ubi.mtd=0` left in bootargs causes kernel UBI attach failure on OpenWrt. Review the full bootargs, not just bootcmd.
+8. **Testbed ports must reflect reality**: a unit parked on a port with PoE disabled and no VLAN membership (lan8 was in both states) is invisible to every remote check. When shelving hardware on bench switches, verify the port would let you SEE the device if it spoke (PoE on, VLAN with L3, port map recorded).
+
+## Escape-Hatch Discipline (before ANY destructive operation)
+
+Motivating incident (2026-09-22, ap-lan2 / UNIT2): we ran `firstboot` on a
+unit with exactly ONE working management door (blank-password SSH over v6).
+The overlay was already marginal — dmesg showed `jffs2 ... 24 unchecked,
+15 orphan` xattrs (captured, not acted on). The post-wipe jffs2 reformat plus
+a bench power loss seconds after a config commit left the unit permanently
+unmanageable: it boots, sends RAs, presents an SSH banner — and closes every
+session at auth (zero working auth methods; keys and shadow state lost to
+overlay replay). The escape hatches we might have reached for do not exist
+on this species: NO reset button (no GPIO buttons in the DTS — OpenWrt
+failsafe is unreachable), NO LuCI in stock images (:80 dead), TFTP fallback
+never runs when flash-boot succeeds (0 RRQs against a verified server), and
+the 2012-era U-Boot has no boot-counter/recovery logic. Seven bounded power
+cycles: still dark. Serial console was the only remaining door — and it was
+not attached. The same class already cost us lan3. Industry guidance (Cisco
+OOB best practices, network change-rigor) says the same thing we learned the
+hard way: verify EVERY access path before the change, and carry a
+pre-checked rollback with no ambiguity.
+
+**Rules:**
+
+1. **Count the doors before you knock anything down.** Before `firstboot`,
+   `sysupgrade`, env/bootloader writes, or any `uci commit` touching
+   network/auth config: enumerate the INDEPENDENT ingress paths that will
+   still work AFTER the change (key SSH, password SSH, LuCI, failsafe,
+   TFTP fallback, serial). Fewer than two verified doors — or a change that
+   destroys the only one — means STOP: attach the console first.
+2. **Inventory the hatches per species, in the model JSON, before relying
+   on them.** AP3915i: no reset button, no failsafe trigger, no LuCI in
+   stock images, TFTP fallback only when flash-boot fails → serial is the
+   only hatch. "Factory reset is lower-risk than reflashing" is a
+   PER-DEVICE claim, never a universal one.
+3. **Check overlay health before choosing the reset method.** `dmesg |
+   grep -i jffs2` showing unchecked/orphan xattrs = marginal overlay. On a
+   marginal overlay, `firstboot` (wipe + reformat-on-next-boot via the racy
+   tmpfs→jffs2 switch) is the RISKIER option; `sysupgrade -n` (fresh image
+   + deterministic fresh-overlay format) is the safer one. Never firstboot
+   a dirty overlay, and never stack destructive operations on a sick unit.
+4. **Unclean power during — or minutes after — overlay writes is a known
+   corruption class** (documented OpenWrt regressions on ipq40xx and
+   others: post-first-boot power cuts corrupt overlay files). Treat any
+   such event as presumed-dirty: verify overlay health on the next boot
+   before making further changes.
+5. **Lottery cycling is not recovery.** Every dirty power-off deepens jffs2
+   debris. Bound diagnostic cycles (≤2), then stop and use the
+   deterministic hatch (console). If a "lucky boot" window opens, use it to
+   FIX (flash/adopt immediately), not to poke.
+6. **Fail fast in the tooling.** Assert pre-state before mutating: ROM auth
+   audit (blank root + PasswordAuth on), overlay health, clean uci baseline
+   (`uci revert` first). Gate commits on `uci get` VALUE readbacks, not
+   textual `uci changes` diffs (staging debris from aborted runs survives
+   SSH sessions in /tmp/.uci and poisons textual diffs; shapes differ
+   across release families). Classify auth-death ("Remote closed" with the
+   box alive) and STOP with a diagnosis instead of blind retries. Every
+   stage owns its own preconditions and waits for its own readiness.
+7. **Exercise hatches before you need them.** Periodically verify every
+   door: console port map + serial reachability, failsafe procedure, TFTP
+   lifeline with a positive-control fetch. An untested hatch is a rumor.
+8. **Keep revert material local and verified.** Known-good image (sha
+   verified at download time) + `sysupgrade -b` backup BEFORE any change.
+   The internet is not guaranteed when you need the rollback image most.
+9. **Package installs auto-start services.** `apk add dnsmasq` on the bench
+   switch enabled a default-config DHCP service on the mgmt VLAN at next
+   boot (rogue DHCP next to the real server). After ANY package install on
+   network gear: check `/etc/init.d/<svc> enabled` and disable unless the
+   service is intended. Keep the package; kill the service.
+
+## Dark-Device Discovery Discipline (before verdicting "network-dead")
+
+Motivating incident (2026-09-22): two AP3915i units sat FOUR MONTHS as
+"stuck, serial-gated" while fully alive at operator-chosen static IPv4s and
+EUI-64 IPv6 link-locals. The earlier session had every datum needed (source
+MACs on the wire) and lacked only the methodology.
+
+Rules:
+
+1. **No negative without a positive control** (extends rule 11 above): prove
+   the probe against a known-good host through the same path/interface in the
+   same session before believing any "no answer".
+2. **IPv6 before death**: derive `fe80::<EUI-64>` from ANY observed source
+   MAC (split MAC, insert FFFE, XOR first byte 0x02) and ping6 it on the
+   access VLAN. Linux/OpenWrt/network gear default to EUI-64 link-locals; a
+   broken IPv4 config does not take these down. NDP `STALE` ≠ dead; the
+   `router` flag means odhcpd is alive.
+3. **v4 sweep order**: inventory archaeology for this MAC → the probe host's
+   OWN interface subnets (the switch knew about 192.168.13.0/24 all along) →
+   operator extras → RFC1918/common defaults.
+4. **Passive patience**: listen 2-5 minutes on the VLAN interface (never
+   `-i any` with VLAN filters). RAs/MLD/beacons repeat forever; the ~10s
+   boot window is the loudest signal, not the only one.
+5. **The only genuine serial-gated class**: zero frames EVER including the
+   bootloader phase across a fresh PoE cycle. Anything that has emitted one
+   frame has an IP-level attack surface.
+6. **Zone-scoped v6 transport**: must be dialed FROM the on-link host —
+   `DROPBEAR_PASSWORD=<pw> dbclient -y -y root@fe80::...%switch.100X`, with
+   scripts piped via `sh -s` stdin (beats quoting through multi-hop SSH;
+   `ssh -J` cannot dial zone-scoped targets; probe hosts may have broken
+   openssh clients — dbclient is the reliable one).
+7. **Password works but pubkey never does** → check `ls -ld /etc/dropbear`:
+   non-root-owned or group-writable makes dropbear silently refuse ALL keys
+   (image-build artifact, seen in the wild).
+
+Tooling: `scripts/bench_discover.py` (ladder generator + control gate),
+methodology: `docs/DARK-DEVICE-PLAYBOOK.md`,
+session prompt: `prompts/bench-forensics-01-dark-device.md`,
+history mining: `prompts/bench-forensics-02-session-archaeology.md`.
+
+## Network-Gear Config Discipline (deadman switch before any commit+reload)
+
+Motivating incident (2026-09-22, the GS1900 bench switch): a VLAN re-rig was
+applied as one bundled command — `uci batch` writing `ports` as a single
+space-joined STRING (the original config used uci LISTS), including a
+rewrite of the MANAGEMENT VLAN (vlan1), followed by `uci commit network` +
+`ubus call network reload` + `/etc/init.d/poe restart` — with no
+verification between steps, no rollback path, and no out-of-band access.
+The session died at the reload and the switch went dark (carrier up, no
+L2/L3 response) with the suspect config COMMITTED. Recovery required
+physical power-cycle, potentially failsafe mode.
+
+**Rules:**
+
+1. **Deadman switch first**: before any `uci commit network` + reload on a
+   switch/router you only reach over the network, schedule a self-reboot —
+   `nohup sh -c 'sleep 300 && reboot' >/dev/null 2>&1 &` — and cancel it
+   (`kill` the sleep) only after re-verifying reachability. A wedged box
+   then heals itself within 5 minutes instead of requiring physical access.
+2. **One change, one verify, one step**: never bundle config write + commit
+   + reload + service restart in a single command. When the session dies
+   mid-bundle you cannot tell which stage killed it — and neither can the
+   post-mortem.
+3. **Diff `uci show <section>` against the known-good state BEFORE
+   committing** — especially `ports`/list syntax. `set x.ports="a b c"`
+   (string) and `add_list` entries (list) both look plausible and can behave
+   differently in netifd. The management VLAN is the one config you never
+   write blind.
+4. **Prefer runtime-apply, verify, THEN commit**: apply the change via
+   runtime commands (or commit + reload behind the deadman), prove
+   reachability survived, and only then let the config persist. Committing
+   before proving is how a transient wedge becomes a boot-time condition.
+5. **Know the failsafe door BEFORE you need it** — button location, the
+   ~2s LED window, the failsafe IP (192.168.1.1), and what the overlay
+   carries that `firstboot` would destroy (e.g. the realtek-poe fork
+   binaries on the GS1900). Failsafe + `mount_root` + surgical edit beats
+   firstboot whenever the overlay holds irreplaceable bits.
+6. **Detach long/mid-flight device commands** from your SSH session
+   (`nohup ... &` with output to a file) so a client timeout cannot
+   SIGKILL a half-applied sequence.
+
+## AP3915i No-Serial Flash: The Proven Recipe and Its Traps
+
+**The proven tuple (validated end-to-end 2026-09-21, lan4 unit, zero serial)**: OpenWrt **24.10.2** + `bootcmd=run boot_openwrt; run boot_net` + `WATCHDOG_COUNT=0`/`WATCHDOG_LIMIT=0` + `ubi.mtd=0` stripped from bootargs/static_bootargs + CFG1-only writes (CFG2 stays pristine stock as the last resort) + a per-port TFTP server on the switch for the fallback tail.
+
+**Rules:**
+
+1. **The semicolon fallback tail only catches commands that RETURN.** A sourced script that ends in `reset` (the stock `boot_kernel` script behind `run boot_flash`/`bootx`) never falls through — the unit wedges in the stock watchdog loop regardless of what follows the semicolon. This is the May 2026 "Critical Error" from SESSION-WRITEUP.md, and it happened AGAIN in September 2026 despite the lesson being on disk. The tail is a safety net for failing *commands*, not for *scripts that reboot*.
+2. **Flash-boot is kernel-version-sensitive on this 2012 U-Boot family**: 6.12 images (OpenWrt 25.12.x) boot fine via `tftpboot`+`bootm` but fail via `sf read`+`bootm`; 6.6 images (24.10.x) flash-boot reliably. FIT forensics (gzip, same load/entry, same structure) do NOT explain it — diagnosing the real cause needs serial. Until then: flash-boot = 24.10.x only.
+3. **Never gate on `$?` behind a pipe**: `cmd | tail -2; echo $?` reports *tail's* exit code. This faked two success gates (apk and opkg installs that had actually failed) and cost hours of blind debugging. Use unpiped exit codes or content/hash gates.
+4. **Package manager era map**: kmods live at `downloads.openwrt.org/releases/<v>/targets/<target>/generic/kmods/<kernel-hash>/` (NOT the arch feed). 24.10 = opkg: `opkg install --force-depends` on initramfs (kernel pkg absent from the status db). 25.x = apk: `apk add --allow-untrusted --force-non-repository` for local packages on tmpfs roots.
+5. **Initramfs session hygiene**: staged `/tmp` files die with every reboot (re-stage after each cycle); every initramfs boot regenerates dropbear host keys (`ssh-keygen -R <alias>` between sessions); flash-rooted boots stabilize keys via the persistent overlay.
+6. **Runtime VLAN interfaces sit in no firewall zone** → fw4 silently drops unsolicited inbound UDP: TFTP/DHCP servers on those VLANs never receive requests. Fix: `nft insert rule inet fw4 input iifname "switch.10*" accept` (runtime; vanishes on switch reboot).
+7. **Stock service-shell transfers** (admin/new2day + legacy SSH algos): `tftp -g -r file 192.168.1.2` works once rule 6 is applied; the fallback is printf-octal-push over expect — remember **Tcl interprets `\OOO` escapes in double-quoted sends** (double the backslashes or your nulls vanish into the tty).
+8. **CFG block format** (reverse-engineered, trusted): CRC32-LE over bytes[5:], byte4=0x01 active, bytes[5:]=null-separated KEY=VALUE, 0xFF pad to 65536. Partial-file writes are legal: unwritten tail of the erased block stays 0xFF — push only the env payload (~1.5KB), verify with a full-64K readback md5.
+9. **The stock boot script arms a 34-second hardware watchdog** before `nboot` (QCA WDT @ 0xb017000, bite from `dis_wdt0_bite_time=0x0fffffff`). Stock firmware services it; OpenWrt's early boot races it — that race, not the script itself, is the reset loop. `WATCHDOG_DISABLE` (nonzero) skips arming. The script lives in BootPRI's EMBEDDED DEFAULT ENV (readable: `dd if=/dev/mtd4 | strings`), ends at an interactive shell ("watchdog might trigger"), and only runs `saveenv`×2 (mirroring CFG2) when `WATCHDOG_LIMIT≠0`.
+10. **Flash-boot capability is ENV-IDENTITY-DEPENDENT — not fixed hardware (#61 PROVEN 2026-09-23)**: a "run boot_net-dependent" unit (could not sf-read-flash-boot ANY image) became flash-boot-capable after ONLY its CFG1 `ver`/`CURR_VER` strings were changed to the 2022-primary build identity (2-key edit, full-64K readback gate, TFTP-down power-cycle test: flash boot ~83s, zero RRQs). Mechanism refined from BootPRI env+script extraction: the boot script itself does NOT branch on these keys (CURR_VER is write-only, set when DEFAULT_SETTING=1) — leading theory is bootloader env-ACCEPTANCE gating: a CFG1 `ver` mismatching the running bootloader's identity falls back to the embedded default env (`bootcmd=bootx` → stock script → the documented watchdog wedges), a matching identity honors CFG1 (custom bootcmd runs). Full analysis: data/ap3915i-session-artifacts/bootpri-analysis/selector-mechanism-research.md (local). Either way the FIELD REPAIR is proven: 2-key CFG edit; keep CFG2 pristine as last resort. Write path trap: under OpenWrt the MTD numbering SHIFTS vs stock (CFG1 = mtd0 under OpenWrt, mtd1 under stock) — always resolve by `/proc/mtd` NAME, never by number; `mtd-rw.ko` needs `mtdcopy=1 i_want_a_brick=1` and then plain `mtd write ... CFG1` works.
+11. **Positive-control every probe before trusting its negatives**: validate ping6/nc/grep patterns/binutils against a known-good target first. Tonight's casualties of skipped controls: an unvalidated ping6 methodology (150-attempt race interpreted as device silence), grep patterns that matched nothing real, and three "confirmed boot @5s" readings that were lingering pre-reboot sessions. A probe's negative result is only evidence if the probe provably works.
+
+## Reset Failsafe Discipline (the ap-lan2 auth-dead incident, 2026-09-22)
+
+Motivating incident: a bench adoption ran `firstboot` on ap-lan2 (AP3915i UNIT2 — healthy, SSH-able, both auth paths verified). The reset left the jffs2 overlay dirty (dmesg on recovery: `jffs2_build_xattr_subsystem ... 24 unchecked, 15 orphan` — a known artifact of interrupted/partial overlay writes; the kernel repairs these lazily at mount). The next boots raced the mount-time jffs2 replay: on some boots replay completed (unit healthy), on others it hung before `/etc` became writable — dropbear was listening, TCP:22 accepted, but with no writable `/etc` it had no host keys and closed every session at auth (`Remote closed the connection`). The unit sat ~45 min "auth-dead", was recorded UNMANAGEABLE ("needs console"), and was revived by a single PoE power cycle (replay completed, self-healed). Verified same evening: adopted (keys + known password + static IP), then survived BOTH a graceful reboot and a cold PoE cycle. Evidence: `data/bench/ap-lan2/20260922-recovery/`.
+
+**Rules:**
+
+1. **`firstboot` is a brick-class operation — treat it exactly like flashing.** Before ANY remote firstboot, arm the full recovery envelope: (a) rom-audit passed (blank root + PasswordAuth in ROM), (b) a KNOWN root password set and verified, (c) SSH keys pushed and BOTH auth paths verified, (d) per-VLAN TFTP lifeline armed, (e) a detached aliveness recorder running. The envelope must exist BEFORE the reset, not after. A reset you cannot recover from is a reset you do not run.
+2. **Never firstboot onto a possibly-dirty overlay.** If a prior adopt/reset aborted mid-flow, check `dmesg | grep -i 'xattr\|jffs2'` for `unchecked/orphan` counts and let a full boot complete the replay before resetting again. Double-firstboot = dirty overlay = nondeterministic auth-dead boots.
+3. **`Remote closed the connection` with TCP:22 open + RAs alive is a dropbear boot-state failure** (host keys / unwritable `/etc`) — NOT locked root, NOT a network fault, NOT necessarily permanent. It is often boot-nondeterministic: one deliberate PoE power cycle frequently cures it (jffs2 replay retries). NEVER verdict a unit "unmanageable / needs console" without at least one recorded power cycle + retry window.
+4. **The `run boot_openwrt; run boot_net` TFTP tail only fires when FLASH boot fails.** A unit that flash-boots fine never enters `boot_net` — proven live during this incident (server armed and listening, zero RRQs). TFTP lifelines protect against flash/bootloader failures, NOT userspace auth failures. For userspace-dead units the recovery ladder is: v6 link-local dbclient → wrong-IP check (`ip neigh` on the switch — the unit may have moved off the address you're probing) → LuCI/uhttpd on :80 if the image has it → PoE cycle → serial.
+5. **A stale worst-case verdict in a registry is itself a hazard.** places.json said UNMANAGEABLE for hours after the unit had been revived and adopted — the next agent would have skipped cheap recovery. Update registries the moment state changes; recovery notes must carry timestamps and evidence paths.
+6. **Know which auth channels are config-independent**: v6 link-local + dbclient from the switch works no matter what `network.lan` says; `ip neigh` on the VLAN reveals the unit's actual v4; uhttpd/LuCI (:80) is a third door on images that include it. Verify at least two channels before declaring access lost.
+7. **uci staging debris**: uncommitted changes live in `/tmp/.uci` (RAM: survives SSH sessions, dies at reboot) and `uci show` displays the MERGED (staged+committed) view. After any aborted uci flow, check `uci changes` and revert debris before staging again — or exact-diff guards will refuse legitimate commits.
+8. **Detached daemons on BusyBox**: `nohup cmd &` over ssh DIES when the session closes — use `setsid cmd &`. There is no `timeout` applet; guard hangs from the Mac side. Anything staged in `/tmp` (recorders, TFTP roots, nft rules) is runtime-only and dies on switch reboot — re-arm and say so in the notes.
+
+## Bench operations rules (2026-09-25)
+
+Hardware-touching bench work now has its own rulebook in ~/conwrt-bench: AGENTS.md (hard rules incl. the sops-ciphertext auth trap) + docs/BENCH-CANON.md (index) + docs/BENCH-PLAYBOOK.md (recipes). Read the bench AGENTS.md before operating either GS1900 or any DUT on the bench network. Labgrid specifics (coordinator, exporter fleet, reservation queueing, exclusion domains, trusted-network model) live in the same repo at `docs/labgrid-coordination.md` — updated 2026-10-14 as the org-wide canon; use `LG_COORDINATOR` (native) and queue with `reserve --wait` rather than poll-acquire.
+
+## Rogue-DHCP Discipline — exactly one DHCP/RA authority per broadcast domain (2026-09-28)
+
+The house network has a hard production/lab boundary (design, enforcement, incident record: `docs/NETWORK-SEGMENTATION.md` + issue #28). Authority map — anything else that answers a DHCPDISCOVER or emits an RA on these segments is a rogue:
+
+| Segment | Sole DHCP/RA authority |
+|---|---|
+| House LAN VLAN 13 (production WiFi + servers; ERX eth3 chain) | ERX dnsmasq/odhcpd 192.168.13.1 |
+| Lab island VLAN 12 (ERX eth1+eth4: stock GS1900 at .12.3, ER6P rig at .12.4, + attached DUTs) | ERX dhcp.lab 192.168.12.1 |
+| Bench DUT VLANs 100N (OpenWrt GS1900 bays lan2-8) | bench switch per-VLAN dnsmasq |
+
+1. **Fresh OpenWrt is an armed rogue** — default images run DHCP + RA on br-lan. Before a device shares ANY segment: `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'` → commit, restart dnsmasq/odhcpd, READ BACK values. This class poisoned the house WiFi 2026-05-23 (docs/gotchas.md) and twice on 2026-09-28 (two AP3915i serving stale bench scopes, issue #28).
+2. **Automation bakes it in**: sysupgrade overlays keep injecting `dhcp.lan.ignore=1` (scripts/profile/overlay.py) for devices destined for any shared or management segment. Never regress this.
+3. **A test needing a DHCP server gets an isolated VLAN** (bench DUT-bay 100N pattern) — never a shared, management, or production segment. One VLAN, one server, owned by the segment owner above.
+4. **Never attach a DUT to ERX eth3** (production chain: house AP + servers). ERX eth1/eth2/eth4 terminate on isolated lab VLANs by design; GS1900 DUT bays are the sanctioned attachment point.
+5. **After any package install on network gear**, verify dnsmasq/odhcpd did not auto-start serving (Escape-Hatch rule 9 — the `apk add dnsmasq` lesson).
+6. **Detection when suspicious is mandatory**: on the ERX, any `Drop-Lab-Rogue-*` counter/log hit means a rogue is transmitting on a lab VLAN — locate it (`tcpdump -i br-lan.12 -n 'udp src port 67'`) and quiet it before continuing. Every DHCP OFFER must be accountable to the segment's authority above.
+
+## Lab Single Source of Truth (2026-09-28): data/lab.yaml + generated labgrid
+
+**data/lab.yaml is the ONE writable registry** (gitignored — contains MACs; public
+template: labgrid/lab.yaml.example). If a device/port/VLAN/place isn't in it, it
+doesn't exist. Tools: `scripts/lab_registry.py` (validate / reconcile /
+emit-exporter) and `scripts/bench_net.py` (status/apply bay-VLANs on OpenWrt DSA
+devices: gs1900-bench, er6p). Rules:
+1. Every state-changing operation ENDS by updating data/lab.yaml.
+2. exporter.yaml + labgrid places are GENERATED from it — never hand-edit
+   (append-only enrollment allowed during migration; wholesale cutover pending
+   serial-bridge modeling).
+3. Run `lab_registry.py reconcile` when surprised — it detects dead devices,
+   switch reboots (failsafes disarmed), and place drift in one command.
+4. data/inventory.jsonl remains the append-only EVIDENCE log (never state).
+
+## ERX dnsmasq Guard — MANDATORY before any dhcp config change (2026-09-28)
+
+**Incident**: anonymous `uci add dhcp host` sections duplicated named sections →
+dnsmasq treated duplicate dhcp-host lines as FATAL → crash-looped → **house-wide
+DNS+DHCP outage** (WiFi users lost internet). The ERX is a single point of failure.
+
+**Rules:**
+1. **NEVER use `uci add dhcp host`** — always use named sections:
+   `uci set dhcp.HOSTNAME=host; uci set dhcp.HOSTNAME.mac=...` (idempotent).
+2. **Run `python3 scripts/erx_dhcp_guard.py validate` BEFORE any
+   `uci commit dhcp` + dnsmasq restart.** It catches duplicate MACs/IPs that
+   would crash dnsmasq. Non-zero exit = DO NOT RESTART.
+3. **Run `erx_dhcp_guard.py check`** after any dhcp change to confirm
+   dnsmasq survived. A cron job on ai-legion monitors this every 5 minutes
+   and logs CRITICAL if unhealthy.
+4. If dnsmasq crashes: the fix is to find the duplicate with `erx_dhcp_guard.py
+   validate`, delete the offending anonymous section (`uci delete dhcp.@host[N]`),
+   commit, restart.
+
 ## Review Feedback Must Be Dispositioned, Never Dropped
 
 A PR is not done when it merges — it is done when every reviewer finding on it
 (Codex, Copilot, or human) has a disposition: fixed in code, replied-to with
 evidence, or tracked in an issue. Merging with unreplied findings creates
-silent review debt (PR #36 shipped three unaddressed Codex P1/P2 findings this
+silent review debt (PR #36 shipped three unaddressed Codex/P1/P2 findings this
 way; PRs #67/#81/#36 were later audited to clean it up).
 
 - Before merging, answer every inline review thread; react 👍 to findings you
@@ -384,3 +667,188 @@ way; PRs #67/#81/#36 were later audited to clean it up).
   `pr-review-audit` skill (runbook + fleet scan + kanban in the private repo
   `Amperstrand/pr-review-audit`). Never re-litigate from memory: re-locate
   each finding at current HEAD before classifying it.
+
+### Pre-merge gate: EVERY automated-review finding gets an explicit response (2026-10-20)
+
+Before a PR merges, every Codex (or other bot) finding **across the PR's
+review history** — including findings raised on earlier heads, re-located
+at the final head — must be closed by exactly one of:
+
+1. **fixed as part of this merge** (name the commit), or
+2. **lifted out** to a follow-up PR/issue (linked — a deferral with no
+   destination is a blocker, not a pass), or
+3. **refuted with evidence in-thread** (never silently dropped).
+
+A 👍 reaction is acknowledgment, not a disposition — pair it with the fix,
+link, or refutation that closes the finding. A 👎 must carry its evidence
+comment.
+
+Rationale: the 2026-10-19 fleet scan found **314 merged PRs across
+Amperstrand/OpenTollGate carrying never-answered bot findings** — every
+one of them merged through review rounds whose feedback was simply never
+read. The audit campaign of 2026-10-19/20 cleared the top tier (16 PRs,
+~310 threads dispositioned; reports in `Amperstrand/pr-review-audit`,
+batches `d7ae193`..`80c9d12` + tail batches) and the `pr-review-audit`
+skill remains the sweep path for anything that slips this gate.
+
+## Rogue-DHCP Discipline — never ship or deploy a competing DHCP server (2026-09-28)
+
+conwrt flashes devices that land on shared bench and house segments. The authority map and enforcement live in conwrt-bench (`docs/NETWORK-SEGMENTATION.md`, issue #28): house LAN VLAN 13 and lab island VLAN 12 are served by the ERX ONLY; bench DUT VLANs 100N are served by the bench switch ONLY.
+
+1. **Fresh OpenWrt is an armed rogue** (dnsmasq DHCP + odhcpd RA on by default). Any flow leaving a device on a shared or management segment must set `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'` — commit, restart, read back.
+2. **Keep baking it into firmware**: the sysupgrade overlay flow (scripts/profile/overlay.py) must keep injecting `dhcp.lan.ignore=1`. Removing that injection is a regression that can poison the production house WiFi — it has happened (2026-05-23 and 2026-09-28; conwrt-bench issue #28).
+3. **A use case that genuinely needs a DHCP server** (captive portal, tollgate AP, router-mode tests) deploys onto an isolated VLAN/DUT bay, never a shared segment.
+4. **Never target or cable a DUT onto ERX eth3** (production). Use bench DUT bays.
+5. After package installs on any managed device, verify dnsmasq/odhcpd did not auto-start serving.
+
+## Lab hardware: one single source of truth (2026-09-28)
+
+All lab hardware — routers, ESP32/STM32 fixtures, switches, power, serial —
+is declared in the **private repo `Amperstrand/conwrt-lab`** (`lab.yaml`:
+devices, MACs, IPs, topology, VLANs, labgrid places). This project does NOT
+own hardware state.
+
+Rules for code and agents in this repo:
+
+1. **Never hardcode device IPs, MACs, or serial-port paths.** Resolve from the
+   registry: `CONWRT_LAB=<conwrt-lab checkout>` +
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py …`, or from a labgrid place.
+2. **Access hardware through labgrid places** (coordinator `ai-legion:20408`):
+   `labgrid-client -p <place> ssh|console|power`. Acquire/release for
+   exclusivity during tests.
+3. **Flashing/adoption goes through conwrt tooling** (`Amperstrand/conwrt-bench`):
+   `scripts/dut_recover.py --from-lab <device-id>` for recovery flashes,
+   `scripts/bench_net.py` for bay/VLAN changes. These update the registry.
+4. **State changes end with a registry commit** in conwrt-lab — if you changed
+   a device (flashed, moved, adopted), lab.yaml must reflect it before you
+   walk away.
+5. **When surprised, reconcile first**:
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py reconcile` detects dead
+   devices, switch reboots, and place drift in one command.
+
+Env: `CONWRT_LAB` (this registry checkout) and `CONWRT_BENCH` (conwrt-bench
+checkout) are the two paths every hardware-touching tool understands.
+
+## Multi-Agent Coordination on the Shared Host (the 2026-10-13 collisions)
+
+Motivating incidents (two AI sessions sharing one checkout and one Linux
+host, 2026-10-12/13): (1) session A switched git branches mid-flight while
+session B was committing — B's commits silently landed on local `master`,
+exactly the "polluted local master" state the branching rule above forbids,
+caused this time by structure, not sloppiness; (2) both sessions' QEMU test
+VMs wanted host port 2222 — the loser got 30 cascading fixture errors with
+no culprit named; (3) while diagnosing (2), session B ran
+`pkill -f "qemu-system-x86_64.*hostfwd"` and killed session A's live
+tollgate VM (recoverable only because it ran snapshot-mode with a boot
+script), and the same pattern self-matched B's own shell and hung it.
+
+Rules — prefer structure that makes collisions impossible over rules that
+merely discourage them:
+
+1. **One worktree per session. The main checkout is a read-only hub.** Never
+   commit from the shared checkout; create
+   `git worktree add ../conwrt-<session> -b <session>/feat-x origin/master`
+   (or run `scripts/dev-session.sh start <name>`, which also registers the
+   session and writes a worktree-local `.cargo/config.toml` so cargo
+   targets stay inside the lane even when the host has a global
+   `~/.cargo/config.toml` target-dir pin). Worktrees share the object
+   store and remotes; each has its own HEAD/index/files, so branch
+   switches and stashes cannot collide.
+2. **Kill only what you own.** Every background process an agent starts
+   (QEMU, TFTP, recorders, daemons) writes its PID to a session-scoped
+   pidfile dir (`/tmp/opencode/<session>/pids/` or a per-session tmp dir).
+   Teardown kills only PIDs read from YOUR pidfiles, after a
+   `/proc/<pid>/cmdline` sanity check. **`pkill`/`killall` by pattern is
+   FORBIDDEN on this host** — other sessions' processes are indistinguishable
+   in `ps`, and `pkill -f` matches your own shell's command line.
+3. **Ports are claimed, not assumed.** Long-lived listeners must take their
+   port from an env var (`CONWRT_VM_SESSION_PORT`, `CONWRT_VM_FLASH_PORT`,
+   …) so a colliding session can shift, and must fail fast with the holder
+   named (`ss -tlnp` hint) instead of cascading errors. Check
+   `data/active-sessions.jsonl` before claiming.
+4. **Claim before you code.** Branch names carry the owner
+   (`<session>/feat-x`), the PR opens (draft) before the work starts, and
+   `scripts/dev-session.sh` appends `{session, worktree, ports, areas}` to
+   the gitignored `data/active-sessions.jsonl` ledger. Before starting work
+   in an area, check `gh pr list` and the ledger — overlapping streams are
+   a coordination failure even when git itself merges cleanly.
+5. **Expect master to move at machine speed.** Sibling agents merge PRs in
+   minutes. Fetch immediately before merging, rebase instead of resolving
+   surprise conflicts by hand, and never assume the merge-result you tested
+   locally is still current an hour later.
+
+## D-Link Recovery Flashing: One-Request Server, Slow Dual-Image Boots, Stale Keys (2026-10-14/15)
+
+Paid for twice in one session (both dark x1860s, plus the Sept #91 saga).
+Full evidence matrix: `models/dlink-covr-x1860-a1.json` bench_observations
+(PR #198) and the bench registry dossiers.
+
+1. **Never GET the recovery page before uploading.** The U-Boot recovery
+   httpd (uIP stack) serves exactly ONE HTTP request, then RSTs every new
+   SYN. Probe arming by ARP only (`ip neigh` for 192.168.0.1, model-wide
+   soft MAC) — any curl of the page burns the window and costs a
+   power-cycle.
+2. **Upload with a real Chromium** (headless Playwright, local form so the
+   multipart POST is the first request) — but know the limits: the
+   2026-10-14 matrix showed even a byte-perfect Chromium POST can produce
+   accepted-but-no-boot. The client was never the #91 variable; suspect
+   flash-write or dual-image timing. Never blame the client without a pcap.
+3. **The COVR dual-image boot takes 15–20+ minutes** (main→backup copy +
+   double reboot). "5+ minutes" in the recipe is wrong; do not declare a
+   flash failed before ~25 min of silence.
+4. **ASU profile names use DASHES in the model part** —
+   `dlink_covr-x1860-a1`, not the all-underscore registry form. The
+   underscore form returns HTTP 400 "Unsupported profile" and costs a
+   build cycle. Check `openwrt.profile` in the model JSON (or the
+   conwrt-image crate's golden filename logic).
+5. **Baked dropbear keys go stale.** A parked unit flashed with an old
+   ASU image boots fine but locks you out (the key belonged to a
+   decommissioned host). Rebuild via ASU with the CURRENT fleet key
+   before flashing anything that has been dark — case-sealed, no-serial
+   units have no second door.
+
+## Long-Running Remote Work Dies With Its Pane (2026-10-14)
+
+Herdr panes churn (operator closes tabs, sessions restart). Anything
+started as a pane background job — builds, watchers, tunnels, pcaps —
+dies with it, usually silently. Rules: stage work as ON-DISK launcher
+scripts (`/tmp/*.sh`) started with `setsid nohup … < /dev/null &`, write
+logs to files, and have supervisors/tunnels re-established by idempotent
+launchers rather than trusted to survive. If a log file "was never
+created", that is this rule, not a mystery.
+## Worktree Lifecycle and Disk Reaping (2026-10-15)
+
+A full disk is a shared-host outage: every lane's tooling dies at ENOSPC
+before commands execute (2026-10-15 incident — `conwrt-esp32` mid-PR lost
+its shell to a disk filled by N worktrees × `target/` + toolchains).
+Worktrees are the unit of cleanup.
+
+**Rules:**
+
+1. **Retire on merge.** When your PR merges (or the session ends), run
+   `scripts/dev-session.sh stop <name>` — it drops the ledger entry,
+   refuses on leftover pidfiles, reaps `target/`, removes the worktree,
+   deletes the branch if it is merged into `origin/master`, prunes stale
+   registrations, and batch-deletes merged local branches whose remote
+   is gone (unmerged-gone branches are only reported). A merged lane
+   that leaves its worktree behind is debris, not a fallback.
+2. **Idle lanes lose their build cache, not their work.**
+   `scripts/dev-session.sh sweep` classifies every worktree: PRUNABLE
+   registrations are pruned, MERGED lanes are retired (worktree + branch),
+   and a worktree whose open PR has had **no activity for 4 days**
+   (`--days N` to change) has its `target/` reaped — the worktree, branch,
+   and uncommitted-safe classification are untouched; a resumed lane pays
+   a rebuild, nothing more.
+3. **Hard guards, always.** Sweep never touches a worktree with
+   uncommitted changes (DIRTY), a branch that exists nowhere on the remote
+   (UNPUSHED), the hub checkout, or the worktree it runs from. Dry-run is
+   the default; `--apply` acts. If `gh` is unavailable, PR-idle states are
+   unknown and nothing is reaped.
+4. **Check before you build big.** Before esp-toolchain installs, OpenWrt
+   image builds, or any multi-GB step: `df -h /` and
+   `scripts/dev-session.sh sweep` (dry-run). Free space proactively —
+   `rm -rf <idle-worktree>/target` is always safe for a lane you own.
+5. **ENOSPC discipline.** If commands start failing with "No space left
+   on device", STOP writing immediately — even `rm` through agent tooling
+   may fail to run. Report the blocker with your reclaimable artifacts;
+   do not thrash the host with retries.

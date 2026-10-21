@@ -6,21 +6,48 @@
 //! is being tightened incrementally (issue #118). Parsing must never reject
 //! a model file that the 1.x Python validator accepts.
 //!
-//! These types are **read-only projections**: only `Deserialize` is derived.
-//! Reserializing a parsed model would silently drop every field not yet in
-//! the typed schema (vendor/bootloader-specific recovery metadata), so
-//! writeback is prevented at compile time. A lossless representation
-//! (e.g. `#[serde(flatten)]` extras + real-corpus roundtrip tests) arrives
-//! with the schema tightening in #118; until then any model-writing tooling
-//! must operate on the raw JSON.
+//! Lossless representation (#118): every field not yet typed lands in
+//! `extras` (an order-preserving map), so parsing never drops vendor or
+//! bootloader metadata and reserialization is checked against the real
+//! corpus by `tests/real_corpus.rs`. Typed fields are the dual-language
+//! contract (schema + Python validator + Rust validation must agree —
+//! `tests/fixtures/schema-negative/` pins the agreement); evidence-shaped
+//! sections stay untyped-but-preserved by decision (see #118).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::ordered_map::OrderedMap;
+
+/// A serial console definition (the typed `serial` section of #118).
+///
+/// Baud is the field hardware lessons keep proving wrong in prose
+/// (AGENTS: NR7101 shipped 115200 in JSON, real hardware speaks 57600) —
+/// so it carries a range check both languages enforce identically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialConsole {
+    /// Baud rate (1200–921600: everything real hardware speaks).
+    pub baud: u32,
+    /// Linux console device (e.g. `ttyMSM0`, `ttyS0`).
+    pub console_device: String,
+    /// Frame/parity notation (e.g. `n81`), when documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parity: Option<String>,
+    /// Bootloader identification string, when documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootloader: Option<String>,
+    /// Where the values were verified from (evidence trail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_from: Option<String>,
+    /// Free-form operator note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
 
 /// A device model definition (`models/{id}.json`).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceModel {
     /// conwrt slug; must match the `models/{id}.json` filename.
     pub id: String,
@@ -39,10 +66,20 @@ pub struct DeviceModel {
     /// Known OUI prefixes for this model (species-level; never unit MACs).
     #[serde(default)]
     pub mac_oui: Vec<String>,
+    /// Typed serial console section (optional; #118).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_console: Option<SerialConsole>,
+    /// Operator-facing hard warnings (array of strings; dual-typed #118).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
+    /// Every field not yet typed, in document order — parsing is lossless
+    /// and reserialization drops nothing (corpus roundtrip test).
+    #[serde(flatten)]
+    pub extras: OrderedMap<serde_json::Value>,
 }
 
 /// OpenWrt target coordinates for a model.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenwrtInfo {
     /// OpenWrt target, `target/subtarget` (e.g. `ath79/generic`).
     pub target: String,
@@ -58,6 +95,9 @@ pub struct OpenwrtInfo {
     /// Default LAN IP after flashing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_ip: Option<String>,
+    /// Untyped openwrt fields, preserved in document order (#118).
+    #[serde(flatten)]
+    pub extras: OrderedMap<serde_json::Value>,
 }
 
 /// One flash method entry.
@@ -65,7 +105,7 @@ pub struct OpenwrtInfo {
 /// Common parameters from the model schema are typed; method-specific extras
 /// are intentionally ignored here until the schema tightening (#118) gives
 /// them a home.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlashMethod {
     /// What this method does (required by the schema).
     pub description: String,
@@ -84,6 +124,11 @@ pub struct FlashMethod {
     /// Silence timeout before declaring the flash stalled, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silence_timeout: Option<u32>,
+    /// Method-specific parameters (`flash_methods.*.params` and friends),
+    /// preserved in document order — the #118 audit's scattered-readers
+    /// problem: these now round-trip instead of vanishing.
+    #[serde(flatten)]
+    pub extras: OrderedMap<serde_json::Value>,
 }
 
 impl DeviceModel {

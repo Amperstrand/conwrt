@@ -77,10 +77,14 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
             version: release.release.clone().unwrap_or_default(),
             board_name: report.board_name.clone(),
             default_ip: None,
+            extras: Default::default(),
         },
         capabilities: Some(vec!["ethernet".into()]),
         flash_methods: None,
         mac_oui: Vec::new(),
+        serial_console: None,
+        warnings: None,
+        extras: Default::default(),
     };
 
     let profile = Profile::Sqm(SqmProfile {

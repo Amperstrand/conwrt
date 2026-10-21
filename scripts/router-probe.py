@@ -651,6 +651,10 @@ def probe_router(
 
 
 def main() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from rust_migration import soft_deprecated
+
+    soft_deprecated("conwrt diagnose --ip <addr>", "boot-state probing/diagnosis")
     parser = argparse.ArgumentParser(
         description="Probe a router to identify its current boot state",
     )

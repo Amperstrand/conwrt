@@ -13,13 +13,15 @@ attached to it, and this tool:
 
 Requires SSH on the target: the conwrt netboot rescue shell only runs telnetd,
 so a rescue-shell flash is a manual procedure — see
-recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick on the
-workstation, use the Rescue Kit flash script instead.
+recipes/raspberry-pi/netboot-rescue.md. For a bootable-USB stick attached to
+the workstation, write it with Raspberry Pi Imager or dd, then inject the
+cloud-init files onto the boot FAT manually (same layout this tool writes).
 
 Usage:
     pi_image.py provision --host 192.168.1.240 --device /dev/sdb \
         --image ubuntu.img.xz --sha256 <hash> --hostname pi4 \
-        --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub
+        --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub \
+        --expect-serial 10000000abcd1234
 
 Wipes the target disk. Never points --device at the Pi's boot medium.
 """
@@ -29,10 +31,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import lzma
+import os
 import socket
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -58,6 +63,17 @@ def _is_mounted(entry: dict) -> bool:
     return any(bool(m) for m in mp)
 
 
+def _subtree_mounted(entry: dict) -> bool:
+    """Recursively inspect the disk AND every descendant (parts, lvm, crypt).
+
+    A dm-crypt/LVM rootfs mounts as a GRANDCHILD of the physical disk; a
+    one-level children check sees the running system disk as 'unmounted'.
+    """
+    if _is_mounted(entry):
+        return True
+    return any(_subtree_mounted(c) for c in (entry.get("children") or []))
+
+
 def pick_target_device(lsblk_json: str, min_gb: int = MIN_DEVICE_GB,
                        allow_mounted: bool = False) -> str:
     """Choose the target disk from `lsblk -b -J -o ...` output.
@@ -73,8 +89,7 @@ def pick_target_device(lsblk_json: str, min_gb: int = MIN_DEVICE_GB,
             continue
         size = int(dev.get("size", 0))
         name = f"/dev/{dev['name']}"
-        mounted = (_is_mounted(dev)
-                   or any(_is_mounted(c) for c in (dev.get("children") or [])))
+        mounted = _subtree_mounted(dev)
         if mounted and not allow_mounted:
             continue
         if size >= min_gb * (1 << 30):
@@ -104,7 +119,10 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
 
     Forces ssh on at boot (runcmd) — some raspi images ship sshd disabled and
     would lock out a headless box. `password` (if set) is the account's
-    break-glass password; callers must record it in a credentials file.
+    break-glass console password; it is delivered via chpasswd with
+    lock_passwd:false — a `password:` stanza under lock_passwd:true is set but
+    LOCKED, and with ssh_pwauth:false + no key the box would be unreachable
+    (#269). Callers must record the password in a credentials file.
     """
     sudo_rule = "ALL=(ALL) NOPASSWD:ALL" if sudo_nopass else "ALL=(ALL):ALL"
     stanza = [
@@ -112,12 +130,17 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
         "    groups: [adm, sudo]",
         "    shell: /bin/bash",
         f"    sudo: {sudo_rule}",
-        "    lock_passwd: true",
+        "    lock_passwd: true" if not password else "    lock_passwd: false",
     ]
+    if ssh_keys:
+        stanza.append("    ssh_authorized_keys:")
+        stanza += [f"      - {key}" for key in ssh_keys]
+    chpasswd = ""
     if password:
-        stanza.append(f"    password: {password}")
-    stanza.append("    ssh_authorized_keys:")
-    stanza += [f"      - {key}" for key in ssh_keys]
+        chpasswd = (f"chpasswd:\n"
+                    f"  expire: false\n"
+                    f"  list: |\n"
+                    f"      {user}:{password}\n")
     return (
         "#cloud-config\n"
         f"hostname: {hostname}\n"
@@ -125,8 +148,7 @@ def render_user_data(user: str, hostname: str, ssh_keys: list[str],
         "users:\n"
         + "\n".join(stanza) + "\n"
         "ssh_pwauth: false\n"
-        "chpasswd:\n"
-        "  expire: false\n"
+        + chpasswd +
         "runcmd:\n"
         "  - systemctl enable --now ssh || systemctl enable --now sshd || true\n"
     )
@@ -140,6 +162,61 @@ def render_network_config() -> str:
         "    dhcp4: true\n"
         "    optional: true\n"
     )
+
+
+def parse_cpuinfo_serial(cpuinfo_text: str) -> str | None:
+    """Serial line from /proc/cpuinfo ('Serial\t\t: 1000...') or None."""
+    for line in cpuinfo_text.splitlines():
+        if line.strip().lower().startswith("serial"):
+            fields = line.split(":", 1)
+            if len(fields) == 2 and fields[1].strip():
+                return fields[1].strip()
+    return None
+
+
+def parse_iface_macs(sysfs_listing: str) -> list[str]:
+    """Non-empty lines of `for f in /sys/class/net/*/address; do cat $f; done`."""
+    return [ln.strip().lower() for ln in sysfs_listing.splitlines() if ln.strip()]
+
+
+def verify_specimen(remote_serial: str | None, remote_macs: list[str],
+                    expect_mac: str | None = None,
+                    expect_serial: str | None = None) -> None:
+    """AGENTS.md 'Verify the SPECIMEN, Not Just the Model' gate (AGENTS.md:36-42).
+
+    The destructive provision path must confirm it is talking to the expected
+    physical Pi — DHCP address reuse or identical bench units otherwise put a
+    valid-looking /dev/sda on the wrong machine. At least one expectation is
+    required; when both are given, both must match.
+    """
+    if not expect_mac and not expect_serial:
+        raise SystemExit(
+            "refusing: specimen gate requires --expect-mac and/or "
+            "--expect-serial (AGENTS.md: verify the specimen, not just the "
+            "model — DHCP reuse makes an IP insufficient identity)")
+    if expect_serial:
+        if not remote_serial:
+            raise SystemExit("refusing: target reports no board serial — "
+                             "cannot verify --expect-serial")
+        if remote_serial.lower() != expect_serial.strip().lower():
+            raise SystemExit(
+                f"refusing: serial mismatch (target {remote_serial} != "
+                f"expected {expect_serial}) — wrong Pi, STOP")
+    if expect_mac:
+        want = expect_mac.strip().lower()
+        if not remote_macs or want not in remote_macs:
+            found = ", ".join(remote_macs) or "none"
+            raise SystemExit(
+                f"refusing: MAC {want} not present on target "
+                f"(found: {found}) — wrong Pi, STOP")
+
+
+def remote_specimen(host: str) -> tuple[str | None, list[str]]:
+    """Read live identity evidence from the Pi over SSH."""
+    _, serial_out, _ = _ssh(host, "cat /proc/cpuinfo")
+    _, macs_out, _ = _ssh(host,
+                          "for f in /sys/class/net/*/address; do cat $f; done")
+    return parse_cpuinfo_serial(serial_out), parse_iface_macs(macs_out)
 
 
 def sha256_of(path: Path, chunk: int = 1 << 20) -> str:
@@ -171,9 +248,36 @@ def local_ip_for(host: str) -> str:
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(Path(kwargs.pop("directory"))),
-                        **kwargs)
+    """Serves exactly one filename from the directory — nothing else.
+
+    The directory also holds <image>.credentials.txt (the break-glass
+    password); an unrestricted handler would hand it to any host on the
+    segment for the duration of the transfer (#262).
+    """
+
+    allowed_name: str = ""
+
+    def __init__(self, *args, directory=None, allowed_name="", **kwargs):
+        # must be set before super().__init__: the base class processes the
+        # request during construction
+        self.allowed_name = allowed_name
+        super().__init__(*args, directory=str(directory), **kwargs)
+
+    def _path_allowed(self) -> bool:
+        name = urllib.parse.urlsplit(self.path).path.lstrip("/")
+        return name == self.allowed_name
+
+    def do_GET(self):
+        if not self._path_allowed():
+            self.send_error(404)
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if not self._path_allowed():
+            self.send_error(404)
+            return
+        super().do_HEAD()
 
     def log_message(self, *args):  # silence request log
         pass
@@ -181,8 +285,10 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 def serve_file(path: Path, port: int = 0) -> tuple[HTTPServer, int]:
     directory = str(path.parent)
+    allowed = path.name
 
     def handler(*a, **kw):
+        kw["allowed_name"] = allowed
         return _QuietHandler(*a, directory=directory, **kw)
 
     server = HTTPServer(("0.0.0.0", port), handler)
@@ -192,7 +298,12 @@ def serve_file(path: Path, port: int = 0) -> tuple[HTTPServer, int]:
     return server, port
 
 
-def preflight(host: str, device: str, min_gb: int) -> None:
+def preflight(host: str, device: str, min_gb: int) -> str:
+    """Verify the target is eligible and return the device path to write.
+
+    For ``--device auto`` the resolved ``/dev/...`` path is returned so the
+    caller never passes the literal string "auto" to ``dd``.
+    """
     rc, out, err = _ssh(host, "lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL")
     if rc != 0:
         raise SystemExit(f"cannot lsblk {host}: {err}")
@@ -201,6 +312,7 @@ def preflight(host: str, device: str, min_gb: int) -> None:
     if target != device and device != "auto":
         raise SystemExit(f"refusing: {device} not eligible (choose {target})")
     print(f"target: {target}")
+    return target
 
 
 def _check_explicit(lsblk_json: str, device: str, min_gb: int) -> str:
@@ -211,8 +323,7 @@ def _check_explicit(lsblk_json: str, device: str, min_gb: int) -> str:
                 raise SystemExit(f"refusing: {device} is not a whole disk")
             if int(dev.get("size", 0)) < min_gb * (1 << 30):
                 raise SystemExit(f"refusing: {device} smaller than {min_gb}GB")
-            if (_is_mounted(dev)
-                    or any(_is_mounted(c) for c in (dev.get("children") or []))):
+            if _subtree_mounted(dev):
                 raise SystemExit(f"refusing: {device} has mounted partitions")
             return device
     raise SystemExit(f"refusing: {device} not found on host")
@@ -239,6 +350,54 @@ def transfer_image(host: str, image: Path, sha256: str | None,
         print("checksum ok")
 
 
+def reread_pt_cmd(device: str) -> str:
+    """Ask the kernel to drop the stale partition table after a whole-disk dd.
+
+    No `|| true`: if BOTH tools fail the caller must refuse — the stale
+    partition node may still exist and `test -b` would then accept the OLD
+    geometry (review of #293: the masked failure made the error path dead).
+    """
+    return (f"partprobe {device} 2>/dev/null || "
+            f"blockdev --rereadpt {device} 2>/dev/null")
+
+
+def wait_for_part_cmd(part: str, tries: int = 10) -> str:
+    """Bounded wait for the boot-partition node to (re)appear."""
+    return (f"i=0; while [ $i -lt {tries} ] && [ ! -b {part} ]; do "
+            f"sleep 1; i=$((i+1)); done; test -b {part}")
+
+
+def reread_partition_table(host: str, device: str, part: str) -> None:
+    """Re-read the partition table and wait for the boot node before mounting.
+
+    After overwriting a whole disk Linux can keep the previous table until
+    rescanned: on a blank target the partition may not exist yet, on a
+    previously partitioned one it can point at the old offset.
+    """
+    rc, _, err = _ssh(host, reread_pt_cmd(device))
+    if rc != 0:
+        raise SystemExit(f"partition reread failed on {device}: {err}")
+    rc, _, _ = _ssh(host, wait_for_part_cmd(part))
+    if rc != 0:
+        raise SystemExit(
+            f"boot partition {part} did not appear after rereading the "
+            f"partition table on {device}")
+
+
+def validate_archive(host: str, remote_path: str) -> None:
+    """Verify the downloaded archive is intact xz data BEFORE dd touches the disk.
+
+    Without this, a corrupt download (especially with --sha256 omitted) lets
+    xz die mid-stream while dd happily consumes the partial output — the
+    pipeline reports dd's status and a truncated image is declared written.
+    """
+    rc, _, err = _ssh(host, f"xz -t {remote_path}", timeout=300)
+    if rc != 0:
+        raise SystemExit(
+            f"image archive failed xz integrity check on {host}: "
+            f"{err.strip() or 'corrupt or not xz data'}")
+
+
 def write_image(host: str, remote_path: str, device: str) -> None:
     rc, _, err = _ssh(
         host,
@@ -247,6 +406,75 @@ def write_image(host: str, remote_path: str, device: str) -> None:
     if rc != 0:
         raise SystemExit(f"write failed: {err}")
     print(f"image written to {device}")
+
+
+def digest_and_size(archive: Path) -> tuple[str, int]:
+    """Local decompressed sha256 + exact byte count of an .img.xz (#295).
+
+    One streaming pass with lzma — no temp files, no shell plumbing. The
+    size feeds the remote `head -c` bound so the read-back covers EXACTLY
+    the bytes dd wrote (a whole-disk sha256 would depend on trailing
+    sectors that were never written).
+    """
+    h = hashlib.sha256()
+    n = 0
+    with lzma.open(archive, "rb") as fh:
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+            n += len(chunk)
+    return h.hexdigest(), n
+
+
+def verify_written(host: str, device: str, size: int, expect_sha: str) -> None:
+    """Read the written byte range back from the target and compare (#295).
+
+    dd success is NOT byte correctness: on the silently-corrupting
+    VL711/JMS578 USB bridges and marginal cables documented in the recipe,
+    the write pipeline reports dd's status while the disk holds wrong
+    bytes. \`blockdev --flushbufs\` evicts the page cache FIRST (review of
+    #381: buffered dd leaves its own writes cached, and a cached read-back
+    would hash the bytes we SENT, not the bytes the media holds). Fails
+    closed (SystemExit) on eviction failure, ssh failure, missing target
+    tools (busybox without blockdev/sha256sum/head), empty output, or
+    hash mismatch.
+    """
+    print(f"verifying {size} bytes read-back from {device} "
+          "(cache-evicted, sha256 over ssh)...")
+    rc, out, err = _ssh(
+        host,
+        f"blockdev --flushbufs {device} && "
+        f"head -c {size} {device} | sha256sum",
+        timeout=1800)
+    if rc != 0:
+        raise SystemExit(
+            f"read-back failed on {device} (cache eviction or read): "
+            f"{err.strip() or 'target may lack blockdev/head/sha256sum'}")
+    got = out.split()[0] if out.strip() else ""
+    if got != expect_sha:
+        raise SystemExit(
+            f"VERIFICATION FAILED: bytes on {device} do not match the image\n"
+            f"  expected {expect_sha}\n"
+            f"  read     {got or '<empty>'}\n"
+            "The write path is silently corrupting (bridge/cable/media) — "
+            "do NOT boot this disk; re-provision on a trusted path "
+            "(--skip-verify exists for repeat provisions on known-good "
+            "bridges only).")
+    print(f"read-back ok: {device}[0:{size}] sha256 matches")
+
+
+def maybe_verify_written(host: str, device: str, archive: Path,
+                         skip: bool) -> None:
+    """#295 wiring: default-ON read-back, explicit --skip-verify escape."""
+    if skip:
+        print("warning: --skip-verify — written bytes NOT read back; "
+              "silent write-path corruption would go undetected "
+              "(only for repeat provisions on trusted bridges)")
+        return
+    expect_sha, size = digest_and_size(archive)
+    verify_written(host, device, size, expect_sha)
 
 
 def inject_cloud_init(host: str, device: str, user: str, hostname: str,
@@ -274,6 +502,20 @@ def inject_cloud_init(host: str, device: str, user: str, hostname: str,
     print(f"cloud-init injected (user={user}, hostname={hostname})")
 
 
+def write_credentials(path: Path, content: str) -> None:
+    """Write the break-glass credentials file with mode 0600 from creation.
+
+    Path.write_text() would create it 0644 under the usual umask, exposing
+    the sole password to other local users (#262).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_CREAT's mode only applies to NEW inodes: an existing 0644 file from
+    # an older run would keep its mode (review of #293) — re-assert 0600.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
+
+
 def cmd_provision(args: argparse.Namespace) -> int:
     import secrets
     image = Path(args.image).expanduser().resolve()
@@ -283,16 +525,39 @@ def cmd_provision(args: argparse.Namespace) -> int:
                 for k in args.ssh_key]
 
     password = args.password or secrets.token_urlsafe(12)
-    preflight(args.host, args.device, args.min_gb)
+    target = preflight(args.host, args.device, args.min_gb)
+    serial, macs = remote_specimen(args.host)
+    verify_specimen(serial, macs,
+                    expect_mac=args.expect_mac,
+                    expect_serial=args.expect_serial)
+    print(f"specimen ok: serial={serial or 'n/a'}, "
+          f"macs={', '.join(macs) or 'n/a'}")
+    try:
+        from specimens import record, usable_macs
+        for _mac in usable_macs(macs):
+            record(mac=_mac, serial=serial or "", label=args.hostname,
+                   host=args.host, source="pi_image.provision")
+        print("specimen recorded in the local ledger "
+              "(pi_eeprom push will accept it)")
+    except (SystemExit, OSError) as exc:
+        # ledger bookkeeping is never allowed to kill a provision whose
+        # live identity the gate above already verified — a conflated
+        # MAC/serial refusal (SystemExit) or a ledger I/O failure (OSError)
+        # both downgrade to a warning (review of #384)
+        print(f"warning: specimen not recorded in ledger: {exc}")
     remote_path = f"/tmp/{image.name}"
     transfer_image(args.host, image, args.sha256, remote_path)
-    write_image(args.host, remote_path, args.device)
+    validate_archive(args.host, remote_path)
+    write_image(args.host, remote_path, target)
+    maybe_verify_written(args.host, target, image, skip=args.skip_verify)
     _ssh(args.host, f"rm -f {remote_path}")
     if not args.no_inject:
-        inject_cloud_init(args.host, args.device, args.user,
+        reread_partition_table(args.host, target, boot_partition(target))
+        inject_cloud_init(args.host, target, args.user,
                           args.hostname, ssh_keys, password)
         creds = Path(str(image) + ".credentials.txt")
-        creds.write_text(
+        write_credentials(
+            creds,
             f"host={args.hostname}\nuser={args.user}\npassword={password}\n"
             f"break-glass: console login, or rescue shell + mount rootfs\n")
         print(f"credentials written to {creds} — store this file, "
@@ -302,7 +567,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -313,6 +578,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="target disk on the Pi (e.g. /dev/sda) or 'auto'")
     sp.add_argument("--image", required=True, help="local .img.xz file")
     sp.add_argument("--sha256", default=None, help="expected image checksum")
+    sp.add_argument("--expect-mac", default=None,
+                    help="specimen gate: MAC that must be present on the "
+                         "target Pi (AGENTS.md MAC/serial rule)")
+    sp.add_argument("--expect-serial", default=None,
+                    help="specimen gate: /proc/cpuinfo Serial that must "
+                         "match the target Pi")
+    sp.add_argument("--password", default=None,
+                    help="break-glass console password (default: generated, "
+                         "recorded in <image>.credentials.txt)")
     sp.add_argument("--hostname", default="pi4")
     sp.add_argument("--user", default="ubuntu")
     sp.add_argument("--ssh-key", action="append", default=[],
@@ -320,9 +594,15 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--min-gb", type=int, default=MIN_DEVICE_GB)
     sp.add_argument("--no-inject", action="store_true",
                     help="skip cloud-init injection")
+    sp.add_argument("--skip-verify", action="store_true",
+                    help="skip the post-write read-back hash (#295) — "
+                         "repeat provisions on known-good bridges only")
     sp.set_defaults(func=cmd_provision)
+    return p
 
-    args = p.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

@@ -1,12 +1,15 @@
 """Tests for pi_netboot.py pure helpers (no network or router I/O)."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from pi_netboot import (
     DEFAULT_CMDLINE,
+    MARKER_END,
+    MARKER_START,
     is_armed,
     missing_firmware,
     netboot_loop_candidates,
@@ -219,3 +222,84 @@ class TestDeployParser(unittest.TestCase):
             pn.main(["deploy", "--router", "10.0.0.1", "--kernel", "/k",
                      "--dtb", "/d", "--help"])
         self.assertEqual(cm.exception.code, 0)
+
+
+class TestArmTransitionOrder(unittest.TestCase):
+    """Re-arming must stop serving the OLD allowlist before the tree changes (#267)."""
+
+    ARMED_A = ("# dnsmasq\n" + MARKER_START + "\n"
+               "dhcp-host=dc:a6:32:11:22:33,set:pinetboot\n"
+               "dhcp-option=tag:pinetboot,66,192.168.1.1\n"
+               "dhcp-option=tag:pinetboot,67,config.txt\n"
+               "enable-tftp\ntftp-root=/tmp/tftp\nlog-dhcp\n" + MARKER_END + "\n")
+
+    def _run_arm(self, armed_conf, healthy_plan):
+        from types import SimpleNamespace
+        import pi_netboot
+        events = []
+        health = iter(healthy_plan)
+
+        def fake_write(router, text):
+            events.append(("write", "pinetboot" in text))
+
+        def fake_upload(router, tree, root):
+            events.append(("upload", root))
+
+        def fake_restart(router):
+            events.append(("restart",))
+
+        def fake_healthy(router, tftp_root=None):
+            return next(health)
+
+        args = SimpleNamespace(
+            router="192.168.1.1", tree="/tmp/tree", mac=["E4:5F:01:12:34:56"],
+            tftp_root="/tmp/tftp", bootfile="config.txt", ip=None)
+        patches = [
+            mock.patch.object(pi_netboot, "remote_detect_tftp_root",
+                              return_value="/tmp/tftp"),
+            mock.patch.object(pi_netboot, "read_remote_config",
+                              return_value=armed_conf),
+            mock.patch.object(pi_netboot, "write_remote_config", fake_write),
+            mock.patch.object(pi_netboot, "upload_tree", fake_upload),
+            mock.patch.object(pi_netboot, "restart_dnsmasq", fake_restart),
+            mock.patch.object(pi_netboot, "dnsmasq_healthy", fake_healthy),
+        ]
+        with patches[0], patches[1], patches[2], patches[3], \
+                patches[4], patches[5]:
+            rc = pi_netboot.cmd_arm(args)
+        return rc, events
+
+    def test_rearm_disarms_before_upload_and_never_re_serves_old_mac(self):
+        rc, events = self._run_arm(self.ARMED_A, [True, True])
+        self.assertEqual(rc, 0)
+        kinds = [e[0] for e in events]
+        self.assertEqual(kinds.index("upload") - kinds.index("write"), 2,
+                         "disarm write+restart must precede the tree upload")
+        disarm_write = events[0]
+        self.assertEqual(disarm_write, ("write", False),
+                         "first write must strip the managed block")
+        final_write = [e for e in events if e[0] == "write"][-1]
+        self.assertEqual(final_write, ("write", True))
+
+    def test_fresh_arm_uploads_before_config(self):
+        rc, events = self._run_arm("# dnsmasq stock\n", [True])
+        self.assertEqual(rc, 0)
+        kinds = [e[0] for e in events]
+        self.assertLess(kinds.index("upload"), kinds.index("write"))
+
+    def test_unhealthy_final_arm_rolls_back_to_disarmed_not_old_allowlist(self):
+        rc, events = self._run_arm(self.ARMED_A, [True, False])
+        self.assertEqual(rc, 1)
+        writes = [e for e in events if e[0] == "write"]
+        self.assertEqual(writes[-1], ("write", False),
+                         "rollback must be the DISARMED base — old allowlist "
+                         "+ new tree is the #267 hazard")
+
+    def test_unhealthy_disarm_step_restores_and_never_touches_tree(self):
+        rc, events = self._run_arm(self.ARMED_A, [False, True])
+        self.assertEqual(rc, 1)
+        kinds = [e[0] for e in events]
+        self.assertNotIn("upload", kinds)
+        writes = [e for e in events if e[0] == "write"]
+        self.assertEqual(writes[-1], ("write", True),
+                         "tree untouched — restore the still-consistent old config")

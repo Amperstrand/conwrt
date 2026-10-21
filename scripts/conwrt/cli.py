@@ -3,6 +3,7 @@ import argparse
 from model_loader import list_models
 from conwrt._version import __version__
 from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
+from bench_doctor import add_doctor_arguments
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -54,6 +55,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "devices at non-default addresses, e.g. after a LAN move")
     flash_parser.add_argument("--no-pcap", action="store_true",
                         help="Disable pcap monitoring (polling-only mode, no scapy needed)")
+    flash_parser.add_argument("--upload-client", default="curl", choices=["curl", "webkit"],
+                        help="Multipart framing for recovery HTTP uploads: curl default, or "
+                             "webkit (Chromium-shaped) for recovery servers that mangle "
+                             "curl-framed uploads (bench-observed on D-Link COVR recovery)")
     flash_parser.add_argument("--force-uboot", action="store_true",
                         help="Force U-Boot recovery mode even if OpenWrt is detected")
     flash_parser.add_argument("--capture", default=None,
@@ -62,6 +67,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Router's OpenWrt MAC address (for ICMPv6 detection)")
     flash_parser.add_argument("--uboot-mac", default="",
                         help="Router's U-Boot MAC address (for ARP detection)")
+    flash_parser.add_argument("--expect-mac", default="",
+                        help="Specimen gate: the exact unit's MAC — required "
+                             "when a plain invocation reaches the sysupgrade "
+                             "route via a model's first-method fallback "
+                             "(operator-driven-only models, e.g. the Pi; "
+                             "AGENTS.md specimen rule)")
     flash_parser.add_argument("--silence-timeout", type=int, default=SILENCE_TIMEOUT_DEFAULT,
                         help="Seconds of no packets before silence event")
     flash_parser.add_argument("--serial-port", default=None,
@@ -77,7 +88,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Serial flash method variant (e.g. openwrt-flash, stock-restore). "
                              "Selects the serial-tftp-{method} flash_method from model JSON.")
     flash_parser.add_argument("--serial-baud", type=int, default=115200,
-                        help="Serial baud rate (default: 115200)")
+                         help="Serial baud rate (default: 115200)")
+    flash_parser.add_argument("--serial", default=None,
+                         help="Optional serial boot-milestone monitor: tcp://HOST:PORT[,baud] "
+                              "(serial bridge, baud ignored) or /dev/path[,baud]. Boot "
+                              "milestones (U-Boot banner, kernel start, procd init, login "
+                              "prompt) are detected from the serial stream alongside the pcap "
+                              "monitor; serial wins conflicts (ground truth). If the stream "
+                              "dies mid-flash, a warning is logged and the flow continues "
+                              "pcap-only. Inert for the serial-tftp flash method (it owns the "
+                              "console). The flash itself is unchanged.")
     flash_parser.add_argument("--tftp-root", default=None,
                         help="TFTP server root directory. Defaults to image directory.")
     flash_parser.add_argument("--isolate-port", default="",
@@ -190,6 +210,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cfg_parser = subparsers.add_parser("configure",
         help="Apply config.toml settings to a running OpenWrt router via SSH")
+    cfg_parser.add_argument("--port", default=None, type=int,
+                            help="SSH port of the target (venue-fed; default: 22 or ssh-config)")
     cfg_parser.add_argument("--ip", default=DEFAULT_IP,
         help="Router IP address (default: 192.168.1.1)")
     cfg_parser.add_argument("--model-id", default=None,
@@ -275,6 +297,25 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--quiet", action="store_true",
         help="Only print responding IPs")
 
+    watch_parser = subparsers.add_parser("watch",
+        help="Scan for routers in recovery/flashable state and prompt to flash")
+    watch_parser.add_argument("--interface", default=None,
+        help="Ethernet interface (auto-detected if omitted)")
+    watch_parser.add_argument("--interval", type=float, default=5.0,
+        help="Seconds between scan rounds (default: 5)")
+    watch_parser.add_argument("--timeout", type=float, default=2.0,
+        help="Per-target probe timeout in seconds (default: 2)")
+    watch_parser.add_argument("--model-id", default=None,
+        help="Flash this model ID instead of the auto-detected match")
+    watch_parser.add_argument("--image", default=None,
+        help="Flash this image instead of requesting an ASU build")
+    watch_parser.add_argument("--no-upload", action="store_true",
+        help="Dry run: detect and prompt but never upload")
+    watch_parser.add_argument("--loop", action="store_true",
+        help="Keep watching after a flash instead of exiting")
+    watch_parser.add_argument("--yes", action="store_true",
+        help="Flash without confirmation prompt")
+
     flow_parser = subparsers.add_parser("flow",
         help="Deploy or generate a composite flow (e.g. net4sats)")
     flow_sub = flow_parser.add_subparsers(dest="flow_command")
@@ -306,6 +347,26 @@ def _build_parser() -> argparse.ArgumentParser:
     mig_parser.add_argument("--interface", default=None,
                         help="Host ethernet interface (auto-detected if omitted)")
     mig_parser.add_argument("--rollback-secs", type=int, default=60,
-                        help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+                         help="Seconds before the router auto-reverts if the new IP doesn't verify (default 60)")
+
+    doctor_parser = subparsers.add_parser("bench-doctor",
+        help="Validate the optional labgrid bench stack (read-only; ABSENT=healthy standalone)")
+    add_doctor_arguments(doctor_parser)
+
+    rp_parser = subparsers.add_parser("recovery-probe",
+        help="Classify what answers at a recovery IP (arms client alias, learns MAC)")
+    rp_parser.add_argument("--recovery-ip", default="192.168.0.1")
+    rp_parser.add_argument("--interface", default=None)
+    rp_parser.add_argument("--client-ip", default="192.168.0.10")
+    rp_parser.add_argument("--json", dest="json_out", action="store_true")
+
+    bw_parser = subparsers.add_parser("boot-watch",
+        help="Watch an interface for device boot signatures (packets + carrier + ping)")
+    bw_parser.add_argument("--interface", required=True)
+    bw_parser.add_argument("--exclude-mac", action="append", default=[])
+    bw_parser.add_argument("--watch-ip", action="append", default=[])
+    bw_parser.add_argument("--duration", type=int, default=300)
+    bw_parser.add_argument("--poll-interval", type=float, default=2.0)
+    bw_parser.add_argument("--max-packets", type=int, default=2000)
 
     return parser

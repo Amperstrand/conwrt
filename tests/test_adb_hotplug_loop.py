@@ -21,6 +21,7 @@ from use_cases.usb_tether import _adb_hotplug_script
 FIXTURES = Path(__file__).parent / "fixtures"
 
 ADB_STUB = r"""#!/bin/sh
+echo "adb: $*" >> "$FAKE_ADB_DIR/calls.log"
 # Fake adb driven by $FAKE_ADB_DIR state files:
 #   mode        "legacy" (svc enables tethering) | "ui" (only the tap does) | "dead"
 #   ui.xml      the dump served for `uiautomator dump` / `cat`
@@ -81,7 +82,7 @@ echo "$*" >> "$FAKE_ADB_DIR/logger.log"
 exit 0
 """
 
-SLEEP_STUB = "#!/bin/sh\nexit 0\n"
+SLEEP_STUB = '#!/bin/sh\necho "sleep: $*" >> "$FAKE_ADB_DIR/calls.log"\nexit 0\n'
 
 
 def _write_stub(dirpath: Path, name: str, content: str) -> None:
@@ -140,6 +141,7 @@ def _run_hotplug(mode: str, timeout_s: float = 10.0) -> dict:
         "taps": out("taps.log"),
         "log": out("logger.log"),
         "tethered": out("tethered"),
+        "calls": out("calls.log"),
     }
 
 
@@ -168,3 +170,36 @@ class TestHotplugLoop:
         assert r["tethered"] == ""
         assert r["taps"] == ""
         assert "gave up after 7 attempts" in r["log"]
+        # Retry ordering proven from the recorded stub-call sequence,
+        # not just the final log line: exactly 7 state probes, a backoff
+        # sleep between every consecutive pair, nothing after give-up.
+        calls = [l for l in r["calls"].splitlines() if l]
+        probes = [i for i, c in enumerate(calls) if c == "adb: get-state"]
+        assert len(probes) == 7, f"expected 7 probes, calls: {calls}"
+        # Leading settle/backoff sleeps before the first probe are fine;
+        # between consecutive probes ONLY sleeps may appear.
+        for i in range(len(probes) - 1):
+            a, b = probes[i], probes[i + 1]
+            gap = calls[a + 1 : b]
+            assert gap and all(c.startswith("sleep:") for c in gap), (
+                f"non-sleep activity between probes {a} and {b}: {calls}"
+            )
+        assert not [c for c in calls[probes[-1] + 1 :] if c.startswith("adb:")], (
+            f"adb called after the final probe: {calls}"
+        )
+
+    def test_extraction_is_the_complete_shipped_pipeline(self):
+        # Lockstep on the COMPLETE structure (not fragments): the body
+        # under test must carry every stage of the production loop —
+        # attempt counter, both enable paths, the interface check, and
+        # the give-up message — or structural drift fails loudly.
+        body = _hotplug_loop_body()
+        for marker in [
+            "attempt=$((attempt + 1))",
+            "svc usb setFunctions",
+            "uiautomator dump",
+            "input tap",
+            "ip addr show usb0",
+            'gave up after $attempt attempts',
+        ]:
+            assert marker in body, f"shipped pipeline lost {marker!r}"

@@ -26,8 +26,22 @@ If the Pi can SSH (normal OS or future rescue-with-sshd):
 python3 scripts/pi_image.py provision --host <pi-ip> --device /dev/sda \
     --image ubuntu-26.04.1-preinstalled-server-arm64+raspi.img.xz \
     --sha256 <hash> --hostname pi4 --user ubuntu \
-    --ssh-key ~/.ssh/id_ed25519.pub
+    --ssh-key ~/.ssh/id_ed25519.pub \
+    --expect-mac dc:a6:32:xx:xx:xx
 ```
+
+`--expect-mac` (or `--expect-serial`) is mandatory — provision refuses to
+write without one. Read the specimen's MAC live from the running Pi
+(`ssh root@<pi-ip> 'cat /sys/class/net/eth0/address'`, any interface listed
+by `/sys/class/net/*/address`), or take the serial from `/proc/cpuinfo`
+(`Serial:` line) / the unit's label — never from a guess or a port number.
+
+After `dd` the provision **reads the written bytes back and compares the
+sha256 of the exact decompressed range** before touching cloud-init (#295) —
+on the silently-corrupting USB bridges below this is the only signal that
+the disk actually holds the image. `--skip-verify` skips it for repeat
+provisions on known-good bridges; a mismatch aborts BEFORE injection and
+tells you not to boot the disk.
 
 If the Pi is in the netboot rescue shell (busybox + telnetd, no sshd), the
 same steps run manually over telnet — this is what was actually done

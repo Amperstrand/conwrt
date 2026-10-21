@@ -230,6 +230,33 @@ class TestResolveFlashMode(TestCase):
         result = self.resolve(profile, "unknown", self.args, use_sysupgrade=False)
         self.assertEqual(result, "uboot")
 
+    def test_netboot_rescue_refuses_with_pi_netboot_pointer(self):
+        """#266: never fall through to uboot for a netboot-rescue profile."""
+        profile = _make_profile(flash_method="netboot-rescue")
+        with self.assertRaises(ValueError) as cm:
+            self.resolve(profile, "unknown", self.args, use_sysupgrade=False)
+        self.assertIn("pi_netboot", str(cm.exception))
+
+    def test_netboot_rescue_refusal_is_operator_error_not_traceback(self):
+        """Review of #294: cmd_flash surfaces the refusal on stderr and
+        returns "" (caller exits 1) instead of leaking a ValueError."""
+        import contextlib
+        import io
+        from conwrt.flash_dispatcher import _resolve_flash_mode_or_refuse
+        profile = _make_profile(flash_method="netboot-rescue")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            mode = _resolve_flash_mode_or_refuse(
+                profile, "unknown", self.args, use_sysupgrade=False)
+        self.assertEqual(mode, "")
+        self.assertIn("ERROR:", err.getvalue())
+        self.assertIn("pi_netboot", err.getvalue())
+
+    def test_netboot_rescue_sysupgrade_state_still_sysupgrades(self):
+        profile = _make_profile(flash_method="netboot-rescue")
+        result = self.resolve(profile, "openwrt", self.args, use_sysupgrade=True)
+        self.assertEqual(result, "sysupgrade")
+
     def test_priority_edgeos_over_extreme(self):
         """edgeos checked before extreme."""
         profile = _make_profile(is_edgeos_kernel_swap=True, is_extreme_rdwr_tftp=True)
@@ -328,9 +355,10 @@ class TestUbootCleanup(TestCase):
         _uboot_cleanup(ctx, profile, "en0")
         mock_route.assert_called_once_with("en0", "192.168.1.1")
 
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
     @patch("conwrt.flash_dispatcher.remove_interface_ip")
     @patch("conwrt.flash_dispatcher.remove_host_route")
-    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip):
+    def test_removes_alias_when_device_moved_subnet(self, mock_route, mock_remove_ip, mock_alias):
         from conwrt.flash_dispatcher import _uboot_cleanup
         ctx = _make_ctx()
         profile = _make_profile(
@@ -338,13 +366,25 @@ class TestUbootCleanup(TestCase):
         _uboot_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_called_once_with("en0", "192.168.1.254", "24")
 
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
     @patch("conwrt.flash_dispatcher.remove_interface_ip")
     @patch("conwrt.flash_dispatcher.remove_host_route")
-    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip):
+    def test_keeps_alias_when_device_same_subnet(self, mock_route, mock_remove_ip, mock_alias):
         from conwrt.flash_dispatcher import _uboot_cleanup
         ctx = _make_ctx()
         profile = _make_profile(
             recovery_ip="192.168.1.1", openwrt_ip="192.168.1.1", client_ip="192.168.1.254")
+        _uboot_cleanup(ctx, profile, "en0")
+        mock_remove_ip.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=False)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    @patch("conwrt.flash_dispatcher.remove_host_route")
+    def test_operator_primary_address_never_removed(self, mock_route, mock_remove_ip, mock_alias):
+        from conwrt.flash_dispatcher import _uboot_cleanup
+        ctx = _make_ctx()
+        profile = _make_profile(
+            recovery_ip="192.168.1.1", openwrt_ip="192.168.9.1", client_ip="192.168.1.254")
         _uboot_cleanup(ctx, profile, "en0")
         mock_remove_ip.assert_not_called()
 
@@ -356,6 +396,40 @@ class TestUbootCleanup(TestCase):
         profile = _make_profile(recovery_ip="")
         _uboot_cleanup(ctx, profile, "en0")
         mock_route.assert_not_called()
+
+
+# ===================================================================
+# _remove_stale_client_aliases
+# ===================================================================
+
+class TestRemoveStaleClientAliases(TestCase):
+    """Leftover cleanup must only touch alias-style addresses."""
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_removes_alias_style_leftovers(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="192.168.0.10", openwrt_client_ip="192.168.1.254")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_any_call("en0", "192.168.0.10", "24")
+        mock_remove.assert_any_call("en0", "192.168.1.254", "24")
+        self.assertEqual(mock_remove.call_count, 2)
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=False)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_operator_primary_addresses_survive(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="192.168.1.254", openwrt_client_ip="")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_not_called()
+
+    @patch("conwrt.flash_dispatcher.interface_addr_is_alias", return_value=True)
+    @patch("conwrt.flash_dispatcher.remove_interface_ip")
+    def test_no_client_ips_no_calls(self, mock_remove, mock_alias):
+        from conwrt.flash_dispatcher import _remove_stale_client_aliases
+        profile = _make_profile(client_ip="", openwrt_client_ip="")
+        _remove_stale_client_aliases("en0", profile)
+        mock_remove.assert_not_called()
 
 
 # ===================================================================
@@ -1430,3 +1504,82 @@ class TestFlashModesCleanup(TestCase):
     def test_zycast_cleanup_is_zycast_cleanup_function(self):
         from conwrt.flash_dispatcher import FLASH_MODES, _zycast_cleanup
         self.assertIs(FLASH_MODES["zycast"].cleanup, _zycast_cleanup)
+
+
+class TestProfileFallbackForNonUnattendedModels(TestCase):
+    """#382: a model whose only methods are non-unattended (the Pi's
+    netboot-rescue) must still produce a profile so boot-state detection
+    can route an OpenWrt-running unit to sysupgrade."""
+
+    def test_pi_profile_falls_back_to_first_method(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err, _fb = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        self.assertIsNone(err)
+        self.assertEqual(profile.flash_method, "netboot-rescue")
+
+    def test_normal_model_builds_normally(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err, _fb = _build_profile_or_first_method(
+            "zyxel-gs1920-24", serial_method="", flash_method="")
+        self.assertIsNone(err)
+        self.assertEqual(profile.flash_method, "oem-ftp")
+
+    def test_unknown_model_returns_error(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err, _fb = _build_profile_or_first_method(
+            "no-such-model", serial_method="", flash_method="")
+        self.assertIsNone(profile)
+        self.assertIn("no-such-model", err)
+
+    def test_fallback_flags_first_method_use(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        _p, _e, fb = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        self.assertTrue(fb)  # the gate key: only this route is specimen-gated
+        _p, _e, fb_plain = _build_profile_or_first_method(
+            "dlink-covr-x1860-a1", serial_method="", flash_method="")
+        self.assertFalse(fb_plain)
+
+    def test_fallback_specimen_gate(self):
+        """#388 review P1: the fallback-enabled sysupgrade route demands an
+        explicit specimen match against the live fingerprint."""
+        from conwrt.flash_dispatcher import _verify_fallback_specimen
+        args = SimpleNamespace(expect_mac="")
+        fp = {"network": {"macs": {"br-lan": "DC:A6:32:11:22:33"}}}
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("--expect-mac is required", detail)
+
+        args = SimpleNamespace(expect_mac="dc:a6:32:11:22:33")
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertTrue(ok)
+        self.assertIn("dc:a6:32:11:22:33", detail)
+
+        args = SimpleNamespace(expect_mac="e4:5f:01:12:34:56")
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("specimen mismatch", detail)
+
+        ok, detail = _verify_fallback_specimen(
+            SimpleNamespace(expect_mac="dc:a6:32:11:22:33"), None, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("no live br-lan MAC", detail)
+
+    def test_fallback_profile_routes_openwrt_pi_to_sysupgrade(self):
+        from conwrt.flash_dispatcher import (
+            _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
+        profile, _, _fb = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        mode = _resolve_flash_mode_or_refuse(
+            profile, "openwrt", SimpleNamespace(), use_sysupgrade=True)
+        self.assertEqual(mode, "sysupgrade")
+
+    def test_fallback_profile_refuses_non_openwrt_pi_cleanly(self):
+        from conwrt.flash_dispatcher import (
+            _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
+        profile, _, _fb = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        mode = _resolve_flash_mode_or_refuse(
+            profile, "unknown", SimpleNamespace(), use_sysupgrade=False)
+        self.assertEqual(mode, "")

@@ -2,7 +2,7 @@ import queue
 import sys
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
@@ -136,10 +136,11 @@ class TestHandleWaitingForPowerOffAlreadyOff(TestCase):
 
 
 class TestHandleWaitingForPowerOffWithLink(TestCase):
+    @patch("flash.context.manual_step", return_value=True)
     @patch("conwrt.handlers_uboot.get_link_state", return_value=True)
     @patch("conwrt.handlers_uboot._wait_for_event_or_timeout")
     @patch("conwrt.handlers_uboot.ts", return_value=2000.0)
-    def test_link_up_waits_and_advances_on_success(self, mock_ts, mock_wait, mock_link):
+    def test_link_up_waits_and_advances_on_success(self, mock_ts, mock_wait, mock_link, mock_manual):
         ctx = _make_ctx()
         eq = queue.Queue()
 
@@ -151,7 +152,8 @@ class TestHandleWaitingForPowerOffWithLink(TestCase):
         _handle_waiting_for_power_off(ctx, eq)
         self.assertEqual(ctx.state, State.WAITING_FOR_UBOOT)
         self.assertEqual(ctx.timeline.power_off, 2000.0)
-        ctx._say_fn.assert_any_call("Ready. Please unplug the power cable from the router now.")
+        mock_manual.assert_any_call("Ready. Please unplug the power cable from the router now.",
+                                    voice=ANY, confirm="event")
         ctx._say_fn.assert_any_call("Power disconnected. Good.")
 
     @patch("conwrt.handlers_uboot.get_link_state", return_value=True)
@@ -177,18 +179,20 @@ class TestHandleWaitingForUbootLinkFails(TestCase):
 
 
 class TestHandleWaitingForUbootRecoveryFound(TestCase):
+    @patch("flash.context.manual_step", return_value=True)
     @patch("conwrt.handlers_uboot._wait_for_event_or_timeout", return_value=Event.LINK_UP)
     @patch("conwrt.handlers_uboot.detect_uboot_http", return_value=(True, "200 OK"))
     @patch("conwrt.handlers_uboot.time.sleep")
     @patch("conwrt.handlers_uboot.ts", return_value=500.0)
-    def test_recovery_detected_advances_to_uploading(self, mock_ts, mock_sleep, mock_detect, mock_wait):
+    def test_recovery_detected_advances_to_uploading(self, mock_ts, mock_sleep, mock_detect, mock_wait, mock_manual):
         ctx = _make_ctx()
         eq = queue.Queue()
         link_monitor = MagicMock()
         _handle_waiting_for_uboot(ctx, eq, link_monitor)
         self.assertEqual(ctx.state, State.UBOOT_UPLOADING)
         self.assertEqual(ctx.timeline.uboot_http_first, 500.0)
-        ctx._say_fn.assert_any_call("Recovery mode detected. You can release the button now.")
+        mock_manual.assert_any_call("Recovery mode detected. You can release the button now.",
+                                    voice=ANY, confirm="event")
 
 
 class TestHandleWaitingForUbootRecoveryNotFound(TestCase):

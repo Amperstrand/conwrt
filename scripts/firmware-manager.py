@@ -37,11 +37,21 @@ IMAGES_DIR = REPO_ROOT / "images"
 ASU_BASE = "https://sysupgrade.openwrt.org"
 ASU_BUILD_URL = f"{ASU_BASE}/api/v1/build"
 ASU_STORE_URL = f"{ASU_BASE}/store"
+LATEST_VERSIONS_URL = f"{ASU_BASE}/json/v1/latest.json"
+
+# ASU rejects bare branch tracks ("Unsupported branch: 24") — resolve via latest.json,
+# fall back to this pinned table when offline.
+_BRANCH_FALLBACK: dict[str, str] = {
+    "24": "24.10.8",
+    "25": "25.12.5",
+}
 
 POLL_INTERVAL = 10
 POLL_TIMEOUT = 600
 
 logger = logging.getLogger("conwrt.firmware")
+
+_latest_versions_cache: Optional[list[str]] = None
 
 # ---------------------------------------------------------------------------
 # HTTP helpers (stdlib only)
@@ -151,15 +161,59 @@ def _compute_cache_key(
 # ---------------------------------------------------------------------------
 
 
+def _fetch_latest_versions() -> list[str]:
+    global _latest_versions_cache
+    if _latest_versions_cache is None:
+        try:
+            latest = _http_get_json(LATEST_VERSIONS_URL, timeout=10).get("latest") or []
+            _latest_versions_cache = [str(v) for v in latest]
+        except (urllib.error.URLError, OSError, ValueError):
+            _latest_versions_cache = []
+    return _latest_versions_cache
+
+
+def resolve_asu_version(version: str) -> str:
+    """Resolve a version alias to a concrete ASU-accepted version string.
+
+    Accepts branch tracks ("25", "24.10") and maps them to the newest concrete
+    release from ASU's latest.json ({"latest": ["25.12.5", "24.10.8"]}).
+    Concrete versions ("25.12.5", "SNAPSHOT", "24.10.2-rc1") pass through.
+    """
+    v = version.strip()
+    if not v:
+        return v
+    if v.upper() == "SNAPSHOT":
+        return "SNAPSHOT"
+    base = v.split("-")[0]
+    if "-" in v or len(base.split(".")) >= 3:
+        return v
+    for candidate in _fetch_latest_versions():
+        candidate_base = candidate.split("-")[0]
+        if candidate_base.split(".")[: len(base.split("."))] == base.split("."):
+            return candidate
+    fallback = _BRANCH_FALLBACK.get(v)
+    if fallback:
+        logger.warning(
+            "%s unreachable — using pinned fallback %s -> %s",
+            LATEST_VERSIONS_URL, v, fallback,
+        )
+        return fallback
+    return v
+
+
 def cmd_request(args: argparse.Namespace) -> int:
     profile: str = args.profile
-    version: str = args.version
+    requested_version: str = args.version
+    version = resolve_asu_version(requested_version)
+    if version != requested_version:
+        logger.info("version %s resolves to %s", requested_version, version)
     target: Optional[str] = args.target
     packages_str: Optional[str] = args.packages
     ssh_key_path: Optional[str] = args.ssh_key
     cfg = _load_config()
     password: Optional[str] = args.password
     wan_ssh: bool = args.wan_ssh or cfg.wan_ssh
+    tofb: bool = args.tofb or cfg.tofb
 
     if not ssh_key_path:
         if cfg.ssh_public_key_path:
@@ -201,7 +255,9 @@ def cmd_request(args: argparse.Namespace) -> int:
         ssh_key_path=ssh_key_path,
         password=password,
         wan_ssh=wan_ssh,
+        tofb=tofb,
         extra_pub_keys=extra_pub_keys,
+        disable_dhcp=cfg.disable_lan_dhcp,
     )
     defaults_script = plan.asu_defaults_script()
     ssh_key_cleaned = plan.ssh_key_cleaned
@@ -674,7 +730,7 @@ def main() -> int:
         help="ASU device profile (e.g. dlink_covr-x1860-a1)",
     )
     p_request.add_argument(
-        "--version", default="25.12.4",
+        "--version", default="25",
         help="OpenWrt version (default: 25.12.4)",
     )
     p_request.add_argument(
@@ -696,6 +752,10 @@ def main() -> int:
     p_request.add_argument(
         "--wan-ssh", action="store_true",
         help="Open SSH on WAN (requires --ssh-key, forces key-only auth)",
+    )
+    p_request.add_argument(
+        "--tofb", action="store_true",
+        help="Bake the TOFB first-boot enrollment service into the image (#228, ADR-0013)",
     )
     p_request.add_argument(
         "--dry-run", action="store_true",

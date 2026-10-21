@@ -313,14 +313,25 @@ class TestInteractiveMenuSingleRouter:
         # Should return without raising
         interactive_menu([_StubRouter()])
 
-    @patch("builtins.input", side_effect=["1", "", "5"])
-    def test_choice_1_prints_flash_command(self, _input, capsys):
+    @patch("router_display.subprocess.run")
+    @patch("builtins.input", side_effect=["1", "n", "5"])
+    def test_choice_1_builds_flash_command_and_confirms(self, _input, mock_run, capsys):
         from router_display import interactive_menu
         interactive_menu([_StubRouter(model_id="my-model")])
         out = capsys.readouterr().out
-        assert "conwrt flash" in out
-        assert "--model-id my-model" in out
+        assert "conwrt.py flash" in out
+        assert "--model-id" in out and "my-model" in out
         assert "--request-image" in out
+        mock_run.assert_not_called(), "declined confirmation must not execute"
+
+    @patch("router_display.subprocess.run", return_value=type("R", (), {"returncode": 0})())
+    @patch("builtins.input", side_effect=["1", "y", "5"])
+    def test_choice_1_confirmed_executes(self, _input, mock_run, capsys):
+        from router_display import interactive_menu
+        interactive_menu([_StubRouter(model_id="my-model")])
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1].endswith("conwrt.py") and cmd[2] == "flash"
+        assert "--request-image" in cmd
 
     @patch("builtins.input", side_effect=["1", "", "5"])
     def test_choice_1_without_model_id_omits_flag(self, _input, capsys):
@@ -346,69 +357,35 @@ class TestInteractiveMenuSingleRouter:
         # No conwrt flash --image command should be printed
         assert "--image" not in out
 
-    @patch("builtins.input", side_effect=["3", "", "5"])
-    def test_choice_3_prints_force_uboot(self, _input, capsys):
+    @patch("router_display.subprocess.run")
+    @patch("builtins.input", side_effect=["3", "n", "5"])
+    def test_choice_3_offers_force_uboot_flash(self, _input, mock_run, capsys):
         from router_display import interactive_menu
         interactive_menu([_StubRouter(model_id="my-model")])
         out = capsys.readouterr().out
         assert "--force-uboot" in out
+        assert "--request-image" in out
+        assert "--model-id" in out and "my-model" in out
+        mock_run.assert_not_called(), "declined confirmation must not execute"
 
-    @patch("builtins.input", side_effect=["3", "", "5"])
-    def test_choice_3_no_model_id_omits_flag(self, _input, capsys):
+    @patch("router_display.subprocess.run")
+    @patch("builtins.input", side_effect=["3", "n", "5"])
+    def test_choice_3_no_model_id_omits_flag(self, _input, mock_run, capsys):
         from router_display import interactive_menu
         interactive_menu([_StubRouter(model_id="")])
         out = capsys.readouterr().out
         assert "--force-uboot" in out
         assert "--model-id" not in out
 
-    @patch("router_display.load_model")
-    @patch("builtins.input", side_effect=["3", "", "5"])
-    def test_choice_3_with_model_loads_recovery_instructions(
-        self, _input, mock_load, capsys,
-    ):
+    @patch("router_display.subprocess.run", return_value=type("R", (), {"returncode": 0})())
+    @patch("builtins.input", side_effect=["3", "y", "5"])
+    def test_choice_3_confirmed_executes(self, _input, mock_run, capsys):
         from router_display import interactive_menu
-        mock_load.return_value = {
-            "flash_methods": {
-                "recovery-http": {
-                    "reset_instructions": "Power off. Hold reset. Power on.",
-                },
-            },
-        }
         interactive_menu([_StubRouter(model_id="my-model")])
-        out = capsys.readouterr().out
-        assert "Recovery instructions" in out
-        assert "Power off" in out
-        assert "Hold reset" in out
-        assert "Power on" in out
-
-    @patch("router_display.load_model")
-    @patch("builtins.input", side_effect=["3", "", "5"])
-    def test_choice_3_with_missing_model_swallows_error(
-        self, _input, mock_load, capsys,
-    ):
-        from router_display import interactive_menu
-        mock_load.side_effect = FileNotFoundError("model not found")
-        # Must not raise
-        interactive_menu([_StubRouter(model_id="missing-model")])
-        out = capsys.readouterr().out
-        # Still prints the basic force-uboot command
-        assert "--force-uboot" in out
-
-    @patch("router_display.load_model")
-    @patch("builtins.input", side_effect=["3", "", "5"])
-    def test_choice_3_model_without_reset_instructions(
-        self, _input, mock_load, capsys,
-    ):
-        from router_display import interactive_menu
-        mock_load.return_value = {
-            "flash_methods": {
-                "sysupgrade": {"description": "no reset_instructions here"},
-            },
-        }
-        interactive_menu([_StubRouter(model_id="m1")])
-        out = capsys.readouterr().out
-        # No "Recovery instructions" section since no reset_instructions
-        assert "Recovery instructions" not in out
+        cmd = mock_run.call_args[0][0]
+        assert cmd[2] == "flash"
+        assert "--force-uboot" in cmd
+        assert "--request-image" in cmd
 
 
 class TestInteractiveMenuDetailedInfo:
