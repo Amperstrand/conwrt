@@ -161,9 +161,11 @@ through the kill); every incident coincided with netdev/L3 config events.
   alive (printk/timers continued 16+ min) yet the watchdog NEVER fired.
   Internal WDT is insufficient for this class; MAGIC_SYSRQ over serial also
   did not respond during the wedge. The working mitigations: preflight
-  overlap guards (avoidance), and — future — an EXTERNAL GPIO hardware
-  watchdog (the vendor stock design), which is immune to SoC-level stalls
-  by construction. Evidence: openwrt/openwrt#26061.
+  overlap guards (avoidance) — and note the vendor does NOT have a secret
+  watchdog either: the V2.90 GPL drop shows GS1900 stock ships with
+  CONFIG_WATCHDOG unset and no WDT board code at all; stock simply lacks
+  the DSA L3-offload path that deadlocks. An external GPIO watchdog would
+  be new hardware, not a config flip. Evidence: openwrt/openwrt#26061.
 
 ### 9. MCU crash survives soft reboots (PoE manager class)
 
