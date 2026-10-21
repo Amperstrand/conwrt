@@ -6,6 +6,8 @@ so the assertions are pinned against ground truth, not fiction.
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,12 @@ import pytest
 import bench_adopt as ba
 
 PLACE = ba.Place("ap-lan4", "b4:2d:56:25:79:b1", "192.168.104.51")
+
+# A valid receipt for PLACE — stage_reset must see one of these (fail-closed).
+RECEIPT = ba.EnvelopeReceipt(
+    place="ap-lan4", vlan=1004, tftproot="/tmp/bench-tftp",
+    lifeline_log="/tmp/tftp-1004.log",
+    recorder_log="/tmp/bench-aliveness-ap-lan4.log")
 
 # Real captures from the spike (verbatim, trimmed to what matters).
 PREFLIGHT_OK = """extreme-networks,ws-ap3915i
@@ -201,23 +209,27 @@ class TestResetPostconditions:
                                             monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
         with pytest.raises(ba.AdoptError, match="overlay was NOT wiped"):
-            ba.stage_reset(_runner(self.ARM + [RESET_NOT_WIPED], tmp_path))
+            ba.stage_reset(_runner(self.ARM + [RESET_NOT_WIPED], tmp_path),
+                           envelope=RECEIPT)
 
     def test_nonzero_firstboot_rc_fails_fast(self, tmp_path: Path) -> None:
         with pytest.raises(ba.AdoptError, match="nonzero"):
-            ba.stage_reset(_runner(["FIRSTBOOT-RC=1", "FIRSTBOOT-RC=1"], tmp_path))
+            ba.stage_reset(_runner(["FIRSTBOOT-RC=1", "FIRSTBOOT-RC=1"], tmp_path),
+                           envelope=RECEIPT)
 
     def test_factory_state_passes(self, tmp_path: Path,
                                   monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
-        ba.stage_reset(_runner(self.ARM + [RESET_FACTORY], tmp_path))
+        ba.stage_reset(_runner(self.ARM + [RESET_FACTORY], tmp_path),
+                       envelope=RECEIPT)
 
     def test_mid_reboot_noise_then_factory(self, tmp_path: Path,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
         noise = ("dbclient: Connection to root@fe80::...%switch.1003:22 exited: "
                  "Remote closed the connection\n")
-        ba.stage_reset(_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path))
+        ba.stage_reset(_runner(self.ARM + [noise, noise, RESET_FACTORY], tmp_path),
+                       envelope=RECEIPT)
 
     def test_persistent_auth_death_fails_fast(self, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,7 +245,7 @@ class TestResetPostconditions:
                              + [noise] * 4 + poe_ack      # round 2 -> HEAL 2/2
                              + [noise] * 4)               # round 3 -> verdict
         with pytest.raises(ba.AdoptError, match="CONSOLE REQUIRED"):
-            ba.stage_reset(_runner(canned, tmp_path))
+            ba.stage_reset(_runner(canned, tmp_path), envelope=RECEIPT)
 
     def test_auth_death_healed_by_poecycle_passes(self, tmp_path: Path,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,7 +256,7 @@ class TestResetPostconditions:
         noise = ("dbclient: Connection to root@fe80::...%switch.1002:22 exited: "
                  "Remote closed the connection\n")
         canned = self.ARM + [noise] * 4 + ['{"status":"okay"}\n'] + [RESET_FACTORY]
-        ba.stage_reset(_runner(canned, tmp_path))
+        ba.stage_reset(_runner(canned, tmp_path), envelope=RECEIPT)
 
     def test_reset_refused_for_tftp_dependent_unit(self, tmp_path: Path) -> None:
         lan5 = ba.Place("ap-lan5", "b4:2d:56:24:ad:97", "192.168.105.51",
@@ -518,3 +530,337 @@ class TestSwitchKeyInstalledSwitchSide:
         installed = (dut_etc / "authorized_keys").read_text()
         assert installed.count(SWITCH_KEY) == 1, \
             "switch key must land exactly once, not duplicate across runs"
+
+
+class FakeSession:
+    """Transport seam for stage_envelope: only switch_put is exercised.
+    switch_sh raises if actually invoked — CLI-gate tests must refuse
+    before any switch traffic."""
+
+    def __init__(self) -> None:
+        self.pushed: list[tuple[str, str]] = []
+
+    def switch_put(self, local: Path, remote: str) -> None:
+        self.pushed.append((str(local), remote))
+
+    @staticmethod
+    def switch_sh(_script: str, timeout_s: int = 90) -> str:
+        raise AssertionError("FakeSession.switch_sh must not be called")
+
+
+def _seq_runner(outputs: list[str], tmp_path: Path, place: ba.Place = PLACE
+                ) -> tuple[ba.Runner, list[str]]:
+    calls: list[str] = []
+    canned = iter(outputs)
+
+    def transport(script: str) -> str:
+        calls.append(script)
+        return next(canned)
+
+    return ba.Runner(transport, place, tmp_path / "ev"), calls
+
+
+class TestEnvelopeStage:
+    """#289: the envelope stage arms lifeline + recorder + blank-password
+    proof, refuses firstboot on any unverified part, and returns the
+    receipt stage_reset demands."""
+
+    def _run(self, outputs: list[str], tmp_path: Path, image_path: Path | None = None,
+             digest: str = "") -> tuple[ba.EnvelopeReceipt, list[str], FakeSession]:
+        session = FakeSession()
+        r, calls = _seq_runner(outputs, tmp_path)
+        receipt = ba.stage_envelope(r, "/tmp/bench-tftp", "rec.bin",
+                                    image_path, digest, session)
+        return receipt, calls, session
+
+    def test_full_envelope_passes_and_returns_receipt(self, tmp_path: Path) -> None:
+        receipt, _, session = self._run(
+            ["LIFELINE-OK", ba.RECORDER_OK,
+             ba.BLANK_CHANNEL_OK + "\nextreme-networks,ws-ap3915i"], tmp_path)
+        assert receipt == ba.EnvelopeReceipt(
+            place="ap-lan4", vlan=1004, tftproot="/tmp/bench-tftp",
+            lifeline_log="/tmp/tftp-1004.log",
+            recorder_log="/tmp/bench-aliveness-ap-lan4.log")
+        assert session.pushed == [], "no local image -> no switch push"
+
+    def test_lifeline_broken_refuses(self, tmp_path: Path, capsys) -> None:
+        with pytest.raises(ba.AdoptError, match="lifeline not verifiably armed"):
+            self._run(["LIFELINE-BROKEN"], tmp_path)
+        assert "[PASS] envelope" not in capsys.readouterr().out
+
+    def test_lifeline_ok_but_image_sha_missing_refuses(self, tmp_path: Path) -> None:
+        # digest known -> the switch-side sha readback is a required marker
+        with pytest.raises(ba.AdoptError, match="IMAGE-SHA-OK"):
+            self._run(["LIFELINE-OK", ba.RECORDER_OK,
+                       ba.BLANK_CHANNEL_OK], tmp_path, digest="a" * 64)
+
+    def test_recorder_broken_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ba.AdoptError, match="aliveness recorder not verified"):
+            self._run(["LIFELINE-OK", "RECORDER-BROKEN"], tmp_path)
+
+    def test_both_auth_channels_dead_refuses(self, tmp_path: Path) -> None:
+        auth_err = "dbclient: Remote closed the connection"
+        with pytest.raises(ba.AdoptError, match="would strand"):
+            self._run(["LIFELINE-OK", ba.RECORDER_OK,
+                       auth_err, auth_err], tmp_path)
+
+    def test_blank_dead_but_key_auth_proves_v6_channel(self, tmp_path, capsys) -> None:
+        # live unit has a root password set: blank auth fails, key auth over
+        # the same v6 link-local still proves the channel mechanism (the
+        # post-reset blank password is rom-audit's ROM guarantee)
+        self._run(["LIFELINE-OK", ba.RECORDER_OK,
+                   "dbclient: Authentications that can continue: publickey",
+                   ba.V6_CHANNEL_OK + "\nextreme-networks,ws-ap3915i"], tmp_path)
+        out = capsys.readouterr().out
+        assert "key auth" in out and "ROM guarantee" in out
+
+    def test_blank_channel_proof_prints_exact_path(self, tmp_path, capsys) -> None:
+        self._run(["LIFELINE-OK", ba.RECORDER_OK,
+                   ba.BLANK_CHANNEL_OK], tmp_path)
+        assert "blank-password channel proven" in capsys.readouterr().out
+
+    def test_local_image_pushed_to_tftproot(self, tmp_path: Path) -> None:
+        img = tmp_path / "rec.bin"
+        img.write_bytes(b"image")
+        _, _, session = self._run(
+            ["LIFELINE-OK\nIMAGE-SHA-OK", ba.RECORDER_OK,
+             ba.BLANK_CHANNEL_OK], tmp_path,
+            image_path=img, digest="a" * 64)
+        assert session.pushed == [(str(img), "/tmp/bench-tftp/rec.bin")]
+
+    def test_lifeline_script_is_exactly_bench_flash_lifeline(self, tmp_path: Path) -> None:
+        # REUSE, not duplication: the envelope must send bench_flash's proven
+        # lifeline script byte-for-byte (plus, at most, the sha readback)
+        import bench_flash
+        _, calls, _ = self._run(["LIFELINE-OK", ba.RECORDER_OK,
+                                 ba.BLANK_CHANNEL_OK], tmp_path)
+        assert calls[0] == ("\n".join(
+            bench_flash.lifeline_lines(PLACE, "rec.bin", "/tmp/bench-tftp")) + "\n")
+
+    def test_sha_readback_appended_after_reused_lines(self, tmp_path: Path) -> None:
+        import bench_flash
+        _, calls, _ = self._run(["LIFELINE-OK\nIMAGE-SHA-OK", ba.RECORDER_OK,
+                                 ba.BLANK_CHANNEL_OK], tmp_path, digest="a" * 64)
+        base = "\n".join(
+            bench_flash.lifeline_lines(PLACE, "rec.bin", "/tmp/bench-tftp"))
+        assert calls[0] == base + ("\nsha256sum /tmp/bench-tftp/rec.bin | "
+                                   "grep -q " + "a" * 64 +
+                                   " && echo IMAGE-SHA-OK || echo IMAGE-SHA-FAIL\n")
+
+
+class TestRecorderScript:
+    """Script invariants for the detached aliveness recorder (#289)."""
+
+    def test_uses_setsid_never_nohup(self) -> None:
+        joined = "\n".join(ba.recorder_lines(PLACE))
+        assert "setsid" in joined
+        assert "nohup" not in joined, \
+            "AGENTS.md rule 8: nohup over ssh dies when the session closes"
+
+    def test_detached_output_redirects_off_ssh_pipe(self) -> None:
+        setsid_line = next(ln for ln in ba.recorder_lines(PLACE) if "setsid" in ln)
+        assert ">/dev/null 2>&1 &" in setsid_line, \
+            "an inherited stdout holds the ssh pipe open and blocks switch_sh forever"
+
+    def test_loop_body_carries_no_single_quotes(self) -> None:
+        # the body rides inside `setsid sh -c '...'` — a single quote breaks out
+        assert "'" not in ba.recorder_loop_body(PLACE, "/tmp/x.log")
+
+    def test_probe_closes_stdin(self) -> None:
+        assert "</dev/null" in ba.recorder_loop_body(PLACE, "/tmp/x.log"), \
+            "dbclient must not eat the piped script (stdin-eats-script bug)"
+
+    def test_previous_recorder_killed_before_rearm(self) -> None:
+        first = ba.recorder_lines(PLACE)[0]
+        assert first.startswith("kill $(pgrep")
+        assert "bench-aliveness-ap-lan4" in first
+
+    def test_verification_is_fail_closed_marker(self) -> None:
+        gate = ba.recorder_lines(PLACE)[-1]
+        assert ba.RECORDER_OK in gate and "RECORDER-BROKEN" in gate
+        assert "[ -s /tmp/bench-aliveness-ap-lan4.log ]" in gate, \
+            "the 'armed' line proves the loop is executing, not just forked"
+
+    def test_log_path_is_per_place(self) -> None:
+        other = ba.Place("ap-lan5", "b4:2d:56:24:ad:97", "192.168.105.51")
+        assert ba.recorder_log_path(PLACE) == "/tmp/bench-aliveness-ap-lan4.log"
+        assert ba.recorder_log_path(other) == "/tmp/bench-aliveness-ap-lan5.log"
+
+
+class TestRecorderLoopUnderBinSh:
+    """The recorder loop body is BusyBox-sh; prove the classification by
+    EXECUTING it under /bin/sh with a fake dbclient on PATH (the
+    #291 /bin/sh payload-stub pattern)."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_dbclient(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "dbclient").write_text('#!/bin/sh\necho "$FAKE_DBCLIENT_OUT"\n')
+        (bindir / "dbclient").chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+
+    @pytest.mark.parametrize("probe_out,expected", [
+        ("REC-ALIVE", "up"),
+        ("dbclient: Connection to root@fe80::b62d:56ff:fe25:79b1%switch.1004:22 "
+         "exited: Remote closed the connection", "auth-dead"),
+        ("dbclient: Authentications that can continue: publickey,password",
+         "auth-dead"),
+        ("dbclient: Connection refused", "down"),
+        ("dbclient: Connection timed out", "down"),
+    ])
+    def test_classification(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                            probe_out: str, expected: str) -> None:
+        log = tmp_path / "rec.log"
+        monkeypatch.setenv("FAKE_DBCLIENT_OUT", probe_out)
+        body = ba.recorder_loop_body(PLACE, str(log))
+        subprocess.run(["/bin/sh", "-c", body], check=True)
+        ts, state = log.read_text().split()
+        assert state == expected
+        assert ts.isdigit(), "each record is `epoch state`"
+
+    def test_appends_one_line_per_iteration(self, tmp_path: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+        log = tmp_path / "rec.log"
+        monkeypatch.setenv("FAKE_DBCLIENT_OUT", "REC-ALIVE")
+        body = ba.recorder_loop_body(PLACE, str(log))
+        for _ in range(3):
+            subprocess.run(["/bin/sh", "-c", body], check=True)
+        assert len(log.read_text().splitlines()) == 3
+
+
+class TestResetRequiresEnvelope:
+    """Fail-closed: stage_reset refuses without a same-session receipt."""
+
+    def test_no_receipt_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ba.AdoptError, match="recovery envelope"):
+            ba.stage_reset(_runner("", tmp_path))
+
+    def test_receipt_for_another_place_refuses(self, tmp_path: Path) -> None:
+        wrong = ba.EnvelopeReceipt(
+            place="ap-lan2", vlan=1002, tftproot="/tmp/bench-tftp",
+            lifeline_log="/tmp/tftp-1002.log",
+            recorder_log="/tmp/bench-aliveness-ap-lan2.log")
+        with pytest.raises(ba.AdoptError, match="not ap-lan4/switch.1004"):
+            ba.stage_reset(_runner("", tmp_path), envelope=wrong)
+
+
+class TestResolveLifelineImage:
+    def _registry(self, tmp_path: Path, version: str = "24.10.2") -> Path:
+        import hashlib
+        img = tmp_path / "img.bin"
+        img.write_bytes(b"firmware")
+        reg = tmp_path / "images.json"
+        reg.write_text(__import__("json").dumps({"images": {"k": {
+            "sha256": hashlib.sha256(img.read_bytes()).hexdigest(),
+            "version": version, "profile": "extreme-networks_ws-ap3915i",
+            "path": str(img)}}}))
+        return reg
+
+    def test_explicit_image_needs_no_registry(self, tmp_path: Path) -> None:
+        name, path, digest = ba.resolve_lifeline_image(
+            PLACE, tmp_path / "nope.json", "operator-staged.bin")
+        assert (name, path, digest) == ("operator-staged.bin", None, "")
+
+    def test_registry_match_gates_and_returns_digest(self, tmp_path: Path) -> None:
+        reg = self._registry(tmp_path)
+        name, path, digest = ba.resolve_lifeline_image(PLACE, reg, None)
+        assert name == "img.bin" and path is not None and len(digest) == 64
+
+    def test_missing_registry_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ba.AdoptError, match="no recovery image"):
+            ba.resolve_lifeline_image(PLACE, tmp_path / "nope.json", None)
+
+    def test_no_matching_release_refuses(self, tmp_path: Path) -> None:
+        reg = self._registry(tmp_path, version="23.05.4")
+        with pytest.raises(ba.AdoptError, match="no images.json entry"):
+            ba.resolve_lifeline_image(PLACE, reg, None)
+
+    def test_corrupt_image_refuses_via_check_image(self, tmp_path: Path) -> None:
+        import hashlib
+        img = tmp_path / "img.bin"
+        img.write_bytes(b"firmware")
+        reg = tmp_path / "images.json"
+        reg.write_text(__import__("json").dumps({"images": {"k": {
+            "sha256": "0" * 64, "version": "24.10.2",
+            "profile": "extreme-networks_ws-ap3915i", "path": str(img)}}}))
+        with pytest.raises(ba.AdoptError, match="sha256 mismatch"):
+            ba.resolve_lifeline_image(PLACE, reg, None)
+
+
+class TestEnvelopeOrder:
+    def test_envelope_precedes_reset_in_order(self) -> None:
+        assert ba.ORDER.index("envelope") < ba.ORDER.index("reset")
+        assert ba.ORDER.index("rom-audit") < ba.ORDER.index("reset")
+
+    def test_envelope_not_in_bare_stages_mapping(self) -> None:
+        # arming needs arguments; main injects a per-run closure instead
+        assert "envelope" not in ba.STAGES
+
+
+class TestCliEnvelopeGate:
+    def _reg(self, tmp_path: Path, name: str = "ap-lan9") -> Path:
+        reg = tmp_path / "places.json"
+        reg.write_text('{"places": [{"name": "%s", "mac": "02:aa:bb:cc:dd:ee", '
+                       '"dut_ip": "192.168.109.51"}]}' % name)
+        return reg
+
+    @pytest.fixture(autouse=True)
+    def _offline_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import bench_session
+        monkeypatch.setattr(bench_session, "get_session",
+                            lambda **kw: FakeSession())
+
+    def test_reset_without_envelope_stage_refused(self, tmp_path: Path,
+                                                  capsys) -> None:
+        rc = ba.main(["--place", "ap-lan9", "--places", str(self._reg(tmp_path)),
+                      "--stages", "reset", "--i-know"])
+        assert rc == 2
+        assert "envelope" in capsys.readouterr().out
+
+    def test_reset_without_rom_audit_refused(self, tmp_path: Path) -> None:
+        rc = ba.main(["--place", "ap-lan9", "--places", str(self._reg(tmp_path)),
+                      "--stages", "envelope,reset", "--i-know",
+                      "--lifeline-image", "rec.bin"])
+        assert rc == 2
+
+    def test_envelope_without_recovery_image_fails(self, tmp_path: Path,
+                                                   capsys) -> None:
+        rc = ba.main(["--place", "ap-lan9", "--places", str(self._reg(tmp_path)),
+                      "--images", str(tmp_path / "no-images.json"),
+                      "--stages", "envelope"])
+        assert rc == 1
+        assert "recovery image" in capsys.readouterr().out
+
+    def test_envelope_then_reset_hands_receipt_through_main(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+        # flagship: rc 0 is only possible if the envelope receipt flowed
+        # from the envelope stage into gated stage_reset
+        canned = iter([
+            "root:::0:99999:7:::\n\toption PasswordAuth 'on'\n"
+            "\toption RootPasswordAuth 'on'",              # rom-audit
+            "LIFELINE-OK",                                  # envelope-lifeline
+            ba.RECORDER_OK,                                 # envelope-recorder
+            ba.BLANK_CHANNEL_OK + "\nextreme-networks,ws-ap3915i",  # blankpw
+            "FIRSTBOOT-RC=0",                               # reset-firstboot (key)
+            "FIRSTBOOT-RC=0",                               # reset-firstboot (pw retry)
+            "",                                             # reset-reboot
+            RESET_FACTORY,                                  # reset-check
+        ])
+
+        def transport(_script: str) -> str:
+            return next(canned)
+
+        import bench_session
+        session = FakeSession()
+        session.switch_sh = transport  # type: ignore[method-assign]
+        monkeypatch.setattr(bench_session, "get_session", lambda **kw: session)
+        monkeypatch.setattr(ba, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ba.time, "sleep", lambda s: None)
+        monkeypatch.setattr(ba.time, "monotonic", lambda: 0)
+        rc = ba.main(["--place", "ap-lan9", "--places", str(self._reg(tmp_path)),
+                      "--stages", "rom-audit,envelope,reset", "--i-know",
+                      "--lifeline-image", "rec.bin"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "[PASS] envelope" in out and "[PASS] reset" in out
