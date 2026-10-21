@@ -558,6 +558,35 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
 _wait_for_event_or_timeout = wait_for_event
 
 
+def _build_profile_or_first_method(model_id: str, serial_method: str = "",
+                                   flash_method: str = "",
+                                   ) -> tuple[object, Optional[str]]:
+    """Build a profile, falling back to the model's first method when the
+    model has no unattended default (#382).
+
+    A model whose only methods are operator-driven (the Pi's netboot-rescue)
+    raises on default selection — but an OpenWrt-running unit still deserves
+    the plain `conwrt flash` sysupgrade path. Build with the first declared
+    method so boot-state detection and `_resolve_flash_mode_or_refuse` can
+    route (sysupgrade when openwrt; clean refusal otherwise). Returns
+    (profile, None) or (None, error_text).
+    """
+    try:
+        return _build_profile_from_model(
+            model_id, serial_method=serial_method,
+            flash_method=flash_method), None
+    except FileNotFoundError as e:
+        return None, str(e)
+    except ValueError:
+        methods = load_model(model_id).get("flash_methods", {}) or {}
+        first = next(iter(methods), None)
+        if not first:
+            return None, f"Model '{model_id}' declares no flash methods."
+        return _build_profile_from_model(
+            model_id, serial_method=serial_method,
+            flash_method=first), None
+
+
 def cmd_flash(args: argparse.Namespace) -> int:
     parser = _build_parser()
     validation_error = _validate_args(args)
@@ -613,12 +642,12 @@ def cmd_flash(args: argparse.Namespace) -> int:
             parser.error("--model-id is required when device is not reachable via SSH "
                          "and active fingerprinting did not identify the model.")
 
-    try:
-        profile = _build_profile_from_model(args.model_id,
-                                             serial_method=args.serial_method or "",
-                                             flash_method=getattr(args, 'flash_method', '') or "")
-    except (FileNotFoundError, ValueError) as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    profile, profile_err = _build_profile_or_first_method(
+        args.model_id,
+        serial_method=args.serial_method or "",
+        flash_method=getattr(args, 'flash_method', '') or "")
+    if profile_err is not None:
+        print(f"ERROR: {profile_err}", file=sys.stderr)
         return 1
 
     is_serial_tftp = getattr(profile, 'is_serial_tftp', False)

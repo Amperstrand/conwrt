@@ -1504,3 +1504,48 @@ class TestFlashModesCleanup(TestCase):
     def test_zycast_cleanup_is_zycast_cleanup_function(self):
         from conwrt.flash_dispatcher import FLASH_MODES, _zycast_cleanup
         self.assertIs(FLASH_MODES["zycast"].cleanup, _zycast_cleanup)
+
+
+class TestProfileFallbackForNonUnattendedModels(TestCase):
+    """#382: a model whose only methods are non-unattended (the Pi's
+    netboot-rescue) must still produce a profile so boot-state detection
+    can route an OpenWrt-running unit to sysupgrade."""
+
+    def test_pi_profile_falls_back_to_first_method(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        self.assertIsNone(err)
+        self.assertEqual(profile.flash_method, "netboot-rescue")
+
+    def test_normal_model_builds_normally(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err = _build_profile_or_first_method(
+            "zyxel-gs1920-24", serial_method="", flash_method="")
+        self.assertIsNone(err)
+        self.assertEqual(profile.flash_method, "oem-ftp")
+
+    def test_unknown_model_returns_error(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        profile, err = _build_profile_or_first_method(
+            "no-such-model", serial_method="", flash_method="")
+        self.assertIsNone(profile)
+        self.assertIn("no-such-model", err)
+
+    def test_fallback_profile_routes_openwrt_pi_to_sysupgrade(self):
+        from conwrt.flash_dispatcher import (
+            _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
+        profile, _ = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        mode = _resolve_flash_mode_or_refuse(
+            profile, "openwrt", SimpleNamespace(), use_sysupgrade=True)
+        self.assertEqual(mode, "sysupgrade")
+
+    def test_fallback_profile_refuses_non_openwrt_pi_cleanly(self):
+        from conwrt.flash_dispatcher import (
+            _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
+        profile, _ = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        mode = _resolve_flash_mode_or_refuse(
+            profile, "unknown", SimpleNamespace(), use_sysupgrade=False)
+        self.assertEqual(mode, "")
