@@ -141,8 +141,21 @@ class TestUserDataGeneration(unittest.TestCase):
         ud = get_pi_user_data(self.params)
         subnet_pos = ud.find("subnets create")
         dhcp_pos = ud.find("dhcp_on=True")
+        # Guard the markers: find() == -1 would make the ordering
+        # assertion vacuously true.
+        self.assertGreaterEqual(subnet_pos, 0, "subnets create marker missing")
+        self.assertGreaterEqual(dhcp_pos, 0, "dhcp_on marker missing")
         self.assertGreater(dhcp_pos, subnet_pos,
                           "dhcp_on must come after subnet creation")
+
+    def test_ordering_fails_when_marker_missing(self):
+        # Pin the guards: a payload without the "subnets create" marker
+        # must FAIL the ordering test, not pass vacuously on find() == -1.
+        with patch(
+            f"{__name__}.get_pi_user_data", return_value="#cloud-config\ndhcp_on=True\n"
+        ):
+            with self.assertRaises(AssertionError):
+                self.test_subnet_create_before_dhcp_on()
 
     def test_force_confold_on_apt(self):
         ud = get_pi_user_data(self.params)

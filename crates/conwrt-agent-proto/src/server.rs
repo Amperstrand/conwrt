@@ -11,11 +11,13 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use conwrt_probe_core::milestones::BootMilestoneTracker;
+
 use crate::dispatch::{AgentEvent, WireEndpoint, WireError, WireFrame, WireResult};
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
-    CapabilityInfo, DisconnectPolicy, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse,
-    PROTOCOL_VERSION, StreamAck, StreamChunk,
+    CapabilityInfo, DetectFinding, DetectReport, DisconnectPolicy, HandshakeError, HandshakeOk,
+    HandshakeRequest, LeaseResponse, PROTOCOL_VERSION, StreamAck, StreamChunk,
 };
 
 /// Missed-heartbeats-to-expiry budget granted per lease.
@@ -65,6 +67,71 @@ pub trait TransferSink: Send {
 /// (`"executor"` — the standalone-executor workflow, #226).
 pub const EXECUTOR_RESOURCE: &str = "executor";
 
+/// One armed detection session (#215 slice 5): the shared probe-core
+/// milestone tracker for a UART port, plus its latched findings. Not
+/// part of controller session state — findings survive
+/// [`ServerCore::reset_session`] (they are agent-side observations of
+/// the router, like queued events).
+///
+/// `armed` gates tracking: nothing latches until a controller sends a
+/// successful `DetectStart` (review round 1 — pre-start console bytes
+/// must not surface as findings of a "fresh" session, and clients that
+/// never opted into detection must not receive the new event variant).
+/// Arming persists across controller disconnects.
+struct DetectSession {
+    port: u8,
+    armed: bool,
+    tracker: BootMilestoneTracker,
+    findings: Vec<DetectFinding>,
+}
+
+/// Detection tracker budget for MCU agents: the F746 heap is 32 KiB
+/// total (protocol frames + the 8 KiB executor window), so the
+/// Python-faithful 64 KiB host budget would abort the allocator
+/// mid-boot (review round 1, P1). 8 KiB / 4 KiB retains far more than
+/// the longest milestone pattern needs across chunk boundaries.
+pub const DETECT_BUFFER_MAX: usize = 8 * 1024;
+/// Retained tail for [`DETECT_BUFFER_MAX`].
+pub const DETECT_KEEP_TAIL: usize = 4 * 1024;
+
+impl DetectSession {
+    fn report(&self) -> DetectReport {
+        DetectReport {
+            port: self.port,
+            findings: self.findings.clone(),
+        }
+    }
+
+    /// Feed RX bytes; queues a finding for every newly latched
+    /// milestone (the caller turns them into outbound events). No-op
+    /// while unarmed.
+    fn feed(&mut self, data: &[u8]) -> Vec<DetectFinding> {
+        if !self.armed {
+            return Vec::new();
+        }
+        let fresh: Vec<DetectFinding> = self
+            .tracker
+            .feed(data)
+            .into_iter()
+            .map(|(milestone, detail)| DetectFinding {
+                port: self.port,
+                milestone,
+                detail,
+            })
+            .collect();
+        self.findings.extend(fresh.iter().cloned());
+        fresh
+    }
+
+    /// Arm (or re-arm) the tracker: every milestone may latch once per
+    /// arming, and findings reset — a fresh session starts clean.
+    fn arm(&mut self) {
+        self.armed = true;
+        self.tracker = BootMilestoneTracker::with_budget(DETECT_BUFFER_MAX, DETECT_KEEP_TAIL);
+        self.findings.clear();
+    }
+}
+
 /// The protocol state machine: what an agent IS, independent of how bytes
 /// arrive (tokio TCP, USB CDC, …).
 pub struct ServerCore {
@@ -75,6 +142,7 @@ pub struct ServerCore {
     leases: LeaseTable,
     uart: Option<Box<dyn UartSink>>,
     transfer: Option<Box<dyn TransferSink>>,
+    detect: Option<DetectSession>,
     outbound_events: VecDeque<AgentEvent>,
 }
 
@@ -90,6 +158,7 @@ impl ServerCore {
             leases: LeaseTable::new(),
             uart: None,
             transfer: None,
+            detect: None,
             outbound_events: VecDeque::new(),
         }
     }
@@ -126,6 +195,24 @@ impl ServerCore {
     #[must_use]
     pub fn attach_transfer(mut self, transfer: Box<dyn TransferSink>) -> Self {
         self.transfer = Some(transfer);
+        self
+    }
+
+    /// Arm boot-milestone detection on `port` (consumed builder,
+    /// #215 slice 5): that port's RX bytes (fed via
+    /// [`ServerCore::push_uart_data`]) run through the shared
+    /// probe-core tracker once a controller arms the session with
+    /// `DetectStart`; latched milestones surface as
+    /// [`AgentEvent::DetectFinding`] events and via
+    /// [`WireEndpoint::DetectStatus`]. The F746 standalone detect mode.
+    #[must_use]
+    pub fn attach_detect(mut self, port: u8) -> Self {
+        self.detect = Some(DetectSession {
+            port,
+            armed: false,
+            tracker: BootMilestoneTracker::with_budget(DETECT_BUFFER_MAX, DETECT_KEEP_TAIL),
+            findings: Vec::new(),
+        });
         self
     }
 
@@ -203,7 +290,8 @@ impl ServerCore {
                     req.on_disconnect,
                     HEARTBEAT_BUDGET,
                 ) {
-                    Ok(_) => WireResult::Lease(LeaseResponse::Granted {
+                    Ok(lease_id) => WireResult::Lease(LeaseResponse::Granted {
+                        lease_id,
                         heartbeat_ms: HEARTBEAT_MS,
                     }),
                     Err(LeaseError::Denied(LeaseDenied::HeldBy(holder))) => {
@@ -285,6 +373,34 @@ impl ServerCore {
                     ))),
                 }
             }
+            WireEndpoint::DetectStart(req) => match self.detect.as_mut() {
+                Some(session) if session.port == req.port => {
+                    session.arm();
+                    WireResult::Detect(session.report())
+                }
+                Some(_) => WireResult::Error(WireError::Internal(alloc::format!(
+                    "detect not armed on uart{}",
+                    req.port
+                ))),
+                None => WireResult::Error(WireError::Internal(String::from(
+                    "no detect session attached",
+                ))),
+            },
+            WireEndpoint::DetectStatus(query) => match self.detect.as_ref() {
+                Some(session) if session.port == query.port => {
+                    if !session.armed {
+                        return WireResult::Error(WireError::DetectNotArmed(session.port));
+                    }
+                    WireResult::Detect(session.report())
+                }
+                Some(_) => WireResult::Error(WireError::Internal(alloc::format!(
+                    "detect not armed on uart{}",
+                    query.port
+                ))),
+                None => WireResult::Error(WireError::Internal(String::from(
+                    "no detect session attached",
+                ))),
+            },
         }
     }
 
@@ -321,8 +437,19 @@ impl ServerCore {
 
     /// Queue unsolicited UART RX bytes for the controller (the firmware's
     /// UART receive task calls this). Delivery is via [`ServerCore::take_events`]
-    /// on the transport's next drain.
+    /// on the transport's next drain. When a detection session is armed
+    /// on this port, the same bytes also feed its milestone tracker and
+    /// every newly latched milestone queues a
+    /// [`AgentEvent::DetectFinding`] (#215 slice 5).
     pub fn push_uart_data(&mut self, port: u8, data: &[u8]) {
+        if let Some(session) = self.detect.as_mut() {
+            if session.port == port {
+                for finding in session.feed(data) {
+                    self.outbound_events
+                        .push_back(AgentEvent::DetectFinding(finding));
+                }
+            }
+        }
         self.outbound_events.push_back(AgentEvent::UartData {
             port,
             data: Vec::from(data),
@@ -436,7 +563,10 @@ mod tests {
         );
         assert!(matches!(
             granted,
-            WireResult::Lease(LeaseResponse::Granted { heartbeat_ms: 1000 })
+            WireResult::Lease(LeaseResponse::Granted {
+                lease_id: 1,
+                heartbeat_ms: 1000,
+            })
         ));
 
         let conflict = request(
@@ -751,6 +881,192 @@ mod tests {
         assert!(
             c.take_events().is_empty(),
             "drain must empty the queue exactly once"
+        );
+    }
+
+    fn detect_core() -> ServerCore {
+        let (mut core, _written) = uart_core();
+        handshake(&mut core);
+        core.attach_detect(0)
+    }
+
+    fn detect_start(c: &mut ServerCore) -> WireResult {
+        request(
+            c,
+            10,
+            WireEndpoint::DetectStart(crate::protocol::DetectRequest { port: 0 }),
+        )
+    }
+
+    fn detect_status(c: &mut ServerCore) -> WireResult {
+        request(
+            c,
+            11,
+            WireEndpoint::DetectStatus(crate::protocol::DetectStatusQuery { port: 0 }),
+        )
+    }
+
+    #[test]
+    fn detect_start_returns_empty_report_and_feeds_from_uart_rx() {
+        let mut c = detect_core();
+        let WireResult::Detect(report) = detect_start(&mut c) else {
+            panic!("detect start must answer with a report");
+        };
+        assert!(report.findings.is_empty());
+
+        c.push_uart_data(0, b"U-Boot 2012.07.22\r\nroot@OpenWrt:~# ");
+        let events = c.take_events();
+        // milestone findings + the raw UartData, in push order
+        assert_eq!(events.len(), 3);
+        let AgentEvent::DetectFinding(ref f) = events[0] else {
+            panic!("first event must be the U-Boot banner finding");
+        };
+        assert_eq!(
+            f.milestone,
+            conwrt_probe_core::milestones::BootMilestone::UbootBanner
+        );
+        assert!(f.detail.contains("U-Boot 2012"));
+        assert!(matches!(events[2], AgentEvent::UartData { .. }));
+
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("detect status must answer with a report");
+        };
+        assert_eq!(report.findings.len(), 2, "banner + login prompt latched");
+    }
+
+    #[test]
+    fn detect_start_rearms_and_relatches() {
+        let mut c = detect_core();
+        detect_start(&mut c);
+        c.push_uart_data(0, b"U-Boot 2012.07\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(report.findings.len(), 1);
+
+        // re-arm: fresh tracker, findings reset
+        let WireResult::Detect(fresh) = detect_start(&mut c) else {
+            panic!("restart");
+        };
+        assert!(fresh.findings.is_empty());
+        c.push_uart_data(0, b"U-Boot 2012.07\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(report.findings.len(), 1, "re-armed tracker latches again");
+    }
+
+    #[test]
+    fn detect_findings_survive_session_reset() {
+        // findings are agent-side observations, not controller state
+        let mut c = detect_core();
+        detect_start(&mut c);
+        c.push_uart_data(0, b"Starting kernel ...\r\n");
+        c.reset_session();
+        c.handshaked = true;
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(report.findings.len(), 1);
+    }
+
+    #[test]
+    fn detect_unarmed_port_is_a_structured_error() {
+        let mut c = detect_core();
+        let result = request(
+            &mut c,
+            10,
+            WireEndpoint::DetectStart(crate::protocol::DetectRequest { port: 3 }),
+        );
+        assert!(matches!(
+            result,
+            WireResult::Error(WireError::Internal(ref msg)) if msg.contains("uart3")
+        ));
+    }
+
+    #[test]
+    fn detect_without_session_attached_is_a_structured_error() {
+        let mut c = core();
+        handshake(&mut c);
+        let result = request(
+            &mut c,
+            10,
+            WireEndpoint::DetectStatus(crate::protocol::DetectStatusQuery { port: 0 }),
+        );
+        assert!(matches!(
+            result,
+            WireResult::Error(WireError::Internal(ref msg)) if msg.contains("no detect session")
+        ));
+    }
+
+    #[test]
+    fn detect_does_not_consume_uart_data_events() {
+        // armed detection leaves the raw UartData stream untouched —
+        // a listening controller still sees the console verbatim
+        let mut c = detect_core();
+        detect_start(&mut c);
+        c.push_uart_data(0, b"noise");
+        let events = c.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], AgentEvent::UartData { ref data, .. } if data == b"noise"));
+    }
+
+    #[test]
+    fn detect_status_before_armed_is_a_structured_error() {
+        // review round 2: an un-armed session must not answer with an
+        // empty report — a controller cannot distinguish that from an
+        // armed, quiet session (e.g. after an MCU reboot)
+        let mut c = detect_core();
+        let result = detect_status(&mut c);
+        assert_eq!(result, WireResult::Error(WireError::DetectNotArmed(0)));
+        detect_start(&mut c);
+        assert!(
+            matches!(detect_status(&mut c), WireResult::Detect(_)),
+            "arming makes status answerable"
+        );
+    }
+
+    #[test]
+    fn detect_pre_start_bytes_never_latch_or_queue() {
+        // review round 1: tracking is gated on DetectStart — console
+        // bytes arriving before arming must produce neither events nor
+        // findings, so a "fresh" session cannot see pre-start findings
+        // and clients that never opted in never see the event variant
+        let mut c = detect_core();
+        c.push_uart_data(0, b"U-Boot 2012.07\r\nroot@OpenWrt:~# ");
+        let events = c.take_events();
+        assert_eq!(events.len(), 1, "only the raw UartData passthrough");
+        assert!(
+            matches!(events[0], AgentEvent::UartData { .. }),
+            "pre-arm bytes must not queue DetectFinding events"
+        );
+        let WireResult::Detect(report) = detect_start(&mut c) else {
+            panic!("detect start");
+        };
+        assert!(report.findings.is_empty(), "arming starts clean");
+
+        // post-arm bytes latch normally
+        c.push_uart_data(0, b"U-Boot 2012.07\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(report.findings.len(), 1);
+    }
+
+    #[test]
+    fn detect_arming_persists_across_session_reset() {
+        let mut c = detect_core();
+        detect_start(&mut c);
+        c.reset_session();
+        c.handshaked = true;
+        c.push_uart_data(0, b"Starting kernel ...\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "a reconnecting controller keeps its armed session"
         );
     }
 }

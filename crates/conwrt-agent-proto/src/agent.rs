@@ -197,7 +197,8 @@ async fn dispatch_request(
                 req.on_disconnect,
                 config.heartbeat_budget,
             ) {
-                Ok(_) => WireResult::Lease(LeaseResponse::Granted {
+                Ok(lease_id) => WireResult::Lease(LeaseResponse::Granted {
+                    lease_id,
                     heartbeat_ms: config.heartbeat_ms,
                 }),
                 Err(LeaseError::Denied(LeaseDenied::HeldBy(h))) => {
@@ -258,5 +259,10 @@ async fn dispatch_request(
         WireEndpoint::UartWrite { .. } => WireResult::Error(crate::dispatch::WireError::Internal(
             "uart passthrough unsupported on this agent".into(),
         )),
+        // Same for detection sessions (#215 slice 5): they ride the MCU
+        // agents' UART RX stream, which the std TCP agent does not have.
+        WireEndpoint::DetectStart(_) | WireEndpoint::DetectStatus(_) => WireResult::Error(
+            crate::dispatch::WireError::Internal("detect mode unsupported on this agent".into()),
+        ),
     }
 }

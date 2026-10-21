@@ -54,14 +54,19 @@ async fn full_protocol_surface_over_tcp() {
         })
         .await
         .unwrap();
-    match resp {
-        LeaseResponse::Granted { heartbeat_ms } => {
+    let lease_id = match resp {
+        LeaseResponse::Granted {
+            lease_id,
+            heartbeat_ms,
+        } => {
             assert!(heartbeat_ms > 0);
+            assert!(lease_id > 0, "the granted lease id must be surfaced");
+            lease_id
         }
         other => panic!("expected Granted, got {other:?}"),
-    }
-    client.heartbeat(1).await.unwrap();
-    let released = client.release_lease(1).await.unwrap();
+    };
+    client.heartbeat(lease_id).await.unwrap();
+    let released = client.release_lease(lease_id).await.unwrap();
     assert!(released);
 
     // --- Streaming: upload, status, kill, reconnect, resume ---

@@ -718,6 +718,7 @@ name = "conwrt-agent-proto"
 version = "0.1.0"
 dependencies = [
  "cobs 0.4.0",
+ "conwrt-probe-core",
  "postcard",
  "postcard-rpc",
  "serde",
@@ -747,6 +748,7 @@ dependencies = [
 name = "conwrt-core"
 version = "0.1.0"
 dependencies = [
+ "conwrt-probe-core",
  "conwrt-types",
  "pollster",
  "serde_json",
@@ -805,6 +807,13 @@ dependencies = [
  "conwrt-core",
  "pollster",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "conwrt-probe-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

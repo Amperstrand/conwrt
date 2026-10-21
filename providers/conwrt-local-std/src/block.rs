@@ -11,7 +11,8 @@
 //!   util-linux/cloud-guestutils tool the lab recipe's Phase-3 resize uses).
 //! - `write_seed` stages the cloud-init trio into `<path>.seed/` as
 //!   `user-data`, `meta-data`, `network-config`; assembling the FAT
-//!   CIDATA volume from the staging dir is the lab-side step.
+//!   CIDATA volume from the staging dir is the lab-side step tracked
+//!   in #303 (owner-gated bench validation).
 //!
 //! **Safety**: the writer opens exactly the path it is given. Pointing it
 //! at a whole-disk device node (`/dev/sdX`) rewrites that device — the
@@ -307,9 +308,22 @@ impl BlockWriter for FileBlockWriter {
         std::fs::write(&user_data_path, &seed.user_data).map_err(io_err(&user_data_path))?;
         let meta_path = dir.join("meta-data");
         std::fs::write(&meta_path, &seed.meta_data).map_err(io_err(&meta_path))?;
-        if let Some(nc) = &seed.network_config {
-            let nc_path = dir.join("network-config");
-            std::fs::write(&nc_path, nc).map_err(io_err(&nc_path))?;
+        let nc_path = dir.join("network-config");
+        match &seed.network_config {
+            Some(nc) => std::fs::write(&nc_path, nc).map_err(io_err(&nc_path))?,
+            // Remove a previous run's sidecar: staging once WITH
+            // network config and later WITHOUT it must not boot the
+            // stale settings (#303).
+            None => match std::fs::remove_file(&nc_path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(BlockWriterError::Io {
+                        path: nc_path,
+                        source: e,
+                    });
+                }
+            },
         }
         Ok(())
     }
@@ -340,6 +354,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restaging_without_network_config_removes_the_stale_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("disk.img.seed");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("user-data"), "old").unwrap();
+        std::fs::write(dir.join("meta-data"), "old").unwrap();
+        std::fs::write(dir.join("network-config"), "STALE").unwrap();
+
+        let mut w = FileBlockWriter::new(tmp.path().join("disk.img"));
+        w.write_seed(&CloudInitSeed {
+            user_data: "#cloud-config\n".into(),
+            meta_data: "instance-id: x".into(),
+            network_config: None,
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            !dir.join("network-config").exists(),
+            "stale sidecar must not survive"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("user-data")).unwrap(),
+            "#cloud-config\n"
+        );
+    }
+
+    #[tokio::test]
     async fn read_back_digest_matches_whole_image_hash_across_chunks() {
         // 2.5 MiB of non-uniform bytes → three VERIFY_CHUNK iterations.
         let image: Vec<u8> = (0..2_621_440).map(|i| (i % 251) as u8).collect();
@@ -361,7 +403,7 @@ mod tests {
         let report = execute_flash(&plan, IMAGE, &mut w).await.unwrap();
 
         assert_eq!(report.bytes_written, IMAGE.len());
-        assert!(report.seed_injected);
+        assert!(report.seed_staged);
         let seed_dir = {
             let mut s = tmp.path().as_os_str().to_os_string();
             s.push(".seed");

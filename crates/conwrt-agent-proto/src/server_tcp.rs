@@ -142,7 +142,13 @@ async fn echo_connection(socket: TcpStream, agent_version: &str) -> io::Result<(
         agent_version,
         serial_caps(1),
         Box::new(EchoSink { echo_tx }),
-    );
+    )
+    // #215 slice 5: the echo path doubles as the detect HIL vehicle —
+    // controller DetectStart arms the tracker, echoed writes feed it
+    // RX bytes, latched milestones flow back as DetectFinding events.
+    // Unarmed until DetectStart, so existing echo behavior is
+    // unchanged.
+    .attach_detect(0);
     server.reset_session();
     // Lease clock (#380): heartbeat expiry must be exercisable over
     // this transport too — one tick per heartbeat interval.
