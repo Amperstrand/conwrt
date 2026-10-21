@@ -5,6 +5,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use conwrt_probe_core::milestones::BootMilestone;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on breaking message changes; agents refuse
@@ -137,4 +138,47 @@ pub struct StreamAck {
     pub contiguous: u64,
     /// Whether the transfer is complete and verified-sized.
     pub done: bool,
+}
+
+// ---- #215 slice 5: standalone detect surface ----
+
+/// Controller → agent: arm boot-milestone detection on a UART port
+/// (`DetectStart`). Re-arming restarts the milestone tracker — each
+/// detection session latches every milestone at most once (the
+/// `serial_monitor.py` per-monitor-lifetime semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectRequest {
+    /// Port index (0-based, as advertised in capabilities).
+    pub port: u8,
+}
+
+/// Controller → agent: query the latched detection findings
+/// (`DetectStatus`) — the reconnecting controller's catch-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectStatusQuery {
+    /// Port index the detection session runs on.
+    pub port: u8,
+}
+
+/// One latched detection finding (agent → controller, unsolicited
+/// [`crate::dispatch::AgentEvent::DetectFinding`] and inside
+/// [`DetectReport`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectFinding {
+    /// Port the detection session runs on.
+    pub port: u8,
+    /// The milestone that latched.
+    pub milestone: BootMilestone,
+    /// The console line that carried it (stripped, capped).
+    pub detail: String,
+}
+
+/// The current state of a port's detection session (the
+/// `DetectStart`/`DetectStatus` reply).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectReport {
+    /// Port the detection session runs on.
+    pub port: u8,
+    /// Every finding latched this session, in latch order.
+    pub findings: Vec<DetectFinding>,
 }
