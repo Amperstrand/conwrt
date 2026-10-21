@@ -132,6 +132,9 @@ async fn main(spawner: Spawner) {
         device,
         config,
         NET_RESOURCES.uninit().write(StackResources::new()),
+        // embassy net seed spells 846-F746-02 (the SoC) — grouping kept
+        // intentionally; not a size/addr literal (#298)
+        #[allow(clippy::unusual_byte_groupings)]
         0x846_f746_02,
     );
     spawner.spawn(net_task(runner).expect("spawn net"));
