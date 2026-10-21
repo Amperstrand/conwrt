@@ -282,8 +282,9 @@ enum MaasCommand {
         /// cloud-init meta-data file (required with --user-data).
         #[arg(long, requires = "user_data")]
         meta_data: Option<PathBuf>,
-        /// Optional cloud-init network-config file.
-        #[arg(long)]
+        /// Optional cloud-init network-config file (requires the seed
+        /// pair --user-data/--meta-data).
+        #[arg(long, requires = "user_data")]
         network_config: Option<PathBuf>,
     },
     /// VM lifecycle over the MAAS region API.
@@ -1081,6 +1082,31 @@ fn cmd_maas_flash(
             return ExitCode::from(2);
         }
     };
+    // #305: the documented MAAS artifact is *.img.xz — verify the
+    // ARCHIVE checksum against --sha256, then flash the DECOMPRESSED
+    // image (the Python original's xzcat flow). Writing the archive
+    // bytes verbatim leaves the disk starting with an XZ stream.
+    let published_sha = sha256;
+    const XZ_MAGIC: &[u8] = b"\xfd7zXZ\x00";
+    let (image, digest) = if image.starts_with(XZ_MAGIC) {
+        if Sha256::hash(&image) != digest {
+            eprintln!(
+                "archive checksum mismatch: refusing to decompress or write {}",
+                image_path.display()
+            );
+            return ExitCode::from(2);
+        }
+        let mut decompressed = Vec::new();
+        use std::io::Read;
+        if let Err(e) = xz2::read::XzDecoder::new(&image[..]).read_to_end(&mut decompressed) {
+            eprintln!("cannot decompress {}: {e}", image_path.display());
+            return ExitCode::from(2);
+        }
+        let decompressed_sha = Sha256::hash(&decompressed);
+        (decompressed, decompressed_sha)
+    } else {
+        (image, digest)
+    };
     let had_network_config = network_config.is_some();
     let mut plan = DiskFlashPlan::new(digest);
     if let (Some(ud_path), Some(md_path)) = (&user_data, &meta_data) {
@@ -1098,10 +1124,16 @@ fn cmd_maas_flash(
                 return ExitCode::from(2);
             }
         };
-        let network_config = network_config.map(|p| {
-            std::fs::read_to_string(&p)
-                .unwrap_or_else(|e| panic!("cannot read network-config {}: {e}", p.display()))
-        });
+        let network_config = match network_config {
+            Some(p) => match std::fs::read_to_string(&p) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("cannot read network-config {}: {e}", p.display());
+                    return ExitCode::from(2);
+                }
+            },
+            None => None,
+        };
         plan = plan.with_seed(CloudInitSeed {
             user_data,
             meta_data,
@@ -1161,7 +1193,7 @@ fn cmd_maas_flash(
     match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
         Ok(report) => {
             println!("image:     {}", image_path.display());
-            println!("sha256:    {digest} (verified before write)");
+            println!("sha256:    {published_sha} (verified before write)");
             println!("target:    {}", target.display());
             println!(
                 "written:   {} bytes (read-back verified)",
