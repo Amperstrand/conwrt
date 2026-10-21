@@ -1217,8 +1217,19 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
             eprintln!("{e}");
             ExitCode::from(2)
         })?;
-        if let Ok(auth) = std::env::var("CONWRT_MAAS_AUTH") {
-            client = client.with_authorization(auth);
+        if let Ok(key) = std::env::var("CONWRT_MAAS_AUTH") {
+            client = match client.with_api_key(&key) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return Err(ExitCode::from(2));
+                }
+            };
+            // RFC 5849 §3.4.4: PLAINTEXT credentials need TLS; the
+            // opt-in exists for isolated http lab regions only.
+            if std::env::var("CONWRT_MAAS_INSECURE_HTTP").ok().as_deref() == Some("1") {
+                client = client.allow_insecure_http();
+            }
         }
         Ok(client)
     }
