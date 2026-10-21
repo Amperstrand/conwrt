@@ -17,10 +17,12 @@
 //! at a whole-disk device node (`/dev/sdX`) rewrites that device — the
 //! caller owns that decision (AGENTS.md specimen/serial gates apply).
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use conwrt_maas::flash::{BlockWriter, CloudInitSeed};
+use conwrt_maas::flash::{BlockWriter, CloudInitSeed, Sha256};
+use sha2::Digest as _;
 use thiserror::Error;
 
 /// Failures of the host block writer.
@@ -56,7 +58,11 @@ pub struct FileBlockWriter {
     path: PathBuf,
     partition: Option<u8>,
     growpart: Option<PathBuf>,
+    written: Option<std::fs::File>,
 }
+
+/// Read-back verification chunk: bounded memory regardless of image size.
+const VERIFY_CHUNK: usize = 1 << 20;
 
 impl FileBlockWriter {
     /// Writer for the image target at `path` (no partition growing).
@@ -66,6 +72,7 @@ impl FileBlockWriter {
             path: path.into(),
             partition: None,
             growpart: None,
+            written: None,
         }
     }
 
@@ -84,7 +91,41 @@ impl FileBlockWriter {
         s.push(".seed");
         PathBuf::from(s)
     }
+
+    /// Durability gate before any verification read: flush the retained
+    /// write handle so read-backs are checked against what the kernel
+    /// committed, not a stale page cache.
+    fn sync_written(&self) -> Result<(), BlockWriterError> {
+        if let Some(f) = &self.written {
+            f.sync_all().map_err(io_err(&self.path))?;
+        }
+        Ok(())
+    }
 }
+
+/// Verification reads go through a fresh handle with the page cache
+/// evicted first (`POSIX_FADV_DONTNEED`), so bytes come from the media.
+fn open_verify_reader(path: &Path) -> Result<std::fs::File, BlockWriterError> {
+    let f = std::fs::File::open(path).map_err(io_err(path))?;
+    evict_page_cache(&f);
+    Ok(f)
+}
+
+#[cfg(target_os = "linux")]
+fn evict_page_cache(f: &std::fs::File) {
+    use std::os::unix::io::AsRawFd;
+    // Pages are clean after sync_all, so DONTNEED evicts them and the
+    // verification read comes from the media, not the cache.
+    let _ = nix::fcntl::posix_fadvise(
+        f.as_raw_fd(),
+        0,
+        0,
+        nix::fcntl::PosixFadviseAdvice::POSIX_FADV_DONTNEED,
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn evict_page_cache(_f: &std::fs::File) {}
 
 fn io_err(path: &Path) -> impl Fn(std::io::Error) -> BlockWriterError + '_ {
     move |source| BlockWriterError::Io {
@@ -100,15 +141,35 @@ impl BlockWriter for FileBlockWriter {
         // std::fs inside async: the lab flow calls this from a host
         // runner, not a shared reactor; keep the I/O synchronous and
         // simple (the mock-era pipeline has no concurrency requirement).
-        std::fs::write(&self.path, image).map_err(io_err(&self.path))
+        let mut f = std::fs::File::create(&self.path).map_err(io_err(&self.path))?;
+        f.write_all(image).map_err(io_err(&self.path))?;
+        f.sync_all().map_err(io_err(&self.path))?;
+        self.written = Some(f);
+        Ok(())
     }
 
     async fn read_back(&mut self, len: usize) -> Result<Vec<u8>, Self::Error> {
-        use std::io::Read;
-        let mut f = std::fs::File::open(&self.path).map_err(io_err(&self.path))?;
+        self.sync_written()?;
+        let mut f = open_verify_reader(&self.path)?;
         let mut buf = vec![0u8; len];
         f.read_exact(&mut buf).map_err(io_err(&self.path))?;
         Ok(buf)
+    }
+
+    async fn read_back_digest(&mut self, len: usize) -> Result<Sha256, Self::Error> {
+        self.sync_written()?;
+        let mut f = open_verify_reader(&self.path)?;
+        let mut h = sha2::Sha256::new();
+        let mut chunk = vec![0u8; VERIFY_CHUNK];
+        let mut remaining = len;
+        while remaining > 0 {
+            let want = remaining.min(chunk.len());
+            f.read_exact(&mut chunk[..want])
+                .map_err(io_err(&self.path))?;
+            h.update(&chunk[..want]);
+            remaining -= want;
+        }
+        Ok(Sha256::from_digest(h.finalize().into()))
     }
 
     async fn grow_partition(&mut self) -> Result<(), Self::Error> {
@@ -178,6 +239,19 @@ mod tests {
 
         w.write_image(IMAGE).await.unwrap();
         assert_eq!(w.read_back(IMAGE.len()).await.unwrap(), IMAGE);
+    }
+
+    #[tokio::test]
+    async fn read_back_digest_matches_whole_image_hash_across_chunks() {
+        // 2.5 MiB of non-uniform bytes → three VERIFY_CHUNK iterations.
+        let image: Vec<u8> = (0..2_621_440).map(|i| (i % 251) as u8).collect();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut w = FileBlockWriter::new(tmp.path());
+
+        w.write_image(&image).await.unwrap();
+        let digest = w.read_back_digest(image.len()).await.unwrap();
+        assert_eq!(digest, Sha256::hash(&image));
+        assert_eq!(w.read_back(image.len()).await.unwrap(), image);
     }
 
     #[tokio::test]
