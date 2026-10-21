@@ -155,10 +155,15 @@ through the kill); every incident coincided with netdev/L3 config events.
 - **Prevention**: never re-use a routed subnet on a second SVI/alias.
   Guard tooling belongs at the operator layer (preflight before any
   SVI add: lab prefix inventory + live addr/route/neigh tables).
-- **Recovery**: power cycle only. No watchdog fires by default on this
-  platform (DT node present, driver not enabled in image) and
-  MAGIC_SYSRQ over serial did not respond — enable both in custom
-  images: CONFIG_REALTEK_OTTO_WDT + CONFIG_MAGIC_SYSRQ_SERIAL.
+- **Recovery**: power cycle only — even WITH the internal watchdog armed.
+  Tested 2026-10-20 23:51Z on a custom image with CONFIG_REALTEK_OTTO_WDT=y
+  (driver bound, procd feeding, both verified): the wedge left the kernel
+  alive (printk/timers continued 16+ min) yet the watchdog NEVER fired.
+  Internal WDT is insufficient for this class; MAGIC_SYSRQ over serial also
+  did not respond during the wedge. The working mitigations: preflight
+  overlap guards (avoidance), and — future — an EXTERNAL GPIO hardware
+  watchdog (the vendor stock design), which is immune to SoC-level stalls
+  by construction. Evidence: openwrt/openwrt#26061.
 
 ### 9. MCU crash survives soft reboots (PoE manager class)
 
