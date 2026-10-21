@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::state::DeviceState;
+use crate::wireguard::{WireguardClientProfile, WireguardServerProfile, cleanup_uci_sections_sh};
 use conwrt_types::DeviceModel;
 
 /// Smart Queue Management (CAKE/fq_codel) — port of the tested 1.x `sqm`
@@ -120,6 +121,10 @@ pub enum Profile {
     Sqm(SqmProfile),
     /// Encrypted DNS resolution for the whole LAN.
     Doh(DohProfile),
+    /// WireGuard VPN client (1.x `wireguard-client` use case).
+    WireguardClient(WireguardClientProfile),
+    /// WireGuard VPN server (1.x `wireguard-server` use case).
+    WireguardServer(WireguardServerProfile),
 }
 
 impl Profile {
@@ -129,6 +134,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => "sqm",
             Profile::Doh(_) => "doh",
+            Profile::WireguardClient(_) => "wireguard-client",
+            Profile::WireguardServer(_) => "wireguard-server",
         }
     }
 
@@ -140,6 +147,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => &[],
             Profile::Doh(_) => &[],
+            Profile::WireguardClient(_) => &[],
+            Profile::WireguardServer(_) => &[],
         }
     }
 }
@@ -273,6 +282,25 @@ pub enum PlanOp {
         /// What to do with it.
         action: ServiceAction,
     },
+    /// Raw shell escape hatch, rendered verbatim — mirror of the 1.x
+    /// `ShellCommand` op for commands that cannot be expressed as typed
+    /// UCI ops (echo summaries, verification loops, file plumbing).
+    /// Use sparingly: like its Python counterpart it is shell-only and
+    /// bypasses transport independence.
+    ShellCommand {
+        /// Exact command line to render.
+        command: String,
+    },
+    /// Delete stale UCI sections matching a grep pattern until none remain
+    /// (idempotent reconfigure) — mirror of the 1.x
+    /// `profile.uci_helpers.uci_cleanup_sections` helper. Renders the
+    /// exact 1.x while-loop snippet.
+    CleanupUciSections {
+        /// UCI config name (e.g. `firewall`).
+        config: String,
+        /// Grep pattern over `uci show` output (e.g. `name='vpn'`).
+        pattern: String,
+    },
 }
 
 impl fmt::Display for PlanOp {
@@ -324,6 +352,10 @@ impl fmt::Display for PlanOp {
             PlanOp::ResetUciConfig { config } => write!(f, "uci reset {config}"),
             PlanOp::CommitUci { config } => write!(f, "uci commit {config}"),
             PlanOp::Service { name, action } => write!(f, "service {name} {action}"),
+            PlanOp::ShellCommand { command } => write!(f, "shell: {command}"),
+            PlanOp::CleanupUciSections { config, pattern } => {
+                write!(f, "cleanup uci {config} sections matching {pattern}")
+            }
         }
     }
 }
@@ -416,7 +448,35 @@ pub fn plan_profile(
     match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
         Profile::Doh(doh) => plan_doh(model, doh),
+        Profile::WireguardClient(p) => plan_wireguard_client(model, p),
+        Profile::WireguardServer(p) => plan_wireguard_server(model, p),
     }
+}
+
+fn plan_wireguard_client(
+    model: &DeviceModel,
+    p: &WireguardClientProfile,
+) -> Result<Plan, Unsupported> {
+    p.validate()?;
+    Ok(Plan {
+        profile_id: "wireguard-client".into(),
+        model_id: model.id.clone(),
+        ops: crate::wireguard::wireguard_client_ops(p),
+        verification: Vec::new(),
+    })
+}
+
+fn plan_wireguard_server(
+    model: &DeviceModel,
+    p: &WireguardServerProfile,
+) -> Result<Plan, Unsupported> {
+    p.validate()?;
+    Ok(Plan {
+        profile_id: "wireguard-server".into(),
+        model_id: model.id.clone(),
+        ops: crate::wireguard::wireguard_server_ops(p),
+        verification: Vec::new(),
+    })
 }
 
 fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> {
@@ -621,10 +681,14 @@ pub fn render_shell(plan: &Plan) -> String {
                 options,
             } => {
                 script.push_str(&format!("# uci {config}.{section}={section_type}\n"));
+                // 1.x renders section names/types bare (`uci set
+                // network.wg0=interface`); both are sanitized to UCI
+                // identifier characters so bare rendering stays
+                // shell-word-safe by construction.
                 script.push_str(&format!(
                     "uci set {config}.{}={}\n",
-                    shell_quote(section),
-                    shell_quote(section_type)
+                    uci_section_ref(section),
+                    uci_key(section_type)
                 ));
                 for (option, value) in options {
                     match value {
@@ -709,11 +773,22 @@ pub fn render_shell(plan: &Plan) -> String {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
                 };
+                // 1.x renders the init script name bare
+                // (`/etc/init.d/network restart`); `uci_key` sanitizes it
+                // to identifier characters.
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",
-                    shell_quote(name),
+                    uci_key(name),
                     action
                 ));
+            }
+            PlanOp::ShellCommand { command } => {
+                script.push_str(&format!("{command}\n\n"));
+            }
+            PlanOp::CleanupUciSections { config, pattern } => {
+                // Byte-for-byte the 1.x `uci_cleanup_sections_sh` helper.
+                script.push_str(&cleanup_uci_sections_sh(config, pattern));
+                script.push_str("\n\n");
             }
         }
     }
@@ -914,8 +989,8 @@ mod tests {
         assert!(script.contains("uci set sqm.wan.download='340000'"));
         assert!(script.contains("uci set sqm.wan.upload='19000'"));
         assert!(script.contains("uci commit sqm"));
-        assert!(script.contains("/etc/init.d/'sqm' enable"));
-        assert!(script.contains("/etc/init.d/'sqm' restart"));
+        assert!(script.contains("/etc/init.d/sqm enable"));
+        assert!(script.contains("/etc/init.d/sqm restart"));
     }
 
     #[test]

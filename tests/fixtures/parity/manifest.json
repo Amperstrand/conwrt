@@ -1,0 +1,41 @@
+{
+  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review — gaps close loudly, never silently.",
+  "fixtures": {
+    "wireguard_client_default": {
+      "use_case": "wireguard-client",
+      "expect": "EQUAL"
+    },
+    "wireguard_client_extras": {
+      "use_case": "wireguard-client",
+      "expect": "EQUAL"
+    },
+    "wireguard_client_no_killswitch": {
+      "use_case": "wireguard-client",
+      "expect": "EQUAL"
+    },
+    "wireguard_server_default": {
+      "use_case": "wireguard-server",
+      "expect": "EQUAL"
+    },
+    "wireguard_server_peer": {
+      "use_case": "wireguard-server",
+      "expect": "EQUAL"
+    },
+    "sqm_default": {
+      "use_case": "sqm",
+      "expect": "GAP",
+      "gap_reasons": [
+        "Rust plan includes EnsurePackage ops (opkg/apk install sqm-scripts, luci-app-sqm); Python delivers packages out-of-band via UseCase.packages",
+        "Rust plan reverts the staged sqm baseline first (uci -q revert sqm ... || true, AGENTS.md uci-revert rule); Python has no revert step",
+        "device-resolution snippet differs: Rust renders a multi-line if/fi block with variable _conwrt_dev_wan; Python renders one ';'-joined line with variable _sqm_dev",
+        "clear-sections loop: Rust renders 'done' and 'true' on separate lines; Python emits 'done; true' on a single line",
+        "option ordering: Python sets interface=\"$_sqm_dev\" directly after section creation (before enabled); Rust orders interface after enabled",
+        "Rust omits the final echo \"SQM configured: .../... kbit/s (...) on ...\" summary line"
+      ]
+    }
+  },
+  "pending_migration": [
+    "doh (Rust plan exists; needs fixture + gap accounting)",
+    "pbr, mwan3, guest_wifi, adguard, travelmate, and the remaining ~25 scripts/use_cases presets (no Rust profile yet)"
+  ]
+}

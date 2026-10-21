@@ -1,0 +1,7 @@
+{
+  "use_case": "wireguard-client",
+  "params": {
+    "peer_public_key": "KLTaGcXW9+mLTAhzQV0PdhlSbHMxU5yeZ5vlHPmZJEU=",
+    "endpoint_host": "vpn.example.net"
+  }
+}

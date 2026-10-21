@@ -1,0 +1,10 @@
+{
+  "use_case": "wireguard-server",
+  "params": {
+    "listen_port": 51822,
+    "subnet": "10.77.0.1/24",
+    "peer1_public_key": "6wQ2Z8jRcT1xNfY0uHb4vPmKdS9lG5nA3eXyB7wCiVk=",
+    "peer1_allowed_ips": "10.77.0.2/32, 10.77.0.3/32",
+    "peer1_psk": "QJ8xP2mNvB6cR0sT4wY8uH1kD5fL9gA3eZ7iO0pX4c="
+  }
+}

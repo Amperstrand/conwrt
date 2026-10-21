@@ -1,0 +1,12 @@
+{
+  "use_case": "sqm",
+  "params": {
+    "download_kbps": 340000,
+    "upload_kbps": 19000,
+    "interface": "wan",
+    "qdisc": "cake",
+    "script": "piece_of_cake.qos",
+    "link_layer": "none",
+    "overhead": 0
+  }
+}

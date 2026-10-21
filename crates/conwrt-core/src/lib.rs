@@ -29,6 +29,11 @@ pub mod mock;
 pub mod plan;
 pub mod ssh;
 pub mod state;
+pub mod wireguard;
+// Cross-implementation parity harness (Rust half); see
+// tests/test_parity_rust_plan.py for the Python half.
+#[cfg(any(test, feature = "parity-fixture"))]
+pub mod parity;
 
 pub use capability::{HttpProbeResult, LinkProbe, ProbeError, SshBanner, Time};
 pub use fingerprint::{FingerprintReport, OpenwrtRelease, confirm, parse_openwrt_release};

@@ -11,9 +11,15 @@ repository.workspace = true
 name = "conwrt"
 path = "src/main.rs"
 
+# Parity-harness helper: renders tests/fixtures/parity/*.json through the
+# Rust plan pipeline for the pytest cross-implementation diff.
+[[bin]]
+name = "conwrt-plan-render"
+path = "src/bin/conwrt_plan_render.rs"
+
 [dependencies]
 conwrt-types = { path = "../../crates/conwrt-types" }
-conwrt-core = { path = "../../crates/conwrt-core" }
+conwrt-core = { path = "../../crates/conwrt-core", features = ["parity-fixture"] }
 conwrt-local-std = { path = "../../providers/conwrt-local-std" }
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
 conwrt-maas = { path = "../../crates/conwrt-maas" }
