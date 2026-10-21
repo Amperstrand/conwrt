@@ -26,6 +26,7 @@ embassy-stm32 = { version = "0.6.0", features = ["stm32f746ng", "memory-x", "tim
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
 embassy-usb = "0.6.0"
 embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"] }
+embassy-sync = "0.8"
 embassy-time = { version = "0.5.1", features = ["tick-hz-32_768"] }
 embassy-futures = "0.1.2"
 
