@@ -1,0 +1,211 @@
+//! Golden parity for the typed-ops use-case ports (parity-matrix §4):
+//! the rendered plans must emit the SAME command-line sequence as the
+//! 1.x Python builders (`scripts/use_cases/{usb_tether,wireguard_client,
+//! guest_wifi}.py`).
+//!
+//! Goldens are the verbatim stdout of the 1.x builders and live in
+//! `tests/goldens/<use-case>.sh`. Regenerate with:
+//!
+//! ```text
+//! cd scripts && python3 - <<'EOF'
+//! import sys; sys.path.insert(0, ".")
+//! from use_cases import registry
+//! r = registry()
+//! print(r["tether"].build_configure({}))
+//! print(r["tether-android"].build_configure({}))
+//! print(r["tether-android-adb"].build_configure({}))
+//! print(r["tether-ios"].build_configure({}))
+//! print(r["wireguard-client"].build_configure({
+//!     "peer_public_key": "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=",
+//!     "endpoint_host": "vpn.example.com",
+//!     "endpoint_port": 51820,
+//!     "peer_psk": "cHNrLTMyLWJ5dGVzLXRlc3QtdmFsdWU=",
+//!     "address": "10.67.0.2/32",
+//!     "dns": "1.1.1.1",
+//!     "kill_switch": True,
+//!     "allowed_ips": "0.0.0.0/0, ::/0",
+//! }))
+//! print(r["guest-wifi"].build_configure({}))
+//! EOF
+//! ```
+//!
+//! Comparison is over the **command-line sequence**: comments, blank
+//! lines, the 2.x script header (`#!/bin/sh`, `set -e`), and the
+//! 2.x-only `EnsurePackage` opkg/apk install lines are filtered from
+//! the Rust render (1.x delivers packages via the ASU image build, not
+//! the configure script). Every remaining line — order, quoting, and
+//! bytes — must match exactly.
+
+use conwrt_core::plan::{
+    DohProfile, GuestWifiProfile, Profile, SqmProfile, TetherProfile, TetherVariant,
+    WireguardClientProfile, plan_profile, render_shell,
+};
+use conwrt_core::state::DeviceState;
+use conwrt_types::DeviceModel;
+
+fn model_with_capabilities(caps: Option<Vec<String>>) -> DeviceModel {
+    let caps_json = caps.map(|c| {
+        let list: Vec<String> = c.iter().map(|c| format!("\"{c}\"")).collect();
+        format!(", \"capabilities\": [{}]", list.join(", "))
+    });
+    let json = format!(
+        "{{\"id\":\"test-model\",\"vendor\":\"Test\",\"description\":\"d\",\
+          \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"24\"}},\
+          \"mac_oui\":[]{}}}",
+        caps_json.unwrap_or_default()
+    );
+    serde_json::from_str(&json).expect("fixture model parses")
+}
+
+/// Command lines only: drop comments, blanks, the 2.x-only script
+/// preamble and package-install lines (see module docs).
+fn command_lines(script: &str) -> Vec<String> {
+    script
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter(|l| l.trim() != "set -e")
+        .filter(|l| !l.starts_with("opkg install "))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+fn assert_plan_matches_golden(profile: Profile, golden: &str) {
+    let model = model_with_capabilities(profile.requires().first().map(|cap| vec![(*cap).into()]));
+    let plan = plan_profile(&DeviceState::OpenWrt, &model, &profile)
+        .unwrap_or_else(|e| panic!("plan must build: {e}"));
+    let rendered = render_shell(&plan);
+    let want = command_lines(golden);
+    let got = command_lines(&rendered);
+    assert_eq!(
+        want, got,
+        "rendered command lines must equal the 1.x golden byte-for-byte"
+    );
+}
+
+#[test]
+fn tether_auto_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Tether(TetherProfile::default()),
+        include_str!("goldens/tether.sh"),
+    );
+}
+
+#[test]
+fn tether_android_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Tether(TetherProfile {
+            variant: TetherVariant::Android,
+            ..TetherProfile::default()
+        }),
+        include_str!("goldens/tether-android.sh"),
+    );
+}
+
+#[test]
+fn tether_android_adb_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Tether(TetherProfile {
+            variant: TetherVariant::AndroidAdb,
+            ..TetherProfile::default()
+        }),
+        include_str!("goldens/tether-android-adb.sh"),
+    );
+}
+
+#[test]
+fn tether_ios_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Tether(TetherProfile {
+            variant: TetherVariant::Ios,
+            ..TetherProfile::default()
+        }),
+        include_str!("goldens/tether-ios.sh"),
+    );
+}
+
+#[test]
+fn wireguard_client_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::WireguardClient(WireguardClientProfile {
+            peer_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+            endpoint_host: "vpn.example.com".into(),
+            endpoint_port: 51820,
+            peer_psk: "cHNrLTMyLWJ5dGVzLXRlc3QtdmFsdWU=".into(),
+            address: "10.67.0.2/32".into(),
+            dns: "1.1.1.1".into(),
+            kill_switch: true,
+            ..WireguardClientProfile::default()
+        }),
+        include_str!("goldens/wireguard-client.sh"),
+    );
+}
+
+#[test]
+fn guest_wifi_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::GuestWifi(GuestWifiProfile::default()),
+        include_str!("goldens/guest-wifi.sh"),
+    );
+}
+
+/// The comparator itself must be honest: sqm (a profile whose 1.x twin
+/// re-expresses two shell idioms in set -e-safe typed form) is expected
+/// NOT to be byte-parity — pin that this file only asserts golden parity
+/// for the three ports above by proving the filter does not silently
+/// swallow real drift (an empty-vs-nonempty sanity check).
+#[test]
+fn golden_files_are_command_scripts_not_empty() {
+    for (name, golden) in [
+        ("tether", include_str!("goldens/tether.sh")),
+        (
+            "wireguard-client",
+            include_str!("goldens/wireguard-client.sh"),
+        ),
+        ("guest-wifi", include_str!("goldens/guest-wifi.sh")),
+    ] {
+        assert!(
+            command_lines(golden).len() > 10,
+            "{name}: golden must contain real commands"
+        );
+    }
+}
+
+// The existing sqm/doh profiles keep their own unit tests in plan.rs;
+// these ports must not change their renders.
+#[test]
+fn sqm_and_doh_renders_unchanged_shape() {
+    let model = model_with_capabilities(None);
+    let sqm = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Sqm(SqmProfile {
+            download_kbps: 10_000,
+            upload_kbps: 5_000,
+            interface: "wan".into(),
+            qdisc: "cake".into(),
+            script: "piece_of_cake.qos".into(),
+            link_layer: "none".into(),
+            overhead: 0,
+        }),
+    )
+    .expect("plans");
+    let script = render_shell(&sqm);
+    assert!(script.contains("uci set sqm.wan=queue"));
+    assert!(script.contains("uci set sqm.wan.download='10000'"));
+    assert!(script.contains("/etc/init.d/sqm restart"));
+
+    let doh = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Doh(DohProfile {
+            provider: "cloudflare".into(),
+            listen_port: 5053,
+        }),
+    )
+    .expect("plans");
+    let script = render_shell(&doh);
+    assert!(script.contains(
+        "uci set https-dns-proxy.main.resolver_url='https://cloudflare-dns.com/dns-query'"
+    ));
+}
