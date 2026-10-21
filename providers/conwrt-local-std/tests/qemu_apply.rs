@@ -1,11 +1,25 @@
-//! Ring-2 (QEMU OpenWrt VM, ADR-0011): apply a desired-state plan to a
-//! **real OpenWrt userspace** end-to-end — fingerprint-confirmed identity,
-//! sqm plan, apply over SSH, read-only verification. Gated exactly like
-//! `qemu_dropbear.rs`: `CONWRT_QEMU_VM=1` plus a reachable VM on
-//! 127.0.0.1:2222 (boot via the integration fixture or the conftest qemu
-//! command). Mutations are confined to the throwaway VM overlay.
+//! Ring-2 (QEMU OpenWrt VM, ADR-0011): apply desired-state plans to a
+//! **real OpenWrt userspace** end-to-end — fingerprint-confirmed
+//! identity, plan, apply over SSH, read-only verification. Gated by
+//! `CONWRT_QEMU_VM=1` plus a reachable VM. The VM's forwarded SSH port
+//! comes from `CONWRT_VM_SESSION_PORT` (default 2222) so sibling lanes
+//! can run isolated VMs on this shared host (AGENTS.md multi-agent
+//! rules); boot via the integration fixture with the same env var.
+//! Mutations are confined to the throwaway VM overlay.
+//!
+//! Coverage: `sqm` (prebaked packages), `wireguard-client` (packages
+//! prebaked in the fixture image — full plan applies, kill-switch verify
+//! loop runs its real 30 s failure tail), and `tether` (shell surface
+//! only: the USB kmods are NOT prebakeable into the fixture image and
+//! the VM has no USB device, so `EnsurePackage` ops are stripped and the
+//! hardware-gated parts — USB detection actually finding a device,
+//! `network.usbwan` coming up — are marked and not asserted; what IS
+//! asserted is the script applying cleanly and the ADB hotplug hook
+//! installing, the parts a VM can prove).
 
-use conwrt_core::plan::{Profile, SqmProfile, plan_profile};
+use conwrt_core::plan::{
+    PlanOp, Profile, SqmProfile, TetherProfile, WireguardClientProfile, plan_profile,
+};
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
 use conwrt_core::{confirm, render_shell};
@@ -15,13 +29,30 @@ use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
 use core::net::{IpAddr, SocketAddr};
 use std::net::TcpStream;
 use std::path::Path;
+use tokio::sync::{Mutex, MutexGuard};
+
+/// All tests in this file share ONE VM; concurrent `apk add` invocations
+/// race on the apk database lock and fail spuriously. Applying plans to
+/// the shared VM is serialized regardless of harness flags.
+static VM_MUTEX: Mutex<()> = Mutex::const_new(());
+
+async fn vm_lock() -> MutexGuard<'static, ()> {
+    VM_MUTEX.lock().await
+}
+
+fn vm_port() -> u16 {
+    std::env::var("CONWRT_VM_SESSION_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(2222)
+}
 
 fn vm_available() -> bool {
     if std::env::var("CONWRT_QEMU_VM").ok().as_deref() != Some("1") {
         return false;
     }
     TcpStream::connect_timeout(
-        &SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 2222),
+        &SocketAddr::new(IpAddr::from([127, 0, 0, 1]), vm_port()),
         std::time::Duration::from_secs(2),
     )
     .is_ok()
@@ -33,7 +64,7 @@ fn vm_key() -> std::path::PathBuf {
 
 fn vm_target() -> SshTarget {
     SshTarget {
-        addr: "127.0.0.1:2222".into(),
+        addr: format!("127.0.0.1:{}", vm_port()),
         user: "root".into(),
         auth: SshAuth::KeyFile {
             path: vm_key(),
@@ -42,13 +73,8 @@ fn vm_target() -> SshTarget {
     }
 }
 
-#[tokio::test]
-async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
-    if !vm_available() {
-        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
-        return;
-    }
-
+async fn connected_openwrt_session()
+-> (conwrt_local_std::ssh::SshSession, conwrt_types::DeviceModel) {
     let mut store = MemoryTrustStore::new();
     let session = connect(
         &vm_target(),
@@ -79,13 +105,25 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
             default_ip: None,
             extras: Default::default(),
         },
-        capabilities: Some(vec!["ethernet".into()]),
+        capabilities: Some(vec!["ethernet".into(), "usb".into()]),
         flash_methods: None,
         mac_oui: Vec::new(),
         serial_console: None,
         warnings: None,
         extras: Default::default(),
     };
+    (session, model)
+}
+
+#[tokio::test]
+async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
 
     let profile = Profile::Sqm(SqmProfile {
         download_kbps: 10_000,
@@ -93,7 +131,8 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
         interface: "wan".into(),
         ..sqm_defaults()
     });
-    let plan = plan_profile(&state, &model, &profile).expect("plan for confirmed VM");
+    let plan =
+        plan_profile(&DeviceState::OpenWrt, &model, &profile).expect("plan for confirmed VM");
     let script = render_shell(&plan);
 
     // hardware-safe dry-run evidence: the script must be exactly what the
@@ -111,6 +150,117 @@ async fn sqm_plan_applies_and_verifies_on_real_openwrt() {
     // rollback so repeated runs stay clean
     let _ = session
         .exec("for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; uci commit sqm; /etc/init.d/sqm stop 2>/dev/null; true")
+        .await;
+}
+
+#[tokio::test]
+async fn wireguard_client_plan_applies_and_verifies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Same parameter set the 1.x VM suite uses
+    // (tests/integration/test_use_cases_runtime.py).
+    let profile = Profile::WireguardClient(WireguardClientProfile {
+        peer_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+        endpoint_host: "vpn.example.com".into(),
+        endpoint_port: 51820,
+        address: "10.0.0.2/32".into(),
+        allowed_ips: "10.0.0.0/24".into(),
+        ..WireguardClientProfile::default()
+    });
+    let plan =
+        plan_profile(&DeviceState::OpenWrt, &model, &profile).expect("plan for confirmed VM");
+
+    // Full plan INCLUDING EnsurePackage: wireguard-tools and
+    // luci-proto-wireguard are prebaked into the fixture image, so the
+    // opkg/apk install lines succeed against a real package database.
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+    // The kill-switch verify loop's 30 s tail must have removed the rule
+    // (no real tunnel endpoint exists on the VM — fail-open by design).
+    let killswitch = session
+        .exec("uci -q get firewall.wg_client_killswitch.target || echo gone")
+        .await
+        .expect("killswitch readback");
+    assert!(String::from_utf8_lossy(&killswitch.stdout).trim() == "gone");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "uci -q delete network.wg0; uci -q delete network.wg0_peer; \
+             uci -q delete firewall.wg_client_vpn; uci -q delete firewall.wg_client_fwd; \
+             uci -q delete firewall.wg_client_killswitch; \
+             uci commit network; uci commit firewall; true",
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn tether_shell_surface_applies_on_vm_hardware_gated() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Tether(TetherProfile {
+            detect_timeout_secs: 3,
+            ..TetherProfile::default()
+        }),
+    )
+    .expect("plan for confirmed VM");
+
+    // HARDWARE-GATED, deliberately stripped for this VM run: the USB
+    // kmod packages cannot be prebaked into the fixture image (the
+    // prebake list is Python-side and frozen for this port) and the VM
+    // has no USB controller — on real hardware the full plan (packages
+    // included) applies unchanged. What the VM proves: the detection
+    // loop times out safely under `set -e`, the skip branch runs, and
+    // the ADB hotplug hook heredoc installs.
+    plan.ops
+        .retain(|op| !matches!(op, PlanOp::EnsurePackage { .. }));
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+    // hardware-gated negative: with no USB device the interface section
+    // must NOT have been created (the 1.x skip branch)
+    let usbwan = session
+        .exec("uci -q get network.usbwan.proto || echo absent")
+        .await
+        .expect("usbwan readback");
+    assert!(String::from_utf8_lossy(&usbwan.stdout).trim() == "absent");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec("rm -f /etc/hotplug.d/usb/99-usb-tether-adb; true")
         .await;
 }
 
