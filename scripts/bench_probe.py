@@ -16,6 +16,10 @@ Classes (evidence per class in data/bench/*/):
   net-dead   link up + PoE, but no TCP:22 answer within the probe window
              (kernel/network never came up, or dropbear never started)
   silent     no neigh entry at all; only PoE draw proves the port feeds it
+  unprobed   negative verdict withheld: the same-path positive controls
+             (switch shell, dbclient applet, VLAN interface) failed, so the
+             bench network itself is not proven alive — the target's state
+             is unknown, not dead (#286)
 
 Usage:
   bench_probe.py --place ap-lan5                classify + JSON verdict
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -35,7 +40,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLACES_JSON = REPO_ROOT / "data" / "bench" / "places.json"
-SWITCH = "root@192.168.13.2"
+SWITCH = os.environ.get("CONWRT_SWITCH", "root@192.168.0.2")  # AGENTS.md: no bench IPs in-repo — operator supplies via env
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
 PROBE_TIMEOUT = 20
@@ -52,12 +57,15 @@ class Verdict:
     banner_or_auth: str
     neigh: str
     evidence: str
+    control: str = ""  # '' = controls passed/unused; else why the bench path is unproven
 
     def text(self) -> str:
         lines = [f"{self.place}: {self.verdict}",
                  f"  key-auth SSH : {'OK' if self.ssh_key_ok else self.banner_or_auth}",
                  f"  v6 neighbor  : {self.neigh or 'absent'}",
                  f"  evidence     : {self.evidence}"]
+        if self.control:
+            lines.append(f"  control      : {self.control}")
         return "\n".join(lines)
 
 
@@ -93,6 +101,59 @@ def linklocal(mac: str) -> str:
     return "fe80::" + ":".join(hextets)
 
 
+def positive_controls(zone: str) -> str:
+    """Same-path positive controls: prove the bench network itself can
+    carry this probe before any negative verdict is recorded (#286).
+
+    A net-dead/silent classification means "the DUT did not answer" — that
+    is only a valid statement if the switch SSH shell answers, dbclient
+    exists on the switch, and the target VLAN interface is up. Without
+    these controls a missing applet, broken VLAN, or failed switch SSH path
+    is silently recorded as a DUT failure. Mirrors bench_inventory's
+    `unprobed` treatment of a batch that could not run.
+
+    Returns '' when every control passes, else a human-readable reason the
+    bench path is unproven.
+    """
+    echo = on_switch("echo BENCH-CTRL-OK")
+    if "BENCH-CTRL-OK" not in echo:
+        return f"switch SSH/shell control failed: {echo.strip()[:160] or '(no output)'}"
+    which = on_switch("command -v dbclient")
+    if "dbclient" not in which:
+        return f"dbclient applet missing on switch: {which.strip()[:160] or '(no output)'}"
+    # Operational link-state control, not existence: `ip link show` exits 0
+    # for admin-down/detached interfaces too (Codex P1 on #401 — an
+    # existence check passes while the data path is dead). Require the
+    # interface to actually report state UP. rc-marker form keeps the
+    # missing-interface case loud ("Device switch.NNN does not exist."
+    # contains the name, so substring checks would false-pass).
+    link_out = on_switch(f"ip link show {zone} 2>&1; echo LINK-CTRL:$?")
+    link_body = link_out.rsplit("LINK-CTRL:", 1)[0]
+    if "LINK-CTRL:0" not in link_out:
+        return (f"vlan interface {zone} missing on switch "
+                f"({link_out.strip()[-60:] or 'no output'})")
+    if "state UP" not in link_body:
+        state = next((ln.strip() for ln in link_body.splitlines()
+                      if "state" in ln), "")[:80]
+        return (f"vlan interface {zone} not operational on switch "
+                f"(want state UP; got: {state or link_body.strip()[:80]})")
+    # Known-good data-path control (AGENTS.md rule 1: prove the probe
+    # against a known-good host through the same interface). Opt-in via
+    # CONWRT_VLAN_CONTROL_HOST — a host that must answer a ping THROUGH the
+    # target VLAN. When unset, controls stop at operational link state and
+    # every verdict's evidence says so (never silently claims path proof).
+    host = os.environ.get("CONWRT_VLAN_CONTROL_HOST", "").strip()
+    if host:
+        ping_rc = on_switch(
+            f"ping -I {zone} -c1 -W2 {host} >/dev/null 2>&1; "
+            f"echo PING-CTRL:$?")
+        if "PING-CTRL:0" not in ping_rc:
+            return (f"known-good host {host} unreachable through {zone} "
+                    f"({ping_rc.strip()[-40:] or 'no output'}) — bench data "
+                    f"path unproven")
+    return ""
+
+
 def probe(place: dict, evidence_dir: Path | None = None) -> Verdict:
     ll = linklocal(place["mac"])
     zone = f"switch.{place.get('vlan') or 1000 + int(place['name'][-1])}"
@@ -111,11 +172,19 @@ def probe(place: dict, evidence_dir: Path | None = None) -> Verdict:
     else:
         verdict = "net-dead" if neigh.strip() else "silent"
 
+    control = ""
+    if verdict in ("net-dead", "silent"):
+        # A negative verdict is only recorded when the same-path positive
+        # controls prove the bench network is alive (#286).
+        control = positive_controls(zone)
+        if control:
+            verdict = "unprobed"
+
     result = Verdict(place=place["name"], verdict=verdict,
                      ssh_key_ok="SSH-KEY-OK" in key,
                      banner_or_auth=key.strip().splitlines()[-1] if key.strip() else "(no output)",
                      neigh="present" if neigh.strip() else "absent",
-                     evidence="")
+                     evidence="", control=control)
     if evidence_dir:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
