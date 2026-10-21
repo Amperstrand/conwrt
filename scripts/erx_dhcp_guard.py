@@ -34,21 +34,49 @@ from pathlib import Path
 ERX = "root@192.168.13.1"
 
 
+class InspectError(RuntimeError):
+    """The ERX config could not be inspected (SSH channel down, timeout, or
+    `uci show dhcp` unreadable). Every caller must treat this as UNSAFE —
+    the old code surfaced it as 'zero host entries' and validate() printed
+    PASS exactly when nothing could be verified (#285)."""
+
+
 def ssh(cmd: str, timeout: int = 15) -> str:
-    r = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ERX, cmd],
-        capture_output=True, text=True, timeout=timeout
-    )
+    """Run cmd on the ERX and return stdout; raise InspectError when the
+    channel itself fails.
+
+    rc 255 is OpenSSH's own error code (auth refused, no route, DNS
+    failure) — returning '' for those made the pre-restart gate give green
+    on red. A nonzero rc with output (e.g. pgrep finding no dnsmasq) is a
+    legitimate remote-command result and is returned as-is.
+    """
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ERX, cmd],
+            capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise InspectError(f"ssh to {ERX} timed out after {timeout}s: {cmd[:60]}") from None
+    if r.returncode == 255:
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        why = detail[0][:160] if detail else "no output"
+        raise InspectError(f"ssh to {ERX} failed (rc=255): {why} — {cmd[:60]}")
     return r.stdout.strip()
 
 
 def parse_host_entries() -> list[dict]:
-    raw = ssh("uci show dhcp | grep '=host$\\|\\.mac=\\|\\.ip=\\|\\.name='")
+    raw = ssh("uci show dhcp")
+    if "dhcp." not in raw:
+        # `uci show dhcp` failing (or the pipe eating it) previously read as
+        # "zero host entries"; the ERX always has a dhcp config — an empty
+        # read means the audit could not inspect, which is not safe.
+        raise InspectError("uci show dhcp returned no dhcp config — cannot "
+                           "inspect the ERX dhcp state")
     entries: dict[str, dict] = {}
     current = None
     for line in raw.splitlines():
         line = line.strip()
-        if "=host$" in line or line.endswith("=host"):
+        if line.endswith("=host"):
             sec = line.split(".")[1].split("=")[0]
             current = sec
             entries.setdefault(current, {"section": sec, "mac": "", "ip": "", "name": ""})
@@ -63,7 +91,18 @@ def parse_host_entries() -> list[dict]:
 
 def cmd_validate() -> int:
     print("== VALIDATE: dhcp config")
-    hosts = parse_host_entries()
+    try:
+        hosts = parse_host_entries()
+        gen = ssh("grep dhcp-host /var/etc/dnsmasq.conf.* 2>/dev/null || true")
+    except InspectError as exc:
+        # Fail CLOSED: the mandatory pre-restart gate must not pass on a
+        # config it could not read (AGENTS.md guard mandate).
+        print(f"\nFAIL: cannot inspect the ERX — {exc}")
+        print("  Treating the config as UNSAFE: an unverified config is a "
+              "failed audit, not an empty one.")
+        print("  Do not `uci commit dhcp` / restart dnsmasq until the ERX "
+              "answers the guard.")
+        return 1
     errors: list[str] = []
 
     macs = [h["mac"] for h in hosts if h["mac"]]
@@ -85,7 +124,6 @@ def cmd_validate() -> int:
             owners = [h["section"] for h in hosts if h["name"] == name]
             errors.append(f"DUPLICATE NAME '{name}' in {owners} — confusing")
 
-    gen = ssh("grep dhcp-host /var/etc/dnsmasq.conf.* 2>/dev/null || true")
     gen_lines = [l.strip() for l in gen.splitlines() if "dhcp-host" in l]
     for line, count in Counter(gen_lines).items():
         if count > 1:
@@ -106,8 +144,18 @@ def cmd_validate() -> int:
 
 def cmd_check() -> int:
     print("== CHECK: dnsmasq health")
-    errors: list[str] = []
+    try:
+        return _check_probe()
+    except InspectError as exc:
+        # Fail closed: unreachable ERX means dnsmasq health is unverifiable,
+        # which is a failed check — never a pass.
+        print(f"\nUNHEALTHY: cannot reach the ERX — {exc}")
+        print("  dnsmasq health is unverifiable; treat as unhealthy.")
+        return 1
 
+
+def _check_probe() -> int:
+    errors: list[str] = []
     proc = ssh("pgrep dnsmasq | head -1")
     if not proc:
         errors.append("dnsmasq NOT RUNNING")
