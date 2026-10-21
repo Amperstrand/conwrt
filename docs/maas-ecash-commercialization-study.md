@@ -23,20 +23,28 @@ killed the run-upstream idea (Option A). The thin-own-service fallback
 Three gates before any non-self tenant:
 
 1. Live-region validation of the no-commission spawn path (#194 remainder).
-2. Customer VLAN isolation (#168) — MAAS metadata port must stay reachable,
-   so L3 separation, not ACLs.
+2. Customer VLAN isolation (#168) — L3 separation AND a default-deny
+   filter: routed VLAN membership alone does not stop a tenant reaching
+   MAAS, the BMCs, management, or other tenants. The milestones plan
+   (maas-compute-milestones.md, tenant-isolation pre-req) requires
+   default-deny nftables + unreachability tests, with ONE selective
+   allow: the MAAS metadata service.
 3. The economic floor from §5 — idle warm-pool capacity is the only real
    marginal cost; the rate must clear it or the pilot is charity.
 
 ## 1. The platform we are selling from
 
-| Component | State (2026-10-14/15) | Source |
+| Component | State | Source |
 |---|---|---|
-| MAAS region | Running on Pi 4B (self-flashed, USB SSD) | `recipes/raspberry-pi/maas-portable-lab.md` |
-| VM host candidate | `awake-iguana` enlisted (8 cores / 16 GB, VT-x unverified until M2) | `docs/maas-compute-milestones.md` M2 |
+| MAAS region | Running on the lab region host (single-board, self-flashed, USB SSD) | `recipes/raspberry-pi/maas-portable-lab.md` |
+| VM host candidate | One 8-core/16 GB host enlisted (VT-x unverified until M2) | `docs/maas-compute-milestones.md` M2 |
 | Boot images | **0/15 complete — M1 blocker** (MAAS 3.6.6 temporal deadlocks) | milestones M1 |
-| Network | x1860 bench router, DHCP owned by MAAS on the bench subnet | recipe |
+| Network | Bench router segment; DHCP for the bench subnet is MAAS-owned | recipe |
 | VPN egress | WireGuard bench→VPS exit verified (~30 ms, public IP = VPS) | milestones §VPN |
+
+(Live hostnames, hardware serials, and enlistment state live in the
+operator's private inventory project — conwrt stays species-level,
+AGENTS.md lab-registry rule.)
 | Provisioning | compose→commission→deploy ~8 min one-command | #193 context |
 | Rust MAAS fluency | `conwrt-maas` crates (types/provider/CLI) + paygress `MaasBackend` | #169, #194 |
 
@@ -158,12 +166,12 @@ delta, no sync obligation). Shape:
       │  pre-payment guards → redeem (NUT-03, whitelist = our mint)
       │  lease = value_msats ÷ rate_msat_per_sec
       ▼
- MaasBackend ── region API 2.0 ──► MAAS (Pi 4B)
+ MaasBackend ── region API 2.0 ──► MAAS region host
       │                               │ compose / deploy / power / delete
       │                               ▼
-      │                        VM host (awake-iguana, KVM)
+      │                        VM host (KVM)
       ▼
- customer VM ── bench VLAN ──► x1860 wg gateway ──► VPS exit ──► internet
+ customer VM ── bench VLAN ──► bench wg gateway ──► VPS exit ──► internet
  access: SSH creds via NIP-17 DM; surface options in §6
 ```
 
@@ -203,8 +211,8 @@ one wire contract, two consumers, tested from both sides.
 |---|---|---|
 | VPS exit | ~€5 | fixed IP, WireGuard, public NAT |
 | Power (desktop, idle+warm pool) | ~€10–15 | 40–80 W continuous at EU rates |
-| Pi + x1860 power | ~€2 | negligible |
-| Hardware | sunk | Pi 4B, x1860, desktop, USB SSD |
+| Region-host + bench-router power | ~€2 | negligible |
+| Hardware | sunk | region host, bench router, desktop, USB SSD |
 | Bandwidth | €0 marginal | WiFi uplink is the ceiling, not billed |
 
 Marginal cost per running VM ≈ power delta only (~10–20 W). **The real
@@ -218,16 +226,21 @@ paygress solves metering with `rate_msat_per_sec`; adopt it wholesale.
 Breakeven arithmetic for the operator:
 
 ```
-monthly_floor ≈ VPS + power ≈ 20 € ≈ (at 100_000 sats/€) 2.0M msat
+monthly_floor ≈ VPS + power ≈ 20 €
+             ≈ (at 100_000 sats/€) 2.0M sats = 2.0 B msat   # 1 sat = 1000 msat
 supply ≈ 5 VMs × 720 h ≈ 3600 VM-hours/month (if always sold)
-breakeven ≈ 2.0M msat ÷ 3600 h ≈ 560 msat/VM-hour ≈ 0.15 msat/s at 2c/2G
+breakeven ≈ 2.0 B msat ÷ 3600 h ≈ 556_000 msat/VM-hour ≈ 155 msat/s at 2c/2G
 ```
 
-So anything above **~1 msat/s per 2c/2G VM** clears the floor with margin
-at even 10% utilization; SHC's per-CPU-coefficient catalog is the right
-shape for tiered rates (1c/1G, 2c/2G, 4c/4G). Actual market rate is an
-operator decision at pilot time — the number to publish is the
-**rate in the offer event**, and paygress already carries it.
+(An earlier draft read "2.0M msat" and "~1 msat/s clears the floor" — a
+1000× sats↔msat slip: at ~1 msat/s per VM and 10% utilization the pilot
+recovers ≈ €0.013/month against the €20 floor, i.e. charity, not
+breakeven.) Even at **full** utilization the per-VM rate must be ≳155
+msat/s — quote rates in **sats/s**, not msat/s, at this scale; SHC's
+per-CPU-coefficient catalog is the right shape for tiered rates
+(1c/1G, 2c/2G, 4c/4G). Actual market rate is an operator decision at
+pilot time — the number to publish is the **rate in the offer event**,
+and paygress already carries it.
 
 ### 5.3 Warm-pool economics
 
@@ -267,7 +280,7 @@ Order: 1 → 2 → 3, each gated on the previous being boring.
 | **MAAS API instability** — interface-registration bug class, temporal deadlocks | high | #194 kill criterion: if the backend turns flaky on live validation → fall back to Option B for anonymous surface, keep MAAS for operator-mediated |
 | **Deploy latency > 300 s** even with no-commission + pool | high | #194 kill criterion; in-fork we may also patch the constant — it is our fork |
 | **M1 boot images** (0/15) | blocker, lab-side | manual placement / 3.7.x trial (milestones M1) — critical path today |
-| **Tenant isolation pre-req** (#168) | high for non-self | L3 VLAN separation; MAAS metadata must stay reachable; no anonymous tenant before it |
+| **Tenant isolation pre-req** (#168) | high for non-self | L3 VLAN separation + default-deny nftables (MAAS metadata selectively reachable, everything else unreachable — tested); no anonymous tenant before it |
 | **Fork maintenance** | medium | we own the delta; no upstream sync obligation; pin the fork commit in ops docs |
 | **Ecash custody / regulatory** | medium | hot-wallet sizing caps, own mints first, testnet pilot; honest ToS language for what dedicated-host does and does not guarantee |
 | **Nostr surface abuse** | medium | inherited guards: mint whitelist (=SSRF guard), disk gate, spawn deadline, their hardening history |

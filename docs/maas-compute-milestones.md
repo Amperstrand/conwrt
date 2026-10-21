@@ -36,11 +36,13 @@ M7: Internal agent pilot ─→ M8: Cashu API ────────→ MVP
 
 **Why:** Need a KVM-capable machine to host virtual machines.
 
-**Hardware:** `awake-iguana.maas` (already enlisted, 8 cores, 16GB RAM, amd64)
+**Hardware:** the lab VM host (8 cores, 16 GB RAM, amd64; hostname and
+enlistment state live in the operator's private inventory — conwrt stays
+species-level, AGENTS.md lab-registry rule)
 
 **Steps:**
 1. Fix boot images (M1)
-2. Commission awake-iguana via MAAS portal/API
+2. Commission the VM host via MAAS portal/API
 3. Verify VT-x support from commissioning output
 4. Deploy Ubuntu Server LTS to it
 5. Verify SSH access from MAAS
@@ -53,8 +55,13 @@ M7: Internal agent pilot ─→ M8: Cashu API ────────→ MVP
 **Why:** MAAS needs a VM host to create virtual machines.
 
 **Steps:**
-1. SSH to awake-iguana, install LXD
-2. Register as MAAS VM host (`maas admin vm-hosts create ...`)
+1. SSH to the VM host, install LXD
+2. `lxd init` — storage pool + network, with the LXD bridge's own DHCP
+   DISABLED (MAAS owns DHCP on the bench subnet; a second DHCP server is
+   the rogue-DHCP hazard AGENTS.md bans), and establish host trust
+3. Only then register as MAAS VM host (`maas admin vm-hosts create ...`)
+   — per the official MAAS sequence, LXD must be initialized before
+   registration or discovery/first compose cannot work
 3. Compose a test VM: 2 vCPU, 2GB RAM, 20GB disk
 4. Deploy Ubuntu to the VM
 5. Verify SSH to the VM
@@ -152,7 +159,7 @@ M1 (fix images) → M2 (commission host) → M3 (compose VM) → M4 (VPN)
 |------|--------|
 | MAAS running | ✅ Pi 4B, self-flashed |
 | Network infrastructure | ✅ x1860, bench subnet, DHCP |
-| Machine enlisted | ✅ awake-iguana (8 cores, 16GB) |
+| Machine enlisted | ✅ one 8-core/16 GB host (identity in private inventory) |
 | Boot images | ❌ 0/15 complete (M1 blocker) |
 | VM host registered | ❌ Not yet |
 | VPN | ❌ Not started |
@@ -161,7 +168,7 @@ M1 (fix images) → M2 (commission host) → M3 (compose VM) → M4 (VPN)
 ## Immediate Next Actions
 
 1. **Fix boot image sync** (M1) — try manual image placement or workflow bypass
-2. **Commission awake-iguana** (M2) — verify VT-x, deploy Ubuntu
+2. **Commission the VM host** (M2) — verify VT-x, deploy Ubuntu
 3. **Install LXD + register as VM host** (M3) — compose first test VM
 4. **Set up WireGuard exit VPS** (M4) — can be done in parallel with M1-M3
 
