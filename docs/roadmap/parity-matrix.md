@@ -46,9 +46,9 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| `scripts/profile/ops.py` + `apply.py` (typed ops pipeline) | ~900 | **partial — parity-tested for the apply path**: `conwrt-core::plan` (typed ops) + `conwrt-local-std::execute::apply_plan` over russh | `providers/conwrt-local-std/tests/qemu_apply.rs` (ring 2: real QEMU Dropbear VM, rendered script == Python-shaped uci) | Partial — 2 of 34 use cases typed (sqm, doh); each additional profile lands with its parity test |
+| `scripts/profile/ops.py` + `apply.py` (typed ops pipeline) | ~900 | **partial — parity-tested for the apply path**: `conwrt-core::plan` (typed ops) + `conwrt-local-std::execute::apply_plan` over russh | `providers/conwrt-local-std/tests/qemu_apply.rs` (ring 2: real QEMU Dropbear VM, rendered script == Python-shaped uci) | Partial — 8 of 34 use cases typed (sqm, doh, tether ×4, wireguard-client, guest-wifi); each additional profile lands with its parity test |
 | `scripts/profile/overlay.py`, `builder.py`, `wifi.py`, `uci_helpers.py` | ~1200 | partial — plan/render shell path only | `conwrt-core/src/plan.rs` | None — bake/overlay (ASU first-boot) pipeline is M7 |
-| `scripts/use_cases/*` (30 plugins) | ~5000 | partial (sqm, doh only) | plan.rs unit tests mirror the 1.x validators | Per-plugin: port on demand with its parity test |
+| `scripts/use_cases/*` (30 plugins) | ~5000 | partial (sqm, doh, tether ×4, wireguard-client, guest-wifi) | plan.rs unit tests mirror the 1.x validators; `crates/conwrt-core/tests/use_case_goldens.rs` byte-compares rendered command lines against goldens generated from the actual 1.x builders (`tests/goldens/*.sh`); ring-2 apply for wireguard-client (full plan, prebaked pkgs) + tether (shell surface; USB parts hardware-gated) in `qemu_apply.rs` | Per-plugin: port on demand with its parity test |
 | `scripts/configure-stock-switch.py`, `cmd_lan_migrate.py` | ~400 | none | — | None — bench-adjacent one-offs |
 
 ## 5. Serial & protocols
