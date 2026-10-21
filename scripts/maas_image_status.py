@@ -38,7 +38,9 @@ Evidence sources:
   --evidence-json FILE   {"<image-dir>": bytes, ...} — produce with:
                            ssh <pi> 'sudo python3 - <<EOF
                            import os,json,sys
-                           root="/var/snap/maas/common/maas/images/boot-resources"
+                           # legacy layout; current releases are
+                           # content-addressed under image-storage
+                           root="/var/snap/maas/common/maas/image-storage"
                            out={}
                            for n in os.listdir(root):
                                p=os.path.join(root,n)
@@ -61,13 +63,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-STORAGE_ROOT_DEFAULT = "/var/snap/maas/common/maas/images/boot-resources"
+# Current snap releases store boot-resource data content-addressed under
+# image-storage (the install hook REMOVES the old images/boot-resources
+# path); the legacy <name>/<arch> tree only exists on old installs.
+STORAGE_ROOT_DEFAULT = "/var/snap/maas/common/maas/image-storage"
+
+# Evidence key for the content-addressed layout, where bytes cannot be
+# attributed to a single resource by path.
+TOTAL_STORAGE_KEY = "image-storage/"
 
 
 @dataclass(frozen=True)
@@ -85,12 +96,27 @@ class ImageStatus:
         return self.status in ("VERIFIED", "VERIFIED-DESPITE-WORKFLOW")
 
 
+def _as_sets(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-set dicts from a BootResource entry, dict- or list-shaped."""
+    sets = entry.get("sets")
+    if isinstance(sets, dict):
+        return [v for v in sets.values() if isinstance(v, dict)]
+    if isinstance(sets, list):
+        return [v for v in sets if isinstance(v, dict)]
+    return []
+
+
 def parse_api_payload(payload: Any) -> list[dict[str, Any]]:
     """Normalize a boot-resources API payload to flat resource dicts.
 
-    Defensive on purpose: MAAS nests resources under `sets` with
-    release-dependent shapes, and this tool must not crash on a shape
-    it has not seen — it must degrade to reporting what it found.
+    Parses the gomaasclient BootResource shape a real region returns:
+    `name`, `architecture`, and `sets` (per-set `size` and `complete`
+    — the declared size is the sum across sets; the resource is
+    complete only when EVERY set is). Legacy flat payloads (`arch`,
+    top-level `size`/`complete` — pre-3.2 saved fixtures) still parse.
+
+    Defensive on purpose: this tool must not crash on a shape it has
+    not seen — it must degrade to reporting what it found.
     """
     if isinstance(payload, dict) and "resources" in payload:
         payload = payload["resources"]
@@ -101,23 +127,32 @@ def parse_api_payload(payload: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name")
-        arch = entry.get("arch")
+        arch = entry.get("architecture") or entry.get("arch")
         if not name or not arch:
             continue
-        size = entry.get("size", 0)
-        try:
-            size = int(size or 0)
-        except (TypeError, ValueError):
-            size = 0
+        sets = _as_sets(entry)
+        if sets:
+            size = sum(_safe_int(v.get("size")) for v in sets)
+            complete = len(sets) > 0 and all(bool(v.get("complete")) for v in sets)
+        else:
+            size = _safe_int(entry.get("size"))
+            complete = bool(entry.get("complete", False))
         out.append(
             {
                 "key": f"{name}/{arch}",
                 "name": name,
                 "declared_size": size,
-                "complete": bool(entry.get("complete", False)),
+                "complete": complete,
             }
         )
     return out
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def evidence_for(resource: dict[str, Any], evidence: dict[str, int]) -> int | None:
@@ -142,10 +177,25 @@ def evidence_for(resource: dict[str, Any], evidence: dict[str, int]) -> int | No
 
 
 def evidence_from_storage_root(root: Path) -> dict[str, int]:
-    """Bytes per `<name>/<arch>` directory under a storage root."""
+    """Bytes of evidence under a storage root, per layout.
+
+    Content-addressed layout (current snap releases): everything lives
+    under `<root>/boot-resources/` keyed by content hash — per-resource
+    attribution by path is impossible, so the walk yields one
+    [`TOTAL_STORAGE_KEY`] entry with the total bytes present.
+
+    Legacy layout (pre-3.2 installs): `<name>/<arch>` directories map
+    directly to resource keys.
+    """
     out: dict[str, int] = {}
     if not root.is_dir():
         return out
+    content_addressed = root / "boot-resources"
+    if content_addressed.is_dir():
+        total = sum(
+            f.stat().st_size for f in content_addressed.rglob("*") if f.is_file()
+        )
+        return {TOTAL_STORAGE_KEY: total}
     for name_dir in root.iterdir():
         if not name_dir.is_dir():
             continue
@@ -201,14 +251,26 @@ def classify(
     return out
 
 
-def fetch_api_payload(url: str, api_key: str) -> Any:
-    """GET the boot-resources list over the region API (OAuth1 PLAINTEXT)."""
+def oauth1_header(api_key: str, nonce: str, timestamp: int) -> str:
+    """OAuth1 PLAINTEXT Authorization value for a MAAS API key.
+
+    MAAS token mode: the consumer secret is empty, so the signature is
+    `&{secret}` (NOT `{secret}&`), and every request carries its own
+    nonce and timestamp — same reference shape as the Rust client's
+    `oauth1_header` (conwrt-local-std, issue #304).
+    """
     ck, token, secret = (api_key.split(":") + ["", ""])[:3]
-    auth = (
+    return (
         f'OAuth oauth_version="1.0", oauth_signature_method="PLAINTEXT", '
         f'oauth_consumer_key="{ck}", oauth_token="{token}", '
-        f'oauth_signature="{secret}&"'
+        f'oauth_signature="&{secret}", '
+        f'oauth_timestamp="{timestamp}", oauth_nonce="{nonce}"'
     )
+
+
+def fetch_api_payload(url: str, api_key: str) -> Any:
+    """GET the boot-resources list over the region API (OAuth1 PLAINTEXT)."""
+    auth = oauth1_header(api_key, secrets.token_hex(16), int(time.time()))
     endpoint = url.rstrip("/") + "/api/2.0/boot-resources/"
     result = subprocess.run(
         ["curl", "-sS", "-f", "-H", f"Authorization: {auth}", endpoint],
@@ -280,7 +342,13 @@ def main_with_argv(argv: list[str] | None) -> int:
 
     if args.storage_root is not None:
         evidence = evidence_from_storage_root(args.storage_root)
-        covered = bool(evidence) or args.storage_root.is_dir()
+        # Only the legacy per-key layout covers every resource: a
+        # POSITIVE content-addressed total cannot attribute bytes per
+        # resource. A zero total, however, is zero for EVERY resource —
+        # the dangerous WORKFLOW-CLAIMS-COMPLETE case must still fire.
+        covered = (bool(evidence) and TOTAL_STORAGE_KEY not in evidence) or (
+            evidence.get(TOTAL_STORAGE_KEY) == 0
+        )
     elif args.evidence_json:
         evidence = {
             k: int(v) for k, v in json.loads(Path(args.evidence_json).read_text()).items()
@@ -290,6 +358,16 @@ def main_with_argv(argv: list[str] | None) -> int:
 
     statuses = classify(parse_api_payload(payload), evidence, covered)
     report(statuses, args.json)
+    if TOTAL_STORAGE_KEY in evidence and any(
+        s.status == "NO-EVIDENCE" for s in statuses
+    ):
+        declared_sum = sum(s.declared_size for s in statuses)
+        print(
+            f"\ncontent-addressed storage: {evidence[TOTAL_STORAGE_KEY]:,} B present "
+            f"vs {declared_sum:,} B declared across all resources "
+            "(per-resource attribution is impossible in this layout)",
+            file=sys.stderr,
+        )
 
     if not evidence:
         print(
