@@ -77,6 +77,50 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _nobody_ids() -> tuple[int, int] | None:
+    """(uid, gid) of the unprivileged account, or None if unavailable.
+
+    The primary GID is resolved via pwd, NOT assumed to be "nogroup" —
+    Fedora/RHEL/Alpine put nobody in group nobody (review of #386).
+    """
+    try:
+        import pwd
+        pw = pwd.getpwnam("nobody")
+        return pw.pw_uid, pw.pw_gid
+    except (ImportError, KeyError):
+        return None
+
+
+def _nobody_wrap(tmp_path: Path, logs_dir: Path) -> list[str] | None:
+    """setpriv command prefix for the root-run harness, or None.
+
+    Only when euid==0 AND the tmp tree is verifiably under the system temp
+    root: the ancestor walk that opens pytest's private 0700 chain is
+    BOUNDED by that root and never chmods anything outside it (review of
+    #386: a --basetemp under /root or a workspace must not leak 0755 to
+    private dirs). None ⇒ caller skips the root-wrap path.
+    """
+    if os.geteuid() != 0:
+        return None
+    import shutil as _shutil
+    if not _shutil.which("setpriv"):
+        return None
+    ids = _nobody_ids()
+    if ids is None:
+        return None
+    import tempfile
+    chain_top = Path(tempfile.gettempdir()).resolve()
+    resolved = tmp_path.resolve()
+    if chain_top != resolved and chain_top not in resolved.parents:
+        return None  # basetemp outside the system temp root — do not touch
+    for anc in [resolved, *resolved.parents]:
+        os.chmod(anc, 0o755)
+        if anc == chain_top:
+            break
+    return ["setpriv", f"--reuid={ids[0]}", f"--regid={ids[1]}",
+            "--clear-groups"]
+
+
 @pytest.fixture()
 def rig(tmp_path: Path):
     """Fake conwrt checkout + stubbed binaries. Yields run()/lines()/set_neigh_reply()."""
@@ -113,8 +157,30 @@ def rig(tmp_path: Path):
             "STUB_LOGS": str(logs_dir),
         }
         env.update(env_extra)
+        cmd = ["bash", str(fake_repo / "scripts" / "flash-recovery.sh"), "test-model", "lo"]
+        prefix = _nobody_wrap(tmp_path, logs_dir)
+        if os.geteuid() == 0 and prefix is None:
+            pytest.skip(
+                "root-run harness needs setpriv + a nobody account + "
+                "basetemp under the system temp root (#299)")
+        if prefix is not None:
+            # flash-recovery.sh refuses root BY DESIGN (it sudo's as
+            # needed); execute the whole hermetic harness unprivileged so
+            # the safety contract stays covered in root-run lanes (#299).
+            # The throwaway tree is opened for traversal; the sticky log
+            # dir keeps fs.protected_regular semantics intact.
+            for p in tmp_path.rglob("*"):
+                if p == logs_dir:
+                    continue
+                if p.is_dir():
+                    p.chmod(0o755)
+                else:
+                    keep_exec = p.stat().st_mode & 0o111
+                    p.chmod(0o755 if keep_exec else 0o644)
+            logs_dir.chmod(0o1777)
+            cmd = prefix + cmd
         return subprocess.run(
-            ["bash", str(fake_repo / "scripts" / "flash-recovery.sh"), "test-model", "lo"],
+            cmd,
             input=stdin if stdin is not None else "",  # EOF at any prompt — never block on a tty
             capture_output=True,
             text=True,
@@ -231,3 +297,54 @@ def test_model_without_recovery_ip_warns(rig):
     assert "exposes no recovery_ip — no arming detection will run." in out.stderr
     assert "Waiting for ARP" not in out.stdout
     assert rig.lines("curl") == [] and rig.lines("ping") == []
+
+
+class TestNobodyWrapBoundaries:
+    """#386 review: the ancestor chmod walk must be bounded by the system
+    temp root, and the unprivileged gid must be resolved, not assumed."""
+
+    def test_walk_never_escapes_the_temp_root(self, tmp_path, monkeypatch):
+        import stat
+        # a private dir OUTSIDE the (faked) temp root must stay 0700
+        private = tmp_path / "private-root"
+        private.mkdir(mode=0o700)
+        inside = private / "basetemp" / "case"
+        inside.mkdir(parents=True)
+        monkeypatch.setattr(
+            "tempfile.gettempdir", lambda: str(inside / "temproot"))
+        (inside / "temproot").mkdir()
+        case = inside / "temproot" / "pytest-of-root" / "case"
+        case.mkdir(parents=True)
+        monkeypatch.setattr(
+            "test_flash_recovery_arp_probe.os.geteuid", lambda: 0)
+        import test_flash_recovery_arp_probe as mod
+        # run twice: once under the temp root (opens chain), once outside
+        # (must be a no-op)
+        self._mode_is(private, 0o700)
+        prefix = mod._nobody_wrap(case, case / "logs")
+        assert prefix is not None
+        # every ancestor up to the faked temp root is now 0755...
+        assert (case.stat().st_mode & 0o777) == 0o755
+        assert (inside / "temproot").stat().st_mode & 0o777 == 0o755
+        # ...but nothing ABOVE the temp root was touched
+        assert private.stat().st_mode & 0o777 == 0o700
+        outside = mod._nobody_wrap(private / "elsewhere", private / "l")
+        assert outside is None  # outside the temp root ⇒ no wrap, no chmod
+        assert private.stat().st_mode & 0o777 == 0o700
+
+    @staticmethod
+    def _mode_is(p: Path, mode: int) -> None:
+        assert p.stat().st_mode & 0o777 == mode
+
+    def test_nobody_ids_resolve_via_pwd(self):
+        import test_flash_recovery_arp_probe as mod
+        ids = mod._nobody_ids()
+        if ids is None:  # accounts without a nobody entry — fine
+            return
+        uid, gid = ids
+        assert isinstance(uid, int) and isinstance(gid, int)
+        assert uid > 0  # never root
+        prefix = ["setpriv", f"--reuid={uid}", f"--regid={gid}",
+                  "--clear-groups"]
+        assert all(p.isdigit() or p.startswith(("-", "setpriv", "--"))
+                   for p in prefix[1:])
