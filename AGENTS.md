@@ -10,7 +10,7 @@ sessions.** PR #119 originally carried ~16 unrelated VPN/nordvpn commits this
 way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
 (2026-10-12 external review, P0).
 
-- Before branching: `git fetch origin && git diff origin/master..master` must be empty
+- Before branching: `git fetch origin && git rev-list --count origin/master..master` must be `0` (the ancestry form — a tree diff alone passes cancel-out histories: a change+revert pair, or tree-convergent local commits, still carries unwanted history into branches)
 - If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
 - Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
 

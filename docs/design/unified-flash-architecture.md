@@ -131,7 +131,20 @@ impl FlashMethod for NetbootSelfFlash {
         // 2. Deploy cloud-init files via HTTP
         self.infra.deploy_boot_files(&ctx.cloud_init_files).await?;
 
-        // 3. Configure DHCP + TFTP on the companion router
+        // 3. Route the SELECTED image: the initramfs fetches exactly
+        //    what `conwrt flash --image …` chose — its source URL (or
+        //    companion-router path) and its verified SHA-256 are staged
+        //    next to the boot files as the flash manifest. The
+        //    initramfs must refuse to write any image whose digest does
+        //    not match the manifest.
+        self.infra
+            .deploy_flash_manifest(&FlashManifest {
+                image_source: self.image_source.clone(),
+                image_sha256: ctx.firmware_sha256,
+            })
+            .await?;
+
+        // 4. Configure DHCP + TFTP on the companion router
         self.infra.arm_recovery(&ctx.target_device).await?;
 
         Ok(PreparedFlash {
@@ -145,12 +158,31 @@ impl FlashMethod for NetbootSelfFlash {
         // 1. EEPROM falls through to NET boot
         // 2. TFTP: fetches kernel + initramfs from companion router
         // 3. Initramfs boots, gets network via DHCP
-        // 4. Initramfs downloads OS image from internet (via companion router NAT)
-        // 5. Initramfs writes to USB disk with serial-whitelist safety
+        // 4. Initramfs fetches the OS image FROM THE FLASH MANIFEST (the
+        //    source selected on the command line, via companion router
+        //    NAT/path), verifies its SHA-256 against the manifest, and
+        //    refuses to write on mismatch
+        // 5. Initramfs writes the VERIFIED image to USB disk with
+        //    serial-whitelist safety
         // 6. Initramfs injects cloud-init from companion router HTTP
-        // 7. Initramfs reboots
+        // 7. Write-complete handshake: the initramfs reports the
+        //    verified write (digest match, disk synced) BEFORE rebooting
+        // 8. Disarm recovery, then reboot:
+        //    - success → `disarm_recovery()` tears down DHCP/TFTP/HTTP
+        //      and the manifest, so the reboot lands on the new USB
+        //      system instead of re-netbooting the self-flash initramfs
+        //      (an armed loop would rewrite the disk on every boot);
+        //      only THEN is the flash a Success
+        //    - error → disarm too: an unauthenticated recovery service
+        //      must not stay armed on a failed target
 
-        // We just wait and poll:
+        // Success requires the write-complete handshake, not merely
+        // "any system is online". Recovery is disarmed on BOTH paths —
+        // success (avoid the rewrite loop) and error (never leave the
+        // unauthenticated recovery service armed on a failed target):
+        let verified = self.wait_for_verified_write(ctx).await;
+        self.infra.disarm_recovery().await?;
+        verified?;
         self.wait_for_target_online(ctx).await?;
         Ok(FlashResult::Success)
     }
