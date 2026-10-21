@@ -167,8 +167,25 @@ name = "conwrt-agent-proto"
 version = "0.1.0"
 dependencies = [
  "cobs 0.4.0",
+ "conwrt-probe-core",
  "postcard",
  "postcard-rpc",
+ "serde",
+]
+
+[[package]]
+name = "conwrt-executor"
+version = "0.1.0"
+dependencies = [
+ "conwrt-agent-proto",
+ "embassy-net",
+ "embedded-io-async 0.7.0",
+]
+
+[[package]]
+name = "conwrt-probe-core"
+version = "0.1.0"
+dependencies = [
  "serde",
 ]
 
@@ -178,6 +195,7 @@ version = "0.1.0"
 dependencies = [
  "conwrt-agent-io",
  "conwrt-agent-proto",
+ "conwrt-executor",
  "cortex-m",
  "cortex-m-rt",
  "defmt",

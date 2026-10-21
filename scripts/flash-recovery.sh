@@ -5,8 +5,13 @@
 #
 # For a model whose recovery method is HTTP-based (uboot-http / recovery-http,
 # e.g. GL.iNet, D-Link, COMFAST), it briefly takes over the recovery subnet on
-# the wired NIC to VERIFY the bootloader web server is up, then hands off to
-# `conwrt flash`. Models without an HTTP recovery address (serial/TFTP/zycast)
+# the wired NIC to verify the bootloader recovery server is ARMED, then hands
+# off to `conwrt flash`. Arming is detected from the ARP layer only: the
+# one-request recovery-server class (D-Link COVR x1860 et al.) serves exactly
+# ONE HTTP request, so any GET probe burns the arming window and costs a power
+# cycle (docs/DLINK-RECOVERY-FLASH-RUNBOOK.md §2 rule 1). FORCE_HTTP_PROBE=1
+# restores the legacy GET probe for multi-request recovery server classes
+# (GL.iNet). Models without an HTTP recovery address (serial/TFTP/zycast)
 # skip the probe and go straight to conwrt.
 #
 # It caches sudo and keeps it alive (post-flash provisioning shells out to
@@ -16,13 +21,28 @@
 #   scripts/flash-recovery.sh [MODEL] [INTERFACE]
 #   MODEL=glinet-mt3000 IFACE=enp0s31f6 scripts/flash-recovery.sh
 #   FORCE_UBOOT=1 scripts/flash-recovery.sh glinet-mt3000   # force U-Boot path
-#   DRY_RUN=1 scripts/flash-recovery.sh glinet-mt3000       # probe only
+#   DRY_RUN=1 scripts/flash-recovery.sh glinet-mt3000       # probe only, never GETs
+#   FORCE_HTTP_PROBE=1 scripts/flash-recovery.sh glinet-mt3000  # legacy GET probe
+#                                                             # (multi-request
+#                                                             # recovery servers)
+#   ASSUME_YES=1 scripts/flash-recovery.sh glinet-mt3000    # non-interactive:
+#                                                             # auto-continue at
+#                                                             # the "not armed"
+#                                                             # prompt (bench panes)
+#   ARP_ATTEMPTS=15 scripts/flash-recovery.sh glinet-mt3000 # ARP poll rounds
+#                                                             # (default 5; a
+#                                                             # round can take
+#                                                             # up to ~10s while
+#                                                             # ARP is unanswered)
 #
 set -euo pipefail
 
 MODEL="${1:-${MODEL:-}}"
 IFACE="${2:-${IFACE:-}}"
 FORCE_UBOOT="${FORCE_UBOOT:-0}"
+FORCE_HTTP_PROBE="${FORCE_HTTP_PROBE:-0}"
+ASSUME_YES="${ASSUME_YES:-0}"
+ARP_ATTEMPTS="${ARP_ATTEMPTS:-5}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 info() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -53,7 +73,9 @@ try:
     from flash.device_profile import build_profile_from_model as b
     p = b(sys.argv[1])
     print(getattr(p, "recovery_ip", "") or "", getattr(p, "client_ip", "") or "")
-except Exception:
+except Exception as e:  # noqa: BLE001 — empty result is handled by the caller
+    # Loud on stderr so a model/schema drift cannot silently skip the probe.
+    print(f"model_recovery: lookup failed for {sys.argv[1]}: {e}", file=sys.stderr)
     print("", "")
 ' "$1"
 }
@@ -79,12 +101,20 @@ CLIENT_IP=""
 if [[ -n "$MODEL" ]]; then
   read -r RECOVERY_IP CLIENT_IP < <(model_recovery "$MODEL")
 fi
+if [[ -n "$MODEL" && -z "$RECOVERY_IP" ]]; then
+  # Serial/TFTP-only models legitimately have none — but so does a broken
+  # model lookup (see model_recovery stderr). Either way say it out loud:
+  # a silent probe skip would hand off to conwrt blind.
+  warn "Model '$MODEL' exposes no recovery_ip — no arming detection will run."
+fi
 
 # ---------------------------------------------------------------------------
 # sudo + cleanup trap
 # ---------------------------------------------------------------------------
 info "Requesting sudo (needed to configure $IFACE for recovery)…"
-sudo -v || die "sudo failed or was cancelled."
+# Non-interactive validate first so tty-less bench panes work when sudo is
+# passwordless or cached; fall back to the interactive prompt otherwise.
+sudo -n true 2>/dev/null || sudo -v || die "sudo failed or was cancelled."
 
 net_down() {
   [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]] || return 0
@@ -106,32 +136,79 @@ trap cleanup EXIT INT TERM
 SUDO_KEEPALIVE=$!
 
 # ---------------------------------------------------------------------------
-# Optional HTTP recovery probe (only when the model exposes a recovery IP)
+# Recovery arming detection — ARP-only by default
 # ---------------------------------------------------------------------------
+# One-request recovery servers (D-Link COVR x1860 class) serve exactly ONE
+# HTTP request; a GET probe burns the arming window and costs a power cycle
+# (docs/DLINK-RECOVERY-FLASH-RUNBOOK.md §2 rule 1). Arming is therefore
+# detected at the ARP layer: solicit the recovery IP with an ICMP ping (the
+# recovery stack answers ARP, never ICMP) and read the neighbor entry —
+# REACHABLE/STALE/DELAY/PROBE with a MAC present means the U-Boot stack is
+# live and would serve its one request. FORCE_HTTP_PROBE=1 restores the
+# legacy GET probe for multi-request server classes (GL.iNet); DRY_RUN=1
+# never issues an HTTP request in either mode.
 if [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]]; then
   LINK_STATE="$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null || echo unknown)"
   info "Wired link '$IFACE' state: $LINK_STATE"
   [[ "$LINK_STATE" == "up" || "$LINK_STATE" == "unknown" ]] \
     || warn "No carrier on $IFACE — check the ethernet cable."
 
-  info "Probing recovery web server at http://$RECOVERY_IP/ …"
   sudo ip link set "$IFACE" up
   sudo ip addr add "$CLIENT_IP/24" dev "$IFACE" 2>/dev/null || true
   sudo ip route replace "$RECOVERY_IP/32" dev "$IFACE"
-  PAGE="$(curl -s --max-time 5 "http://$RECOVERY_IP/" || true)"
+
+  ARMED=0
+  ARM_EVIDENCE=""
+  if [[ "$FORCE_HTTP_PROBE" == "1" && "${DRY_RUN:-0}" != "1" ]]; then
+    info "FORCE_HTTP_PROBE=1 — GETting recovery web server at http://$RECOVERY_IP/ …"
+    PAGE="$(curl -s --max-time 5 "http://$RECOVERY_IP/" || true)"
+    if [[ -n "$PAGE" ]]; then
+      ARMED=1
+      ARM_EVIDENCE="HTTP response"
+    fi
+  else
+    command -v ping >/dev/null \
+      || die "ping not found (needed to solicit ARP for the recovery probe)."
+    # Drop any stale neighbor entry first, so the verdict below can only come
+    # from ARP resolved during THIS probe — not a leftover from an earlier
+    # session against stock firmware on the same address.
+    sudo ip neigh del "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true
+    info "Waiting for ARP from $RECOVERY_IP (armed = it answers ARP)…"
+    # A non-numeric ARP_ATTEMPTS makes seq emit nothing — the loop would run
+    # zero rounds and silently collapse the wait window. Clamp, loudly.
+    if ! [[ "$ARP_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+      warn "ARP_ATTEMPTS='$ARP_ATTEMPTS' is not a positive integer — using 5."
+      ARP_ATTEMPTS=5
+    fi
+    for _ in $(seq 1 "$ARP_ATTEMPTS"); do
+      ping -c 1 -W 1 "$RECOVERY_IP" >/dev/null 2>&1 || true
+      NEIGH="$(ip neigh show "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true)"
+      # MAC present + live-ish state (not INCOMPLETE/FAILED/absent) = armed.
+      if [[ "$NEIGH" =~ lladdr[[:space:]]+([0-9a-fA-F:]{17})[[:space:]]+(REACHABLE|STALE|DELAY|PROBE) ]]; then
+        ARMED=1
+        ARM_EVIDENCE="ARP ${BASH_REMATCH[2]} ${BASH_REMATCH[1]}"
+        break
+      fi
+      sleep 1
+    done
+  fi
   # Remove the temporary config so conwrt's stale-IP pre-flight stays clean;
   # conwrt re-adds it itself right before detecting boot state.
   net_down
 
-  if [[ -n "$PAGE" ]]; then
-    info "Recovery web server responded."
+  if [[ "$ARMED" == "1" ]]; then
+    info "Recovery server armed ($ARM_EVIDENCE)."
   else
-    warn "No response from $RECOVERY_IP."
+    warn "No ARP response from $RECOVERY_IP (no HTTP response in FORCE_HTTP_PROBE mode)."
     warn "The device may not be in recovery mode. Enter it (see the model's"
     warn "reset instructions), then retry."
-    read -r -p "Continue anyway and let conwrt guide the power cycle? [y/N] " ans || ans=""
-    if [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]]; then
-      die "Aborted — nothing was flashed."
+    if [[ "$ASSUME_YES" == "1" ]]; then
+      warn "ASSUME_YES=1 — continuing without asking."
+    else
+      read -r -p "Continue anyway and let conwrt guide the power cycle? [y/N] " ans || ans=""
+      if [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]]; then
+        die "Aborted — nothing was flashed."
+      fi
     fi
   fi
 fi

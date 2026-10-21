@@ -215,6 +215,16 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
 
     if use_sysupgrade:
         return "sysupgrade"
+    if getattr(profile, "flash_method", "") == "netboot-rescue":
+        # #266: netboot-rescue has no unattended state machine — falling
+        # through to uboot made `conwrt flash` wait on a recovery HTTP server
+        # that never comes. Refuse with the operator-driven workflow instead.
+        raise ValueError(
+            f"'{getattr(profile, 'name', 'model')}' recovers via netboot-rescue, "
+            "which is operator-driven, not an unattended flash mode: arm the "
+            "rescue server with scripts/pi_netboot.py (arm --tree ... --mac ...), "
+            "power-cycle the Pi, then deploy/provision — see "
+            "recipes/raspberry-pi/netboot-rescue.md")
     if is_edgeos_ks:
         return "edgeos"
     if is_extreme_rdwr_tftp:
@@ -224,6 +234,23 @@ def _resolve_flash_mode(profile: object, boot_state: str, args: argparse.Namespa
     if is_zycast:
         return "zycast"
     return "uboot"
+
+
+def _resolve_flash_mode_or_refuse(profile: object, boot_state: str,
+                                  args: argparse.Namespace,
+                                  use_sysupgrade: bool) -> str:
+    """_resolve_flash_mode with refusals surfaced as an operator error.
+
+    Review of #294: the netboot-rescue ValueError is raised past cmd_flash's
+    earlier ValueError handling and the CLI entry does not catch — without
+    this the refusal reaches the operator as a traceback. Returns "" when
+    refusing.
+    """
+    try:
+        return _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return ""
 
 
 def _resolve_initial_state(mode: str, profile: object, boot_state: str,
@@ -531,6 +558,68 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
 _wait_for_event_or_timeout = wait_for_event
 
 
+def _build_profile_or_first_method(model_id: str, serial_method: str = "",
+                                   flash_method: str = "",
+                                   ) -> tuple[object, Optional[str], bool]:
+    """Build a profile, falling back to the model's first method when the
+    model has no unattended default (#382).
+
+    A model whose only methods are operator-driven (the Pi's netboot-rescue)
+    raises on default selection — but an OpenWrt-running unit still deserves
+    the plain `conwrt flash` sysupgrade path. Build with the first declared
+    method so boot-state detection and `_resolve_flash_mode_or_refuse` can
+    route (sysupgrade when openwrt; clean refusal otherwise). Returns
+    (profile, None, used_fallback) or (None, error_text, False).
+    """
+    try:
+        return _build_profile_from_model(
+            model_id, serial_method=serial_method,
+            flash_method=flash_method), None, False
+    except FileNotFoundError as e:
+        return None, str(e), False
+    except ValueError:
+        methods = load_model(model_id).get("flash_methods", {}) or {}
+        first = next(iter(methods), None)
+        if not first:
+            return None, f"Model '{model_id}' declares no flash methods.", False
+        return _build_profile_from_model(
+            model_id, serial_method=serial_method,
+            flash_method=first), None, True
+
+
+def _verify_fallback_specimen(args: argparse.Namespace, fp: Optional[dict],
+                              openwrt_ip: str) -> tuple[bool, str]:
+    """Specimen gate for the fallback-enabled sysupgrade route (#388 review P1).
+
+    The first-method fallback opened a DESTRUCTIVE route onto whatever unit
+    answers at the model's default IP — the --ip model check does not run on
+    a plain invocation and checks the model, not the unit. AGENTS.md
+    "Verify the SPECIMEN, Not Just the Model": require an explicit
+    --expect-mac and match it against the live fingerprint's br-lan MAC.
+    Returns (ok, detail); ok=False ⇒ cmd_flash refuses.
+    """
+    want = (getattr(args, "expect_mac", "") or "").strip().lower()
+    live = ""
+    if fp:
+        live = ((fp.get("network", {}) or {}).get("macs", {}) or {}
+                ).get("br-lan", "").strip().lower()
+    if not want:
+        return False, (
+            "--expect-mac is required for the sysupgrade route this model "
+            "reached via its first-method fallback (AGENTS.md: verify the "
+            "SPECIMEN, not just the model) — name the exact unit's MAC "
+            "(fingerprint or label)")
+    if not live:
+        return False, (
+            f"cannot verify specimen {want}: no live br-lan MAC readable at "
+            f"{openwrt_ip} — refusing (AGENTS.md specimen rule)")
+    if live != want:
+        return False, (
+            f"specimen mismatch at {openwrt_ip}: expected {want}, found "
+            f"{live} — wrong Pi, STOP (AGENTS.md specimen rule)")
+    return True, f"specimen: {live}"
+
+
 def cmd_flash(args: argparse.Namespace) -> int:
     parser = _build_parser()
     validation_error = _validate_args(args)
@@ -586,12 +675,12 @@ def cmd_flash(args: argparse.Namespace) -> int:
             parser.error("--model-id is required when device is not reachable via SSH "
                          "and active fingerprinting did not identify the model.")
 
-    try:
-        profile = _build_profile_from_model(args.model_id,
-                                             serial_method=args.serial_method or "",
-                                             flash_method=getattr(args, 'flash_method', '') or "")
-    except (FileNotFoundError, ValueError) as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    profile, profile_err, used_fallback = _build_profile_or_first_method(
+        args.model_id,
+        serial_method=args.serial_method or "",
+        flash_method=getattr(args, 'flash_method', '') or "")
+    if profile_err is not None:
+        print(f"ERROR: {profile_err}", file=sys.stderr)
         return 1
 
     is_serial_tftp = getattr(profile, 'is_serial_tftp', False)
@@ -832,6 +921,16 @@ def cmd_flash(args: argparse.Namespace) -> int:
     # about to sysupgrade whatever device answers there — verify its board
     # identity (board.json + /tmp/sysinfo/board_name) matches the selected
     # model first, and abort on any mismatch or unreadable identity.
+    if use_sysupgrade and used_fallback:
+        # #388 review P1: the first-method fallback opened the plain-
+        # invocation sysupgrade route — gate it on specimen identity, not
+        # just model (AGENTS.md: Verify the SPECIMEN, Not Just the Model).
+        ok, detail = _verify_fallback_specimen(args, fp, openwrt_ip)
+        if not ok:
+            print(f"ERROR: {detail}", file=sys.stderr)
+            return 1
+        log(f"  ✓ {detail}")
+
     if use_sysupgrade and getattr(args, "ip", None):
         ok, detail = _verify_device_identity(openwrt_ip, args.model_id,
                                              ssh_key_path or None)
@@ -844,7 +943,13 @@ def cmd_flash(args: argparse.Namespace) -> int:
             return 1
         log(f"  ✓ identity: {detail}")
 
-    mode = _resolve_flash_mode(profile, boot_state, args, use_sysupgrade)
+    # Review of #294: the refusal must reach the operator as an error, not
+    # as a traceback — this call site is past cmd_flash's earlier ValueError
+    # handling and the CLI entry does not catch.
+    mode = _resolve_flash_mode_or_refuse(profile, boot_state, args,
+                                         use_sysupgrade)
+    if not mode:
+        return 1
     config = FLASH_MODES[mode]
 
     # Bring up the recovery interface (client alias + /32 host route) BEFORE

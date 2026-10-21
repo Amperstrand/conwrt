@@ -161,6 +161,16 @@ class TestLoadConfigToml:
         cfg = load_config(p)
         assert cfg.wan_ssh is True
 
+    def test_tofb(self, tmp_path):
+        p = self._write(tmp_path, "[network]\ntofb = true")
+        cfg = load_config(p)
+        assert cfg.tofb is True
+
+    def test_tofb_default_off(self, tmp_path):
+        p = self._write(tmp_path, "[network]\nwan_ssh = true")
+        cfg = load_config(p)
+        assert cfg.tofb is False
+
     def test_extra_packages(self, tmp_path):
         p = self._write(tmp_path, '[asu]\nextra_packages = ["luci", "vim"]')
         cfg = load_config(p)

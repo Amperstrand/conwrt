@@ -142,10 +142,25 @@ async fn echo_connection(socket: TcpStream, agent_version: &str) -> io::Result<(
         agent_version,
         serial_caps(1),
         Box::new(EchoSink { echo_tx }),
-    );
+    )
+    // #215 slice 5: the echo path doubles as the detect HIL vehicle —
+    // controller DetectStart arms the tracker, echoed writes feed it
+    // RX bytes, latched milestones flow back as DetectFinding events.
+    // Unarmed until DetectStart, so existing echo behavior is
+    // unchanged.
+    .attach_detect(0);
     server.reset_session();
+    // Lease clock (#380): heartbeat expiry must be exercisable over
+    // this transport too — one tick per heartbeat interval.
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            _ = tick.tick() => {
+                for event in server.tick() {
+                    sender.send(&frame_bytes_of(&WireFrame::Event(event))?).await?;
+                }
+            }
             frame_bytes = receiver.receive(&mut rx) => {
                 let Some(frame_bytes) = frame_bytes? else {
                     return Ok(());

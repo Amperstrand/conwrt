@@ -213,6 +213,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     cfg = _load_config()
     password: Optional[str] = args.password
     wan_ssh: bool = args.wan_ssh or cfg.wan_ssh
+    tofb: bool = args.tofb or cfg.tofb
 
     if not ssh_key_path:
         if cfg.ssh_public_key_path:
@@ -254,6 +255,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         ssh_key_path=ssh_key_path,
         password=password,
         wan_ssh=wan_ssh,
+        tofb=tofb,
         extra_pub_keys=extra_pub_keys,
         disable_dhcp=cfg.disable_lan_dhcp,
     )
@@ -750,6 +752,10 @@ def main() -> int:
     p_request.add_argument(
         "--wan-ssh", action="store_true",
         help="Open SSH on WAN (requires --ssh-key, forces key-only auth)",
+    )
+    p_request.add_argument(
+        "--tofb", action="store_true",
+        help="Bake the TOFB first-boot enrollment service into the image (#228, ADR-0013)",
     )
     p_request.add_argument(
         "--dry-run", action="store_true",

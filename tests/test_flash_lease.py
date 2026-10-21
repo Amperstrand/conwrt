@@ -72,13 +72,24 @@ class TestProtectedPlaces:
         monkeypatch.setattr(venues, "LAB_YAML", lab)
         assert venues.default_protected_places() == {"ap-lan4"}
 
-    def test_absent_registry_is_empty(self, tmp_path, monkeypatch):
+    def test_absent_registry_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CONWRT_LAB", raising=False)
         monkeypatch.setattr(venues, "LAB_YAML", tmp_path / "nope.yaml")
-        assert venues.default_protected_places() == set()
+        with pytest.raises(RuntimeError, match="no lab registry"):
+            venues.default_protected_places()
+
+
+@pytest.fixture
+def empty_registry(tmp_path, monkeypatch):
+    """A readable registry protecting nothing (fail-closed needs one)."""
+    monkeypatch.delenv("CONWRT_LAB", raising=False)
+    lab = tmp_path / "lab.yaml"
+    lab.write_text("places: []\n")
+    monkeypatch.setattr(venues, "LAB_YAML", lab)
 
 
 class TestFlashLease:
-    def test_reserve_acquire_release_sequence(self):
+    def test_reserve_acquire_release_sequence(self, empty_registry):
         runner = FakeRunner()
         with flash_lease(
             "x1860-1", session="ses1", story="sysupgrade", runner=runner
@@ -94,7 +105,7 @@ class TestFlashLease:
             ]
         assert runner.calls[-1] == ["-p", "x1860-1", "release"]
 
-    def test_release_runs_on_body_exception(self):
+    def test_release_runs_on_body_exception(self, empty_registry):
         runner = FakeRunner()
         with pytest.raises(RuntimeError, match="boom"), \
                 flash_lease("ap-lan4", session="s", story="t", runner=runner):
@@ -111,7 +122,7 @@ class TestFlashLease:
             pass
         assert runner.calls == []
 
-    def test_dry_mode_never_contacts_coordinator(self):
+    def test_dry_mode_never_contacts_coordinator(self, empty_registry):
         runner = FakeRunner()
         with flash_lease(
             "x1860-1", session="s", story="t", runner=runner,
@@ -121,14 +132,14 @@ class TestFlashLease:
             assert lease.reservation == "conwrt-s-t"
         assert runner.calls == []
 
-    def test_reserve_failure_never_yields(self):
+    def test_reserve_failure_never_yields(self, empty_registry):
         runner = FakeRunner(failures={"reserve": "place is already reserved"})
         with pytest.raises(RuntimeError, match="cancel-reservation"), \
                 flash_lease("x1860-1", session="s", story="t", runner=runner):
             pass
         assert len(runner.calls) == 1  # no acquire, no release after failed reserve
 
-    def test_acquire_failure_cancels_reservation(self):
+    def test_acquire_failure_cancels_reservation(self, empty_registry):
         runner = FakeRunner(failures={"acquire": "place acquired by sibling"})
         with pytest.raises(RuntimeError, match="canceled"), \
                 flash_lease("x1860-1", session="s", story="t", runner=runner):
@@ -136,7 +147,7 @@ class TestFlashLease:
         assert runner.calls[-1] == ["cancel-reservation", "conwrt-s-t"]
         assert ["-p", "x1860-1", "release"] not in runner.calls
 
-    def test_unsafe_tokens_sanitized_in_reservation_name(self):
+    def test_unsafe_tokens_sanitized_in_reservation_name(self, empty_registry):
         runner = FakeRunner()
         with flash_lease(
             "x1860-1", session="my session/2026", story="flash: [keep]",

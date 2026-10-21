@@ -256,7 +256,10 @@ def test_default_mode_is_mac_hash() -> None:
 
 
 def test_asu_defaults_step_exit_isolation(tmp_path) -> None:
-    """A step's early `exit` must not skip later steps in the ASU defaults file."""
+    """A step's early `exit 0` must not skip later steps in the ASU defaults
+    file. Steps must run with a stubbed uci on PATH: with real `|| exit 1`
+    failure propagation (#229), a missing binary would abort the file for
+    the wrong reason."""
     cfg = ConwrtConfig(
         wifi_sta=WifiSTAConfig(band="5ghz", ssid="up", encryption="psk2", key="k"),
         use_cases=[UseCaseConfig(name="nodns")],
@@ -264,6 +267,10 @@ def test_asu_defaults_step_exit_isolation(tmp_path) -> None:
     plan = build_plan(cfg, mode="asu_build")
     script = plan.asu_defaults_script()
 
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    (stub_dir / "uci").write_text("#!/bin/sh\nexit 0\n")
+    (stub_dir / "uci").chmod(0o755)
     marker_file = tmp_path / "done"
     # Execute the real joined script with the marker appended; the wifi_sta
     # block ends in `exit 0` on band match — later blocks must still run.
@@ -272,9 +279,35 @@ def test_asu_defaults_step_exit_isolation(tmp_path) -> None:
     result = subprocess.run(
         ["sh", "-c", f"{script}\n\n{sentinel}"],
         capture_output=True, text=True, timeout=30,
-        env={"PATH": "/usr/bin:/bin", "src": "", "i": "0"},
+        env={"PATH": f"{stub_dir}:/usr/bin:/bin", "src": "", "i": "0"},
     )
     assert marker_file.exists(), f"later steps skipped: {result.stderr[-400:]}"
+
+
+def test_asu_defaults_failure_aborts_file(tmp_path) -> None:
+    """#229: a failing step must make the whole defaults file exit non-zero.
+    uci_apply_defaults deletes only scripts that exit 0, so failing fast
+    keeps the file for retry next boot instead of consuming a half-applied
+    first boot (the recovery-flash SSH lockout)."""
+    import subprocess
+    cfg = ConwrtConfig()
+    plan = build_plan(cfg, mode="asu_build")
+    from profile.plan import ProfileStep
+    plan.steps.insert(
+        0, ProfileStep(kind=StepKind.USE_CASE, label="boom", firstboot_script="false")
+    )
+    script = plan.asu_defaults_script()
+    assert "(\nfalse\n) || exit 1" in script
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    (stub_dir / "uci").write_text("#!/bin/sh\nexit 0\n")
+    (stub_dir / "uci").chmod(0o755)
+    result = subprocess.run(
+        ["sh", "-c", script],
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": f"{stub_dir}:/usr/bin:/bin", "src": "", "i": "0"},
+    )
+    assert result.returncode != 0
 
 
 def test_wifi_sta_firstboot_expands_radio_variable() -> None:
@@ -290,3 +323,45 @@ def test_wifi_sta_firstboot_expands_radio_variable() -> None:
     assert 'device="$_r"' in script
     assert "exit 0" not in script, "early exit would skip later ASU default steps"
     assert "break" in script
+
+
+# --- TOFB opt-in image flag (#228 / ADR-0013, follow-up to PR #236) -------
+
+def test_build_plan_tofb_step_present() -> None:
+    plan = build_plan(ConwrtConfig(), mode="asu_build", tofb=True)
+    steps = [s for s in plan.steps if s.kind == StepKind.TOFB]
+    assert len(steps) == 1
+    step = steps[0]
+    assert step.include_in_asu is True
+    # Image-only feature: no SSH/post-install side (scripts/tofb.py is the
+    # operator side against a running unit).
+    assert step.include_in_post_install is False
+    assert step.configure_script == ""
+
+
+def test_build_plan_tofb_default_absent() -> None:
+    # Opt-in only: default builds must not change the ASU payload at all.
+    plan = build_plan(ConwrtConfig(), mode="asu_build")
+    assert not any(s.kind == StepKind.TOFB for s in plan.steps)
+    assert "tofb" not in plan.asu_defaults_script().lower()
+
+
+def test_build_plan_tofb_step_is_last_for_retention() -> None:
+    # uci_apply_defaults deletes the defaults file based on the LAST
+    # command's status, so the TOFB step must close the file: a failed
+    # install then retains every step for next-boot retry (#229/#235).
+    cfg = ConwrtConfig(lan_ip_mode="mac-hash")
+    plan = build_plan(cfg, mode="asu_build", tofb=True, model_id="asus-lyra-map-ac2200")
+    assert plan.steps[-1].kind == StepKind.TOFB
+
+
+def test_build_plan_tofb_fragment_in_defaults_script() -> None:
+    plan = build_plan(ConwrtConfig(), mode="asu_build", tofb=True)
+    defaults = plan.asu_defaults_script()
+    assert "sha256sum /etc/conwrt/tofb-device.sh" in defaults
+    assert "/etc/init.d/tofb enable || exit 1" in defaults
+    # Standard subshell isolation like every other step, and last block.
+    # (#229: every block carries a `) || exit 1` failure-propagation tail,
+    # so assert on the last BLOCK's content, not the literal suffix.)
+    last_block = defaults.rstrip().rsplit("\n(", 1)[-1]
+    assert "/etc/init.d/tofb enabled" in last_block

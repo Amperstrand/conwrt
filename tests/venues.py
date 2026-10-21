@@ -69,21 +69,40 @@ def default_place_list() -> str:
     return result.stdout
 
 
-def default_protected_places() -> set[str]:
-    """Places marked protected in data/lab.yaml (the lab SSOT).
+def lab_registry_path() -> Path:
+    """The lab registry the documented way: the private ``CONWRT_LAB``
+    checkout's lab.yaml, falling back to the repo-local data/lab.yaml."""
+    lab_env = os.environ.get("CONWRT_LAB")
+    if lab_env:
+        candidate = Path(lab_env) / "lab.yaml"
+        if candidate.exists():
+            return candidate
+    return LAB_YAML
 
-    Both registry shapes count: the legacy ``places:`` list and the
-    canonical ``devices:`` mapping (a device entry with ``protected: true``
-    protects its ``labgrid_place``, or its own id when no place is named).
-    Returns an empty set when the registry is absent — places are GENERATED
-    from the registry, so a coordinator place implies registry membership;
-    the protection flag is what the registry adds.
+
+def default_protected_places() -> set[str]:
+    """Places marked protected in the lab registry (the lab SSOT).
+
+    The registry resolves the documented way: the private ``CONWRT_LAB``
+    checkout's lab.yaml first, then the repo-local data/lab.yaml. Both
+    registry shapes count: the legacy ``places:`` list and the canonical
+    ``devices:`` mapping (a device entry with ``protected: true`` protects
+    its ``labgrid_place``, or its own id when no place is named).
+
+    FAILS CLOSED when no registry can be read: unresolvable protection
+    data is not "nothing is protected" (set CONWRT_LAB, add a
+    data/lab.yaml, or pass CONWRT_VENUE_ALLOW_PROTECTED to override).
     """
-    if not LAB_YAML.exists():
-        return set()
     import yaml
 
-    data = yaml.safe_load(LAB_YAML.read_text()) or {}
+    registry = lab_registry_path()
+    if not registry.exists():
+        raise RuntimeError(
+            "no lab registry found (CONWRT_LAB/lab.yaml or data/lab.yaml) — "
+            "cannot resolve protected places; refusing to run unprotected "
+            "(set CONWRT_LAB, or CONWRT_VENUE_ALLOW_PROTECTED to override)"
+        )
+    data = yaml.safe_load(registry.read_text()) or {}
     protected: set[str] = set()
     for place in data.get("places", []) or []:
         name = place.get("name", "") if isinstance(place, dict) else ""
@@ -112,9 +131,11 @@ def venues_from_env(
 
     venues: list[Venue] = []
     needs_places = False
+    saw_token = False
     for token in (t.strip() for t in raw.split(",")):
         if not token:
             continue
+        saw_token = True
         if token == "qemu-session":
             venues.append(Venue("qemu-session", "qemu-session"))
             continue
@@ -133,6 +154,12 @@ def venues_from_env(
             needs_places = True
         venues.append(Venue(token, kind))
 
+    if not saw_token:
+        raise ValueError(
+            f"CONWRT_VENUES={raw!r} contains no venue — a separator-only "
+            "value would run an empty suite (use qemu-session or "
+            "labgrid:<place>/direct:<name> entries)"
+        )
     if needs_places:
         known = {
             line.split()[0]

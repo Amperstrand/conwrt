@@ -47,6 +47,7 @@ use conwrt_agent_io::{EventSource, agent_session_stream_events};
 use conwrt_agent_proto::dispatch::WireError;
 use conwrt_agent_proto::protocol::CapabilityInfo;
 use conwrt_agent_proto::server::{ServerCore, UartSink};
+use conwrt_executor::ExecutorTransfer;
 
 bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler;
@@ -69,6 +70,10 @@ const AGENT_PORT: u16 = 8400;
 
 /// Router console: OpenWrt GS1900 console default.
 const UART_BAUD: u32 = 115_200;
+
+/// Executor transfer window (undrained bytes) — the #226 firmware
+/// profile; heap-allocated at first chunk, so no static footprint.
+const EXECUTOR_WINDOW: usize = 8 * 1024;
 
 /// Heap size for the [`HEAP`] allocator (protocol Vec allocations), in
 /// internal SRAM — the DISCO's SDRAM (FMC) stays untouched.
@@ -98,7 +103,8 @@ async fn main(spawner: Spawner) {
     }
 
     let p: Peripherals = embassy_stm32::init(agent_clock_config());
-    defmt::info!("conwrt-stm32f746 agent up");
+    let uid = embassy_stm32::uid::uid_hex();
+    defmt::info!("conwrt-stm32f746 agent up (uid={})", uid);
 
     let uart = BufferedUart::new(
         p.USART6,
@@ -137,15 +143,28 @@ async fn main(spawner: Spawner) {
         device,
         config,
         NET_RESOURCES.uninit().write(StackResources::new()),
+        // embassy net seed spells 846-F746-02 (the SoC) — grouping kept
+        // intentionally; not a size/addr literal (#298)
+        #[allow(clippy::unusual_byte_groupings)]
         0x846_f746_02,
     );
     spawner.spawn(net_task(runner).expect("spawn net"));
 
     let server = ServerCore::with_uart(
-        "conwrt-stm32f746 0.2.0",
+        "conwrt-stm32f746 0.4.0",
         capabilities(),
         Box::new(Usart6Sink { tx: uart_tx }),
-    );
+    )
+    // #226 slice 3: StreamChunk/StreamStatus land in the executor's
+    // bounded window (the recovery POST pump is a later, bench-gated
+    // slice — this wiring makes the stream endpoints live).
+    .attach_transfer(Box::new(ExecutorTransfer::new(EXECUTOR_WINDOW)))
+    // #215 slice 5: standalone detect mode — the router console RX
+    // (already feeding UartData events) runs through the shared
+    // probe-core milestone tracker; a controller arms it with
+    // DetectStart and harvests DetectFinding events (mock-first in
+    // conwrt-agent-proto's HIL suite; bench validation NEEDS-BENCH).
+    .attach_detect(0);
     spawner.spawn(uart_task(uart_rx, CONSOLE_CH.sender()).expect("spawn uart"));
     spawner.spawn(
         agent_task(stack, server, ConsoleSource(CONSOLE_CH.receiver())).expect("spawn agent"),
@@ -250,35 +269,73 @@ fn uart_config() -> UartConfig {
 }
 
 fn capabilities() -> Vec<CapabilityInfo> {
+    // Per-unit identity from the MCU's 96-bit device ID (the esp32s3
+    // app's per-board serial pattern): identical units on one bench
+    // stay distinguishable to controllers (#377, AGENTS.md specimen
+    // identity).
+    let uid = embassy_stm32::uid::uid_hex();
     Vec::from([
         CapabilityInfo {
             name: String::from("serial"),
             detail: Vec::from([(String::from("uarts"), String::from("1"))]),
         },
         CapabilityInfo {
+            name: String::from("executor"),
+            detail: Vec::from([
+                (String::from("window_bytes"), String::from("8192")),
+                (
+                    String::from("wire"),
+                    // the controller selects the target; the POST pump
+                    // itself is the bench-gated slice (#226)
+                    String::from("stream-only"),
+                ),
+            ]),
+        },
+        CapabilityInfo {
             name: String::from("diag"),
             detail: Vec::from([
                 (String::from("chip"), String::from("stm32f746ng")),
-                (String::from("fw"), String::from("conwrt-stm32f746 0.2.0")),
+                (String::from("fw"), String::from("conwrt-stm32f746 0.4.0")),
                 (String::from("heap_bytes"), String::from("32768")),
+                (String::from("uid"), String::from(uid)),
+            ]),
+        },
+        CapabilityInfo {
+            // #215 slice 5: standalone detect mode — boot-milestone
+            // detection on uart0 (DetectStart/DetectStatus/DetectFinding),
+            // powered by the shared conwrt-probe-core tracker.
+            name: String::from("detect"),
+            detail: Vec::from([
+                (String::from("port"), String::from("0")),
+                (
+                    String::from("milestones"),
+                    String::from(
+                        "serial_uboot_banner,serial_kernel_start,serial_procd_preinit,\
+                         serial_procd_init,serial_login_prompt",
+                    ),
+                ),
+                (String::from("core"), String::from("conwrt-probe-core")),
             ]),
         },
     ])
 }
 
-/// HSE 8 MHz crystal → PLL1: 168 MHz sysclk, 48 MHz on PLL1_Q (the same
-/// integer PLL math as the F469 BSP config; RMII ref clock is external
-/// from the LAN8742 on PA1 and needs no RCC change).
+/// The 32F746G-DISCO's 25 MHz HSE crystal → PLL1: 168 MHz sysclk,
+/// 48 MHz on PLL1_Q (25/25 = 1 MHz in, ×336 = 336 MHz VCO, /2 and /7).
+/// The F469 sibling board's 8 MHz dividers here would drive the VCO to
+/// 1.05 GHz — sysclk 525 MHz, clk48 150 MHz: out of spec, CDC dead.
+/// RMII ref clock is external from the LAN8742 on PA1 and needs no RCC
+/// change.
 fn agent_clock_config() -> ChipConfig {
     let mut config = ChipConfig::default();
     config.rcc.hse = Some(rcc::Hse {
-        freq: Hertz(8_000_000),
+        freq: Hertz(25_000_000),
         mode: rcc::HseMode::Oscillator,
     });
     config.rcc.pll_src = rcc::PllSource::HSE;
     config.rcc.pll = Some(rcc::Pll {
-        prediv: rcc::PllPreDiv::DIV4,
-        mul: rcc::PllMul::MUL168,
+        prediv: rcc::PllPreDiv::DIV25,
+        mul: rcc::PllMul::MUL336,
         divp: Some(rcc::PllPDiv::DIV2),
         divq: Some(rcc::PllQDiv::DIV7),
         divr: None,

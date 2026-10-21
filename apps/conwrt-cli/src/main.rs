@@ -266,17 +266,25 @@ enum MaasCommand {
         /// Published SHA-256 of the image (64 hex chars).
         #[arg(long)]
         sha256: String,
-        /// Target file or block device to write.
+        /// Target file or block device to write. Block-device targets
+        /// must pass the specimen gate (USB transport, unmounted,
+        /// writable, ≥30GB; serial must match --serial-whitelist when
+        /// given) before any write.
         #[arg(long)]
         target: PathBuf,
+        /// Comma-separated USB serials allowed as block-device targets
+        /// (specimen gate, AGENTS.md MAC/serial rule).
+        #[arg(long, value_delimiter = ',')]
+        serial_whitelist: Option<Vec<String>>,
         /// cloud-init user-data file (required with --meta-data).
         #[arg(long, requires = "meta_data")]
         user_data: Option<PathBuf>,
         /// cloud-init meta-data file (required with --user-data).
         #[arg(long, requires = "user_data")]
         meta_data: Option<PathBuf>,
-        /// Optional cloud-init network-config file.
-        #[arg(long)]
+        /// Optional cloud-init network-config file (requires the seed
+        /// pair --user-data/--meta-data).
+        #[arg(long, requires = "user_data")]
         network_config: Option<PathBuf>,
     },
     /// VM lifecycle over the MAAS region API.
@@ -1033,6 +1041,7 @@ fn cmd_maas(command: MaasCommand) -> ExitCode {
             user_data,
             meta_data,
             network_config,
+            serial_whitelist,
         } => cmd_maas_flash(
             &image,
             &sha256,
@@ -1040,6 +1049,7 @@ fn cmd_maas(command: MaasCommand) -> ExitCode {
             user_data,
             meta_data,
             network_config,
+            serial_whitelist,
         ),
         MaasCommand::Vm { command } => cmd_maas_vm(command),
     }
@@ -1052,6 +1062,7 @@ fn cmd_maas_flash(
     user_data: Option<PathBuf>,
     meta_data: Option<PathBuf>,
     network_config: Option<PathBuf>,
+    serial_whitelist: Option<Vec<String>>,
 ) -> ExitCode {
     use conwrt_local_std::block::FileBlockWriter;
     use conwrt_maas::flash::{CloudInitSeed, DiskFlashPlan, Sha256, execute_flash};
@@ -1071,6 +1082,31 @@ fn cmd_maas_flash(
             return ExitCode::from(2);
         }
     };
+    // #305: the documented MAAS artifact is *.img.xz — verify the
+    // ARCHIVE checksum against --sha256, then flash the DECOMPRESSED
+    // image (the Python original's xzcat flow). Writing the archive
+    // bytes verbatim leaves the disk starting with an XZ stream.
+    let published_sha = sha256;
+    const XZ_MAGIC: &[u8] = b"\xfd7zXZ\x00";
+    let (image, digest) = if image.starts_with(XZ_MAGIC) {
+        if Sha256::hash(&image) != digest {
+            eprintln!(
+                "archive checksum mismatch: refusing to decompress or write {}",
+                image_path.display()
+            );
+            return ExitCode::from(2);
+        }
+        let mut decompressed = Vec::new();
+        use std::io::Read;
+        if let Err(e) = xz2::read::XzDecoder::new(&image[..]).read_to_end(&mut decompressed) {
+            eprintln!("cannot decompress {}: {e}", image_path.display());
+            return ExitCode::from(2);
+        }
+        let decompressed_sha = Sha256::hash(&decompressed);
+        (decompressed, decompressed_sha)
+    } else {
+        (image, digest)
+    };
     let had_network_config = network_config.is_some();
     let mut plan = DiskFlashPlan::new(digest);
     if let (Some(ud_path), Some(md_path)) = (&user_data, &meta_data) {
@@ -1088,10 +1124,16 @@ fn cmd_maas_flash(
                 return ExitCode::from(2);
             }
         };
-        let network_config = network_config.map(|p| {
-            std::fs::read_to_string(&p)
-                .unwrap_or_else(|e| panic!("cannot read network-config {}: {e}", p.display()))
-        });
+        let network_config = match network_config {
+            Some(p) => match std::fs::read_to_string(&p) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("cannot read network-config {}: {e}", p.display());
+                    return ExitCode::from(2);
+                }
+            },
+            None => None,
+        };
         plan = plan.with_seed(CloudInitSeed {
             user_data,
             meta_data,
@@ -1099,17 +1141,65 @@ fn cmd_maas_flash(
         });
     }
 
-    let mut writer = FileBlockWriter::new(target);
+    // Specimen gate (AGENTS.md MAC/serial rule, #302): block-device
+    // targets need identity evidence — an explicit serial whitelist is
+    // REQUIRED (an unnamed "any USB disk" pass is a wrong-unit flash) —
+    // and the verified device is opened read+write immediately so the
+    // destructive write goes through the pinned inode, not a later
+    // re-resolution of the /dev/sdX name. Regular files (CI, lab
+    // staging) pass through.
+    let is_device = match std::fs::metadata(target) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            meta.file_type().is_block_device()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            eprintln!("cannot stat target {}: {e}", target.display());
+            return ExitCode::from(2);
+        }
+    };
+    let mut writer = if is_device {
+        let whitelist = serial_whitelist.as_deref().unwrap_or(&[]);
+        if whitelist.is_empty() {
+            eprintln!(
+                "flash refused: block-device targets require --serial-whitelist \
+                 (specimen gate, AGENTS.md serial rule)"
+            );
+            return ExitCode::from(2);
+        }
+        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => println!(
+                "verified:  {} usb serial={} {}GB rw",
+                target.display(),
+                id.serial.as_deref().unwrap_or("?"),
+                id.size_bytes.unwrap_or(0) / 1_000_000_000
+            ),
+            Err(msg) => {
+                eprintln!("flash refused: {msg}");
+                return ExitCode::from(2);
+            }
+        }
+        match FileBlockWriter::open_device(target) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("cannot pin target {}: {e}", target.display());
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        FileBlockWriter::new(target)
+    };
     match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
         Ok(report) => {
             println!("image:     {}", image_path.display());
-            println!("sha256:    {digest} (verified before write)");
+            println!("sha256:    {published_sha} (verified before write)");
             println!("target:    {}", target.display());
             println!(
                 "written:   {} bytes (read-back verified)",
                 report.bytes_written
             );
-            if report.seed_injected {
+            if report.seed_staged {
                 println!(
                     "seed:      staged at {}.seed/ (user-data, meta-data{})",
                     target.display(),
@@ -1159,8 +1249,19 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
             eprintln!("{e}");
             ExitCode::from(2)
         })?;
-        if let Ok(auth) = std::env::var("CONWRT_MAAS_AUTH") {
-            client = client.with_authorization(auth);
+        if let Ok(key) = std::env::var("CONWRT_MAAS_AUTH") {
+            client = match client.with_api_key(&key) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return Err(ExitCode::from(2));
+                }
+            };
+            // RFC 5849 §3.4.4: PLAINTEXT credentials need TLS; the
+            // opt-in exists for isolated http lab regions only.
+            if std::env::var("CONWRT_MAAS_INSECURE_HTTP").ok().as_deref() == Some("1") {
+                client = client.allow_insecure_http();
+            }
         }
         Ok(client)
     }
@@ -1322,20 +1423,56 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             resource,
             shared,
         } => {
-            let result = rt.block_on(async {
+            // #378: the lease is held for the process lifetime — a
+            // heartbeat loop keeps it alive and Ctrl-C releases it. An
+            // acquired-then-abandoned lease pins the resource until
+            // agent restart.
+            let result: Result<conwrt_agent_proto::protocol::LeaseResponse, _> =
+                rt.block_on(async {
                 let mut client = AgentClient::connect(&addr).await?;
                 client.handshake("conwrt-cli").await?;
-                client
+                let resp = client
                     .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
                         resource,
                         exclusive: !shared,
                         on_disconnect: DisconnectPolicy::Abort,
                     })
-                    .await
+                    .await?;
+                let conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                } = resp
+                else {
+                    return Ok::<_, conwrt_agent_proto::controller::ClientError>(resp);
+                };
+                println!(
+                    "lease {lease_id} granted (heartbeat every {heartbeat_ms}ms; Ctrl-C to release)"
+                );
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(
+                            heartbeat_ms.into(),
+                        )) => {
+                            client.heartbeat(lease_id).await?;
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            let released = client.release_lease(lease_id).await?;
+                            if released {
+                                println!("lease {lease_id} released");
+                            } else {
+                                eprintln!("lease {lease_id} was already gone");
+                            }
+                            break;
+                        }
+                    }
+                }
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                })
             });
             match result {
-                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { heartbeat_ms }) => {
-                    println!("granted (heartbeat every {heartbeat_ms}ms)");
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { .. }) => {
                     ExitCode::SUCCESS
                 }
                 Ok(conwrt_agent_proto::protocol::LeaseResponse::Denied { holder }) => {
@@ -1356,11 +1493,13 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             });
             match result {
                 Ok(ack) => {
+                    // Offset and state are separate fields: the old
+                    // "{contiguous}/{state} bytes" printed nonsense like
+                    // "4096/in progress bytes" (#378).
                     println!(
-                        "transfer {transfer_id}: {}/{} bytes{}",
+                        "transfer {transfer_id}: {} bytes (state: {})",
                         ack.contiguous,
                         if ack.done { "done" } else { "in progress" },
-                        if ack.done { " (done)" } else { "" }
                     );
                     ExitCode::SUCCESS
                 }

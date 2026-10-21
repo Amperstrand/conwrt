@@ -33,7 +33,7 @@ fn flash_happy_path_writes_verifies_grows_and_seeds() {
     let report = pollster::block_on(execute_flash(&plan, IMAGE, &mut writer)).unwrap();
 
     assert_eq!(report.bytes_written, IMAGE.len());
-    assert!(report.partition_grown && report.seed_injected);
+    assert!(report.partition_grown && report.seed_staged);
     assert_eq!(
         writer.calls,
         ["write_image", "read_back", "grow_partition", "write_seed"]
@@ -101,7 +101,7 @@ fn flash_without_seed_or_grow_is_minimal() {
 
     let report = pollster::block_on(execute_flash(&plan, IMAGE, &mut writer)).unwrap();
 
-    assert!(!report.partition_grown && !report.seed_injected);
+    assert!(!report.partition_grown && !report.seed_staged);
     assert_eq!(writer.calls, ["write_image", "read_back"]);
 }
 

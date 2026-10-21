@@ -58,7 +58,7 @@ async fn lease_lifecycle_against_the_mcu_brain() {
     let mut client = AgentClient::connect(&addr).await.expect("connect");
     client.handshake("laptop-hil").await.expect("handshake");
 
-    let LeaseResponse::Granted { heartbeat_ms } = client
+    let LeaseResponse::Granted { heartbeat_ms, .. } = client
         .acquire_lease(uart0_exclusive())
         .await
         .expect("grant")
@@ -272,4 +272,123 @@ async fn s3_diag_capability_is_served_mock_first() {
     let caps = client.capabilities().await.expect("capabilities");
     assert_eq!(caps[0].name, "diag");
     assert_eq!(caps[0].detail, expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn echo_mock_expires_leases_on_heartbeat_timeout() {
+    // #380: the echo mock must drive the lease clock — a lease that is
+    // granted but never heartbeated EXPIRES and reports LeaseExpired.
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        run_echo_mock_on(listener, "echo-mock 0.1.0").await;
+    });
+
+    let mut client = AgentClient::connect(&addr.to_string()).await.unwrap();
+    client.handshake("expiry-probe").await.unwrap();
+    let resp = client.acquire_lease(uart0_exclusive()).await.unwrap();
+    assert!(matches!(resp, LeaseResponse::Granted { .. }));
+
+    // Never heartbeat: the mock's 1s tick burns the budget (3) and the
+    // LeaseExpired event must arrive. The capabilities RPC doubles as
+    // the read pump (responses and unsolicited events share the wire).
+    // Paused-clock sleeps auto-advance; the wall-clock bound only
+    // guards against a broken mock, not the expiry itself.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut expired = false;
+    while std::time::Instant::now() < deadline {
+        let _ = client.capabilities().await;
+        while let Some(ev) = client.try_recv_event() {
+            if matches!(ev, AgentEvent::LeaseExpired(_)) {
+                expired = true;
+            }
+        }
+        if expired {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(expired, "lease never expired over the echo mock");
+}
+
+/// #215 slice 5 acceptance shape, mock stage: the F746 standalone
+/// detect mode. The controller arms boot-milestone detection over the
+/// wire, the (echo-backed) UART RX stream feeds the shared probe-core
+/// tracker, and latched milestones flow back as unsolicited
+/// `DetectFinding` events — the exact ServerCore loop the F746
+/// firmware runs behind TCP.
+#[tokio::test]
+async fn f746_detect_mode_flows_milestones_over_the_wire() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral");
+    let addr = listener.local_addr().expect("local addr").to_string();
+    task::spawn(async move {
+        run_echo_mock_on(listener, "detect-mock 0.1.0").await;
+    });
+
+    let mut client = AgentClient::connect(&addr).await.expect("connect");
+    client.handshake("laptop-detect").await.expect("handshake");
+    let LeaseResponse::Granted { .. } = client
+        .acquire_lease(uart0_exclusive())
+        .await
+        .expect("grant")
+    else {
+        panic!("acquire must grant");
+    };
+
+    let report = client.detect_start(0).await.expect("detect start");
+    assert!(report.findings.is_empty(), "fresh session has no findings");
+
+    // console bytes onto the wire UART -> echo -> tracker -> findings
+    client
+        .uart_write(0, b"U-Boot 2012.07.22 (Jul 19 2022)\r\n".to_vec())
+        .await
+        .expect("uart write");
+
+    // any round trip harvests queued events into the client's queue
+    let _ = client.capabilities().await.expect("capabilities");
+    let mut saw_finding = false;
+    while let Some(event) = client.try_recv_event() {
+        if let conwrt_agent_proto::dispatch::AgentEvent::DetectFinding(f) = event {
+            saw_finding = true;
+            assert_eq!(f.port, 0);
+            assert_eq!(
+                f.milestone,
+                conwrt_probe_core::milestones::BootMilestone::UbootBanner
+            );
+            assert!(f.detail.contains("U-Boot 2012"));
+        }
+    }
+    assert!(
+        saw_finding,
+        "the banner milestone must flow to the controller"
+    );
+
+    let status = client.detect_status(0).await.expect("detect status");
+    assert_eq!(status.findings.len(), 1);
+    assert_eq!(
+        status.findings[0].milestone,
+        conwrt_probe_core::milestones::BootMilestone::UbootBanner
+    );
+}
+
+#[tokio::test]
+async fn detect_on_unarmed_port_is_a_structured_agent_error() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral");
+    let addr = listener.local_addr().expect("local addr").to_string();
+    task::spawn(async move {
+        run_echo_mock_on(listener, "detect-mock 0.1.0").await;
+    });
+
+    let mut client = AgentClient::connect(&addr).await.expect("connect");
+    client.handshake("laptop-detect").await.expect("handshake");
+    match client.detect_start(9).await {
+        Err(ClientError::Agent(WireError::Internal(msg))) if msg.contains("uart9") => {}
+        other => panic!("unarmed port must be a structured Internal error, got {other:?}"),
+    }
 }

@@ -27,6 +27,7 @@ class StepKind(Enum):
     LAN_IP_MAC_HASH = "lan_ip_mac_hash"
     LAN_IP = "lan_ip"
     CELLULAR = "cellular"
+    TOFB = "tofb"
 
 
 @dataclass
@@ -87,5 +88,9 @@ class ProfilePlan:
             # file, and some step scripts use early `exit 0` (wifi band
             # match, optional-feature skip). Without the ( ) each exit
             # would skip every later step in the chain.
-            blocks.append(f"(\n{step.firstboot_script.strip()}\n)")
+            # `|| exit 1` (#229): a failed step must fail the whole file —
+            # uci_apply_defaults deletes only scripts that exit 0, so this
+            # keeps the file for retry instead of consuming a half-applied
+            # boot (e.g. key write failed but a later block succeeded).
+            blocks.append(f"(\n{step.firstboot_script.strip()}\n) || exit 1")
         return "\n\n".join(blocks).strip()

@@ -40,6 +40,13 @@ impl Sha256 {
         Self(h.finalize().into())
     }
 
+    /// Wrap a raw SHA-256 digest (providers that hash incrementally in
+    /// bounded memory via [`BlockWriter::read_back_digest`]).
+    #[must_use]
+    pub fn from_digest(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Lowercase hex form (64 chars), as used in checksums.txt artifacts.
     #[must_use]
     pub fn as_hex(&self) -> String {
@@ -197,6 +204,17 @@ pub trait BlockWriter {
     /// Read back the first `len` bytes of the written region.
     async fn read_back(&mut self, len: usize) -> Result<alloc::vec::Vec<u8>, Self::Error>;
 
+    /// Digest-based sibling of [`BlockWriter::read_back`]: SHA-256 of the
+    /// first `len` bytes of the written region, hashed incrementally.
+    /// Flash pipelines MUST prefer this over `read_back` — materializing
+    /// the whole written region next to the in-memory image doubles peak
+    /// memory for multi-GiB images. The default hashes `read_back`; real
+    /// providers override with a bounded-chunk implementation.
+    async fn read_back_digest(&mut self, len: usize) -> Result<Sha256, Self::Error> {
+        let bytes = self.read_back(len).await?;
+        Ok(Sha256::hash(&bytes))
+    }
+
     /// Grow the last partition to fill the disk (idempotent).
     async fn grow_partition(&mut self) -> Result<(), Self::Error>;
 
@@ -211,8 +229,11 @@ pub struct FlashReport {
     pub bytes_written: usize,
     /// Whether the partition was grown.
     pub partition_grown: bool,
-    /// Whether a cloud-init seed was injected.
-    pub seed_injected: bool,
+    /// Whether a cloud-init seed was STAGED next to the target
+    /// (providers stage `<target>.seed/`); assembling the FAT CIDATA
+    /// volume onto the boot partition is the lab-side step tracked in
+    /// #303 (owner-gated bench validation) — staging is NOT injection.
+    pub seed_staged: bool,
 }
 
 /// Execute `plan` against `writer` with `image` in memory.
@@ -239,11 +260,10 @@ pub async fn execute_flash<W: BlockWriter>(
         .await
         .map_err(|e| FlashError::Writer(e.to_string()))?;
 
-    let read_back = writer
-        .read_back(image.len())
+    let written = writer
+        .read_back_digest(image.len())
         .await
         .map_err(|e| FlashError::Writer(e.to_string()))?;
-    let written = Sha256::hash(&read_back);
     if written != plan.image_sha256 {
         return Err(FlashError::WrittenChecksum {
             expected: plan.image_sha256,
@@ -258,7 +278,7 @@ pub async fn execute_flash<W: BlockWriter>(
             .map_err(|e| FlashError::Writer(e.to_string()))?;
     }
 
-    let seed_injected = if let Some(seed) = &plan.seed {
+    let seed_staged = if let Some(seed) = &plan.seed {
         writer
             .write_seed(seed)
             .await
@@ -271,6 +291,6 @@ pub async fn execute_flash<W: BlockWriter>(
     Ok(FlashReport {
         bytes_written: image.len(),
         partition_grown: plan.grow_partition,
-        seed_injected,
+        seed_staged,
     })
 }

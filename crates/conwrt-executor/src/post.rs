@@ -1,0 +1,685 @@
+//! The recovery HTTP POST pump (#226 slice 1).
+//!
+//! Staged on purpose — the firmware drives it from its session loop
+//! (accept a chunk, drain into the request body, repeat), so nothing
+//! here owns an executor or a socket lifecycle:
+//!
+//! 1. [`RecoveryPost::start`] writes the request head — only after the
+//!    first chunk announced `total` (`Content-Length` is exact; U-Boot's
+//!    uIP httpd has no chunked encoding).
+//! 2. [`RecoveryPost::pump`] moves buffered window bytes into the body.
+//!    Backpressure is structural: the window is bounded, and the
+//!    controller is lock-step, so the body advances only as fast as the
+//!    agent drains.
+//! 3. [`RecoveryPost::finish`] requires the transfer complete, writes
+//!    the multipart footer, then reads the server's verdict to EOF
+//!    (U-Boot FINs after the response body).
+//!
+//! One-request contract (AGENTS.md): there is no GET/probe path in this
+//! API at all. The POST is the first and only request; once
+//! [`RecoveryPost::start`] has written, a mid-body failure is a burned
+//! recovery window (re-arm = power-cycle into recovery) — the caller's
+//! lease policy owns that fact (ADR-0004 §5 `Complete` semantics).
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::multipart::Multipart;
+use crate::transfer::TransferState;
+
+/// Async byte transport to the recovery server (AFIT per ADR-0002 —
+/// firmware monomorphizes over its embassy-net socket; host tests over
+/// tokio TCP). Connected when handed to the pump.
+#[allow(async_fn_in_trait)]
+pub trait HttpIo {
+    /// Transport error type.
+    type Error;
+
+    /// Write the whole buffer or fail.
+    ///
+    /// # Errors
+    /// Transport failure mid-body — a burned window (see module docs).
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error>;
+
+    /// Read the response body to EOF (the server FINs when done),
+    /// retaining at most [`MAX_VERDICT_BYTES`] via
+    /// [`retain_verdict_bytes`] — drain past the cap, never grow
+    /// past it (firmware heap safety after the irreversible POST).
+    ///
+    /// # Errors
+    /// Transport failure before EOF.
+    async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), Self::Error>;
+}
+
+/// Why a post did not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostError {
+    /// Transport failure while writing (`op` names the stage).
+    Write {
+        /// Stage that failed: `"head"`, `"body"` or `"footer"`.
+        op: &'static str,
+    },
+    /// Transport failure reading the verdict.
+    Read,
+    /// [`finish`] called before the transfer was complete — nothing
+    /// was committed; drain the rest first.
+    Incomplete {
+        /// Bytes received so far.
+        received: u64,
+        /// Announced total.
+        total: u64,
+    },
+    /// [`start`] called before the first chunk arrived (no `total`,
+    /// no `Content-Length`).
+    NoTotal,
+    /// The framing overhead overflows the announced image size —
+    /// refused before any wire bytes (review round 6).
+    FramingOverflow,
+    /// [`start`] called twice.
+    AlreadyStarted,
+    /// [`pump`] or [`finish`] called before [`start`] — draining the
+    /// window without a request head would put raw image bytes first
+    /// on the wire and burn the one-request window (review round 3).
+    NotStarted,
+    /// The multipart framing was built for a different image size than
+    /// the transfer announced — a `Content-Length`/body mismatch that
+    /// would desync the one-request server. Nothing was written.
+    SizeMismatch {
+        /// Size the multipart framing declares.
+        multipart: u64,
+        /// Size the transfer announced.
+        transfer: u64,
+    },
+}
+
+/// The server's verdict on a completed upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// The model's `upload_response_pattern` matched (D-Link:
+    /// "Upgrade successfully!").
+    Accepted,
+    /// The response was HTML (1.x treats any HTML reply as accepted).
+    AcceptedHtml,
+    /// Server responded, but the body matched no acceptance shape.
+    Rejected {
+        /// First bytes of the response, for logs.
+        snippet: String,
+    },
+    /// Connection closed with no response (the burned-window shape:
+    /// a one-request server that already served — or refused — its
+    /// one request).
+    NoResponse,
+}
+
+/// `"<size> <md5>"` — the GL.iNet/MediaTek U-Boot acceptance shape,
+/// recognized structurally (no regex on no_std).
+fn is_size_md5_shape(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let (Some(size), Some(md5), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !size.is_empty()
+        && size.bytes().all(|b| b.is_ascii_digit())
+        && md5.len() == 32
+        && md5.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Result of a finished post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostOutcome {
+    /// Image bytes that reached the body.
+    pub uploaded: u64,
+    /// The verdict.
+    pub verdict: Verdict,
+}
+
+/// Response text the model JSONs mark as acceptance
+/// (`upload_response_pattern`, dlink-covr-x1860-a1).
+pub const ACCEPT_PATTERN: &str = "Upgrade successfully!";
+
+/// Verdict-buffer retention cap for [`HttpIo::read_response`] impls.
+///
+/// A real recovery-server verdict is a tiny HTML/size-line page; a
+/// response larger than this is by definition not a U-Boot verdict
+/// (an unexpected HTTP server sat on the configured address). Impls
+/// must keep `out` at or below this bound — the firmware heap is
+/// 32 KiB and the POST is already irreversible when the response
+/// arrives, so an unbounded read must never become an allocation
+/// failure. Bytes beyond the cap are drained-and-discarded to EOF so
+/// the FIN path still terminates.
+pub const MAX_VERDICT_BYTES: usize = 8 * 1024;
+
+/// Retain `segment` in `out` up to [`MAX_VERDICT_BYTES`] — the shared
+/// bounded-retention rule for every [`HttpIo::read_response`] impl
+/// (firmware socket, test transport, host twin: identical wire
+/// behavior). Returns the number of bytes retained.
+pub fn retain_verdict_bytes(out: &mut Vec<u8>, segment: &[u8]) -> usize {
+    let room = MAX_VERDICT_BYTES.saturating_sub(out.len());
+    let take = segment.len().min(room);
+    out.extend_from_slice(&segment[..take]);
+    take
+}
+
+/// The staged recovery POST.
+pub struct RecoveryPost<'a> {
+    mp: Multipart<'a>,
+    host: String,
+    endpoint: String,
+    /// Model-specific `upload_response_pattern` the verdict matches
+    /// (defaults to the D-Link phrase; GL.iNet-style `<size> <md5>`
+    /// bodies are recognized structurally — review round 6).
+    accept_pattern: String,
+    started: bool,
+    written: u64,
+}
+
+impl<'a> RecoveryPost<'a> {
+    /// New post over a prepared [`Multipart`] framing.
+    ///
+    /// `host` is used for the `Host:` header (U-Boot's uIP stack does
+    /// not parse it, but browsers send it and 1.x parity is free).
+    /// `endpoint` is the model's `upload_endpoint` (`"/upload"`).
+    #[must_use]
+    pub fn new(mp: Multipart<'a>, host: &str, endpoint: &str) -> Self {
+        Self {
+            mp,
+            host: String::from(host),
+            endpoint: String::from(endpoint),
+            accept_pattern: String::from(ACCEPT_PATTERN),
+            started: false,
+            written: 0,
+        }
+    }
+
+    /// Override the acceptance pattern with the model's
+    /// `upload_response_pattern` (e.g. `"UPDATE IN PROGRESS"`).
+    #[must_use]
+    pub fn with_accept_pattern(mut self, pattern: &str) -> Self {
+        self.accept_pattern = String::from(pattern);
+        self
+    }
+
+    /// Write the request head. Requires the transfer to know its
+    /// `total` (first chunk received) — nothing goes on the wire
+    /// before the exact `Content-Length` is known.
+    ///
+    /// Headers mirror the proven 1.x curl invocation: no `Expect:`
+    /// (U-Boot does not speak 100-continue) and `Connection: close`.
+    pub async fn start(
+        &mut self,
+        io: &mut impl HttpIo,
+        xfer: &TransferState,
+    ) -> Result<(), PostError> {
+        if self.started {
+            return Err(PostError::AlreadyStarted);
+        }
+        let Some(total) = xfer.total() else {
+            return Err(PostError::NoTotal);
+        };
+        if total != self.mp.image_len {
+            return Err(PostError::SizeMismatch {
+                multipart: self.mp.image_len,
+                transfer: total,
+            });
+        }
+        if self.mp.content_len().is_none() {
+            return Err(PostError::FramingOverflow);
+        }
+        // committed BEFORE the first write: a partially-landed head is
+        // still a burned one-request window (review round 1)
+        self.started = true;
+        let head = format!(
+            "POST {} HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Content-Type: {}\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n",
+            self.endpoint,
+            self.host,
+            self.mp.content_type(),
+            self.mp.content_len().unwrap_or(u64::MAX),
+        );
+        io.write_all(head.as_bytes())
+            .await
+            .map_err(|_| PostError::Write { op: "head" })?;
+        io.write_all(&self.mp.header())
+            .await
+            .map_err(|_| PostError::Write { op: "head" })?;
+        self.written += self.mp.header().len() as u64;
+        Ok(())
+    }
+
+    /// Whether [`start`](Self::start) has written the head (the
+    /// point of no return for the one-request window).
+    pub fn committed(&self) -> bool {
+        self.started
+    }
+
+    /// Move buffered window bytes into the request body. Call after
+    /// each accepted chunk; backpressure ends when the window empties.
+    pub async fn pump(
+        &mut self,
+        io: &mut impl HttpIo,
+        xfer: &mut TransferState,
+    ) -> Result<u64, PostError> {
+        if !self.started {
+            return Err(PostError::NotStarted);
+        }
+        let mut buf = [0u8; 1024];
+        let mut moved = 0u64;
+        loop {
+            let n = xfer.drain(&mut buf);
+            if n == 0 {
+                return Ok(moved);
+            }
+            io.write_all(&buf[..n])
+                .await
+                .map_err(|_| PostError::Write { op: "body" })?;
+            self.written += n as u64;
+            moved += n as u64;
+        }
+    }
+
+    /// Write the footer and read the verdict. Requires the transfer
+    /// complete (fully drained) — an incomplete body would desync the
+    /// one-request server, so it is refused before any wire bytes.
+    pub async fn finish(
+        &mut self,
+        io: &mut impl HttpIo,
+        xfer: &TransferState,
+    ) -> Result<PostOutcome, PostError> {
+        if !self.started {
+            return Err(PostError::NotStarted);
+        }
+        let Some(total) = xfer.total() else {
+            return Err(PostError::NoTotal);
+        };
+        if !xfer.is_complete() {
+            return Err(PostError::Incomplete {
+                received: xfer.ack().contiguous,
+                total,
+            });
+        }
+        io.write_all(&self.mp.footer())
+            .await
+            .map_err(|_| PostError::Write { op: "footer" })?;
+        self.written += self.mp.footer().len() as u64;
+
+        let mut response = Vec::new();
+        match io.read_response(&mut response).await {
+            Ok(()) if response.is_empty() => Ok(PostOutcome {
+                uploaded: total,
+                verdict: Verdict::NoResponse,
+            }),
+            Ok(()) => {
+                // Verdict on the response BODY: U-Boot sends real HTTP
+                // status headers before the HTML/size line — skip them
+                // (fall back to the whole stream when absent).
+                let raw = String::from_utf8_lossy(&response).into_owned();
+                let text = match raw.find("\r\n\r\n") {
+                    Some(at) => String::from(&raw[at + 4..]),
+                    None => raw,
+                };
+                let verdict = if text.contains(self.accept_pattern.as_str()) {
+                    Verdict::Accepted
+                } else if is_size_md5_shape(&text) {
+                    // GL.iNet / MediaTek U-Boot: "<size> <md5>" plain
+                    // text (scripts/flash/upload.py::parse_uboot_response)
+                    Verdict::Accepted
+                } else if text
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("<!doctype")
+                    || text.trim_start().to_ascii_lowercase().starts_with("<html")
+                {
+                    Verdict::AcceptedHtml
+                } else {
+                    Verdict::Rejected {
+                        snippet: text.chars().take(80).collect(),
+                    }
+                };
+                Ok(PostOutcome {
+                    uploaded: total,
+                    verdict,
+                })
+            }
+            Err(_) => Err(PostError::Read),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verdict_retention_caps_at_max_verdict_bytes() {
+        let mut out = Vec::new();
+        assert_eq!(retain_verdict_bytes(&mut out, &[0u8; 6000]), 6000);
+        assert_eq!(
+            retain_verdict_bytes(&mut out, &[0u8; 6000]),
+            MAX_VERDICT_BYTES - 6000
+        );
+        assert_eq!(out.len(), MAX_VERDICT_BYTES);
+        assert_eq!(
+            retain_verdict_bytes(&mut out, &[1, 2, 3]),
+            0,
+            "a full buffer retains nothing further"
+        );
+        assert_eq!(out.len(), MAX_VERDICT_BYTES);
+    }
+
+    /// In-memory IO: records writes, replays a canned response.
+    struct MemIo {
+        written: Vec<u8>,
+        response: Vec<u8>,
+        fail_writes: bool,
+    }
+
+    impl HttpIo for MemIo {
+        type Error = ();
+        async fn write_all(&mut self, data: &[u8]) -> Result<(), ()> {
+            if self.fail_writes {
+                return Err(());
+            }
+            self.written.extend_from_slice(data);
+            Ok(())
+        }
+        async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), ()> {
+            // empty canned response = clean EOF with no body (the
+            // burned-window shape); errors are never injected here
+            out.extend_from_slice(&self.response);
+            Ok(())
+        }
+    }
+
+    fn mp() -> Multipart<'static> {
+        Multipart {
+            boundary: "----WebKitFormBoundary0123456789abcdef",
+            field: "firmware",
+            filename: "recovery.bin",
+            image_len: 6,
+        }
+    }
+
+    fn fed_transfer() -> TransferState {
+        let mut t = TransferState::new(1, 64);
+        t.accept(&conwrt_agent_proto::protocol::StreamChunk {
+            transfer_id: 1,
+            offset: 0,
+            total: Some(6),
+            data: alloc::vec![0xAA; 6],
+        })
+        .unwrap();
+        t
+    }
+
+    #[tokio::test]
+    async fn head_shape_matches_1x_curl_semantics() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"Upgrade successfully!".to_vec(),
+            fail_writes: false,
+        };
+        let t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "192.168.0.1", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        let head = String::from_utf8_lossy(&io.written).into_owned();
+        assert!(head.starts_with("POST /upload HTTP/1.1\r\n"));
+        assert!(head.contains("Host: 192.168.0.1\r\n"));
+        assert!(head.contains(
+            "Content-Type: multipart/form-data; boundary=----WebKitFormBoundary0123456789abcdef\r\n"
+        ));
+        assert!(head.contains(&format!(
+            "Content-Length: {}\r\n",
+            mp().content_len().expect("sane sizes")
+        )));
+        assert!(head.contains("Connection: close\r\n"));
+        assert!(!head.to_ascii_lowercase().contains("expect:")); // no 100-continue
+        assert!(head.ends_with("\r\n\r\n"));
+        // head write includes the multipart part header after the blank line
+        assert!(io.written.ends_with(b"application/octet-stream\r\n\r\n"));
+    }
+
+    #[tokio::test]
+    async fn full_post_body_and_verdict() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"<html>Upgrade successfully!</html>".to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "192.168.0.1", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        assert!(post.committed());
+        assert_eq!(post.pump(&mut io, &mut t).await.unwrap(), 6);
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.uploaded, 6);
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+
+        // body assembled on the wire: header + 6 bytes + footer, tail-aligned
+        let mp = mp();
+        let hdr = mp.header();
+        let ftr = mp.footer();
+        let w = &io.written;
+        assert!(w.ends_with(&ftr));
+        let payload_start = w.len() - ftr.len() - 6;
+        let hdr_start = payload_start - hdr.len();
+        assert_eq!(&w[hdr_start..payload_start], &hdr[..]);
+        assert_eq!(&w[payload_start..payload_start + 6], &[0xAA; 6]);
+    }
+
+    #[tokio::test]
+    async fn finish_refuses_incomplete_transfer_before_wire() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = TransferState::new(1, 64);
+        t.accept(&conwrt_agent_proto::protocol::StreamChunk {
+            transfer_id: 1,
+            offset: 0,
+            total: Some(10),
+            data: alloc::vec![1, 2, 3],
+        })
+        .unwrap();
+        let mut post = RecoveryPost::new(
+            Multipart {
+                image_len: 10,
+                ..mp()
+            },
+            "192.168.0.1",
+            "/upload",
+        );
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let before = io.written.len();
+        assert_eq!(
+            post.finish(&mut io, &t).await,
+            Err(PostError::Incomplete {
+                received: 3,
+                total: 10
+            })
+        );
+        assert_eq!(io.written.len(), before, "no footer bytes on refusal");
+    }
+
+    #[tokio::test]
+    async fn start_requires_total_and_once_only() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let t = TransferState::new(1, 64); // no chunk yet
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        assert_eq!(post.start(&mut io, &t).await, Err(PostError::NoTotal));
+
+        let t2 = fed_transfer();
+        post.start(&mut io, &t2).await.unwrap();
+        assert_eq!(
+            post.start(&mut io, &t2).await,
+            Err(PostError::AlreadyStarted)
+        );
+    }
+
+    #[tokio::test]
+    async fn size_mismatch_refused_before_any_wire_bytes() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let t = fed_transfer(); // total 6
+        let mut post = RecoveryPost::new(
+            Multipart {
+                image_len: 999,
+                ..mp()
+            },
+            "h",
+            "/upload",
+        );
+        assert_eq!(
+            post.start(&mut io, &t).await,
+            Err(PostError::SizeMismatch {
+                multipart: 999,
+                transfer: 6
+            })
+        );
+        assert!(io.written.is_empty(), "nothing on the wire");
+        assert!(!post.committed());
+    }
+
+    #[tokio::test]
+    async fn failed_head_write_still_counts_as_committed() {
+        // a partially-landed head may have reached the server: the
+        // one-request window is burned either way (review round 1)
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: true,
+        };
+        let t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        assert!(matches!(
+            post.start(&mut io, &t).await,
+            Err(PostError::Write { op: "head" })
+        ));
+        assert!(post.committed());
+    }
+
+    #[tokio::test]
+    async fn verdict_skips_http_response_headers() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n\
+                        <html>Upgrade successfully!</html>"
+                .to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn pump_before_start_refused_without_draining() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        assert_eq!(post.pump(&mut io, &mut t).await, Err(PostError::NotStarted));
+        assert!(io.written.is_empty());
+        assert_eq!(t.buffered(), 6, "window untouched");
+        assert_eq!(
+            post.finish(&mut io, &t).await,
+            Err(PostError::NotStarted),
+            "footer before start refused too"
+        );
+    }
+
+    #[tokio::test]
+    async fn glinet_size_md5_response_is_accepted() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"4194304 0d7e2f8d5c3b1a9f6e4d2c8b7a6f5e3d".to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn custom_accept_pattern_from_model() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: b"UPDATE IN PROGRESS".to_vec(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post =
+            RecoveryPost::new(mp(), "h", "/upload").with_accept_pattern("UPDATE IN PROGRESS");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted);
+    }
+
+    #[tokio::test]
+    async fn framing_overflow_total_refused_before_wire() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = TransferState::new(1, 64);
+        t.accept(&conwrt_agent_proto::protocol::StreamChunk {
+            transfer_id: 1,
+            offset: 0,
+            total: Some(u64::MAX),
+            data: alloc::vec![0u8; 4],
+        })
+        .unwrap();
+        let mut post = RecoveryPost::new(
+            Multipart {
+                image_len: u64::MAX,
+                ..mp()
+            },
+            "h",
+            "/upload",
+        );
+        assert_eq!(
+            post.start(&mut io, &t).await,
+            Err(PostError::FramingOverflow)
+        );
+        assert!(io.written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_response_is_burned_window_verdict() {
+        let mut io = MemIo {
+            written: Vec::new(),
+            response: Vec::new(),
+            fail_writes: false,
+        };
+        let mut t = fed_transfer();
+        let mut post = RecoveryPost::new(mp(), "h", "/upload");
+        post.start(&mut io, &t).await.unwrap();
+        post.pump(&mut io, &mut t).await.unwrap();
+        let outcome = post.finish(&mut io, &t).await.unwrap();
+        assert_eq!(outcome.verdict, Verdict::NoResponse);
+    }
+}

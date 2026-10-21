@@ -191,3 +191,133 @@ class TestMainExitCodes:
         with pytest.raises(SystemExit) as e:
             mis.main_with_argv(["--api", "http://maas:5240/MAAS"])
         assert e.value.code == 2
+
+
+def real_resource(
+    name="ubuntu/noble",
+    architecture="amd64/ga-24.04",
+    sets=None,
+) -> dict:
+    """The gomaasclient BootResource shape a real region returns."""
+    if sets is None:
+        sets = {"901": {"label": "stable", "complete": False, "size": 600_000_000}}
+    return {
+        "id": 1,
+        "type": "Synced",
+        "name": name,
+        "architecture": architecture,
+        "sets": sets,
+    }
+
+
+class TestParseRealSchema:
+    def test_architecture_and_sets_parsed(self):
+        parsed = mis.parse_api_payload([real_resource()])
+        assert parsed[0]["key"] == "ubuntu/noble/amd64/ga-24.04"
+        assert parsed[0]["declared_size"] == 600_000_000
+        assert parsed[0]["complete"] is False
+
+    def test_sizes_sum_across_sets_and_all_complete_means_complete(self):
+        r = real_resource(
+            sets={
+                "a": {"complete": True, "size": 100},
+                "b": {"complete": True, "size": 250},
+            }
+        )
+        parsed = mis.parse_api_payload([r])
+        assert parsed[0]["declared_size"] == 350
+        assert parsed[0]["complete"] is True
+
+    def test_any_incomplete_set_leaves_resource_incomplete(self):
+        r = real_resource(
+            sets={
+                "a": {"complete": True, "size": 100},
+                "b": {"complete": False, "size": 250},
+            }
+        )
+        parsed = mis.parse_api_payload([r])
+        assert parsed[0]["complete"] is False
+        assert parsed[0]["declared_size"] == 350
+
+    def test_sets_serialized_as_list_is_handled(self):
+        r = real_resource(sets=[{"complete": True, "size": 42}])
+        parsed = mis.parse_api_payload([r])
+        assert parsed[0]["declared_size"] == 42
+        assert parsed[0]["complete"] is True
+
+    def test_legacy_flat_shape_still_parses(self):
+        parsed = mis.parse_api_payload(payload(resource("ubuntu/noble", 100, True)))
+        assert parsed[0]["key"] == "ubuntu/noble"
+        assert parsed[0]["declared_size"] == 100
+        assert parsed[0]["complete"] is True
+
+    def test_entry_without_architecture_is_skipped(self):
+        assert mis.parse_api_payload([{"name": "ubuntu/noble", "sets": {}}]) == []
+
+
+class TestContentAddressedStorage:
+    def test_image_storage_layout_yields_total_evidence(self, tmp_path):
+        br = tmp_path / "boot-resources"
+        hashed = br / "abc123"
+        hashed.mkdir(parents=True)
+        (hashed / "part1").write_bytes(b"x" * 1000)
+        (br / "def456").write_bytes(b"y" * 40)
+        (tmp_path / "README").write_text("not evidence")
+
+        evidence = mis.evidence_from_storage_root(tmp_path)
+        assert evidence == {mis.TOTAL_STORAGE_KEY: 1040}
+
+    def test_total_evidence_does_not_falsely_attribute_resources(self, tmp_path):
+        # The content-addressed layout cannot attribute bytes per
+        # resource: classify must see NO-EVIDENCE, not zero bytes.
+        statuses = mis.classify(
+            mis.parse_api_payload([real_resource(sets={"a": {"complete": True, "size": 100}})]),
+            {mis.TOTAL_STORAGE_KEY: 500},
+            evidence_covers_all=False,
+        )
+        assert statuses[0].status == "NO-EVIDENCE"
+
+
+class TestOauthHeader:
+    def test_maas_token_mode_signature_nonce_and_timestamp(self):
+        h = mis.oauth1_header("ck:tok:sec", "nonce-7", 1_777_777_777)
+        assert 'oauth_signature="&sec"' in h
+        assert 'oauth_signature="sec&"' not in h
+        assert 'oauth_nonce="nonce-7"' in h
+        assert 'oauth_timestamp="1777777777"' in h
+        assert 'oauth_consumer_key="ck"' in h
+        assert 'oauth_token="tok"' in h
+
+    def test_short_key_degrades_without_crashing(self):
+        h = mis.oauth1_header("onlyck", "n", 1)
+        assert 'oauth_signature="&"' in h
+
+    def test_zero_total_covers_every_resource_for_the_lie_case(self):
+        # Storage fully walked, zero bytes anywhere: a workflow that
+        # claims complete is lying for EVERY resource.
+        statuses = mis.classify(
+            mis.parse_api_payload(
+                [real_resource(sets={"a": {"complete": True, "size": 100}})]
+            ),
+            {mis.TOTAL_STORAGE_KEY: 0},
+            evidence_covers_all=True,
+        )
+        assert statuses[0].status == "WORKFLOW-CLAIMS-COMPLETE"
+
+    def test_content_addressed_root_reports_no_evidence_not_missing(self, tmp_path, capsys):
+        api = tmp_path / "api.json"
+        api.write_text(
+            json.dumps([real_resource(sets={"a": {"complete": False, "size": 100}})])
+        )
+        br = tmp_path / "storage" / "boot-resources"
+        br.mkdir(parents=True)
+        (br / "hash1").write_bytes(b"x" * 50)
+
+        rc = mis.main_with_argv(
+            ["--api-json", str(api), "--storage-root", str(tmp_path / "storage")]
+        )
+
+        assert rc == 1  # present-but-unattributable is not VERIFIED
+        captured = capsys.readouterr()
+        assert "NO-EVIDENCE" in captured.out
+        assert "content-addressed storage" in captured.err

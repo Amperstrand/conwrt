@@ -78,7 +78,11 @@ async fn main(_spawner: Spawner) {
     let mut dev_cfg = UsbDevConfig::new(0xc0de, 0xcafe);
     dev_cfg.manufacturer = Some("Amperstrand");
     dev_cfg.product = Some("conwrt agent");
-    dev_cfg.serial_number = Some("f469i-disco-01");
+    // Per-board USB serial from the MCU's 96-bit device ID (#377): a
+    // hardcoded serial collides /dev/serial/by-id across identical
+    // units (AGENTS.md specimen identity; the esp32s3 app's pattern).
+    let serial = alloc::format!("f469i-disco-{}", embassy_stm32::uid::uid_hex());
+    dev_cfg.serial_number = Some(&serial);
 
     let mut config_descriptor = [0u8; 256];
     let mut bos_descriptor = [0u8; 256];

@@ -9,8 +9,9 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    CapabilityInfo, DisconnectPolicy, HandshakeError, HandshakeOk, HandshakeRequest, Heartbeat,
-    LeaseExpired, LeaseRequest, LeaseResponse, StreamAck, StreamChunk,
+    CapabilityInfo, DetectReport, DetectRequest, DetectStatusQuery, DisconnectPolicy,
+    HandshakeError, HandshakeOk, HandshakeRequest, Heartbeat, LeaseExpired, LeaseRequest,
+    LeaseResponse, StreamAck, StreamChunk,
 };
 
 /// A request to the agent (controller → agent).
@@ -44,6 +45,16 @@ pub enum WireEndpoint {
         /// Payload bytes for the UART TX line.
         data: Vec<u8>,
     },
+    /// Arm boot-milestone detection on a UART port (#215 slice 5):
+    /// the agent feeds that port's RX through the shared probe-core
+    /// tracker; latched milestones arrive as
+    /// [`AgentEvent::DetectFinding`]. Reply: [`WireResult::Detect`].
+    /// NOT lease-gated — passive read-only observation, consistent
+    /// with `AgentEvent::UartData` flowing unleased.
+    DetectStart(DetectRequest),
+    /// Query a detection session's latched findings (the reconnecting
+    /// controller's catch-up). Reply: [`WireResult::Detect`].
+    DetectStatus(DetectStatusQuery),
 }
 
 /// A response from the agent (agent → controller), correlated by id.
@@ -65,6 +76,9 @@ pub enum WireResult {
     UartWritten(usize),
     /// The endpoint errored.
     Error(WireError),
+    /// Detection session state (#215 slice 5) — the reply shape for
+    /// `DetectStart`/`DetectStatus`.
+    Detect(DetectReport),
 }
 
 /// Agent-side operational errors (distinct from protocol-level refusals).
@@ -81,6 +95,11 @@ pub enum WireError {
     /// The operation needs the named resource lease first (M5 #110: UART
     /// writes are lease-gated).
     LeaseRequired(String),
+    /// The detection session on this port exists but no controller has
+    /// armed it with `DetectStart` yet (#215 slice 5) —
+    /// `DetectStatus` refuses rather than returning an empty report a
+    /// controller cannot distinguish from an armed, quiet session.
+    DetectNotArmed(u8),
 }
 
 /// The wire frame: exactly one per COBS frame.
@@ -131,6 +150,9 @@ pub enum AgentEvent {
         /// Payload bytes from the UART RX line.
         data: Vec<u8>,
     },
+    /// A boot milestone latched by a detection session (#215 slice 5)
+    /// — unsolicited push, same harvest path as `UartData`.
+    DetectFinding(crate::protocol::DetectFinding),
 }
 
 /// Encode a frame to bytes (postcard).
@@ -172,7 +194,10 @@ mod tests {
     fn lease_response_round_trips() {
         let frame = WireFrame::Response {
             id: 7,
-            result: WireResult::Lease(LeaseResponse::Granted { heartbeat_ms: 1000 }),
+            result: WireResult::Lease(LeaseResponse::Granted {
+                lease_id: 1,
+                heartbeat_ms: 1000,
+            }),
         };
         let bytes = encode_frame(&frame).unwrap();
         let back = decode_frame(&bytes).unwrap();
@@ -220,5 +245,43 @@ mod tests {
     #[test]
     fn garbage_bytes_fail_cleanly() {
         assert!(decode_frame(&[0xDE, 0xAD, 0xBE, 0xEF]).is_err());
+    }
+
+    #[test]
+    fn detect_start_round_trips() {
+        let frame = WireFrame::Request {
+            id: 21,
+            endpoint: WireEndpoint::DetectStart(crate::protocol::DetectRequest { port: 0 }),
+        };
+        let bytes = encode_frame(&frame).unwrap();
+        assert_eq!(decode_frame(&bytes).unwrap(), frame);
+    }
+
+    #[test]
+    fn detect_finding_event_round_trips() {
+        let frame = WireFrame::Event(AgentEvent::DetectFinding(crate::protocol::DetectFinding {
+            port: 0,
+            milestone: conwrt_probe_core::milestones::BootMilestone::LoginPrompt,
+            detail: String::from("root@OpenWrt:~#"),
+        }));
+        let bytes = encode_frame(&frame).unwrap();
+        assert_eq!(decode_frame(&bytes).unwrap(), frame);
+    }
+
+    #[test]
+    fn detect_report_result_round_trips() {
+        let frame = WireFrame::Response {
+            id: 22,
+            result: WireResult::Detect(crate::protocol::DetectReport {
+                port: 0,
+                findings: alloc::vec![crate::protocol::DetectFinding {
+                    port: 0,
+                    milestone: conwrt_probe_core::milestones::BootMilestone::UbootBanner,
+                    detail: String::from("U-Boot 2012.07.22"),
+                }],
+            }),
+        };
+        let bytes = encode_frame(&frame).unwrap();
+        assert_eq!(decode_frame(&bytes).unwrap(), frame);
     }
 }

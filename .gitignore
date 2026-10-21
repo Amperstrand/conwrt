@@ -97,3 +97,5 @@ config.toml
 
 # Local env/credential files — never commit
 .env*
+# pi_image break-glass password files (mode 0600, never commit)
+*.credentials.txt

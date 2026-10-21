@@ -62,7 +62,7 @@
     "netboot_protocol": {
       "dhcp": "DISCOVER with vendor-class option 60 = PXEClient:Arch:00000:UNDI:002001, option 93/94/97 (ARCH/NDI/GUID). GUID embeds ASCII Rpi4 or Rpi5 plus the MAC.",
       "requirements": "OFFER must include option 66 (TFTP server) and/or 67 (bootfile) or the bootloader ignores it and keeps DISCOVERing forever. Plain DHCP OFFERs without boot options are rejected.",
-      "transport": "TFTP only (no HTTP boot on BCM2711/2712). Requests <serial>/ first, then root. dnsmasq with enable-tftp + per-host dhcp-option 66/67 is sufficient.",
+      "transport": "TFTP only for the rescue chain (HTTP boot exists on BCM2711/2712 since 2022 firmware — BOOT_ORDER mode 0x7 — but this chain intentionally serves no HTTP; dnsmasq with enable-tftp + per-host dhcp-option 66/67 is sufficient). Requests <serial>/ first, then root.",
       "tftp_files": "config.txt, start4.elf/start5.elf, fixup*.dat, kernel*.img, dtbs, initramfs \u2014 same files as a FAT boot partition."
     },
     "netboot_os": {
@@ -100,7 +100,7 @@
       ]
     },
     "usb-image": {
-      "description": "Write an OS image (Ubuntu Server, Raspberry Pi OS, OpenWrt) to a USB disk / SD card and boot it natively. conwrt pi_image.py provisions a Pi-attached disk over SSH; scripts/pi_rescue/flash-rescue.sh writes a local stick. Headless via cloud-init (user-data/network-config/meta-data on the boot FAT) or Raspberry Pi OS boot-marker + authorized_keys injection.",
+      "description": "Write an OS image (Ubuntu Server, Raspberry Pi OS, OpenWrt) to a USB disk / SD card and boot it natively. conwrt pi_image.py provisions a Pi-ATTACHED disk over SSH (from a booted OS or per recipes/raspberry-pi/netboot-rescue.md); for a workstation-attached stick use Raspberry Pi Imager or plain dd — headless setup then goes through the same cloud-inject (user-data/network-config/meta-data on the boot FAT) or Raspberry Pi OS boot-marker + authorized_keys injection.",
       "requires": "Pi with USB-MSD-capable EEPROM (all 2020+ bootloaders), writable medium",
       "tested_hardware": {
         "tested": true,

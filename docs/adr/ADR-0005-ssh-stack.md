@@ -99,14 +99,20 @@ profile, static `size` only — nothing flashed):
   ed25519 pubkey auth + exec all pass — exactly this ADR's floor, no
   ssh-rsa/SHA-1 anywhere. Against real Dropbear **2026.94** (main) the
   same client additionally completed a negotiated
-  `mlkem768x25519-sha256` session end-to-end — which also isolates the
-  spike's in-harness mlkem `BadKex` to sunset-as-server.
+  `mlkem768x25519-sha256` session end-to-end — and the fork
+  investigation later showed sunset 0.6.0 mlkem works client *and*
+  server (the in-harness `BadKex` was the spike's own transport; see
+  the corrected finding in the spike doc).
 - **Caveats for the revisit**: sunset-async's dependency edge re-enables
-  sunset's mlkem default (feature unification) — floor builds need a
-  patched sunset-async; sunset's mlkem768x25519 hybrid kex fails
-  in-harness when sunset is the server (`BadKex` in ml-kem 0.3.2 key
-  validation; sunset-as-client works against Dropbear 2026.94); getrandom
-  0.4 on no_std needs the `custom` backend cfg. All detailed in the spike
-  doc; human-submission upstream report drafts for these three live in
-  `docs/upstream-drafts/` (external-repo etiquette: filed by humans only).
+  sunset's mlkem default (feature unification) — fixed on the org fork
+  (forwarded default-on `mlkem` feature; see below); sunset's
+  mlkem768x25519 kex is fully functional client and server (the spike's
+  original `BadKex` was its own in-memory transport — the corrected
+  finding and the restart-safety sharp edge for `Write` impls are in the
+  spike doc); getrandom 0.4 on no_std needs the `custom` backend cfg.
+  **Fork**: conwrt-relevant patches are carried on
+  `Amperstrand/sunset` branch `ai-experiments` (base: `sunset-0.6.0`;
+  feature fix + mlkem regression tests; pin snippet in the spike doc) —
+  external-repo etiquette keeps upstream interaction human-only, and
+  human-submission drafts live in `docs/upstream-drafts/`.
 

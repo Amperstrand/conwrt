@@ -86,6 +86,10 @@ class ConwrtConfig:
     password_mode: str = "random"
     lan_ip: str = ""
     wan_ssh: bool = False
+    # Opt-in TOFB image feature (#228, ADR-0013): bake the first-boot
+    # enrollment service into ASU builds. Off by default — images without
+    # it are byte-identical to pre-TOFB builds.
+    tofb: bool = False
     country_code: str = "DE"
     mgmt_wifi: bool = False
     mgmt_wifi_txpower: Optional[int] = None
@@ -344,6 +348,7 @@ def load_config(path: Optional[Path] = None) -> ConwrtConfig:
         password_mode=password_mode,
         lan_ip=network_section.get("lan_ip", ""),
         wan_ssh=network_section.get("wan_ssh", False),
+        tofb=network_section.get("tofb", False),
         country_code=network_section.get("country_code", "DE"),
         mgmt_wifi=network_section.get("mgmt_wifi", False),
         mgmt_wifi_txpower=network_section.get("mgmt_wifi_txpower"),
