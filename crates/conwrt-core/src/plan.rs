@@ -346,6 +346,43 @@ impl WireguardClientProfile {
     }
 }
 
+/// WireGuard VPN server — port of the tested 1.x `wireguard-server`
+/// preset (`scripts/use_cases/wireguard_server.py`). Remote access to
+/// the local network: a `wg0` listener, a wan→router allow rule on the
+/// listen port, and vpn→lan/wan forwardings. The first peer is optional
+/// (1.x adds it when the client's public key is already known). Unlike
+/// the client preset, 1.x declares no param validators — every value is
+/// single-quoted at render time — so this port adds none either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireguardServerProfile {
+    /// WireGuard private key, or `generate` (1.x default) to
+    /// auto-generate per device on first boot.
+    pub private_key: String,
+    /// UDP listen port (1.x default 51820).
+    pub listen_port: u16,
+    /// VPN client subnet, server IP + CIDR (1.x default `10.1.99.1/24`).
+    pub subnet: String,
+    /// First peer's public key (empty = no peer section, 1.x default).
+    pub peer1_public_key: String,
+    /// First peer's allowed IPs (1.x default `10.1.99.2/32`).
+    pub peer1_allowed_ips: String,
+    /// First peer's pre-shared key (empty = none, 1.x default).
+    pub peer1_psk: String,
+}
+
+impl Default for WireguardServerProfile {
+    fn default() -> Self {
+        Self {
+            private_key: "generate".into(),
+            listen_port: 51820,
+            subnet: "10.1.99.1/24".into(),
+            peer1_public_key: String::new(),
+            peer1_allowed_ips: "10.1.99.2/32".into(),
+            peer1_psk: String::new(),
+        }
+    }
+}
+
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
 /// apply time from the live LAN IP (third octet + 1), so the address
@@ -454,6 +491,9 @@ pub enum Profile {
     Tether(TetherProfile),
     /// Route traffic through a WireGuard VPN tunnel.
     WireguardClient(WireguardClientProfile),
+    /// Terminate a WireGuard tunnel on this device (remote access
+    /// server).
+    WireguardServer(WireguardServerProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -467,6 +507,7 @@ impl Profile {
             Profile::Doh(_) => "doh",
             Profile::Tether(t) => t.variant.id(),
             Profile::WireguardClient(_) => "wireguard-client",
+            Profile::WireguardServer(_) => "wireguard-server",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -481,6 +522,7 @@ impl Profile {
             Profile::Doh(_) => &[],
             Profile::Tether(_) => &["usb"],
             Profile::WireguardClient(_) => &[],
+            Profile::WireguardServer(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -785,6 +827,7 @@ pub fn plan_profile(
         Profile::Doh(doh) => plan_doh(model, doh),
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
+        Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1290,6 +1333,160 @@ fn plan_wireguard_client(
     ];
     Ok(Plan {
         profile_id: "wireguard-client".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_wireguard_server(
+    model: &DeviceModel,
+    wg: &WireguardServerProfile,
+) -> Result<Plan, Unsupported> {
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "qrencode".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "wg0".into(),
+            section_type: "interface".into(),
+            options: vec![
+                ("proto".into(), literal("wireguard".into())),
+                ("private_key".into(), literal(wg.private_key.clone())),
+                ("listen_port".into(), literal(wg.listen_port.to_string())),
+            ],
+        },
+        PlanOp::UciAddList {
+            config: "network".into(),
+            section: "wg0".into(),
+            option: "addresses".into(),
+            value: wg.subnet.clone(),
+        },
+        PlanOp::Shell {
+            command: "mkdir -p /etc/wireguard && \
+                      wg show wg0 public-key > /etc/wireguard/server_public_key \
+                      2>/dev/null || true"
+                .into(),
+        },
+    ];
+    if !wg.peer1_public_key.is_empty() {
+        ops.push(PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "wg0_peer1".into(),
+            section_type: "wireguard_wg0".into(),
+            options: vec![
+                ("public_key".into(), literal(wg.peer1_public_key.clone())),
+                ("allowed_ips".into(), literal(wg.peer1_allowed_ips.clone())),
+                ("route_allowed_ips".into(), literal("1".into())),
+            ],
+        });
+        if !wg.peer1_psk.is_empty() {
+            ops.push(PlanOp::SetUciOptions {
+                config: "network".into(),
+                section: "wg0_peer1".into(),
+                options: vec![("preshared_key".into(), literal(wg.peer1_psk.clone()))],
+            });
+        }
+    }
+    // Named firewall sections + while-loop cleanup of stale anonymous
+    // sections to prevent accumulation across reconfigure runs.
+    ops.extend([
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='Allow-WireGuard'".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "wg_server_vpn".into(),
+            section_type: "zone".into(),
+            options: vec![
+                ("name".into(), literal("vpn".into())),
+                ("input".into(), literal("ACCEPT".into())),
+                ("output".into(), literal("ACCEPT".into())),
+                ("forward".into(), literal("REJECT".into())),
+                ("masq".into(), literal("1".into())),
+                ("mtu_fix".into(), literal("1".into())),
+                ("network".into(), literal("wg0".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "wg_server_fwd_lan".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("vpn".into())),
+                ("dest".into(), literal("lan".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "wg_server_fwd_wan".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("vpn".into())),
+                ("dest".into(), literal("wan".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "wg_server_allow".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-WireGuard".into())),
+                ("src".into(), literal("wan".into())),
+                ("dest_port".into(), literal(wg.listen_port.to_string())),
+                ("proto".into(), literal("udp".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "network".into(),
+        },
+        PlanOp::CommitUci {
+            config: "firewall".into(),
+        },
+        PlanOp::Service {
+            name: "network".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"WireGuard server configured: port {}, subnet {}\"",
+                wg.listen_port, wg.subnet
+            ),
+        },
+    ]);
+    let verification = vec![
+        VerificationCheck {
+            description: "wg0 interface persisted".into(),
+            command: "uci -q get network.wg0.proto".into(),
+            expect_contains: "wireguard".into(),
+        },
+        VerificationCheck {
+            description: "listen port persisted".into(),
+            command: "uci -q get network.wg0.listen_port".into(),
+            expect_contains: wg.listen_port.to_string(),
+        },
+        VerificationCheck {
+            description: "wan allow rule persisted".into(),
+            command: "uci -q get firewall.wg_server_allow.name".into(),
+            expect_contains: "Allow-WireGuard".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "wireguard-server".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -2110,6 +2307,105 @@ mod tests {
         assert!(script.contains("uci set firewall.wg_client_vpn.name='vpn'"));
         assert!(script.contains("uci set firewall.wg_client_fwd.dest='vpn'"));
         assert!(script.contains("echo 'WireGuard client configured: vpn.example.com:51820'"));
+    }
+
+    #[test]
+    fn wireguard_server_default_render_matches_1x_shape() {
+        let script = render_shell(&plan_for(Profile::WireguardServer(
+            WireguardServerProfile {
+                private_key: "test_key_12345".into(),
+                ..WireguardServerProfile::default()
+            },
+        )));
+        assert!(script.contains("uci set network.wg0=interface"));
+        assert!(script.contains("uci set network.wg0.proto='wireguard'"));
+        assert!(script.contains("uci set network.wg0.private_key='test_key_12345'"));
+        assert!(script.contains("uci set network.wg0.listen_port='51820'"));
+        assert!(script.contains("uci add_list network.wg0.addresses='10.1.99.1/24'"));
+        assert!(script.contains(
+            "mkdir -p /etc/wireguard && \
+                             wg show wg0 public-key > /etc/wireguard/server_public_key \
+                             2>/dev/null || true"
+        ));
+        assert!(script.contains("uci commit network"));
+        assert!(script.contains("uci commit firewall"));
+        assert!(
+            !script.contains("wg0_peer1"),
+            "no peer by default (1.x branch)"
+        );
+    }
+
+    #[test]
+    fn wireguard_server_custom_params_match_1x_shape() {
+        let script = render_shell(&plan_for(Profile::WireguardServer(
+            WireguardServerProfile {
+                private_key: "abc123".into(),
+                listen_port: 12_345,
+                subnet: "172.16.0.1/16".into(),
+                ..WireguardServerProfile::default()
+            },
+        )));
+        assert!(script.contains("uci set network.wg0.listen_port='12345'"));
+        assert!(script.contains("uci add_list network.wg0.addresses='172.16.0.1/16'"));
+        assert!(script.contains("uci set firewall.wg_server_allow.dest_port='12345'"));
+        assert!(
+            script
+                .contains("echo \"WireGuard server configured: port 12345, subnet 172.16.0.1/16\"")
+        );
+    }
+
+    #[test]
+    fn wireguard_server_peer_and_psk_branches_match_1x() {
+        let with_peer = render_shell(&plan_for(Profile::WireguardServer(
+            WireguardServerProfile {
+                private_key: "server_key".into(),
+                peer1_public_key: "peer_pub_key".into(),
+                peer1_allowed_ips: "10.1.99.2/32".into(),
+                ..WireguardServerProfile::default()
+            },
+        )));
+        assert!(with_peer.contains("uci set network.wg0_peer1=wireguard_wg0"));
+        assert!(with_peer.contains("uci set network.wg0_peer1.public_key='peer_pub_key'"));
+        assert!(with_peer.contains("uci set network.wg0_peer1.allowed_ips='10.1.99.2/32'"));
+        assert!(with_peer.contains("uci set network.wg0_peer1.route_allowed_ips='1'"));
+        assert!(!with_peer.contains("preshared_key"));
+
+        let with_psk = render_shell(&plan_for(Profile::WireguardServer(
+            WireguardServerProfile {
+                private_key: "server_key".into(),
+                peer1_public_key: "peer_pub_key".into(),
+                peer1_psk: "shared_secret_key".into(),
+                ..WireguardServerProfile::default()
+            },
+        )));
+        assert!(with_psk.contains("uci set network.wg0_peer1.preshared_key='shared_secret_key'"));
+        assert!(
+            with_psk
+                .find("route_allowed_ips")
+                .zip(with_psk.find("preshared_key"))
+                .is_some_and(|(route, psk)| route < psk),
+            "psk renders last (1.x dict insertion order)"
+        );
+    }
+
+    #[test]
+    fn wireguard_server_firewall_sections_match_1x_shape() {
+        let script = render_shell(&plan_for(Profile::WireguardServer(
+            WireguardServerProfile::default(),
+        )));
+        assert!(script.contains(
+            "while uci show firewall 2>/dev/null | grep -q \"name='Allow-WireGuard'\"; do \
+             _s=$(uci show firewall 2>/dev/null | grep \"name='Allow-WireGuard'\" \
+             | head -1 | cut -d. -f2 | cut -d= -f1); \
+             uci delete \"firewall.$_s\" 2>/dev/null; done; true"
+        ));
+        assert!(script.contains("uci set firewall.wg_server_vpn.name='vpn'"));
+        assert!(script.contains("uci set firewall.wg_server_vpn.input='ACCEPT'"));
+        assert!(script.contains("uci set firewall.wg_server_fwd_lan.dest='lan'"));
+        assert!(script.contains("uci set firewall.wg_server_fwd_wan.dest='wan'"));
+        assert!(script.contains("uci set firewall.wg_server_allow.src='wan'"));
+        assert!(script.contains("uci set firewall.wg_server_allow.proto='udp'"));
+        assert!(script.contains("/etc/init.d/network restart"));
     }
 
     #[test]

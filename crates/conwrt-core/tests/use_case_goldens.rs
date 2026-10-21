@@ -1,7 +1,7 @@
 //! Golden parity for the typed-ops use-case ports (parity-matrix §4):
 //! the rendered plans must emit the SAME command-line sequence as the
 //! 1.x Python builders (`scripts/use_cases/{usb_tether,wireguard_client,
-//! guest_wifi}.py`).
+//! wireguard_server,guest_wifi}.py`).
 //!
 //! Goldens are the verbatim stdout of the 1.x builders and live in
 //! `tests/goldens/<use-case>.sh`. Regenerate with:
@@ -25,6 +25,14 @@
 //!     "kill_switch": True,
 //!     "allowed_ips": "0.0.0.0/0, ::/0",
 //! }))
+//! print(r["wireguard-server"].build_configure({
+//!     "private_key": "generate",
+//!     "listen_port": 51820,
+//!     "subnet": "10.1.99.1/24",
+//!     "peer1_public_key": "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=",
+//!     "peer1_allowed_ips": "10.1.99.2/32",
+//!     "peer1_psk": "cHNrLTMyLWJ5dGVzLXRlc3QtdmFsdWU=",
+//! }))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -38,7 +46,7 @@
 
 use conwrt_core::plan::{
     DohProfile, GuestWifiProfile, Profile, SqmProfile, TetherProfile, TetherVariant,
-    WireguardClientProfile, plan_profile, render_shell,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -142,6 +150,18 @@ fn wireguard_client_matches_1x_golden() {
 }
 
 #[test]
+fn wireguard_server_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::WireguardServer(WireguardServerProfile {
+            peer1_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+            peer1_psk: "cHNrLTMyLWJ5dGVzLXRlc3QtdmFsdWU=".into(),
+            ..WireguardServerProfile::default()
+        }),
+        include_str!("goldens/wireguard-server.sh"),
+    );
+}
+
+#[test]
 fn guest_wifi_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::GuestWifi(GuestWifiProfile::default()),
@@ -161,6 +181,10 @@ fn golden_files_are_command_scripts_not_empty() {
         (
             "wireguard-client",
             include_str!("goldens/wireguard-client.sh"),
+        ),
+        (
+            "wireguard-server",
+            include_str!("goldens/wireguard-server.sh"),
         ),
         ("guest-wifi", include_str!("goldens/guest-wifi.sh")),
     ] {
