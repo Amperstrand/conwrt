@@ -72,6 +72,10 @@ class TestPlaceDerivation:
         assert PLACE.linklocal == "fe80::b62d:56ff:fe25:79b1"
 
 
+SWITCH_KEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJb4PBnGmVcWqX0OZ8pT"
+              "+3QMq7dH2iWc1Rk0vKqZf1kQ root@switch")
+
+
 class TestAdoptFullFlow:
     @pytest.fixture(autouse=True)
     def _no_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +85,7 @@ class TestAdoptFullFlow:
     def test_value_readback_flow_passes(self, tmp_path: Path) -> None:
         canned = [
             "extreme-networks,ws-ap3915i",                          # adopt-ready
+            SWITCH_KEY,                                            # adopt-switchkey
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",  # adopt-keys
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED\nRESTARTED",
@@ -90,6 +95,7 @@ class TestAdoptFullFlow:
     def test_wrong_readback_value_refuses_commit(self, tmp_path: Path) -> None:
         canned = [
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",
             "---READBACK---\nstatic\n192.168.1.1/24\n192.168.104.1\n192.168.104.1",
         ]
@@ -100,6 +106,7 @@ class TestAdoptFullFlow:
         scripts: list[str] = []
         canned = iter([
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED",
@@ -320,6 +327,7 @@ class TestKeyAuthProof:
         scripts: list[str] = []
         canned = iter([
             "extreme-networks,ws-ap3915i",
+            SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
             "COMMITTED",
@@ -335,3 +343,81 @@ class TestKeyAuthProof:
         assert "DROPBEAR_PASSWORD=" in proof_line, (
             "key proof must poison password fallback (bare -i passes on the "
             "blank/known password — NR7101 2026-09-23 lesson)")
+
+
+class TestSwitchKeyInstalledSwitchSide:
+    """#291: the adopt-keys payload must embed the switch pubkey (read
+    SWITCH-side), never reference /root/.ssh/id_ed25519.pub DUT-side — that
+    file does not exist on a factory unit, so the switch key was never
+    installed and the KEY-AUTH-OK gate could only pass by other means."""
+
+    @pytest.fixture(autouse=True)
+    def _no_time(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(ba.time, "sleep", lambda s: None)
+        monkeypatch.setattr(ba.time, "monotonic", lambda: 0)
+        # deterministic mac_keys: none (isolates the switch-key path)
+        monkeypatch.setattr(ba.Path, "home", classmethod(lambda cls: tmp_path))
+
+    def _run_and_capture(self, tmp_path: Path) -> list[str]:
+        scripts: list[str] = []
+        canned = iter([
+            "extreme-networks,ws-ap3915i",       # adopt-ready
+            SWITCH_KEY,                          # adopt-switchkey
+            "KEYS-PUSHED\nKEY-AUTH-OK\n1",       # adopt-keys
+            "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
+            "COMMITTED\nRESTARTED",
+        ])
+
+        def capture(script: str) -> str:
+            scripts.append(script)
+            return next(canned)
+
+        ba.stage_adopt(ba.Runner(capture, PLACE, tmp_path / "ev"))
+        return scripts
+
+    def test_switch_key_fetched_switch_side_first(self, tmp_path: Path) -> None:
+        scripts = self._run_and_capture(tmp_path)
+        fetch = next(s for s in scripts if "cat /root/.ssh/id_ed25519.pub" in s)
+        assert "dbclient" not in fetch, "key fetch must run on the switch, not via DUT"
+
+    def test_payload_has_no_dut_side_key_read(self, tmp_path: Path) -> None:
+        scripts = self._run_and_capture(tmp_path)
+        keys_line = next(ln for s in scripts for ln in s.splitlines()
+                         if "KEYS-PUSHED" in ln)
+        assert "$(head -c 24" not in keys_line
+        assert "cat /root/.ssh/id_ed25519.pub" not in keys_line, \
+            "payload runs on a factory DUT where that file does not exist"
+        assert SWITCH_KEY in keys_line, "switch key content must be embedded"
+
+    def test_missing_switch_key_fails_loudly(self, tmp_path: Path) -> None:
+        canned = iter([
+            "extreme-networks,ws-ap3915i",
+            "",  # switch-side fetch returned nothing
+        ])
+
+        def capture(script: str) -> str:
+            return next(canned)
+
+        with pytest.raises(ba.AdoptError, match="cannot read the switch pubkey"):
+            ba.stage_adopt(ba.Runner(capture, PLACE, tmp_path / "ev"))
+
+    @staticmethod
+    def _payload(scripts: list[str]) -> str:
+        keys_line = next(ln for s in scripts for ln in s.splitlines()
+                         if "KEYS-PUSHED" in ln)
+        # payload rides inside double quotes on the dbclient line
+        return keys_line.split('"', 1)[1].rsplit('"', 1)[0]
+
+    def test_factory_fresh_stub_installs_key_exactly_once(self, tmp_path: Path) -> None:
+        import subprocess
+        scripts = self._run_and_capture(tmp_path)
+        payload = self._payload(scripts)
+        # simulate the factory DUT: rewrite /etc/dropbear into the sandbox
+        # (the factory unit has NO /root/.ssh — which is the whole bug)
+        dut_etc = tmp_path / "factory-dut/etc/dropbear"
+        payload = payload.replace("/etc/dropbear", str(dut_etc))
+        for _ in range(2):  # idempotent across two runs
+            subprocess.run(["/bin/sh", "-c", payload], check=True)
+        installed = (dut_etc / "authorized_keys").read_text()
+        assert installed.count(SWITCH_KEY) == 1, \
+            "switch key must land exactly once, not duplicate across runs"
