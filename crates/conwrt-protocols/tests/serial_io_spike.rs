@@ -22,7 +22,8 @@
 #![cfg(unix)]
 
 use conwrt_protocols::serial_io::{
-    AcceptanceCheck, AsyncRead, AsyncWrite, ChunkedSerialIo, send_firmware_verified_async,
+    AcceptanceCheck, AsyncRead, AsyncWrite, ChunkedSerialIo, NoReArm, ReceiverReArm,
+    send_firmware_verified_async,
 };
 use conwrt_protocols::xmodem_transfer::{BlockLength, RetryPolicy, VerifiedError};
 use crc16::State as Crc16State;
@@ -118,6 +119,10 @@ impl TestSerial {
     fn set_verify_mode(&self) {
         self.sock.set_nonblocking(true).unwrap();
     }
+
+    fn set_write_deadline(&self, d: Duration) {
+        self.sock.set_write_timeout(Some(d)).unwrap();
+    }
 }
 
 impl std::io::Read for TestSerial {
@@ -191,6 +196,36 @@ impl AcceptanceCheck<TestSerial> for CrcEchoCheck {
 
 type OutcomeSlot = Arc<Mutex<Option<(TestSerial, Result<usize, VerifiedError>)>>>;
 
+/// Test-side re-arm: issue the U-Boot-shaped load command and wait for
+/// the ready banner — what a real driver does between attempts
+/// (`loadx 0x46000000` → `## Ready`).
+const REARM_CMD: &[u8] = b"loadx 0x46000000\r";
+const REARM_BANNER: &[u8] = b"## Ready\n";
+const ABORT_BANNER: &[u8] = b"## aborted\n";
+
+struct UBootPromptReArm {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ReceiverReArm<TestSerial> for UBootPromptReArm {
+    async fn rearm(&mut self, io: &mut ChunkedSerialIo<TestSerial>) {
+        io.inner_mut().set_verify_mode();
+        let mut abort = [0u8; ABORT_BANNER.len()];
+        io.read_exact(&mut abort)
+            .await
+            .expect("abort/prompt banner from the receiver");
+        assert_eq!(&abort, ABORT_BANNER);
+        io.write_all(REARM_CMD).await.expect("send loadx");
+        let mut banner = [0u8; REARM_BANNER.len()];
+        io.read_exact(&mut banner)
+            .await
+            .expect("ready banner after loadx");
+        assert_eq!(&banner, REARM_BANNER);
+        io.inner_mut().set_transfer_mode();
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Drive `send_firmware_verified_async` on a dedicated thread's MiniExec
 /// with a co-scheduled heartbeat task — the no-starvation probe. Returns
 /// the outcome slot, a completion flag, and the heartbeat tick counter.
@@ -199,6 +234,7 @@ fn drive_on_exec(
     payload: Vec<u8>,
     policy: RetryPolicy,
     check: impl AcceptanceCheck<TestSerial> + Send + 'static,
+    rearm: impl ReceiverReArm<TestSerial> + Send + 'static,
 ) -> (OutcomeSlot, Arc<AtomicBool>, Arc<AtomicUsize>) {
     let ticks = Arc::new(AtomicUsize::new(0));
     let slot: OutcomeSlot = Arc::default();
@@ -223,6 +259,7 @@ fn drive_on_exec(
                 BlockLength::Standard,
                 policy,
                 check,
+                rearm,
             )
             .await;
             *slot_in.lock().unwrap() = Some(outcome);
@@ -263,6 +300,14 @@ fn lenient_nak_claimed_success_refused_then_restarted_verified() {
     let receiver = std::thread::spawn(move || {
         let mut peer = peer;
         for attempt in 1..=2u32 {
+            // Real receivers do NOT re-enter receive mode after an
+            // attempt: sit at the prompt until the driver re-arms.
+            if attempt > 1 {
+                let mut cmd = [0u8; REARM_CMD.len()];
+                peer.read_exact(&mut cmd).expect("rearm command");
+                assert_eq!(&cmd, REARM_CMD);
+                peer.write_all(REARM_BANNER).expect("ready banner");
+            }
             peer.write_all(&[CRC_START]).expect("start C");
             ts.fetch_add(1, Ordering::Relaxed);
             let mut accepted: Vec<u8> = Vec::with_capacity(16384);
@@ -280,6 +325,7 @@ fn lenient_nak_claimed_success_refused_then_restarted_verified() {
             peer.write_all(b"OK").unwrap();
             peer.write_all(&crc16_of(&accepted).to_be_bytes())
                 .expect("crc echo");
+            peer.write_all(ABORT_BANNER).expect("back at prompt");
         }
     });
 
@@ -288,6 +334,7 @@ fn lenient_nak_claimed_success_refused_then_restarted_verified() {
         expected,
         calls: calls.clone(),
     };
+    let rearms = Arc::new(AtomicUsize::new(0));
     let (slot, done, ticks) = drive_on_exec(
         TestSerial::new(dev_sock),
         payload.clone(),
@@ -296,6 +343,9 @@ fn lenient_nak_claimed_success_refused_then_restarted_verified() {
             restart_delay_ms: 30,
         },
         check,
+        UBootPromptReArm {
+            calls: rearms.clone(),
+        },
     );
 
     assert!(
@@ -318,6 +368,11 @@ fn lenient_nak_claimed_success_refused_then_restarted_verified() {
         transfers_seen.load(Ordering::Relaxed),
         2,
         "whole transfer restarted once"
+    );
+    assert_eq!(
+        rearms.load(Ordering::Relaxed),
+        1,
+        "receiver was re-armed between attempts"
     );
     let final_ticks = ticks.load(Ordering::Relaxed);
     assert!(
@@ -379,7 +434,16 @@ fn strict_receiver_abort_exhausts_sender_then_clean_restart_verifies() {
             }
         }
 
+        // Attempt 1 is over (aborted, bootloader back at its prompt);
+        // the driver must re-arm before attempt 2.
         peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        peer.write_all(ABORT_BANNER)
+            .expect("abort banner at prompt");
+        let mut cmd = [0u8; REARM_CMD.len()];
+        peer.read_exact(&mut cmd).expect("rearm command");
+        assert_eq!(&cmd, REARM_CMD);
+        peer.write_all(REARM_BANNER).expect("ready banner");
+
         peer.write_all(&[CRC_START]).expect("start C");
         ts.fetch_add(1, Ordering::Relaxed);
         let mut accepted = Vec::new();
@@ -399,6 +463,7 @@ fn strict_receiver_abort_exhausts_sender_then_clean_restart_verifies() {
         expected,
         calls: calls.clone(),
     };
+    let rearms = Arc::new(AtomicUsize::new(0));
     let (slot, done, ticks) = drive_on_exec(
         TestSerial::new(dev_sock),
         payload.clone(),
@@ -407,6 +472,9 @@ fn strict_receiver_abort_exhausts_sender_then_clean_restart_verifies() {
             restart_delay_ms: 30,
         },
         check,
+        UBootPromptReArm {
+            calls: rearms.clone(),
+        },
     );
 
     assert!(
@@ -426,6 +494,11 @@ fn strict_receiver_abort_exhausts_sender_then_clean_restart_verifies() {
         "attempt 1 failed sender-side: no claimed success, no verify call"
     );
     assert_eq!(transfers_seen.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        rearms.load(Ordering::Relaxed),
+        1,
+        "receiver re-armed once after the aborted attempt"
+    );
     assert!(
         ticks.load(Ordering::Relaxed) >= 50,
         "heartbeat advanced through the ~0.5 s sender exhaustion window"
@@ -477,6 +550,7 @@ fn dropping_driver_mid_attempt_cancels_bounded() {
             restart_delay_ms: 30,
         },
         check,
+        NoReArm,
     ));
 
     let waker = noop_waker();
@@ -575,27 +649,90 @@ fn chunked_adapter_bounded_steps_and_external_wake() {
     let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
     let flag_waker = Waker::from(flag.clone());
     let mut cx_flag = Context::from_waker(&flag_waker);
+    // The readiness handle is the IRQ-shaped wake path: callable while a
+    // read/write future exclusively borrows the adapter (#124 review).
+    let readiness = io.readiness();
     {
         let mut f = Box::pin(io.read(&mut buf));
         assert!(
             f.as_mut().poll(&mut cx_flag).is_pending(),
             "drained line: Pending again"
         );
-    }
-    assert!(
-        !flag.0.load(Ordering::Acquire),
-        "no spurious wake before wake()"
-    );
-    peer.write_all(&[1, 2, 3]).expect("producer writes");
-    io.wake();
-    assert!(
-        flag.0.load(Ordering::Acquire),
-        "wake() must fire the waker registered by the pending poll"
-    );
-    {
-        let mut f = Box::pin(io.read(&mut buf));
+        assert!(
+            !flag.0.load(Ordering::Acquire),
+            "no spurious wake before wake()"
+        );
+        peer.write_all(&[1, 2, 3]).expect("producer writes");
+        readiness.wake();
+        assert!(
+            flag.0.load(Ordering::Acquire),
+            "readiness wake() must fire the waker registered by the pending poll"
+        );
         assert!(f.as_mut().poll(&mut cx_flag).is_ready());
     }
     io.inner_mut().set_transfer_mode();
     let _ = io.into_inner();
+}
+
+/// A peer that stops draining mid-transfer must not wedge the flow: the
+/// transport's WRITE deadline turns the stalled block-write into a fatal
+/// engine error, every attempt ends promptly, and the driver returns
+/// bounded (`AttemptsExhausted`) instead of hanging (#124 review: bound
+/// worker writes before promising cancellation).
+#[test]
+fn write_deadline_bounds_a_stalled_peer() {
+    let payload: Vec<u8> = vec![0x36; 600_000];
+    let (dev_sock, peer) = UnixStream::pair().expect("socketpair");
+    let serial = TestSerial::new(dev_sock);
+    serial.set_write_deadline(Duration::from_millis(100));
+
+    let peer_gone = Arc::new(AtomicBool::new(false));
+    let gone = peer_gone.clone();
+    let receiver = std::thread::spawn(move || {
+        let mut peer = peer;
+        peer.write_all(&[CRC_START]).expect("start C");
+        let mut sink = [0u8; 200];
+        peer.read_exact(&mut sink)
+            .expect("read a little, then stall");
+        std::thread::sleep(Duration::from_secs(8));
+        gone.store(true, Ordering::Release);
+    });
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let check = CrcEchoCheck { expected: 0, calls };
+    let (slot, done, _ticks) = drive_on_exec(
+        serial,
+        payload.clone(),
+        RetryPolicy {
+            max_attempts: 3,
+            restart_delay_ms: 20,
+        },
+        check,
+        NoReArm,
+    );
+
+    let t0 = Instant::now();
+    assert!(
+        wait_until(
+            || done.load(Ordering::Acquire) && slot.lock().unwrap().is_some(),
+            Duration::from_secs(20)
+        ),
+        "driver must stay bounded against a stalled peer"
+    );
+    let elapsed = t0.elapsed();
+    let (_, result) = slot.lock().unwrap().take().expect("outcome");
+    receiver.join().expect("receiver thread");
+
+    assert!(
+        matches!(result, Err(VerifiedError::AttemptsExhausted { attempts, .. }) if attempts == 3),
+        "expected bounded exhaustion, got {result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "stalled peer cost {elapsed:?} — write deadline did not bound it"
+    );
+    assert!(
+        peer_gone.load(Ordering::Acquire),
+        "peer finished its window without interference"
+    );
 }
