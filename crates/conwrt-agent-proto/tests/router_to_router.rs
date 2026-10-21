@@ -62,7 +62,7 @@ fn deploy_and_start_agent() -> bool {
         .arg("root@127.0.0.1")
         .arg(
             "kill $(pgrep conwrt-agent) 2>/dev/null; chmod +x /tmp/conwrt-agent && \
-/tmp/conwrt-agent --listen 0.0.0.0:8400 \
+/tmp/conwrt-agent --listen 0.0.0.0:8400 --insecure-allow-non-loopback \
   --capability serial:uarts=2 \
   --capability link-probe \
   --capability tftp-server:port=69 \
