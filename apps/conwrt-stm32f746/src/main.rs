@@ -141,14 +141,20 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_task(runner).expect("spawn net"));
 
     let server = ServerCore::with_uart(
-        "conwrt-stm32f746 0.3.0",
+        "conwrt-stm32f746 0.4.0",
         capabilities(),
         Box::new(Usart6Sink { tx: uart_tx }),
     )
     // #226 slice 3: StreamChunk/StreamStatus land in the executor's
     // bounded window (the recovery POST pump is a later, bench-gated
     // slice — this wiring makes the stream endpoints live).
-    .attach_transfer(Box::new(ExecutorTransfer::new(EXECUTOR_WINDOW)));
+    .attach_transfer(Box::new(ExecutorTransfer::new(EXECUTOR_WINDOW)))
+    // #215 slice 5: standalone detect mode — the router console RX
+    // (already feeding UartData events) runs through the shared
+    // probe-core milestone tracker; a controller arms it with
+    // DetectStart and harvests DetectFinding events (mock-first in
+    // conwrt-agent-proto's HIL suite; bench validation NEEDS-BENCH).
+    .attach_detect(0);
     spawner.spawn(agent_task(stack, server, UartRxSource(uart_rx)).expect("spawn agent"));
 }
 
@@ -248,9 +254,26 @@ fn capabilities() -> Vec<CapabilityInfo> {
             name: String::from("diag"),
             detail: Vec::from([
                 (String::from("chip"), String::from("stm32f746ng")),
-                (String::from("fw"), String::from("conwrt-stm32f746 0.3.0")),
+                (String::from("fw"), String::from("conwrt-stm32f746 0.4.0")),
                 (String::from("heap_bytes"), String::from("32768")),
                 (String::from("uid"), String::from(uid)),
+            ]),
+        },
+        CapabilityInfo {
+            // #215 slice 5: standalone detect mode — boot-milestone
+            // detection on uart0 (DetectStart/DetectStatus/DetectFinding),
+            // powered by the shared conwrt-probe-core tracker.
+            name: String::from("detect"),
+            detail: Vec::from([
+                (String::from("port"), String::from("0")),
+                (
+                    String::from("milestones"),
+                    String::from(
+                        "serial_uboot_banner,serial_kernel_start,serial_procd_preinit,\
+                         serial_procd_init,serial_login_prompt",
+                    ),
+                ),
+                (String::from("core"), String::from("conwrt-probe-core")),
             ]),
         },
     ])
