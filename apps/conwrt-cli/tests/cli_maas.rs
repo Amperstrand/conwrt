@@ -170,7 +170,8 @@ fn maas_vm_list_prints_region_machines() {
 fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
     let server = MockServer::start();
     server.mock(|when, then| {
-        when.method(POST).path("/MAAS/api/2.0/vm-hosts/7/compose/");
+        when.method(POST)
+            .path("/MAAS/api/2.0/vm-hosts/7/op-compose");
         then.status(200)
             .json_body(machine_json("sys-1", "Commissioning"));
     });
@@ -181,8 +182,10 @@ fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
     server.mock(|when, then| {
         when.method(POST)
             .path("/MAAS/api/2.0/machines/")
-            .query_param("op", "allocate");
-        then.status(200).json_body(json!({}));
+            .query_param("op", "allocate")
+            .body_contains("name=vm-sys-1");
+        then.status(200)
+            .json_body(machine_json("sys-1", "Allocated"));
     });
     server.mock(|when, then| {
         when.method(POST)
@@ -218,7 +221,7 @@ fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
         stderr.contains("never reached Deployed after 3 polls"),
         "stderr: {stderr}"
     );
-    machine.assert_hits(4); // 1 (await Ready) + 3 (bounded await Deployed)
+    machine.assert_hits(5); // 1 (await Ready) + 1 (allocate name lookup) + 3 (bounded await Deployed)
 }
 
 #[test]
