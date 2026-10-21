@@ -248,6 +248,54 @@ impl AgentClient {
         }
     }
 
+    /// Arm boot-milestone detection on a UART port (#215 slice 5);
+    /// latched milestones arrive as `AgentEvent::DetectFinding` via
+    /// [`AgentClient::try_recv_event`]. Returns the (fresh, empty)
+    /// session report.
+    ///
+    /// # Errors
+    /// Transport failure or agent error (no detection session armed).
+    pub async fn detect_start(
+        &mut self,
+        port: u8,
+    ) -> Result<crate::protocol::DetectReport, ClientError> {
+        match self
+            .round_trip(WireEndpoint::DetectStart(crate::protocol::DetectRequest {
+                port,
+            }))
+            .await?
+        {
+            WireResult::Detect(report) => Ok(report),
+            WireResult::Error(e) => Err(ClientError::Agent(e)),
+            _ => Err(ClientError::Agent(crate::dispatch::WireError::Internal(
+                "unexpected response type".into(),
+            ))),
+        }
+    }
+
+    /// Query a detection session's latched findings (reconnect
+    /// catch-up).
+    ///
+    /// # Errors
+    /// Transport failure or agent error (no detection session armed).
+    pub async fn detect_status(
+        &mut self,
+        port: u8,
+    ) -> Result<crate::protocol::DetectReport, ClientError> {
+        match self
+            .round_trip(WireEndpoint::DetectStatus(
+                crate::protocol::DetectStatusQuery { port },
+            ))
+            .await?
+        {
+            WireResult::Detect(report) => Ok(report),
+            WireResult::Error(e) => Err(ClientError::Agent(e)),
+            _ => Err(ClientError::Agent(crate::dispatch::WireError::Internal(
+                "unexpected response type".into(),
+            ))),
+        }
+    }
+
     /// Non-blocking: drain any buffered unsolicited events.
     #[must_use]
     pub fn try_recv_event(&mut self) -> Option<AgentEvent> {

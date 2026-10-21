@@ -16,6 +16,9 @@ std = ["conwrt-types/std"]
 
 [dependencies]
 conwrt-types = { path = "../conwrt-types", default-features = false }
+# #215 slice 5: the shared detection core owns the vocabulary matching
+# primitives — host classify and firmware detect run the same matcher.
+conwrt-probe-core = { path = "../conwrt-probe-core", default-features = false }
 
 [dev-dependencies]
 pollster = { workspace = true }
