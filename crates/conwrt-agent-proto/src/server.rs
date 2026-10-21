@@ -386,7 +386,12 @@ impl ServerCore {
                 ))),
             },
             WireEndpoint::DetectStatus(query) => match self.detect.as_ref() {
-                Some(session) if session.port == query.port => WireResult::Detect(session.report()),
+                Some(session) if session.port == query.port => {
+                    if !session.armed {
+                        return WireResult::Error(WireError::DetectNotArmed(session.port));
+                    }
+                    WireResult::Detect(session.report())
+                }
                 Some(_) => WireResult::Error(WireError::Internal(alloc::format!(
                     "detect not armed on uart{}",
                     query.port
@@ -1000,6 +1005,21 @@ mod tests {
         let events = c.take_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], AgentEvent::UartData { ref data, .. } if data == b"noise"));
+    }
+
+    #[test]
+    fn detect_status_before_armed_is_a_structured_error() {
+        // review round 2: an un-armed session must not answer with an
+        // empty report — a controller cannot distinguish that from an
+        // armed, quiet session (e.g. after an MCU reboot)
+        let mut c = detect_core();
+        let result = detect_status(&mut c);
+        assert_eq!(result, WireResult::Error(WireError::DetectNotArmed(0)));
+        detect_start(&mut c);
+        assert!(
+            matches!(detect_status(&mut c), WireResult::Detect(_)),
+            "arming makes status answerable"
+        );
     }
 
     #[test]

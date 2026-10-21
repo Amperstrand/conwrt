@@ -95,6 +95,11 @@ pub enum WireError {
     /// The operation needs the named resource lease first (M5 #110: UART
     /// writes are lease-gated).
     LeaseRequired(String),
+    /// The detection session on this port exists but no controller has
+    /// armed it with `DetectStart` yet (#215 slice 5) —
+    /// `DetectStatus` refuses rather than returning an empty report a
+    /// controller cannot distinguish from an armed, quiet session.
+    DetectNotArmed(u8),
 }
 
 /// The wire frame: exactly one per COBS frame.
