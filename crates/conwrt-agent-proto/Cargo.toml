@@ -19,6 +19,7 @@ tokio = { workspace = true, optional = true }
 cobs = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 sha2 = "0.10"
 
 [lints]

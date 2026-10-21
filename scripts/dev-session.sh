@@ -159,7 +159,8 @@ EOF
         | while IFS= read -r br; do
             if git -C "$REPO_ROOT" merge-base --is-ancestor "$br" origin/master 2>/dev/null; then
                 git -C "$REPO_ROOT" branch -d "$br" >/dev/null 2>&1 \
-                    && echo "branch $br deleted (merged, remote gone)"
+                    && echo "branch $br deleted (merged, remote gone)" \
+                    || echo "branch $br kept (delete refused — checked out here? remove manually)"
             else
                 echo "branch $br kept (remote gone, not merged into origin/master)"
             fi
