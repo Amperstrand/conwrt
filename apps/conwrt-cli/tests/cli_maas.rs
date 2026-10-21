@@ -170,7 +170,8 @@ fn maas_vm_list_prints_region_machines() {
 fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
     let server = MockServer::start();
     server.mock(|when, then| {
-        when.method(POST).path("/MAAS/api/2.0/vm-hosts/7/compose/");
+        when.method(POST)
+            .path("/MAAS/api/2.0/vm-hosts/7/op-compose");
         then.status(200)
             .json_body(machine_json("sys-1", "Commissioning"));
     });
@@ -181,8 +182,10 @@ fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
     server.mock(|when, then| {
         when.method(POST)
             .path("/MAAS/api/2.0/machines/")
-            .query_param("op", "allocate");
-        then.status(200).json_body(json!({}));
+            .query_param("op", "allocate")
+            .body_contains("name=vm-sys-1");
+        then.status(200)
+            .json_body(machine_json("sys-1", "Allocated"));
     });
     server.mock(|when, then| {
         when.method(POST)
@@ -218,7 +221,7 @@ fn maas_vm_create_runs_the_verb_chain_and_reports_bounded_polling() {
         stderr.contains("never reached Deployed after 3 polls"),
         "stderr: {stderr}"
     );
-    machine.assert_hits(4); // 1 (await Ready) + 3 (bounded await Deployed)
+    machine.assert_hits(5); // 1 (await Ready) + 1 (allocate name lookup) + 3 (bounded await Deployed)
 }
 
 #[test]
@@ -260,4 +263,154 @@ fn maas_vm_destroy_deletes_ready_machine_without_release() {
     );
     assert!(stdout.contains("destroyed: sys-1"), "stdout: {stdout}");
     release.assert_hits(0);
+}
+
+#[test]
+fn maas_flash_img_xz_is_decompressed_not_written_compressed() {
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let raw = b"decompressed lab image bytes: not an xz stream, a partition table lives here";
+    let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+    use std::io::Write as _;
+    encoder.write_all(raw).unwrap();
+    let archive = encoder.finish().unwrap();
+    let image = dir.path().join("img.img.xz");
+    std::fs::write(&image, &archive).unwrap();
+    let target = dir.path().join("disk.img");
+
+    let archive_sha: String = Sha256::digest(&archive)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let out = conwrt()
+        .args([
+            "maas",
+            "flash",
+            "--image",
+            image.to_str().unwrap(),
+            "--sha256",
+            &archive_sha,
+            "--target",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        raw,
+        "the DECOMPRESSED image must land on the target"
+    );
+}
+
+#[test]
+fn maas_flash_wrong_checksum_on_xz_archive_refuses_before_write() {
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let raw = b"decompressed lab image bytes";
+    let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+    use std::io::Write as _;
+    encoder.write_all(raw).unwrap();
+    let archive = encoder.finish().unwrap();
+    let image = dir.path().join("img.img.xz");
+    std::fs::write(&image, &archive).unwrap();
+    let target = dir.path().join("disk.img");
+
+    let wrong_sha: String = Sha256::digest(b"not the archive")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let out = conwrt()
+        .args([
+            "maas",
+            "flash",
+            "--image",
+            image.to_str().unwrap(),
+            "--sha256",
+            &wrong_sha,
+            "--target",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(
+        !target.exists(),
+        "nothing written on archive checksum mismatch"
+    );
+}
+
+#[test]
+fn maas_flash_network_config_alone_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("img.img");
+    let nc = dir.path().join("network-config");
+    std::fs::write(&image, IMAGE).unwrap();
+    std::fs::write(&nc, "network: {}").unwrap();
+
+    let out = conwrt()
+        .args([
+            "maas",
+            "flash",
+            "--image",
+            image.to_str().unwrap(),
+            "--sha256",
+            &sha256_hex(),
+            "--target",
+            dir.path().join("d.img").to_str().unwrap(),
+            "--network-config",
+            nc.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        !out.status.success(),
+        "--network-config without the seed pair must be rejected"
+    );
+}
+
+#[test]
+fn maas_flash_unreadable_network_config_exits_cleanly_not_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("img.img");
+    let ud = dir.path().join("user-data");
+    let md = dir.path().join("meta-data");
+    std::fs::write(&image, IMAGE).unwrap();
+    std::fs::write(&ud, "#cloud-config\n").unwrap();
+    std::fs::write(&md, "instance-id: x").unwrap();
+
+    let out = conwrt()
+        .args([
+            "maas",
+            "flash",
+            "--image",
+            image.to_str().unwrap(),
+            "--sha256",
+            &sha256_hex(),
+            "--target",
+            dir.path().join("d.img").to_str().unwrap(),
+            "--user-data",
+            ud.to_str().unwrap(),
+            "--meta-data",
+            md.to_str().unwrap(),
+            "--network-config",
+            dir.path().join("no-such-network-config").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "controlled exit 2, stderr: {stderr}"
+    );
+    assert!(stderr.contains("cannot read network-config"), "{stderr}");
 }

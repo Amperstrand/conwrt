@@ -20,6 +20,7 @@ cobs = { version = "0.4", default-features = false, features = ["alloc"] }
 conwrt-probe-core = { path = "../conwrt-probe-core", default-features = false }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 sha2 = "0.10"
 
 [lints]

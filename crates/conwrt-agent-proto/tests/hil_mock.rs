@@ -58,7 +58,7 @@ async fn lease_lifecycle_against_the_mcu_brain() {
     let mut client = AgentClient::connect(&addr).await.expect("connect");
     client.handshake("laptop-hil").await.expect("handshake");
 
-    let LeaseResponse::Granted { heartbeat_ms } = client
+    let LeaseResponse::Granted { heartbeat_ms, .. } = client
         .acquire_lease(uart0_exclusive())
         .await
         .expect("grant")
@@ -272,6 +272,45 @@ async fn s3_diag_capability_is_served_mock_first() {
     let caps = client.capabilities().await.expect("capabilities");
     assert_eq!(caps[0].name, "diag");
     assert_eq!(caps[0].detail, expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn echo_mock_expires_leases_on_heartbeat_timeout() {
+    // #380: the echo mock must drive the lease clock — a lease that is
+    // granted but never heartbeated EXPIRES and reports LeaseExpired.
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        run_echo_mock_on(listener, "echo-mock 0.1.0").await;
+    });
+
+    let mut client = AgentClient::connect(&addr.to_string()).await.unwrap();
+    client.handshake("expiry-probe").await.unwrap();
+    let resp = client.acquire_lease(uart0_exclusive()).await.unwrap();
+    assert!(matches!(resp, LeaseResponse::Granted { .. }));
+
+    // Never heartbeat: the mock's 1s tick burns the budget (3) and the
+    // LeaseExpired event must arrive. The capabilities RPC doubles as
+    // the read pump (responses and unsolicited events share the wire).
+    // Paused-clock sleeps auto-advance; the wall-clock bound only
+    // guards against a broken mock, not the expiry itself.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut expired = false;
+    while std::time::Instant::now() < deadline {
+        let _ = client.capabilities().await;
+        while let Some(ev) = client.try_recv_event() {
+            if matches!(ev, AgentEvent::LeaseExpired(_)) {
+                expired = true;
+            }
+        }
+        if expired {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(expired, "lease never expired over the echo mock");
 }
 
 /// #215 slice 5 acceptance shape, mock stage: the F746 standalone

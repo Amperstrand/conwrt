@@ -243,14 +243,40 @@ impl TrustStore for FileTrustStore {
             s.push(".tmp");
             PathBuf::from(s)
         };
-        let Ok(mut tmp) = File::create(&tmp_path) else {
-            return;
+        // The rename must be unreachable unless the temp store is fully
+        // persisted: a partial swap over known_hosts DESTROYS trust
+        // (the --relearn-host-key hazard, #380). Every failure skips
+        // the swap, cleans the temp, and says so.
+        let mut tmp = match File::create(&tmp_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("trust store: cannot create {}: {e}", tmp_path.display());
+                return;
+            }
         };
-        for (h, k) in &entries {
-            let _ = writeln!(tmp, "{} {} {}", h, k.key_algo, k.fingerprint);
+        let persisted = (|| -> std::io::Result<()> {
+            for (h, k) in &entries {
+                writeln!(tmp, "{} {} {}", h, k.key_algo, k.fingerprint)?;
+            }
+            tmp.sync_all()?;
+            Ok(())
+        })();
+        drop(tmp);
+        match persisted {
+            Ok(()) => {
+                if let Err(e) = fs::rename(&tmp_path, &self.path) {
+                    eprintln!("trust store: rename to {} failed: {e}", self.path.display());
+                    let _ = fs::remove_file(&tmp_path);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "trust store: partial write to {} discarded: {e}",
+                    tmp_path.display()
+                );
+                let _ = fs::remove_file(&tmp_path);
+            }
         }
-        let _ = tmp.sync_all();
-        let _ = fs::rename(&tmp_path, &self.path);
     }
 
     fn forget(&mut self, host: &str) {
