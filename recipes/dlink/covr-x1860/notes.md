@@ -163,3 +163,69 @@
 - **HNAP firmware upload returns OK but stock v1.02 rejects OpenWrt during validation — NO successful flash ever recorded. Use recovery-http instead**
 - **Stock firmware wizard is aggressive**: session times out after ~170s of inactivity, redirects to Login.html
 - **GetFirmwareSettings confirms `UpdateMethods: HNAP_UPLOAD`** — the device claims to support it, but validation blocks non-OEM firmware
+
+## Boot-time dual-image behavior (GPL-source verified, 2026-10-19)
+
+D-Link's bootloader keeps TWO firmware slots (main + backup) and runs a
+check on EVERY plain boot — from `board/ralink/common/dual_image.c` in the
+COVR-X1860 GPL tarball (mirror: github.com/lyq1996/MT7621-U-Boot, same
+file; cross-referenced with the port author's analysis in
+forum.openwrt.org/t/161862 and serial-console observations in
+forum.openwrt.org/t/106500):
+
+```
+verify_image(main)  -> valid? + hash
+verify_image(backup)-> valid? + hash
+  both valid AND hashes identical -> "Passed" -> boot kernel (instant)
+  main valid, backup not          -> "Restoring backup image ...":
+                                     erase backup + copy main->backup
+                                     (MANY MINUTES of NAND writing),
+                                     then SELF-REBOOT and re-run this check
+  main invalid, backup valid      -> same dance, reversed
+  both invalid                    -> recovery mode (red blink, HTTP upload)
+```
+
+Key facts and their consequences:
+
+1. **A recovery flash always leaves backup stale** (the recovery writer
+   flashes main; the backup slot then holds non-squashfs leftovers), so
+   EVERY recovery flash is followed by exactly one bootloader repair
+   (copy + self-reboot + recheck) before the first successful boot.
+2. **Power-cycling during the copy destroys its progress** — the next
+   boot restarts the repair from scratch. Rapid power-cycling after a
+   flash therefore produces a self-inflicted boot loop that looks like
+   "the flash didn't take". It is NOT nondeterminism: the unit boots
+   (and stays booted) once a single repair completes undisturbed.
+   Observed live: a unit that failed ~4 rapid cycles booted the moment
+   cycling paused for ~7 min, and then rebooted instantly on every
+   subsequent cycle (converged slots -> "Passed" in seconds).
+3. **SOP after a consumed recovery POST**: power-cycle ONCE, then hands
+   off for 15-25 minutes (repair copy + self-reboot + first-boot UBI
+   format, each phase minutes long). Red LED for many minutes mid-window
+   is the copy in progress, not failure. The only externally visible
+   signals during the repair are the LED and the ethernet carrier
+   (the self-reboot blips carrier ~1 s); there is no network stack to
+   probe. The full log ("Verifying main image ... / Restoring backup
+   image ... / Done") is only on the serial console (labeled header,
+   3.3 V, 115200 8n1).
+4. **Hold-reset-during-power-on is NOT a repair or reset path**: it
+   enters recovery mode (park at 192.168.0.1, wait for HTTP upload,
+   red blink). It performs no check, no copy, no boot attempt — using
+   it after a flash discards repair progress for nothing. It is only
+   the flashing door.
+5. The OpenWrt image ships a fake-squashfs-padded kernel
+   (`append-squashfs4-fakeroot`, kernel padded to 8 MiB) precisely so
+   `verify_image` accepts it, and the second slot's data area is folded
+   into the runtime UBI via `mtd-concat` — after the bootloader's
+   repair copy, the foreign bytes in the backup slot's data area are
+   simply ignored by UBI as dirty blocks.
+
+Sources: D-Link COVR-X1860_A1 GPL tarball (U-Boot `dual_image.c`,
+`verify_image`/`find_rootfs`/`copy_image`, printf strings quoted
+above); forum.openwrt.org/t/add-support-for-d-link-covr-x1860 (port
+author's bootloader analysis, incl. "no active partition toggle — only
+main is ever booted" and the duplicate-then-reboot flow);
+forum.openwrt.org/t/106500 (DIR-X1860 sibling, serial-verified restore
+behavior and "no regression after landing"); OpenWrt commit 0a18259e
+(DTS: dual-slot layout, LED aliases led-failsafe=red / led-running=white,
+labeled serial header).

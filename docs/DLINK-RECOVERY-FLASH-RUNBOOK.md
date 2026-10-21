@@ -10,7 +10,9 @@ Evidence base: `models/dlink-covr-x1860-a1.json` `bench_observations`
 (commits `8269043`, merged as PR #198 `9edb378`), AGENTS.md
 "D-Link Recovery Flashing" (commit `3462db4`), issues #91 / #228 / #229 / #230,
 `recipes/dlink/covr-x1860/notes.md`, `scripts/flash/upload.py`,
-`scripts/flash-recovery.sh`.
+`scripts/flash-recovery.sh`, `scripts/flash/chromium_upload.py`
+(real-Chromium driver: browser-cache drift fallback, local-form
+first-request-POST default, outcome classification).
 
 ---
 
