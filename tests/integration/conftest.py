@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -26,6 +27,12 @@ VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 VM_PIDFILE = REPO_ROOT / "tests" / "integration" / ".openwrt-session-vm.pid"
 SSH_PORT = port_from_env("CONWRT_VM_SESSION_PORT", 2222)
 SSH_HOST = "127.0.0.1"
+# Host UDP port forwarded to the guest's WireGuard listen port (51820) for
+# the VM-as-server E2E test (tests/integration/test_wireguard_e2e.py).
+# Best-effort: if the port is busy on this host (a real wireguard server or a
+# sibling QEMU session), the forward is omitted and that test skips — boot
+# behavior for every other test is unchanged.
+WG_FWD_PORT = port_from_env("CONWRT_VM_WG_FWD_PORT", 51820)
 OPENWRT_VERSION = "25.12.5"
 IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
 PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
@@ -225,6 +232,16 @@ def _vm_layer_supported() -> bool:
     return sys.platform.startswith("linux") and os.path.exists("/dev/kvm")
 
 
+def _udp_port_free(port: int) -> bool:
+    """True if the host can bind the UDP port (QEMU hostfwd binds 0.0.0.0)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+        return True
+
+
 @pytest.fixture(scope="session")
 def openwrt_vm():
     if not _vm_layer_supported():
@@ -274,11 +291,22 @@ def openwrt_vm():
     require_free(SSH_PORT, SSH_HOST, "CONWRT_VM_SESSION_PORT",
                  "session VM (QEMU OpenWrt integration fixture)")
 
+    # Optional UDP forward for the WireGuard VM-as-server E2E test. Omitted
+    # (never fatal — every other test boots exactly as before) when the host
+    # port is taken.
+    wg_fwd_port = WG_FWD_PORT if _udp_port_free(WG_FWD_PORT) else None
+    if wg_fwd_port is None:
+        print(f"  UDP {WG_FWD_PORT} busy — WireGuard hostfwd omitted "
+              f"(test_wireguard_e2e vm-as-server test will skip)", flush=True)
+    hostfwds = [f"tcp::{SSH_PORT}-:22"]
+    if wg_fwd_port is not None:
+        hostfwds.append(f"udp::{wg_fwd_port}-:51820")
+
     qemu_cmd = [
         "qemu-system-x86_64",
         "-drive", f"file={VM_OVERLAY},format=qcow2,if=virtio",
         "-m", "512M",
-        "-netdev", f"user,id=net0,hostfwd=tcp::{SSH_PORT}-:22",
+        "-netdev", "user,id=net0," + ",".join(f"hostfwd={h}" for h in hostfwds),
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
         "-serial", f"file:{SERIAL_LOG}",
@@ -334,7 +362,8 @@ def openwrt_vm():
             i += 1
         ssh_config.write_text("".join(kept) + wanted)
 
-    yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY)}
+    yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY),
+           "wg_fwd_port": wg_fwd_port}
 
     _capture_evidence()
     if VM_PIDFILE.exists():
