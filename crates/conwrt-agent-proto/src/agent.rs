@@ -197,7 +197,8 @@ async fn dispatch_request(
                 req.on_disconnect,
                 config.heartbeat_budget,
             ) {
-                Ok(_) => WireResult::Lease(LeaseResponse::Granted {
+                Ok(lease_id) => WireResult::Lease(LeaseResponse::Granted {
+                    lease_id,
                     heartbeat_ms: config.heartbeat_ms,
                 }),
                 Err(LeaseError::Denied(LeaseDenied::HeldBy(h))) => {

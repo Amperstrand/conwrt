@@ -1380,20 +1380,56 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             resource,
             shared,
         } => {
-            let result = rt.block_on(async {
+            // #378: the lease is held for the process lifetime — a
+            // heartbeat loop keeps it alive and Ctrl-C releases it. An
+            // acquired-then-abandoned lease pins the resource until
+            // agent restart.
+            let result: Result<conwrt_agent_proto::protocol::LeaseResponse, _> =
+                rt.block_on(async {
                 let mut client = AgentClient::connect(&addr).await?;
                 client.handshake("conwrt-cli").await?;
-                client
+                let resp = client
                     .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
                         resource,
                         exclusive: !shared,
                         on_disconnect: DisconnectPolicy::Abort,
                     })
-                    .await
+                    .await?;
+                let conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                } = resp
+                else {
+                    return Ok::<_, conwrt_agent_proto::controller::ClientError>(resp);
+                };
+                println!(
+                    "lease {lease_id} granted (heartbeat every {heartbeat_ms}ms; Ctrl-C to release)"
+                );
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(
+                            heartbeat_ms.into(),
+                        )) => {
+                            client.heartbeat(lease_id).await?;
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            let released = client.release_lease(lease_id).await?;
+                            if released {
+                                println!("lease {lease_id} released");
+                            } else {
+                                eprintln!("lease {lease_id} was already gone");
+                            }
+                            break;
+                        }
+                    }
+                }
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted {
+                    lease_id,
+                    heartbeat_ms,
+                })
             });
             match result {
-                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { heartbeat_ms }) => {
-                    println!("granted (heartbeat every {heartbeat_ms}ms)");
+                Ok(conwrt_agent_proto::protocol::LeaseResponse::Granted { .. }) => {
                     ExitCode::SUCCESS
                 }
                 Ok(conwrt_agent_proto::protocol::LeaseResponse::Denied { holder }) => {
@@ -1414,11 +1450,13 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             });
             match result {
                 Ok(ack) => {
+                    // Offset and state are separate fields: the old
+                    // "{contiguous}/{state} bytes" printed nonsense like
+                    // "4096/in progress bytes" (#378).
                     println!(
-                        "transfer {transfer_id}: {}/{} bytes{}",
+                        "transfer {transfer_id}: {} bytes (state: {})",
                         ack.contiguous,
                         if ack.done { "done" } else { "in progress" },
-                        if ack.done { " (done)" } else { "" }
                     );
                     ExitCode::SUCCESS
                 }

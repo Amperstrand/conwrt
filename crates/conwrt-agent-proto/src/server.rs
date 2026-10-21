@@ -203,7 +203,8 @@ impl ServerCore {
                     req.on_disconnect,
                     HEARTBEAT_BUDGET,
                 ) {
-                    Ok(_) => WireResult::Lease(LeaseResponse::Granted {
+                    Ok(lease_id) => WireResult::Lease(LeaseResponse::Granted {
+                        lease_id,
                         heartbeat_ms: HEARTBEAT_MS,
                     }),
                     Err(LeaseError::Denied(LeaseDenied::HeldBy(holder))) => {
@@ -436,7 +437,10 @@ mod tests {
         );
         assert!(matches!(
             granted,
-            WireResult::Lease(LeaseResponse::Granted { heartbeat_ms: 1000 })
+            WireResult::Lease(LeaseResponse::Granted {
+                lease_id: 1,
+                heartbeat_ms: 1000,
+            })
         ));
 
         let conflict = request(

@@ -172,7 +172,10 @@ mod tests {
     fn lease_response_round_trips() {
         let frame = WireFrame::Response {
             id: 7,
-            result: WireResult::Lease(LeaseResponse::Granted { heartbeat_ms: 1000 }),
+            result: WireResult::Lease(LeaseResponse::Granted {
+                lease_id: 1,
+                heartbeat_ms: 1000,
+            }),
         };
         let bytes = encode_frame(&frame).unwrap();
         let back = decode_frame(&bytes).unwrap();
