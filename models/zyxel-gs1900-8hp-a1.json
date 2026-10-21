@@ -281,17 +281,17 @@
     "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default.",
     "control_plane_wedge_class": {
       "observed": "2026-10-20, three occurrences in one session (25.12.x + realtek-poe fork r5-era)",
-      "trigger_pattern": "PoE daemon activity bursts \u2014 service restarts AND rapid port-toggle (set_port_config) sequences; each control-plane death followed within minutes",
+      "attribution": "Root-caused 2026-10-20 to overlapping-L3/netdev configuration events (recipes/detection-and-recovery.md §7-8). The earlier \"PoE daemon activity bursts\" trigger theory is RETIRED: the PoE daemon is exonerated (healthy counters through the kill); every incident coincided with netdev/L3 config events.",
+      "trigger_pattern": "Overlapping subnet / netdev-L3 configuration events — adding a subnet that OVERLAPS an already-routed prefix wedges the network stack within seconds (openwrt/openwrt#26061). NOT PoE daemon activity.",
       "symptoms": "CPU plane dies (ICMP/SSH/ubus unresponsive) while ASIC forwarding and PoE delivery KEEP WORKING \u2014 powered DUTs stay up through the outage",
       "recovery": "power cycle (mains); config survives; all PoE DUTs cold-cycle and self-recover",
       "detection": "a DUT behind the switch still answers while the switch's own mgmt IP does not = this class",
       "mitigations": [
-        "batch PoE changes; ONE service restart maximum, never bursts",
-        "space port toggles; avoid rapid same-session enable/disable cycles",
+        "never re-use a routed subnet on a second SVI/alias — preflight any SVI add against a lab prefix inventory + live addr/route/neigh tables",
         "keep the serial console attached and EXPORTED \u2014 it is the only diagnostic door when the CPU plane hangs (and console wiring needs TX, RX AND GND verified before you need it)",
         "the on-box wedge-guard timer cannot help when the whole CPU plane hangs \u2014 external liveness watch required"
       ],
-      "see_also": "recipes/detection-and-recovery.md \u00a78"
+      "see_also": "recipes/detection-and-recovery.md \u00a77-8"
     }
   },
   "safety": {

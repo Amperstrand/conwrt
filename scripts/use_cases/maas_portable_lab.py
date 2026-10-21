@@ -6,31 +6,47 @@ Designed for tiny portable home labs that can manage 1-5 servers.
 
 Hardware: Pi 4B (4GB) + COVR-X1860 + USB SSD (≥32GB)
 Software: Ubuntu Server 26.04 + MAAS 3.6.6 + OpenWrt 25.12.x
+
+Per AGENTS.md (operator-private data rules) the bench network plan —
+subnet, gateway, MAAS IP, DHCP pool, beacon listener — is operator-
+specific and belongs in the operator's private project: this module
+declares those as REQUIRED parameters and ships no committed defaults.
 """
 
+from __future__ import annotations
+
+import shlex
 from typing import Any
 
-# Parameters with defaults — overridable via config.toml
+from . import ParamDef, UseCase, register
+
+# Defaults for species-level (non-operator-specific) values only.
 DEFAULTS = {
-    "bench_subnet": "10.50.0.0/24",
-    "bench_gateway": "10.50.0.1",
-    "bench_netmask": "255.255.255.0",
-    "maas_ip": "10.50.0.5",
-    "dhcp_range_start": "10.50.0.100",
-    "dhcp_range_end": "10.50.0.200",
     "root_partition_size": "50G",
     "maas_channel": "3.6/stable",
     "zram_percent": 75,
     "swapfile_size_mb": 2048,
-    "upstream_dns": None,  # defaults to bench_gateway
-    "ntp_servers": None,  # defaults to maas_ip
     "image_arch": "amd64",
     "image_release": "noble",
+    "image_url": (
+        "https://cdimage.ubuntu.com/ubuntu/releases/26.04/release/"
+        "ubuntu-26.04.1-preinstalled-server-arm64+raspi.img.xz"
+    ),
 }
 
+# Operator-specific (bench network plan — AGENTS.md: never committed to
+# conwrt) or security-critical (no default credentials): must be supplied.
 REQUIRED = [
     "uplink_ssid",
     "uplink_password",
+    "bench_subnet",
+    "bench_gateway",
+    "maas_ip",
+    "dhcp_range_start",
+    "dhcp_range_end",
+    "beacon_listener_ip",
+    "beacon_listener_mac",
+    "maas_admin_password",
 ]
 
 DESCRIPTION = """Minimal MAAS for portable home labs.
@@ -57,9 +73,25 @@ def get_first_boot_script(params: dict[str, Any]) -> str:
 
     This runs on the x1860 after OpenWrt is flashed.
     """
-    gateway = params.get("bench_gateway", DEFAULTS["bench_gateway"])
+    gateway = params["bench_gateway"]
+    maas_ip = params["maas_ip"]
     ssid = params["uplink_ssid"]
     password = params["uplink_password"]
+    ssh_key = params.get("ssh_key", "")
+    lan_cidr = f"{gateway}/24"
+
+    if ssh_key:
+        access_block = f"""# Install the operator key (only when supplied — an absent key must
+# never clobber the existing authorized_keys; AGENTS.md access rules)
+_key={shlex.quote(ssh_key)}
+echo "$_key" > /etc/dropbear/authorized_keys
+mkdir -p /root/.ssh && cp /etc/dropbear/authorized_keys /root/.ssh/
+chmod 700 /root /root/.ssh /etc/dropbear
+chmod 600 /etc/dropbear/authorized_keys /root/.ssh/authorized_keys"""
+    else:
+        access_block = (
+            "# no ssh_key supplied: existing authorized_keys left untouched"
+        )
 
     return f"""#!/bin/sh
 # x1860 "deploy MAAS and Raspberry Pi mode"
@@ -69,17 +101,26 @@ set -e
 
 # Identity + access
 uci set system.@system[0].hostname='maas-bench'
-echo '{params.get("ssh_key", "")}' > /etc/dropbear/authorized_keys
-mkdir -p /root/.ssh && cp /etc/dropbear/authorized_keys /root/.ssh/
-chmod 700 /root /root/.ssh /etc/dropbear
-chmod 600 /etc/dropbear/authorized_keys /root/.ssh/authorized_keys
+{access_block}
 
 # Bench bridge: both ports in one L2 segment
 # DSA port names on COVR-X1860: 'ethernet' (LAN) and 'internet' (WAN)
 uci add_list network.@device[0].ports='internet' 2>/dev/null || true
-uci set network.lan.ipaddr='{gateway}/24'
+uci set network.lan.ipaddr={shlex.quote(lan_cidr)}
 uci -q delete network.wan
 uci -q delete network.wan6
+
+# AGENTS.md: never `uci commit` an IP change without verifying the readback
+_lan_set=$(uci get network.lan.ipaddr)
+if [ "$_lan_set" != {shlex.quote(lan_cidr)} ]; then
+    echo "ABORT: network.lan.ipaddr readback '$_lan_set' != expected '{lan_cidr}'; not committing" >&2
+    exit 1
+fi
+
+# MAAS serves DHCP on the bench segment (first-boot phase 4); the
+# router's own dnsmasq DHCP must not compete for PXE clients on the
+# same L2 segment.
+uci set dhcp.lan.ignore='1'
 
 # 5GHz WiFi STA uplink on radio1
 uci set wireless.radio1.disabled='0'
@@ -89,9 +130,9 @@ uci set wireless.radio1.country='NO'
 uci set wireless.sta5=wifi-iface
 uci set wireless.sta5.device='radio1'
 uci set wireless.sta5.mode='sta'
-uci set wireless.sta5.ssid='{ssid}'
+uci set wireless.sta5.ssid={shlex.quote(ssid)}
 uci set wireless.sta5.encryption='psk2'
-uci set wireless.sta5.key='{password}'
+uci set wireless.sta5.key={shlex.quote(password)}
 uci set wireless.sta5.network='wwan'
 uci set network.wwan=interface
 uci set network.wwan.proto='dhcp'
@@ -109,7 +150,7 @@ uci add firewall rule
 uci set firewall.@rule[-1].name='House-to-MAAS-mgmt'
 uci set firewall.@rule[-1].src='wan'
 uci set firewall.@rule[-1].dest='lan'
-uci set firewall.@rule[-1].dest_ip='{params.get("maas_ip", DEFAULTS["maas_ip"])}'
+uci set firewall.@rule[-1].dest_ip={shlex.quote(maas_ip)}
 uci set firewall.@rule[-1].dest_port='22 5240 5248'
 uci set firewall.@rule[-1].proto='tcp'
 uci set firewall.@rule[-1].target='ACCEPT'
@@ -126,19 +167,47 @@ def get_pi_user_data(params: dict[str, Any]) -> str:
     Includes MAAS installation, bench network configuration,
     and the monitoring/logging infrastructure.
     """
-    maas_ip = params.get("maas_ip", DEFAULTS["maas_ip"])
-    gateway = params.get("bench_gateway", DEFAULTS["bench_gateway"])
+    maas_ip = params["maas_ip"]
+    gateway = params["bench_gateway"]
     channel = params.get("maas_channel", DEFAULTS["maas_channel"])
     zram = params.get("zram_percent", DEFAULTS["zram_percent"])
     swap_mb = params.get("swapfile_size_mb", DEFAULTS["swapfile_size_mb"])
-    admin_pw = params.get("maas_admin_password", "changeme")
-    bench_cidr = params.get("bench_subnet", DEFAULTS["bench_subnet"])
-    dhcp_start = params.get("dhcp_range_start", DEFAULTS["dhcp_range_start"])
-    dhcp_end = params.get("dhcp_range_end", DEFAULTS["dhcp_range_end"])
+    admin_pw = params.get("maas_admin_password")
+    if not admin_pw or admin_pw == "changeme":
+        raise ValueError(
+            "maas_admin_password is required and must not be the well-known "
+            "'changeme' (management ports are forwarded from the uplink)"
+        )
+    bench_cidr = params["bench_subnet"]
+    dhcp_start = params["dhcp_range_start"]
+    dhcp_end = params["dhcp_range_end"]
     dns = params.get("upstream_dns") or gateway
-    beacon_ip = params.get("beacon_listener_ip", "10.50.0.127")
-    beacon_mac = params.get("beacon_listener_mac", "00:e0:4c:3e:7b:58")
+    beacon_ip = params["beacon_listener_ip"]
+    beacon_mac = params["beacon_listener_mac"]
     arch = params.get("image_arch", DEFAULTS["image_arch"])
+    ssh_key = params.get("ssh_key", "")
+    break_glass = params.get("break_glass_password")
+
+    ssh_keys_block = (
+        f"    ssh_authorized_keys:\n      - {ssh_key}"
+        if ssh_key
+        else "    # no ssh_key supplied: key-based login disabled"
+    )
+    chpasswd_block = (
+        f"""chpasswd:
+  expire: false
+  users:
+    - name: ubuntu
+      password: {break_glass}
+      type: text
+"""
+        if break_glass
+        else "# no break_glass_password supplied: ubuntu account stays key-only"
+    )
+
+    # shlex.quote keeps generated secrets literal ($, backticks, quotes,
+    # backslashes) inside the shell command line.
+    q_pw = shlex.quote(admin_pw)
 
     return f"""#cloud-config
 hostname: maas
@@ -149,23 +218,18 @@ users:
     lock_passwd: false
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    ssh_authorized_keys:
-      - {params.get("ssh_key", "")}
-chpasswd:
-  expire: false
-  users:
-    - name: ubuntu
-      password: {params.get("break_glass_password", "changeme")}
-      type: text
-
+{ssh_keys_block}
+{chpasswd_block}
 bootcmd:
-  - sh -c 'echo "[maas-boot] bootcmd $(date +%T)" >> /var/log/maas-boot-beacons.log; echo "[maas-boot] bootcmd" > /dev/udp/{beacon_ip}/6667 2>/dev/null || true'
+  - bash -c 'echo "[maas-boot] bootcmd $(date +%T)" >> /var/log/maas-boot-beacons.log; echo "[maas-boot] bootcmd" > /dev/udp/{beacon_ip}/6667 2>/dev/null || true'
 
 write_files:
   - path: /usr/local/bin/beacon
     permissions: '0755'
     content: |
-      #!/bin/sh
+      #!/bin/bash
+      # bash, not sh: /dev/udp is a bash synthetic endpoint; dash would
+      # treat it as a file path and silently drop every progress event
       echo "[maas-boot] $* $(date +%T)" >> /var/log/maas-boot-beacons.log
       echo "[maas-boot] $*" > /dev/udp/{beacon_ip}/6667 2>/dev/null || true
   - path: /usr/local/sbin/netconsole-start.sh
@@ -188,7 +252,7 @@ write_files:
   - path: /usr/local/bin/temp-watch.sh
     permissions: '0755'
     content: |
-      #!/bin/sh
+      #!/bin/bash
       while true; do
         T=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | cut -c1-2)
         echo "$(date +%T) ${{T}}C load=$(cut -d' ' -f1 /proc/loadavg)" >> /var/log/pi-temp.log
@@ -235,20 +299,23 @@ runcmd:
     beacon phase2-done
   - |
     beacon phase3-maas-init-start
+    INIT_OK=0
     for i in $(seq 1 12); do
-      timeout 180 maas init region+rack --database-uri maas-test-db:/// --maas-url http://{maas_ip}:5240/MAAS --num-workers 2 && break
+      timeout 180 maas init region+rack --database-uri maas-test-db:/// --maas-url http://{maas_ip}:5240/MAAS --num-workers 2 && {{ INIT_OK=1; break; }}
       sleep 15
     done
+    ADMIN_OK=0
     for i in $(seq 1 30); do
-      timeout 60 maas createadmin --username admin --password "{admin_pw}" --email admin@pi.local && break
+      timeout 60 maas createadmin --username admin --password {q_pw} --email admin@pi.local && {{ ADMIN_OK=1; break; }}
       sleep 10
     done
     timeout 30 maas apikey --username admin > /root/maas-apikey && chmod 600 /root/maas-apikey
     test -s /root/maas-apikey && beacon apikey-ok || beacon apikey-FAILED
   - |
     beacon phase4-bench-config-start
+    LOGIN_OK=0
     for i in $(seq 1 20); do
-      APIKEY=$(cat /root/maas-apikey 2>/dev/null) && timeout 60 maas login admin http://localhost:5240/MAAS "$APIKEY" 2>/dev/null && break
+      APIKEY=$(cat /root/maas-apikey 2>/dev/null) && timeout 60 maas login admin http://localhost:5240/MAAS "$APIKEY" 2>/dev/null && {{ LOGIN_OK=1; break; }}
       sleep 10
     done
     timeout 30 maas admin maas set-config name=upstream_dns value={dns} || true
@@ -267,7 +334,14 @@ runcmd:
       timeout 30 maas admin boot-resources import || true
       beacon import-started
     fi
-    beacon FIRST-BOOT-COMPLETE
+    # Completion is EARNED: only report FIRST-BOOT-COMPLETE when every
+    # critical phase actually succeeded — a silent failure must not look
+    # like success on the beacon channel.
+    if [ "$INIT_OK" = 1 ] && [ "$ADMIN_OK" = 1 ] && [ "$LOGIN_OK" = 1 ] && [ -n "$SUB" ]; then
+      beacon FIRST-BOOT-COMPLETE
+    else
+      beacon FIRST-BOOT-FAILED
+    fi
 
 final_message: "maas-bench provisioned after $UPTIME seconds"
 """
@@ -275,8 +349,8 @@ final_message: "maas-bench provisioned after $UPTIME seconds"
 
 def get_pi_network_config(params: dict[str, Any]) -> str:
     """Generate netplan network-config for the Pi."""
-    maas_ip = params.get("maas_ip", DEFAULTS["maas_ip"])
-    gateway = params.get("bench_gateway", DEFAULTS["bench_gateway"])
+    maas_ip = params["maas_ip"]
+    gateway = params["bench_gateway"]
     dns = params.get("upstream_dns") or gateway
 
     return f"""network:
@@ -298,14 +372,14 @@ def get_pi_network_config(params: dict[str, Any]) -> str:
 def get_flash_config(params: dict[str, Any]) -> dict[str, Any]:
     """Return flash parameters for the USB disk provisioning script."""
     return {
-        "image_url": params.get(
-            "image_url",
-            "https://cdimage.ubuntu.com/ubuntu/releases/26.04/release/"
-            "ubuntu-26.04.1-preinstalled-server-arm64+raspi.img.xz",
+        "image_url": params.get("image_url", DEFAULTS["image_url"]),
+        "image_sha256": params.get("image_sha256"),
+        "partition_size": params.get(
+            "root_partition_size", DEFAULTS["root_partition_size"]
         ),
-        "partition_size": params.get("root_partition_size", "50G"),
         "verify_chunks": True,
         "serial_whitelist_required": True,
+        "sha256_required": True,
         "inject_boot_files": True,
     }
 
@@ -316,8 +390,131 @@ def validate(params: dict[str, Any]) -> list[str]:
     for req in REQUIRED:
         if not params.get(req):
             errors.append(f"Missing required parameter: {req}")
+    if params.get("maas_admin_password") == "changeme":
+        errors.append(
+            "maas_admin_password must not be the well-known 'changeme' "
+            "(MAAS management ports are forwarded from the uplink)"
+        )
+    if not params.get("ssh_key") and not params.get("break_glass_password"):
+        errors.append(
+            "no access path: supply ssh_key or break_glass_password "
+            "(port 22 is forwarded from the uplink; a default password is unsafe)"
+        )
+    if params.get("break_glass_password") == "changeme":
+        errors.append(
+            "break_glass_password must not be the well-known 'changeme' "
+            "(port 22 is forwarded from the uplink)"
+        )
     if params.get("zram_percent", 0) > 90:
         errors.append("zram_percent > 90% may cause OOM under MAAS load")
-    if int(params.get("swapfile_size_mb", 0)) < 1024:
+    if int(params.get("swapfile_size_mb") or 0) < 1024:
         errors.append("swapfile_size_mb < 1024: MAAS init OOMs without swap")
     return errors
+
+
+register(UseCase(
+    name="maas-portable-lab",
+    description=DESCRIPTION,
+    packages=get_packages(),
+    packages_remove=[],
+    params={
+        "uplink_ssid": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="SSID of the upstream 5GHz network",
+        ),
+        "uplink_password": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="WPA2 passphrase of the upstream network",
+        ),
+        "bench_subnet": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="Bench subnet (CIDR) — operator-private, never defaulted",
+        ),
+        "bench_gateway": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="Router LAN address on the bench subnet",
+        ),
+        "maas_ip": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="Static address for the MAAS Pi on the bench subnet",
+        ),
+        "dhcp_range_start": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="First address of the MAAS DHCP pool",
+        ),
+        "dhcp_range_end": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="Last address of the MAAS DHCP pool",
+        ),
+        "beacon_listener_ip": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="UDP beacon listener address — operator-private",
+        ),
+        "beacon_listener_mac": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="MAC of the beacon listener (netconsole target)",
+        ),
+        "maas_admin_password": ParamDef(
+            type=str, required=True, allow_empty=False,
+            description="MAAS admin password (generate e.g. `openssl rand -base64 24`);"
+                        " 'changeme' is rejected",
+        ),
+        "ssh_key": ParamDef(
+            type=str, default=None,
+            description="Operator SSH public key; when absent, existing"
+                        " authorized_keys are left untouched",
+        ),
+        "break_glass_password": ParamDef(
+            type=str, default=None,
+            description="Password for the ubuntu account; when absent the"
+                        " account is key-only",
+        ),
+        "upstream_dns": ParamDef(
+            type=str, default=None,
+            description="Upstream DNS (defaults to bench_gateway)",
+        ),
+        "ntp_servers": ParamDef(
+            type=str, default=None,
+            description="NTP servers (defaults to maas_ip)",
+        ),
+        "root_partition_size": ParamDef(
+            type=str, default=DEFAULTS["root_partition_size"],
+            description="Root partition size on the USB SSD",
+        ),
+        "maas_channel": ParamDef(
+            type=str, default=DEFAULTS["maas_channel"],
+            description="snap channel for the MAAS snap",
+        ),
+        "zram_percent": ParamDef(
+            type=int, default=DEFAULTS["zram_percent"], max_value=90,
+            description="zram swap percentage",
+        ),
+        "swapfile_size_mb": ParamDef(
+            type=int, default=DEFAULTS["swapfile_size_mb"], min_value=1024,
+            description="Swapfile size in MB",
+        ),
+        "image_arch": ParamDef(
+            type=str, default=DEFAULTS["image_arch"],
+            description="Architecture for MAAS-managed images",
+        ),
+        "image_release": ParamDef(
+            type=str, default=DEFAULTS["image_release"],
+            description="Release for MAAS-managed images",
+        ),
+        "image_url": ParamDef(
+            type=str, default=DEFAULTS["image_url"],
+            description="Ubuntu Server raspi image URL",
+        ),
+        "image_sha256": ParamDef(
+            type=str, default=None, allow_empty=False,
+            description="Publisher sha256 of the image file (required by"
+                        " maas_flash.py before any disk write)",
+        ),
+    },
+    build_configure=get_first_boot_script,
+    packages_via="auto",
+    configure_via="ssh",
+    test_status="untested",
+    tested_notes="Not yet exercised on hardware; scripts reviewed only.",
+    requires_capabilities=[],
+))

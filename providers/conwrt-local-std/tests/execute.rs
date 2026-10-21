@@ -5,7 +5,7 @@
 mod common;
 
 use common::{FIXTURE_PASSWORD, Fixture};
-use conwrt_core::plan::{Profile, SqmProfile, plan_profile, render_shell};
+use conwrt_core::plan::{Profile, SqmProfile, VerificationCheck, plan_profile, render_shell};
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
 use conwrt_local_std::execute::apply_plan;
@@ -37,6 +37,13 @@ fn plan() -> conwrt_core::plan::Plan {
     plan_profile(&DeviceState::OpenWrt, &model(), &Profile::Sqm(sqm())).expect("plans")
 }
 
+fn check<'a>(plan: &'a conwrt_core::plan::Plan, needle: &str) -> &'a VerificationCheck {
+    plan.verification
+        .iter()
+        .find(|c| c.description.contains(needle))
+        .expect("check present in plan")
+}
+
 async fn connected(fixture: &Fixture) -> conwrt_local_std::ssh::SshSession {
     let target = SshTarget {
         addr: fixture.addr.clone(),
@@ -62,8 +69,12 @@ async fn apply_runs_whole_script_then_verifies() {
     let plan = plan();
     let script = render_shell(&plan);
     fixture.set_exec_response(&script, 0, "conwrt-plan-applied\n");
-    fixture.set_exec_response("uci -q get sqm.wan.download", 0, "340000\n");
-    fixture.set_exec_response("tc qdisc show", 0, "qdisc cake 80e9: dev eth0 root\n");
+    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
+    fixture.set_exec_response(
+        &check(&plan, "qdisc").command,
+        0,
+        "qdisc cake 80e9: dev eth0 root\n",
+    );
     fixture.set_exec_response("/etc/init.d/sqm enabled && echo yes", 0, "yes\n");
 
     let session = connected(&fixture).await;
@@ -76,7 +87,7 @@ async fn apply_runs_whole_script_then_verifies() {
         outcome.verification
     );
     assert_eq!(outcome.verification.len(), 3);
-    assert_eq!(outcome.verification[0].stdout, "340000");
+    assert_eq!(outcome.verification[0].stdout, "ok");
     drop(session);
 }
 
@@ -86,7 +97,7 @@ async fn failed_script_is_data_not_error_and_skips_verification() {
     let plan = plan();
     let script = render_shell(&plan);
     fixture.set_exec_response(&script, 1, "");
-    fixture.set_exec_response("uci -q get sqm.wan.download", 0, "340000\n");
+    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
 
     let session = connected(&fixture).await;
     let outcome = apply_plan(&session, &plan)
@@ -108,8 +119,12 @@ async fn verification_failure_is_reported_per_check() {
     let plan = plan();
     let script = render_shell(&plan);
     fixture.set_exec_response(&script, 0, "applied\n");
-    fixture.set_exec_response("uci -q get sqm.wan.download", 0, "340000\n");
-    fixture.set_exec_response("tc qdisc show", 0, "qdisc fq_codel 9: dev eth0 root\n");
+    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
+    fixture.set_exec_response(
+        &check(&plan, "qdisc").command,
+        0,
+        "qdisc fq_codel 9: dev eth0 root\n",
+    );
     fixture.set_exec_response("/etc/init.d/sqm enabled && echo yes", 0, "yes\n");
 
     let session = connected(&fixture).await;
@@ -122,7 +137,7 @@ async fn verification_failure_is_reported_per_check() {
         .iter()
         .find(|v| !v.passed)
         .expect("one failed check");
-    assert_eq!(failed.description, "qdisc active on the device");
+    assert_eq!(failed.description, "qdisc active on the shaped device");
     drop(session);
 }
 
@@ -132,8 +147,12 @@ async fn verification_nonzero_exit_fails_the_check() {
     let plan = plan();
     let script = render_shell(&plan);
     fixture.set_exec_response(&script, 0, "applied\n");
-    fixture.set_exec_response("uci -q get sqm.wan.download", 1, "");
-    fixture.set_exec_response("tc qdisc show", 0, "qdisc cake 1: dev eth0 root\n");
+    fixture.set_exec_response(&check(&plan, "rate").command, 1, "");
+    fixture.set_exec_response(
+        &check(&plan, "qdisc").command,
+        0,
+        "qdisc cake 1: dev eth0 root\n",
+    );
     fixture.set_exec_response("/etc/init.d/sqm enabled && echo yes", 0, "yes\n");
 
     let session = connected(&fixture).await;

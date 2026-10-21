@@ -24,6 +24,7 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "doh": ("ssh", "auto"),
     "fips-bluetooth-rfcomm": ("ssh", "opkg"),
     "guest-wifi": ("ssh", "auto"),
+    "maas-portable-lab": ("ssh", "auto"),
     "mesh11sd": ("both", "auto"),
     "mptcp-bonding": ("both", "auto"),
     "mwan3": ("both", "auto"),
