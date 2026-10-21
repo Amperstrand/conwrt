@@ -65,6 +65,7 @@
 pub mod boot_capture;
 pub mod collect;
 pub mod console;
+pub mod flash;
 pub mod io;
 pub mod lint;
 
@@ -74,5 +75,9 @@ pub use boot_capture::{
 };
 pub use collect::{CmdOutcome, Collector, Marker, RC_FAIL, RC_OK, ReadOutcome};
 pub use console::{ConsoleTiming, PortOpener, SerialConsole, Sleeper, SpecOpener, StdSleeper};
+pub use flash::{
+    FlashError, FlashOptions, FlashReport, flash_base64, image_sha256, parse_device_sha256,
+    trigger_sysupgrade,
+};
 pub use io::{ConsoleError, ConsoleIo, open_port, parse_tcp_endpoint};
 pub use lint::{LintError, MAX_LINE};

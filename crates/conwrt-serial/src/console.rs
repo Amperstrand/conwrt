@@ -319,11 +319,47 @@ impl<S: Sleeper, O: PortOpener> SerialConsole<S, O> {
     /// # Errors
     /// The reopen failure propagates: Python's `_reopen_after_break` let
     /// `open_serial` exceptions escape `run()` too.
-    fn reopen_after_break(&mut self) -> Result<(), ConsoleError> {
+    pub(crate) fn reopen_after_break(&mut self) -> Result<(), ConsoleError> {
         self.port.close();
         self.sleeper.sleep(self.timing.break_recover_wait);
         self.port = self.opener.open()?;
         self.port.reset_input_buffer();
         Ok(())
+    }
+
+    /// Paced raw line write for crate-internal bulk drivers (the base64
+    /// flash chunk loop): the line goes out verbatim with `\r\n` (no RC
+    /// marker, no collection — Python `serial-flash.py`'s per-chunk
+    /// `echo '...' >> file` pacing), then one recovery-classified drain
+    /// read: a read error or a chunk starting with [`BREAK_BYTE`] runs
+    /// the same break recovery as [`SerialConsole::run`].
+    ///
+    /// # Errors
+    /// [`ConsoleError::Io`] on write; recovery reopen failures propagate.
+    pub(crate) fn send_paced_line(
+        &mut self,
+        line: &str,
+        gap: Duration,
+    ) -> Result<(), ConsoleError> {
+        self.port
+            .write_all_bytes(format!("{line}\r\n").as_bytes())?;
+        self.sleeper.sleep(gap);
+        let mut buf = [0u8; READ_CHUNK];
+        match self.port.read(&mut buf) {
+            Err(_) => self.reopen_after_break()?,
+            Ok(n) if n > 0 && buf[0] == BREAK_BYTE => self.reopen_after_break()?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Raw byte write with no pacing, no marker, no collection — the
+    /// trigger channel for commands whose output belongs to a LATER
+    /// collection (`sysupgrade -n /tmp/fw.bin` deliberately never waits).
+    ///
+    /// # Errors
+    /// [`ConsoleError::Io`] when the write fails.
+    pub(crate) fn write_raw(&mut self, data: &[u8]) -> Result<(), ConsoleError> {
+        self.port.write_all_bytes(data).map_err(ConsoleError::Io)
     }
 }

@@ -16,6 +16,12 @@ thiserror = "2"
 # (serial_monitor.py's extraction); the boot-capture loop never forks
 # its own matcher set (parity-matrix §5 rule).
 conwrt-probe-core = { path = "../conwrt-probe-core" }
+# host-side expected hash for the base64 flash driver — matches what
+# BusyBox `sha256sum` prints on the device (AGENTS.md: Python-side hash
+# algorithms MUST match BusyBox).
+sha2 = "0.10"
+# chunk encoding for the base64 serial-flash driver.
+base64 = "0.22"
 
 [dev-dependencies]
 # pty fixtures + poll-bounded reads in the integration tests only
