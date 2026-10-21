@@ -85,7 +85,10 @@ fn lease_messages_round_trip() {
     let back: LeaseRequest = postcard::from_bytes(&postcard::to_stdvec(&req).unwrap()).unwrap();
     assert_eq!(back, req);
 
-    let granted = LeaseResponse::Granted { heartbeat_ms: 1000 };
+    let granted = LeaseResponse::Granted {
+        lease_id: 1,
+        heartbeat_ms: 1000,
+    };
     let back: LeaseResponse =
         postcard::from_bytes(&postcard::to_stdvec(&granted).unwrap()).unwrap();
     assert_eq!(back, granted);

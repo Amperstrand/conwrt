@@ -58,7 +58,7 @@ async fn lease_lifecycle_against_the_mcu_brain() {
     let mut client = AgentClient::connect(&addr).await.expect("connect");
     client.handshake("laptop-hil").await.expect("handshake");
 
-    let LeaseResponse::Granted { heartbeat_ms } = client
+    let LeaseResponse::Granted { heartbeat_ms, .. } = client
         .acquire_lease(uart0_exclusive())
         .await
         .expect("grant")

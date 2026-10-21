@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on breaking message changes; agents refuse
 /// mismatches at the handshake (ADR-0004 §2 — never interpret a mismatch).
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// A capability an agent can expose to a controller (ADR-0003 traits, named
 /// on the wire).
@@ -79,8 +79,12 @@ pub struct LeaseRequest {
 /// Agent → controller: lease outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LeaseResponse {
-    /// Granted; the heartbeat interval in milliseconds.
+    /// Granted; the lease id every later [`Heartbeat`] / release call
+    /// must quote, plus the heartbeat interval in milliseconds.
     Granted {
+        /// The granted lease's id (agent-assigned, monotonically
+        /// increasing).
+        lease_id: u64,
         /// How often the controller must send [`Heartbeat`].
         heartbeat_ms: u32,
     },
