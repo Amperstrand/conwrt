@@ -67,6 +67,11 @@ fn model_with_capabilities(caps: Option<Vec<String>>) -> DeviceModel {
 
 /// Command lines only: drop comments, blanks, the 2.x-only script
 /// preamble and package-install lines (see module docs).
+///
+/// #421's apk-aware `EnsurePackage` render emits a two-line install block
+/// per package (`if command -v apk … || { apk update \` +
+/// `&& apk add …; }; else … opkg install …; }; fi`) — same semantic
+/// exclusion as the legacy single `opkg install ` line.
 fn command_lines(script: &str) -> Vec<String> {
     script
         .lines()
@@ -74,6 +79,8 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.trim_start().starts_with('#'))
         .filter(|l| l.trim() != "set -e")
         .filter(|l| !l.starts_with("opkg install "))
+        .filter(|l| !l.starts_with("if command -v apk "))
+        .filter(|l| !l.starts_with("&& apk add "))
         .map(|l| l.to_string())
         .collect()
 }
