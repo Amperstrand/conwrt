@@ -975,6 +975,12 @@ Research across OpenWrt forums (thread #155683), GitHub PR #20439, and Zyxel com
 
 **Source**: OpenWrt forum thread #155683, GitHub PR #20439 (merged Jan 2026)
 
+**Restart safety**: mid-stream-abort restart for this BootBase `ATUP`
+receiver is **NEEDS-BENCH** — see `docs/xmodem-receiver-matrix.md` (row
+B2) before automating any serial XMODEM against this species. The
+procedure itself stages to RAM (`ATUP80100000`), restart = re-run
+`ATUP`.
+
 ### Prerequisites
 - USB-RS232 serial adapter
 - Serial connection: 9600 baud initially, then 115200 (8N1)
