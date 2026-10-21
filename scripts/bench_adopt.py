@@ -333,10 +333,20 @@ def stage_adopt(r: Runner) -> None:
     for pub in (Path.home() / ".ssh" / "id_ed25519.pub", Path.home() / ".ssh" / "id_rsa.pub"):
         if pub.exists():
             mac_keys += [line.strip() for line in pub.read_text().splitlines() if line.strip()]
-    payload = ("mkdir -p /etc/dropbear; "
-               "grep -q '$(head -c 24 /root/.ssh/id_ed25519.pub)' /etc/dropbear/authorized_keys 2>/dev/null "
-               "|| cat /root/.ssh/id_ed25519.pub >> /etc/dropbear/authorized_keys")
-    for key in mac_keys:
+    # The switch's pubkey must be read SWITCH-side and embedded in the
+    # payload: the payload executes on a factory-fresh DUT where
+    # /root/.ssh/id_ed25519.pub does not exist, so the old
+    # `cat /root/.ssh/id_ed25519.pub >> authorized_keys` fallback appended
+    # nothing and the switch key was never installed by this stage (#291).
+    key_out = r.sh("adopt-switchkey", ["cat /root/.ssh/id_ed25519.pub"])
+    switch_keys = [line.strip() for line in key_out.splitlines() if line.strip()]
+    if not switch_keys or not switch_keys[0].startswith("ssh-"):
+        raise AdoptError(f"adopt: cannot read the switch pubkey at "
+                         f"/root/.ssh/id_ed25519.pub (switch-side) — the KEY-AUTH-OK "
+                         f"gate below could never pass:\n{key_out[:300]}")
+    switch_key = switch_keys[0]
+    payload = "mkdir -p /etc/dropbear"
+    for key in (switch_key, *mac_keys):
         marker = key.split()[1][:24]
         payload += (f"; grep -q '{marker}' /etc/dropbear/authorized_keys 2>/dev/null "
                     f"|| echo '{key}' >> /etc/dropbear/authorized_keys")
