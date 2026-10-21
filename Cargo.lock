@@ -821,6 +821,7 @@ name = "conwrt-protocols"
 version = "0.1.0"
 dependencies = [
  "crc16",
+ "embedded-io-async 0.7.0",
  "xmodem",
 ]
 

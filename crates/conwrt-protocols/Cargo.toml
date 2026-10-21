@@ -11,9 +11,12 @@ repository.workspace = true
 default = ["std"]
 # std builds use the xmodem crate's std::io trait bindings; no_std builds
 # implement `xmodem::io::{Read, Write}` at the driver (MCU, M5+).
-std = ["xmodem/std"]
+# embedded-io-async's std feature adds the std::io Error interop the
+# serial_io adapter's error type needs.
+std = ["xmodem/std", "embedded-io-async/std"]
 
 [dependencies]
+embedded-io-async = { version = "0.7.0", default-features = false }
 xmodem = { version = "0.4", default-features = false }
 
 [dev-dependencies]
