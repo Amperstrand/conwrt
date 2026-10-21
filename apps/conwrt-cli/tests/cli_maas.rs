@@ -100,6 +100,41 @@ fn maas_flash_refuses_to_write_on_checksum_mismatch() {
 }
 
 #[test]
+fn maas_flash_accepts_serial_whitelist_on_regular_file_target() {
+    // Regular-file targets (CI, staging) bypass the block-device
+    // specimen gate; the whitelist flag must still parse and not change
+    // the outcome. Block-device gating is unit-covered in
+    // conwrt-local-std::specimen (no USB devices in CI).
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("img.img");
+    let target = dir.path().join("disk.img");
+    std::fs::write(&image, IMAGE).unwrap();
+
+    let out = conwrt()
+        .args([
+            "maas",
+            "flash",
+            "--image",
+            image.to_str().unwrap(),
+            "--sha256",
+            &sha256_hex(),
+            "--target",
+            target.to_str().unwrap(),
+            "--serial-whitelist",
+            "LAB-USB-001,LAB-USB-002",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), IMAGE);
+}
+
+#[test]
 fn maas_vm_list_prints_region_machines() {
     let server = MockServer::start();
     server.mock(|when, then| {

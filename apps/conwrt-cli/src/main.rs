@@ -266,9 +266,16 @@ enum MaasCommand {
         /// Published SHA-256 of the image (64 hex chars).
         #[arg(long)]
         sha256: String,
-        /// Target file or block device to write.
+        /// Target file or block device to write. Block-device targets
+        /// must pass the specimen gate (USB transport, unmounted,
+        /// writable, ≥30GB; serial must match --serial-whitelist when
+        /// given) before any write.
         #[arg(long)]
         target: PathBuf,
+        /// Comma-separated USB serials allowed as block-device targets
+        /// (specimen gate, AGENTS.md MAC/serial rule).
+        #[arg(long, value_delimiter = ',')]
+        serial_whitelist: Option<Vec<String>>,
         /// cloud-init user-data file (required with --meta-data).
         #[arg(long, requires = "meta_data")]
         user_data: Option<PathBuf>,
@@ -1033,6 +1040,7 @@ fn cmd_maas(command: MaasCommand) -> ExitCode {
             user_data,
             meta_data,
             network_config,
+            serial_whitelist,
         } => cmd_maas_flash(
             &image,
             &sha256,
@@ -1040,6 +1048,7 @@ fn cmd_maas(command: MaasCommand) -> ExitCode {
             user_data,
             meta_data,
             network_config,
+            serial_whitelist,
         ),
         MaasCommand::Vm { command } => cmd_maas_vm(command),
     }
@@ -1052,6 +1061,7 @@ fn cmd_maas_flash(
     user_data: Option<PathBuf>,
     meta_data: Option<PathBuf>,
     network_config: Option<PathBuf>,
+    serial_whitelist: Option<Vec<String>>,
 ) -> ExitCode {
     use conwrt_local_std::block::FileBlockWriter;
     use conwrt_maas::flash::{CloudInitSeed, DiskFlashPlan, Sha256, execute_flash};
@@ -1099,7 +1109,55 @@ fn cmd_maas_flash(
         });
     }
 
-    let mut writer = FileBlockWriter::new(target);
+    // Specimen gate (AGENTS.md MAC/serial rule, #302): block-device
+    // targets need identity evidence — an explicit serial whitelist is
+    // REQUIRED (an unnamed "any USB disk" pass is a wrong-unit flash) —
+    // and the verified device is opened read+write immediately so the
+    // destructive write goes through the pinned inode, not a later
+    // re-resolution of the /dev/sdX name. Regular files (CI, lab
+    // staging) pass through.
+    let is_device = match std::fs::metadata(target) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            meta.file_type().is_block_device()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            eprintln!("cannot stat target {}: {e}", target.display());
+            return ExitCode::from(2);
+        }
+    };
+    let mut writer = if is_device {
+        let whitelist = serial_whitelist.as_deref().unwrap_or(&[]);
+        if whitelist.is_empty() {
+            eprintln!(
+                "flash refused: block-device targets require --serial-whitelist \
+                 (specimen gate, AGENTS.md serial rule)"
+            );
+            return ExitCode::from(2);
+        }
+        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => println!(
+                "verified:  {} usb serial={} {}GB rw",
+                target.display(),
+                id.serial.as_deref().unwrap_or("?"),
+                id.size_bytes.unwrap_or(0) / 1_000_000_000
+            ),
+            Err(msg) => {
+                eprintln!("flash refused: {msg}");
+                return ExitCode::from(2);
+            }
+        }
+        match FileBlockWriter::open_device(target) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("cannot pin target {}: {e}", target.display());
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        FileBlockWriter::new(target)
+    };
     match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
         Ok(report) => {
             println!("image:     {}", image_path.display());
