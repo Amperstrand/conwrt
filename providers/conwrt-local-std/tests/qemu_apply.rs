@@ -18,7 +18,8 @@
 //! installing, the parts a VM can prove).
 
 use conwrt_core::plan::{
-    PlanOp, Profile, SqmProfile, TetherProfile, WireguardClientProfile, plan_profile,
+    PlanOp, Profile, SqmProfile, TetherProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
@@ -261,6 +262,72 @@ async fn tether_shell_surface_applies_on_vm_hardware_gated() {
     // rollback so repeated runs stay clean
     let _ = session
         .exec("rm -f /etc/hotplug.d/usb/99-usb-tether-adb; true")
+        .await;
+}
+
+#[tokio::test]
+async fn wireguard_server_plan_applies_and_verifies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    let profile = Profile::WireguardServer(WireguardServerProfile {
+        peer1_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+        ..WireguardServerProfile::default()
+    });
+    let plan =
+        plan_profile(&DeviceState::OpenWrt, &model, &profile).expect("plan for confirmed VM");
+
+    // Full plan INCLUDING EnsurePackage: wireguard-tools,
+    // luci-proto-wireguard, and qrencode are all prebaked into the
+    // fixture image (tests/integration/conftest.py prebake list).
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    // The listener must actually be up: private_key='generate' makes the
+    // netifd wireguard proto mint a real key on ifup, so wg0 answers
+    // `wg show` with a concrete public key (not the literal 'generate').
+    let pubkey = session
+        .exec("wg show wg0 public-key 2>/dev/null || echo nokey")
+        .await
+        .expect("pubkey readback");
+    let pubkey = String::from_utf8_lossy(&pubkey.stdout).trim().to_string();
+    assert!(
+        !pubkey.is_empty() && pubkey != "nokey",
+        "wg0 must hold a generated keypair after apply"
+    );
+    let listen = session
+        .exec("netstat -lnu 2>/dev/null | grep -q ':51820 ' && echo listening || echo silent")
+        .await
+        .expect("listen readback");
+    assert_eq!(
+        String::from_utf8_lossy(&listen.stdout).trim(),
+        "listening",
+        "wg0 must listen on UDP 51820"
+    );
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "uci -q delete network.wg0; uci -q delete network.wg0_peer1; \
+             uci -q delete firewall.wg_server_vpn; uci -q delete firewall.wg_server_fwd_lan; \
+             uci -q delete firewall.wg_server_fwd_wan; uci -q delete firewall.wg_server_allow; \
+             rm -f /etc/wireguard/server_public_key; \
+             uci commit network; uci commit firewall; true",
+        )
         .await;
 }
 
