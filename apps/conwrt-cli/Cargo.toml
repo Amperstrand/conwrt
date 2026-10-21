@@ -1,6 +1,7 @@
 [package]
 name = "conwrt-cli"
 description = "conwrt command-line interface (thin frontend over conwrt-core — ADR-0008)"
+default-run = "conwrt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +12,15 @@ repository.workspace = true
 name = "conwrt"
 path = "src/main.rs"
 
+# Parity-harness helper: renders tests/fixtures/parity/*.json through the
+# Rust plan pipeline for the pytest cross-implementation diff.
+[[bin]]
+name = "conwrt-plan-render"
+path = "src/bin/conwrt_plan_render.rs"
+
 [dependencies]
 conwrt-types = { path = "../../crates/conwrt-types" }
-conwrt-core = { path = "../../crates/conwrt-core" }
+conwrt-core = { path = "../../crates/conwrt-core", features = ["parity-fixture"] }
 conwrt-local-std = { path = "../../providers/conwrt-local-std" }
 conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
 conwrt-image = { path = "../../crates/conwrt-image" }

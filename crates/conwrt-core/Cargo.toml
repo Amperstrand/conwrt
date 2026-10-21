@@ -13,12 +13,17 @@ default = ["std"]
 # stays no_std-compatible; CI checks the no-default-features build for
 # thumbv7em-none-eabihf (ADR-0002).
 std = ["conwrt-types/std"]
+# Cross-implementation plan-renderer parity harness: fixture JSON → profile
+# → plan → shell (std-only; used by the `conwrt-plan-render` bin and the
+# parity cargo tests).
+parity-fixture = ["dep:serde_json", "std"]
 
 [dependencies]
 conwrt-types = { path = "../conwrt-types", default-features = false }
 # #215 slice 5: the shared detection core owns the vocabulary matching
 # primitives — host classify and firmware detect run the same matcher.
 conwrt-probe-core = { path = "../conwrt-probe-core", default-features = false }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 pollster = { workspace = true }

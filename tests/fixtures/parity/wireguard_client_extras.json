@@ -1,0 +1,12 @@
+{
+  "use_case": "wireguard-client",
+  "params": {
+    "peer_public_key": "KLTaGcXW9+mLTAhzQV0PdhlSbHMxU5yeZ5vlHPmZJEU=",
+    "endpoint_host": "203.0.113.10",
+    "endpoint_port": 51821,
+    "peer_psk": "bJhkX+3wPqO1j0Z8mFz2UqS5vN8yT4rW7gLcA6dE1oI=",
+    "address": "10.99.0.7/32",
+    "dns": "10.64.0.1",
+    "allowed_ips": "10.0.0.0/8, 192.168.0.0/16"
+  }
+}
