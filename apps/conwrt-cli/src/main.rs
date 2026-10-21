@@ -20,7 +20,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{DohProfile, SqmProfile};
-use conwrt_core::ssh::TrustMode;
+use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
@@ -532,19 +532,25 @@ fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf)
 }
 fn cmd_models_validate(dir: &Path) -> ExitCode {
     let (registry, _) = load_registry(dir);
-    for model in registry.models() {
+    let models = registry.models();
+    println!(
+        "{:<40}  {:<12}  {:<22}  {:<20}  Description",
+        "Model ID", "Vendor", "Target", "Flash Methods"
+    );
+    println!("{}", "-".repeat(140));
+    for model in models {
+        let target = &model.openwrt.target;
+        let methods = model
+            .flash_method_names()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
-            "ok   {} ({}) — {} flash method(s)",
-            model.id,
-            model.vendor,
-            model.flash_methods.as_ref().map_or(0, |m| m.len())
+            "{:<40}  {:<12}  {:<22}  [{}]  {}",
+            model.id, model.vendor, target, methods, model.description
         );
     }
-    println!(
-        "\n{} model(s) valid in {}",
-        registry.models().len(),
-        dir.display()
-    );
+    println!("\n{} model(s) valid in {}", models.len(), dir.display());
     ExitCode::SUCCESS
 }
 fn cmd_identify(mac: &str, dir: &Path) -> ExitCode {
@@ -762,7 +768,9 @@ fn cmd_fingerprint(
             return ExitCode::from(2);
         }
     };
-    let mut store = FileTrustStore::new(FileTrustStore::default_path());
+    let kh_path = FileTrustStore::default_path();
+    let mut store = FileTrustStore::new(kh_path.clone());
+    let known_before = store.entries(&target.addr);
     let session = match runtime.block_on(connect(
         &target,
         &mut store,
@@ -778,6 +786,12 @@ fn cmd_fingerprint(
         }
     };
     println!("host key:   {}", session.presented_key.fingerprint);
+    persist_new_host_key(
+        &kh_path,
+        &target.addr,
+        &session.presented_key,
+        &known_before,
+    );
     let report = match runtime.block_on(fingerprint(&session)) {
         Ok(report) => report,
         Err(e) => {
@@ -882,7 +896,9 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let mut store = FileTrustStore::new(FileTrustStore::default_path());
+    let kh_path = FileTrustStore::default_path();
+    let mut store = FileTrustStore::new(kh_path.clone());
+    let known_before = store.entries(&target.addr);
     let session = match runtime.block_on(connect(
         &target,
         &mut store,
@@ -898,6 +914,12 @@ fn cmd_apply(
         }
     };
     println!("host key:   {}", session.presented_key.fingerprint);
+    persist_new_host_key(
+        &kh_path,
+        &target.addr,
+        &session.presented_key,
+        &known_before,
+    );
 
     let report = match runtime.block_on(fingerprint(&session)) {
         Ok(report) => report,
@@ -915,10 +937,11 @@ fn cmd_apply(
         return ExitCode::FAILURE;
     }
     if let Some(board) = &report.board_name {
-        if !board.is_empty() && *board != model.openwrt.device {
+        if !board.is_empty() && !board_matches(&model, board) {
+            let expected = board_name_or_device(&model);
             eprintln!(
-                "refused: board_name {board:?} does not match model {} target device {:?}",
-                model.id, model.openwrt.device
+                "refused: board_name {board:?} does not match model {} board name {expected:?}",
+                model.id
             );
             return ExitCode::FAILURE;
         }
@@ -967,6 +990,7 @@ fn cmd_apply(
         }
     }
 }
+
 fn build_profile(
     profile: ProfileChoice,
     download_kbps: Option<u32>,
@@ -991,6 +1015,7 @@ fn build_profile(
         })),
     }
 }
+
 fn cmd_discover_v6(interface: &str, mac: Option<&str>, ports: &[u16]) -> ExitCode {
     use conwrt_local_std::v6;
 
@@ -1647,5 +1672,104 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// After a successful connection, persist a first-use host key so the
+/// trust ladder's changed-key refusal protects *later* invocations
+/// (TOFU with a throwaway store accepts any spoofed endpoint once).
+fn persist_new_host_key(
+    kh_path: &Path,
+    addr: &str,
+    key: &HostKeyView,
+    known_before: &[HostKeyView],
+) {
+    if known_before.iter().any(|k| k == key) {
+        return; // already pinned in the persistent store
+    }
+    use conwrt_core::ssh::TrustStore;
+    let mut store = FileTrustStore::new(kh_path.to_path_buf());
+    store.remember(addr, key);
+    println!(
+        "host key:   {} (first use; recorded in {})",
+        key.fingerprint,
+        kh_path.display()
+    );
+}
+
+/// The modeled board name: `/tmp/sysinfo/board_name` reports the
+/// `openwrt.board_name` value (e.g. `AAOB`), NOT the image/DTS `device`
+/// id — older models without a modeled board name fall back to `device`.
+fn board_name_or_device(model: &conwrt_types::DeviceModel) -> &str {
+    model
+        .openwrt
+        .board_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .unwrap_or(&model.openwrt.device)
+}
+
+/// Live board_name acceptance: the modeled `board_name` when present,
+/// with the DTS `device` id accepted as an alias (some builds report
+/// the DTS name where board.json uses a short board id).
+fn board_matches(model: &conwrt_types::DeviceModel, board: &str) -> bool {
+    let modeled = board_name_or_device(model);
+    board == modeled || board == model.openwrt.device
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_with(board_name: Option<&str>, device: &str) -> conwrt_types::DeviceModel {
+        conwrt_types::DeviceModel {
+            id: "test-model".into(),
+            vendor: "Test".into(),
+            description: "d".into(),
+            openwrt: conwrt_types::OpenwrtInfo {
+                target: "x/y".into(),
+                device: device.into(),
+                profile: "x_y".into(),
+                version: "24".into(),
+                board_name: board_name.map(str::to_string),
+                default_ip: None,
+                extras: Default::default(),
+            },
+            capabilities: None,
+            flash_methods: None,
+            mac_oui: Vec::new(),
+            serial_console: None,
+            warnings: None,
+            extras: Default::default(),
+        }
+    }
+
+    #[test]
+    fn board_name_matches_the_modeled_board_name() {
+        // zyxel-gs1920-24 shape: board_name AAOB, device zyxel,gs1920-24hp-v1
+        let model = model_with(Some("AAOB"), "zyxel,gs1920-24hp-v1");
+        assert!(
+            board_matches(&model, "AAOB"),
+            "the reported board_name must match"
+        );
+        assert!(
+            board_matches(&model, "zyxel,gs1920-24hp-v1"),
+            "DTS alias accepted"
+        );
+        assert!(!board_matches(&model, "zyxel,gs1900-8hp-a1"));
+    }
+
+    #[test]
+    fn board_name_falls_back_to_device_for_older_models() {
+        let model = model_with(None, "glinet,gl-ar150");
+        assert!(board_matches(&model, "glinet,gl-ar150"));
+        assert!(!board_matches(&model, "glinet,gl-ar300m"));
+    }
+
+    #[test]
+    fn blank_board_name_falls_back_to_device() {
+        let model = model_with(Some("  "), "glinet,gl-ar150");
+        assert!(board_matches(&model, "glinet,gl-ar150"));
     }
 }

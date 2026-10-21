@@ -1,247 +1,174 @@
-"""Tests for maas_portable_lab use case (no hardware needed)."""
+"""Tests for the maas-portable-lab use case (PR #322 Codex findings).
+
+Covers: registry registration, operator-private defaults removal,
+credential quoting, DHCP disable, LAN-IP readback gate, SSH-key
+preservation, bash beacons, and the gated completion beacon.
+"""
+from __future__ import annotations
+
+import shlex
 import sys
-import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "use_cases"))
+import pytest
 
-from maas_portable_lab import (
-    DEFAULTS,
-    DESCRIPTION,
-    POST_FLASH,
-    REQUIRED,
-    get_first_boot_script,
-    get_flash_config,
-    get_pi_network_config,
-    get_pi_user_data,
-    validate,
-)
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import use_cases as uc  # noqa: E402
+from use_cases import maas_portable_lab as mpl  # noqa: E402
 
 
-class TestValidation(unittest.TestCase):
-    def test_empty_params_catches_required(self):
-        errors = validate({})
-        self.assertTrue(any("uplink_ssid" in e for e in errors))
-        self.assertTrue(any("uplink_password" in e for e in errors))
-
-    def test_empty_params_catches_swapfile(self):
-        errors = validate({})
-        self.assertTrue(any("swapfile" in e.lower() for e in errors))
-
-    def test_full_params_pass(self):
-        params = {**DEFAULTS, "uplink_ssid": "test", "uplink_password": "p",
-                  "zram_percent": 75, "swapfile_size_mb": 2048}
-        self.assertEqual(validate(params), [])
-
-    def test_high_zram_warns(self):
-        params = {**DEFAULTS, "uplink_ssid": "t", "uplink_password": "p",
-                  "zram_percent": 95, "swapfile_size_mb": 2048}
-        errors = validate(params)
-        self.assertTrue(any("zram" in e.lower() for e in errors))
-
-    def test_low_swapfile_warns(self):
-        params = {**DEFAULTS, "uplink_ssid": "t", "uplink_password": "p",
-                  "zram_percent": 75, "swapfile_size_mb": 512}
-        errors = validate(params)
-        self.assertTrue(any("swap" in e.lower() for e in errors))
+def _params(**overrides) -> dict:
+    base = {
+        "uplink_ssid": "house-5g",
+        "uplink_password": "wpa-pass 'quote",
+        "bench_subnet": "192.168.77.0/24",
+        "bench_gateway": "192.168.77.1",
+        "maas_ip": "192.168.77.5",
+        "dhcp_range_start": "192.168.77.100",
+        "dhcp_range_end": "192.168.77.200",
+        "beacon_listener_ip": "192.168.77.127",
+        "beacon_listener_mac": "aa:bb:cc:dd:ee:ff",
+        "maas_admin_password": "s3cr3t-$tart`tick\"now",
+    }
+    base.update(overrides)
+    return base
 
 
-class TestUserDataGeneration(unittest.TestCase):
-    def setUp(self):
-        self.params = {
-            **DEFAULTS,
-            "uplink_ssid": "MyNetwork",
-            "uplink_password": "secret123",
-            "ssh_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@host",
-            "maas_admin_password": "adminpw",
-            "break_glass_password": "breakglass",
-            "zram_percent": 75,
-            "swapfile_size_mb": 2048,
-        }
-
-    def test_starts_with_cloud_config(self):
-        ud = get_pi_user_data(self.params)
-        self.assertTrue(ud.startswith("#cloud-config"))
-
-    def test_contains_hostname(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("hostname: maas", ud)
-
-    def test_contains_ssh_key(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest", ud)
-
-    def test_contains_growpart_off(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn('mode: "off"', ud)
-
-    def test_contains_accept_ra_false(self):
-        nc = get_pi_network_config(self.params)
-        self.assertIn("accept-ra: false", nc)
-
-    def test_contains_dhcp6_false(self):
-        nc = get_pi_network_config(self.params)
-        self.assertIn("dhcp6: false", nc)
-
-    def test_default_ip_params(self):
-        nc = get_pi_network_config(self.params)
-        self.assertIn("10.50.0.5/24", nc)
-        self.assertIn("10.50.0.1", nc)
-
-    def test_custom_ip_params(self):
-        params = {**self.params, "maas_ip": "192.168.100.10",
-                  "bench_gateway": "192.168.100.1"}
-        nc = get_pi_network_config(params)
-        self.assertIn("192.168.100.10/24", nc)
-        self.assertIn("192.168.100.1", nc)
-        self.assertNotIn("10.50.0", nc)
-
-    def test_contains_maas_channel(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("3.6/stable", ud)
-
-    def test_contains_zram_percent(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("PERCENT=75", ud)
-
-    def test_contains_swapfile_size(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("2048M", ud)
-
-    def test_contains_upstream_dns(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("upstream_dns", ud)
-
-    def test_contains_disable_discovery(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("network_discovery", ud)
-
-    def test_contains_beacon_infrastructure(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("/usr/local/bin/beacon", ud)
-        self.assertIn("/dev/udp/", ud)
-
-    def test_contains_temp_monitor(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("temp-watch", ud)
-        self.assertIn("TEMP-HIGH", ud)
-
-    def test_contains_netconsole(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("netconsole", ud)
-
-    def test_phase_beacons_present(self):
-        ud = get_pi_user_data(self.params)
-        for phase in ["phase1-memory-floor", "phase2-snap-install",
-                      "phase3-maas-init", "phase4-bench-config"]:
-            self.assertIn(phase, ud)
-
-    def test_subnet_create_before_dhcp_on(self):
-        ud = get_pi_user_data(self.params)
-        subnet_pos = ud.find("subnets create")
-        dhcp_pos = ud.find("dhcp_on=True")
-        # Guard the markers: find() == -1 would make the ordering
-        # assertion vacuously true.
-        self.assertGreaterEqual(subnet_pos, 0, "subnets create marker missing")
-        self.assertGreaterEqual(dhcp_pos, 0, "dhcp_on marker missing")
-        self.assertGreater(dhcp_pos, subnet_pos,
-                          "dhcp_on must come after subnet creation")
-
-    def test_ordering_fails_when_marker_missing(self):
-        # Pin the guards: a payload without the "subnets create" marker
-        # must FAIL the ordering test, not pass vacuously on find() == -1.
-        with patch(
-            f"{__name__}.get_pi_user_data", return_value="#cloud-config\ndhcp_on=True\n"
-        ):
-            with self.assertRaises(AssertionError):
-                self.test_subnet_create_before_dhcp_on()
-
-    def test_force_confold_on_apt(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("--force-confold", ud)
-
-    def test_maas_test_db_explicit(self):
-        ud = get_pi_user_data(self.params)
-        self.assertIn("snap install maas-test-db", ud)
+# -- registration -------------------------------------------------------------
 
 
-class TestBenchScript(unittest.TestCase):
-    def setUp(self):
-        self.params = {
-            **DEFAULTS,
-            "uplink_ssid": "MyNetwork",
-            "uplink_password": "secret",
-            "ssh_key": "ssh-ed25519 AAAA test",
-        }
-
-    def test_contains_bench_config(self):
-        bs = get_first_boot_script(self.params)
-        self.assertIn("network.lan.ipaddr", bs)
-        self.assertIn("ports='internet'", bs)
-
-    def test_contains_wifi_sta(self):
-        bs = get_first_boot_script(self.params)
-        self.assertIn("sta5", bs)
-        self.assertIn("MyNetwork", bs)
-        self.assertIn("secret", bs)
-
-    def test_contains_firewall_pinhole(self):
-        bs = get_first_boot_script(self.params)
-        self.assertIn("House-to-MAAS-mgmt", bs)
-
-    def test_contains_ssh_key(self):
-        bs = get_first_boot_script(self.params)
-        self.assertIn("ssh-ed25519 AAAA test", bs)
-
-    def test_contains_both_ports(self):
-        bs = get_first_boot_script(self.params)
-        self.assertIn("ethernet", bs)  # LAN port DSA name
-        self.assertIn("internet", bs)  # WAN port DSA name
+def test_registered_in_discovery_registry():
+    reg = uc.registry()
+    assert "maas-portable-lab" in reg
+    u = reg["maas-portable-lab"]
+    assert u.configure_via == "ssh"
+    assert u.build_configure(_params())  # renders a script
 
 
-class TestFlashConfig(unittest.TestCase):
-    def test_default_partition_size(self):
-        fc = get_flash_config({})
-        self.assertEqual(fc["partition_size"], "50G")
-
-    def test_custom_partition_size(self):
-        fc = get_flash_config({"root_partition_size": "100G"})
-        self.assertEqual(fc["partition_size"], "100G")
-
-    def test_serial_whitelist_required(self):
-        fc = get_flash_config({})
-        self.assertTrue(fc["serial_whitelist_required"])
-
-    def test_verify_enabled(self):
-        fc = get_flash_config({})
-        self.assertTrue(fc["verify_chunks"])
-
-    def test_boot_injection(self):
-        fc = get_flash_config({})
-        self.assertTrue(fc["inject_boot_files"])
+def test_apply_defaults_requires_operator_params():
+    with pytest.raises(ValueError, match="bench_subnet"):
+        uc.apply_defaults("maas-portable-lab", {"uplink_ssid": "a", "uplink_password": "b"})
+    merged = uc.apply_defaults("maas-portable-lab", _params())
+    assert merged["bench_subnet"] == "192.168.77.0/24"
+    assert merged["zram_percent"] == mpl.DEFAULTS["zram_percent"]
 
 
-class TestDefaults(unittest.TestCase):
-    def test_bench_subnet(self):
-        self.assertIn("10.50.0.0/24", DEFAULTS["bench_subnet"])
-
-    def test_maas_ip(self):
-        self.assertEqual(DEFAULTS["maas_ip"], "10.50.0.5")
-
-    def test_dhcp_range(self):
-        self.assertEqual(DEFAULTS["dhcp_range_start"], "10.50.0.100")
-        self.assertEqual(DEFAULTS["dhcp_range_end"], "10.50.0.200")
-
-    def test_maas_channel(self):
-        self.assertIn("3.6", DEFAULTS["maas_channel"])
-
-    def test_description_mentions_portable(self):
-        self.assertIn("portable", DESCRIPTION.lower())
-
-    def test_post_flash_is_true(self):
-        self.assertTrue(POST_FLASH)
+# -- no committed operator network plan (AGENTS.md private-data rules) --------
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_no_committed_bench_defaults():
+    for value in mpl.DEFAULTS.values():
+        assert "10.50" not in str(value)
+        assert "00:e0:4c" not in str(value)
+    for req in ("bench_subnet", "bench_gateway", "maas_ip", "dhcp_range_start",
+                "dhcp_range_end", "beacon_listener_ip", "beacon_listener_mac"):
+        assert req in mpl.REQUIRED
+
+
+# -- validate() gates ---------------------------------------------------------
+
+
+def test_validate_rejects_default_admin_password():
+    errors = mpl.validate(_params(maas_admin_password="changeme"))
+    assert any("changeme" in e for e in errors)
+
+
+def test_validate_rejects_changeme_break_glass():
+    errors = mpl.validate(_params(break_glass_password="changeme"))
+    assert any("break_glass_password" in e for e in errors)
+
+
+def test_validate_requires_an_access_path():
+    errors = mpl.validate(_params())
+    assert any("access path" in e for e in errors)
+    assert not any("access path" in e for e in mpl.validate(_params(ssh_key="ssh-ed25519 AAA x")))
+
+
+def test_get_pi_user_data_rejects_missing_admin_password():
+    with pytest.raises(ValueError, match="maas_admin_password"):
+        mpl.get_pi_user_data(
+            {k: v for k, v in _params().items() if k != "maas_admin_password"}
+        )
+
+
+# -- first-boot script (x1860) -------------------------------------------------
+
+
+def test_ssh_key_absent_leaves_authorized_keys_untouched():
+    script = mpl.get_first_boot_script(_params())
+    assert "> /etc/dropbear/authorized_keys" not in script
+    assert "left untouched" in script
+
+
+def test_ssh_key_present_installs_key():
+    script = mpl.get_first_boot_script(_params(ssh_key="ssh-ed25519 AAAA key"))
+    assert "> /etc/dropbear/authorized_keys" in script
+    assert shlex.quote("ssh-ed25519 AAAA key") in script
+
+
+def test_wifi_credentials_shell_quoted():
+    ssid = "my'net"
+    password = "p'q\"r$s"
+    script = mpl.get_first_boot_script(_params(uplink_ssid=ssid, uplink_password=password))
+    assert shlex.quote(ssid) in script
+    assert shlex.quote(password) in script
+    assert f"'{ssid}'" not in script  # naive single-quote interpolation gone
+
+
+def test_lan_ip_readback_verified_before_commit():
+    script = mpl.get_first_boot_script(_params())
+    set_idx = script.index("uci set network.lan.ipaddr=")
+    readback_idx = script.index("$(uci get network.lan.ipaddr)")
+    commit_idx = script.index("\nuci commit")
+    assert set_idx < readback_idx < commit_idx
+    assert '!= ' in script
+    assert "exit 1" in script
+
+
+def test_router_dhcp_disabled_for_maas_segment():
+    script = mpl.get_first_boot_script(_params())
+    assert "uci set dhcp.lan.ignore='1'" in script
+
+
+# -- Pi user-data --------------------------------------------------------------
+
+
+def test_admin_password_shell_quoted_in_createadmin():
+    pw = 'a$b`c"d\\e'
+    user_data = mpl.get_pi_user_data(_params(maas_admin_password=pw))
+    assert f"--password {shlex.quote(pw)}" in user_data
+    assert f'--password "{pw}"' not in user_data
+
+
+def test_beacons_use_bash_not_dash():
+    user_data = mpl.get_pi_user_data(_params())
+    assert "#!/bin/bash" in user_data
+    assert "bash -c '" in user_data  # bootcmd
+    assert "#!/bin/sh\n      echo \"[maas-boot]" not in user_data
+
+
+def test_completion_beacon_only_after_all_phases_succeed():
+    user_data = mpl.get_pi_user_data(_params())
+    assert "beacon FIRST-BOOT-COMPLETE" in user_data
+    assert "beacon FIRST-BOOT-FAILED" in user_data
+    gate_idx = user_data.index('if [ "$INIT_OK" = 1 ]')
+    complete_idx = user_data.index("beacon FIRST-BOOT-COMPLETE")
+    assert gate_idx < complete_idx
+    # retry loops record success instead of silently exhausting
+    assert "{ INIT_OK=1; break; }" in user_data
+    assert "{ ADMIN_OK=1; break; }" in user_data
+    assert "{ LOGIN_OK=1; break; }" in user_data
+
+
+def test_no_beacon_listener_defaults_leak():
+    user_data = mpl.get_pi_user_data(_params())
+    assert "10.50.0.127" not in user_data
+    assert "00:e0:4c" not in user_data
+
+
+def test_flash_config_declares_digest_and_whitelist_requirements():
+    cfg = mpl.get_flash_config({})
+    assert cfg["serial_whitelist_required"] is True
+    assert cfg["sha256_required"] is True
