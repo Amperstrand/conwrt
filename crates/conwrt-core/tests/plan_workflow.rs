@@ -57,8 +57,10 @@ fn sqm_plan_ops_are_typed_and_ordered() {
             PlanOp::UciDeleteOption { .. } => "delete-option",
             PlanOp::UciAddList { .. } => "add-list",
             PlanOp::ResetUciConfig { .. } => "reset-config",
+            PlanOp::CleanupUciSections { .. } => "cleanup",
             PlanOp::CommitUci { .. } => "commit",
             PlanOp::Service { .. } => "service",
+            PlanOp::Shell { .. } => "shell",
         })
         .collect();
     assert_eq!(
@@ -203,7 +205,7 @@ fn doh_plan_ports_1x_semantics() {
     let script = render_shell(&plan);
     assert!(script.contains("opkg install 'https-dns-proxy'"));
     assert!(script.contains("uci -q delete https-dns-proxy >/dev/null 2>&1 || true"));
-    assert!(script.contains("uci set https-dns-proxy.'main'='https_dns_proxy'"));
+    assert!(script.contains("uci set https-dns-proxy.main=https_dns_proxy"));
     assert!(
         script.contains(
             "uci set https-dns-proxy.main.resolver_url='https://dns.quad9.net/dns-query'"
@@ -214,7 +216,7 @@ fn doh_plan_ports_1x_semantics() {
     assert!(script.contains("uci -q delete dhcp.@dnsmasq[0].server || true"));
     assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'"));
     assert!(script.contains("uci commit dhcp"));
-    assert!(script.contains("/etc/init.d/'dnsmasq' restart"));
+    assert!(script.contains("/etc/init.d/dnsmasq restart"));
     assert_eq!(plan.verification.len(), 3);
 }
 
