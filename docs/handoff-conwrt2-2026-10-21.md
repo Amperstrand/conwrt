@@ -17,7 +17,7 @@ removal PR cites its row). Tonight's wave, end state:
 |---|---|---|
 | #412 | `conwrt-serial` crate: serial_transport.py port (linter, collector FSM, break recovery, tcp bridge) | **merged** (Wave 1A) |
 | #418 | serial boot-capture + base64 flash driver on conwrt-serial (§5 siblings) | **merged** (serialcap worker, 23:2x) |
-| #411 | Rust/Python plan-renderer parity harness + wireguard preset migration (§4) | owner-directed merge at 20:55, executed this session after CI re-trigger (see below) |
+| #411 | Rust/Python plan-renderer parity harness + wireguard preset migration (§4) | owner-directed merge at 20:55, pending this session's CI round: original rust run was a real FAILURE (no_std gate: `vec!` out of scope in `wireguard.rs`) — fixed (`use alloc::vec;`), all gates replicated green locally, pushed; merge when CI lands |
 | #417 | detection & recovery patterns for dark devices + gs1900 wedge-class model | **merged** (rebuilt this session) |
 | #416 | typed-ops ports: tether + wireguard-client (+guest-wifi) (§4) | green, owned by live `ucport2` worker |
 | #419 | `conwrt image` CLI — ASU request-with-packages parity slice (§3) | open (this session; recovered from uncommitted 2026-10-16 hub debris) |
@@ -27,13 +27,18 @@ removal PR cites its row). Tonight's wave, end state:
 1. **Recovered state**: hung session `ses_ed057d30…` tail + ledger + worktrees
    + PR inventory. Two live workers (`ucport2` w15, `serialcap` w16) were
    mid-flight and were left to finish (serialcap merged #418 itself).
-2. **#411**: rust check was a dead runner (2h in_progress, un-rerunnable).
-   Merged origin/master into the PR branch (clean), re-verified locally
-   (`cargo test --workspace` green; parity suite 14/14 after adding the
-   worktree-local `.cargo/config.toml` — the global target-dir pin silently
-   breaks the test's binary lookup, `dev-session.sh start` prevents it),
-   pushed → CI re-fired. Codex review never ran (usage limits) — same
-   honest-disposition precedent as #412, recorded on-PR by the prior session.
+2. **#411**: the 2h "in_progress" rust run completed as FAILURE — not a
+   wedge. Merged origin/master into the PR branch (clean), re-verified the
+   std surface locally (`cargo test --workspace` green; parity suite 14/14
+   after adding the worktree-local `.cargo/config.toml` — the global
+   target-dir pin silently breaks the test's binary lookup,
+   `dev-session.sh start` prevents it), then replicated CI's no_std gate
+   and found the real failure: `vec!` without `use alloc::vec;` in
+   `wireguard.rs` (the head commit fixed `ToString` but missed the macro).
+   One-line fix pushed; fmt/clippy/workspace/no_std/embassy cross-checks
+   all green locally. Codex review never ran (usage limits) — same
+   honest-disposition precedent as #412, recorded on-PR by the prior
+   session.
 3. **#417**: old branch was 380 commits behind carrying pre-landing
    executor/maas/trust-store work (already in master via #200/#201/#293+).
    Rebuilt from master: net-new docs + gs1900 model JSON only (3-way merge,
