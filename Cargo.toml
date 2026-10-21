@@ -5,6 +5,7 @@ members = [
     "crates/conwrt-core",
     "crates/conwrt-maas",
     "crates/conwrt-protocols",
+    "crates/conwrt-serial",
     "crates/conwrt-image",
     "crates/conwrt-agent-proto",
     "crates/conwrt-agent-io",
