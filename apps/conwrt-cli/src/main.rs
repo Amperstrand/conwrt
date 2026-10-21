@@ -1110,37 +1110,54 @@ fn cmd_maas_flash(
     }
 
     // Specimen gate (AGENTS.md MAC/serial rule, #302): block-device
-    // targets need identity evidence before the first write; regular
-    // files (CI, lab staging) pass through.
-    match std::fs::metadata(target) {
-        Ok(meta)
-            if {
-                use std::os::unix::fs::FileTypeExt;
-                meta.file_type().is_block_device()
-            } =>
-        {
-            match conwrt_local_std::specimen::verify_disk(target, serial_whitelist.as_deref()) {
-                Ok(id) => println!(
-                    "verified:  {} usb serial={} {}GB rw",
-                    target.display(),
-                    id.serial.as_deref().unwrap_or("?"),
-                    id.size_bytes.unwrap_or(0) / 1_000_000_000
-                ),
-                Err(msg) => {
-                    eprintln!("flash refused: {msg}");
-                    return ExitCode::from(2);
-                }
-            }
+    // targets need identity evidence — an explicit serial whitelist is
+    // REQUIRED (an unnamed "any USB disk" pass is a wrong-unit flash) —
+    // and the verified device is opened read+write immediately so the
+    // destructive write goes through the pinned inode, not a later
+    // re-resolution of the /dev/sdX name. Regular files (CI, lab
+    // staging) pass through.
+    let is_device = match std::fs::metadata(target) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            meta.file_type().is_block_device()
         }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => {
             eprintln!("cannot stat target {}: {e}", target.display());
             return ExitCode::from(2);
         }
-    }
-
-    let mut writer = FileBlockWriter::new(target);
+    };
+    let mut writer = if is_device {
+        let whitelist = serial_whitelist.as_deref().unwrap_or(&[]);
+        if whitelist.is_empty() {
+            eprintln!(
+                "flash refused: block-device targets require --serial-whitelist \
+                 (specimen gate, AGENTS.md serial rule)"
+            );
+            return ExitCode::from(2);
+        }
+        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => println!(
+                "verified:  {} usb serial={} {}GB rw",
+                target.display(),
+                id.serial.as_deref().unwrap_or("?"),
+                id.size_bytes.unwrap_or(0) / 1_000_000_000
+            ),
+            Err(msg) => {
+                eprintln!("flash refused: {msg}");
+                return ExitCode::from(2);
+            }
+        }
+        match FileBlockWriter::open_device(target) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("cannot pin target {}: {e}", target.display());
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        FileBlockWriter::new(target)
+    };
     match pollster::block_on(execute_flash(&plan, &image, &mut writer)) {
         Ok(report) => {
             println!("image:     {}", image_path.display());

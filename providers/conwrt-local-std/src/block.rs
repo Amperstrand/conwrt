@@ -17,7 +17,7 @@
 //! at a whole-disk device node (`/dev/sdX`) rewrites that device — the
 //! caller owns that decision (AGENTS.md specimen/serial gates apply).
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -49,6 +49,15 @@ pub enum BlockWriterError {
         /// Truncated stderr from the utility.
         stderr: String,
     },
+    /// The opened device node is not the device that was verified —
+    /// a rename/reassign race between specimen gate and open.
+    #[error("device reassign race: opened {} but expected {expected}", opened.display())]
+    DeviceReassigned {
+        /// What the open handle actually resolves to.
+        opened: PathBuf,
+        /// What the specimen gate verified.
+        expected: PathBuf,
+    },
 }
 
 /// File-backed [`BlockWriter`]: the image target is a regular file (or a
@@ -58,7 +67,11 @@ pub struct FileBlockWriter {
     path: PathBuf,
     partition: Option<u8>,
     growpart: Option<PathBuf>,
-    written: Option<std::fs::File>,
+    /// Retained handle: a pre-opened device (see [`FileBlockWriter::open_device`])
+    /// or the just-written file. All writes and verification reads on a
+    /// device go through THIS inode — the pathname is never re-resolved
+    /// after the specimen gate.
+    handle: Option<std::fs::File>,
 }
 
 /// Read-back verification chunk: bounded memory regardless of image size.
@@ -72,8 +85,31 @@ impl FileBlockWriter {
             path: path.into(),
             partition: None,
             growpart: None,
-            written: None,
+            handle: None,
         }
+    }
+
+    /// Open the block device at `path` read+write NOW and pin it: every
+    /// later write and verification read goes through this handle, so an
+    /// unplug/reassign of `/dev/sdX` between the specimen gate and the
+    /// write cannot redirect the destructive path onto a different,
+    /// never-verified device (the held inode just starts erroring).
+    /// On Linux the opened node's name is cross-checked against `path`
+    /// to close the verify-open race itself.
+    pub fn open_device(path: impl Into<PathBuf>) -> Result<Self, BlockWriterError> {
+        let path = path.into();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(io_err(&path))?;
+        verify_opened_device_name(&file, &path)?;
+        Ok(Self {
+            path,
+            partition: None,
+            growpart: None,
+            handle: Some(file),
+        })
     }
 
     /// Builder: grow this 1-based partition after write verification
@@ -96,11 +132,50 @@ impl FileBlockWriter {
     /// write handle so read-backs are checked against what the kernel
     /// committed, not a stale page cache.
     fn sync_written(&self) -> Result<(), BlockWriterError> {
-        if let Some(f) = &self.written {
+        if let Some(f) = &self.handle {
             f.sync_all().map_err(io_err(&self.path))?;
         }
         Ok(())
     }
+
+    /// A handle for verification reads: a dup of the retained handle
+    /// (same inode — pathname reassignment cannot redirect it) or, for
+    /// the plain-file flow, a fresh open with the cache evicted.
+    fn verify_file(&self) -> Result<std::fs::File, BlockWriterError> {
+        match &self.handle {
+            Some(f) => {
+                let dup = f.try_clone().map_err(io_err(&self.path))?;
+                evict_page_cache(&dup);
+                Ok(dup)
+            }
+            None => open_verify_reader(&self.path),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn verify_opened_device_name(
+    file: &std::fs::File,
+    expected: &Path,
+) -> Result<(), BlockWriterError> {
+    use std::os::unix::io::AsRawFd;
+    let opened = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(io_err(expected))?;
+    if opened.file_name() != expected.file_name() {
+        return Err(BlockWriterError::DeviceReassigned {
+            opened,
+            expected: expected.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_opened_device_name(
+    _file: &std::fs::File,
+    _expected: &Path,
+) -> Result<(), BlockWriterError> {
+    Ok(())
 }
 
 /// Verification reads go through a fresh handle with the page cache
@@ -141,24 +216,47 @@ impl BlockWriter for FileBlockWriter {
         // std::fs inside async: the lab flow calls this from a host
         // runner, not a shared reactor; keep the I/O synchronous and
         // simple (the mock-era pipeline has no concurrency requirement).
-        let mut f = std::fs::File::create(&self.path).map_err(io_err(&self.path))?;
+        use std::io::Seek;
+        let mut f = match self.handle.take() {
+            // Pre-opened device: write through the pinned inode.
+            Some(mut f) => {
+                f.seek(std::io::SeekFrom::Start(0))
+                    .map_err(io_err(&self.path))?;
+                f
+            }
+            // Regular-file flow: create (truncate) and retain; read+write
+            // so verification can dup the same handle.
+            None => std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&self.path)
+                .map_err(io_err(&self.path))?,
+        };
         f.write_all(image).map_err(io_err(&self.path))?;
         f.sync_all().map_err(io_err(&self.path))?;
-        self.written = Some(f);
+        self.handle = Some(f);
         Ok(())
     }
 
     async fn read_back(&mut self, len: usize) -> Result<Vec<u8>, Self::Error> {
+        use std::io::{Read, Seek};
         self.sync_written()?;
-        let mut f = open_verify_reader(&self.path)?;
+        let mut f = self.verify_file()?;
+        f.seek(std::io::SeekFrom::Start(0))
+            .map_err(io_err(&self.path))?;
         let mut buf = vec![0u8; len];
         f.read_exact(&mut buf).map_err(io_err(&self.path))?;
         Ok(buf)
     }
 
     async fn read_back_digest(&mut self, len: usize) -> Result<Sha256, Self::Error> {
+        use std::io::{Read, Seek};
         self.sync_written()?;
-        let mut f = open_verify_reader(&self.path)?;
+        let mut f = self.verify_file()?;
+        f.seek(std::io::SeekFrom::Start(0))
+            .map_err(io_err(&self.path))?;
         let mut h = sha2::Sha256::new();
         let mut chunk = vec![0u8; VERIFY_CHUNK];
         let mut remaining = len;

@@ -33,11 +33,13 @@ pub struct DiskIdentity {
 pub const MIN_DISK_BYTES: u64 = 30_000_000_000;
 
 /// Pure gate: does this identity describe a disk we may overwrite?
-/// Refusals are `ABORT: …` messages, mirroring `verify_disk`.
+/// `allowed_serials` MUST be non-empty — a missing specimen identity is
+/// a refusal, not a pass (AGENTS.md specimen/serial gates). Refusals
+/// are `ABORT: …` messages, mirroring `verify_disk`.
 pub fn check_disk_identity(
     dev: &Path,
     id: &DiskIdentity,
-    allowed_serials: Option<&[String]>,
+    allowed_serials: &[String],
 ) -> Result<(), String> {
     match id.transport.as_deref() {
         Some("usb") => {}
@@ -50,14 +52,21 @@ pub fn check_disk_identity(
         }
     }
 
-    if let Some(allowed) = allowed_serials {
-        match id.serial.as_deref() {
-            Some(s) if allowed.iter().any(|a| a == s) => {}
-            Some(s) => {
-                return Err(format!("ABORT: serial {s:?} not in whitelist {allowed:?}"));
-            }
-            None => return Err("ABORT: no serial reported, whitelist given".to_string()),
+    if allowed_serials.is_empty() {
+        return Err(format!(
+            "ABORT: no serial whitelist given for {} — block-device targets need explicit \
+             specimen identity (--serial-whitelist)",
+            dev.display()
+        ));
+    }
+    match id.serial.as_deref() {
+        Some(s) if allowed_serials.iter().any(|a| a == s) => {}
+        Some(s) => {
+            return Err(format!(
+                "ABORT: serial {s:?} not in whitelist {allowed_serials:?}"
+            ));
         }
+        None => return Err("ABORT: no serial reported, whitelist given".to_string()),
     }
 
     let size = id.size_bytes.ok_or_else(|| {
@@ -99,21 +108,63 @@ pub fn check_disk_identity(
 
 /// Gather `dev`'s identity (lsblk + sysfs) and run [`check_disk_identity`].
 /// On success the verified identity is returned for the evidence trail.
-pub fn verify_disk(dev: &Path, allowed_serials: Option<&[String]>) -> Result<DiskIdentity, String> {
+/// `allowed_serials` must be non-empty.
+pub fn verify_disk(dev: &Path, allowed_serials: &[String]) -> Result<DiskIdentity, String> {
     let identity = gather_identity(dev)?;
     check_disk_identity(dev, &identity, allowed_serials)?;
     Ok(identity)
 }
 
-fn gather_identity(dev: &Path) -> Result<DiskIdentity, String> {
-    let ids = lsblk(dev, "TRAN,SERIAL")?;
-    let (transport, serial) = match ids.split_whitespace().collect::<Vec<_>>()[..] {
-        [tran, serial] => (Some(tran.to_string()), Some(serial.to_string())),
-        [tran] => (Some(tran.to_string()), None),
-        _ => (None, None),
-    };
+/// Parse one `lsblk --pairs` line (`KEY="VALUE" KEY="VALUE"`) into pairs.
+/// `--pairs` keeps values with spaces intact — raw column output would
+/// split a serial like `USB SERIAL 001` into unattributable fields.
+fn parse_lsblk_pairs(line: &str) -> Vec<(String, String)> {
+    let b = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        let key_start = i;
+        while i < b.len() && b[i] != b'=' {
+            i += 1;
+        }
+        if i + 1 >= b.len() || b[i + 1] != b'"' {
+            break;
+        }
+        let key = line[key_start..i].to_string();
+        i += 2;
+        let val_start = i;
+        while i < b.len() && b[i] != b'"' {
+            i += 1;
+        }
+        if i >= b.len() {
+            break;
+        }
+        out.push((key, line[val_start..i].to_string()));
+        i += 1;
+    }
+    out
+}
 
-    let mountpoints = lsblk(dev, "MOUNTPOINTS")?
+fn gather_identity(dev: &Path) -> Result<DiskIdentity, String> {
+    let pairs = parse_lsblk_pairs(&lsblk_pairs(dev, "TRAN,SERIAL")?);
+    let get = |k: &str| {
+        pairs
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| v.clone())
+    };
+    let transport = get("TRAN");
+    let serial = get("SERIAL");
+
+    // No `-d` here on purpose: with it, lsblk prints only the whole-disk
+    // row and a mounted child partition's mountpoint is invisible — the
+    // gate would pass a mounted disk. Without it, every row of the
+    // device's tree contributes its non-empty MOUNTPOINTS cell.
+    let mountpoints = lsblk_tree(dev, "MOUNTPOINTS")?
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
@@ -145,9 +196,29 @@ fn read_sysfs_u64(path: &str) -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-fn lsblk(dev: &Path, columns: &str) -> Result<String, String> {
+fn lsblk_pairs(dev: &Path, columns: &str) -> Result<String, String> {
     let out = Command::new("lsblk")
         .arg("-dn")
+        .arg("--pairs")
+        .arg("-o")
+        .arg(columns)
+        .arg(dev)
+        .output()
+        .map_err(|e| format!("verify_disk needs the `lsblk` utility: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "lsblk failed for {}: {}",
+            dev.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Whole-device tree (children included): `-n -o COLUMNS` without `-d`.
+fn lsblk_tree(dev: &Path, columns: &str) -> Result<String, String> {
+    let out = Command::new("lsblk")
+        .arg("-n")
         .arg("-o")
         .arg(columns)
         .arg(dev)
@@ -184,12 +255,17 @@ mod tests {
     #[test]
     fn verified_usb_disk_passes() {
         assert_eq!(
-            check_disk_identity(Path::new("/dev/sdb"), &ok_identity(), None),
+            check_disk_identity(Path::new("/dev/sdb"), &ok_identity(), &whitelisted()),
             Ok(())
         );
-        assert_eq!(
-            check_disk_identity(Path::new("/dev/sdb"), &ok_identity(), Some(&whitelisted())),
-            Ok(())
+    }
+
+    #[test]
+    fn empty_whitelist_is_refused() {
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &ok_identity(), &[]).unwrap_err();
+        assert!(
+            msg.starts_with("ABORT:") && msg.contains("--serial-whitelist"),
+            "{msg}"
         );
     }
 
@@ -198,7 +274,7 @@ mod tests {
         let mut id = ok_identity();
         for tran in ["sata", "nvme", "virtio"] {
             id.transport = Some(tran.into());
-            let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+            let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
             assert!(msg.starts_with("ABORT:") && msg.contains(tran), "{msg}");
         }
     }
@@ -207,18 +283,14 @@ mod tests {
     fn unknown_transport_is_refused() {
         let mut id = ok_identity();
         id.transport = None;
-        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
         assert!(msg.contains("not USB"), "{msg}");
     }
 
     #[test]
     fn serial_outside_whitelist_is_refused() {
-        let msg = check_disk_identity(
-            Path::new("/dev/sdb"),
-            &ok_identity(),
-            Some(&["other".into()]),
-        )
-        .unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &ok_identity(), &["other".into()])
+            .unwrap_err();
         assert!(
             msg.starts_with("ABORT:") && msg.contains("whitelist"),
             "{msg}"
@@ -230,7 +302,7 @@ mod tests {
         let mut id = ok_identity();
         id.serial = None;
         assert!(
-            check_disk_identity(Path::new("/dev/sdb"), &id, Some(&whitelisted())).is_err(),
+            check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).is_err(),
             "no serial is not evidence"
         );
     }
@@ -239,7 +311,7 @@ mod tests {
     fn too_small_disk_is_refused() {
         let mut id = ok_identity();
         id.size_bytes = Some(MIN_DISK_BYTES - 1);
-        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
         assert!(
             msg.starts_with("ABORT:") && msg.contains("too small"),
             "{msg}"
@@ -250,7 +322,7 @@ mod tests {
     fn unknown_size_is_refused() {
         let mut id = ok_identity();
         id.size_bytes = None;
-        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
         assert!(msg.contains("size"), "{msg}");
     }
 
@@ -258,7 +330,7 @@ mod tests {
     fn read_only_disk_is_refused() {
         let mut id = ok_identity();
         id.read_only = Some(true);
-        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
         assert!(
             msg.starts_with("ABORT:") && msg.contains("read-only"),
             "{msg}"
@@ -269,17 +341,58 @@ mod tests {
     fn unknown_read_only_state_is_refused() {
         let mut id = ok_identity();
         id.read_only = None;
-        assert!(check_disk_identity(Path::new("/dev/sdb"), &id, None).is_err());
+        assert!(check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).is_err());
     }
 
     #[test]
     fn mounted_disk_is_refused() {
         let mut id = ok_identity();
         id.mountpoints = vec!["/media/ubuntu/labdisk".into()];
-        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, None).unwrap_err();
+        let msg = check_disk_identity(Path::new("/dev/sdb"), &id, &whitelisted()).unwrap_err();
         assert!(
             msg.starts_with("ABORT:") && msg.contains("mounted"),
             "{msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pairs_tests {
+    use super::parse_lsblk_pairs;
+
+    #[test]
+    fn parses_single_pair() {
+        assert_eq!(
+            parse_lsblk_pairs(r#"TRAN="usb""#),
+            vec![("TRAN".to_string(), "usb".to_string())]
+        );
+    }
+
+    #[test]
+    fn keeps_spaces_inside_values() {
+        assert_eq!(
+            parse_lsblk_pairs(r#"TRAN="usb" SERIAL="USB SERIAL 001""#),
+            vec![
+                ("TRAN".to_string(), "usb".to_string()),
+                ("SERIAL".to_string(), "USB SERIAL 001".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_value_is_preserved() {
+        assert_eq!(
+            parse_lsblk_pairs(r#"TRAN="usb" SERIAL="""#),
+            vec![
+                ("TRAN".to_string(), "usb".to_string()),
+                ("SERIAL".to_string(), String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn garbage_stops_instead_of_misparsing() {
+        assert!(parse_lsblk_pairs("not pairs at all").is_empty());
+        assert!(parse_lsblk_pairs(r#"KEY="unterminated"#).is_empty());
     }
 }
