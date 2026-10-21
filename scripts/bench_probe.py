@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -120,13 +121,36 @@ def positive_controls(zone: str) -> str:
     which = on_switch("command -v dbclient")
     if "dbclient" not in which:
         return f"dbclient applet missing on switch: {which.strip()[:160] or '(no output)'}"
-    # rc-marker form (bench_inventory probe style): the textual error for a
-    # missing interface CONTAINS the interface name, so substring checks
-    # would false-pass on "Device switch.1005 does not exist."
-    link_rc = on_switch(f"ip link show {zone} >/dev/null 2>&1; echo LINK-CTRL:$?")
-    if "LINK-CTRL:0" not in link_rc:
-        return (f"vlan interface {zone} missing/down on switch "
-                f"({link_rc.strip()[-60:] or 'no output'})")
+    # Operational link-state control, not existence: `ip link show` exits 0
+    # for admin-down/detached interfaces too (Codex P1 on #401 — an
+    # existence check passes while the data path is dead). Require the
+    # interface to actually report state UP. rc-marker form keeps the
+    # missing-interface case loud ("Device switch.NNN does not exist."
+    # contains the name, so substring checks would false-pass).
+    link_out = on_switch(f"ip link show {zone} 2>&1; echo LINK-CTRL:$?")
+    link_body = link_out.rsplit("LINK-CTRL:", 1)[0]
+    if "LINK-CTRL:0" not in link_out:
+        return (f"vlan interface {zone} missing on switch "
+                f"({link_out.strip()[-60:] or 'no output'})")
+    if "state UP" not in link_body:
+        state = next((ln.strip() for ln in link_body.splitlines()
+                      if "state" in ln), "")[:80]
+        return (f"vlan interface {zone} not operational on switch "
+                f"(want state UP; got: {state or link_body.strip()[:80]})")
+    # Known-good data-path control (AGENTS.md rule 1: prove the probe
+    # against a known-good host through the same interface). Opt-in via
+    # CONWRT_VLAN_CONTROL_HOST — a host that must answer a ping THROUGH the
+    # target VLAN. When unset, controls stop at operational link state and
+    # every verdict's evidence says so (never silently claims path proof).
+    host = os.environ.get("CONWRT_VLAN_CONTROL_HOST", "").strip()
+    if host:
+        ping_rc = on_switch(
+            f"ping -I {zone} -c1 -W2 {host} >/dev/null 2>&1; "
+            f"echo PING-CTRL:$?")
+        if "PING-CTRL:0" not in ping_rc:
+            return (f"known-good host {host} unreachable through {zone} "
+                    f"({ping_rc.strip()[-40:] or 'no output'}) — bench data "
+                    f"path unproven")
     return ""
 
 

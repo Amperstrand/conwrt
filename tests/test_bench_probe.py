@@ -19,13 +19,20 @@ ZONE = f"switch.{PLACE['vlan']}"
 NEIGH_PRESENT = ("192.168.105.51 dev switch.1005 lladdr b4:2d:56:24:ad:97 "
                  "ref 1 used 0/0/0 probes 1 REACHABLE")
 
+LINK_UP = (f"17: {ZONE}@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 "
+           f"state UP mode DEFAULT\n    link/ether 00:00:00:00:00:00\n"
+           f"LINK-CTRL:0")
+LINK_DOWN = (f"17: {ZONE}@eth0: <BROADCAST,MULTICAST> mtu 1500 "
+             f"state DOWN mode DEFAULT\nLINK-CTRL:0")
+
 # Needles are matched against the exact switch-side scripts probe() issues:
 #   key probe  -> "dbclient -y -y"      control2 -> "command -v dbclient"
 #   neighbors  -> "ip neigh show"       control3 -> "ip link show"
+#   control4 (opt-in via CONWRT_VLAN_CONTROL_HOST) -> "ping -I"
 CONTROLS_OK = {
     "echo BENCH-CTRL-OK": "BENCH-CTRL-OK",
     "command -v dbclient": "/usr/bin/dbclient",
-    "ip link show": "LINK-CTRL:0",
+    "ip link show": LINK_UP,
 }
 
 
@@ -80,7 +87,7 @@ class TestNegativeVerdictsRequireControls:
             "dbclient -y -y": "sh: dbclient: not found",
             "echo BENCH-CTRL-OK": "BENCH-CTRL-OK",
             "command -v dbclient": "",  # applet absent on the switch
-            "ip link show": "LINK-CTRL:0",
+            "ip link show": LINK_UP,
         })
         result = bp.probe(PLACE)
         assert result.verdict == "unprobed"
@@ -98,7 +105,53 @@ class TestNegativeVerdictsRequireControls:
         })
         result = bp.probe(PLACE)
         assert result.verdict == "unprobed"
-        assert "missing/down" in result.control
+
+    def test_admin_down_vlan_means_unprobed_not_net_dead(self, monkeypatch) -> None:
+        # Codex P1 on #401: `ip link show` exits 0 for an admin-down
+        # interface — existence alone must not pass the control.
+        fake_switch(monkeypatch, {
+            "ip neigh show": NEIGH_PRESENT,
+            "dbclient -y -y": "",
+            "echo BENCH-CTRL-OK": "BENCH-CTRL-OK",
+            "command -v dbclient": "/usr/bin/dbclient",
+            "ip link show": LINK_DOWN,
+        })
+        result = bp.probe(PLACE)
+        assert result.verdict == "unprobed"
+        assert "not operational" in result.control
+        assert "state DOWN" in result.control
+
+    def test_known_good_host_unreachable_means_unprobed(
+            self, monkeypatch) -> None:
+        # AGENTS.md rule 1 tier: with CONWRT_VLAN_CONTROL_HOST set, a dead
+        # known-good host through the VLAN blocks negative verdicts.
+        monkeypatch.setenv("CONWRT_VLAN_CONTROL_HOST", "192.168.105.2")
+        fake_switch(monkeypatch, {
+            "ip neigh show": NEIGH_PRESENT,
+            "dbclient -y -y": "",
+            "echo BENCH-CTRL-OK": "BENCH-CTRL-OK",
+            "command -v dbclient": "/usr/bin/dbclient",
+            "ip link show": LINK_UP,
+            "ping -I": "PING-CTRL:1",
+        })
+        result = bp.probe(PLACE)
+        assert result.verdict == "unprobed"
+        assert "192.168.105.2 unreachable" in result.control
+
+    def test_known_good_host_reachable_still_verdicts(
+            self, monkeypatch) -> None:
+        monkeypatch.setenv("CONWRT_VLAN_CONTROL_HOST", "192.168.105.2")
+        fake_switch(monkeypatch, {
+            "ip neigh show": NEIGH_PRESENT,
+            "dbclient -y -y": "",
+            "echo BENCH-CTRL-OK": "BENCH-CTRL-OK",
+            "command -v dbclient": "/usr/bin/dbclient",
+            "ip link show": LINK_UP,
+            "ping -I": "PING-CTRL:0",
+        })
+        result = bp.probe(PLACE)
+        assert result.verdict == "net-dead"
+        assert result.control == ""
 
     def test_control_reason_carried_in_json_verdict(self, monkeypatch, tmp_path) -> None:
         fake_switch(monkeypatch, {"ip neigh show": NEIGH_PRESENT}, default="")
@@ -144,7 +197,7 @@ class TestControlsDirect:
     @pytest.mark.parametrize("broken,needle", [
         ({"echo BENCH-CTRL-OK": ""}, "switch SSH/shell"),
         ({"command -v dbclient": ""}, "dbclient applet"),
-        ({"ip link show": ""}, "missing/down"),
+        ({"ip link show": ""}, "missing on switch"),
     ])
     def test_each_control_failure_reasoned(self, monkeypatch, broken, needle) -> None:
         responses = dict(CONTROLS_OK)
