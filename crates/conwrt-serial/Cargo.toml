@@ -12,6 +12,10 @@ repository.workspace = true
 # this driver opens by explicit path/spec, so CI builders stay libudev-free.
 serialport = { version = "4", default-features = false }
 thiserror = "2"
+# milestone detection — the SHARED vocabulary from conwrt-probe-core
+# (serial_monitor.py's extraction); the boot-capture loop never forks
+# its own matcher set (parity-matrix §5 rule).
+conwrt-probe-core = { path = "../conwrt-probe-core" }
 
 [dev-dependencies]
 # pty fixtures + poll-bounded reads in the integration tests only

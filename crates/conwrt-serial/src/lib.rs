@@ -33,6 +33,15 @@
 //!   `run` (RC-marker command execution), `send_script` (linted line-chunked
 //!   delivery). Timing, sleeping, and port opening are injectable so the
 //!   driver semantics are testable without hardware.
+//! * [`boot_capture`] is the two-phase boot capture (Rust port of
+//!   `scripts/serial-boot-capture.py`): wait for the power-transition
+//!   break byte, reopen after the recovery wait, capture to
+//!   `console.raw`/`console.log` until silence, milestones detected via
+//!   the SHARED `conwrt-probe-core` tracker.
+//! * [`flash`] is the base64 firmware transfer (Rust port of
+//!   `scripts/serial-flash.py`) with the #405 policy: the device's own
+//!   `sha256sum` reply — parsed and compared — is the only acceptance
+//!   gate; a sender-side `Ok` is never trusted alone.
 //!
 //! This lives outside `conwrt-protocols` deliberately: that crate is
 //! `no_std`-cross-compiled in CI (`--target thumbv7em-none-eabihf`), while
@@ -53,11 +62,16 @@
 //! * `tests/tcp_driver.rs`: the TCP bridge over a localhost echo server
 //!   only (CI rule: no network beyond localhost).
 
+pub mod boot_capture;
 pub mod collect;
 pub mod console;
 pub mod io;
 pub mod lint;
 
+pub use boot_capture::{
+    BootCaptureError, BootCaptureOptions, BootCaptureReport, PowerTransition, capture_boot,
+    session_dir,
+};
 pub use collect::{CmdOutcome, Collector, Marker, RC_FAIL, RC_OK, ReadOutcome};
 pub use console::{ConsoleTiming, PortOpener, SerialConsole, Sleeper, SpecOpener, StdSleeper};
 pub use io::{ConsoleError, ConsoleIo, open_port, parse_tcp_endpoint};
