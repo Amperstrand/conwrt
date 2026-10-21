@@ -113,8 +113,34 @@ def rig(tmp_path: Path):
             "STUB_LOGS": str(logs_dir),
         }
         env.update(env_extra)
+        cmd = ["bash", str(fake_repo / "scripts" / "flash-recovery.sh"), "test-model", "lo"]
+        if os.geteuid() == 0:
+            # flash-recovery.sh refuses root BY DESIGN (it sudo's as
+            # needed); in root-run lanes keep this safety contract covered
+            # by executing the whole hermetic harness as an unprivileged
+            # user instead of skipping (#299). Nobody must be able to
+            # traverse pytest's private tmp chain (0700 from /tmp down)
+            # and append to the stub logs, so open the tree up — this is
+            # throwaway stub data.
+            import tempfile
+            chain_top = Path(tempfile.gettempdir())
+            for anc in [tmp_path, *tmp_path.parents]:
+                if anc == chain_top:
+                    break
+                os.chmod(anc, 0o755)
+            for p in tmp_path.rglob("*"):
+                if p == logs_dir:
+                    continue
+                if p.is_dir():
+                    p.chmod(0o755)
+                else:
+                    keep_exec = p.stat().st_mode & 0o111
+                    p.chmod(0o755 if keep_exec else 0o644)
+            logs_dir.chmod(0o1777)
+            cmd = ["setpriv", "--reuid=nobody", "--regid=nogroup",
+                   "--clear-groups"] + cmd
         return subprocess.run(
-            ["bash", str(fake_repo / "scripts" / "flash-recovery.sh"), "test-model", "lo"],
+            cmd,
             input=stdin if stdin is not None else "",  # EOF at any prompt — never block on a tty
             capture_output=True,
             text=True,
