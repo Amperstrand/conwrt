@@ -154,12 +154,30 @@ def _auth_dead(out: str) -> bool:
     return any(marker in out for marker in AUTH_DEAD_MARKERS)
 
 
+# Remote-side completion marker: a probe command that appends
+# `; echo PROBE-DONE` proves the DUT channel executed it. Output bearing
+# this marker is authoritative evidence even when the board name is absent
+# (#288: overlay-health output never contains the board name).
+PROBE_DONE = "PROBE-DONE"
+
+
 def dut_with_fallback(r: Runner, name: str, remote_cmd: str) -> str:
-    """Key auth first; empty-password v6 fallback for never-adopted units."""
+    """Key auth first; empty-password v6 fallback for never-adopted units.
+
+    The key-auth result is only discarded when it shows no evidence the
+    remote command actually ran (neither the board name nor the
+    PROBE-DONE marker): discarding marker-bearing key-auth output and
+    retrying over the empty-password channel made the retry's auth error
+    read as a clean result — the #288 false-PASS right before firstboot.
+    """
     out = r.dut(name, remote_cmd)
-    if r.place.board not in out:
-        out = r.dut(f"{name}-pw", remote_cmd, auth="password")
-    return out
+    if r.place.board in out or PROBE_DONE in out:
+        return out
+    retry = r.dut(f"{name}-pw", remote_cmd, auth="password")
+    # Prefer whichever attempt actually reached the DUT shell.
+    if r.place.board in retry or PROBE_DONE in retry:
+        return retry
+    return out + "\n" + retry
 
 
 def stage_rom_audit(r: Runner) -> None:
@@ -220,17 +238,28 @@ def stage_overlay(r: Runner) -> None:
     boots (ap-lan2 2026-09-22, ap-lan5 2026-09-24; AGENTS.md reset-failsafe
     rule 2). sysupgrade -n (--method flash) formats a fresh overlay and is
     the safe alternative."""
-    out = dut_with_fallback(r, "overlay-health", "dmesg | grep jffs2_build_xattr")
-    if "unchecked" not in out and "orphan" not in out:
+    # PROBE-DONE brackets the evidence: a healthy grep prints NOTHING, so
+    # without a completion marker a successful probe is indistinguishable
+    # from a dead channel (#288).
+    out = dut_with_fallback(r, "overlay-health",
+                            "echo OVERLAY-BEGIN; dmesg | grep jffs2_build_xattr; "
+                            f"echo {PROBE_DONE}")
+    if PROBE_DONE not in out:
+        raise AdoptError(
+            f"overlay {r.place.name}: health probe never completed on either auth "
+            f"channel — dirty-overlay state UNKNOWN, refusing to gate firstboot "
+            f"on unproven evidence (both outputs follow):\n{out[:400]}")
+    debris = out.split("OVERLAY-BEGIN", 1)[-1]
+    if "unchecked" not in debris and "orphan" not in debris:
         print(f"[PASS] overlay {r.place.name}: no jffs2 xattr debris in dmesg")
         return
-    if "0 unchecked, 0 orphan" in out:
+    if "0 unchecked, 0 orphan" in debris:
         print(f"[PASS] overlay {r.place.name}: clean overlay (0 unchecked, 0 orphan)")
         return
     raise AdoptError(
         f"overlay {r.place.name}: DIRTY jffs2 overlay — firstboot from this state "
         f"is the known auth-dead trigger. Boot to health or use --method flash "
-        f"(sysupgrade -n formats a fresh overlay deterministically). dmesg:\n{out[:300]}")
+        f"(sysupgrade -n formats a fresh overlay deterministically). dmesg:\n{debris[:300]}")
 
 
 def stage_reset(r: Runner) -> None:
