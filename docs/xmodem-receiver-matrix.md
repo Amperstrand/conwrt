@@ -67,6 +67,18 @@ of one restart per corrupted block** — acceptable on a clean bench
 line; noisy lines will restart repeatedly (measure before large
 transfers; prefer short initramfs payloads).
 
+### Receiver EOT latency (lrzsz cross-check finding)
+
+The real-receiver cross-check (`tests/xmodem_lrzsz.rs`, lrzsz 0.12.21
+`rx`) surfaced a timing class the scripted receivers can't show:
+**lrzsz's rx deliberates ~1 s before ACKing EOT** (ZMODEM heritage),
+and each EOT retransmission RESETS that deliberation — an engine read
+deadline shorter than the receiver's EOT latency therefore deadlocks
+the finish phase (16 × deadline → `ExhaustedRetries`). Rule: mount the
+engine with a read deadline strictly greater than the target receiver's
+EOT latency (U-Boot's xyzModem ACKs EOT immediately — source — so
+serial-port defaults are fine there; lrzsz-class receivers need ≥1.5 s).
+
 ## Crate upgrade evaluation (#124 checkbox 4)
 
 - The Rust `xmodem` crate's **latest release is 0.4.0** (crates.io,
