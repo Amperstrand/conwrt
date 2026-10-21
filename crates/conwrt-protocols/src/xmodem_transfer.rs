@@ -17,22 +17,24 @@
 //! - mid-stream `CAN` is not honored during block send (crate TODO);
 //!   cancellation is reliable at transfer start and via error exhaustion.
 //!
-//! # Receiver compatibility matrix (#124) — fill per target BEFORE any
-//! automated serial flash ships
+//! # Receiver compatibility matrix (#124) — `docs/xmodem-receiver-matrix.md`
 //!
-//! | Bootloader target | Restart-after-abort safe? | Evidence |
-//! |---|---|---|
-//! | U-Boot `loadx` | unknown — hardware-gated | to verify: mid-transfer abort, then clean restart; confirm no partial write |
-//! | Z-Loader (Zyxel) | unknown — hardware-gated | as above |
-//! | vendor ROM loaders | unknown — hardware-gated | as above |
+//! Per-bootloader-family mid-stream-abort / restart-safety verdicts live
+//! in `docs/xmodem-receiver-matrix.md` (source-verified where public —
+//! U-Boot `loadx`/xyzModem is the strict-receiver reference; vendor rows
+//! NEEDS-BENCH). Summary at the time of writing: U-Boot `loadx` is
+//! restart-safe **to RAM** (receiver state fully re-initialized per
+//! invocation; one whole-transfer restart per corrupted block against
+//! the pinned sender); never `loadx` directly at a flash address.
 //!
-//! Every row must be proven on hardware and recorded in the model JSON
+//! Every family must be bench-confirmed and recorded in the model JSON
 //! flash-method entry (`restart_safety`) before `send_firmware_verified`
 //! is pointed at that target.
 //!
 //! I/O traits come from the crate itself: `std::io` on std builds, the
 //! crate's `xmodem::io` subset on `no_std` (implement it at the driver —
-//! embassy UART in M5+).
+//! embassy UART in M5+, which programs against
+//! [`crate::serial_io::SerialIo`]).
 
 #[cfg(feature = "std")]
 pub use std::io::{Read, Write};

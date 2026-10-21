@@ -55,8 +55,8 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| XMODEM (none in Python — Python uses base64 serial) | — | **parity-tested** — `conwrt-protocols`: wire-exact frames + failure-mode pins + verified retry policy | `crates/conwrt-protocols/tests/xmodem_fitness.rs` (14 tests, #212) | n/a — Rust-first capability; receivers matrix (#124) gates hardware use |
-| `scripts/serial_transport.py`, `serial-console.py`, `serial-boot-capture.py`, `serial-flash.py` (base64), `serial-configure.py`, `serial-backup.py` | ~2200 | partial — FT232R break-recovery semantics documented + tested Python-side; no Rust serial port I/O yet | `tests/test_flash_serial_monitor.py`, `serial_transport` tests | None — M5 embedded-io spike is the prerequisite (#124) |
+| XMODEM (none in Python — Python uses base64 serial) | — | **parity-tested** — `conwrt-protocols`: wire-exact frames + failure-mode pins + verified retry policy + `embedded-io-async` adaptation (SerialIo seam, chunked adapter, offloaded engine; host completion/cancellation/no-starvation proofs) | `crates/conwrt-protocols/tests/xmodem_fitness.rs` (14 tests, #212), `tests/serial_io_spike.rs` (4 tests, #124) | n/a — Rust-first capability; receiver matrix (`docs/xmodem-receiver-matrix.md`, #124) gates hardware use |
+| `scripts/serial_transport.py`, `serial-console.py`, `serial-boot-capture.py`, `serial-flash.py` (base64), `serial-configure.py`, `serial-backup.py` | ~2200 | partial — FT232R break-recovery semantics documented + tested Python-side; Rust side now has the async serial seam (`conwrt-protocols::serial_io`) the M5 firmware targets program against; no Rust serial-port driver yet | `tests/test_flash_serial_monitor.py`, `serial_transport` tests, `crates/conwrt-protocols/src/serial_io.rs` | Partial — M5 spike landed (#124); remaining is the port driver itself |
 
 ## 6. SSH & trust
 
