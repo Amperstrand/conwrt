@@ -1513,29 +1513,63 @@ class TestProfileFallbackForNonUnattendedModels(TestCase):
 
     def test_pi_profile_falls_back_to_first_method(self):
         from conwrt.flash_dispatcher import _build_profile_or_first_method
-        profile, err = _build_profile_or_first_method(
+        profile, err, _fb = _build_profile_or_first_method(
             "raspberrypi-4b", serial_method="", flash_method="")
         self.assertIsNone(err)
         self.assertEqual(profile.flash_method, "netboot-rescue")
 
     def test_normal_model_builds_normally(self):
         from conwrt.flash_dispatcher import _build_profile_or_first_method
-        profile, err = _build_profile_or_first_method(
+        profile, err, _fb = _build_profile_or_first_method(
             "zyxel-gs1920-24", serial_method="", flash_method="")
         self.assertIsNone(err)
         self.assertEqual(profile.flash_method, "oem-ftp")
 
     def test_unknown_model_returns_error(self):
         from conwrt.flash_dispatcher import _build_profile_or_first_method
-        profile, err = _build_profile_or_first_method(
+        profile, err, _fb = _build_profile_or_first_method(
             "no-such-model", serial_method="", flash_method="")
         self.assertIsNone(profile)
         self.assertIn("no-such-model", err)
 
+    def test_fallback_flags_first_method_use(self):
+        from conwrt.flash_dispatcher import _build_profile_or_first_method
+        _p, _e, fb = _build_profile_or_first_method(
+            "raspberrypi-4b", serial_method="", flash_method="")
+        self.assertTrue(fb)  # the gate key: only this route is specimen-gated
+        _p, _e, fb_plain = _build_profile_or_first_method(
+            "dlink-covr-x1860-a1", serial_method="", flash_method="")
+        self.assertFalse(fb_plain)
+
+    def test_fallback_specimen_gate(self):
+        """#388 review P1: the fallback-enabled sysupgrade route demands an
+        explicit specimen match against the live fingerprint."""
+        from conwrt.flash_dispatcher import _verify_fallback_specimen
+        args = SimpleNamespace(expect_mac="")
+        fp = {"network": {"macs": {"br-lan": "DC:A6:32:11:22:33"}}}
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("--expect-mac is required", detail)
+
+        args = SimpleNamespace(expect_mac="dc:a6:32:11:22:33")
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertTrue(ok)
+        self.assertIn("dc:a6:32:11:22:33", detail)
+
+        args = SimpleNamespace(expect_mac="e4:5f:01:12:34:56")
+        ok, detail = _verify_fallback_specimen(args, fp, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("specimen mismatch", detail)
+
+        ok, detail = _verify_fallback_specimen(
+            SimpleNamespace(expect_mac="dc:a6:32:11:22:33"), None, "192.168.1.1")
+        self.assertFalse(ok)
+        self.assertIn("no live br-lan MAC", detail)
+
     def test_fallback_profile_routes_openwrt_pi_to_sysupgrade(self):
         from conwrt.flash_dispatcher import (
             _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
-        profile, _ = _build_profile_or_first_method(
+        profile, _, _fb = _build_profile_or_first_method(
             "raspberrypi-4b", serial_method="", flash_method="")
         mode = _resolve_flash_mode_or_refuse(
             profile, "openwrt", SimpleNamespace(), use_sysupgrade=True)
@@ -1544,7 +1578,7 @@ class TestProfileFallbackForNonUnattendedModels(TestCase):
     def test_fallback_profile_refuses_non_openwrt_pi_cleanly(self):
         from conwrt.flash_dispatcher import (
             _build_profile_or_first_method, _resolve_flash_mode_or_refuse)
-        profile, _ = _build_profile_or_first_method(
+        profile, _, _fb = _build_profile_or_first_method(
             "raspberrypi-4b", serial_method="", flash_method="")
         mode = _resolve_flash_mode_or_refuse(
             profile, "unknown", SimpleNamespace(), use_sysupgrade=False)

@@ -67,6 +67,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Router's OpenWrt MAC address (for ICMPv6 detection)")
     flash_parser.add_argument("--uboot-mac", default="",
                         help="Router's U-Boot MAC address (for ARP detection)")
+    flash_parser.add_argument("--expect-mac", default="",
+                        help="Specimen gate: the exact unit's MAC — required "
+                             "when a plain invocation reaches the sysupgrade "
+                             "route via a model's first-method fallback "
+                             "(operator-driven-only models, e.g. the Pi; "
+                             "AGENTS.md specimen rule)")
     flash_parser.add_argument("--silence-timeout", type=int, default=SILENCE_TIMEOUT_DEFAULT,
                         help="Seconds of no packets before silence event")
     flash_parser.add_argument("--serial-port", default=None,
