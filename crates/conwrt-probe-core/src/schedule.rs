@@ -36,9 +36,9 @@ pub enum ProbeKind {
     FailsafeBroadcast,
     /// `probe_icmpv6_ra` — bounded RA capture (`min(passive, 5s)`).
     Icmpv6Ra,
-    /// `probe_dhcp` — bounded DHCP capture (30s).
+    /// `probe_dhcp` — bounded DHCP capture (`passive_timeout`).
     Dhcp,
-    /// `probe_tftp` — bounded TFTP RRQ capture (30s).
+    /// `probe_tftp` — bounded TFTP RRQ capture (`passive_timeout`).
     Tftp,
     /// `probe_http_get` — active HTTP GET (3s).
     HttpGet,
@@ -134,9 +134,10 @@ impl ProbeScheduler {
 }
 
 /// The `probe_router` plan: instant passive reads, bounded captures
-/// (passive-timeout-driven), then active probes — Python's default
-/// budgets (`passive_timeout` default 10s; DHCP/TFTP 30s; curl 3s;
-/// ping 2s; SSH 8s).
+/// (all driven by `passive_timeout`, which the Python call site passes
+/// to the failsafe, RA, DHCP, and TFTP probes alike — RA additionally
+/// capped at 5s), then active probes with the Python's fixed budgets
+/// (curl 3s; ping 2s; SSH 8s; `passive_timeout` default 10s).
 #[must_use]
 pub fn default_plan(passive_timeout_ms: u64) -> Vec<ProbeStep> {
     let ra_budget = passive_timeout_ms.min(5_000);
@@ -159,11 +160,11 @@ pub fn default_plan(passive_timeout_ms: u64) -> Vec<ProbeStep> {
         },
         ProbeStep {
             kind: ProbeKind::Dhcp,
-            timeout_ms: 30_000,
+            timeout_ms: passive_timeout_ms,
         },
         ProbeStep {
             kind: ProbeKind::Tftp,
-            timeout_ms: 30_000,
+            timeout_ms: passive_timeout_ms,
         },
         ProbeStep {
             kind: ProbeKind::HttpGet,
@@ -287,6 +288,30 @@ mod tests {
                 .unwrap()
                 .timeout_ms,
             2_000
+        );
+    }
+
+    #[test]
+    fn dhcp_and_tftp_budgets_follow_passive_timeout() {
+        // review round 1: the Python call site passes passive_timeout
+        // to BOTH probes — the 30s in their signatures is a default
+        // probe_router never uses
+        let plan = default_plan(10_000);
+        for kind in [ProbeKind::Dhcp, ProbeKind::Tftp] {
+            assert_eq!(
+                plan.iter().find(|s| s.kind == kind).unwrap().timeout_ms,
+                10_000,
+                "{kind:?} must use the passive timeout"
+            );
+        }
+        let custom = default_plan(45_000);
+        assert_eq!(
+            custom
+                .iter()
+                .find(|s| s.kind == ProbeKind::Dhcp)
+                .unwrap()
+                .timeout_ms,
+            45_000
         );
     }
 }

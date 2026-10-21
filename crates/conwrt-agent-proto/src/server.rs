@@ -72,11 +72,27 @@ pub const EXECUTOR_RESOURCE: &str = "executor";
 /// part of controller session state — findings survive
 /// [`ServerCore::reset_session`] (they are agent-side observations of
 /// the router, like queued events).
+///
+/// `armed` gates tracking: nothing latches until a controller sends a
+/// successful `DetectStart` (review round 1 — pre-start console bytes
+/// must not surface as findings of a "fresh" session, and clients that
+/// never opted into detection must not receive the new event variant).
+/// Arming persists across controller disconnects.
 struct DetectSession {
     port: u8,
+    armed: bool,
     tracker: BootMilestoneTracker,
     findings: Vec<DetectFinding>,
 }
+
+/// Detection tracker budget for MCU agents: the F746 heap is 32 KiB
+/// total (protocol frames + the 8 KiB executor window), so the
+/// Python-faithful 64 KiB host budget would abort the allocator
+/// mid-boot (review round 1, P1). 8 KiB / 4 KiB retains far more than
+/// the longest milestone pattern needs across chunk boundaries.
+pub const DETECT_BUFFER_MAX: usize = 8 * 1024;
+/// Retained tail for [`DETECT_BUFFER_MAX`].
+pub const DETECT_KEEP_TAIL: usize = 4 * 1024;
 
 impl DetectSession {
     fn report(&self) -> DetectReport {
@@ -87,8 +103,12 @@ impl DetectSession {
     }
 
     /// Feed RX bytes; queues a finding for every newly latched
-    /// milestone (the caller turns them into outbound events).
+    /// milestone (the caller turns them into outbound events). No-op
+    /// while unarmed.
     fn feed(&mut self, data: &[u8]) -> Vec<DetectFinding> {
+        if !self.armed {
+            return Vec::new();
+        }
         let fresh: Vec<DetectFinding> = self
             .tracker
             .feed(data)
@@ -103,10 +123,11 @@ impl DetectSession {
         fresh
     }
 
-    /// Restart the tracker (a fresh `DetectStart`): every milestone
-    /// may latch once per session.
-    fn restart(&mut self) {
-        self.tracker = BootMilestoneTracker::new();
+    /// Arm (or re-arm) the tracker: every milestone may latch once per
+    /// arming, and findings reset — a fresh session starts clean.
+    fn arm(&mut self) {
+        self.armed = true;
+        self.tracker = BootMilestoneTracker::with_budget(DETECT_BUFFER_MAX, DETECT_KEEP_TAIL);
         self.findings.clear();
     }
 }
@@ -180,14 +201,16 @@ impl ServerCore {
     /// Arm boot-milestone detection on `port` (consumed builder,
     /// #215 slice 5): that port's RX bytes (fed via
     /// [`ServerCore::push_uart_data`]) run through the shared
-    /// probe-core tracker; latched milestones surface as
+    /// probe-core tracker once a controller arms the session with
+    /// `DetectStart`; latched milestones surface as
     /// [`AgentEvent::DetectFinding`] events and via
     /// [`WireEndpoint::DetectStatus`]. The F746 standalone detect mode.
     #[must_use]
     pub fn attach_detect(mut self, port: u8) -> Self {
         self.detect = Some(DetectSession {
             port,
-            tracker: BootMilestoneTracker::new(),
+            armed: false,
+            tracker: BootMilestoneTracker::with_budget(DETECT_BUFFER_MAX, DETECT_KEEP_TAIL),
             findings: Vec::new(),
         });
         self
@@ -351,7 +374,7 @@ impl ServerCore {
             }
             WireEndpoint::DetectStart(req) => match self.detect.as_mut() {
                 Some(session) if session.port == req.port => {
-                    session.restart();
+                    session.arm();
                     WireResult::Detect(session.report())
                 }
                 Some(_) => WireResult::Error(WireError::Internal(alloc::format!(
@@ -977,5 +1000,49 @@ mod tests {
         let events = c.take_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], AgentEvent::UartData { ref data, .. } if data == b"noise"));
+    }
+
+    #[test]
+    fn detect_pre_start_bytes_never_latch_or_queue() {
+        // review round 1: tracking is gated on DetectStart — console
+        // bytes arriving before arming must produce neither events nor
+        // findings, so a "fresh" session cannot see pre-start findings
+        // and clients that never opted in never see the event variant
+        let mut c = detect_core();
+        c.push_uart_data(0, b"U-Boot 2012.07\r\nroot@OpenWrt:~# ");
+        let events = c.take_events();
+        assert_eq!(events.len(), 1, "only the raw UartData passthrough");
+        assert!(
+            matches!(events[0], AgentEvent::UartData { .. }),
+            "pre-arm bytes must not queue DetectFinding events"
+        );
+        let WireResult::Detect(report) = detect_start(&mut c) else {
+            panic!("detect start");
+        };
+        assert!(report.findings.is_empty(), "arming starts clean");
+
+        // post-arm bytes latch normally
+        c.push_uart_data(0, b"U-Boot 2012.07\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(report.findings.len(), 1);
+    }
+
+    #[test]
+    fn detect_arming_persists_across_session_reset() {
+        let mut c = detect_core();
+        detect_start(&mut c);
+        c.reset_session();
+        c.handshaked = true;
+        c.push_uart_data(0, b"Starting kernel ...\r\n");
+        let WireResult::Detect(report) = detect_status(&mut c) else {
+            panic!("status");
+        };
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "a reconnecting controller keeps its armed session"
+        );
     }
 }

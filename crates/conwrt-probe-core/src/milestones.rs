@@ -107,17 +107,46 @@ pub const DETAIL_LINE_MAX: usize = 120;
 /// This is the pure state machine under the Python monitor thread —
 /// transport (serial/TCP bridge, break recovery) stays outside, so the
 /// host and the F746 firmware drive the SAME tracker.
-#[derive(Debug, Default)]
+///
+/// The buffer budget is caller-owned: [`BootMilestoneTracker::new`]
+/// keeps the Python-faithful 64 KiB / 32 KiB pair for hosts;
+/// heap-constrained firmware builds use
+/// [`BootMilestoneTracker::with_budget`] with an MCU-sized cap (the
+/// F746 agent's whole heap is 32 KiB — a 64 KiB buffer would abort the
+/// allocator mid-boot). Old bytes are discarded BEFORE growing, so the
+/// buffer never transiently overshoots its budget.
+#[derive(Debug)]
 pub struct BootMilestoneTracker {
     latched: [bool; 5],
     buf: Vec<u8>,
+    max_buffer: usize,
+    keep_tail: usize,
+}
+
+impl Default for BootMilestoneTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BootMilestoneTracker {
-    /// New tracker; nothing latched, empty buffer.
+    /// New tracker with the source's 64 KiB / 32 KiB budget (hosts).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_budget(MAX_BUFFER, KEEP_TAIL)
+    }
+
+    /// New tracker with a caller-owned buffer budget. `keep_tail` is
+    /// clamped below `max_buffer`; both must be non-zero.
+    #[must_use]
+    pub fn with_budget(max_buffer: usize, keep_tail: usize) -> Self {
+        let max_buffer = max_buffer.max(1);
+        Self {
+            latched: [false; 5],
+            buf: Vec::new(),
+            max_buffer,
+            keep_tail: keep_tail.min(max_buffer - 1),
+        }
     }
 
     /// Feed one chunk of console bytes; returns the milestones newly
@@ -126,10 +155,22 @@ impl BootMilestoneTracker {
     ///
     /// Matching re-scans the whole rolling buffer (the source does the
     /// same), so milestones whose pattern spans a chunk boundary latch
-    /// on the chunk that completes them.
+    /// on the chunk that completes them. When the incoming chunk does
+    /// not fit the budget, old bytes are discarded first — a chunk
+    /// larger than the whole budget keeps only its tail.
     #[must_use]
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<(BootMilestone, String)> {
+        let overflow = (self.buf.len() + chunk.len()).saturating_sub(self.max_buffer);
+        if overflow > 0 {
+            let drop = overflow.min(self.buf.len());
+            self.buf.drain(..drop);
+        }
         self.buf.extend_from_slice(chunk);
+        if self.buf.len() > self.max_buffer {
+            // chunk alone exceeds the budget: keep only its tail
+            let drop = self.buf.len() - self.keep_tail.max(1);
+            self.buf.drain(..drop);
+        }
         let mut latched = Vec::new();
         for (pattern, milestone) in MILESTONE_PATTERNS {
             let idx = milestone_index(*milestone);
@@ -140,10 +181,6 @@ impl BootMilestoneTracker {
                 self.latched[idx] = true;
                 latched.push((*milestone, self.line_at(at, at + pattern_len(pattern))));
             }
-        }
-        if self.buf.len() > MAX_BUFFER {
-            let drop = self.buf.len() - KEEP_TAIL;
-            self.buf.drain(..drop);
         }
         latched
     }
@@ -299,6 +336,36 @@ mod tests {
         let latched = t.feed(&chunk);
         assert_eq!(latched.len(), 1);
         assert!(t.buf.len() <= MAX_BUFFER);
+    }
+
+    #[test]
+    fn mcu_budget_never_overshoots_and_still_latches() {
+        // review round 1 (P1): heap-constrained firmware budgets — the
+        // buffer must never transiently exceed its cap, and detection
+        // still works across the trims
+        let mut t = BootMilestoneTracker::with_budget(1024, 512);
+        let mut total_latched = 0;
+        for i in 0..40 {
+            let line = format!("filler log line {i:04} padding padding\r\n");
+            total_latched += t.feed(line.as_bytes()).len();
+            assert!(
+                t.buf.len() <= 1024,
+                "buffer must stay within budget, got {}",
+                t.buf.len()
+            );
+        }
+        total_latched += t.feed(b"U-Boot 2026.10\r\n").len();
+        assert!(t.has_latched(BootMilestone::UbootBanner));
+        assert_eq!(total_latched, 1);
+    }
+
+    #[test]
+    fn budget_keeps_tail_when_chunk_exceeds_whole_budget() {
+        // one chunk bigger than the entire budget keeps only its tail
+        let mut t = BootMilestoneTracker::with_budget(256, 128);
+        let chunk = vec![b'x'; 10_000];
+        let _ = t.feed(&chunk);
+        assert!(t.buf.len() <= 256);
     }
 
     #[test]
