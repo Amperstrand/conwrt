@@ -195,6 +195,13 @@ pub enum PlanOp {
         /// opkg/apk package name.
         name: String,
     },
+    /// Revert staged `/tmp/.uci` changes for a config before the first
+    /// mutation (AGENTS.md: aborted sessions leave staging debris that
+    /// a later commit would make permanent).
+    RevertUci {
+        /// UCI config name (file), e.g. `sqm`.
+        config: String,
+    },
     /// Delete every section of a type in a UCI config (idempotent
     /// reconfigure).
     ClearUciSections {
@@ -272,6 +279,7 @@ impl fmt::Display for PlanOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PlanOp::EnsurePackage { name } => write!(f, "install package {name}"),
+            PlanOp::RevertUci { config } => write!(f, "revert staged uci {config} baseline"),
             PlanOp::ClearUciSections {
                 config,
                 section_type,
@@ -573,6 +581,12 @@ pub fn render_shell(plan: &Plan) -> String {
                     shell_quote(name)
                 ));
             }
+            PlanOp::RevertUci { config } => {
+                script.push_str(&format!("# revert staged {config} baseline\n"));
+                // `|| true`: on a fresh install the config file may not
+                // exist yet; reverting nothing must not abort the script.
+                script.push_str(&format!("uci -q revert {config} 2>/dev/null || true\n\n"));
+            }
             PlanOp::ClearUciSections {
                 config,
                 section_type,
@@ -716,6 +730,12 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         },
         PlanOp::EnsurePackage {
             name: "luci-app-sqm".into(),
+        },
+        // Clean baseline first: an aborted earlier session can leave
+        // staged changes in /tmp/.uci that the commit below would
+        // otherwise make permanent (AGENTS.md uci-revert rule).
+        PlanOp::RevertUci {
+            config: "sqm".into(),
         },
         PlanOp::ClearUciSections {
             config: "sqm".into(),
@@ -908,6 +928,29 @@ mod tests {
         assert!(
             script.contains("uci set sqm.wan.script='evil'\\''; rm -rf /; '\\'''"),
             "single quotes must be escaped, not interpolated: {script}"
+        );
+    }
+
+    #[test]
+    fn sqm_plan_reverts_staged_baseline_before_first_mutation() {
+        let model = model_with_capabilities(None);
+        let plan = plan_profile(
+            &DeviceState::OpenWrt,
+            &model,
+            &Profile::Sqm(test_sqm_defaults()),
+        )
+        .expect("plans");
+        let script = render_shell(&plan);
+        let revert_pos = script
+            .find("uci -q revert sqm")
+            .expect("script must revert the sqm baseline");
+        let first_mutation = script
+            .find("uci -q show sqm")
+            .or_else(|| script.find("uci set sqm"))
+            .expect("script mutates sqm");
+        assert!(
+            revert_pos < first_mutation,
+            "revert must precede the first sqm mutation:\n{script}"
         );
     }
 

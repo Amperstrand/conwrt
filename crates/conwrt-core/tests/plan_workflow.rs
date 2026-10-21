@@ -49,6 +49,7 @@ fn sqm_plan_ops_are_typed_and_ordered() {
         .iter()
         .map(|op| match op {
             PlanOp::EnsurePackage { .. } => "package",
+            PlanOp::RevertUci { .. } => "revert",
             PlanOp::ClearUciSections { .. } => "clear",
             PlanOp::ResolveNetworkDevice { .. } => "resolve",
             PlanOp::SetUciSection { .. } => "section",
@@ -63,7 +64,8 @@ fn sqm_plan_ops_are_typed_and_ordered() {
     assert_eq!(
         kinds,
         [
-            "package", "package", "clear", "resolve", "section", "commit", "service", "service"
+            "package", "package", "revert", "clear", "resolve", "section", "commit", "service",
+            "service"
         ]
     );
 
