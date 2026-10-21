@@ -3,7 +3,8 @@
 
 Codifies the spike validated 2026-09-22 on ap-lan4 (WS-AP3915i):
 
-  preflight -> backup -> reset(firstboot) -> adopt(keys+static) -> verify
+  preflight -> backup -> envelope(lifeline + recorder + blank-pw proof)
+            -> reset(firstboot) -> adopt(keys+static) -> verify
 
 Design rules from that session's audit — every one is an assertion here:
 
@@ -19,6 +20,12 @@ Design rules from that session's audit — every one is an assertion here:
   * adopt post-conditions: new address answers SSH with the pushed key and
     `uci get network.lan.proto` reads back the staged value.
   * Places with reset_allowed=false (TFTP-dependent units) never reset.
+  * firstboot NEVER runs unless the recovery envelope was armed AND
+    verified in the same session (#289; AGENTS.md reset-failsafe rule 1:
+    "The envelope must exist BEFORE the reset, not after"): per-VLAN TFTP
+    lifeline (reuses bench_flash.lifeline_lines), a detached (setsid)
+    aliveness recorder on the switch, and the blank-password v6 channel
+    proven. stage_reset refuses without a receipt — fail-closed.
   * Switch-side scripts feed dbclient from /dev/null (stdin-eats-script bug)
     and the Mac-side subprocess timeout is the hang guard (BusyBox here has
     no `timeout` applet).
@@ -39,7 +46,11 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    # annotation-only: bench_session imports this module's Place
+    from bench_session import BenchSession
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_BOARD = "extreme-networks,ws-ap3915i"
@@ -262,11 +273,195 @@ def stage_overlay(r: Runner) -> None:
         f"(sysupgrade -n formats a fresh overlay deterministically). dmesg:\n{debris[:300]}")
 
 
-def stage_reset(r: Runner) -> None:
+# --------------------------------------------- recovery envelope (#289)
+
+RECORDER_OK = "RECORDER-OK"
+BLANK_CHANNEL_OK = "BLANK-CHANNEL-OK"
+V6_CHANNEL_OK = "V6-CHANNEL-OK"
+
+
+@dataclass(frozen=True)
+class EnvelopeReceipt:
+    """Proof that stage_envelope armed AND verified this place's recovery
+    envelope in the current session. stage_reset refuses to run without a
+    matching one — the capability-token shape of the pilot's RESET_ENVELOPE
+    assertion (cf8260b)."""
+
+    place: str
+    vlan: int
+    tftproot: str
+    lifeline_log: str
+    recorder_log: str
+
+
+def recorder_log_path(place: Place) -> str:
+    return f"/tmp/bench-aliveness-{place.name}.log"
+
+
+def recorder_loop_body(place: Place, log: str) -> str:
+    """One probe iteration of the aliveness recorder (runs on the switch).
+
+    Probes the config-independent v6 channel (AGENTS.md reset-failsafe
+    rule 6) with the same empty-password dbclient the post-reset recovery
+    ladder uses, and classifies into the incident taxonomy: up /
+    auth-dead (TCP:22 answers but no shell — the jffs2 replay-race
+    signature, AGENTS.md rule 3) / down. Liveness is SSH/TCP, never ICMP.
+    Kept free of single quotes so it can ride inside `setsid sh -c '...'`.
+    """
+    return (
+        f"out=$(DROPBEAR_PASSWORD= dbclient -y -y root@{place.linklocal}%switch.{place.vlan} "
+        f"\"echo REC-ALIVE\" </dev/null 2>&1); "
+        f"case \"$out\" in *REC-ALIVE*) st=up;; "
+        f"*closed*|*auth*|*Auth*) st=auth-dead;; *) st=down;; esac; "
+        f"echo $(date +%s) $st >> {log}"
+    )
+
+
+def recorder_lines(place: Place) -> list[str]:
+    """Arm the detached switch-side aliveness recorder (#289).
+
+    BusyBox rule (AGENTS.md reset-failsafe rule 8): `nohup cmd &` over ssh
+    DIES when the session closes — `setsid cmd &` survives. The recorder
+    must outlive BOTH the adopting SSH session and the DUT's own sshd
+    dying mid-reset, so a failed reset leaves a timestamped
+    up/auth-dead/down timeline instead of silence. Its output must be
+    redirected off the ssh pipe or switch_sh blocks on pipe EOF forever.
+    Runtime-only state: dies on switch reboot — re-arm per session.
+    """
+    log = recorder_log_path(place)
+    return [
+        # idempotent re-arm: stop any previous recorder for this place
+        f"kill $(pgrep -f 'bench-aliveness-{place.name}') 2>/dev/null; sleep 1",
+        f": > {log}",
+        # the 'armed' line proves the loop is executing even while the
+        # first probe is still in flight (a down DUT answers slowly)
+        f"setsid sh -c 'echo $(date +%s) armed >> {log}; "
+        f"while true; do {recorder_loop_body(place, log)}; sleep 10; done' "
+        ">/dev/null 2>&1 &",
+        "sleep 2",
+        f"pgrep -f 'bench-aliveness-{place.name}' >/dev/null && [ -s {log} ] "
+        f"&& echo {RECORDER_OK} || echo RECORDER-BROKEN",
+    ]
+
+
+def resolve_lifeline_image(place: Place, images_path: Path,
+                           explicit: str | None) -> tuple[str, Path | None, str]:
+    """Recovery image the TFTP lifeline will serve: an operator-staged
+    --lifeline-image NAME (assumed already present in the tftproot), else
+    the images.json entry whose version matches the place release (gated
+    by bench_flash.check_image). Returns (image_name, local_path, sha256);
+    path/digest are set only when this code pushes the file itself."""
+    import bench_flash  # lazy: bench_flash imports this module at load time
+
+    if explicit:
+        return explicit, None, ""
+    if not images_path.exists():
+        raise AdoptError(
+            f"envelope: no recovery image for {place.name} — {images_path} is "
+            f"missing. Stage an image in the tftproot and pass --lifeline-image, "
+            f"or add an images.json entry matching release {place.release}.")
+    for entry in bench_flash.load_images(images_path).values():
+        if entry.get("version") == place.release:
+            path = Path(entry["path"])
+            return path.name, path, bench_flash.check_image(entry, path)
+    raise AdoptError(
+        f"envelope: no images.json entry with version {place.release} for "
+        f"{place.name} — stage a recovery image and pass --lifeline-image.")
+
+
+def stage_envelope(r: Runner, tftproot: str, image_name: str,
+                   image_path: Path | None, digest: str,
+                   session: BenchSession) -> EnvelopeReceipt:
+    """Arm + verify the pre-reset recovery envelope (#289; AGENTS.md
+    reset-failsafe rule 1: the envelope must exist BEFORE the reset, not
+    after):
+
+      (a) per-VLAN TFTP lifeline — REUSES bench_flash.lifeline_lines (the
+          bootcmd `run boot_net` fallback tail is the only flash-level
+          recovery door);
+      (b) detached aliveness recorder on the switch (setsid — survives
+          the SSH session dying mid-reset);
+      (c) blank-password channel proof — the exact auth path that exists
+          after firstboot wipes authorized_keys (ROM-blank root, gated
+          earlier by stage_rom_audit).
+
+    Any unverified part refuses firstboot — the bench_tollgate --tftproot
+    refusal pattern. A reset you cannot recover from is a reset you do
+    not run.
+    """
+    import bench_flash  # lazy: circular with bench_flash's bench_adopt import
+
+    p = r.place
+    if image_path is not None:
+        session.switch_put(image_path, f"{tftproot}/{image_name}")
+    lifeline = bench_flash.lifeline_lines(p, image_name, tftproot)
+    if digest:
+        lifeline.append(f"sha256sum {tftproot}/{image_name} | grep -q {digest} "
+                        "&& echo IMAGE-SHA-OK || echo IMAGE-SHA-FAIL")
+    out = r.sh("envelope-lifeline", lifeline)
+    required = ["LIFELINE-OK"] + (["IMAGE-SHA-OK"] if digest else [])
+    missing = [m for m in required if m not in out]
+    if missing:
+        raise AdoptError(
+            f"envelope: TFTP lifeline not verifiably armed on switch.{p.vlan} "
+            f"(missing {missing}) — refusing firstboot, the boot_net fallback "
+            f"would have nothing to serve:\n{out[:300]}")
+    print(f"[PASS] envelope {p.name}: TFTP lifeline serving {image_name} "
+          f"from {tftproot} on switch.{p.vlan}")
+
+    out = r.sh("envelope-recorder", recorder_lines(p))
+    if RECORDER_OK not in out:
+        raise AdoptError(
+            f"envelope: detached aliveness recorder not verified on the switch "
+            f"— refusing firstboot (an SSH death mid-reset would leave no "
+            f"aliveness timeline for the recovery ladder):\n{out[:300]}")
+    print(f"[PASS] envelope {p.name}: detached recorder -> {recorder_log_path(p)}")
+
+    blank = r.dut("envelope-blankpw",
+                  f"echo {BLANK_CHANNEL_OK}; cat /tmp/sysinfo/board_name",
+                  auth="password")
+    if BLANK_CHANNEL_OK not in blank:
+        # The live unit has a root password set (blank auth rejected). The
+        # channel MECHANISM is still proven if key auth reaches a shell over
+        # the same v6 link-local; the post-reset blank password is
+        # stage_rom_audit's ROM guarantee, not live state.
+        v6key = r.dut("envelope-v6key",
+                      f"echo {V6_CHANNEL_OK}; cat /tmp/sysinfo/board_name")
+        if V6_CHANNEL_OK not in v6key:
+            raise AdoptError(
+                f"envelope: neither the blank-password nor the key channel "
+                f"gives a shell over v6 on {p.name} — firstboot would strand "
+                f"the unit. If both outputs show `Remote closed the "
+                f"connection` the unit is ALREADY auth-dead (jffs2 replay "
+                f"race): heal with one PoE cycle and re-run the overlay gate "
+                f"before resetting. Blank-channel output:\n{blank[:300]}\n"
+                f"Key-channel output:\n{v6key[:300]}")
+        print(f"[PASS] envelope {p.name}: v6 channel proven via key auth (live "
+              f"root password is set; the post-reset blank channel is "
+              f"rom-audit's ROM guarantee)")
+    else:
+        print(f"[PASS] envelope {p.name}: blank-password channel proven over v6 "
+              f"— the exact post-reset recovery path")
+    return EnvelopeReceipt(place=p.name, vlan=p.vlan, tftproot=tftproot,
+                           lifeline_log=f"/tmp/tftp-{p.vlan}.log",
+                           recorder_log=recorder_log_path(p))
+
+
+def stage_reset(r: Runner, envelope: EnvelopeReceipt | None = None) -> None:
     p = r.place
     if not p.reset_allowed:
         raise AdoptError(f"reset refused: {p.name} is reset_allowed=false "
                          "(TFTP-dependent unit — re-arm lifeline or run #61 first)")
+    if envelope is None:
+        raise AdoptError(
+            f"reset refused: no recovery envelope verified for {p.name} this "
+            f"session — run the envelope stage first (AGENTS.md: the envelope "
+            f"must exist BEFORE the reset, not after)")
+    if (envelope.place, envelope.vlan) != (p.name, p.vlan):
+        raise AdoptError(
+            f"reset refused: envelope receipt is for {envelope.place}/"
+            f"switch.{envelope.vlan}, not {p.name}/switch.{p.vlan} — re-arm "
+            f"this place's envelope")
     try:
         out = dut_with_fallback(r, "reset-firstboot", "firstboot -y; echo FIRSTBOOT-RC=$?")
     except AdoptError as exc:
@@ -438,7 +633,9 @@ def stage_verify(r: Runner) -> None:
 
 STAGES = {"rom-audit": stage_rom_audit, "preflight": stage_preflight, "backup": stage_backup,
           "overlay": stage_overlay, "reset": stage_reset, "adopt": stage_adopt, "verify": stage_verify}
-ORDER = ["rom-audit", "preflight", "backup", "overlay", "reset", "adopt", "verify"]
+# envelope is deliberately NOT in STAGES: it needs arming arguments, so main
+# injects a per-run closure. ORDER still schedules it before reset.
+ORDER = ["rom-audit", "preflight", "backup", "overlay", "envelope", "reset", "adopt", "verify"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -454,6 +651,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--images", type=Path, default=REPO_ROOT / "data/bench/images.json")
     ap.add_argument("--tftproot", default="/tmp/bench-tftp",
                     help="switch-side TFTP lifeline root (must hold the image)")
+    ap.add_argument("--lifeline-image",
+                    help="recovery image filename already staged in --tftproot "
+                         "(default: images.json entry matching the place release)")
     ap.add_argument("--i-know", action="store_true",
                     help="required for stages that mutate the DUT (reset, adopt, flash)")
     args = ap.parse_args(argv)
@@ -468,8 +668,22 @@ def main(argv: list[str] | None = None) -> int:
     session = bench_session.get_session(switch_host=args.switch)
 
     plan: list[tuple[str, Place, Callable[[Runner], None]]]
+    envelope_receipt: EnvelopeReceipt | None = None
+
+    def envelope_stage(r: Runner) -> None:
+        nonlocal envelope_receipt
+        name, path, digest = resolve_lifeline_image(place, args.images,
+                                                    args.lifeline_image)
+        envelope_receipt = stage_envelope(r, args.tftproot, name, path, digest,
+                                          session)
+
+    def gated_reset(r: Runner) -> None:
+        # fail-closed: refuses unless stage_envelope ran in THIS invocation
+        stage_reset(r, envelope=envelope_receipt)
+
     if args.method == "firstboot":
-        plan = [(s, place, STAGES[s]) for s in ORDER]
+        stages = {**STAGES, "envelope": envelope_stage, "reset": gated_reset}
+        plan = [(s, place, stages[s]) for s in ORDER]
     else:
         if not args.image:
             print("--method flash requires --image (registry key)"); return 2
@@ -496,6 +710,13 @@ def main(argv: list[str] | None = None) -> int:
     mutating = any(s in ("reset", "adopt", "flash") for s in wanted)
     if mutating and not args.i_know:
         print("refusing DUT mutation without --i-know"); return 2
+    if "reset" in wanted and not {"rom-audit", "envelope"} <= set(wanted):
+        # tollgate-style refusal: firstboot is a brick-class operation and
+        # must not run without the recovery envelope verified in the same
+        # invocation (AGENTS.md reset-failsafe rule 1)
+        print("refusing reset without the recovery envelope: the rom-audit and "
+              "envelope stages must run in the same invocation (AGENTS.md: the "
+              "envelope must exist BEFORE the reset, not after)"); return 2
 
     evidence = REPO_ROOT / "data" / "bench" / place.name / time.strftime("%Y%m%d-%H%M%S")
     for stage, stage_place, fn in plan:
