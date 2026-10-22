@@ -1,0 +1,1 @@
+{"rustc":5244445300240561903,"features":"[]","declared_features":"[\"std\"]","target":101105287388978408,"profile":11926785003450549200,"path":1308736005496964460,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug/.fingerprint/mutex-traits-d23172059b13b967/dep-lib-mutex_traits","checksum":false}}],"rustflags":[],"config":9396254390672932401,"compile_kind":0}

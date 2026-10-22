@@ -174,7 +174,12 @@ def test_rust_rendered_client_against_host_server(openwrt_vm, wireguard_installe
             assert f"uci set network.wg0_peer.public_key='{host_pub}'" in script
             assert f"uci set network.wg0_peer.endpoint_host='{GUEST_ALIAS}'" in script
             assert f"uci set network.wg0_peer.endpoint_port='{HOST_SERVER_PORT}'" in script
-            assert "KillSwitch" not in script, "kill_switch=False must drop the rule"
+            # kill_switch=False drops the RULE, not the hygiene: both
+            # renderers (verified: Python identical) keep the cleanup
+            # loop that greps for the rule name — assert the ADD is
+            # absent, the same precise form the plan unit test pins.
+            assert "uci set firewall.wg_client_killswitch" not in script, \
+                "kill_switch=False must not add the reject rule"
 
             # 1. APPLY — the Rust output runs, unmodified, inside the VM
             out = _apply_rust_script_in_vm(script)
