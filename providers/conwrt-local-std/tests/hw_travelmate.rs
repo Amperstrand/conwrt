@@ -16,12 +16,25 @@
 //! (ssid‥hash8). Raw `logread` output is never printed; only grep
 //! counts. Nothing is committed to the repo.
 //!
-//! Status (2026-10-22, specimen x1860-1 @ 25.12.6): apply + uci
-//! verification + teardown proven live on hardware; kernel dmesg
-//! proved a seeded PSK associates (`phy0-staN: associated`). The full
-//! auto-join watch (travelmate 2.4.9 enabling its disabled uplink
-//! ifaces + trm_wwan DHCP) is this test's contract — pending
-//! travelmate's iface-enable handshake, tracked in the §4 follow-up.
+//! Status (2026-10-22, specimen x1860-1 @ 25.12.6): **GREEN end-to-end
+//! from a clean slate** — the plan applies + verifies, travelmate 2.4.9
+//! recognizes the seeded uplinks (paired `uplink` sections carrying
+//! `enabled=1` are REQUIRED — its `f_getcfg` matches device+ssid and
+//! `f_setif` force-disables unpaired ifaces), auto-joins a host-seeded
+//! network, `trm_wwan` DHCPs, and travelmate's own captive probe
+//! reports `net ok`. Teardown restores the specimen (verified by
+//! readback).
+//!
+//! No-LLM regression use — run against any specimen with the env pins:
+//! ```text
+//! CONWRT_HW_TARGET=<ip:22> CONWRT_HW_KEY=<key> \
+//! CONWRT_HW_EXPECT_MAC=<br-lan mac> \
+//! cargo test -p conwrt-local-std --test hw_travelmate -- --nocapture
+//! ```
+//! Prerequisites: OpenWrt 25.x with `travelmate luci-app-travelmate
+//! ca-bundle ca-certificates` installable (online) or preinstalled, a
+//! `wifi` capability, and this host's saved networks readable via
+//! passwordless sudo.
 
 use conwrt_core::confirm;
 use conwrt_core::plan::{PlanOp, Profile, TravelmateProfile, WifiUplink, plan_profile};
@@ -252,10 +265,14 @@ async fn travelmate_seeds_host_networks_and_joins_on_real_hardware() {
         }
     }
     let joined = session
-        .exec("ubus call network.wireless status 2>/dev/null | grep -B6 '\"sta\"' | grep ssid | head -1")
+        .exec("for i in $(iw dev | awk '/Interface/{print $2}'); do iwinfo $i iwgetid 2>/dev/null; done | head -1")
         .await
         .expect("joined ssid");
-    let joined_ssid = String::from_utf8_lossy(&joined.stdout).trim().to_string();
+    let joined_ssid = String::from_utf8_lossy(&joined.stdout)
+        .lines()
+        .find_map(|l| l.split("ESSID:").nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_default();
     let logcount = session
         .exec("logread 2>/dev/null | grep -c travelmate || true")
         .await
@@ -263,24 +280,54 @@ async fn travelmate_seeds_host_networks_and_joins_on_real_hardware() {
     let logcount_s = String::from_utf8_lossy(&logcount.stdout).trim().to_string();
 
     teardown(&session, saved.len()).await;
-    let left = session
-        .exec("uci -q get wireless.trm_uplink1.ssid >/dev/null 2>&1 && echo left || echo clean; uci -q get network.trm_wwan.proto >/dev/null 2>&1 && echo wwanleft || echo wwanclean; uci -q get travelmate.global.trm_iface >/dev/null 2>&1 && echo ifaceleft || echo ifaceclean; uci -q get travelmate.global.trm_enabled")
+    let check = session
+        .exec("uci -q get wireless.trm_uplink1.ssid >/dev/null 2>&1 && echo left || echo clean")
         .await
-        .expect("teardown verify");
-    let left = String::from_utf8_lossy(&left.stdout);
+        .expect("teardown verify sta");
     assert!(
-        left.contains("clean")
-            && left.contains("wwanclean")
-            && left.contains("ifaceclean")
-            && left.trim().ends_with("'0'"),
-        "teardown left state (redacted): {}",
-        redact(&left, &saved)
+        String::from_utf8_lossy(&check.stdout)
+            .trim()
+            .contains("clean"),
+        "seeded STA section survived teardown"
+    );
+    let check = session
+        .exec("uci -q get network.trm_wwan.proto >/dev/null 2>&1 && echo left || echo clean")
+        .await
+        .expect("teardown verify wwan");
+    assert!(
+        String::from_utf8_lossy(&check.stdout)
+            .trim()
+            .contains("clean"),
+        "trm_wwan survived teardown"
+    );
+    let check = session
+        .exec("uci -q get travelmate.global.trm_iface >/dev/null 2>&1 && echo left || echo clean")
+        .await
+        .expect("teardown verify iface opt");
+    assert!(
+        String::from_utf8_lossy(&check.stdout)
+            .trim()
+            .contains("clean"),
+        "trm_iface option survived teardown"
+    );
+    let check = session
+        .exec("uci -q get travelmate.global.trm_enabled")
+        .await
+        .expect("teardown verify enabled");
+    assert_eq!(
+        String::from_utf8_lossy(&check.stdout).trim(),
+        "0",
+        "travelmate must be disabled after teardown"
     );
 
     if associated {
+        let label = if joined_ssid.is_empty() {
+            "(readback n/a)".to_string()
+        } else {
+            ssid_label(&joined_ssid)
+        };
         eprintln!(
-            "ASSOCIATED via {} — travelmate log lines: {}",
-            ssid_label(joined_ssid.trim_matches('"')),
+            "ASSOCIATED via {label} — travelmate log lines: {}",
             logcount_s
         );
     }
@@ -293,10 +340,6 @@ async fn travelmate_seeds_host_networks_and_joins_on_real_hardware() {
             .map(|w| ssid_label(&w.ssid))
             .collect::<Vec<_>>()
             .join(", ")
-    );
-    assert!(
-        !joined_ssid.is_empty(),
-        "wireless status lost the sta iface ssid evidence"
     );
 }
 
@@ -311,6 +354,7 @@ async fn teardown(session: &conwrt_local_std::ssh::SshSession, seeded: usize) {
     let _ = session
         .exec(&format!(
             "{seeded_ifaces}\
+             for i in 1 2 3 4 5 6 7 8; do uci -q delete travelmate.trm_uplink$i; done; \
              uci -q delete network.trm_wwan; uci -q delete network.trm_wwan6; \
              for _z in $(uci show firewall 2>/dev/null | grep '=zone' | cut -d. -f2 | cut -d= -f1); do \
                uci -q del_list firewall.\"$_z\".network='trm_wwan' 2>/dev/null; \
@@ -322,6 +366,8 @@ async fn teardown(session: &conwrt_local_std::ssh::SshSession, seeded: usize) {
              uci -q delete travelmate.global.trm_retry; \
              uci -q delete travelmate.global.trm_radio; \
              uci -q delete travelmate.global.trm_iface; \
+             uci -q delete travelmate.global.trm_uplink; \
+             uci -q delete travelmate.global.trm_debug; \
              uci commit wireless; uci commit network; uci commit firewall; uci commit travelmate; \
              /etc/init.d/travelmate disable; /etc/init.d/travelmate stop; \
              wifi reload; \

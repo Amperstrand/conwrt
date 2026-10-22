@@ -487,6 +487,45 @@ These use cases are the most immediately useful because they require almost no u
 
 These are the "flash and forget" cases — no wiki reading, no manual uci editing. Flash the image, plug in your phone or connect to upstream WiFi, and it works.
 
+### Travelmate: deploy with your host's saved WiFi networks
+
+The travelmate preset can seed the router's uplink candidates from the
+machine you deploy with — the same networks your computer already knows.
+Both modes are **optional and off by default**; nothing leaves the
+deploying host unless you ask for it:
+
+```toml
+[use_cases]
+enabled = ["travelmate"]
+
+# Mode 1 — hardcoded list:
+[use_cases.travelmate]
+uplinks = [
+  { ssid = "Home", psk = "password", encryption = "psk2", radio = "radio0" },
+  { ssid = "Cabin-5G", psk = "password2", encryption = "sae", radio = "radio1" },
+]
+
+# Mode 2 — everything this host has saved (NetworkManager keyfiles,
+# read once at build time via passwordless sudo):
+[use_cases.travelmate]
+seed_from_host = true
+```
+
+Each seeded network becomes a travelmate uplink pair: a STA
+`wifi-iface` plus the `uplink` section travelmate 2.4.x requires for
+recognition (`trm_wwan`/`trm_wwan6` uplink network, wan-zone
+membership; PSK2, SAE, and open — enterprise networks are skipped).
+Credentials end up in the device config exactly like any PSK you would
+type manually; they are never logged and never appear in git.
+
+**Status: hardware-proven end-to-end** (2026-10-22, COVR-X1860 A1 @
+25.12.6, clean-slate run): seeded script applies, travelmate
+auto-joins a network seeded from the deploying host's saved passwords,
+and its captive probe reports working internet. The unattended
+regression e2e is checked in
+(`providers/conwrt-local-std/tests/hw_travelmate.rs`) and runs against
+any specimen via env pins (`CONWRT_HW_TARGET/KEY/EXPECT_MAC`).
+
 ### All Available Presets
 
 | Preset | Description | Post-flash? |

@@ -68,6 +68,7 @@ class TestTravelmateSeeding:
     def test_hardcoded_uplinks_render_travelmate_setup_shape(self):
         rendered = render_shell(_build_travelmate_ops({"uplinks": self.HARDCODED}))
         assert "uci set travelmate.global.trm_iface='trm_wwan'" in rendered
+        assert "uci set travelmate.global.trm_uplink='trm_wwan'" in rendered
         assert "uci set network.trm_wwan=interface" in rendered
         assert "uci set network.trm_wwan.proto='dhcp'" in rendered
         assert "uci set network.trm_wwan.metric='100'" in rendered
@@ -88,6 +89,13 @@ class TestTravelmateSeeding:
         assert "uci set wireless.trm_uplink2.ssid='cafe open'" in rendered
         assert "uci set wireless.trm_uplink2.encryption='none'" in rendered
         assert "trm_uplink2.key" not in rendered
+        # travelmate recognition pairs: uplink sections in its own config
+        assert "uci set travelmate.trm_uplink1=uplink" in rendered
+        assert "uci set travelmate.trm_uplink1.device='radio1'" in rendered
+        assert "uci set travelmate.trm_uplink1.ssid='home-net'" in rendered
+        assert "uci set travelmate.trm_uplink1.enabled='1'" in rendered
+        assert "uci set travelmate.trm_uplink2=uplink" in rendered
+        assert "uci set travelmate.trm_uplink2.enabled='1'" in rendered
         assert "uci commit wireless" in rendered
         assert "wifi reload; ubus call network.interface.trm_wwan up" in rendered
         assert "(2 uplinks)" in rendered

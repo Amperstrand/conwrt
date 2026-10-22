@@ -116,6 +116,16 @@ def _seeded_uplink_ops(uplinks: list[dict[str, Any]]) -> list[Op]:
             values["key"] = str(up.get("psk", ""))
         ops.append(ShellCommand(command=f"uci set wireless.{iface}=wifi-iface"))
         ops.append(UciSet(config="wireless", section=iface, values=values))
+        # travelmate 2.4.x recognition: paired `uplink` section in
+        # /etc/config/travelmate (matched by device+ssid in f_getcfg)
+        # with enabled=1 — without it f_setif force-disables the iface
+        # (found live on x1860-1, 2026-10-22)
+        ops.append(ShellCommand(command=f"uci set travelmate.{iface}=uplink"))
+        ops.append(UciSet(config="travelmate", section=iface, values={
+            "device": values["device"],
+            "ssid": values["ssid"],
+            "enabled": "1",
+        }))
     ops.extend([
         UciCommit(config="network"),
         UciCommit(config="wireless"),
@@ -142,6 +152,7 @@ def _build_travelmate_ops(params: dict[str, Any]) -> list[Op]:
     }
     if uplinks:
         global_values["trm_iface"] = "trm_wwan"
+        global_values["trm_uplink"] = "trm_wwan"
 
     ops: list[Op] = [
         Comment(text="--- Travelmate travel router ---"),
