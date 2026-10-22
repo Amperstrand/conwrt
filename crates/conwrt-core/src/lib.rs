@@ -97,6 +97,7 @@ where
         ping,
         http,
         ssh_banner,
+        authenticated_board: None,
         mac,
     };
     let (state, notes) = state::classify_with_notes(&evidence, state::DEFAULT_RECOVERY_HINTS);
@@ -113,4 +114,75 @@ where
         notes,
         model_candidates,
     })
+}
+
+/// Refine a completed diagnosis with a key-authenticated board read.
+///
+/// Pure: re-classifies the existing evidence with the board signal
+/// attached. Only an `SshOnly` verdict can move — every other state was
+/// decided by stronger evidence that outranks the board arm in the
+/// classifier (identifying HTTP first, contradictions refused).
+#[must_use]
+pub fn refine_with_authenticated_board(
+    mut diagnosis: Diagnosis,
+    board: capability::AuthenticatedBoard,
+) -> Diagnosis {
+    diagnosis.evidence.authenticated_board = Some(board);
+    let (state, notes) =
+        state::classify_with_notes(&diagnosis.evidence, state::DEFAULT_RECOVERY_HINTS);
+    diagnosis.state = state;
+    diagnosis.notes = notes;
+    diagnosis
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::AuthenticatedBoard;
+    use crate::state::ProbeEvidence;
+    use std::net::IpAddr;
+
+    fn ssh_only_diagnosis() -> Diagnosis {
+        let evidence = ProbeEvidence {
+            ssh_banner: Some(crate::capability::SshBanner {
+                software: "dropbear_2024.86".into(),
+            }),
+            ..Default::default()
+        };
+        let (state, _) = state::classify_with_notes(&evidence, state::DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, crate::state::DeviceState::SshOnly);
+        Diagnosis {
+            ip: "127.0.0.1".parse::<IpAddr>().expect("ip"),
+            mac: None,
+            state,
+            evidence,
+            notes: Vec::new(),
+            model_candidates: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn refine_upgrades_ssh_only_to_openwrt() {
+        let refined = refine_with_authenticated_board(
+            ssh_only_diagnosis(),
+            AuthenticatedBoard {
+                board_name: "dlink,covr-x1860-a1".into(),
+                distrib_id: "OpenWrt".into(),
+            },
+        );
+        assert_eq!(refined.state, crate::state::DeviceState::OpenWrt);
+        assert!(refined.evidence.authenticated_board.is_some());
+    }
+
+    #[test]
+    fn refine_with_empty_board_keeps_ssh_only() {
+        let refined = refine_with_authenticated_board(
+            ssh_only_diagnosis(),
+            AuthenticatedBoard {
+                board_name: String::new(),
+                distrib_id: String::new(),
+            },
+        );
+        assert_eq!(refined.state, crate::state::DeviceState::SshOnly);
+    }
 }

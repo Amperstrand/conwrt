@@ -72,6 +72,12 @@ enum Command {
         /// SSH port to probe for the identification banner (22).
         #[arg(long, default_value_t = 22)]
         ssh_port: u16,
+        /// Private key for the authenticated board read: when the
+        /// unauthenticated verdict is `ssh-only`, connect with this key
+        /// and read board identity (`/tmp/sysinfo/board_name` +
+        /// `/etc/openwrt_release`) to resolve the OS ambiguity.
+        #[arg(long)]
+        key: Option<PathBuf>,
         /// Directory containing `*.json` model files.
         #[arg(long, default_value = "models")]
         dir: PathBuf,
@@ -438,8 +444,9 @@ fn main() -> ExitCode {
             interface,
             http_port,
             ssh_port,
+            key,
             dir,
-        } => cmd_diagnose(ip, interface, http_port, ssh_port, &dir),
+        } => cmd_diagnose(ip, interface, http_port, ssh_port, key, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
         Command::Fingerprint {
             ip,
@@ -602,6 +609,7 @@ fn cmd_diagnose(
     interface: Option<String>,
     http_port: u16,
     ssh_port: u16,
+    key: Option<PathBuf>,
     dir: &Path,
 ) -> ExitCode {
     let (registry, _) = load_registry(dir);
@@ -617,15 +625,35 @@ fn cmd_diagnose(
             return ExitCode::from(2);
         }
     };
-    let diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
+    let mut diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("diagnose failed: {e}");
             return ExitCode::from(2);
         }
     };
+    if let Some(key_path) = key.as_deref() {
+        if diagnosis.state == DeviceState::SshOnly {
+            let addr = format!("{ip}:{ssh_port}");
+            match runtime.block_on(conwrt_local_std::fingerprint::authenticated_board(
+                &addr, key_path,
+            )) {
+                Some(board) => {
+                    diagnosis = conwrt_core::refine_with_authenticated_board(diagnosis, board);
+                }
+                None => eprintln!(
+                    "authenticated board read failed (key refused or unreachable) — \
+                     ssh-only verdict stands"
+                ),
+            }
+        }
+    }
     print_diagnosis(&diagnosis);
-    println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    if key.is_some() {
+        println!("\n(provider: local-std; read-only probes + key-authenticated board read)");
+    } else {
+        println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    }
     ExitCode::SUCCESS
 }
 fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {

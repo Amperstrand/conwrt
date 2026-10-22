@@ -62,3 +62,47 @@ fn release_from(output: &ExecOutput) -> Option<OpenwrtRelease> {
     }
     parse_openwrt_release(&String::from_utf8_lossy(&output.stdout))
 }
+
+/// Key-authenticated board read for the diagnose refinement
+/// (`conwrt_core::refine_with_authenticated_board`): connect TOFU with a
+/// memory trust store (a read-only probe never persists trust), gather
+/// the fingerprint, convert to the classifier's evidence type.
+///
+/// Returns `None` on any failure (key refused, transport down) — the
+/// unauthenticated verdict then simply stands.
+pub async fn authenticated_board(
+    addr: &str,
+    key_path: &std::path::Path,
+) -> Option<conwrt_core::capability::AuthenticatedBoard> {
+    use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
+
+    use crate::ssh::{SshAuth, SshOptions, SshTarget, connect};
+
+    let target = SshTarget {
+        addr: addr.to_string(),
+        user: "root".into(),
+        auth: SshAuth::KeyFile {
+            path: key_path.to_path_buf(),
+            passphrase: None,
+        },
+    };
+    let mut store = MemoryTrustStore::new();
+    let session = connect(
+        &target,
+        &mut store,
+        &SshOptions {
+            mode: TrustMode::TrustOnFirstUse,
+            ..Default::default()
+        },
+    )
+    .await
+    .ok()?;
+    let report = fingerprint(&session).await.ok()?;
+    Some(conwrt_core::capability::AuthenticatedBoard {
+        board_name: report.board_name.unwrap_or_default(),
+        distrib_id: report
+            .release
+            .and_then(|release| release.id)
+            .unwrap_or_default(),
+    })
+}
