@@ -28,6 +28,32 @@ use nix::unistd::ttyname;
 use conwrt_serial::monitor::{BootStage, MonitorConfig, MonitorSession};
 use conwrt_serial::{PortOpener, SpecOpener, open_port};
 
+/// `YYYY-MM-DD HH:MM:SS` now — lexicographic compare works for this
+/// fixed-width format. (civil-from-days, Howard Hinnant)
+fn humantime_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86_400);
+    let (h, _m, s) = (
+        secs.rem_euclid(86_400) / 3_600,
+        secs.rem_euclid(3_600) / 60,
+        secs.rem_euclid(60),
+    );
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 9 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{m:02}:{s:02}")
+}
+
 fn pty_parts() -> (std::fs::File, String) {
     let pair = openpty(None, None).expect("openpty");
     let mut term = tcgetattr(&pair.slave).expect("tcgetattr slave");
@@ -134,7 +160,6 @@ fn monitor_latches_stages_logs_both_streams_and_dispatches_mailbox() {
     session.step().expect("dispatch help");
     let seen_help = read_until(&m, b"help", Duration::from_secs(3));
     assert!(seen_help.ends_with(b"help") || seen_help.windows(4).any(|w| w == b"help"));
-
     let meta = session.write_session_meta().expect("meta");
     stop.store(true, Ordering::Relaxed);
     device.join().unwrap();
@@ -145,6 +170,14 @@ fn monitor_latches_stages_logs_both_streams_and_dispatches_mailbox() {
     assert_eq!(json["final_boot_stage"], "openwrt");
     assert_eq!(json["total_tx_bytes"], 1 + 4); // \x03 + "help"
     assert!(json["total_rx_bytes"].as_u64().unwrap() > 0);
+    // start_time is the OPEN timestamp: strictly earlier than the
+    // meta-write wall clock (the session ran for seconds)
+    let now = humantime_now();
+    assert!(
+        json["start_time"].as_str().unwrap() < now.as_str(),
+        "start_time {:?} must predate the meta write",
+        json["start_time"]
+    );
     assert_eq!(
         json["boot_stage_transitions"]
             .as_array()

@@ -154,14 +154,17 @@ pub fn show_dropbear_config<S: Sleeper, O: PortOpener>(
     step(out, "uci show dropbear").map(|s| filter_reply(&s, "uci show dropbear"))
 }
 
-/// Set the LAN IP (`uci set/commit network` + `ifup lan`), then VERIFY
-/// by reading `network.lan.ipaddr` back — a mismatch is a typed error,
-/// not a warning (upgrading the Python flow's print-only check).
+/// Set the LAN IP: `uci set`, VERIFY the stored value by reading it
+/// back BEFORE committing (`uci get` — a mangled or ignored set aborts
+/// with nothing persisted), then `uci commit network` + `ifup lan`.
+/// The pre-commit gate upgrades the Python flow, which committed and
+/// reconfigured the interface before noticing a bad readback.
 ///
 /// # Errors
 /// [`ConfigureError::StepFailed`] for any uci/ifup step;
-/// [`ConfigureError::IpVerifyMismatch`] when the readback differs;
-/// [`ConfigureError::Console`] on transport failure.
+/// [`ConfigureError::IpVerifyMismatch`] when the readback differs
+/// (nothing committed); [`ConfigureError::Console`] on transport
+/// failure.
 pub fn set_lan_ip<S: Sleeper, O: PortOpener>(
     console: &mut SerialConsole<S, O>,
     ip: &str,
@@ -171,11 +174,6 @@ pub fn set_lan_ip<S: Sleeper, O: PortOpener>(
         console.run(&format!("uci set network.lan.ipaddr='{ip}'"), timeout)?,
         "uci set network.lan.ipaddr",
     )?;
-    step(
-        console.run("uci commit network", timeout)?,
-        "uci commit network",
-    )?;
-    step(console.run("ifup lan", timeout)?, "ifup lan")?;
     let readback = console.run("uci get network.lan.ipaddr", timeout)?;
     let readback = step(readback, "uci get network.lan.ipaddr")?;
     let actual = filter_reply(&readback, "uci get network.lan.ipaddr");
@@ -185,6 +183,11 @@ pub fn set_lan_ip<S: Sleeper, O: PortOpener>(
             actual,
         });
     }
+    step(
+        console.run("uci commit network", timeout)?,
+        "uci commit network",
+    )?;
+    step(console.run("ifup lan", timeout)?, "ifup lan")?;
     Ok(())
 }
 
@@ -263,7 +266,7 @@ pub fn install_authorized_key<S: Sleeper, O: PortOpener>(
 }
 
 /// The `wc -c` verification shared by the install paths. Returns the
-/// verified byte count.
+/// verified on-device byte count (key text + the echo newline).
 fn verify_key_size<S: Sleeper, O: PortOpener>(
     console: &mut SerialConsole<S, O>,
     key: &str,
@@ -273,7 +276,7 @@ fn verify_key_size<S: Sleeper, O: PortOpener>(
     let wc = step(wc, "wc -c authorized_keys")?;
     let reported = parse_wc_bytes(&filter_reply(&wc, "wc -c /etc/dropbear/authorized_keys"))
         .ok_or(ConfigureError::WcUnparseable { output: wc })?;
-    let written = key.len();
+    let written = key.len() + 1; // BusyBox echo appends the newline
     if reported != written {
         return Err(ConfigureError::KeySizeMismatch { written, reported });
     }

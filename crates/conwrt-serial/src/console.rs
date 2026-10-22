@@ -362,4 +362,58 @@ impl<S: Sleeper, O: PortOpener> SerialConsole<S, O> {
     pub(crate) fn write_raw(&mut self, data: &[u8]) -> Result<(), ConsoleError> {
         self.port.write_all_bytes(data).map_err(ConsoleError::Io)
     }
+
+    /// Marker-free command collection for streams whose output would
+    /// swallow (or echo) an RC tail: the command goes out verbatim and
+    /// chunks are collected until `enough` says stop, `quiet` of no
+    /// NEW data passes after first output (the Python read-until-prompt
+    /// intent: a truncated stream ends at its silence, not at the whole
+    /// deadline), or `timeout` expires. Every read is #412
+    /// recovery-classified (read error or break chunk ⇒ close → wait →
+    /// reopen; the deadline keeps ticking). The echoed command line is
+    /// part of the returned text — callers filter (the marker collector
+    /// cannot serve big echoing streams: the echoed `__RC0__` tail ends
+    /// collection immediately).
+    ///
+    /// # Errors
+    /// [`ConsoleError::Io`] on write; recovery reopen failures
+    /// propagate.
+    pub(crate) fn run_raw_collect(
+        &mut self,
+        cmd: &str,
+        timeout: Duration,
+        quiet: Duration,
+        enough: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<String, ConsoleError> {
+        self.port.write_all_bytes(format!("{cmd}\r\n").as_bytes())?;
+        let deadline = Instant::now() + timeout;
+        let mut collected = String::new();
+        let mut last_data = Instant::now();
+        loop {
+            if Instant::now() >= deadline {
+                return Ok(collected);
+            }
+            let mut buf = [0u8; READ_CHUNK];
+            match self.port.read(&mut buf) {
+                Err(_) => self.reopen_after_break()?,
+                Ok(0) => {
+                    // a truncated stream ends at its own silence, not
+                    // at the whole deadline (Python read-until-prompt)
+                    if !collected.is_empty() && last_data.elapsed() > quiet {
+                        return Ok(collected);
+                    }
+                }
+                Ok(n) if n > 0 && buf[0] == crate::collect::BREAK_BYTE => {
+                    self.reopen_after_break()?;
+                }
+                Ok(n) => {
+                    last_data = Instant::now();
+                    collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if enough(&collected) {
+                        return Ok(collected);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -270,6 +270,7 @@ pub struct MonitorSession {
     raw_file: File,
     log_file: File,
     started: Instant,
+    start_wall: String,
     total_rx: u64,
     total_tx: u64,
     stage: BootStage,
@@ -316,12 +317,14 @@ impl MonitorSession {
         // no input flush on open — Python parity: the reader logs
         // whatever arrives, including bytes queued while the session
         // was being set up
+        let start_wall = wall_clock();
         Ok(Self {
             config,
             port,
             raw_file,
             log_file,
             started: Instant::now(),
+            start_wall,
             total_rx: 0,
             total_tx: 0,
             stage: BootStage::Unknown,
@@ -435,7 +438,7 @@ impl MonitorSession {
     pub fn write_session_meta(&mut self) -> Result<String, MonitorError> {
         let meta = SessionMeta {
             session_name: self.config.session_name.clone(),
-            start_time: wall_clock(),
+            start_time: self.start_wall.clone(),
             elapsed_s: self.started.elapsed().as_secs_f64(),
             total_rx_bytes: self.total_rx,
             total_tx_bytes: self.total_tx,

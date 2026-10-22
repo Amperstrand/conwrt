@@ -21,6 +21,7 @@
 //!   partition-name matching is case-insensitive.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use base64::Engine as _;
 use thiserror::Error;
@@ -32,6 +33,10 @@ use crate::io::ConsoleError;
 /// Below this fraction of the partition size a dump is rejected as
 /// incomplete (Python's 0.95 threshold).
 pub const INCOMPLETE_FRACTION: f64 = 0.95;
+
+/// No-new-data window that ends a dump collection early (the Python
+/// read-until-prompt intent; a truncated stream stops at its silence).
+pub const QUIET_WINDOW: Duration = Duration::from_secs(5);
 
 /// BusyBox `base64` wraps at 76 chars ⇒ 57 raw bytes per line; the
 /// Python estimator used ~48 B/line at 50 ms/line — kept for the
@@ -82,16 +87,6 @@ pub enum BackupError {
     /// given (Python parity: the default target is Factory).
     #[error("no Factory partition found — use an explicit partition or --all semantics")]
     NoFactory,
-    /// The dump command failed on the device.
-    #[error("dumping {device} failed (rc {rc}): {output}")]
-    DumpFailed {
-        /// The device that failed, e.g. `mtd12`.
-        device: String,
-        /// The collected rc.
-        rc: u8,
-        /// Collected console output.
-        output: String,
-    },
     /// The captured base64 stream did not decode (corrupt capture).
     #[error("base64 decode of {device} dump failed: {source}")]
     DecodeFailed {
@@ -142,7 +137,9 @@ pub struct DumpOutcome {
 }
 
 /// Parse `/proc/mtd` output (`mtd12: 00080000 00080000 "Factory"`).
-/// Pure, no regex — the Python `re` match ported by hand.
+/// Pure, no regex — the Python `re` match ported by hand. Quoted names
+/// may contain spaces (`"RedBoot config"`); the name is everything
+/// between the first and last double quote of the row's tail.
 #[must_use]
 pub fn parse_proc_mtd(output: &str) -> Vec<Partition> {
     let mut out = Vec::new();
@@ -155,23 +152,21 @@ pub fn parse_proc_mtd(output: &str) -> Vec<Partition> {
             continue;
         };
         let device = format!("mtd{}", &rest[..colon]);
-        let mut fields = rest[colon + 1..].split_whitespace();
-        let (Some(size_hex), Some(_erase_hex), Some(name_field)) =
-            (fields.next(), fields.next(), fields.next())
-        else {
+        let tail = &rest[colon + 1..];
+        // two hex fields, then the quoted name (which may hold spaces)
+        let mut fields = tail.split_whitespace();
+        let (Some(size_hex), Some(_erase_hex)) = (fields.next(), fields.next()) else {
             continue;
         };
-        let Some(inner) = name_field
-            .strip_prefix('"')
-            .and_then(|n| n.strip_suffix('"'))
-        else {
-            continue;
+        let name = match (tail.find('"'), tail.rfind('"')) {
+            (Some(open), Some(close)) if open < close => &tail[open + 1..close],
+            _ => continue,
         };
         if let Ok(size) = u64::from_str_radix(size_hex, 16) {
             out.push(Partition {
                 device,
                 size,
-                name: inner.to_string(),
+                name: name.to_string(),
             });
         }
     }
@@ -304,13 +299,15 @@ pub fn dump_timeout(size: u64) -> std::time::Duration {
 }
 
 /// Dump one partition over the console and write `<name>.bin` into
-/// `output_dir`. `progress(decoded_bytes, total)` reports the decoded
-/// size once the collection completes (the RC collector is opaque to
-/// per-chunk progress; the Python ~16 KB cadence applied to its raw
-/// read loop).
+/// `output_dir`. The dump command is collected MARKER-FREE
+/// ([`SerialConsole::run_raw_collect`] — Python `send_and_wait`
+/// parity): an echoing tty would hit the RC marker inside the echoed
+/// command tail and stop after one drain read, so collection instead
+/// runs until the decoded base64 reaches the partition size (or the
+/// `dump_timeout` deadline). `progress(decoded_bytes, total)` fires as
+/// the stream accumulates.
 ///
 /// # Errors
-/// [`BackupError::DumpFailed`] when the device command fails;
 /// [`BackupError::DecodeFailed`] / [`BackupError::Incomplete`] /
 /// [`BackupError::DumpFile`] / [`BackupError::Console`].
 pub fn dump_partition<S: Sleeper, O: PortOpener>(
@@ -321,20 +318,26 @@ pub fn dump_partition<S: Sleeper, O: PortOpener>(
 ) -> Result<DumpOutcome, BackupError> {
     let dev_path = format!("/dev/{}", partition.device);
     let cmd = format!("cat {dev_path} | base64");
-    let out = console.run(&cmd, dump_timeout(partition.size))?;
-    if out.rc != 0 {
-        return Err(BackupError::DumpFailed {
-            device: partition.device.clone(),
-            rc: out.rc,
-            output: out.output,
-        });
-    }
-    let lines = extract_base64_lines(&out.output);
-    let raw = decode_dump_lines(&partition.device, &lines)?;
-    progress(raw.len() as u64, partition.size);
-
-    let got = raw.len() as u64;
     let expected = partition.size;
+    let mut notify_at = 0u64;
+    let reply = console
+        .run_raw_collect(
+            &cmd,
+            dump_timeout(expected),
+            QUIET_WINDOW,
+            &mut |collected| {
+                let got = base64_char_count(collected) * 3 / 4;
+                if got >= notify_at {
+                    progress(got.min(expected), expected);
+                    notify_at = got + 16 * 1024;
+                }
+                got >= expected
+            },
+        )
+        .map_err(BackupError::Console)?;
+    let lines = extract_base64_lines(&reply);
+    let raw = decode_dump_lines(&partition.device, &lines)?;
+    let got = raw.len() as u64;
     if got < expected {
         let fraction = got as f64 / expected as f64;
         if fraction < INCOMPLETE_FRACTION {
@@ -369,6 +372,15 @@ pub fn dump_partition<S: Sleeper, O: PortOpener>(
     })
 }
 
+/// Decoded-size estimate: count alphabet characters (the collector's
+/// lossy text may carry `\r`, spaces, prompt and echo lines — none are
+/// alphabet bytes except the payload itself; `+/=` are alphabet too).
+fn base64_char_count(text: &str) -> u64 {
+    text.bytes()
+        .filter(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=')
+        .count() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +410,16 @@ mod tests {
     fn parse_ignores_header_and_noise() {
         let parts = parse_proc_mtd("dev: size erasesize name\njunk line\nmtd9: bad row\n");
         assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn parse_preserves_quoted_names_with_spaces() {
+        // the Python regex captured "RedBoot config" whole; a
+        // whitespace-split would silently drop the row
+        let parts = parse_proc_mtd("mtd3: 00010000 00010000 \"RedBoot config\"\n");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].name, "RedBoot config");
+        assert_eq!(parts[0].device, "mtd3");
     }
 
     #[test]

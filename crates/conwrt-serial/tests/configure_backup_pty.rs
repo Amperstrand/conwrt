@@ -157,7 +157,9 @@ fn device_shell(master: std::fs::File, mode: MockMode, state: Arc<Mutex<DeviceSt
                 .split("' > /etc/dropbear/authorized_keys")
                 .next()
                 .unwrap_or("");
-            state.lock().unwrap().authorized_keys = Some(key.to_string());
+            // BusyBox echo appends the newline — the on-device file is
+            // key + \n (the wc -c gate compares against exactly that)
+            state.lock().unwrap().authorized_keys = Some(format!("{key}\n"));
             reply(&mut writer, "");
         } else if cmd.starts_with("wc -c /etc/dropbear/authorized_keys") {
             let stored = state.lock().unwrap().authorized_keys.clone();
@@ -278,8 +280,8 @@ fn install_key_round_trips_and_wc_gate_refuses_truncation() {
     thread::sleep(Duration::from_millis(100));
     drop(console);
     let state = device.join();
-    assert_eq!(installed, key.len());
-    assert_eq!(state.authorized_keys.as_deref(), Some(key));
+    assert_eq!(installed, key.len() + 1, "wc counts the echo newline");
+    assert_eq!(state.authorized_keys.as_deref(), Some(&*format!("{key}\n")));
 
     let (master, slave_path) = pty_parts();
     let device = MockOpenWrt::spawn(
@@ -329,7 +331,7 @@ fn backup_lists_selects_and_dumps_factory_exactly() {
     let mut progress_calls = 0;
     let outcome = dump_partition(&mut console, &targets[0], &out_dir, |got, total| {
         progress_calls += 1;
-        assert_eq!(got, total);
+        assert!(got <= total);
     })
     .expect("dump");
     thread::sleep(Duration::from_millis(100));
