@@ -59,11 +59,65 @@ bind_interrupts!(struct Irqs {
 const AGENT_MAC: [u8; 6] = [0x02, 0x43, 0x57, 0x46, 0x37, 0x34];
 
 /// Bench DUT VLAN address. Species-level placeholder only: resolve the
-/// actual bay VLAN/address/gateway from the lab registry at build time and
-/// set them here before flashing (AGENTS.md: never hardcode bench IPs —
-/// the bench DUT-bay convention is VLAN 100N, 192.168.100N.0/24).
-const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 100, 2);
-const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 100, 1);
+/// actual bay VLAN/address/gateway from the lab registry and set them at
+/// BUILD TIME without editing source — `CONWRT_AGENT_IPV4` /
+/// `CONWRT_AGENT_GW` (`a.b.c.d`) — e.g. for the gs108t flat recovery
+/// segment: `CONWRT_AGENT_IPV4=192.168.0.2 CONWRT_AGENT_GW=192.168.0.1
+/// cargo build --release` (AGENTS.md: never hardcode bench IPs — the
+/// bench DUT-bay convention is VLAN 100N, 192.168.100N.0/24).
+const AGENT_IPV4_DEFAULT: &str = "192.168.100.2";
+const AGENT_GW_DEFAULT: &str = "192.168.100.1";
+
+fn agent_ipv4() -> Ipv4Address {
+    seat_ipv4(
+        "CONWRT_AGENT_IPV4",
+        option_env!("CONWRT_AGENT_IPV4"),
+        AGENT_IPV4_DEFAULT,
+    )
+}
+
+fn agent_gateway() -> Ipv4Address {
+    seat_ipv4(
+        "CONWRT_AGENT_GW",
+        option_env!("CONWRT_AGENT_GW"),
+        AGENT_GW_DEFAULT,
+    )
+}
+
+/// Parse `a.b.c.d`, falling back to the default with a defmt warning —
+/// a typo'd build-time seat override must warn, never brick the boot.
+fn seat_ipv4(env_name: &str, value: Option<&'static str>, default: &'static str) -> Ipv4Address {
+    let text = value.unwrap_or(default);
+    let mut octets = [0u8; 4];
+    let mut ok = true;
+    for (i, part) in text.split('.').enumerate() {
+        match (i < 4, part.parse::<u8>()) {
+            (true, Ok(o)) => octets[i] = o,
+            _ => {
+                ok = false;
+                break;
+            }
+        }
+    }
+    if !ok {
+        defmt::warn!(
+            "{=str}={=str} is not a.b.c.d; using {=str}",
+            env_name,
+            text,
+            default
+        );
+        return parse_default(default);
+    }
+    Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
+}
+
+fn parse_default(default: &'static str) -> Ipv4Address {
+    let mut octets = [0u8; 4];
+    for (i, part) in default.split('.').enumerate() {
+        octets[i] = part.parse().expect("compile-time default is a.b.c.d");
+    }
+    Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
+}
 
 /// The agent's TCP port (the HIL mock's conventional port).
 const AGENT_PORT: u16 = 8400;
@@ -135,8 +189,8 @@ async fn main(spawner: Spawner) {
         p.PC1,
     );
     let config = embassy_net::Config::ipv4_static(StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(AGENT_IPV4, 24),
-        gateway: Some(AGENT_GW),
+        address: embassy_net::Ipv4Cidr::new(agent_ipv4(), 24),
+        gateway: Some(agent_gateway()),
         dns_servers: heapless::Vec::new(),
     });
     let (stack, runner) = embassy_net::new(
