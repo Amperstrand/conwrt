@@ -42,6 +42,15 @@
 //!   `scripts/serial-flash.py`) with the #405 policy: the device's own
 //!   `sha256sum` reply — parsed and compared — is the only acceptance
 //!   gate; a sender-side `Ok` is never trusted alone.
+//! * [`configure`] ports `scripts/serial-configure.py`: LAN IP change
+//!   with uci readback verification, dropbear password-auth toggling,
+//!   authorized-key install with an on-device byte check.
+//! * [`backup`] ports `scripts/serial-backup.py`: `/proc/mtd` parsing
+//!   and base64 partition dumps over the RC-marker collector — the
+//!   IRREPLACEABLE Factory-dump path when SSH is gone.
+//! * [`monitor`] ports the `scripts/serial-console.py` monitoring
+//!   core: dual logging, boot-stage detection (the `serial_baud.py`
+//!   vocabulary), mailbox command injection, and `session.json`.
 //!
 //! This lives outside `conwrt-protocols` deliberately: that crate is
 //! `no_std`-cross-compiled in CI (`--target thumbv7em-none-eabihf`), while
@@ -62,18 +71,29 @@
 //! * `tests/tcp_driver.rs`: the TCP bridge over a localhost echo server
 //!   only (CI rule: no network beyond localhost).
 
+pub mod backup;
 pub mod boot_capture;
 pub mod collect;
+pub mod configure;
 pub mod console;
 pub mod flash;
 pub mod io;
 pub mod lint;
+pub mod monitor;
 
+pub use backup::{
+    BackupError, BackupSelection, DumpOutcome, Partition, decode_dump_lines, dump_partition,
+    dump_timeout, extract_base64_lines, list_partitions, parse_proc_mtd, select_targets,
+};
 pub use boot_capture::{
     BootCaptureError, BootCaptureOptions, BootCaptureReport, PowerTransition, capture_boot,
     session_dir,
 };
 pub use collect::{CmdOutcome, Collector, Marker, RC_FAIL, RC_OK, ReadOutcome};
+pub use configure::{
+    ConfigureError, filter_reply, install_authorized_key, parse_wc_bytes, run_command, set_lan_ip,
+    set_password_auth, show_dropbear_config, show_firmware, show_network_config,
+};
 pub use console::{ConsoleTiming, PortOpener, SerialConsole, Sleeper, SpecOpener, StdSleeper};
 pub use flash::{
     FlashError, FlashOptions, FlashReport, flash_base64, image_sha256, parse_device_sha256,
@@ -81,3 +101,7 @@ pub use flash::{
 };
 pub use io::{ConsoleError, ConsoleIo, open_port, parse_tcp_endpoint};
 pub use lint::{LintError, MAX_LINE};
+pub use monitor::{
+    BootStage, MonitorConfig, MonitorError, MonitorSession, StageTransition, detect_boot_stage,
+    format_bytes, resolve_command,
+};

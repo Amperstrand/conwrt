@@ -22,6 +22,10 @@ conwrt-probe-core = { path = "../conwrt-probe-core" }
 sha2 = "0.10"
 # chunk encoding for the base64 serial-flash driver.
 base64 = "0.22"
+# session.json metadata for the console monitor (and its tests parse it
+# back — the record must BE json, not look like it).
+serde = { workspace = true }
+serde_json = "1"
 
 [dev-dependencies]
 # pty fixtures + poll-bounded reads in the integration tests only
