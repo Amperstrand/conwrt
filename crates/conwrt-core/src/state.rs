@@ -72,6 +72,10 @@ pub struct ProbeEvidence {
     pub http: Option<crate::capability::HttpProbeResult>,
     /// SSH identification banner.
     pub ssh_banner: Option<crate::capability::SshBanner>,
+    /// Board identity read over a key-authenticated SSH session, when the
+    /// operator supplied a key and SSH accepted it (`conwrt diagnose
+    /// --key`). Absent for purely unauthenticated runs.
+    pub authenticated_board: Option<crate::capability::AuthenticatedBoard>,
     /// Neighbor/ARP MAC of the target.
     pub mac: Option<MacAddress>,
 }
@@ -172,6 +176,24 @@ pub fn classify_with_notes(
                 banner.software
             ));
             (DeviceState::Unknown, notes)
+        } else if let Some(board) = evidence
+            .authenticated_board
+            .as_ref()
+            .filter(|board| !board.board_name.is_empty())
+        {
+            if board.is_openwrt() {
+                notes.push(format!(
+                    "authenticated board read: {} ({}) — OpenWrt over key-verified SSH",
+                    board.board_name, board.distrib_id
+                ));
+                (DeviceState::OpenWrt, notes)
+            } else {
+                notes.push(format!(
+                    "authenticated board read: {} — vendor firmware, not OpenWrt",
+                    board.board_name
+                ));
+                (DeviceState::StockVendor, notes)
+            }
         } else {
             notes.push(format!(
                 "SSH banner '{}' answered with no identifying HTTP evidence",
@@ -274,7 +296,7 @@ fn is_openwrt_http(http: &crate::capability::HttpProbeResult) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::{HttpProbeResult, SshBanner};
+    use crate::capability::{AuthenticatedBoard, HttpProbeResult, SshBanner};
 
     fn http(
         status: u16,
@@ -421,6 +443,61 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(classify(&ev), DeviceState::SshOnly);
+    }
+
+    #[test]
+    fn authenticated_openwrt_board_upgrades_ssh_only() {
+        // Headless OpenWrt (no LuCI): dropbear and nothing else
+        // unauthenticated — the key-authenticated board read is the
+        // disambiguator (the 2026-10-12 handoff's
+        // "management-interface scope signal", observed live on the
+        // bench x1860 2026-10-22: ASU image without uhttpd).
+        let ev = ProbeEvidence {
+            ssh_banner: banner("dropbear_2024.86"),
+            authenticated_board: Some(AuthenticatedBoard {
+                board_name: "dlink,covr-x1860-a1".into(),
+                distrib_id: "OpenWrt".into(),
+            }),
+            ..Default::default()
+        };
+        let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, DeviceState::OpenWrt);
+        assert!(notes.iter().any(|n| n.contains("authenticated board")));
+    }
+
+    #[test]
+    fn authenticated_vendor_board_refines_to_stock_vendor() {
+        // The refinement cuts both ways: a key-authenticated read on a
+        // vendor box (board file answers, no openwrt_release) resolves
+        // the same ambiguity toward stock firmware.
+        let ev = ProbeEvidence {
+            ssh_banner: banner("dropbear_2017.75"),
+            authenticated_board: Some(AuthenticatedBoard {
+                board_name: "Vendor,R10".into(),
+                distrib_id: String::new(),
+            }),
+            ..Default::default()
+        };
+        let (state, notes) = classify_with_notes(&ev, DEFAULT_RECOVERY_HINTS);
+        assert_eq!(state, DeviceState::StockVendor);
+        assert!(notes.iter().any(|n| n.contains("vendor firmware")));
+    }
+
+    #[test]
+    fn authenticated_board_never_overrides_identifying_http() {
+        // Unauthenticated identifying HTTP wins first: recovery
+        // fingerprints beside SSH stay contradictory even with a board
+        // read present (evidence ordering is load-bearing).
+        let ev = ProbeEvidence {
+            ssh_banner: banner("dropbear"),
+            http: http(200, Some("GoAhead-http"), None, None),
+            authenticated_board: Some(AuthenticatedBoard {
+                board_name: "x".into(),
+                distrib_id: "OpenWrt".into(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(classify(&ev), DeviceState::Unknown);
     }
 
     #[test]

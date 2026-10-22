@@ -66,6 +66,30 @@ pub struct SshBanner {
     pub software: String,
 }
 
+/// Board identity read over a key-authenticated SSH session.
+///
+/// The management-interface scope signal: a headless OpenWrt box (no
+/// LuCI/uhttpd) presents dropbear and nothing else to unauthenticated
+/// probes — indistinguishable from stock vendor firmware. An
+/// authenticated read of `/tmp/sysinfo/board_name` +
+/// `/etc/openwrt_release` disambiguates both directions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedBoard {
+    /// `/tmp/sysinfo/board_name`, e.g. `dlink,covr-x1860-a1`.
+    pub board_name: String,
+    /// `DISTRIB_ID` from `/etc/openwrt_release`; empty when the file is
+    /// absent — which is itself the not-OpenWrt signal.
+    pub distrib_id: String,
+}
+
+impl AuthenticatedBoard {
+    /// `DISTRIB_ID` is `OpenWrt` on every release the corpus covers.
+    #[must_use]
+    pub fn is_openwrt(&self) -> bool {
+        self.distrib_id.eq_ignore_ascii_case("OpenWrt")
+    }
+}
+
 impl SshBanner {
     /// Parse the raw banner line `SSH-2.0-software comment`.
     pub fn parse(raw: &str) -> Option<Self> {
