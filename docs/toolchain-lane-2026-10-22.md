@@ -234,9 +234,14 @@ edited `rust-toolchain.toml` still resolves 1.99.0.
   Hard df preflight (25G bootstrap / 8G build), named container, detached
   launch recipe in the header. Stage-2 env (std location, RUSTFLAGS) is
   probed and fails loudly — tuned on first successful bootstrap.
-- **Bootstrap NOT yet executed — disk gate.** Host is at 98% (11G free);
-  the rust bootstrap needs 10-20G+. Reclaim path: `dev-session.sh sweep`
-  shows ~7.5G of idle-but-DIRTY lane `target/` caches (ucport 4.4G,
-  arpprobe 1.6G, rusttest 955M, asuflash 524M) — all PROTECTED, so the
-  sweep will not touch them; owners retire lanes or `rm -rf` their own
-  `target/` first, then run `bootstrap`.
+- **Bootstrap NOT yet executed — disk gate.** Host is at 98% and falling
+  (11G → 8.5G free within an hour while this lane idled — re-check `df`
+  before trusting any number here). The rust bootstrap needs 10-20G+ and
+  the script's floor is 25G. Reclaim arithmetic (2026-10-22): the ~7.5G of
+  idle-but-DIRTY lane `target/` caches (ucport 4.4G, arpprobe 1.6G,
+  rusttest 955M, asuflash 524M) are all sweep-PROTECTED, and even fully
+  reclaimed they only reach ~16G — **below the floor**. Reaching 25G+
+  needs lane *retirement* (`dev-session.sh stop` on merged/stale lanes,
+  which reaps worktrees + toolchains, not just `target/`), additional
+  reclamation elsewhere, or a deliberate, operator-approved floor
+  exception. Do not quietly lower the floor to squeeze under it.
