@@ -9,6 +9,8 @@ use serde_json::{Map, Value};
 
 use std::fmt;
 
+use crate::error::ImageError;
+
 /// ASU build request payload (`POST /api/v1/build`).
 ///
 /// Field-for-field parity with the dict `cmd_request` builds in
@@ -256,6 +258,55 @@ impl fmt::Display for ImageType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// Reject defaults scripts that set a static `network.<section>.ipaddr`
+/// without the paired `network.<section>.netmask`.
+///
+/// Encodes the 2026-10-14 x1860 postmortem: a baked `ipaddr` with no
+/// netmask boots v4-dead on OpenWrt 25.12 (netifd defaults the missing
+/// netmask to /32 — 24.10 defaulted /24). The Python profile builder
+/// emits the pair everywhere (`scripts/profile/builder.py`); this guard
+/// holds the Rust request path to the same invariant.
+pub fn validate_defaults_script(script: &str) -> Result<(), ImageError> {
+    let mut ipaddr_sections: Vec<&str> = Vec::new();
+    let mut netmask_sections: Vec<&str> = Vec::new();
+    for line in script.lines() {
+        let trimmed = line.trim();
+        let Some(payload) = trimmed.strip_prefix("uci set ") else {
+            continue;
+        };
+        if let Some(section) = network_section_for(payload, "ipaddr") {
+            ipaddr_sections.push(section);
+        }
+        if let Some(section) = network_section_for(payload, "netmask") {
+            netmask_sections.push(section);
+        }
+    }
+    for section in ipaddr_sections {
+        if !netmask_sections.contains(&section) {
+            return Err(ImageError::DefaultsMissingNetmask {
+                section: section.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// `network.<section>.<key>=<value>` → `<section>`, for `uci set` payloads
+/// only (comments, echoes, and other verbs never reach this function).
+fn network_section_for<'a>(payload: &'a str, key: &str) -> Option<&'a str> {
+    let (path, _value) = payload.split_once('=')?;
+    let mut parts = path.trim().split('.');
+    if parts.next()? != "network" {
+        return None;
+    }
+    let section = parts.next()?;
+    let last = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    (last == key).then_some(section)
 }
 
 #[cfg(test)]
