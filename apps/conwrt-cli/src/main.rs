@@ -19,7 +19,10 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
-use conwrt_core::plan::{DohProfile, SqmProfile};
+use conwrt_core::plan::{
+    AdguardProfile, DohProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
+    WireguardClientProfile,
+};
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
 use conwrt_local_std::fingerprint::fingerprint;
@@ -151,9 +154,8 @@ enum Command {
     /// default: prints the exact script. Mutating execution requires
     /// --execute AND a fingerprint-confirmed OpenWrt identity.
     Apply {
-        /// Desired-state profile to apply.
-        #[arg(long)]
-        profile: ProfileChoice,
+        #[command(flatten)]
+        profile_args: ProfileArgs,
         /// Explicitly forget the stored host key before connecting
         /// (reflash/reimage escape hatch; logged, never silent).
         #[arg(long)]
@@ -161,21 +163,6 @@ enum Command {
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        download_kbps: Option<u32>,
-        /// Shaper upload rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        upload_kbps: Option<u32>,
-        /// UCI network name to shape (sqm).
-        #[arg(long, default_value = "wan")]
-        interface: String,
-        /// DoH provider name or https:// URL (doh).
-        #[arg(long)]
-        provider: Option<String>,
-        /// DoH local listen port (doh).
-        #[arg(long)]
-        listen_port: Option<u16>,
         /// Target address of the device.
         #[arg(long)]
         ip: IpAddr,
@@ -228,27 +215,11 @@ enum Command {
         password: Option<String>,
     },
     Plan {
-        /// Desired-state profile to plan.
-        #[arg(long)]
-        profile: ProfileChoice,
+        #[command(flatten)]
+        profile_args: ProfileArgs,
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        download_kbps: Option<u32>,
-        /// Shaper upload rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        upload_kbps: Option<u32>,
-        /// UCI network name to shape (sqm).
-        #[arg(long, default_value = "wan")]
-        interface: String,
-        /// DoH provider name or https:// URL (doh).
-        #[arg(long)]
-        provider: Option<String>,
-        /// DoH local listen port (doh).
-        #[arg(long)]
-        listen_port: Option<u16>,
         /// Target address (used for reporting; the mock answers anything).
         #[arg(long, default_value = "192.168.1.1")]
         ip: IpAddr,
@@ -285,6 +256,81 @@ impl ScenarioChoice {
 enum ProfileChoice {
     Sqm,
     Doh,
+    SshHardening,
+    Adguard,
+    RescueWatchdog,
+    WireguardClient,
+}
+
+/// Profile selection + per-profile parameters, shared by `apply` and
+/// `plan` (flattened into both subcommands — one help surface, one
+/// `build_profile` consumer).
+#[derive(clap::Args)]
+struct ProfileArgs {
+    /// Desired-state profile to apply.
+    #[arg(long)]
+    profile: ProfileChoice,
+    /// Shaper download rate in Kbit/s (required for sqm).
+    #[arg(long)]
+    download_kbps: Option<u32>,
+    /// Shaper upload rate in Kbit/s (required for sqm).
+    #[arg(long)]
+    upload_kbps: Option<u32>,
+    /// UCI network name to shape (sqm).
+    #[arg(long, default_value = "wan")]
+    interface: String,
+    /// DoH provider name or https:// URL (doh).
+    #[arg(long)]
+    provider: Option<String>,
+    /// DoH local listen port (doh); ssh-hardening dropbear port.
+    #[arg(long)]
+    listen_port: Option<u16>,
+    /// ssh-hardening: idle disconnect timeout in seconds.
+    #[arg(long)]
+    idle_timeout: Option<u32>,
+    /// ssh-hardening: max auth attempts per connection.
+    #[arg(long)]
+    max_auth_tries: Option<u32>,
+    /// ssh-hardening: KEEP password auth (default disables it).
+    #[arg(long)]
+    password_auth: bool,
+    /// adguard: web UI listen address.
+    #[arg(long)]
+    listen_ip: Option<String>,
+    /// adguard: web UI port.
+    #[arg(long)]
+    web_port: Option<u16>,
+    /// adguard: DNS listen port (off 53 to avoid dnsmasq).
+    #[arg(long)]
+    dns_port: Option<u16>,
+    /// rescue-watchdog: management IP pinged once a minute.
+    #[arg(long)]
+    target: Option<String>,
+    /// wireguard-client: VPN server public key (required).
+    #[arg(long)]
+    peer_public_key: Option<String>,
+    /// wireguard-client: VPN server hostname or IPv4 (required).
+    #[arg(long)]
+    endpoint_host: Option<String>,
+    /// wireguard-client: VPN server UDP port.
+    #[arg(long)]
+    endpoint_port: Option<u16>,
+    /// wireguard-client: pre-shared key (optional).
+    #[arg(long)]
+    peer_psk: Option<String>,
+    /// wireguard-client: tunnel address with CIDR.
+    #[arg(long)]
+    address: Option<String>,
+    /// wireguard-client: DNS server through the tunnel.
+    #[arg(long)]
+    dns: Option<String>,
+    /// wireguard-client: IPs routed through the tunnel.
+    #[arg(long)]
+    allowed_ips: Option<String>,
+    /// wireguard-client: opt OUT of the kill switch (1.x default is ON —
+    /// block all traffic when the tunnel is down).
+    #[arg(long)]
+    no_kill_switch: bool,
 }
 #[derive(Subcommand)]
 enum MaasCommand {
@@ -465,13 +511,8 @@ fn main() -> ExitCode {
         ),
         Command::Apply {
             relearn_host_key,
-            profile,
+            profile_args,
             model_id,
-            download_kbps,
-            upload_kbps,
-            interface,
-            provider,
-            listen_port,
             ip,
             port,
             user,
@@ -481,13 +522,8 @@ fn main() -> ExitCode {
             dir,
         } => cmd_apply(
             relearn_host_key,
-            profile,
+            profile_args,
             &model_id,
-            download_kbps,
-            upload_kbps,
-            &interface,
-            provider,
-            listen_port,
             ip,
             port,
             &user,
@@ -497,28 +533,12 @@ fn main() -> ExitCode {
             &dir,
         ),
         Command::Plan {
-            profile,
+            profile_args,
             model_id,
-            download_kbps,
-            upload_kbps,
-            interface,
-            provider,
-            listen_port,
             ip,
             scenario,
             dir,
-        } => cmd_plan(
-            profile,
-            &model_id,
-            download_kbps,
-            upload_kbps,
-            &interface,
-            provider,
-            listen_port,
-            ip,
-            scenario,
-            &dir,
-        ),
+        } => cmd_plan(profile_args, &model_id, ip, scenario, &dir),
     }
 }
 fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf) {
@@ -679,15 +699,9 @@ fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
         }
     }
 }
-#[allow(clippy::too_many_arguments)]
 fn cmd_plan(
-    profile: ProfileChoice,
+    profile_args: ProfileArgs,
     model_id: &str,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
     ip: IpAddr,
     scenario: ScenarioChoice,
     dir: &Path,
@@ -708,14 +722,7 @@ fn cmd_plan(
             return ExitCode::from(2);
         }
     };
-    let profile = match build_profile(
-        profile,
-        download_kbps,
-        upload_kbps,
-        interface,
-        provider,
-        listen_port,
-    ) {
+    let profile = match build_profile(&profile_args) {
         Ok(profile) => profile,
         Err(msg) => {
             eprintln!("{msg}");
@@ -860,16 +867,11 @@ fn store_forget(addr: &str) {
     use conwrt_core::ssh::TrustStore;
     FileTrustStore::new(FileTrustStore::default_path()).forget(addr);
 }
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // ssh-target plumbing; grouped under one subcommand
 fn cmd_apply(
     relearn_host_key: bool,
-    profile: ProfileChoice,
+    profile_args: ProfileArgs,
     model_id: &str,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
     ip: IpAddr,
     port: u16,
     user: &str,
@@ -886,14 +888,7 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let profile = match build_profile(
-        profile,
-        download_kbps,
-        upload_kbps,
-        interface,
-        provider,
-        listen_port,
-    ) {
+    let profile = match build_profile(&profile_args) {
         Ok(profile) => profile,
         Err(msg) => {
             eprintln!("{msg}");
@@ -993,6 +988,21 @@ fn cmd_apply(
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
         return ExitCode::SUCCESS;
     }
+    // Escape-hatch discipline (AGENTS.md): never disable the only working
+    // auth method. Password-only auth + PasswordAuth=off = locked out.
+    // The systemic executor-side gate is tracked in #427; this CLI guard
+    // covers the concrete foot-gun.
+    if let Profile::SshHardening(sh) = &profile {
+        if sh.disable_password_auth && key.is_none() {
+            eprintln!(
+                "refused: ssh-hardening would disable password auth, but this session \
+                 authenticates by password (no --key). Install a key first \
+                 (conwrt apply --key ... after adding it to authorized_keys) — \
+                 refusing to cut the only working door."
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     eprintln!("# executing on {ip} ...");
     match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
         Ok(outcome) if outcome.fully_verified() => {
@@ -1019,28 +1029,61 @@ fn cmd_apply(
     }
 }
 
-fn build_profile(
-    profile: ProfileChoice,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
-) -> Result<Profile, String> {
-    match profile {
-        ProfileChoice::Sqm => match (download_kbps, upload_kbps) {
+fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
+    match args.profile {
+        ProfileChoice::Sqm => match (args.download_kbps, args.upload_kbps) {
             (Some(download_kbps), Some(upload_kbps)) => Ok(Profile::Sqm(SqmProfile {
                 download_kbps,
                 upload_kbps,
-                interface: interface.into(),
+                interface: args.interface.clone(),
                 ..default_sqm()
             })),
             _ => Err("--download-kbps and --upload-kbps are required for sqm".into()),
         },
         ProfileChoice::Doh => Ok(Profile::Doh(DohProfile {
-            provider: provider.unwrap_or_else(|| "cloudflare".into()),
-            listen_port: listen_port.unwrap_or(5053),
+            provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
+            listen_port: args.listen_port.unwrap_or(5053),
         })),
+        ProfileChoice::SshHardening => Ok(Profile::SshHardening(SshHardeningProfile {
+            disable_password_auth: !args.password_auth,
+            idle_timeout: args.idle_timeout.unwrap_or(300),
+            max_auth_tries: args.max_auth_tries.unwrap_or(3),
+            port: args.listen_port.unwrap_or(22),
+            ..SshHardeningProfile::default()
+        })),
+        ProfileChoice::Adguard => Ok(Profile::Adguard(AdguardProfile {
+            listen_ip: args.listen_ip.clone().unwrap_or_else(|| "0.0.0.0".into()),
+            web_port: args.web_port.unwrap_or(3000),
+            dns_port: args.dns_port.unwrap_or(5353),
+        })),
+        ProfileChoice::RescueWatchdog => Ok(Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: args
+                .target
+                .clone()
+                .unwrap_or_else(|| "192.168.1.254".into()),
+        })),
+        ProfileChoice::WireguardClient => {
+            // required-param gates live in WireguardClientProfile::validate,
+            // enforced at plan time with the 1.x error shapes
+            Ok(Profile::WireguardClient(WireguardClientProfile {
+                peer_public_key: args.peer_public_key.clone().unwrap_or_default(),
+                endpoint_host: args.endpoint_host.clone().unwrap_or_default(),
+                endpoint_port: args.endpoint_port.unwrap_or(51820),
+                peer_psk: args.peer_psk.clone().unwrap_or_default(),
+                address: args
+                    .address
+                    .clone()
+                    .unwrap_or_else(|| "10.67.0.2/32".into()),
+                dns: args.dns.clone().unwrap_or_default(),
+                // 1.x default is ON; --no-kill-switch is the explicit opt-out
+                kill_switch: !args.no_kill_switch,
+                allowed_ips: args
+                    .allowed_ips
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0.0/0, ::/0".into()),
+                ..WireguardClientProfile::default()
+            }))
+        }
     }
 }
 
@@ -1761,6 +1804,88 @@ fn board_matches(model: &conwrt_types::DeviceModel, board: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile_args(profile: ProfileChoice) -> ProfileArgs {
+        ProfileArgs {
+            profile,
+            download_kbps: None,
+            upload_kbps: None,
+            interface: "wan".into(),
+            provider: None,
+            listen_port: None,
+            idle_timeout: None,
+            max_auth_tries: None,
+            password_auth: false,
+            listen_ip: None,
+            web_port: None,
+            dns_port: None,
+            target: None,
+            peer_public_key: None,
+            endpoint_host: None,
+            endpoint_port: None,
+            peer_psk: None,
+            address: None,
+            dns: None,
+            allowed_ips: None,
+            no_kill_switch: false,
+        }
+    }
+
+    #[test]
+    fn build_profile_new_arms_default_to_1x_shapes() {
+        let ssh = build_profile(&profile_args(ProfileChoice::SshHardening)).expect("ssh");
+        let Profile::SshHardening(sh) = &ssh else {
+            panic!("ssh profile");
+        };
+        assert!(sh.disable_password_auth);
+        assert_eq!((sh.idle_timeout, sh.max_auth_tries, sh.port), (300, 3, 22));
+
+        let ag = build_profile(&profile_args(ProfileChoice::Adguard)).expect("adguard");
+        let Profile::Adguard(ag) = &ag else {
+            panic!("adguard profile");
+        };
+        assert_eq!(
+            (ag.listen_ip.as_str(), ag.web_port, ag.dns_port),
+            ("0.0.0.0", 3000, 5353)
+        );
+
+        let wd = build_profile(&profile_args(ProfileChoice::RescueWatchdog)).expect("watchdog");
+        let Profile::RescueWatchdog(wd) = &wd else {
+            panic!("watchdog profile");
+        };
+        assert_eq!(wd.target, "192.168.1.254");
+
+        let mut wg_args = profile_args(ProfileChoice::WireguardClient);
+        wg_args.peer_public_key = Some("SERVERKEY".into());
+        wg_args.endpoint_host = Some("vpn.example.com".into());
+        let wg = build_profile(&wg_args).expect("wireguard");
+        let Profile::WireguardClient(wg) = &wg else {
+            panic!("wireguard profile");
+        };
+        assert_eq!(wg.peer_public_key, "SERVERKEY");
+        assert_eq!(wg.endpoint_host, "vpn.example.com");
+        assert_eq!(wg.endpoint_port, 51820);
+        // 1.x default holds without any flag (Codex #442 P1-1)
+        assert!(wg.kill_switch);
+        wg_args.no_kill_switch = true;
+        let Profile::WireguardClient(off) = &build_profile(&wg_args).expect("wireguard") else {
+            panic!("wireguard profile");
+        };
+        assert!(!off.kill_switch);
+        assert!(wg.validate().is_ok());
+    }
+
+    #[test]
+    fn wireguard_client_required_gates_surface_at_plan_time() {
+        let wg = build_profile(&profile_args(ProfileChoice::WireguardClient)).expect("built");
+        let model = model_with(None, "glinet,gl-ar150");
+        match plan_profile(&conwrt_core::state::DeviceState::OpenWrt, &model, &wg) {
+            Err(conwrt_core::plan::Unsupported::InvalidParams(why)) => {
+                assert!(why.contains("peer_public_key"), "got: {why}");
+            }
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
+    }
 
     fn model_with(board_name: Option<&str>, device: &str) -> conwrt_types::DeviceModel {
         conwrt_types::DeviceModel {
