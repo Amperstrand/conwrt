@@ -252,13 +252,35 @@ For a NON-aligned bench binary while the SDK lane waits for disk:
 nightly `1.101.0-nightly` still lists `mipsel-unknown-linux-musl` as a
 builtin (tier-3) target, so `cargo +nightly -Z build-std=std,panic_abort`
 + the SDK image's `staging_dir/toolchain-*` gcc/musl sysroot is a viable
-path. Budget: pull openwrt/sdk image (~3-4G transient), `docker create` +
-`docker cp` the toolchain (~1G kept), `docker rmi` the image, rust-src
-(~300M), workspace build (~1-2G). **Attempted: NO — rejected at 9.6G
-free** (peak would leave ~5-6G on a host losing ~2G/hour to other lanes;
-ENOSPC discipline). Re-attempt only with >=12G free and nothing else
-churning the disk; label the artifact throwaway — the aligned artifact
-still comes from the SDK lane.
+path. First checked 2026-10-22 session 3 and rejected at 9.6G free;
+**EXECUTED session 4 at 19G free — artifact produced and smoke-tested**:
+
+1. `docker pull openwrt/sdk@sha256:0d28e4f8…` (digest from the manifest),
+   `docker create` + `docker cp staging_dir/toolchain-mipsel_24kc_gcc-14.3.0_musl`
+   (266M) into `data/sdk-lane/`, `docker rmi` (image released same hour).
+2. Patch the extracted toolchain's host-loader wrappers (they exec via
+   `../../host/lib/ld-linux-x86-64.so.2`, absent without the SDK): rewrite
+   any `exec "$dir/…ld-linux…" --library-path … (.name.bin "$@")` line to
+   `exec "$dir/.name.bin" "$@"` and drop `runas.so` LD_PRELOAD lines —
+   18 exec lines + 51 preload lines across bin/ AND libexec/ (cc1 etc.).
+   The `.bin` reals have system-glibc INTERPs and run as-is; positive
+   control: hello.c → mipsel musl ELF, compiles + strips.
+3. `rustup component add rust-src --toolchain nightly`, then
+   `STAGING_DIR=<sdk-lane> CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER=<tc>/bin/mipsel-openwrt-linux-gcc
+   CC/AR_mipsel_unknown_linux_musl=<tc>/…gcc|ar cargo +nightly build
+   -Z build-std=std,panic_abort --release --target mipsel-unknown-linux-musl
+   -p conwrt-zycast` — **dynamic musl** (feed parity: std built
+   crt-static=false). `-C target-feature=+crt-static` FAILS: the SDK
+   toolchain ships no static libunwind (`-lunwind` is an OpenWrt gcc spec
+   addition) and rustc's static-mode startfile resolution bypasses the
+   driver's search paths. Dynamic is correct on-device.
+4. Result: `data/bin/conwrt-zycast-mipsel-throwaway` — mipsel MIPS32 rel2
+   PIE, `/lib/ld-musl-mipsel-sf.so.1`, stripped 1,188,248 B, sha256
+   `a38f1c2f78716923f017840f2235df3cc12391e5beda73d24c4d74b9a59f6620`,
+   **qemu-mipsel smoke test PASSED** (help + version render, rc=0, via
+   `qemu-mipsel-static -L <tc>/mipsel-openwrt-linux-musl`). THROWAWAY
+   provenance — bench-unblock only; the aligned artifact still comes
+   from the SDK lane (build stage is fact-checked, commit `2ad814d`).
 
 Stage-2 env is now primary-source-correct (commit `2ad814d`):
 `staging_dir/host/{bin,lib/rustlib}` (not hostpkg),
