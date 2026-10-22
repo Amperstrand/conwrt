@@ -62,7 +62,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| SSH transport in `conwrt.py`/`profile/apply.py` (subprocess ssh; the paramiko mention was stale) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | **Deprecated for the sqm apply flow** (2026-10-22): `conwrt apply --execute` proven in the QEMU oracle suite (`tests/integration/test_rust_apply_sqm.py`, board-gated, set -e-safe render) + ring-2 wireguard/tether; transport banner in `apply.py`. Full retirement rides the remaining profiles' Rust proofs |
+| SSH transport in `conwrt.py`/`profile/apply.py` (subprocess ssh; the paramiko mention was stale) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | **Deprecated for sqm + ssh-hardening + adguard + rescue-watchdog + wireguard-client apply flows** (2026-10-22): `conwrt apply --execute` exposes all five (sqm oracle-proven; the rest carry per-row §4 evidence + ring-2); transport banner in `apply.py`. Full retirement rides the remaining profiles' Rust proofs + the ubus transport |
 
 ## 7. CLI surface
 
