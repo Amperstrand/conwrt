@@ -6,8 +6,12 @@
 #
 # - Bump this pin deliberately (with the workspace `rust-version` MSRV
 #   floor in Cargo.toml as the compatibility guarantee).
-# - Embedded/OpenWrt cross-builds (mips, #109) will pin their own older
-#   lane (1.94.x, matching the OpenWrt SDK) when that work lands.
+# - The OpenWrt cross lane (mipsel zycast, #109) pins NO rustup channel:
+#   upstream demoted mipsel-unknown-linux-musl std to tier 3 after 1.85,
+#   so no current channel ships it. That lane builds inside the pinned
+#   openwrt/sdk image with the feed's own rustc (openwrt-25.12 feed =
+#   1.96.0 as of 2026-10-22; scripts/sdk_rust_version.py audits drift).
+#   MCU lanes keep their own toolchains (esp fork, ADR-0012).
 [toolchain]
 channel = "1.99.0"
 components = ["rustfmt", "clippy"]
