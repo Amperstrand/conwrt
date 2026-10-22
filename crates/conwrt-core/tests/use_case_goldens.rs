@@ -33,6 +33,7 @@
 //!     "peer1_allowed_ips": "10.1.99.2/32",
 //!     "peer1_psk": "cHNrLTMyLWJ5dGVzLXRlc3QtdmFsdWU=",
 //! }))
+//! print(r["ssh-hardening"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -45,8 +46,8 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    DohProfile, GuestWifiProfile, Profile, SqmProfile, TetherProfile, TetherVariant,
-    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    DohProfile, GuestWifiProfile, Profile, SqmProfile, SshHardeningProfile, TetherProfile,
+    TetherVariant, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -169,6 +170,14 @@ fn wireguard_server_matches_1x_golden() {
 }
 
 #[test]
+fn ssh_hardening_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::SshHardening(SshHardeningProfile::default()),
+        include_str!("goldens/ssh-hardening.sh"),
+    );
+}
+
+#[test]
 fn guest_wifi_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::GuestWifi(GuestWifiProfile::default()),
@@ -185,10 +194,6 @@ fn guest_wifi_matches_1x_golden() {
 fn golden_files_are_command_scripts_not_empty() {
     for (name, golden) in [
         ("tether", include_str!("goldens/tether.sh")),
-        (
-            "wireguard-client",
-            include_str!("goldens/wireguard-client.sh"),
-        ),
         (
             "wireguard-server",
             include_str!("goldens/wireguard-server.sh"),

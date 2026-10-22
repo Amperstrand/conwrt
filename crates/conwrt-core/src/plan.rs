@@ -390,6 +390,43 @@ impl Default for WireguardServerProfile {
     }
 }
 
+/// Dropbear SSH hardening — port of the tested 1.x `ssh-hardening`
+/// preset (`scripts/use_cases/ssh_hardening.py`): key-only auth, idle
+/// disconnect timeout, auth-try limit, alternate port, no remote port
+/// forwarding. Every option lands on the anonymous `@dropbear[0]`
+/// section; the bool→UCI string coercions are the whole of the logic.
+/// No 1.x validators to mirror.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshHardeningProfile {
+    /// Disable password auth — drives BOTH `PasswordAuth` and
+    /// `RootPasswordAuth` (1.x default on).
+    pub disable_password_auth: bool,
+    /// Idle disconnect timeout in seconds (1.x default 300).
+    pub idle_timeout: u32,
+    /// Max authentication attempts per connection (1.x default 3).
+    pub max_auth_tries: u32,
+    /// SSH listen port (1.x default 22).
+    pub port: u16,
+    /// Disable remote port forwarding — rendered as `GatewayPorts='no'`
+    /// (1.x naming parity). Note the semantics: GatewayPorts only stops
+    /// forwarded ports binding non-loopback; it does NOT reject `-R`
+    /// requests. Matches 1.x byte-for-byte; the param NAME is the
+    /// upstream preset's choice (tracked upstream, not changed here).
+    pub disable_gateway_ports: bool,
+}
+
+impl Default for SshHardeningProfile {
+    fn default() -> Self {
+        Self {
+            disable_password_auth: true,
+            idle_timeout: 300,
+            max_auth_tries: 3,
+            port: 22,
+            disable_gateway_ports: true,
+        }
+    }
+}
+
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
 /// apply time from the live LAN IP (third octet + 1), so the address
@@ -501,6 +538,8 @@ pub enum Profile {
     /// Terminate a WireGuard tunnel on this device (remote access
     /// server).
     WireguardServer(WireguardServerProfile),
+    /// Harden Dropbear SSH (key-only auth, timeouts, port).
+    SshHardening(SshHardeningProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -515,6 +554,7 @@ impl Profile {
             Profile::Tether(t) => t.variant.id(),
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
+            Profile::SshHardening(_) => "ssh-hardening",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -530,6 +570,7 @@ impl Profile {
             Profile::Tether(_) => &["usb"],
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
+            Profile::SshHardening(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -835,6 +876,7 @@ pub fn plan_profile(
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
+        Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1500,6 +1542,69 @@ fn plan_wireguard_server(
     ];
     Ok(Plan {
         profile_id: "wireguard-server".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_ssh_hardening(model: &DeviceModel, sh: &SshHardeningProfile) -> Result<Plan, Unsupported> {
+    let pw_auth = if sh.disable_password_auth {
+        "off"
+    } else {
+        "on"
+    };
+    let gateway_ports = if sh.disable_gateway_ports {
+        "no"
+    } else {
+        "yes"
+    };
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::SetUciOptions {
+            config: "dropbear".into(),
+            section: "@dropbear[0]".into(),
+            options: vec![
+                ("PasswordAuth".into(), literal(pw_auth.into())),
+                ("RootPasswordAuth".into(), literal(pw_auth.into())),
+                ("Port".into(), literal(sh.port.to_string())),
+                ("IdleTimeout".into(), literal(sh.idle_timeout.to_string())),
+                (
+                    "MaxAuthTries".into(),
+                    literal(sh.max_auth_tries.to_string()),
+                ),
+                ("GatewayPorts".into(), literal(gateway_ports.into())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "dropbear".into(),
+        },
+        PlanOp::Service {
+            name: "dropbear".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"SSH hardened: password_auth={pw_auth} idle={}s \
+                 max_tries={} port={}\"",
+                sh.idle_timeout, sh.max_auth_tries, sh.port
+            ),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "password auth mode persisted".into(),
+            command: "uci -q get dropbear.@dropbear[0].PasswordAuth".into(),
+            expect_contains: pw_auth.into(),
+        },
+        VerificationCheck {
+            description: "listen port persisted".into(),
+            command: "uci -q get dropbear.@dropbear[0].Port".into(),
+            expect_contains: sh.port.to_string(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "ssh-hardening".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -2527,6 +2632,40 @@ mod tests {
         assert!(script.contains("uci set firewall.wg_server_allow.src='wan'"));
         assert!(script.contains("uci set firewall.wg_server_allow.proto='udp'"));
         assert!(script.contains("/etc/init.d/network restart"));
+    }
+
+    #[test]
+    fn ssh_hardening_default_and_flipped_branches_match_1x() {
+        let default_script = render_shell(&plan_for(Profile::SshHardening(
+            SshHardeningProfile::default(),
+        )));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].PasswordAuth='off'"));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].RootPasswordAuth='off'"));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].Port='22'"));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].IdleTimeout='300'"));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].MaxAuthTries='3'"));
+        assert!(default_script.contains("uci set dropbear.@dropbear[0].GatewayPorts='no'"));
+        assert!(default_script.contains("uci commit dropbear"));
+        assert!(default_script.contains("/etc/init.d/dropbear restart"));
+        assert!(
+            default_script
+                .contains("echo \"SSH hardened: password_auth=off idle=300s max_tries=3 port=22\"")
+        );
+
+        let flipped = render_shell(&plan_for(Profile::SshHardening(SshHardeningProfile {
+            disable_password_auth: false,
+            idle_timeout: 0,
+            max_auth_tries: 1,
+            port: 2222,
+            disable_gateway_ports: false,
+        })));
+        assert!(flipped.contains("uci set dropbear.@dropbear[0].PasswordAuth='on'"));
+        assert!(flipped.contains("uci set dropbear.@dropbear[0].GatewayPorts='yes'"));
+        assert!(flipped.contains("uci set dropbear.@dropbear[0].IdleTimeout='0'"));
+        assert!(
+            flipped
+                .contains("echo \"SSH hardened: password_auth=on idle=0s max_tries=1 port=2222\"")
+        );
     }
 
     #[test]
