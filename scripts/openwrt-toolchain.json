@@ -4,8 +4,8 @@
     "image": "openwrt/sdk",
     "default_era": "apk",
     "releases": {
-      "apk": {"series": "25.12", "release": "25.12.6", "target": "ramips-mt7621"},
-      "ipk": {"series": "24.10", "release": "24.10.8", "target": "ramips-mt7621"}
+      "apk": {"series": "25.12", "release": "25.12.6", "target": "ramips-mt7621", "digest": "sha256:0d28e4f80933a32cef954e8e476ca258582283984771b952d8f9d9bea1bd789f"},
+      "ipk": {"series": "24.10", "release": "24.10.8", "target": "ramips-mt7621", "digest": "sha256:40a1aae0021865b2b9d74bcedae17ad84d64760f8a16bbc0e71604002e962120"}
     },
     "rust_per_release": {
       "25.12": "1.96.0",

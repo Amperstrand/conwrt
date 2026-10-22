@@ -52,7 +52,7 @@ own packaging is test/repro lanes only.
 | NR7101 = `ramips/mt7621` → arch `mipsel_24kc`, OpenWrt **25** line | `models/zyxel-nr7101.json` (`openwrt.version: "25"`) |
 | Feed rust on **openwrt-25.12 = 1.96.0**; **openwrt-24.10 = 1.94.0**; master = 1.96.0 | `raw.githubusercontent.com/openwrt/packages/<branch>/lang/rust/Makefile` `PKG_VERSION` |
 | `rust-toolchain.toml` comment ("cross lane will pin 1.94.x matching the OpenWrt SDK") is **wrong twice**: 1.94 is the 24.10 line (and exactly 1.94.**0**, not 1.94.1), and the NR7101's line is 25.12 → **1.96.0** | see above; installed `1.94.1` matches no feed |
-| **Upstream rust demoted `mipsel-unknown-linux-musl` to tier 3.** std artifacts ship in the 1.85.0 channel (29 refs) but are **absent** from 1.94.1 / 1.96.0 / 1.99.0 (positive control `aarch64-unknown-linux-musl` present in all). `rustup target add mipsel-unknown-linux-musl` is impossible on any modern rustc | `static.rust-lang.org/dist/channel-rust-<v>.toml` greps |
+| **Upstream rust demoted `mipsel-unknown-linux-musl` to tier 3.** No rustup channel ships its std on ANY version: the 1.85.0 channel manifest still lists the target (29 refs) but marks the `rust-std` component **unavailable** — live `rustup target add` refuses with "component ... unavailable for download" (verified 2026-10-22; the channel-grep "present" reading was wrong — presence refs ≠ per-component availability) — and 1.94.1/1.96.0/1.99.0 have no refs at all (positive control `aarch64-unknown-linux-musl` installable on all) | `static.rust-lang.org/dist/channel-rust-<v>.toml` + live `rustup target add --toolchain 1.85.0` |
 | OpenWrt's feed builds rustc + std **from source** for that target anyway — `RUSTC_TARGET_ARCH` is derived from the GNU toolchain triple (`mipsel-openwrt-linux-musl` → `mipsel-unknown-linux-musl`) in `lang/rust/rust-values.mk` | feed source |
 | Docker 29.5.3 available on this host; tollgate's lane runs the same way | `docker --version` |
 | Workspace MSRV = 1.85 (and `1.85.0` is installed — it is the MSRV verifier, not a mipsel lane: only x86_64 target installed) | `Cargo.toml` `rust-version`; `rustup target list --installed --toolchain 1.85.0` |
@@ -104,9 +104,14 @@ using the feed's `lang/rust` (1.96.0), linking with the SDK's
   --target mipsel-unknown-linux-musl` + SDK/musl-cross linker. No new
   numbered toolchain, but ad-hoc std builds, a moving nightly pin, and no
   pipeline parity.
-- **Pinned 1.85.0 rustup lane** (last channel shipping mipsel-musl std):
-  works today, but it's a rustc a year behind the feed on a target upstream
-  abandoned — building new infrastructure on it just moves the rot in-house.
+- ~~**Pinned 1.85.0 rustup lane** (last channel shipping mipsel-musl std)~~
+  **DEAD — correction 2026-10-22 (session 2):** rustup refuses the
+  mipsel-musl `rust-std` component on 1.85.0 too ("component unavailable
+  for download", verified live). There is NO rustup mipsel-musl lane at
+  any version; the SDK docker lane below is the only lane. Methodology
+  lesson recorded: grep-presence in the channel manifest is not
+  availability — the per-component `available` flag is the truth, and the
+  live rustup refusal is the ground truth.
 
 ## 3. Does no_std matter here?
 
@@ -215,3 +220,23 @@ Verification: self-test 5/5 PASS; live `check`/`print` vs feed OK
 pre-existing env gap, so `make typecheck` itself can't run here) reports
 0 errors on the new script; manifest JSON + rust.yml YAML parse; the
 edited `rust-toolchain.toml` still resolves 1.99.0.
+
+## 6. SDK docker lane scaffold added 2026-10-22 (session 2)
+
+- **SDK digests pinned** in `scripts/openwrt-toolchain.json`:
+  `openwrt/sdk:ramips-mt7621-25.12.6@sha256:0d28e4f8…` (apk era) and
+  `…24.10.8@sha256:40a1aae0…` (ipk era) — same digest-pinning discipline
+  as tollgate's build-inputs.json.
+- **`scripts/zycast-mipsel-build.sh`** — the ready-to-run lane:
+  `preflight` / `bootstrap` (feeds + lang/rust into the named volume
+  `conwrt-sdk-ramips-mt7621`; hours, paid once) / `build` (SDK rustc +
+  mipsel gcc → static musl `data/bin/conwrt-zycast-mipsel` + sha256).
+  Hard df preflight (25G bootstrap / 8G build), named container, detached
+  launch recipe in the header. Stage-2 env (std location, RUSTFLAGS) is
+  probed and fails loudly — tuned on first successful bootstrap.
+- **Bootstrap NOT yet executed — disk gate.** Host is at 98% (11G free);
+  the rust bootstrap needs 10-20G+. Reclaim path: `dev-session.sh sweep`
+  shows ~7.5G of idle-but-DIRTY lane `target/` caches (ucport 4.4G,
+  arpprobe 1.6G, rusttest 955M, asuflash 524M) — all PROTECTED, so the
+  sweep will not touch them; owners retire lanes or `rm -rf` their own
+  `target/` first, then run `bootstrap`.
