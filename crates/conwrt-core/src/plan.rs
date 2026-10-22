@@ -1685,6 +1685,7 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
     ];
     if !tm.uplinks.is_empty() {
         global_options.push(("trm_iface".into(), literal("trm_wwan".into())));
+        global_options.push(("trm_uplink".into(), literal("trm_wwan".into())));
     }
     let mut ops = vec![
         PlanOp::EnsurePackage {
@@ -1751,6 +1752,21 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
                 section: uplink.iface.clone(),
                 section_type: "wifi-iface".into(),
                 options,
+            });
+            // travelmate 2.4.x recognition: each sta wifi-iface needs a
+            // paired `uplink` section in /etc/config/travelmate (matched
+            // by device+ssid in f_getcfg) carrying enabled=1 — without
+            // it f_setif force-disables the iface and the sta_list stays
+            // empty (found live on x1860-1, 2026-10-22).
+            ops.push(PlanOp::SetUciSection {
+                config: "travelmate".into(),
+                section: uplink.iface.clone(),
+                section_type: "uplink".into(),
+                options: vec![
+                    ("device".into(), literal(uplink.radio.clone())),
+                    ("ssid".into(), literal(uplink.ssid.clone())),
+                    ("enabled".into(), literal("1".into())),
+                ],
             });
         }
         ops.push(PlanOp::CommitUci {
@@ -3002,6 +3018,7 @@ mod tests {
         }));
         let script = render_shell(&plan);
         assert!(script.contains("uci set travelmate.global.trm_iface='trm_wwan'"));
+        assert!(script.contains("uci set travelmate.global.trm_uplink='trm_wwan'"));
         assert!(script.contains("uci set network.trm_wwan=interface"));
         assert!(script.contains("uci set network.trm_wwan.proto='dhcp'"));
         assert!(script.contains("uci set network.trm_wwan.metric='100'"));
@@ -3018,6 +3035,12 @@ mod tests {
         assert!(script.contains("uci set wireless.trm_uplink1.ssid='home-net'"));
         assert!(script.contains("uci set wireless.trm_uplink1.encryption='psk2'"));
         assert!(script.contains("uci set wireless.trm_uplink1.key='hunter2 son'"));
+        // travelmate recognition pairs: uplink sections in its own config
+        assert!(script.contains("uci set travelmate.trm_uplink1=uplink"));
+        assert!(script.contains("uci set travelmate.trm_uplink1.device='radio1'"));
+        assert!(script.contains("uci set travelmate.trm_uplink1.enabled='1'"));
+        assert!(script.contains("uci set travelmate.trm_uplink2=uplink"));
+        assert!(script.contains("uci set travelmate.trm_uplink2.enabled='1'"));
         // open network: no key option at all
         assert!(script.contains("uci set wireless.trm_uplink2.ssid='cafe open'"));
         assert!(script.contains("uci set wireless.trm_uplink2.encryption='none'"));
