@@ -70,6 +70,12 @@ _DROP_LINE_PREFIXES = ("opkg install ", "if command -v apk ", "&& apk add ")
 
 def _normalize_line(line: str) -> list[str] | None:
     stripped = line.strip()
+    # 2.x runs under a `set -e` preamble (itself dropped above) and so
+    # guards best-effort substitutions with `|| true` — the 1.x render
+    # is bare. Strip the shim inside `$( ... )` before tokenizing (the
+    # token-level `|| true` drop below cannot see it: the closing paren
+    # glues to the word).
+    stripped = stripped.replace(" || true)", ")")
     if not stripped or stripped.startswith("#"):
         return None
     if stripped == "set -e" or stripped.startswith("#!"):

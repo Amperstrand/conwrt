@@ -2300,7 +2300,7 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         // phy1-sta0 on WiFi STA) — the 1.x `wan` lesson, 1.x shape.
         PlanOp::Shell {
             command: format!(
-                "_sqm_dev=$(uci get network.{iface}.device 2>/dev/null); \
+                "_sqm_dev=$(uci get network.{iface}.device 2>/dev/null || true); \
                  if [ -z \"$_sqm_dev\" ] || ! ip addr show \"$_sqm_dev\" 2>/dev/null | grep -q \"inet \"; then \
                  _sqm_dev=$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{{print $5}}' | head -1); fi; \
                  if [ -z \"$_sqm_dev\" ]; then _sqm_dev={iface}; fi"
@@ -2493,9 +2493,10 @@ mod tests {
             "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"
         ));
         // device resolution is the 1.x one-line `_sqm_dev` idiom (not the
-        // typed multi-line `_conwrt_dev_*` block)
+        // typed multi-line `_conwrt_dev_*` block), with the 2.x-only
+        // `|| true` set -e guard
         assert!(script.contains(
-            "_sqm_dev=$(uci get network.wan.device 2>/dev/null); if [ -z \"$_sqm_dev\" ]"
+            "_sqm_dev=$(uci get network.wan.device 2>/dev/null || true); if [ -z \"$_sqm_dev\" ]"
         ));
         assert!(script.contains("uci set sqm.wan.interface=\"$_sqm_dev\""));
         // 1.x option order: interface directly after section creation,
@@ -2979,6 +2980,7 @@ mod tests {
                 profile: "t_d".into(),
                 version: "24".into(),
                 board_name: None,
+                board_names: None,
                 default_ip: None,
                 extras: Default::default(),
             },
@@ -3071,6 +3073,19 @@ mod tests {
         assert!(!script.contains("trm_iface"));
         assert!(!script.contains("wifi-iface"));
         assert!(!script.contains("trm_wwan"));
+    }
+
+    #[test]
+    fn sqm_resolve_survives_set_e_when_wan_device_is_absent() {
+        // the 2.x preamble is `set -e` (1.x runs bare); an unguarded
+        // `var=$(uci get ...)` kills the whole script under `sh -c`
+        // exec when the option is missing — found live via
+        // `conwrt apply --execute` on a fixture VM without wan.device.
+        let script = render_shell(&plan_for(Profile::Sqm(test_sqm_defaults())));
+        assert!(
+            script.contains("_sqm_dev=$(uci get network.wan.device 2>/dev/null || true)"),
+            "resolve substitution must be set -e safe"
+        );
     }
 
     #[test]

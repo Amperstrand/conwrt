@@ -96,7 +96,7 @@ fn sqm_plan_ops_are_typed_and_ordered() {
         shells[0],
         "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"
     );
-    assert!(shells[1].starts_with("_sqm_dev=$(uci get network.wan.device 2>/dev/null);"));
+    assert!(shells[1].starts_with("_sqm_dev=$(uci get network.wan.device 2>/dev/null || true);"));
     assert_eq!(shells[2], "uci set sqm.wan=queue");
     assert_eq!(shells[3], "uci set sqm.wan.interface=\"$_sqm_dev\"");
     assert_eq!(

@@ -1721,7 +1721,13 @@ fn board_name_or_device(model: &conwrt_types::DeviceModel) -> &str {
 /// the DTS name where board.json uses a short board id).
 fn board_matches(model: &conwrt_types::DeviceModel, board: &str) -> bool {
     let modeled = board_name_or_device(model);
-    board == modeled || board == model.openwrt.device
+    board == modeled
+        || board == model.openwrt.device
+        || model
+            .openwrt
+            .board_names
+            .as_deref()
+            .is_some_and(|names| names.iter().any(|name| name == board))
 }
 
 #[cfg(test)]
@@ -1739,6 +1745,7 @@ mod tests {
                 profile: "x_y".into(),
                 version: "24".into(),
                 board_name: board_name.map(str::to_string),
+                board_names: None,
                 default_ip: None,
                 extras: Default::default(),
             },
@@ -1771,6 +1778,25 @@ mod tests {
         let model = model_with(None, "glinet,gl-ar150");
         assert!(board_matches(&model, "glinet,gl-ar150"));
         assert!(!board_matches(&model, "glinet,gl-ar300m"));
+    }
+
+    #[test]
+    fn board_names_list_matches_fixture_variants() {
+        // virtual-x86-64 shape: the QEMU fixture reports a long
+        // qemu-derived board_name that only the list knows
+        let mut model = model_with(Some("generic"), "generic");
+        model.openwrt.board_names = Some(vec![
+            "generic".into(),
+            "conwrt-conwrt-test-vm".into(),
+            "qemu-ubuntu-24-04-pc-v2-i440fx-piix-arch_caps-fix-1996".into(),
+        ]);
+        assert!(board_matches(&model, "generic"));
+        assert!(board_matches(&model, "conwrt-conwrt-test-vm"));
+        assert!(board_matches(
+            &model,
+            "qemu-ubuntu-24-04-pc-v2-i440fx-piix-arch_caps-fix-1996"
+        ));
+        assert!(!board_matches(&model, "some-other-board"));
     }
 
     #[test]
