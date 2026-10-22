@@ -42,6 +42,58 @@ impl ApplyOutcome {
     }
 }
 
+/// The exact script `apply_plan` runs: the rendered plan with the
+/// executor-level uci-revert preamble spliced in after `set -e`. Every
+/// config the plan commits gets `uci -q revert` BEFORE the first
+/// mutation, so staging debris an aborted earlier session left in
+/// `/tmp/.uci` can never merge into this run's commits (AGENTS.md
+/// revert rule — #427). Plan-level `RevertUci` ops stay as-is; a
+/// double revert is a harmless no-op.
+#[must_use]
+pub fn render_apply_script(plan: &Plan) -> String {
+    use conwrt_core::plan::PlanOp;
+    let mut script = render_shell(plan);
+    let mut configs: Vec<String> = Vec::new();
+    let push = |configs: &mut Vec<String>, config: String| {
+        if !configs.contains(&config) {
+            configs.push(config);
+        }
+    };
+    for op in &plan.ops {
+        match op {
+            PlanOp::CommitUci { config } => push(&mut configs, config.clone()),
+            // tether-style plans embed their commits inside verbatim
+            // shell payloads — scan those too (Codex #446 P1-1)
+            PlanOp::Shell { command } => {
+                let mut rest = command.as_str();
+                while let Some(at) = rest.find("uci commit ") {
+                    rest = &rest[at + "uci commit ".len()..];
+                    let token: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
+                    if !token.is_empty() {
+                        push(&mut configs, token);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if configs.is_empty() {
+        return script;
+    }
+    let mut preamble =
+        String::from("# revert staged uci baselines before mutating (executor, #427)\n");
+    for config in &configs {
+        preamble.push_str(&format!("uci -q revert {config} 2>/dev/null || true\n"));
+    }
+    if let Some(at) = script.find("set -e\n").map(|i| i + "set -e\n".len()) {
+        script.insert_str(at, &preamble);
+    }
+    script
+}
+
 /// Apply a plan: run the rendered script, then the read-only verification
 /// checks. The script aborts on first failure (`set -e`), which surfaces as
 /// `applied == false` with the script's stderr already streamed to the
@@ -51,7 +103,7 @@ impl ApplyOutcome {
 /// Transport-level SSH failures (`SshError`). A failing script or a failing
 /// verification check is **data**, not an error — inspect the outcome.
 pub async fn apply_plan(session: &SshSession, plan: &Plan) -> Result<ApplyOutcome, SshError> {
-    let script = render_shell(plan);
+    let script = render_apply_script(plan);
     let output = session.exec(&script).await?;
     let applied = output.exit_code.unwrap_or(1) == 0;
 

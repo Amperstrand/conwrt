@@ -5,10 +5,10 @@
 mod common;
 
 use common::{FIXTURE_PASSWORD, Fixture};
-use conwrt_core::plan::{Profile, SqmProfile, VerificationCheck, plan_profile, render_shell};
+use conwrt_core::plan::{Profile, SqmProfile, VerificationCheck, plan_profile};
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
-use conwrt_local_std::execute::apply_plan;
+use conwrt_local_std::execute::{apply_plan, render_apply_script};
 use conwrt_local_std::ssh::{SshAuth, SshOptions, SshTarget, connect};
 
 fn model() -> conwrt_types::DeviceModel {
@@ -67,7 +67,7 @@ async fn connected(fixture: &Fixture) -> conwrt_local_std::ssh::SshSession {
 async fn apply_runs_whole_script_then_verifies() {
     let fixture = Fixture::start().await;
     let plan = plan();
-    let script = render_shell(&plan);
+    let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 0, "conwrt-plan-applied\n");
     fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
     fixture.set_exec_response(
@@ -95,7 +95,7 @@ async fn apply_runs_whole_script_then_verifies() {
 async fn failed_script_is_data_not_error_and_skips_verification() {
     let fixture = Fixture::start().await;
     let plan = plan();
-    let script = render_shell(&plan);
+    let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 1, "");
     fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
 
@@ -117,7 +117,7 @@ async fn failed_script_is_data_not_error_and_skips_verification() {
 async fn verification_failure_is_reported_per_check() {
     let fixture = Fixture::start().await;
     let plan = plan();
-    let script = render_shell(&plan);
+    let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 0, "applied\n");
     fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
     fixture.set_exec_response(
@@ -145,7 +145,7 @@ async fn verification_failure_is_reported_per_check() {
 async fn verification_nonzero_exit_fails_the_check() {
     let fixture = Fixture::start().await;
     let plan = plan();
-    let script = render_shell(&plan);
+    let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 0, "applied\n");
     fixture.set_exec_response(&check(&plan, "rate").command, 1, "");
     fixture.set_exec_response(
@@ -165,4 +165,94 @@ async fn verification_nonzero_exit_fails_the_check() {
         "exit 1 must fail the check"
     );
     drop(session);
+}
+
+/// #427: the executor reverts every committed config's staged baseline
+/// before the first mutation, independent of plan-level RevertUci ops.
+#[test]
+fn apply_script_reverts_every_committed_config_before_mutations() {
+    use conwrt_core::plan::{WireguardClientProfile, render_shell};
+    let model = conwrt_types::DeviceModel {
+        id: "t".into(),
+        vendor: "T".into(),
+        description: "d".into(),
+        openwrt: conwrt_types::OpenwrtInfo {
+            target: "x/y".into(),
+            device: "t,d".into(),
+            profile: "t_d".into(),
+            version: "24".into(),
+            board_name: None,
+            board_names: None,
+            default_ip: None,
+            extras: Default::default(),
+        },
+        capabilities: None,
+        flash_methods: None,
+        mac_oui: Vec::new(),
+        serial_console: None,
+        warnings: None,
+        extras: Default::default(),
+    };
+    let plan = plan_profile(
+        &conwrt_core::state::DeviceState::OpenWrt,
+        &model,
+        &Profile::WireguardClient(WireguardClientProfile {
+            peer_public_key: "K".into(),
+            endpoint_host: "vpn.example.com".into(),
+            ..WireguardClientProfile::default()
+        }),
+    )
+    .expect("plan");
+    let script = render_apply_script(&plan);
+    let rev_net = script
+        .find("uci -q revert network")
+        .expect("revert network");
+    let rev_fw = script
+        .find("uci -q revert firewall")
+        .expect("revert firewall");
+    let first_mutation = render_shell(&plan)
+        .find("uci set network.wg0=interface")
+        .expect("mutation");
+    assert!(rev_net < first_mutation && rev_fw < first_mutation);
+    // distinct configs, first-occurrence order, no duplicates
+    assert!(rev_net < rev_fw);
+    assert_eq!(script.matches("uci -q revert network").count(), 1);
+}
+
+/// #427 + Codex #446 P1-1: tether-style plans embed `uci commit` inside
+/// verbatim Shell payloads — the revert preamble must see those too.
+#[test]
+fn apply_script_reverts_configs_committed_inside_shell_ops() {
+    use conwrt_core::plan::Plan;
+    let plan = Plan {
+        profile_id: "shell-commits".into(),
+        model_id: "t".into(),
+        ops: vec![
+            conwrt_core::plan::PlanOp::Shell {
+                command: "uci set network.usbwan=interface; \
+                          uci commit network; \
+                          uci add_list firewall.z.network='usbwan'; \
+                          uci commit firewall"
+                    .into(),
+            },
+            conwrt_core::plan::PlanOp::CommitUci {
+                config: "wireless".into(),
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    let rev_net = script
+        .find("uci -q revert network")
+        .expect("revert network");
+    let rev_fw = script
+        .find("uci -q revert firewall")
+        .expect("revert firewall");
+    let rev_wl = script
+        .find("uci -q revert wireless")
+        .expect("revert wireless");
+    let mutation = script
+        .find("uci set network.usbwan=interface")
+        .expect("mutation");
+    assert!(rev_net < mutation && rev_fw < mutation && rev_wl < mutation);
 }

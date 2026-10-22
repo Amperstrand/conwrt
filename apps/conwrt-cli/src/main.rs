@@ -20,11 +20,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    WireguardClientProfile,
+    AdguardProfile, DohProfile, GuestWifiProfile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
-use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
+use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
@@ -294,6 +294,9 @@ enum ProfileChoice {
     Adguard,
     RescueWatchdog,
     WireguardClient,
+    WireguardServer,
+    GuestWifi,
+    Travelmate,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -316,7 +319,8 @@ struct ProfileArgs {
     /// DoH provider name or https:// URL (doh).
     #[arg(long)]
     provider: Option<String>,
-    /// DoH local listen port (doh); ssh-hardening dropbear port.
+    /// DoH local listen port (doh); ssh-hardening dropbear port;
+    /// wireguard-server UDP listen port.
     #[arg(long)]
     listen_port: Option<u16>,
     /// ssh-hardening: idle disconnect timeout in seconds.
@@ -365,6 +369,45 @@ struct ProfileArgs {
     /// block all traffic when the tunnel is down).
     #[arg(long)]
     no_kill_switch: bool,
+    /// wireguard-server: VPN client subnet, server IP + CIDR.
+    #[arg(long)]
+    subnet: Option<String>,
+    /// wireguard-server: first peer's public key (empty = no peer).
+    #[arg(long)]
+    peer1_public_key: Option<String>,
+    /// wireguard-server: first peer's allowed IPs.
+    #[arg(long)]
+    peer1_allowed_ips: Option<String>,
+    /// wireguard-server: first peer's pre-shared key (optional).
+    #[arg(long)]
+    peer1_psk: Option<String>,
+    /// guest-wifi: SSID (required; validated at plan time).
+    #[arg(long)]
+    ap_ssid: Option<String>,
+    /// guest-wifi: WiFi password (empty = open network).
+    #[arg(long)]
+    ap_key: Option<String>,
+    /// guest-wifi: encryption mode (psk2 default, sae for WPA3…).
+    #[arg(long)]
+    ap_encryption: Option<String>,
+    /// guest-wifi: WiFi band (2.4ghz default).
+    #[arg(long)]
+    ap_band: Option<String>,
+    /// guest-wifi: opt OUT of client isolation (default isolates).
+    #[arg(long)]
+    ap_no_isolation: bool,
+    /// travelmate: WiFi radio for upstream scanning.
+    #[arg(long)]
+    trm_radio: Option<String>,
+    /// travelmate: overall retry timeout in seconds.
+    #[arg(long)]
+    trm_timeout: Option<u32>,
+    /// travelmate: retry count to find a suitable uplink.
+    #[arg(long)]
+    trm_retry: Option<u32>,
+    /// travelmate: opt OUT of captive portal detection.
+    #[arg(long)]
+    trm_no_captive: bool,
 }
 #[derive(Subcommand)]
 enum MaasCommand {
@@ -1037,7 +1080,7 @@ fn cmd_apply(
         plan.verification.len()
     );
     println!();
-    println!("{}", render_shell(&plan));
+    println!("{}", conwrt_local_std::execute::render_apply_script(&plan));
 
     if !execute {
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
@@ -1139,6 +1182,46 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 ..WireguardClientProfile::default()
             }))
         }
+        ProfileChoice::WireguardServer => Ok(Profile::WireguardServer(WireguardServerProfile {
+            listen_port: args.listen_port.unwrap_or(51820),
+            subnet: args.subnet.clone().unwrap_or_else(|| "10.1.99.1/24".into()),
+            peer1_public_key: args.peer1_public_key.clone().unwrap_or_default(),
+            peer1_allowed_ips: args
+                .peer1_allowed_ips
+                .clone()
+                .unwrap_or_else(|| "10.1.99.2/32".into()),
+            peer1_psk: args.peer1_psk.clone().unwrap_or_default(),
+            ..WireguardServerProfile::default()
+        })),
+        ProfileChoice::GuestWifi => {
+            // 1.x validate_ssid + WIFI_* choice gates fire at plan time;
+            // the omitted-flag defaults are the valid 1.x defaults.
+            // Refuse the psk/sae-without-key foot-gun up front (1.x
+            // renders it and hostapd then refuses to start the AP).
+            let encryption = args.ap_encryption.clone().unwrap_or_else(|| "psk2".into());
+            let key = args.ap_key.clone().unwrap_or_default();
+            if key.is_empty() && encryption != "none" && encryption != "owe" {
+                return Err(format!(
+                    "--ap-encryption {encryption} needs --ap-key \
+                     (or pass --ap-encryption none for an open network)"
+                ));
+            }
+            Ok(Profile::GuestWifi(GuestWifiProfile {
+                ssid: args.ap_ssid.clone().unwrap_or_else(|| "Guest".into()),
+                key,
+                encryption,
+                band: args.ap_band.clone().unwrap_or_else(|| "2.4ghz".into()),
+                isolation: !args.ap_no_isolation,
+                ..GuestWifiProfile::default()
+            }))
+        }
+        ProfileChoice::Travelmate => Ok(Profile::Travelmate(TravelmateProfile {
+            radio: args.trm_radio.clone().unwrap_or_else(|| "radio0".into()),
+            timeout: args.trm_timeout.unwrap_or(60),
+            retry: args.trm_retry.unwrap_or(5),
+            captive: !args.trm_no_captive,
+            ..TravelmateProfile::default()
+        })),
     }
 }
 
@@ -1972,6 +2055,19 @@ mod tests {
             dns: None,
             allowed_ips: None,
             no_kill_switch: false,
+            subnet: None,
+            peer1_public_key: None,
+            peer1_allowed_ips: None,
+            peer1_psk: None,
+            ap_ssid: None,
+            ap_key: None,
+            ap_encryption: None,
+            ap_band: None,
+            ap_no_isolation: false,
+            trm_radio: None,
+            trm_timeout: None,
+            trm_retry: None,
+            trm_no_captive: false,
         }
     }
 
@@ -2017,6 +2113,58 @@ mod tests {
         };
         assert!(!off.kill_switch);
         assert!(wg.validate().is_ok());
+
+        let wgs = build_profile(&profile_args(ProfileChoice::WireguardServer)).expect("wg-server");
+        let Profile::WireguardServer(wgs) = &wgs else {
+            panic!("wg-server profile");
+        };
+        assert_eq!(
+            (
+                wgs.listen_port,
+                wgs.subnet.as_str(),
+                wgs.peer1_allowed_ips.as_str()
+            ),
+            (51820, "10.1.99.1/24", "10.1.99.2/32")
+        );
+        assert!(wgs.peer1_public_key.is_empty());
+
+        let mut gw_args = profile_args(ProfileChoice::GuestWifi);
+        gw_args.ap_key = Some("guestpass".into());
+        let gw = build_profile(&gw_args).expect("guest-wifi");
+        let Profile::GuestWifi(gw) = &gw else {
+            panic!("guest-wifi profile");
+        };
+        assert_eq!(
+            (gw.ssid.as_str(), gw.encryption.as_str(), gw.band.as_str()),
+            ("Guest", "psk2", "2.4ghz")
+        );
+        assert!(gw.isolation);
+        // Codex #446 P1-2: encrypted AP without a key is refused, not rendered
+        let err = build_profile(&profile_args(ProfileChoice::GuestWifi))
+            .expect_err("must refuse psk2 without key");
+        assert!(err.contains("--ap-key"), "got: {err}");
+
+        let tm = build_profile(&profile_args(ProfileChoice::Travelmate)).expect("travelmate");
+        let Profile::Travelmate(tm) = &tm else {
+            panic!("travelmate profile");
+        };
+        assert_eq!(
+            (tm.radio.as_str(), tm.timeout, tm.retry, tm.captive),
+            ("radio0", 60, 5, true)
+        );
+    }
+
+    #[test]
+    fn guest_wifi_choice_gates_surface_at_plan_time() {
+        let mut args = profile_args(ProfileChoice::GuestWifi);
+        args.ap_key = Some("guestpass".into());
+        let gw = build_profile(&args).expect("built");
+        let model = model_with(None, "glinet,gl-ar150");
+        match plan_profile(&conwrt_core::state::DeviceState::OpenWrt, &model, &gw) {
+            Err(conwrt_core::plan::Unsupported::MissingCapability { capability, .. })
+                if capability == "wifi" => {}
+            other => panic!("expected wifi capability refusal, got {other:?}"),
+        }
     }
 
     #[test]
