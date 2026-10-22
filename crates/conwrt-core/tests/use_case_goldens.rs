@@ -35,6 +35,7 @@
 //! }))
 //! print(r["ssh-hardening"].build_configure({}))
 //! print(r["travelmate"].build_configure({}))
+//! print(r["adguard"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -47,9 +48,9 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    DohProfile, GuestWifiProfile, Profile, SqmProfile, SshHardeningProfile, TetherProfile,
-    TetherVariant, TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
-    render_shell,
+    AdguardProfile, DohProfile, GuestWifiProfile, Profile, SqmProfile, SshHardeningProfile,
+    TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -184,6 +185,14 @@ fn travelmate_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Travelmate(TravelmateProfile::default()),
         include_str!("goldens/travelmate.sh"),
+    );
+}
+
+#[test]
+fn adguard_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Adguard(AdguardProfile::default()),
+        include_str!("goldens/adguard.sh"),
     );
 }
 

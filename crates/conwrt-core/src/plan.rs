@@ -462,6 +462,34 @@ impl Default for TravelmateProfile {
     }
 }
 
+/// Network-wide ad blocking via AdGuard Home — port of the tested 1.x
+/// `adguard` preset (`scripts/use_cases/adguard.py`). The daemon owns
+/// its YAML config; this plan only shapes the uci wrapper (listen
+/// address, ports), enables + starts it, and points dnsmasq at the
+/// local AdGuard DNS instance (noresolv + server=127.0.0.1#port).
+/// Web-UI first-run setup (admin account) remains manual — 1.x marks
+/// the preset "post-flash setup". No 1.x validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdguardProfile {
+    /// Web UI listen address (1.x default `0.0.0.0`).
+    pub listen_ip: String,
+    /// Web UI port (1.x default 3000).
+    pub web_port: u16,
+    /// DNS listen port (1.x default 5353, off 53 to avoid the
+    /// dnsmasq conflict).
+    pub dns_port: u16,
+}
+
+impl Default for AdguardProfile {
+    fn default() -> Self {
+        Self {
+            listen_ip: "0.0.0.0".into(),
+            web_port: 3000,
+            dns_port: 5353,
+        }
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -598,6 +626,8 @@ pub enum Profile {
     SshHardening(SshHardeningProfile),
     /// Travel-router auto-connect for captive-portal WiFi upstreams.
     Travelmate(TravelmateProfile),
+    /// Network-wide ad blocking via AdGuard Home.
+    Adguard(AdguardProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -614,6 +644,7 @@ impl Profile {
             Profile::WireguardServer(_) => "wireguard-server",
             Profile::SshHardening(_) => "ssh-hardening",
             Profile::Travelmate(_) => "travelmate",
+            Profile::Adguard(_) => "adguard",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -631,6 +662,7 @@ impl Profile {
             Profile::WireguardServer(_) => &[],
             Profile::SshHardening(_) => &[],
             Profile::Travelmate(_) => &["wifi"],
+            Profile::Adguard(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -643,6 +675,8 @@ pub enum ServiceAction {
     Enable,
     /// (Re)start now.
     Restart,
+    /// Start now (without restart semantics — 1.x `start`).
+    Start,
 }
 
 impl fmt::Display for ServiceAction {
@@ -650,6 +684,7 @@ impl fmt::Display for ServiceAction {
         match self {
             ServiceAction::Enable => write!(f, "enable"),
             ServiceAction::Restart => write!(f, "restart"),
+            ServiceAction::Start => write!(f, "start"),
         }
     }
 }
@@ -938,6 +973,7 @@ pub fn plan_profile(
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
+        Profile::Adguard(ag) => plan_adguard(model, ag),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1822,6 +1858,84 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
     })
 }
 
+fn plan_adguard(model: &DeviceModel, ag: &AdguardProfile) -> Result<Plan, Unsupported> {
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "adguardhome".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-adguardhome".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "adguardhome".into(),
+            section: "adguardhome".into(),
+            section_type: "adguardhome".into(),
+            options: vec![
+                ("enabled".into(), literal("1".into())),
+                (
+                    "http_address".into(),
+                    literal(format!("{}:{}", ag.listen_ip, ag.web_port)),
+                ),
+                ("dns_port".into(), literal(ag.dns_port.to_string())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "adguardhome".into(),
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Start,
+        },
+        PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            options: vec![("noresolv".into(), literal("1".into()))],
+        },
+        PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: format!("127.0.0.1#{}", ag.dns_port),
+        },
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"AdGuard Home configured: DNS on port {}, web UI at {}:{}\"",
+                ag.dns_port, ag.listen_ip, ag.web_port
+            ),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "adguardhome enabled in uci".into(),
+            command: "uci -q get adguardhome.adguardhome.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "dnsmasq forwards to adguard".into(),
+            command: "uci -q get dhcp.@dnsmasq[0].server".into(),
+            expect_contains: format!("127.0.0.1#{}", ag.dns_port),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "adguard".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, Unsupported> {
     gw.validate()?;
     let net = &gw.network_name;
@@ -2250,6 +2364,7 @@ pub fn render_shell(plan: &Plan) -> String {
                 let action = match action {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
+                    ServiceAction::Start => "start",
                 };
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",
@@ -3086,6 +3201,34 @@ mod tests {
             script.contains("_sqm_dev=$(uci get network.wan.device 2>/dev/null || true)"),
             "resolve substitution must be set -e safe"
         );
+    }
+
+    #[test]
+    fn adguard_default_and_custom_render_match_1x_shape() {
+        let script = render_shell(&plan_for(Profile::Adguard(AdguardProfile::default())));
+        assert!(script.contains("uci set adguardhome.adguardhome=adguardhome"));
+        assert!(script.contains("uci set adguardhome.adguardhome.enabled='1'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.http_address='0.0.0.0:3000'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.dns_port='5353'"));
+        assert!(script.contains("uci commit adguardhome"));
+        assert!(script.contains("/etc/init.d/adguardhome enable"));
+        assert!(script.contains("/etc/init.d/adguardhome start"));
+        assert!(script.contains("uci set dhcp.@dnsmasq[0].noresolv='1'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'"));
+        assert!(script.contains("uci commit dhcp"));
+        assert!(script.contains("/etc/init.d/dnsmasq restart"));
+        assert!(script.contains(
+            "echo \"AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000\""
+        ));
+
+        let custom = render_shell(&plan_for(Profile::Adguard(AdguardProfile {
+            listen_ip: "192.168.1.1".into(),
+            web_port: 8080,
+            dns_port: 5333,
+        })));
+        assert!(custom.contains("uci set adguardhome.adguardhome.http_address='192.168.1.1:8080'"));
+        assert!(custom.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'"));
+        assert!(custom.contains("web UI at 192.168.1.1:8080"));
     }
 
     #[test]
