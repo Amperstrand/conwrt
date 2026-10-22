@@ -13,7 +13,7 @@ CUSTOM_PARAMS = {
     "idle_timeout": 600,
     "max_auth_tries": 5,
     "port": 2222,
-    "disable_gateway_ports": False,
+    "restrict_gateway_ports": False,
 }
 
 EXPECTED_DEFAULT = (
@@ -109,7 +109,7 @@ class TestSshHardeningOps:
         assert render_shell(_build_ssh_hardening_ops({"port": 2222, "idle_timeout": 0})) == EXPECTED_PORT_TIMEOUT
 
     def test_gateway_ports_enabled(self):
-        assert render_shell(_build_ssh_hardening_ops({"disable_gateway_ports": False})) == EXPECTED_GW_ENABLED
+        assert render_shell(_build_ssh_hardening_ops({"restrict_gateway_ports": False})) == EXPECTED_GW_ENABLED
 
     def test_all_custom(self):
         params = {
@@ -117,6 +117,6 @@ class TestSshHardeningOps:
             "idle_timeout": 120,
             "max_auth_tries": 1,
             "port": 8022,
-            "disable_gateway_ports": True,
+            "restrict_gateway_ports": True,
         }
         assert render_shell(_build_ssh_hardening_ops(params)) == EXPECTED_ALL_CUSTOM
