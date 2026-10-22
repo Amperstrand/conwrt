@@ -110,22 +110,26 @@ stage_build() {
     RUST_TARGET=mipsel-unknown-linux-musl
     CRATE=conwrt-zycast
     STAGING=/builder/staging_dir
+    # Feed facts (lang/rust Makefile, openwrt-25.12): rust installs to
+    # $(STAGING_DIR)/host — bin/ and lib/rustlib/ (NOT hostpkg); consumer
+    # env mirrors rust-values.mk CARGO_PKG_CONFIG_VARS; std is built with
+    # crt-static=false (dynamic-musl default — fine on-device; try
+    # -C target-feature=+crt-static as a follow-up experiment only).
     GCC="$(ls "$STAGING"/toolchain-*/bin/mipsel-openwrt-linux-musl-gcc | head -1)"
     [ -x "$GCC" ] || { echo "no mipsel gcc under $STAGING/toolchain-*" >&2; exit 1; }
-    [ -x "$STAGING/hostpkg/bin/cargo" ] || { echo "hostpkg cargo missing — run bootstrap first" >&2; exit 1; }
-    # Probe where the feed rustc keeps mipsel std; fail loudly if absent
-    # (first successful bootstrap is where this gets tuned — see file header).
-    STD_DIR="$(find "$STAGING" -type d -name "$RUST_TARGET" 2>/dev/null | head -1 || true)"
-    [ -n "$STD_DIR" ] || { echo "mipsel std dir not found under staging — tune after first bootstrap" >&2; exit 1; }
-    export PATH="$STAGING/hostpkg/bin:$PATH"
-    export CARGO_HOME=/builder/dl/cargo-home
+    [ -x "$STAGING/host/bin/cargo" ] || { echo "host cargo missing — run bootstrap first ($STAGING/host/bin/cargo)" >&2; exit 1; }
+    STD_DIR="$STAGING/host/lib/rustlib/$RUST_TARGET"
+    [ -d "$STD_DIR" ] || { echo "mipsel std missing at $STD_DIR — bootstrap incomplete?" >&2; exit 1; }
+    export PATH="$STAGING/host/bin:$PATH"
+    export CARGO_HOME=/builder/dl/cargo
     export CARGO_TARGET_DIR=/builder/build_dir/conwrt-zycast-target
-    export RUSTFLAGS="-C linker=$GCC"
+    export CARGO_BUILD_TARGET="$RUST_TARGET"
+    export CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$GCC"
     cd /src
-    cargo build --release --locked --target "$RUST_TARGET" -p "$CRATE"
+    cargo build --release --locked -p "$CRATE"
     BIN="$CARGO_TARGET_DIR/$RUST_TARGET/release/$CRATE"
-    file "$BIN" | grep -q "statically linked\|static-pie" \
-      || { echo "WARNING: binary is not static — check musl linking" >&2; }
+    file "$BIN" | grep -qE "ELF 32-bit LSB .* MIPS" \
+      || { echo "WARNING: not a mipsel ELF — check linking" >&2; }
     "$STAGING"/toolchain-*/bin/mipsel-openwrt-linux-musl-strip "$BIN" || true
     sha256sum "$BIN"
   ' < /dev/null
