@@ -427,6 +427,35 @@ impl Default for SshHardeningProfile {
     }
 }
 
+/// Travel-router auto-connect — port of the tested 1.x `travelmate`
+/// preset (`scripts/use_cases/travelmate.py`). Travelmate scans the
+/// declared radio for upstream APs, joins per its own uplink rules, and
+/// handles captive portals. This plan only shapes the daemon's global
+/// section — which SSIDs to join is travelmate/wireless config the
+/// operator (or a companion profile) manages. No 1.x validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TravelmateProfile {
+    /// WiFi radio used for upstream scanning (1.x default `radio0`).
+    pub radio: String,
+    /// Overall retry timeout in seconds (1.x default 60).
+    pub timeout: u32,
+    /// Retry count to find a suitable uplink (1.x default 5).
+    pub retry: u32,
+    /// Enable captive portal detection (1.x default on).
+    pub captive: bool,
+}
+
+impl Default for TravelmateProfile {
+    fn default() -> Self {
+        Self {
+            radio: "radio0".into(),
+            timeout: 60,
+            retry: 5,
+            captive: true,
+        }
+    }
+}
+
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
 /// apply time from the live LAN IP (third octet + 1), so the address
@@ -540,6 +569,8 @@ pub enum Profile {
     WireguardServer(WireguardServerProfile),
     /// Harden Dropbear SSH (key-only auth, timeouts, port).
     SshHardening(SshHardeningProfile),
+    /// Travel-router auto-connect for captive-portal WiFi upstreams.
+    Travelmate(TravelmateProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -555,6 +586,7 @@ impl Profile {
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
             Profile::SshHardening(_) => "ssh-hardening",
+            Profile::Travelmate(_) => "travelmate",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -571,6 +603,7 @@ impl Profile {
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
             Profile::SshHardening(_) => &[],
+            Profile::Travelmate(_) => &["wifi"],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -877,6 +910,7 @@ pub fn plan_profile(
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
+        Profile::Travelmate(tm) => plan_travelmate(model, tm),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1605,6 +1639,77 @@ fn plan_ssh_hardening(model: &DeviceModel, sh: &SshHardeningProfile) -> Result<P
     ];
     Ok(Plan {
         profile_id: "ssh-hardening".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, Unsupported> {
+    let captive_flag = if tm.captive { "1" } else { "0" };
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "travelmate".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-travelmate".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-certificates".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "travelmate".into(),
+            section: "global".into(),
+            options: vec![
+                ("trm_enabled".into(), literal("1".into())),
+                ("trm_automatic".into(), literal("1".into())),
+                ("trm_captive".into(), literal(captive_flag.into())),
+                ("trm_timeout".into(), literal(tm.timeout.to_string())),
+                ("trm_retry".into(), literal(tm.retry.to_string())),
+                ("trm_radio".into(), literal(tm.radio.clone())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "travelmate".into(),
+        },
+        PlanOp::Service {
+            name: "travelmate".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "travelmate".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"Travelmate configured: auto-connect on {}\"",
+                tm.radio
+            ),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "travelmate enabled".into(),
+            command: "uci -q get travelmate.global.trm_enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "scan radio persisted".into(),
+            command: "uci -q get travelmate.global.trm_radio".into(),
+            expect_contains: tm.radio.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/travelmate enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "travelmate".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -2728,6 +2833,59 @@ mod tests {
             flipped
                 .contains("echo \"SSH hardened: password_auth=on idle=0s max_tries=1 port=2222\"")
         );
+    }
+
+    #[test]
+    fn travelmate_branches_and_capability_gate_match_1x() {
+        let default_script =
+            render_shell(&plan_for(Profile::Travelmate(TravelmateProfile::default())));
+        assert!(default_script.contains("uci set travelmate.global.trm_enabled='1'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_captive='1'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_timeout='60'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_retry='5'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_radio='radio0'"));
+        assert!(default_script.contains("uci commit travelmate"));
+        assert!(default_script.contains("/etc/init.d/travelmate enable"));
+        assert!(default_script.contains("/etc/init.d/travelmate restart"));
+        assert!(default_script.contains("echo \"Travelmate configured: auto-connect on radio0\""));
+
+        let flipped = render_shell(&plan_for(Profile::Travelmate(TravelmateProfile {
+            radio: "radio1".into(),
+            timeout: 30,
+            retry: 2,
+            captive: false,
+        })));
+        assert!(flipped.contains("uci set travelmate.global.trm_captive='0'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_timeout='30'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_retry='2'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_radio='radio1'"));
+        assert!(flipped.contains("echo \"Travelmate configured: auto-connect on radio1\""));
+
+        // wifi capability gate (1.x requires_capabilities=["wifi"])
+        let no_wifi = conwrt_types::DeviceModel {
+            id: "no-wifi".into(),
+            vendor: "Test".into(),
+            description: "d".into(),
+            openwrt: conwrt_types::OpenwrtInfo {
+                target: "x/y".into(),
+                device: "t,d".into(),
+                profile: "t_d".into(),
+                version: "24".into(),
+                board_name: None,
+                default_ip: None,
+                extras: Default::default(),
+            },
+            capabilities: Some(vec!["ethernet".into()]),
+            flash_methods: None,
+            mac_oui: Vec::new(),
+            serial_console: None,
+            warnings: None,
+            extras: Default::default(),
+        };
+        assert!(matches!(
+            plan_profile(&DeviceState::OpenWrt, &no_wifi, &Profile::Travelmate(TravelmateProfile::default())),
+            Err(Unsupported::MissingCapability { capability, .. }) if capability == "wifi"
+        ));
     }
 
     #[test]
