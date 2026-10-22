@@ -28,7 +28,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
 | `scripts/router-probe.py` (boot-state detect) | ~300 | **parity-tested** — `conwrt-core` classifier (evidence-based, pure) + `conwrt-local-std::LinkProbe` | `crates/conwrt-core` state tests; CLI `conwrt diagnose` on real provider | Partial — pcap-side boot signatures still Python (`flash/serial_monitor.py` sibling logic); retire probe when pcap classifier lands in Rust |
-| `scripts/router-fingerprint.py` | ~250 | **parity-tested** — `conwrt-local-std::ssh::fingerprint` (authenticated `/etc/openwrt_release` evidence, trust-gated) | `providers/conwrt-local-std/tests/fingerprint.rs` (ring 1, live russh fixture); CLI `conwrt fingerprint` | Superseded for OpenWrt targets; stock-vendor fingerprint paths remain Python |
+| `scripts/router-fingerprint.py` | ~250 | **parity-tested** — `conwrt-local-std::ssh::fingerprint` (authenticated `/etc/openwrt_release` evidence, trust-gated) | `providers/conwrt-local-std/tests/fingerprint.rs` (ring 1, live russh fixture); CLI `conwrt fingerprint`; ring-2 `qemu_dropbear.rs` | **Deprecated for OpenWrt targets (2026-10-22)**: docs swap done (README points at `conwrt fingerprint`), the script prints a deprecation notice on operator use; internal 1.x imports and stock-vendor paths remain until they port |
 | `scripts/conwrt/device_detect.py`, `device_profile.py`, `auto_detect.py` | ~800 | partial — MAC/OUI identification (`conwrt-core::identify`) + `conwrt probe`/`identify` CLI | `identify.rs` unit tests over real corpus | Partial — profile/registry heuristics (HNAP, OEM pages) not ported |
 | `scripts/conwrt/hnap.py`, `oem_handlers.py` | ~700 | none | — | None — OEM-specific; port per-model on demand |
 
@@ -91,13 +91,36 @@ are operator tooling, not product surface. Review annually, not per-M9.
 
 1. **`validate_models.py` → parity fixture**: the schema stays
    authoritative; the Python runner becomes the parity harness itself
-   (already is — `make parity-check`). No removal needed.
+   (already is — `make parity-check`). No removal needed. **DONE by
+   design.**
 2. **`router-fingerprint.py`** — Rust twin ring-2 green; retire when
    `conwrt fingerprint` is the operator default (docs swap).
+   **DEPRECATED 2026-10-22** (#433 follow-up deprecation pass): docs
+   swap landed (README), script prints a deprecation notice for
+   operator use, matrix §2 row updated. Removal waits on the
+   stock-vendor paths porting; internal 1.x imports
+   (`fingerprint_router`/`save_fingerprint`) are untouched.
 3. **`firmware-manager.py` download/verify/cache paths** — retire the
    `image`/`cache` Python commands when `conwrt image` reaches feature
-   parity (request-with-packages is the remaining gap).
-4. **`profile/apply.py` SSH path** — retire when `conwrt apply --execute`
-   covers the ops set used by CI (sqm today).
+   parity (request-with-packages is the remaining gap). **OPEN** —
+   gate unmet.
+4. **`profile/apply.py` SSH path** — retire when `conwrt apply
+   --execute` covers the ops set used by CI (sqm today). **OPEN** but
+   closer than written: #429 proves the Rust-RENDERED wireguard plan
+   applies and tunnels on the QEMU VM (the #411 render binary + `sh
+   -s`), and ring-2 `qemu_apply.rs` covers sqm/wireguard/tether via
+   the russh executor. Remaining: switch the CI configure path itself
+   to `conwrt apply --execute`, then deprecate the paramiko path.
 5. Everything else: per-row gates above; nothing retires without a
    green Rust twin AND a removal PR citing this file's row.
+
+Deprecation audit (2026-10-22) — candidates considered and NOT
+deprecated, with the blocking gate: `serial_transport.py` (parity-tested
+but "superseded once a Rust consumer drives it" — none yet),
+`model_loader.py` (retirement rides the 1.x CLI consumers reading
+models from Rust — no consumer migrated), `validate_models.py`
+(deliberate permanent fixture), the 11 ported use-case presets (the
+ASU bake pipeline that embeds their output is 1.x-only until M7 — the
+plugins are load-bearing, including travelmate's 2026-10-22 seeding
+extension), `serial_console.py` family (port onto
+`conwrt-serial::SerialConsole` not started), TUI (M7).
