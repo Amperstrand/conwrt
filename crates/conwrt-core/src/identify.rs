@@ -86,6 +86,7 @@ mod tests {
                 profile: "test_dev".into(),
                 version: "24".into(),
                 board_name: None,
+                board_names: None,
                 default_ip: None,
                 extras: Default::default(),
             },

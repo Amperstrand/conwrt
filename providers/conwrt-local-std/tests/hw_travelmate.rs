@@ -212,6 +212,7 @@ async fn travelmate_seeds_host_networks_and_joins_on_real_hardware() {
                 .and_then(|r| r.release.clone())
                 .unwrap_or_default(),
             board_name: report.board_name.clone(),
+            board_names: None,
             default_ip: None,
             extras: Default::default(),
         },

@@ -103,6 +103,7 @@ async fn connected_openwrt_session()
             profile: "generic".into(),
             version: release.release.clone().unwrap_or_default(),
             board_name: report.board_name.clone(),
+            board_names: None,
             default_ip: None,
             extras: Default::default(),
         },

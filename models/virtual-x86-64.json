@@ -8,7 +8,11 @@
     "profile": "generic",
     "version": "24",
     "board_name": "generic",
-    "board_names": ["generic", "conwrt-conwrt-test-vm"],
+    "board_names": [
+      "generic",
+      "conwrt-conwrt-test-vm",
+      "qemu-ubuntu-24-04-pc-v2-i440fx-piix-arch_caps-fix-1996"
+    ],
     "default_ip": "192.168.1.1"
   },
   "mac_oui": [],

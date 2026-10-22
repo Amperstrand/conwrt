@@ -161,6 +161,15 @@ fn pty_parts() -> (std::fs::File, String) {
 }
 
 /// Fast timings for the harness: 5 ms pacing + 20 ms read bound.
+///
+/// Handoff order in every test: `open_console` BEFORE
+/// `MockDevice::spawn`. Two races make the opposite order flake (#422):
+/// (1) while no slave fd is open, master READS return EIO — the device
+/// thread can read EOF and exit before the console ever opens;
+/// (2) if the device thread panics (fd pressure under CI load), it
+/// drops the master and the pts node vanishes — the console open then
+/// fails with ENOENT on /dev/pts/N. Opening the console first pins the
+/// node and the reader thread starts against a live slave.
 fn fast_opts() -> FlashOptions {
     FlashOptions {
         chunk_size: 32,
@@ -185,8 +194,8 @@ fn image(bytes: usize) -> Vec<u8> {
 #[test]
 fn round_trip_transfers_and_verifies_sha256_receiver_side() {
     let (master, slave_path) = pty_parts();
-    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let mut console = open_console(&slave_path);
+    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let image = image(2048);
     let opts = fast_opts();
 
@@ -217,8 +226,8 @@ fn round_trip_transfers_and_verifies_sha256_receiver_side() {
 #[test]
 fn corrupt_device_copy_fails_hash_verification() {
     let (master, slave_path) = pty_parts();
-    let device = MockDevice::spawn(master, DeviceMode::CorruptTail);
     let mut console = open_console(&slave_path);
+    let device = MockDevice::spawn(master, DeviceMode::CorruptTail);
     let image = image(700);
     let err = flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).unwrap_err();
     thread::sleep(Duration::from_millis(100));
@@ -240,8 +249,8 @@ fn corrupt_device_copy_fails_hash_verification() {
 #[test]
 fn decode_failure_on_device_surfaces() {
     let (master, slave_path) = pty_parts();
-    let device = MockDevice::spawn(master, DeviceMode::DecodeFails);
     let mut console = open_console(&slave_path);
+    let device = MockDevice::spawn(master, DeviceMode::DecodeFails);
     let image = image(300);
     let err = flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).unwrap_err();
     thread::sleep(Duration::from_millis(100));
@@ -262,8 +271,8 @@ fn decode_failure_on_device_surfaces() {
 #[test]
 fn trigger_sysupgrade_writes_line_without_waiting() {
     let (master, slave_path) = pty_parts();
-    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let mut console = open_console(&slave_path);
+    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let image = image(64);
     flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).expect("flash before sysupgrade");
     trigger_sysupgrade(&mut console).expect("trigger");
@@ -281,8 +290,8 @@ fn trigger_sysupgrade_writes_line_without_waiting() {
 #[test]
 fn zero_chunk_size_is_refused() {
     let (master, slave_path) = pty_parts();
-    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let mut console = open_console(&slave_path);
+    let device = MockDevice::spawn(master, DeviceMode::Honest);
     let mut opts = fast_opts();
     opts.chunk_size = 0;
     let err = flash_base64(&mut console, b"image", &opts, |_, _| {}).unwrap_err();

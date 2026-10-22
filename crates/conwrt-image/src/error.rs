@@ -58,6 +58,18 @@ pub enum ImageError {
     /// The model has no `openwrt.profile`.
     #[error("model '{0}' is missing openwrt.profile")]
     MissingProfile(String),
+    /// A defaults script set a static `network.<section>.ipaddr` without a
+    /// paired netmask. OpenWrt 25.12 netifd defaults the missing netmask
+    /// to /32, leaving the device v4-dead at L2 (2026-10-14 x1860
+    /// postmortem); the Python profile builder always emits the pair.
+    #[error(
+        "defaults script sets network.{section}.ipaddr without network.{section}.netmask — \
+         a static LAN address must carry its netmask (2026-10-14 /32 postmortem)"
+    )]
+    DefaultsMissingNetmask {
+        /// The UCI network section with the unpaired address.
+        section: String,
+    },
     /// The image file name was absent from the target directory's
     /// `sha256sums` index.
     #[error(

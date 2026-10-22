@@ -62,7 +62,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| SSH transport in `conwrt.py`/`profile/apply.py` (paramiko/subprocess ssh) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | Superseded for the apply/fingerprint flows the Rust CLI covers; full retirement rides the CLI slice |
+| SSH transport in `conwrt.py`/`profile/apply.py` (subprocess ssh; the paramiko mention was stale) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | **Deprecated for the sqm apply flow** (2026-10-22): `conwrt apply --execute` proven in the QEMU oracle suite (`tests/integration/test_rust_apply_sqm.py`, board-gated, set -e-safe render) + ring-2 wireguard/tether; transport banner in `apply.py`. Full retirement rides the remaining profiles' Rust proofs |
 
 ## 7. CLI surface
 
@@ -105,12 +105,14 @@ are operator tooling, not product surface. Review annually, not per-M9.
    parity (request-with-packages is the remaining gap). **OPEN** —
    gate unmet.
 4. **`profile/apply.py` SSH path** — retire when `conwrt apply
-   --execute` covers the ops set used by CI (sqm today). **OPEN** but
-   closer than written: #429 proves the Rust-RENDERED wireguard plan
-   applies and tunnels on the QEMU VM (the #411 render binary + `sh
-   -s`), and ring-2 `qemu_apply.rs` covers sqm/wireguard/tether via
-   the russh executor. Remaining: switch the CI configure path itself
-   to `conwrt apply --execute`, then deprecate the paramiko path.
+   --execute` covers the ops set used by CI (sqm today).
+   **DEPRECATED 2026-10-22**: `tests/integration/test_rust_apply_sqm.py`
+   proves the Rust apply path inside the QEMU oracle suite (fingerprint
+   + board gate + full verification), and the run caught and fixed a
+   real set -e render bug (`_sqm_dev=$(uci get ...)` without `|| true`
+   aborts under the 2.x `set -e` preamble when `wan.device` is absent).
+   Removal waits on the remaining profiles' Rust proofs + the ubus
+   transport.
 5. Everything else: per-row gates above; nothing retires without a
    green Rust twin AND a removal PR citing this file's row.
 

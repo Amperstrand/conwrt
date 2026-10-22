@@ -187,14 +187,19 @@ pub fn render_fixture_file(path: &std::path::Path) -> Result<String, String> {
 /// preamble (`EnsurePackage` apk/opkg blocks — a deliberate Rust-side
 /// extension; 1.x Python bakes packages into the image, so its configure
 /// render has no install lines; same exclusion as
-/// `tests/use_case_goldens.rs`). What remains is the pure command stream
-/// — the level at which parity is asserted on the Rust side (EQUAL
-/// fixtures must match the Python golden byte-for-byte after this
-/// filter).
+/// `tests/use_case_goldens.rs`). The 2.x preamble is `set -e` where 1.x
+/// runs bare, so 2.x guards best-effort command substitutions with
+/// `|| true` (the #365 set-e-kills-assignments lesson) — those guards
+/// are stripped here for the same reason the preamble is: they are the
+/// 2.x shell-options shim, not semantic drift. What remains is the
+/// pure command stream — the level at which parity is asserted on the
+/// Rust side (EQUAL fixtures must match the Python golden byte-for-byte
+/// after this filter).
 pub fn command_lines(script: &str) -> Vec<String> {
     script
         .lines()
         .map(|l| l.trim())
+        .map(|l| l.replace(" || true)", ")").replace(" || true ;", " ;"))
         .filter(|l| {
             !l.is_empty()
                 && !l.starts_with('#')
@@ -204,7 +209,6 @@ pub fn command_lines(script: &str) -> Vec<String> {
                 && !l.starts_with("if command -v apk ")
                 && !l.starts_with("&& apk add ")
         })
-        .map(String::from)
         .collect()
 }
 

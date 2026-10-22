@@ -92,6 +92,11 @@ pub struct OpenwrtInfo {
     /// Optional `/tmp/sysinfo/board_name` for auto-detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_name: Option<String>,
+    /// Additional accepted `/tmp/sysinfo/board_name` values — fixtures,
+    /// rebrands, and QEMU variants of the same board (checked by the
+    /// `conwrt apply` identity gate alongside `board_name`/`device`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_names: Option<Vec<String>>,
     /// Default LAN IP after flashing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_ip: Option<String>,
