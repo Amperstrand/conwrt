@@ -18,7 +18,7 @@ pub struct CleanOptions {
     pub profile: Option<String>,
 }
 
-/// What [`clean_cache`] removed.
+/// What [`clean_cache`] removed (or, from [`plan_cache_clean`], would).
 #[derive(Debug, Clone, Default)]
 pub struct CleanReport {
     /// Removed cache directories.
@@ -28,6 +28,12 @@ pub struct CleanReport {
     pub freed_bytes: u64,
 }
 
+impl CleanReport {
+    fn take(&mut self) -> CleanReport {
+        std::mem::take(self)
+    }
+}
+
 /// Removes cached builds from `images_root`.
 ///
 /// With `keep_latest`, every profile keeps its newest cache directory
@@ -35,6 +41,19 @@ pub struct CleanReport {
 /// confirmation/dry-run presentation — this function only computes and
 /// removes, so it stays testable without a TTY.
 pub fn clean_cache(images_root: &Path, options: &CleanOptions) -> std::io::Result<CleanReport> {
+    let mut report = plan_cache_clean(images_root, options)?;
+    for dir in &report.removed {
+        fs::remove_dir_all(dir)?;
+    }
+    Ok(report.take())
+}
+
+/// Compute what [`clean_cache`] would remove — same walk, same matching,
+/// no deletion. The CLI shows this as the confirmation preview.
+pub fn plan_cache_clean(
+    images_root: &Path,
+    options: &CleanOptions,
+) -> std::io::Result<CleanReport> {
     let mut report = CleanReport::default();
     for profile_dir in sorted_subdirs(images_root)? {
         let profile = profile_dir
@@ -42,8 +61,13 @@ pub fn clean_cache(images_root: &Path, options: &CleanOptions) -> std::io::Resul
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         if let Some(wanted) = &options.profile {
-            let underscore = wanted.replace('-', "_");
-            if profile != *wanted && profile != underscore {
+            // Multi-hyphen ids broke the plain first-separator swap
+            // (`dlink-covr-x1860-a1` → `dlink_covr_x1860_a1`, which
+            // never matches the ASU dir `dlink_covr-x1860-a1`) — the
+            // 1.x `_cache_clean` had the identical bug. Profile names
+            // are unique modulo separators, so compare normalized.
+            let strip = |text: &str| text.replace(['_', '-'], "");
+            if strip(&profile) != strip(wanted) {
                 continue;
             }
         }
@@ -65,7 +89,6 @@ pub fn clean_cache(images_root: &Path, options: &CleanOptions) -> std::io::Resul
 
     for dir in &report.removed {
         report.freed_bytes += flat_size(dir);
-        fs::remove_dir_all(dir)?;
     }
     Ok(report)
 }

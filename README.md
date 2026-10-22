@@ -343,10 +343,13 @@ Download + SHA-256 verify the stock OpenWrt image (into the gitignored
 automatically when neither `--image` nor `--request-image` is given.
 
 ```bash
-python3 scripts/conwrt.py image --model-id glinet-mt3000
-python3 scripts/conwrt.py image --model-id glinet-mt3000 --release 25.12.5
-python3 scripts/conwrt.py image --model-id dlink-covr-x1860-a1          # model's image_suffix (factory)
-python3 scripts/conwrt.py image --model-id glinet-mt3000 --image-suffix squashfs-factory.bin
+cargo run -q -p conwrt-cli -- source-image --model-id glinet-mt3000
+cargo run -q -p conwrt-cli -- source-image --model-id glinet-mt3000 --release 25.12.5
+cargo run -q -p conwrt-cli -- source-image --model-id dlink-covr-x1860-a1   # model's image_suffix (factory)
+cargo run -q -p conwrt-cli -- source-image --model-id glinet-mt3000 --image-suffix squashfs-factory.bin
+
+(1.x `conwrt.py image` retired 2026-10-22 — parity-matrix §3, retirement
+queue #3; `conwrt source-image` is the cache-compatible successor.)
 ```
 
 The **release** comes from `openwrt.release` in the model (falling back to the
@@ -362,14 +365,20 @@ source the correct artefact for GL.iNet, D-Link, and other devices alike.
 
 ```bash
 # List all cached builds
-python3 scripts/conwrt.py cache list
+cargo run -q -p conwrt-cli -- cache list
 
-# Remove old builds, keep latest per model
-python3 scripts/conwrt.py cache clean --keep-latest
+# Preview a clean (dry run), then remove old builds keeping latest per model
+cargo run -q -p conwrt-cli -- cache clean --keep-latest
+cargo run -q -p conwrt-cli -- cache clean --keep-latest --yes
 
-# Remove all builds for a specific model
-python3 scripts/conwrt.py cache clean --model-id dlink_covr-x1860-a1
+# Remove all builds for a specific model (any separator spelling matches)
+cargo run -q -p conwrt-cli -- cache clean --model-id dlink-covr-x1860-a1 --yes
 ```
+
+(1.x `conwrt.py cache` retired 2026-10-22 — parity-matrix §3, retirement
+queue #3; `conwrt cache` is the successor and `clean` without `--yes` is a
+dry-run preview. The `--model-id` match is separator-normalized: the old
+first-separator-only swap never matched multi-hyphen ids — fixed Rust-side.)
 
 ### Fingerprint a connected router
 
@@ -440,7 +449,7 @@ Each model JSON contains vendor info, OpenWrt target/device/arch, hardware specs
 - ASU integration for custom firmware builds with baked-in SSH keys, passwords, WAN SSH
 - Use case presets — flash OpenWrt pre-configured for tethering, SQM, VPN, guest WiFi, etc.
 - Transport-agnostic ops pipeline — each use case generates typed operations that render to shell or ubus HTTP
-- Firmware cache management (`conwrt cache list/clean`)
+- Firmware cache management (`conwrt cache list/clean` — Rust surface; 1.x command retired)
 - Automatic ethernet interface detection
 - Link monitoring survives pcap writer death during reboot
 - conwrt ipk package — install on OpenWrt routers for router-to-router flashing

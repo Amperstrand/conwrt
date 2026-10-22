@@ -122,35 +122,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list", help="List available device models")
 
-    image_parser = subparsers.add_parser("image",
-        help="Download + verify the vanilla OpenWrt sysupgrade image for a model")
-    image_parser.add_argument("--model-id", required=True,
-        help="Model ID from models/ (e.g. glinet-mt3000)")
-    image_parser.add_argument("--release", default=None,
-        help="OpenWrt release override (e.g. 24.10.2)")
-    image_parser.add_argument("--image-suffix", default=None,
-        help="Image flavour (e.g. squashfs-sysupgrade.bin, squashfs-factory.bin). "
-             "Defaults to the model's openwrt.image_suffix, then squashfs-sysupgrade.bin.")
-    image_parser.add_argument("--dest", default=None,
-        help="Destination directory (default: images/)")
-    image_parser.add_argument("--force", action="store_true",
-        help="Re-download even if a cached copy exists")
 
     uc_parser = subparsers.add_parser("list-use-cases",
         help="List available use case presets")
     uc_parser.add_argument("--model-id", default=None,
         help="Show compatibility for a specific model")
 
-    cache_parser = subparsers.add_parser("cache", help="Manage cached firmware images")
-    cache_sub = cache_parser.add_subparsers(dest="cache_command")
-    cache_sub.add_parser("list", help="List cached firmware images")
-    cache_clean = cache_sub.add_parser("clean", help="Remove cached firmware images")
-    cache_clean.add_argument("--model-id", default=None,
-                        help="Only clean images for this model")
-    cache_clean.add_argument("--keep-latest", action="store_true",
-                        help="Keep only the latest build per model")
-    cache_clean.add_argument("--yes", action="store_true",
-                        help="Skip confirmation prompt")
 
     mgmt_parser = subparsers.add_parser("setup-mgmt-wifi",
         help="Configure management WiFi on a running router")
