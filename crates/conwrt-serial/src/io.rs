@@ -181,6 +181,27 @@ pub trait ConsoleIo {
 /// [`ConsoleError::Connect`] for a malformed or unreachable `tcp://`
 /// endpoint (clean operator-facing message, no traceback);
 /// [`ConsoleError::OpenDevice`] when the local port cannot be opened.
+/// Open a break-capable console (local serial only — TCP bridges cannot
+/// assert a UART break). Recovery/sysrq path.
+pub fn open_break_port(
+    spec: &str,
+    baud: u32,
+    timeout: Duration,
+) -> Result<Box<dyn crate::recovery::BreakIo>, ConsoleError> {
+    if spec.starts_with(TCP_PREFIX) {
+        return Err(ConsoleError::Connect {
+            endpoint: spec.to_string(),
+            port: 0,
+            source: std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "sysrq-over-BREAK needs a local serial port; a TCP bridge cannot assert break",
+            ),
+        });
+    }
+    Ok(Box::new(SerialPortIo::open(spec, baud, timeout)?))
+}
+
+/// Open a break-capable console (local serial; sysrq/BREAK path).
 pub fn open_port(
     spec: &str,
     baud: u32,
@@ -414,6 +435,23 @@ impl ConsoleIo for TcpIo {
     }
 }
 
+impl crate::recovery::BreakIo for SerialPortIo {
+    fn send_break_for(&mut self, dur: Duration) -> io::Result<()> {
+        // serialport-rs: set_break asserts the condition, clear_break ends it.
+        // The port is Option<Box<dyn SerialPort>> because close() takes it.
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "port closed"))?;
+        port.set_break()
+            .map_err(io::Error::other)?;
+        std::thread::sleep(dur);
+        port.clear_break()
+            .map_err(io::Error::other)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,3 +517,5 @@ mod tests {
         assert!(msg.contains("timed out"), "msg: {msg}");
     }
 }
+
+

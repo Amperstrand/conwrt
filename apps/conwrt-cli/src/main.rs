@@ -42,6 +42,23 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
+    /// (RTL8382 field-proven 25+ times; works when console input is dead).
+    SerialRecover {
+        /// Serial port spec, e.g. /dev/serial/by-id/usb-FTDI_...-port0.
+        #[arg(long)]
+        port: String,
+        /// Baud rate (GS1900 console: 115200).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Boot marker to wait for after the reboot (default: the OpenWrt
+        /// kernel handoff line).
+        #[arg(long, default_value = "Starting kernel")]
+        marker: String,
+        /// Overall timeout in seconds.
+        #[arg(long, default_value_t = 240)]
+        timeout: u32,
+    },
     /// Validate device model JSON files against the model schema.
     Models {
         /// Directory containing `*.json` model files.
@@ -407,7 +424,40 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Models { dir } => cmd_models_validate(&dir),
+        Command::SerialRecover {
+            port,
+            baud,
+            marker,
+            timeout,
+        } => {
+            use conwrt_serial::io::open_break_port;
+            use conwrt_serial::recovery::reboot_wedged;
+            use std::time::Duration;
+
+            let mut io = match open_break_port(&port, baud, Duration::from_secs(1)) {
+                Ok(io) => io,
+                Err(e) => {
+                    eprintln!("conwrt: open {port}: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            println!("BREAK + sysrq-b on {port} ...");
+            match reboot_wedged(
+                io.as_mut(),
+                marker.as_bytes(),
+                Duration::from_secs(timeout as u64),
+            ) {
+                Ok(out) => {
+                    println!("{out:?} - keep this console reader attached until the device is stable.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("conwrt: recovery: {e}");
+                    ExitCode::from(3)
+                }
+            }
+        }
+    Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
         Command::Image {
