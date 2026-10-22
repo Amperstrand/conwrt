@@ -23,15 +23,7 @@
     },
     "sqm_default": {
       "use_case": "sqm",
-      "expect": "GAP",
-      "gap_reasons": [
-        "Rust plan includes EnsurePackage ops (opkg/apk install sqm-scripts, luci-app-sqm); Python delivers packages out-of-band via UseCase.packages",
-        "Rust plan reverts the staged sqm baseline first (uci -q revert sqm ... || true, AGENTS.md uci-revert rule); Python has no revert step",
-        "device-resolution snippet differs: Rust renders a multi-line if/fi block with variable _conwrt_dev_wan; Python renders one ';'-joined line with variable _sqm_dev",
-        "clear-sections loop: Rust renders 'done' and 'true' on separate lines; Python emits 'done; true' on a single line",
-        "option ordering: Python sets interface=\"$_sqm_dev\" directly after section creation (before enabled); Rust orders interface after enabled",
-        "Rust omits the final echo \"SQM configured: .../... kbit/s (...) on ...\" summary line"
-      ]
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

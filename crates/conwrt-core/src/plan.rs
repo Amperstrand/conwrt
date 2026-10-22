@@ -2055,6 +2055,26 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
     sqm.validate()?;
     let iface = &sqm.interface;
     let literal = |v: String| UciValue::Literal(v);
+    // Op-for-op mirror of the 1.x builder (`scripts/use_cases/sqm.py`
+    // `_build_sqm_ops`), closing the parity GAP recorded in
+    // tests/fixtures/parity/manifest.json:
+    //
+    // - no `RevertUci` step: 1.x has no revert; its clear-sections loop
+    //   below already deletes every staged AND committed `queue` section
+    //   (`uci show` displays the merged view) before the fresh values are
+    //   staged, so leftover `/tmp/.uci` debris cannot survive the commit.
+    // - device resolution, section creation, and the `interface=` line
+    //   render as the exact 1.x one-line shell idioms (`_sqm_dev`), in
+    //   1.x order: create → interface → values. A typed
+    //   `ResolveNetworkDevice` op renders a multi-line if/fi block with a
+    //   `_conwrt_dev_wan` variable — same semantics, different bytes.
+    // - the final echo summary line is part of the 1.x contract.
+    //
+    // The `EnsurePackage` preamble stays: like wireguard/doh/tether, it is
+    // a deliberate 2.x extension excluded from parity comparison by the
+    // shared normalization (see `parity.rs::command_lines`), because 1.x
+    // delivers packages out-of-band (`UseCase.packages` bakes them into
+    // the image).
     let ops = vec![
         PlanOp::EnsurePackage {
             name: "sqm-scripts".into(),
@@ -2062,32 +2082,31 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         PlanOp::EnsurePackage {
             name: "luci-app-sqm".into(),
         },
-        // Clean baseline first: an aborted earlier session can leave
-        // staged changes in /tmp/.uci that the commit below would
-        // otherwise make permanent (AGENTS.md uci-revert rule).
-        PlanOp::RevertUci {
-            config: "sqm".into(),
+        PlanOp::Shell {
+            command: "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true".into(),
         },
-        PlanOp::ClearUciSections {
-            config: "sqm".into(),
-            section_type: "queue".into(),
+        // Resolve UCI network name to actual linux device (e.g. wan →
+        // phy1-sta0 on WiFi STA) — the 1.x `wan` lesson, 1.x shape.
+        PlanOp::Shell {
+            command: format!(
+                "_sqm_dev=$(uci get network.{iface}.device 2>/dev/null); \
+                 if [ -z \"$_sqm_dev\" ] || ! ip addr show \"$_sqm_dev\" 2>/dev/null | grep -q \"inet \"; then \
+                 _sqm_dev=$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{{print $5}}' | head -1); fi; \
+                 if [ -z \"$_sqm_dev\" ]; then _sqm_dev={iface}; fi"
+            ),
         },
-        PlanOp::ResolveNetworkDevice {
-            network: iface.clone(),
+        PlanOp::Shell {
+            command: format!("uci set sqm.{iface}=queue"),
         },
-        PlanOp::SetUciSection {
+        // interface must be the actual device name, not a UCI network name
+        PlanOp::Shell {
+            command: format!("uci set sqm.{iface}.interface=\"$_sqm_dev\""),
+        },
+        PlanOp::SetUciOptions {
             config: "sqm".into(),
             section: iface.clone(),
-            section_type: "queue".into(),
             options: vec![
                 ("enabled".into(), literal("1".into())),
-                // actual device, not the UCI network name (1.x lesson)
-                (
-                    "interface".into(),
-                    UciValue::ResolvedDevice {
-                        network: iface.clone(),
-                    },
-                ),
                 ("script".into(), literal(sqm.script.clone())),
                 ("qdisc".into(), literal(sqm.qdisc.clone())),
                 ("linklayer".into(), literal(sqm.link_layer.clone())),
@@ -2112,6 +2131,13 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         PlanOp::Service {
             name: "sqm".into(),
             action: ServiceAction::Restart,
+        },
+        // 1.x closes with the human-facing summary on the resolved device
+        PlanOp::Shell {
+            command: format!(
+                "echo \"SQM configured: {}/{} kbit/s ({}) on $_sqm_dev\"",
+                sqm.download_kbps, sqm.upload_kbps, sqm.qdisc
+            ),
         },
     ];
     let verification = vec![
@@ -2251,19 +2277,36 @@ mod tests {
         ));
         assert!(script.contains("opkg list-installed 'sqm-scripts' 2>/dev/null"));
         assert!(script.contains("|| { opkg update && opkg install 'sqm-scripts'; }; fi"));
-        // clear-sections idiom, 1.x style
-        assert!(script.contains("uci -q show sqm 2>/dev/null | grep '=queue'"));
-        // device resolution sets the var the section later references
-        assert!(
-            script.contains("_conwrt_dev_wan=$(uci get network.wan.device 2>/dev/null || true)")
-        );
-        assert!(script.contains("uci set sqm.wan.interface=\"$_conwrt_dev_wan\""));
+        // clear-sections idiom, 1.x shape: one line, `done; true` joined
+        assert!(script.contains(
+            "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"
+        ));
+        // device resolution is the 1.x one-line `_sqm_dev` idiom (not the
+        // typed multi-line `_conwrt_dev_*` block)
+        assert!(script.contains(
+            "_sqm_dev=$(uci get network.wan.device 2>/dev/null); if [ -z \"$_sqm_dev\" ]"
+        ));
+        assert!(script.contains("uci set sqm.wan.interface=\"$_sqm_dev\""));
+        // 1.x option order: interface directly after section creation,
+        // before enabled
+        let interface_at = script
+            .find("uci set sqm.wan.interface=")
+            .expect("interface line");
+        let enabled_at = script
+            .find("uci set sqm.wan.enabled=")
+            .expect("enabled line");
+        let create_at = script.find("uci set sqm.wan=queue").expect("creation line");
+        assert!(create_at < interface_at && interface_at < enabled_at);
         // single-quoted literals, 1.x convention
         assert!(script.contains("uci set sqm.wan.download='340000'"));
         assert!(script.contains("uci set sqm.wan.upload='19000'"));
         assert!(script.contains("uci commit sqm"));
         assert!(script.contains("/etc/init.d/sqm enable"));
         assert!(script.contains("/etc/init.d/sqm restart"));
+        // 1.x closes with the echo summary on the resolved device
+        assert!(
+            script.contains("echo \"SQM configured: 340000/19000 kbit/s (cake) on $_sqm_dev\"")
+        );
     }
 
     #[test]
@@ -2365,7 +2408,7 @@ mod tests {
     }
 
     #[test]
-    fn sqm_plan_reverts_staged_baseline_before_first_mutation() {
+    fn sqm_plan_mirrors_1x_builder_op_stream() {
         let model = model_with_capabilities(None);
         let plan = plan_profile(
             &DeviceState::OpenWrt,
@@ -2374,16 +2417,35 @@ mod tests {
         )
         .expect("plans");
         let script = render_shell(&plan);
-        let revert_pos = script
-            .find("uci -q revert sqm")
-            .expect("script must revert the sqm baseline");
-        let first_mutation = script
-            .find("uci -q show sqm")
-            .or_else(|| script.find("uci set sqm"))
-            .expect("script mutates sqm");
+        // 1.x has no revert step: its clear-sections loop already deletes
+        // every staged AND committed queue section (uci show displays the
+        // merged view) before fresh values are staged, so /tmp/.uci debris
+        // cannot survive the commit.
         assert!(
-            revert_pos < first_mutation,
-            "revert must precede the first sqm mutation:\n{script}"
+            !script.contains("uci revert"),
+            "1.x parity: no revert step, the clear loop is the baseline reset:\n{script}"
+        );
+        // clear loop precedes the first sqm mutation
+        let clear_pos = script
+            .find("uci -q show sqm")
+            .expect("script clears sqm sections");
+        let first_mutation = script.find("uci set sqm").expect("script mutates sqm");
+        assert!(
+            clear_pos < first_mutation,
+            "clear must precede the first sqm mutation:\n{script}"
+        );
+        // the echo summary is the final command line of the script body
+        let lines: Vec<&str> = script
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with('#') && t != "set -e"
+            })
+            .collect();
+        assert_eq!(
+            lines.last(),
+            Some(&"echo \"SQM configured: 10000/5000 kbit/s (cake) on $_sqm_dev\""),
+            "1.x closes with the SQM summary echo"
         );
     }
 

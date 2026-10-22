@@ -207,8 +207,9 @@ fn golden_files_are_command_scripts_not_empty() {
     }
 }
 
-// The existing sqm/doh profiles keep their own unit tests in plan.rs;
-// these ports must not change their renders.
+// The existing sqm/doh profiles keep their own unit tests in plan.rs.
+// sqm now reaches 1.x parity (tests/fixtures/parity/manifest.json: EQUAL);
+// these assertions pin the invariants that must survive either way.
 #[test]
 fn sqm_and_doh_renders_unchanged_shape() {
     let model = model_with_capabilities(None);
