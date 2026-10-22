@@ -68,6 +68,7 @@ pub mod console;
 pub mod flash;
 pub mod io;
 pub mod lint;
+pub mod backup;
 pub mod baud;
 pub mod console_monitor;
 pub mod recovery;
