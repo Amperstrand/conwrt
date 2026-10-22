@@ -407,7 +407,11 @@ pub struct SshHardeningProfile {
     pub max_auth_tries: u32,
     /// SSH listen port (1.x default 22).
     pub port: u16,
-    /// Disable remote port forwarding — `GatewayPorts` (1.x default on).
+    /// Disable remote port forwarding — rendered as `GatewayPorts='no'`
+    /// (1.x naming parity). Note the semantics: GatewayPorts only stops
+    /// forwarded ports binding non-loopback; it does NOT reject `-R`
+    /// requests. Matches 1.x byte-for-byte; the param NAME is the
+    /// upstream preset's choice (tracked upstream, not changed here).
     pub disable_gateway_ports: bool,
 }
 
