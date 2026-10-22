@@ -245,3 +245,25 @@ edited `rust-toolchain.toml` still resolves 1.99.0.
   which reaps worktrees + toolchains, not just `target/`), additional
   reclamation elsewhere, or a deliberate, operator-approved floor
   exception. Do not quietly lower the floor to squeeze under it.
+
+### Throwaway-artifact route (bench unblock), checked 2026-10-22 session 3
+
+For a NON-aligned bench binary while the SDK lane waits for disk:
+nightly `1.101.0-nightly` still lists `mipsel-unknown-linux-musl` as a
+builtin (tier-3) target, so `cargo +nightly -Z build-std=std,panic_abort`
++ the SDK image's `staging_dir/toolchain-*` gcc/musl sysroot is a viable
+path. Budget: pull openwrt/sdk image (~3-4G transient), `docker create` +
+`docker cp` the toolchain (~1G kept), `docker rmi` the image, rust-src
+(~300M), workspace build (~1-2G). **Attempted: NO — rejected at 9.6G
+free** (peak would leave ~5-6G on a host losing ~2G/hour to other lanes;
+ENOSPC discipline). Re-attempt only with >=12G free and nothing else
+churning the disk; label the artifact throwaway — the aligned artifact
+still comes from the SDK lane.
+
+Stage-2 env is now primary-source-correct (commit `2ad814d`):
+`staging_dir/host/{bin,lib/rustlib}` (not hostpkg),
+`CARGO_HOME=/builder/dl/cargo`, `CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER`,
+mipsel-ELF check instead of demanding static (feed std is
+`crt-static=false` → dynamic musl, correct on-device). Bootstrap
+footnote: the feed builds LLVM from source
+(`--set=llvm.download-ci-llvm=false`) — the 25G floor is realistic.
