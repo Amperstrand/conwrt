@@ -106,6 +106,7 @@ register(UseCase(
     name="wireguard-server",
     description="WireGuard VPN server — remote access to home network",
     packages=[
+        "kmod-wireguard",
         "wireguard-tools",
         "luci-proto-wireguard",
         "qrencode",

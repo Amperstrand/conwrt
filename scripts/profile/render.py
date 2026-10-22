@@ -5,7 +5,13 @@ from profile.plan import ProfilePlan, StepKind
 
 
 def opkg_install_script(packages: list[str], remove: list[str] | None = None) -> str:
-    """Shell script to install packages — apk on OpenWrt >= 25.x, opkg older."""
+    """Shell script to install packages — apk on OpenWrt >= 25.x, opkg older.
+
+    Mirrors the 2.x executor's EnsurePackage semantics (#421 lineage,
+    a11bfd6): the apk branch self-heals a missing index (a fresh 25.x
+    boot may lack the adb index until `apk update`) and the opkg branch
+    short-circuits when every package is already installed so an
+    offline device stays usable (AGENTS.md package rules)."""
     if remove:
         remove_sfx = (
             f"if command -v apk >/dev/null; then apk del {' '.join(remove)} 2>/dev/null || true; "
@@ -15,9 +21,12 @@ def opkg_install_script(packages: list[str], remove: list[str] | None = None) ->
         remove_sfx = ""
     if packages:
         pkgs = " ".join(packages)
+        installed_checks = " && ".join(
+            f'[ -n "$(opkg list-installed {p} 2>/dev/null)" ]' for p in packages
+        )
         install = (
-            f"if command -v apk >/dev/null 2>&1; then apk add {pkgs}; "
-            f"else opkg update && opkg install {pkgs}; fi"
+            f"if command -v apk >/dev/null 2>&1; then apk add {pkgs} || {{ apk update && apk add {pkgs}; }}; "
+            f"else {installed_checks} || {{ opkg update && opkg install {pkgs}; }}; fi"
         )
     else:
         install = ""
