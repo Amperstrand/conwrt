@@ -42,6 +42,20 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Serial console monitor: dual logging (raw + timestamped), boot-stage
+    /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
+    /// (Rust port of scripts/serial-console.py --monitor).
+    SerialConsole {
+        /// Serial port spec (/dev path or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Baud rate.
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Session name; logs go to serial/<name>/{console.raw,console.log,session.json}.
+        #[arg(long, default_value = "session")]
+        session: String,
+    },
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -424,6 +438,46 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::SerialConsole {
+            port,
+            baud,
+            session,
+        } => {
+            use conwrt_serial::console_monitor::{
+                run_monitor, translate_token, MonitorConfig,
+            };
+            use conwrt_serial::io::open_port;
+            use std::io::BufRead;
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            let dir = std::path::PathBuf::from("serial").join(&session);
+            let (tx, rx) = mpsc::channel::<Vec<u8>>();
+            // stdin injector: lines -> token translation -> channel
+            std::thread::spawn(move || {
+                let stdin = std::io::stdin();
+                for line in stdin.lock().lines() {
+                    let Ok(line) = line else { break };
+                    let _ = tx.send(translate_token(&line));
+                }
+            });
+            let mut io = match open_port(&port, baud, Duration::from_millis(200)) {
+                Ok(io) => io,
+                Err(e) => {
+                    eprintln!("conwrt: open {port}: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            println!("monitoring {port} -> {} (stdin lines inject; ESCAPE/ENTER/CTRLC tokens)",
+                     dir.display());
+            match run_monitor(io.as_mut(), &MonitorConfig { session_dir: dir.clone() }, &rx) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("conwrt: monitor ended: {e} (session meta in {})", dir.display());
+                    ExitCode::SUCCESS // transport end is a normal monitor exit
+                }
+            }
+        }
         Command::SerialRecover {
             port,
             baud,
