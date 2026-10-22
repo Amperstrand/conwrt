@@ -37,6 +37,7 @@
 //! print(r["travelmate"].build_configure({}))
 //! print(r["adguard"].build_configure({}))
 //! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
+//! print(r["rescue-watchdog"].build_configure({"target": "192.168.105.10"}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -49,9 +50,9 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Profile, SqmProfile,
-    SshHardeningProfile, TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant, TravelmateProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -205,6 +206,16 @@ fn mesh11sd_matches_1x_golden() {
             ..Mesh11sdProfile::default()
         }),
         include_str!("goldens/mesh11sd.sh"),
+    );
+}
+
+#[test]
+fn rescue_watchdog_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: "192.168.105.10".into(),
+        }),
+        include_str!("goldens/rescue-watchdog.sh"),
     );
 }
 

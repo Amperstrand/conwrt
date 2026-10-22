@@ -538,6 +538,30 @@ impl Mesh11sdProfile {
     }
 }
 
+/// Self-healing reboot for bench/lab devices — port of the 1.x
+/// `rescue-watchdog` preset (`scripts/use_cases/rescue_watchdog.py`,
+/// born from the 2026-10-08 x1860 wedges: kernel-level networking
+/// death that only a hands-on power cycle cured). The whole plan is
+/// ONE verbatim shell payload: procd init + watchdog loop heredocs,
+/// pinging the management target once a minute and force-rebooting
+/// after 3 consecutive failures (10-minute boot grace). 1.x marks it
+/// untested — verify grace/reboot on hardware before trusting
+/// unattended. No packages, no validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescueWatchdogProfile {
+    /// Management IP pinged once a minute (bench host LAN address;
+    /// 1.x default `192.168.1.254`).
+    pub target: String,
+}
+
+impl Default for RescueWatchdogProfile {
+    fn default() -> Self {
+        Self {
+            target: "192.168.1.254".into(),
+        }
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -678,6 +702,8 @@ pub enum Profile {
     Adguard(AdguardProfile),
     /// Automated 802.11s mesh networking.
     Mesh11sd(Mesh11sdProfile),
+    /// Self-healing reboot when the management target goes unreachable.
+    RescueWatchdog(RescueWatchdogProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -696,6 +722,7 @@ impl Profile {
             Profile::Travelmate(_) => "travelmate",
             Profile::Adguard(_) => "adguard",
             Profile::Mesh11sd(_) => "mesh11sd",
+            Profile::RescueWatchdog(_) => "rescue-watchdog",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -715,6 +742,7 @@ impl Profile {
             Profile::Travelmate(_) => &["wifi"],
             Profile::Adguard(_) => &[],
             Profile::Mesh11sd(_) => &["wifi"],
+            Profile::RescueWatchdog(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -1027,6 +1055,7 @@ pub fn plan_profile(
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
         Profile::Adguard(ag) => plan_adguard(model, ag),
         Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
+        Profile::RescueWatchdog(wd) => plan_rescue_watchdog(model, wd),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -2053,6 +2082,75 @@ fn plan_mesh11sd(model: &DeviceModel, mesh: &Mesh11sdProfile) -> Result<Plan, Un
     }];
     Ok(Plan {
         profile_id: "mesh11sd".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+/// The 1.x watchdog payload, verbatim (`WATCHDOG_INIT` in
+/// `scripts/use_cases/rescue_watchdog.py`): procd init heredoc +
+/// watchdog loop heredoc, `__TARGET__` substituted at plan time.
+const RESCUE_WATCHDOG_INIT: &str = r#"cat > /etc/init.d/rescue-watchdog << 'WD_EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /bin/sh /usr/bin/rescue-watchdog-loop
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+WD_EOF
+chmod +x /etc/init.d/rescue-watchdog
+
+/usr/bin/rescue-watchdog-loop << 'WDL_EOF'
+#!/bin/sh
+TARGET="${WATCHDOG_TARGET:-__TARGET__}"
+GRACE=600
+FAILS=0
+while :; do
+    UPTIME=$(cut -d. -f1 /proc/uptime)
+    if [ "$UPTIME" -lt "$GRACE" ]; then
+        FAILS=0
+    elif ping -c1 -W3 "$TARGET" >/dev/null 2>&1; then
+        FAILS=0
+    else
+        FAILS=$((FAILS+1))
+        logger -t rescue-watchdog "target $TARGET unreachable ($FAILS/3)"
+        if [ "$FAILS" -ge 3 ]; then
+            logger -t rescue-watchdog "networking wedged - rebooting"
+            sync
+            reboot
+        fi
+    fi
+    sleep 60
+done
+WDL_EOF
+chmod +x /usr/bin/rescue-watchdog-loop
+
+/etc/init.d/rescue-watchdog enable
+/etc/init.d/rescue-watchdog restart
+"#;
+
+fn plan_rescue_watchdog(
+    model: &DeviceModel,
+    wd: &RescueWatchdogProfile,
+) -> Result<Plan, Unsupported> {
+    let ops = vec![PlanOp::Shell {
+        command: RESCUE_WATCHDOG_INIT.replace("__TARGET__", &wd.target),
+    }];
+    let verification = vec![VerificationCheck {
+        description: "watchdog service enabled".into(),
+        command: "/etc/init.d/rescue-watchdog enabled && echo yes".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "rescue-watchdog".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -3387,6 +3485,20 @@ mod tests {
             Mesh11sdProfile::default().validate(),
             Err(Unsupported::InvalidParams(_))
         ));
+    }
+
+    #[test]
+    fn rescue_watchdog_payload_is_verbatim_with_target_substituted() {
+        let script = render_shell(&plan_for(Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: "192.168.105.10".into(),
+        })));
+        assert!(script.contains("cat > /etc/init.d/rescue-watchdog << 'WD_EOF'"));
+        assert!(script.contains("procd_set_param respawn 3600 5 0"));
+        assert!(script.contains("TARGET=\"${WATCHDOG_TARGET:-192.168.105.10}\""));
+        assert!(script.contains("[ \"$FAILS\" -ge 3 ]"));
+        assert!(script.contains("/etc/init.d/rescue-watchdog enable"));
+        // no unsubstituted placeholder survives
+        assert!(!script.contains("__TARGET__"));
     }
 
     #[test]
