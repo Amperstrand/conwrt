@@ -2,6 +2,15 @@
 """
 Router Fingerprint Script
 Connects to an OpenWrt router via SSH and collects comprehensive identifying information.
+
+DEPRECATED for OpenWrt targets (2026-10-22, parity-matrix §2): the
+Rust twin `conwrt fingerprint` is the operator default — parity-tested
+against this script (ring-1 russh fixture, ring-2 QEMU Dropbear VM,
+persistent TOFU store). This script remains supported for
+stock-vendor fingerprint paths, which have no Rust twin yet. Internal
+1.x flows importing `fingerprint_router`/`save_fingerprint` are
+unaffected; removal follows the retirement queue once the stock paths
+port.
 """
 
 import subprocess
@@ -360,6 +369,12 @@ def save_fingerprint(fingerprint: Dict[str, Any], board_id: str = "") -> Optiona
 
 
 def main():
+    print(
+        '[deprecated] OpenWrt fingerprinting moved to the Rust CLI: '
+        '`conwrt fingerprint --ip <addr>` (parity-tested, matrix §2). '
+        'This script stays for stock-vendor paths.',
+        file=sys.stderr,
+    )
     parser = argparse.ArgumentParser(
         description='SSH into an OpenWrt router and collect comprehensive fingerprinting information',
         formatter_class=argparse.RawDescriptionHelpFormatter,

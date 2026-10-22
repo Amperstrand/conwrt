@@ -373,6 +373,18 @@ python3 scripts/conwrt.py cache clean --model-id dlink_covr-x1860-a1
 
 ### Fingerprint a connected router
 
+**Default for OpenWrt targets** (the Python `router-fingerprint.py` is
+deprecated for this flow — parity-matrix §2):
+
+```bash
+# Rust CLI: TOFU host keys persist in ~/.config/conwrt/known_hosts
+conwrt fingerprint --ip 192.168.1.1
+conwrt fingerprint --ip 192.168.1.1 --key ~/.ssh/id_ed25519
+```
+
+Stock-vendor fingerprinting (pre-OpenWrt identification) remains on the
+Python script:
+
 ```bash
 # Auto-detect router at default gateway
 python3 scripts/router-fingerprint.py
