@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
+.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity openwrt-toolchain-check
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -176,6 +176,10 @@ test-live: ## Live VPN provider API contract tests (read-only; credential-gated 
 rust-nostd-parity: ## #227: Makefile and rust.yml must list the SAME -p crates for the no_std cross-check (guard + self-test)
 	@python3 scripts/rust_nostd_parity.py
 	@python3 scripts/rust_nostd_parity.py --self-test
+
+openwrt-toolchain-check: ## Audit scripts/openwrt-toolchain.json rust pins against the live openwrt/packages feed (network) + seeded-drift self-test
+	@python3 scripts/sdk_rust_version.py check
+	@python3 scripts/sdk_rust_version.py --self-test
 
 rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	@$(MAKE) --no-print-directory rust-nostd-parity

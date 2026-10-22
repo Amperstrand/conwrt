@@ -12,6 +12,8 @@ on:
       - "Makefile"
       - "models/**"
       - "scripts/rust_nostd_parity.py"
+      - "scripts/sdk_rust_version.py"
+      - "scripts/openwrt-toolchain.json"
   push:
     branches: [master]
     paths:
@@ -21,7 +23,11 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust.yml"
+      - "Makefile"
+      - "models/**"
       - "scripts/rust_nostd_parity.py"
+      - "scripts/sdk_rust_version.py"
+      - "scripts/openwrt-toolchain.json"
 
 jobs:
   rust:
@@ -43,6 +49,11 @@ jobs:
       # seeded-divergence self-test; fails before any cargo step.
       - name: no_std crate-list parity (Makefile vs rust.yml)
         run: make rust-nostd-parity
+      # Feed-as-authority audit (tollgate sdk-go-version.sh pattern, rust
+      # leg): openwrt/packages openwrt-<series> lang/rust defines the SDK
+      # lane's rustc; a drifted pin is a stale lane.
+      - name: OpenWrt toolchain pin audit (feed rust-version drift)
+        run: make openwrt-toolchain-check
       - name: fmt + clippy + test + no_std gate
         run: |
           cargo fmt --all -- --check
