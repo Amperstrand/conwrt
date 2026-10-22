@@ -428,6 +428,61 @@ impl Default for SshHardeningProfile {
     }
 }
 
+/// Travel-router auto-connect — port of the tested 1.x `travelmate`
+/// preset (`scripts/use_cases/travelmate.py`). Travelmate scans the
+/// declared radio for upstream APs, joins per its own uplink rules, and
+/// handles captive portals. This plan only shapes the daemon's global
+/// section — which SSIDs to join is travelmate/wireless config the
+/// operator (or a companion profile) manages. No 1.x validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TravelmateProfile {
+    /// WiFi radio used for upstream scanning (1.x default `radio0`).
+    pub radio: String,
+    /// Overall retry timeout in seconds (1.x default 60).
+    pub timeout: u32,
+    /// Retry count to find a suitable uplink (1.x default 5).
+    pub retry: u32,
+    /// Enable captive portal detection (1.x default on).
+    pub captive: bool,
+    /// Known-network seeding (2.x-first capability, beyond the 1.x
+    /// preset): STA uplink profiles derived from the deploying host's
+    /// saved WiFis. Empty (default) keeps the render 1.x-identical.
+    pub uplinks: Vec<WifiUplink>,
+}
+
+impl Default for TravelmateProfile {
+    fn default() -> Self {
+        Self {
+            radio: "radio0".into(),
+            timeout: 60,
+            retry: 5,
+            captive: true,
+            uplinks: Vec::new(),
+        }
+    }
+}
+
+/// One upstream WiFi the deploying host already knows the credentials
+/// for — seeded onto the router so travelmate can join it onsite (the
+/// "flash and it just works" flow: the deploying host's saved networks
+/// become the router's uplink candidates). Secrets never appear in
+/// plan debug output: `PlanOp` renders quote-escaped and verification
+/// matches on non-secret anchors only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WifiUplink {
+    /// Network name to join.
+    pub ssid: String,
+    /// Passphrase (empty for open networks).
+    pub psk: String,
+    /// UCI encryption mode: `psk2`, `sae`, `psk2-sae` (mixed), `none`.
+    pub encryption: String,
+    /// Radio section the STA iface binds to, e.g. `radio0`.
+    pub radio: String,
+    /// wifi-iface section name, e.g. `trm_uplink1` (stable across
+    /// re-applies for idempotent reconfigure).
+    pub iface: String,
+}
+
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
 /// apply time from the live LAN IP (third octet + 1), so the address
@@ -541,6 +596,8 @@ pub enum Profile {
     WireguardServer(WireguardServerProfile),
     /// Harden Dropbear SSH (key-only auth, timeouts, port).
     SshHardening(SshHardeningProfile),
+    /// Travel-router auto-connect for captive-portal WiFi upstreams.
+    Travelmate(TravelmateProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -556,6 +613,7 @@ impl Profile {
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
             Profile::SshHardening(_) => "ssh-hardening",
+            Profile::Travelmate(_) => "travelmate",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -572,6 +630,7 @@ impl Profile {
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
             Profile::SshHardening(_) => &[],
+            Profile::Travelmate(_) => &["wifi"],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -878,6 +937,7 @@ pub fn plan_profile(
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
+        Profile::Travelmate(tm) => plan_travelmate(model, tm),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1606,6 +1666,140 @@ fn plan_ssh_hardening(model: &DeviceModel, sh: &SshHardeningProfile) -> Result<P
     ];
     Ok(Plan {
         profile_id: "ssh-hardening".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, Unsupported> {
+    let captive_flag = if tm.captive { "1" } else { "0" };
+    let literal = |v: String| UciValue::Literal(v);
+    let mut global_options = vec![
+        ("trm_enabled".into(), literal("1".into())),
+        ("trm_automatic".into(), literal("1".into())),
+        ("trm_captive".into(), literal(captive_flag.into())),
+        ("trm_timeout".into(), literal(tm.timeout.to_string())),
+        ("trm_retry".into(), literal(tm.retry.to_string())),
+        ("trm_radio".into(), literal(tm.radio.clone())),
+    ];
+    if !tm.uplinks.is_empty() {
+        global_options.push(("trm_iface".into(), literal("trm_wwan".into())));
+    }
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "travelmate".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-travelmate".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-certificates".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "travelmate".into(),
+            section: "global".into(),
+            options: global_options,
+        },
+    ];
+    if !tm.uplinks.is_empty() {
+        // Mirror of travelmate's own `setup` command shape (2.4.x): the
+        // trm_iface gate in travelmate-functions.sh exits "not
+        // configured" without it; the uplink pair is trm_wwan (dhcp,
+        // metric 100) + trm_wwan6 (dhcpv6 via @trm_wwan), both joined
+        // to the wan zone by NAME via the 1.x helper.
+        ops.push(PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "trm_wwan".into(),
+            section_type: "interface".into(),
+            options: vec![
+                ("proto".into(), literal("dhcp".into())),
+                ("metric".into(), literal("100".into())),
+            ],
+        });
+        ops.push(PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "trm_wwan6".into(),
+            section_type: "interface".into(),
+            options: vec![
+                ("device".into(), literal("@trm_wwan".into())),
+                ("proto".into(), literal("dhcpv6".into())),
+            ],
+        });
+        ops.push(PlanOp::Shell {
+            command: uci_add_to_wan_zone_sh("trm_wwan"),
+        });
+        ops.push(PlanOp::Shell {
+            command: uci_add_to_wan_zone_sh("trm_wwan6"),
+        });
+        for uplink in &tm.uplinks {
+            let mut options = vec![
+                ("device".into(), literal(uplink.radio.clone())),
+                ("mode".into(), literal("sta".into())),
+                ("network".into(), literal("trm_wwan".into())),
+                ("ssid".into(), literal(uplink.ssid.clone())),
+                ("encryption".into(), literal(uplink.encryption.clone())),
+            ];
+            if uplink.encryption != "none" {
+                options.push(("key".into(), literal(uplink.psk.clone())));
+            }
+            ops.push(PlanOp::SetUciSection {
+                config: "wireless".into(),
+                section: uplink.iface.clone(),
+                section_type: "wifi-iface".into(),
+                options,
+            });
+        }
+        ops.push(PlanOp::CommitUci {
+            config: "network".into(),
+        });
+        ops.push(PlanOp::CommitUci {
+            config: "wireless".into(),
+        });
+        ops.push(PlanOp::Shell {
+            command: "wifi reload; ubus call network.interface.trm_wwan up 2>/dev/null; true"
+                .into(),
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "travelmate".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "travelmate".into(),
+        action: ServiceAction::Enable,
+    });
+    ops.push(PlanOp::Service {
+        name: "travelmate".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo \"Travelmate configured: auto-connect on {}\"",
+            tm.radio
+        ),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "travelmate enabled".into(),
+            command: "uci -q get travelmate.global.trm_enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "scan radio persisted".into(),
+            command: "uci -q get travelmate.global.trm_radio".into(),
+            expect_contains: tm.radio.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/travelmate enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "travelmate".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -2729,6 +2923,131 @@ mod tests {
             flipped
                 .contains("echo \"SSH hardened: password_auth=on idle=0s max_tries=1 port=2222\"")
         );
+    }
+
+    #[test]
+    fn travelmate_branches_and_capability_gate_match_1x() {
+        let default_script =
+            render_shell(&plan_for(Profile::Travelmate(TravelmateProfile::default())));
+        assert!(default_script.contains("uci set travelmate.global.trm_enabled='1'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_captive='1'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_timeout='60'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_retry='5'"));
+        assert!(default_script.contains("uci set travelmate.global.trm_radio='radio0'"));
+        assert!(default_script.contains("uci commit travelmate"));
+        assert!(default_script.contains("/etc/init.d/travelmate enable"));
+        assert!(default_script.contains("/etc/init.d/travelmate restart"));
+        assert!(default_script.contains("echo \"Travelmate configured: auto-connect on radio0\""));
+
+        let flipped = render_shell(&plan_for(Profile::Travelmate(TravelmateProfile {
+            radio: "radio1".into(),
+            timeout: 30,
+            retry: 2,
+            captive: false,
+            ..TravelmateProfile::default()
+        })));
+        assert!(flipped.contains("uci set travelmate.global.trm_captive='0'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_timeout='30'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_retry='2'"));
+        assert!(flipped.contains("uci set travelmate.global.trm_radio='radio1'"));
+        assert!(flipped.contains("echo \"Travelmate configured: auto-connect on radio1\""));
+
+        // wifi capability gate (1.x requires_capabilities=["wifi"])
+        let no_wifi = conwrt_types::DeviceModel {
+            id: "no-wifi".into(),
+            vendor: "Test".into(),
+            description: "d".into(),
+            openwrt: conwrt_types::OpenwrtInfo {
+                target: "x/y".into(),
+                device: "t,d".into(),
+                profile: "t_d".into(),
+                version: "24".into(),
+                board_name: None,
+                default_ip: None,
+                extras: Default::default(),
+            },
+            capabilities: Some(vec!["ethernet".into()]),
+            flash_methods: None,
+            mac_oui: Vec::new(),
+            serial_console: None,
+            warnings: None,
+            extras: Default::default(),
+        };
+        assert!(matches!(
+            plan_profile(&DeviceState::OpenWrt, &no_wifi, &Profile::Travelmate(TravelmateProfile::default())),
+            Err(Unsupported::MissingCapability { capability, .. }) if capability == "wifi"
+        ));
+    }
+
+    #[test]
+    fn travelmate_uplink_seeding_renders_sta_profiles() {
+        let plan = plan_for(Profile::Travelmate(TravelmateProfile {
+            uplinks: vec![
+                WifiUplink {
+                    ssid: "home-net".into(),
+                    psk: "hunter2 son".into(),
+                    encryption: "psk2".into(),
+                    radio: "radio1".into(),
+                    iface: "trm_uplink1".into(),
+                },
+                WifiUplink {
+                    ssid: "cafe open".into(),
+                    psk: String::new(),
+                    encryption: "none".into(),
+                    radio: "radio0".into(),
+                    iface: "trm_uplink2".into(),
+                },
+            ],
+            ..TravelmateProfile::default()
+        }));
+        let script = render_shell(&plan);
+        assert!(script.contains("uci set travelmate.global.trm_iface='trm_wwan'"));
+        assert!(script.contains("uci set network.trm_wwan=interface"));
+        assert!(script.contains("uci set network.trm_wwan.proto='dhcp'"));
+        assert!(script.contains("uci set network.trm_wwan.metric='100'"));
+        assert!(script.contains("uci set network.trm_wwan6=interface"));
+        assert!(script.contains("uci set network.trm_wwan6.device='@trm_wwan'"));
+        assert!(script.contains("uci set network.trm_wwan6.proto='dhcpv6'"));
+        // the 1.x wan-zone helper (del_list-then-add_list on the NAME-matched zone), both ifaces
+        assert!(script.contains("uci add_list firewall.\"$_z\".network='trm_wwan'"));
+        assert!(script.contains("uci add_list firewall.\"$_z\".network='trm_wwan6'"));
+        assert!(script.contains("uci set wireless.trm_uplink1=wifi-iface"));
+        assert!(script.contains("uci set wireless.trm_uplink1.device='radio1'"));
+        assert!(script.contains("uci set wireless.trm_uplink1.mode='sta'"));
+        assert!(script.contains("uci set wireless.trm_uplink1.network='trm_wwan'"));
+        assert!(script.contains("uci set wireless.trm_uplink1.ssid='home-net'"));
+        assert!(script.contains("uci set wireless.trm_uplink1.encryption='psk2'"));
+        assert!(script.contains("uci set wireless.trm_uplink1.key='hunter2 son'"));
+        // open network: no key option at all
+        assert!(script.contains("uci set wireless.trm_uplink2.ssid='cafe open'"));
+        assert!(script.contains("uci set wireless.trm_uplink2.encryption='none'"));
+        assert!(!script.contains("trm_uplink2.key"));
+        assert!(script.contains("uci commit wireless"));
+        assert!(script.contains("wifi reload; ubus call network.interface.trm_wwan up"));
+        // secrets stay single-quote-escaped, never interpolated raw
+        let hostile = plan_for(Profile::Travelmate(TravelmateProfile {
+            uplinks: vec![WifiUplink {
+                ssid: "ev'; rm -rf /; '".into(),
+                psk: "p'w".into(),
+                encryption: "psk2".into(),
+                radio: "radio0".into(),
+                iface: "trm_uplink3".into(),
+            }],
+            ..TravelmateProfile::default()
+        }));
+        let hostile_script = render_shell(&hostile);
+        assert!(
+            hostile_script.contains("uci set wireless.trm_uplink3.ssid='ev'\\''; rm -rf /; '\\''")
+        );
+        assert!(hostile_script.contains("uci set wireless.trm_uplink3.key='p'\\''w'"));
+    }
+
+    #[test]
+    fn travelmate_without_uplinks_stays_1x_shape() {
+        let script = render_shell(&plan_for(Profile::Travelmate(TravelmateProfile::default())));
+        assert!(!script.contains("trm_iface"));
+        assert!(!script.contains("wifi-iface"));
+        assert!(!script.contains("trm_wwan"));
     }
 
     #[test]
