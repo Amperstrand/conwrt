@@ -24,7 +24,7 @@ use conwrt_core::plan::{
     WireguardClientProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
-use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
+use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
@@ -982,7 +982,7 @@ fn cmd_apply(
         plan.verification.len()
     );
     println!();
-    println!("{}", render_shell(&plan));
+    println!("{}", conwrt_local_std::execute::render_apply_script(&plan));
 
     if !execute {
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
