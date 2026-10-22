@@ -66,8 +66,8 @@ fn sqm_plan_ops_are_typed_and_ordered() {
     assert_eq!(
         kinds,
         [
-            "package", "package", "revert", "clear", "resolve", "section", "commit", "service",
-            "service"
+            "package", "package", "shell", "shell", "shell", "shell", "options", "commit",
+            "service", "service", "shell"
         ]
     );
 
@@ -81,11 +81,34 @@ fn sqm_plan_ops_are_typed_and_ordered() {
         .collect();
     assert_eq!(names, ["sqm-scripts", "luci-app-sqm"]);
 
+    // The shell ops mirror the 1.x builder's raw ShellCommands op-for-op:
+    // clear loop, `_sqm_dev` resolution, section creation, then the
+    // interface line pointing at the resolved device (1.x `wan` lesson).
+    let shells: Vec<&str> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            PlanOp::Shell { command } => Some(command.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shells[0],
+        "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"
+    );
+    assert!(shells[1].starts_with("_sqm_dev=$(uci get network.wan.device 2>/dev/null);"));
+    assert_eq!(shells[2], "uci set sqm.wan=queue");
+    assert_eq!(shells[3], "uci set sqm.wan.interface=\"$_sqm_dev\"");
+    assert_eq!(
+        shells[4],
+        "echo \"SQM configured: 340000/19000 kbit/s (cake) on $_sqm_dev\""
+    );
+
     let section = plan.ops.iter().find_map(|op| match op {
-        PlanOp::SetUciSection { options, .. } => Some(options),
+        PlanOp::SetUciOptions { options, .. } => Some(options),
         _ => None,
     });
-    let options = section.expect("plan sets the sqm queue section");
+    let options = section.expect("plan sets the sqm queue options");
     let get = |key: &str| {
         options
             .iter()
@@ -95,13 +118,9 @@ fn sqm_plan_ops_are_typed_and_ordered() {
     };
     assert_eq!(get("download"), UciValue::Literal("340000".into()));
     assert_eq!(get("upload"), UciValue::Literal("19000".into()));
-    // the 1.x lesson, typed: shape the resolved device, not the UCI name
-    assert_eq!(
-        get("interface"),
-        UciValue::ResolvedDevice {
-            network: "wan".into()
-        }
-    );
+    // 1.x option order: enabled first — interface is the separate shell
+    // line emitted directly after section creation, before these values.
+    assert_eq!(options.first().map(|(k, _)| k.as_str()), Some("enabled"));
 
     let services: Vec<(String, ServiceAction)> = plan
         .ops
