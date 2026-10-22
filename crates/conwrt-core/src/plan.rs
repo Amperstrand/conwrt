@@ -1502,6 +1502,9 @@ fn plan_wireguard_client(
     let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
         PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
             name: "wireguard-tools".into(),
         },
         PlanOp::EnsurePackage {
@@ -1658,6 +1661,9 @@ fn plan_wireguard_server(
 ) -> Result<Plan, Unsupported> {
     let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
         PlanOp::EnsurePackage {
             name: "wireguard-tools".into(),
         },
@@ -3914,6 +3920,29 @@ mod tests {
             .position(|l| *l == "HOTPLUG_EOF")
             .expect("heredoc terminator");
         assert!(lines[..eof_at].iter().any(|l| l.contains(") &")));
+    }
+
+    #[test]
+    fn wireguard_profiles_ensure_kernel_module_for_runtime_applies() {
+        // Runtime applies on vanilla apk/opkg-era images need the kernel
+        // module — the historical package set (wireguard-tools,
+        // luci-proto-wireguard) only worked because ASU bakes resolved
+        // kmod dependencies at image build time (x1860 25.12.6 hardware
+        // finding, lane wanapk).
+        let client = plan_for(Profile::WireguardClient(WireguardClientProfile {
+            peer_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+            endpoint_host: "vpn.example.com".into(),
+            ..WireguardClientProfile::default()
+        }));
+        let server = plan_for(Profile::WireguardServer(WireguardServerProfile::default()));
+        for plan in [client, server] {
+            assert!(
+                plan.ops.iter().any(
+                    |op| matches!(op, PlanOp::EnsurePackage { name } if name == "kmod-wireguard")
+                ),
+                "wireguard plans must ensure kmod-wireguard for runtime applies"
+            );
+        }
     }
 
     #[test]

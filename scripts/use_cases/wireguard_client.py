@@ -141,6 +141,10 @@ register(UseCase(
     name="wireguard-client",
     description="WireGuard VPN client — route traffic through a VPN tunnel",
     packages=[
+        # kmod-wireguard: runtime applies on vanilla images need the kernel
+        # module — ASU bakes resolved it transitively, runtime installs do not
+        # (x1860 25.12.6 hardware finding, lane wanapk).
+        "kmod-wireguard",
         "wireguard-tools",
         "luci-proto-wireguard",
     ],
