@@ -120,9 +120,13 @@ async fn wireguard_client_apply_verify_revert_lifecycle_on_real_hardware() {
         extras: Default::default(),
     };
 
+    // Endpoint is plan data only (the lifecycle never connects); the
+    // default is RFC 5737 TEST-NET-1 — bench listeners come via env.
+    let endpoint_host =
+        std::env::var("CONWRT_HW_WG_ENDPOINT").unwrap_or_else(|_| "192.0.2.1".into());
     let profile = WireguardClient(WireguardClientProfile {
         peer_public_key: "dGhpcyBpcyBhIGJlbmNoIGxpc3RlbmVyIHB1YmxpYyBrZXk=".into(),
-        endpoint_host: "10.102.89.254".into(),
+        endpoint_host: endpoint_host.clone(),
         endpoint_port: 51820,
         address: "10.203.0.2/32".into(),
         allowed_ips: "10.203.0.0/24".into(),
@@ -180,7 +184,7 @@ async fn wireguard_client_apply_verify_revert_lifecycle_on_real_hardware() {
     // uci readbacks (value-level, AGENTS.md).
     for (query, want) in [
         ("network.wg0.proto", "wireguard"),
-        ("network.wg0_peer.endpoint_host", "10.102.89.254"),
+        ("network.wg0_peer.endpoint_host", endpoint_host.as_str()),
         (
             "network.wg0_peer.public_key",
             "dGhpcyBpcyBhIGJlbmNoIGxpc3RlbmVyIHB1YmxpYyBrZXk=",
