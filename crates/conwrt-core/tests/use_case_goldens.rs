@@ -39,6 +39,7 @@
 //! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
 //! print(r["rescue-watchdog"].build_configure({"target": "192.168.105.10"}))
 //! print(r["mwan3"].build_configure({}))
+//! print(r["nodns"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -51,8 +52,8 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, Profile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant,
+    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, NodnsProfile,
+    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant,
     TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
@@ -234,6 +235,14 @@ fn mwan3_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Mwan3(Mwan3Profile::default()),
         include_str!("goldens/mwan3.sh"),
+    );
+}
+
+#[test]
+fn nodns_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Nodns(NodnsProfile::default()),
+        include_str!("goldens/nodns.sh"),
     );
 }
 
