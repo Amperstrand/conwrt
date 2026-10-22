@@ -1683,7 +1683,7 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
         ("trm_radio".into(), literal(tm.radio.clone())),
     ];
     if !tm.uplinks.is_empty() {
-        global_options.push(("trm_uplink".into(), literal("trm_wwan".into())));
+        global_options.push(("trm_iface".into(), literal("trm_wwan".into())));
     }
     let mut ops = vec![
         PlanOp::EnsurePackage {
@@ -1705,19 +1705,34 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
         },
     ];
     if !tm.uplinks.is_empty() {
-        // One shared DHCP uplink network; every seeded STA iface joins
-        // it and travelmate toggles the ifaces as it scans (its
-        // documented multi-uplink pattern). The wan-zone join reuses
-        // the 1.x helper: zone found by NAME, del_list-then-add_list
-        // for idempotency.
+        // Mirror of travelmate's own `setup` command shape (2.4.x): the
+        // trm_iface gate in travelmate-functions.sh exits "not
+        // configured" without it; the uplink pair is trm_wwan (dhcp,
+        // metric 100) + trm_wwan6 (dhcpv6 via @trm_wwan), both joined
+        // to the wan zone by NAME via the 1.x helper.
         ops.push(PlanOp::SetUciSection {
             config: "network".into(),
             section: "trm_wwan".into(),
             section_type: "interface".into(),
-            options: vec![("proto".into(), literal("dhcp".into()))],
+            options: vec![
+                ("proto".into(), literal("dhcp".into())),
+                ("metric".into(), literal("100".into())),
+            ],
+        });
+        ops.push(PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "trm_wwan6".into(),
+            section_type: "interface".into(),
+            options: vec![
+                ("device".into(), literal("@trm_wwan".into())),
+                ("proto".into(), literal("dhcpv6".into())),
+            ],
         });
         ops.push(PlanOp::Shell {
             command: uci_add_to_wan_zone_sh("trm_wwan"),
+        });
+        ops.push(PlanOp::Shell {
+            command: uci_add_to_wan_zone_sh("trm_wwan6"),
         });
         for uplink in &tm.uplinks {
             let mut options = vec![
@@ -2985,11 +3000,16 @@ mod tests {
             ..TravelmateProfile::default()
         }));
         let script = render_shell(&plan);
-        assert!(script.contains("uci set travelmate.global.trm_uplink='trm_wwan'"));
+        assert!(script.contains("uci set travelmate.global.trm_iface='trm_wwan'"));
         assert!(script.contains("uci set network.trm_wwan=interface"));
         assert!(script.contains("uci set network.trm_wwan.proto='dhcp'"));
-        // the 1.x wan-zone helper (del_list-then-add_list on the NAME-matched zone)
+        assert!(script.contains("uci set network.trm_wwan.metric='100'"));
+        assert!(script.contains("uci set network.trm_wwan6=interface"));
+        assert!(script.contains("uci set network.trm_wwan6.device='@trm_wwan'"));
+        assert!(script.contains("uci set network.trm_wwan6.proto='dhcpv6'"));
+        // the 1.x wan-zone helper (del_list-then-add_list on the NAME-matched zone), both ifaces
         assert!(script.contains("uci add_list firewall.\"$_z\".network='trm_wwan'"));
+        assert!(script.contains("uci add_list firewall.\"$_z\".network='trm_wwan6'"));
         assert!(script.contains("uci set wireless.trm_uplink1=wifi-iface"));
         assert!(script.contains("uci set wireless.trm_uplink1.device='radio1'"));
         assert!(script.contains("uci set wireless.trm_uplink1.mode='sta'"));
@@ -3024,7 +3044,7 @@ mod tests {
     #[test]
     fn travelmate_without_uplinks_stays_1x_shape() {
         let script = render_shell(&plan_for(Profile::Travelmate(TravelmateProfile::default())));
-        assert!(!script.contains("trm_uplink"));
+        assert!(!script.contains("trm_iface"));
         assert!(!script.contains("wifi-iface"));
         assert!(!script.contains("trm_wwan"));
     }
