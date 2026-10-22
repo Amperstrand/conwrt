@@ -38,6 +38,7 @@
 //! print(r["adguard"].build_configure({}))
 //! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
 //! print(r["rescue-watchdog"].build_configure({"target": "192.168.105.10"}))
+//! print(r["mwan3"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -50,9 +51,9 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Profile, RescueWatchdogProfile,
-    SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant, TravelmateProfile,
-    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, Profile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant,
+    TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -78,6 +79,13 @@ fn model_with_capabilities(caps: Option<Vec<String>>) -> DeviceModel {
 /// per package (`if command -v apk … || { apk update \` +
 /// `&& apk add …; }; else … opkg install …; }; fi`) — same semantic
 /// exclusion as the legacy single `opkg install ` line.
+///
+/// mwan3 track-ip wiring is dropped from BOTH sides: 1.x renders it as
+/// bare `list track_ip '<ip>'` lines — broken shell that no-`set -e`
+/// 1.x silently ignored — while 2.x renders the intended
+/// `uci add_list mwan3.<sec>.track_ip` ops. A documented 1.x defect the
+/// port fixes; the corrected lines are pinned by unit test instead of
+/// golden parity.
 fn command_lines(script: &str) -> Vec<String> {
     script
         .lines()
@@ -87,6 +95,8 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.starts_with("opkg install "))
         .filter(|l| !l.starts_with("if command -v apk "))
         .filter(|l| !l.starts_with("&& apk add "))
+        .filter(|l| !l.starts_with("list track_ip "))
+        .filter(|l| !(l.starts_with("uci add_list mwan3.") && l.contains(".track_ip=")))
         .map(|l| l.to_string())
         .collect()
 }
@@ -216,6 +226,14 @@ fn rescue_watchdog_matches_1x_golden() {
             target: "192.168.105.10".into(),
         }),
         include_str!("goldens/rescue-watchdog.sh"),
+    );
+}
+
+#[test]
+fn mwan3_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Mwan3(Mwan3Profile::default()),
+        include_str!("goldens/mwan3.sh"),
     );
 }
 

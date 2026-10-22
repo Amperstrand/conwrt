@@ -562,6 +562,80 @@ impl Default for RescueWatchdogProfile {
     }
 }
 
+/// Multi-WAN failover / load balancing — port of the tested 1.x
+/// `mwan3` preset (`scripts/use_cases/mwan3.py`, verified on 24.10.2
+/// with the iptables-nft compat layer in QEMU). Two tracked WAN
+/// interfaces, one member each (metric/weight per policy), a
+/// `<primary>_policy` using both members, and default_v4 + sticky-HTTPS
+/// rules. 1.x renders the track IPs as bare `list track_ip 'IP'`
+/// lines — broken shell that no-`set -e` 1.x silently ignored; this
+/// port renders real `uci add_list` ops (the golden comparator
+/// excludes track-ip wiring from both sides and the unit tests pin the
+/// corrected lines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mwan3Profile {
+    /// Primary WAN UCI interface name (1.x `interface_name` charset).
+    pub primary: String,
+    /// Secondary WAN UCI interface name (e.g. `usbwan` from tethering).
+    pub secondary: String,
+    /// `failover` (secondary metric 2) or `balanced` (equal metrics,
+    /// weight 2:1) — 1.x treats any other value as failover.
+    pub policy: String,
+    /// IPs pinged for connectivity tracking (1.x default: four public
+    /// resolvers).
+    pub track_ips: Vec<String>,
+}
+
+impl Default for Mwan3Profile {
+    fn default() -> Self {
+        Self {
+            primary: "wan".into(),
+            secondary: "usbwan".into(),
+            policy: "failover".into(),
+            track_ips: vec![
+                "1.0.0.1".into(),
+                "1.1.1.1".into(),
+                "8.8.8.8".into(),
+                "8.8.4.4".into(),
+            ],
+        }
+    }
+}
+
+impl Mwan3Profile {
+    /// 1.x `shell_safe::interface_name` parity: non-empty, `[A-Za-z0-9_.:-]+`.
+    /// `policy` additionally carries a shell-safe charset — it is the one
+    /// value this plan interpolates into a raw `echo` line, and 1.x never
+    /// validated it (the PlanOp::Shell contract requires gated values).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.primary) {
+            return Err(Unsupported::InvalidParams(
+                "primary contains unsafe characters".into(),
+            ));
+        }
+        if !iface_ok(&self.secondary) {
+            return Err(Unsupported::InvalidParams(
+                "secondary contains unsafe characters".into(),
+            ));
+        }
+        if !self
+            .policy
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(Unsupported::InvalidParams(
+                "policy contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -704,6 +778,8 @@ pub enum Profile {
     Mesh11sd(Mesh11sdProfile),
     /// Self-healing reboot when the management target goes unreachable.
     RescueWatchdog(RescueWatchdogProfile),
+    /// Multi-WAN failover / load balancing.
+    Mwan3(Mwan3Profile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -723,6 +799,7 @@ impl Profile {
             Profile::Adguard(_) => "adguard",
             Profile::Mesh11sd(_) => "mesh11sd",
             Profile::RescueWatchdog(_) => "rescue-watchdog",
+            Profile::Mwan3(_) => "mwan3",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -743,6 +820,7 @@ impl Profile {
             Profile::Adguard(_) => &[],
             Profile::Mesh11sd(_) => &["wifi"],
             Profile::RescueWatchdog(_) => &[],
+            Profile::Mwan3(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -1056,6 +1134,7 @@ pub fn plan_profile(
         Profile::Adguard(ag) => plan_adguard(model, ag),
         Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
         Profile::RescueWatchdog(wd) => plan_rescue_watchdog(model, wd),
+        Profile::Mwan3(mw) => plan_mwan3(model, mw),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -2151,6 +2230,167 @@ fn plan_rescue_watchdog(
     }];
     Ok(Plan {
         profile_id: "rescue-watchdog".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_mwan3(model: &DeviceModel, mw: &Mwan3Profile) -> Result<Plan, Unsupported> {
+    mw.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let (primary_metric, primary_weight, secondary_metric, secondary_weight) =
+        if mw.policy == "balanced" {
+            ("1", "2", "1", "1")
+        } else {
+            ("1", "1", "2", "1")
+        };
+    let pm = format!("{}_m{primary_metric}_w{primary_weight}", mw.primary);
+    let sm = format!("{}_m{secondary_metric}_w{secondary_weight}", mw.secondary);
+    let pol_name = format!("{}_policy", mw.primary);
+    let probe_options = vec![
+        ("family".into(), literal("ipv4".into())),
+        ("reliability".into(), literal("1".into())),
+        ("count".into(), literal("1".into())),
+        ("timeout".into(), literal("2".into())),
+        ("interval".into(), literal("5".into())),
+        ("down".into(), literal("3".into())),
+        ("up".into(), literal("8".into())),
+    ];
+    let mut ops: Vec<PlanOp> = [
+        "mwan3",
+        "iptables-nft",
+        "ip6tables-nft",
+        "iptables-mod-conntrack-extra",
+    ]
+    .iter()
+    .map(|name| PlanOp::EnsurePackage {
+        name: (*name).into(),
+    })
+    .collect();
+    // mwan3 convention: the tracked interface section is named after the
+    // UCI network it tracks. 1.x hardcoded the section as `wan` while
+    // pointing the member at `primary` — broken for any primary ≠ "wan"
+    // (Codex #448 P1; default output renders identically, so golden
+    // parity is unaffected).
+    ops.push(PlanOp::ResetUciConfig {
+        config: "mwan3".into(),
+    });
+    for section in [&mw.primary, &mw.secondary] {
+        ops.push(PlanOp::SetUciSection {
+            config: "mwan3".into(),
+            section: section.clone(),
+            section_type: "interface".into(),
+            options: vec![("enabled".into(), literal("1".into()))],
+        });
+        for ip in &mw.track_ips {
+            // 1.x renders bare `list track_ip '<ip>'` lines here — broken
+            // shell (silently ignored without set -e, fatal with it); the
+            // port emits the intended uci add_list against THIS section
+            ops.push(PlanOp::UciAddList {
+                config: "mwan3".into(),
+                section: section.clone(),
+                option: "track_ip".into(),
+                value: ip.clone(),
+            });
+        }
+        ops.push(PlanOp::SetUciOptions {
+            config: "mwan3".into(),
+            section: section.clone(),
+            options: probe_options.clone(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: pm.clone(),
+        section_type: "member".into(),
+        options: vec![
+            ("interface".into(), literal(mw.primary.clone())),
+            ("metric".into(), literal(primary_metric.into())),
+            ("weight".into(), literal(primary_weight.into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: sm.clone(),
+        section_type: "member".into(),
+        options: vec![
+            ("interface".into(), literal(mw.secondary.clone())),
+            ("metric".into(), literal(secondary_metric.into())),
+            ("weight".into(), literal(secondary_weight.into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        section_type: "policy".into(),
+        options: vec![],
+    });
+    ops.push(PlanOp::UciAddList {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        option: "use_member".into(),
+        value: pm.clone(),
+    });
+    ops.push(PlanOp::UciAddList {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        option: "use_member".into(),
+        value: sm.clone(),
+    });
+    ops.push(PlanOp::SetUciOptions {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        options: vec![("last_resort".into(), literal("default".into()))],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: "default_rule_v4".into(),
+        section_type: "rule".into(),
+        options: vec![
+            ("dest_ip".into(), literal("0.0.0.0/0".into())),
+            ("use_policy".into(), literal(pol_name.clone())),
+            ("family".into(), literal("ipv4".into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: "https_rule".into(),
+        section_type: "rule".into(),
+        options: vec![
+            ("dest_port".into(), literal("443".into())),
+            ("proto".into(), literal("tcp".into())),
+            ("sticky".into(), literal("1".into())),
+            ("use_policy".into(), literal(pol_name.clone())),
+        ],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "mwan3".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "mwan3".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo \"mwan3 configured: {} (primary) + {} ({})\"",
+            mw.primary, mw.secondary, mw.policy
+        ),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "primary interface section exists".into(),
+            command: "uci -q get mwan3.wan.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "policy wired to both members".into(),
+            command: format!("uci -q get mwan3.{pol_name}.use_member"),
+            expect_contains: pm,
+        },
+    ];
+    Ok(Plan {
+        profile_id: "mwan3".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -3499,6 +3739,70 @@ mod tests {
         assert!(script.contains("/etc/init.d/rescue-watchdog enable"));
         // no unsubstituted placeholder survives
         assert!(!script.contains("__TARGET__"));
+    }
+
+    #[test]
+    fn mwan3_shape_members_policy_rules_and_track_ip_fix() {
+        let script = render_shell(&plan_for(Profile::Mwan3(Mwan3Profile::default())));
+        assert!(script.contains("uci -q delete mwan3 >/dev/null 2>&1 || true"));
+        assert!(script.contains("uci set mwan3.wan=interface"));
+        assert!(script.contains("uci set mwan3.wan.enabled='1'"));
+        // the 1.x `list track_ip` defect is FIXED: real add_list ops per section
+        assert!(script.contains("uci add_list mwan3.wan.track_ip='1.0.0.1'"));
+        assert!(script.contains("uci add_list mwan3.usbwan.track_ip='8.8.4.4'"));
+        assert!(!script.contains("list track_ip"));
+        assert!(script.contains("uci set mwan3.wan.family='ipv4'"));
+        assert!(script.contains("uci set mwan3.usbwan=interface"));
+        // failover metrics: primary m1w1, secondary m2w1
+        assert!(script.contains("uci set mwan3.wan_m1_w1=member"));
+        assert!(script.contains("uci set mwan3.usbwan_m2_w1=member"));
+        assert!(script.contains("uci set mwan3.wan_policy=policy"));
+        assert!(script.contains("uci add_list mwan3.wan_policy.use_member='wan_m1_w1'"));
+        assert!(script.contains("uci add_list mwan3.wan_policy.use_member='usbwan_m2_w1'"));
+        assert!(script.contains("uci set mwan3.wan_policy.last_resort='default'"));
+        assert!(script.contains("uci set mwan3.default_rule_v4=rule"));
+        assert!(
+            script.contains(
+                "uci set mwan3.https_rule.rule"
+                    .replace(".rule", "=rule")
+                    .as_str()
+            )
+        );
+        assert!(script.contains("uci commit mwan3"));
+        assert!(script.contains("/etc/init.d/mwan3 restart"));
+        assert!(script.contains("echo \"mwan3 configured: wan (primary) + usbwan (failover)\""));
+
+        // balanced flips the metrics/weights; non-default primary gets its
+        // own tracked section (1.x hardcoded `wan` — Codex #448 P1)
+        let balanced = render_shell(&plan_for(Profile::Mwan3(Mwan3Profile {
+            primary: "wwan2".into(),
+            secondary: "wwan".into(),
+            policy: "balanced".into(),
+            track_ips: vec!["9.9.9.9".into()],
+        })));
+        assert!(balanced.contains("uci set mwan3.wwan2=interface"));
+        assert!(balanced.contains("uci set mwan3.wwan2_m1_w2=member"));
+        assert!(balanced.contains("uci set mwan3.wwan_m1_w1=member"));
+        assert!(balanced.contains("uci add_list mwan3.wwan.track_ip='9.9.9.9'"));
+
+        // interface_name charset gate
+        assert!(matches!(
+            Mwan3Profile {
+                primary: "wan; rm".into(),
+                ..Mwan3Profile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        // policy is interpolated into the echo line — hostile values refused
+        assert!(matches!(
+            Mwan3Profile {
+                policy: "x'; rm -rf /; '".into(),
+                ..Mwan3Profile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
     }
 
     #[test]
