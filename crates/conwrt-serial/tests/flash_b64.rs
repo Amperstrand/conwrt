@@ -142,7 +142,7 @@ fn hex(digest: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn pty_parts() -> (std::fs::File, String) {
+fn pty_parts() -> (std::fs::File, std::fs::File, String) {
     let pair = openpty(None, None).expect("openpty");
     let mut term = tcgetattr(&pair.slave).expect("tcgetattr slave");
     cfmakeraw(&mut term);
@@ -153,9 +153,13 @@ fn pty_parts() -> (std::fs::File, String) {
     )
     .expect("setraw slave");
     let slave_path = ttyname(&pair.slave).expect("ttyname slave");
-    drop(pair.slave);
+    // The openpty slave fd stays open until open_console's own path-based
+    // open completes (the caller drops it right after): a pts whose last
+    // slave fd closes can refuse the reopen under CI load with EIO (#422
+    // live signature: `open pty slave: OpenDevice … I/O error`).
     (
         std::fs::File::from(pair.master),
+        std::fs::File::from(pair.slave),
         slave_path.display().to_string(),
     )
 }
@@ -181,8 +185,21 @@ fn fast_opts() -> FlashOptions {
 }
 
 fn open_console(slave_path: &str) -> SerialConsole {
-    SerialConsole::with_baud(slave_path, 115_200, Duration::from_millis(20))
-        .expect("open pty slave")
+    // The held openpty slave closes the #422 race window by construction;
+    // this bounded retry absorbs any residual load-induced EIO on the
+    // reopen instead of failing the test with it.
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        match SerialConsole::with_baud(slave_path, 115_200, Duration::from_millis(20)) {
+            Ok(console) => return console,
+            Err(e) => {
+                eprintln!("open pty slave attempt {attempt} failed: {e}");
+                last_err = Some(e);
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    panic!("open pty slave after 3 attempts: {last_err:?}");
 }
 
 fn image(bytes: usize) -> Vec<u8> {
@@ -193,8 +210,9 @@ fn image(bytes: usize) -> Vec<u8> {
 /// `PROGRESS_EVERY = 50` cadence fires mid-transfer AND at the end.
 #[test]
 fn round_trip_transfers_and_verifies_sha256_receiver_side() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut console = open_console(&slave_path);
+    drop(_held_slave);
     let device = MockDevice::spawn(master, DeviceMode::Honest);
     let image = image(2048);
     let opts = fast_opts();
@@ -225,8 +243,9 @@ fn round_trip_transfers_and_verifies_sha256_receiver_side() {
 /// corrupt — the driver must refuse, never trust its own `Ok`.
 #[test]
 fn corrupt_device_copy_fails_hash_verification() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut console = open_console(&slave_path);
+    drop(_held_slave);
     let device = MockDevice::spawn(master, DeviceMode::CorruptTail);
     let image = image(700);
     let err = flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).unwrap_err();
@@ -248,8 +267,9 @@ fn corrupt_device_copy_fails_hash_verification() {
 /// with the device output — verification is never reached.
 #[test]
 fn decode_failure_on_device_surfaces() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut console = open_console(&slave_path);
+    drop(_held_slave);
     let device = MockDevice::spawn(master, DeviceMode::DecodeFails);
     let image = image(300);
     let err = flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).unwrap_err();
@@ -270,8 +290,9 @@ fn decode_failure_on_device_surfaces() {
 /// Python-parity line and returns without waiting for a reply.
 #[test]
 fn trigger_sysupgrade_writes_line_without_waiting() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut console = open_console(&slave_path);
+    drop(_held_slave);
     let device = MockDevice::spawn(master, DeviceMode::Honest);
     let image = image(64);
     flash_base64(&mut console, &image, &fast_opts(), |_, _| {}).expect("flash before sysupgrade");
@@ -289,8 +310,9 @@ fn trigger_sysupgrade_writes_line_without_waiting() {
 /// `chunk_size == 0` is refused before any wire traffic.
 #[test]
 fn zero_chunk_size_is_refused() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut console = open_console(&slave_path);
+    drop(_held_slave);
     let device = MockDevice::spawn(master, DeviceMode::Honest);
     let mut opts = fast_opts();
     opts.chunk_size = 0;
