@@ -455,6 +455,13 @@ impl MonitorSession {
         Ok(json)
     }
 
+    /// The wall-clock timestamp captured when the session OPENED (the
+    /// value `session.json` reports as `start_time`).
+    #[must_use]
+    pub fn start_wall(&self) -> &str {
+        &self.start_wall
+    }
+
     /// Bytes received so far.
     #[must_use]
     pub fn total_rx(&self) -> u64 {
