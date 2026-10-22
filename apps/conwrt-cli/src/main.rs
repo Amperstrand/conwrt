@@ -112,6 +112,40 @@ enum Command {
         #[command(subcommand)]
         command: MaasCommand,
     },
+    /// Source the vanilla OpenWrt image for a model from
+    /// downloads.openwrt.org: resolve release/flavour through the
+    /// precedence chains (CLI > env > model > default), fetch the
+    /// target's sha256sums index, verify the downloaded bytes, cache
+    /// under images/ (1.x `conwrt.py image` / `make source-image` parity).
+    SourceImage {
+        /// Model id from `conwrt models`.
+        #[arg(long)]
+        model_id: String,
+        /// Full X.Y.Z release; defaults to the model's `openwrt.release`.
+        #[arg(long)]
+        release: Option<String>,
+        /// Image flavour (e.g. squashfs-factory.bin); defaults to the
+        /// model's `openwrt.image_suffix`, then squashfs-sysupgrade.bin.
+        #[arg(long)]
+        image_suffix: Option<String>,
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+        /// downloads server base URL (default: downloads.openwrt.org;
+        /// mirrors work — the layout below `<base>/releases/` is the
+        /// contract).
+        #[arg(long)]
+        downloads_base: Option<String>,
+        /// Skip the sha256sums index check (parity with the 1.x kwarg).
+        #[arg(long)]
+        no_verify: bool,
+        /// Re-download even when a matching cached image exists.
+        #[arg(long)]
+        force: bool,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
+    },
     /// Request a custom ASU firmware build and cache the verified image
     /// (#117 parity slice for firmware-manager.py `request`).
     Image {
@@ -462,6 +496,27 @@ fn main() -> ExitCode {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
+        Command::SourceImage {
+            model_id,
+            release,
+            image_suffix,
+            images_root,
+            downloads_base,
+            no_verify,
+            force,
+            dir,
+        } => cmd_source_image(
+            &SourceImageArgs {
+                model_id: &model_id,
+                release: release.as_deref(),
+                image_suffix: image_suffix.as_deref(),
+                images_root: &images_root,
+                downloads_base: downloads_base.as_deref(),
+                no_verify,
+                force,
+            },
+            &dir,
+        ),
         Command::Image {
             model_id,
             release,
@@ -1508,6 +1563,95 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+    }
+}
+
+struct SourceImageArgs<'a> {
+    model_id: &'a str,
+    release: Option<&'a str>,
+    image_suffix: Option<&'a str>,
+    images_root: &'a Path,
+    downloads_base: Option<&'a str>,
+    no_verify: bool,
+    force: bool,
+}
+
+fn cmd_source_image(args: &SourceImageArgs<'_>, dir: &Path) -> ExitCode {
+    use conwrt_image::downloads::{FetchOptions, ReqwestDownloadsClient, fetch_image};
+    use conwrt_image::vanilla::{ReleaseOverrides, SuffixOverrides, VanillaModel};
+
+    let (registry, _) = load_registry(dir);
+    let Some(model) = registry.models().iter().find(|m| m.id == args.model_id) else {
+        eprintln!("unknown model id {:?} (see `conwrt models`)", args.model_id);
+        return ExitCode::from(2);
+    };
+    let openwrt_str = |key: &str| {
+        model
+            .openwrt
+            .extras
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let vanilla_model = VanillaModel {
+        id: model.id.clone(),
+        target: model.openwrt.target.clone(),
+        profile: model.openwrt.profile.clone(),
+        release: openwrt_str("release"),
+        image_suffix: openwrt_str("image_suffix"),
+    };
+    let client = match args
+        .downloads_base
+        .map(ReqwestDownloadsClient::with_base)
+        .unwrap_or_else(ReqwestDownloadsClient::new)
+    {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("cannot start downloads client: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let env_release = std::env::var("CONWRT_OPENWRT_RELEASE").ok();
+    let env_suffix = std::env::var("CONWRT_IMAGE_SUFFIX").ok();
+    let options = FetchOptions {
+        release: ReleaseOverrides {
+            cli: args.release,
+            env: env_release.as_deref(),
+        },
+        suffix: SuffixOverrides {
+            cli: args.image_suffix,
+            env: env_suffix.as_deref(),
+        },
+        verify: !args.no_verify,
+        force: args.force,
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match runtime.block_on(fetch_image(
+        &client,
+        args.images_root,
+        &vanilla_model,
+        &options,
+    )) {
+        Ok(fetched) => {
+            println!("URL:     {}", fetched.url);
+            if fetched.already_cached {
+                println!("cached:  {}", fetched.path.display());
+            } else if let Some(sha) = &fetched.sha256 {
+                println!("SHA-256 verified: {sha}");
+            }
+            println!("Image ready: {}", fetched.path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("source-image failed: {e}");
+            ExitCode::from(2)
         }
     }
 }
