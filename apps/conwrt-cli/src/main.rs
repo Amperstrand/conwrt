@@ -1469,7 +1469,13 @@ fn cmd_image(
         Some(packages.to_vec())
     };
     let defaults_script = defaults.map(|p| {
-        std::fs::read_to_string(p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        let text = std::fs::read_to_string(p)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()));
+        if let Err(e) = conwrt_image::types::validate_defaults_script(&text) {
+            eprintln!("defaults rejected: {e}");
+            std::process::exit(2);
+        }
+        text
     });
     let mut request = BuildRequest::openwrt(
         version,
