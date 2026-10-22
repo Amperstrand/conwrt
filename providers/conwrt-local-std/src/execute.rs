@@ -53,12 +53,31 @@ impl ApplyOutcome {
 pub fn render_apply_script(plan: &Plan) -> String {
     use conwrt_core::plan::PlanOp;
     let mut script = render_shell(plan);
-    let mut configs: Vec<&str> = Vec::new();
+    let mut configs: Vec<String> = Vec::new();
+    let push = |configs: &mut Vec<String>, config: String| {
+        if !configs.contains(&config) {
+            configs.push(config);
+        }
+    };
     for op in &plan.ops {
-        if let PlanOp::CommitUci { config } = op {
-            if !configs.iter().any(|c| c == &config.as_str()) {
-                configs.push(config);
+        match op {
+            PlanOp::CommitUci { config } => push(&mut configs, config.clone()),
+            // tether-style plans embed their commits inside verbatim
+            // shell payloads — scan those too (Codex #446 P1-1)
+            PlanOp::Shell { command } => {
+                let mut rest = command.as_str();
+                while let Some(at) = rest.find("uci commit ") {
+                    rest = &rest[at + "uci commit ".len()..];
+                    let token: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
+                    if !token.is_empty() {
+                        push(&mut configs, token);
+                    }
+                }
             }
+            _ => {}
         }
     }
     if configs.is_empty() {

@@ -218,3 +218,41 @@ fn apply_script_reverts_every_committed_config_before_mutations() {
     assert!(rev_net < rev_fw);
     assert_eq!(script.matches("uci -q revert network").count(), 1);
 }
+
+/// #427 + Codex #446 P1-1: tether-style plans embed `uci commit` inside
+/// verbatim Shell payloads — the revert preamble must see those too.
+#[test]
+fn apply_script_reverts_configs_committed_inside_shell_ops() {
+    use conwrt_core::plan::Plan;
+    let plan = Plan {
+        profile_id: "shell-commits".into(),
+        model_id: "t".into(),
+        ops: vec![
+            conwrt_core::plan::PlanOp::Shell {
+                command: "uci set network.usbwan=interface; \
+                          uci commit network; \
+                          uci add_list firewall.z.network='usbwan'; \
+                          uci commit firewall"
+                    .into(),
+            },
+            conwrt_core::plan::PlanOp::CommitUci {
+                config: "wireless".into(),
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    let rev_net = script
+        .find("uci -q revert network")
+        .expect("revert network");
+    let rev_fw = script
+        .find("uci -q revert firewall")
+        .expect("revert firewall");
+    let rev_wl = script
+        .find("uci -q revert wireless")
+        .expect("revert wireless");
+    let mutation = script
+        .find("uci set network.usbwan=interface")
+        .expect("mutation");
+    assert!(rev_net < mutation && rev_fw < mutation && rev_wl < mutation);
+}
