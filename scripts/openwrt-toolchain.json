@@ -1,0 +1,15 @@
+{
+  "_comment": "Pinned OpenWrt build-pipeline inputs for conwrt cross lanes (mipsel zycast, #109). rust_per_release mirrors lang/rust PKG_VERSION of each openwrt/packages feed branch; audited against the live feed by scripts/sdk_rust_version.py (make openwrt-toolchain-check) - the tollgate-module-basic-go scripts/sdk-go-version.sh pattern. OpenWrt publishes no rust toolchain in released feeds (unlike golang), so feed branches are the only rust authority. openwrt/sdk image digests get pinned here when the #109 docker lane lands.",
+  "openwrt_sdk": {
+    "image": "openwrt/sdk",
+    "default_era": "apk",
+    "releases": {
+      "apk": {"series": "25.12", "release": "25.12.6", "target": "ramips-mt7621"},
+      "ipk": {"series": "24.10", "release": "24.10.8", "target": "ramips-mt7621"}
+    },
+    "rust_per_release": {
+      "25.12": "1.96.0",
+      "24.10": "1.94.0"
+    }
+  }
+}
