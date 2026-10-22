@@ -11,24 +11,18 @@
 //!
 //! Default path: `$CONWRT_KNOWN_HOSTS`, else `~/.config/conwrt/known_hosts`
 //! (the OpenSSH mental model, conwrt-scoped). Concurrent access: an
-//! exclusive lock file (`<path>.lock`, O_EXCL with bounded retry, stale
-//! takeover after a timeout) guards the read-merge-write; the write itself
-//! is temp-file + atomic rename, so a crashed writer can never tear the
-//! store. Worst case under lock contention is last-writer-wins *per
-//! remember()*, never a corrupted file.
+//! exclusive `flock(2)` on a persistent sidecar (`<path>.lock`) guards
+//! the read-merge-write; the write itself is temp-file + atomic rename,
+//! so a crashed writer can never tear the store. The kernel both
+//! enforces exclusion and reclaims a crashed holder's lock (fd close),
+//! so there are no timeouts, no stale takeover, and no lost entries
+//! under contention (#406).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use conwrt_core::ssh::{HostKeyView, TrustStore};
-
-/// How long [`FileTrustStore::remember`] waits for the lock before
-/// taking over a stale one (a crashed holder cannot release).
-const LOCK_WAIT: Duration = Duration::from_secs(3);
-/// Retry cadence while waiting for the lock.
-const LOCK_RETRY: Duration = Duration::from_millis(25);
 
 /// File-backed TOFU store.
 pub struct FileTrustStore {
@@ -45,74 +39,29 @@ impl std::fmt::Debug for FileTrustStore {
     }
 }
 
-/// A held exclusive lock file, identified by an ownership token written
-/// into it at acquire time.
+/// Acquires the exclusive `flock(2)` on the persistent sidecar file and
+/// returns the RAII guard (drop = release).
 ///
-/// Release is ownership-checked: after a stale takeover (a crashed or
-/// wedged holder), the ORIGINAL holder's guard must not delete the
-/// SUCCESSOR's lockfile — that would admit a second writer mid-write and
-/// lose entries (the CI-runner race this token exists for).
-struct LockGuard {
-    path: PathBuf,
-    token: String,
-}
-
-fn next_lock_token() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-impl LockGuard {
-    fn acquire(lock_path: &Path) -> std::io::Result<Self> {
-        let token = next_lock_token();
-        let deadline = Instant::now() + LOCK_WAIT;
-        loop {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(lock_path)
-            {
-                Ok(mut file) => {
-                    use std::io::Write as _;
-                    let _ = file.write_all(token.as_bytes());
-                    let _ = file.sync_all();
-                    return Ok(Self {
-                        path: lock_path.to_path_buf(),
-                        token,
-                    });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if Instant::now() >= deadline {
-                        // Stale holder (crashed process). Take over: the
-                        // atomic-rename write below means a racing writer
-                        // can lose an entry but never corrupt the store.
-                        // Ownership tokens keep the deposed holder's
-                        // release from unlocking the successor.
-                        let _ = fs::remove_file(lock_path);
-                        continue;
-                    }
-                    std::thread::sleep(LOCK_RETRY);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-}
-
-impl Drop for LockGuard {
-    fn drop(&mut self) {
-        let still_ours = fs::read_to_string(&self.path)
-            .map(|contents| contents == self.token)
-            .unwrap_or(false);
-        if still_ours {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
+/// Determinism (#406): mutual exclusion is enforced by the kernel, which
+/// also owns liveness — a holder that crashes has the lock reclaimed when
+/// its fd closes. There is no timeout that can expire against a merely
+/// slow holder (the old O_EXCL scheme deposed slow holders after 3s and
+/// lost whole write batches), no stale takeover, and no polling. `flock`
+/// is per open-file-description, so separate `open()`s inside one
+/// process contend exactly like separate processes. The sidecar is never
+/// unlinked: the lock's identity is its inode, and removing it would let
+/// two openers hold "the lock" on different inodes.
+fn acquire_lock(lock_path: &Path) -> std::io::Result<nix::fcntl::Flock<File>> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    // Blocking LOCK_EX: queues behind the current holder and returns
+    // only with the lock held — the release→acquire happens-before edge
+    // is the kernel's, not the scheduler's.
+    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
+        .map_err(|(_, errno)| std::io::Error::from(errno))
 }
 
 impl FileTrustStore {
@@ -182,7 +131,7 @@ impl FileTrustStore {
             s.push(".lock");
             PathBuf::from(s)
         };
-        let _lock = match LockGuard::acquire(&lock_path) {
+        let _lock = match acquire_lock(&lock_path) {
             Ok(g) => g,
             Err(_) => return,
         };
@@ -225,7 +174,7 @@ impl TrustStore for FileTrustStore {
             s.push(".lock");
             PathBuf::from(s)
         };
-        let _lock = match LockGuard::acquire(&lock_path) {
+        let _lock = match acquire_lock(&lock_path) {
             Ok(g) => g,
             Err(_) => return, // store unavailable: skip, never panic mid-auth
         };
@@ -413,7 +362,14 @@ mod tests {
     }
 
     #[test]
-    fn stale_lock_is_taken_over() {
+    fn leftover_lock_file_from_a_dead_process_does_not_block() {
+        // Under the old O_EXCL scheme a crashed holder left the lock file
+        // behind and every later writer had to wait out a 3s timeout
+        // before taking it over. With flock the sidecar is pure lock
+        // identity: a leftover file from a dead process is unlocked by
+        // definition (its fd is closed), so remember() proceeds at once.
+        // Crash cleanup is the kernel's job now — there is deliberately
+        // no timeout logic left here to test.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("known_hosts");
         let lock_path = {
@@ -421,12 +377,9 @@ mod tests {
             s.push(".lock");
             PathBuf::from(s)
         };
-        fs::write(&lock_path, "held by a dead process").unwrap();
+        fs::write(&lock_path, "left behind by a dead process").unwrap();
         let mut store = FileTrustStore::new(&path);
-        let start = Instant::now();
         store.remember("h:22", &key("ssh-ed25519", "SHA256:aaa"));
-        assert!(start.elapsed() >= LOCK_WAIT, "must wait before takeover");
         assert_eq!(store.entries("h:22").len(), 1);
-        assert!(!lock_path.exists(), "lock released after write");
     }
 }
