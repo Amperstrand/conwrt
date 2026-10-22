@@ -1,0 +1,15 @@
+[package]
+name = "conwrt-zycast"
+description = "ZyXEL multicast flash sender — Rust port of cmd/zycast send (lean: conwrt-protocols + clap only, so mipsel/MCU cross-builds stay small)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conwrt-protocols = { path = "../../crates/conwrt-protocols", features = ["std"] }
+clap = { workspace = true }
+
+[lints]
+workspace = true

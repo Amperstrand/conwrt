@@ -17,18 +17,18 @@ The protocol was reverse-engineered by Bjorn Mork and published as `zycast.c` in
 
 ## 2. Implementations
 
-| Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) |
-|---------|-------------------|---------------------------|--------------------------------------|
-| **Status** | **TESTED on hardware** | Reference, untested on our hardware | Untested |
-| **Binary size** | 3.1 MB (stripped, MIPS) | ~50 KB | N/A (interpreted) |
-| **Cross-compile** | Single command | Requires C compiler on host | No compilation |
-| **Dependencies** | None (static) | C compiler + socket headers | Python 3 stdlib only |
-| **PoE control** | Built-in (`poe` subcommand) | None | None |
-| **Boot detection** | Built-in (`flash` subcommand pings target) | None | None |
-| **Platforms** | MIPS, ARM, x86_64 (any Go target) | Linux/macOS (needs MSG_MORE or `-DMSG_MORE=0`) | Any Python 3 |
-| **Interface binding** | SO_BINDTODEVICE with IP_MULTICAST_IF fallback | SO_BINDTODEVICE | SO_BINDTODEVICE with IP_MULTICAST_IF fallback |
+| Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) | Rust (`crates/conwrt-protocols` + `apps/conwrt-zycast`) |
+|---------|-------------------|---------------------------|--------------------------------------|--------------------------------------|
+| **Status** | **TESTED on hardware** | Reference, untested on our hardware | Untested | Wire-parity proven vs Go (lo + qemu-mipsel capture: byte-identical packets); no hardware flash yet |
+| **Binary size** | 3.1 MB (stripped, MIPS) | ~50 KB | N/A (interpreted) | 1.45 MB (stripped, x86_64) |
+| **Cross-compile** | Single command | Requires C compiler on host | No compilation | mipsel needs the soft-float musl SDK lane (see below) |
+| **Dependencies** | None (static) | C compiler + socket headers | Python 3 stdlib only | `socket2` (SO_BINDTODEVICE), `clap` |
+| **PoE control** | Built-in (`poe` subcommand) | None | None | None (drive PoE from the bench switch tooling) |
+| **Boot detection** | Built-in (`flash` subcommand pings target) | None | None | None (MAC-gate the boot detect at the bench layer) |
+| **Platforms** | MIPS, ARM, x86_64 (any Go target) | Linux/macOS (needs MSG_MORE or `-DMSG_MORE=0`) | Any Python 3 | Linux (SO_BINDTODEVICE); core encoder is `no_std` (MCU-ready) |
+| **Interface binding** | SO_BINDTODEVICE with IP_MULTICAST_IF fallback | SO_BINDTODEVICE | SO_BINDTODEVICE with IP_MULTICAST_IF fallback | SO_BINDTODEVICE via `socket2` (Linux/OpenWrt senders only) |
 
-**Recommendation**: Use the Go binary. It is the only implementation tested on real hardware, includes PoE control and boot detection, and produces a single static binary that runs on any OpenWrt switch.
+**Recommendation**: Use the Go binary. It is the only implementation tested on real hardware, includes PoE control and boot detection, and produces a single static binary that runs on any OpenWrt switch. The Rust port is the protocol library + parity reference (`apps/conwrt-zycast`, lean: `conwrt-protocols` + `clap` only) — byte-identical on the wire to Go (verified 2026-10-22 via loopback capture and qemu-mipsel), with the packet encoder `no_std` so an MCU sender can reuse it. Its mipsel artifact must be built on the soft-float musl lane: a `build-std` gnu build links hard-float glibc and dies with `Illegal instruction` on the FPU-less MT7621 (1004Kc) despite running under qemu (qemu emulates the FPU). The correct lane is the digest-pinned `openwrt/sdk:ramips-mt7621-<release>` image with the feed's rust (toolchain-lane writeup, 2026-10-22).
 
 ## 3. Compiling the Go Binary
 
@@ -117,6 +117,26 @@ ssh root@192.168.1.1
 ```
 
 ## 6. Protocol Details
+
+### Measured flash timings (2026-10-22 session, NR7101 + stock GS1900 path)
+
+| Phase | Duration |
+|---|---|
+| PoE off dwell | 7–8 s |
+| Z-Loader listen window opens | ~5–10 s after power-on |
+| Sender loop (7.6 MB image, 10 ms/chunk) | ~80 s per loop |
+| Sender loop at full speed (`-delay 0s`) | ~2 s per loop (3861 pkt/s on a 25.12 ERX-class host) |
+| Flash write (both slots), silent | ~2–10 min — do not verdict dead before ~10 min past the last delivery |
+| Initramfs at 192.168.1.1 | ~20–60 s after the write completes |
+| `sysupgrade -n` to a baked image + SSH | ~2–3 min |
+
+Budget power-on → OpenWrt SSH: **8–15 min**. If a complete, byte-verified stream
+(capture and reassemble on any segment member) has been delivered for ~10 min
+with no boot, stop sending — the receiver is not accepting, and more airtime
+does not help (see the 2026-10-22 stock-switch audit in conwrt-bench: seven
+parameter-varied attempts, wire-proven byte-perfect, zero acceptance through
+the stock-switch path; the proven topology is the on-switch sender + DUT bay
+VLAN below).
 
 Header format (30 bytes, big-endian):
 

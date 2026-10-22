@@ -14,6 +14,7 @@ members = [
     "providers/conwrt-local-std",
     "apps/conwrt-cli",
     "apps/conwrt-agent",
+    "apps/conwrt-zycast",
 ]
 # Tier-C firmware (ADR-0002): no_std MCU builds that must never enter
 # host `cargo test --workspace`. CI builds them explicitly with --target and

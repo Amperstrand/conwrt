@@ -13,11 +13,13 @@ default = ["std"]
 # implement `xmodem::io::{Read, Write}` at the driver (MCU, M5+).
 # embedded-io-async's std feature adds the std::io Error interop the
 # serial_io adapter's error type needs.
-std = ["xmodem/std", "embedded-io-async/std"]
+std = ["xmodem/std", "embedded-io-async/std", "dep:socket2"]
 
 [dependencies]
 embedded-io-async = { version = "0.7.0", default-features = false }
 xmodem = { version = "0.4", default-features = false }
+# zycast sender egress binding (SO_BINDTODEVICE) — libraries-first, ADR-0001
+socket2 = { version = "0.6", optional = true, features = ["all"] }
 
 [dev-dependencies]
 crc16 = "0.4"
