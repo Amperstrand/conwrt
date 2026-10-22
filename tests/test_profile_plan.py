@@ -36,6 +36,22 @@ def test_opkg_install_script() -> None:
     assert "wpad-basic" in script
 
 
+def test_opkg_install_script_apk_selfheal_and_offline_guard() -> None:
+    """The install line must carry the 2.x EnsurePackage semantics
+    (#421 lineage / a11bfd6): the apk branch self-heals a missing index
+    (a fresh 25.x boot may lack the adb index until `apk update`), and
+    the opkg branch short-circuits when everything is already installed
+    so an offline device stays usable (AGENTS.md package rules)."""
+    script = opkg_install_script(["wireguard-tools"])
+    assert "apk add wireguard-tools || { apk update && apk add wireguard-tools; }" in script
+    assert '[ -n "$(opkg list-installed wireguard-tools 2>/dev/null)" ]' in script
+
+
+def test_opkg_install_script_offline_guard_covers_every_package() -> None:
+    script = opkg_install_script(["a-pkg", "b-pkg"])
+    assert '[ -n "$(opkg list-installed a-pkg 2>/dev/null)" ] && [ -n "$(opkg list-installed b-pkg 2>/dev/null)" ]' in script
+
+
 def test_build_plan_wan_ssh_explicit_false_ignores_cfg() -> None:
     cfg = ConwrtConfig(wan_ssh=True)
     plan = build_plan(cfg, mode="post_install", wan_ssh=False)
