@@ -392,8 +392,8 @@ impl Default for WireguardServerProfile {
 
 /// Dropbear SSH hardening — port of the tested 1.x `ssh-hardening`
 /// preset (`scripts/use_cases/ssh_hardening.py`): key-only auth, idle
-/// disconnect timeout, auth-try limit, alternate port, no remote port
-/// forwarding. Every option lands on the anonymous `@dropbear[0]`
+/// disconnect timeout, auth-try limit, alternate port, GatewayPorts
+/// restricted to loopback binding. Every option lands on the anonymous `@dropbear[0]`
 /// section; the bool→UCI string coercions are the whole of the logic.
 /// No 1.x validators to mirror.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,12 +407,13 @@ pub struct SshHardeningProfile {
     pub max_auth_tries: u32,
     /// SSH listen port (1.x default 22).
     pub port: u16,
-    /// Disable remote port forwarding — rendered as `GatewayPorts='no'`
-    /// (1.x naming parity). Note the semantics: GatewayPorts only stops
-    /// forwarded ports binding non-loopback; it does NOT reject `-R`
-    /// requests. Matches 1.x byte-for-byte; the param NAME is the
-    /// upstream preset's choice (tracked upstream, not changed here).
-    pub disable_gateway_ports: bool,
+    /// Restrict GatewayPorts to loopback binding — rendered as
+    /// `GatewayPorts='no'` (1.x naming parity). Note the semantics:
+    /// GatewayPorts only stops forwarded ports binding non-loopback
+    /// addresses; it does NOT disable `-R` remote forwarding. Renamed
+    /// from `disable_gateway_ports` for honest semantics (#426, landed
+    /// in both implementations).
+    pub restrict_gateway_ports: bool,
 }
 
 impl Default for SshHardeningProfile {
@@ -422,7 +423,7 @@ impl Default for SshHardeningProfile {
             idle_timeout: 300,
             max_auth_tries: 3,
             port: 22,
-            disable_gateway_ports: true,
+            restrict_gateway_ports: true,
         }
     }
 }
@@ -1554,7 +1555,7 @@ fn plan_ssh_hardening(model: &DeviceModel, sh: &SshHardeningProfile) -> Result<P
     } else {
         "on"
     };
-    let gateway_ports = if sh.disable_gateway_ports {
+    let gateway_ports = if sh.restrict_gateway_ports {
         "no"
     } else {
         "yes"
@@ -2719,7 +2720,7 @@ mod tests {
             idle_timeout: 0,
             max_auth_tries: 1,
             port: 2222,
-            disable_gateway_ports: false,
+            restrict_gateway_ports: false,
         })));
         assert!(flipped.contains("uci set dropbear.@dropbear[0].PasswordAuth='on'"));
         assert!(flipped.contains("uci set dropbear.@dropbear[0].GatewayPorts='yes'"));

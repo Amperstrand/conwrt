@@ -14,7 +14,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     idle_timeout = params.get("idle_timeout", 300)
     max_auth_tries = params.get("max_auth_tries", 3)
     port = params.get("port", 22)
-    gateway_ports = "no" if params.get("disable_gateway_ports", True) else "yes"
+    gateway_ports = "no" if params.get("restrict_gateway_ports", True) else "yes"
     return {
         "password_auth": password_auth,
         "root_password_auth": root_password_auth,
@@ -57,8 +57,8 @@ register(UseCase(
             description="Max authentication attempts per connection"),
         "port": ParamDef(type=int, default=22,
             description="SSH listen port"),
-        "disable_gateway_ports": ParamDef(type=bool, default=True,
-            description="Disable remote port forwarding (GatewayPorts)"),
+        "restrict_gateway_ports": ParamDef(type=bool, default=True,
+            description="Restrict GatewayPorts to loopback binding — forwarded ports do not bind non-loopback addresses (does NOT disable -R remote forwarding)"),
     },
     build_configure=lambda p: render_shell(_build_ssh_hardening_ops(p)),
     build_configure_ops=_build_ssh_hardening_ops,
