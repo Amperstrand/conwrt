@@ -462,6 +462,106 @@ impl Default for TravelmateProfile {
     }
 }
 
+/// Network-wide ad blocking via AdGuard Home — port of the tested 1.x
+/// `adguard` preset (`scripts/use_cases/adguard.py`). The daemon owns
+/// its YAML config; this plan only shapes the uci wrapper (listen
+/// address, ports), enables + starts it, and points dnsmasq at the
+/// local AdGuard DNS instance (noresolv + server=127.0.0.1#port).
+/// Web-UI first-run setup (admin account) remains manual — 1.x marks
+/// the preset "post-flash setup". No 1.x validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdguardProfile {
+    /// Web UI listen address (1.x default `0.0.0.0`).
+    pub listen_ip: String,
+    /// Web UI port (1.x default 3000).
+    pub web_port: u16,
+    /// DNS listen port (1.x default 5353, off 53 to avoid the
+    /// dnsmasq conflict).
+    pub dns_port: u16,
+}
+
+impl Default for AdguardProfile {
+    fn default() -> Self {
+        Self {
+            listen_ip: "0.0.0.0".into(),
+            web_port: 3000,
+            dns_port: 5353,
+        }
+    }
+}
+
+/// Automated 802.11s mesh networking — port of the tested 1.x
+/// `mesh11sd` preset (`scripts/use_cases/mesh11sd.py`). The plan swaps
+/// wpad-basic for full wpad (verbatim 1.x shell, opkg-era commands
+/// kept for parity — they no-op on apk systems), then shapes the
+/// daemon's `setup` section. Option order matters for byte parity:
+/// `mesh_gate_key` lands BETWEEN `mesh_gate_encryption` and
+/// `auto_config` (1.x dict insertion order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mesh11sdProfile {
+    /// Unique mesh network ID, required — must match on all nodes
+    /// (1.x required-param gate).
+    pub mesh_id: String,
+    /// Base SSID for the mesh gate AP (1.x default `MeshNet`).
+    pub ssid: String,
+    /// Mesh gate encryption: `0`=none, `1`=wpa3, `2`=wpa2, `3`=mixed
+    /// (1.x default `1`; kept a string for parity).
+    pub encryption: String,
+    /// WiFi key for the mesh gate AP (empty = none).
+    pub key: String,
+    /// Auto-config mode: `0`=disabled, `1`=auto, `2`=auto+commit
+    /// (1.x default `0`).
+    pub auto_config: String,
+}
+
+impl Default for Mesh11sdProfile {
+    fn default() -> Self {
+        Self {
+            mesh_id: String::new(),
+            ssid: "MeshNet".into(),
+            encryption: "1".into(),
+            key: String::new(),
+            auto_config: "0".into(),
+        }
+    }
+}
+
+impl Mesh11sdProfile {
+    /// 1.x has exactly one gate: `mesh_id` is a required param.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.mesh_id.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "mesh_id is required (must match on all mesh nodes)".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Self-healing reboot for bench/lab devices — port of the 1.x
+/// `rescue-watchdog` preset (`scripts/use_cases/rescue_watchdog.py`,
+/// born from the 2026-10-08 x1860 wedges: kernel-level networking
+/// death that only a hands-on power cycle cured). The whole plan is
+/// ONE verbatim shell payload: procd init + watchdog loop heredocs,
+/// pinging the management target once a minute and force-rebooting
+/// after 3 consecutive failures (10-minute boot grace). 1.x marks it
+/// untested — verify grace/reboot on hardware before trusting
+/// unattended. No packages, no validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescueWatchdogProfile {
+    /// Management IP pinged once a minute (bench host LAN address;
+    /// 1.x default `192.168.1.254`).
+    pub target: String,
+}
+
+impl Default for RescueWatchdogProfile {
+    fn default() -> Self {
+        Self {
+            target: "192.168.1.254".into(),
+        }
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -598,6 +698,12 @@ pub enum Profile {
     SshHardening(SshHardeningProfile),
     /// Travel-router auto-connect for captive-portal WiFi upstreams.
     Travelmate(TravelmateProfile),
+    /// Network-wide ad blocking via AdGuard Home.
+    Adguard(AdguardProfile),
+    /// Automated 802.11s mesh networking.
+    Mesh11sd(Mesh11sdProfile),
+    /// Self-healing reboot when the management target goes unreachable.
+    RescueWatchdog(RescueWatchdogProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -614,6 +720,9 @@ impl Profile {
             Profile::WireguardServer(_) => "wireguard-server",
             Profile::SshHardening(_) => "ssh-hardening",
             Profile::Travelmate(_) => "travelmate",
+            Profile::Adguard(_) => "adguard",
+            Profile::Mesh11sd(_) => "mesh11sd",
+            Profile::RescueWatchdog(_) => "rescue-watchdog",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -631,6 +740,9 @@ impl Profile {
             Profile::WireguardServer(_) => &[],
             Profile::SshHardening(_) => &[],
             Profile::Travelmate(_) => &["wifi"],
+            Profile::Adguard(_) => &[],
+            Profile::Mesh11sd(_) => &["wifi"],
+            Profile::RescueWatchdog(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -643,6 +755,8 @@ pub enum ServiceAction {
     Enable,
     /// (Re)start now.
     Restart,
+    /// Start now (without restart semantics — 1.x `start`).
+    Start,
 }
 
 impl fmt::Display for ServiceAction {
@@ -650,6 +764,7 @@ impl fmt::Display for ServiceAction {
         match self {
             ServiceAction::Enable => write!(f, "enable"),
             ServiceAction::Restart => write!(f, "restart"),
+            ServiceAction::Start => write!(f, "start"),
         }
     }
 }
@@ -938,6 +1053,9 @@ pub fn plan_profile(
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
+        Profile::Adguard(ag) => plan_adguard(model, ag),
+        Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
+        Profile::RescueWatchdog(wd) => plan_rescue_watchdog(model, wd),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1822,6 +1940,223 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
     })
 }
 
+fn plan_adguard(model: &DeviceModel, ag: &AdguardProfile) -> Result<Plan, Unsupported> {
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "adguardhome".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-adguardhome".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "adguardhome".into(),
+            section: "adguardhome".into(),
+            section_type: "adguardhome".into(),
+            options: vec![
+                ("enabled".into(), literal("1".into())),
+                (
+                    "http_address".into(),
+                    literal(format!("{}:{}", ag.listen_ip, ag.web_port)),
+                ),
+                ("dns_port".into(), literal(ag.dns_port.to_string())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "adguardhome".into(),
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Start,
+        },
+        PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            options: vec![("noresolv".into(), literal("1".into()))],
+        },
+        PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: format!("127.0.0.1#{}", ag.dns_port),
+        },
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"AdGuard Home configured: DNS on port {}, web UI at {}:{}\"",
+                ag.dns_port, ag.listen_ip, ag.web_port
+            ),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "adguardhome enabled in uci".into(),
+            command: "uci -q get adguardhome.adguardhome.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "dnsmasq forwards to adguard".into(),
+            command: "uci -q get dhcp.@dnsmasq[0].server".into(),
+            expect_contains: format!("127.0.0.1#{}", ag.dns_port),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "adguard".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_mesh11sd(model: &DeviceModel, mesh: &Mesh11sdProfile) -> Result<Plan, Unsupported> {
+    mesh.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut setup_options = vec![
+        ("auto_mesh_id".into(), literal(mesh.mesh_id.clone())),
+        ("mesh_gate_base_ssid".into(), literal(mesh.ssid.clone())),
+        (
+            "mesh_gate_encryption".into(),
+            literal(mesh.encryption.clone()),
+        ),
+    ];
+    if !mesh.key.is_empty() {
+        setup_options.push(("mesh_gate_key".into(), literal(mesh.key.clone())));
+    }
+    setup_options.push(("auto_config".into(), literal(mesh.auto_config.clone())));
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "mesh11sd".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ip-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "kmod-nft-bridge".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "vxlan".into(),
+        },
+        PlanOp::Shell {
+            command: "opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl \
+                      wpad-basic 2>/dev/null || true"
+                .into(),
+        },
+        PlanOp::Shell {
+            command: "opkg install wpad-mbedtls 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: "service wpad restart 2>/dev/null || true".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "mesh11sd".into(),
+            section: "setup".into(),
+            options: setup_options,
+        },
+        PlanOp::CommitUci {
+            config: "mesh11sd".into(),
+        },
+        PlanOp::Shell {
+            command: "service mesh11sd restart 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"Mesh11sd configured: mesh_id={} ssid={}\"",
+                mesh.mesh_id, mesh.ssid
+            ),
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "mesh id persisted".into(),
+        command: "uci -q get mesh11sd.setup.auto_mesh_id".into(),
+        expect_contains: mesh.mesh_id.clone(),
+    }];
+    Ok(Plan {
+        profile_id: "mesh11sd".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+/// The 1.x watchdog payload, verbatim (`WATCHDOG_INIT` in
+/// `scripts/use_cases/rescue_watchdog.py`): procd init heredoc +
+/// watchdog loop heredoc, `__TARGET__` substituted at plan time.
+const RESCUE_WATCHDOG_INIT: &str = r#"cat > /etc/init.d/rescue-watchdog << 'WD_EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /bin/sh /usr/bin/rescue-watchdog-loop
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+WD_EOF
+chmod +x /etc/init.d/rescue-watchdog
+
+/usr/bin/rescue-watchdog-loop << 'WDL_EOF'
+#!/bin/sh
+TARGET="${WATCHDOG_TARGET:-__TARGET__}"
+GRACE=600
+FAILS=0
+while :; do
+    UPTIME=$(cut -d. -f1 /proc/uptime)
+    if [ "$UPTIME" -lt "$GRACE" ]; then
+        FAILS=0
+    elif ping -c1 -W3 "$TARGET" >/dev/null 2>&1; then
+        FAILS=0
+    else
+        FAILS=$((FAILS+1))
+        logger -t rescue-watchdog "target $TARGET unreachable ($FAILS/3)"
+        if [ "$FAILS" -ge 3 ]; then
+            logger -t rescue-watchdog "networking wedged - rebooting"
+            sync
+            reboot
+        fi
+    fi
+    sleep 60
+done
+WDL_EOF
+chmod +x /usr/bin/rescue-watchdog-loop
+
+/etc/init.d/rescue-watchdog enable
+/etc/init.d/rescue-watchdog restart
+"#;
+
+fn plan_rescue_watchdog(
+    model: &DeviceModel,
+    wd: &RescueWatchdogProfile,
+) -> Result<Plan, Unsupported> {
+    let ops = vec![PlanOp::Shell {
+        command: RESCUE_WATCHDOG_INIT.replace("__TARGET__", &wd.target),
+    }];
+    let verification = vec![VerificationCheck {
+        description: "watchdog service enabled".into(),
+        command: "/etc/init.d/rescue-watchdog enabled && echo yes".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "rescue-watchdog".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, Unsupported> {
     gw.validate()?;
     let net = &gw.network_name;
@@ -2250,6 +2585,7 @@ pub fn render_shell(plan: &Plan) -> String {
                 let action = match action {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
+                    ServiceAction::Start => "start",
                 };
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",
@@ -3086,6 +3422,83 @@ mod tests {
             script.contains("_sqm_dev=$(uci get network.wan.device 2>/dev/null || true)"),
             "resolve substitution must be set -e safe"
         );
+    }
+
+    #[test]
+    fn adguard_default_and_custom_render_match_1x_shape() {
+        let script = render_shell(&plan_for(Profile::Adguard(AdguardProfile::default())));
+        assert!(script.contains("uci set adguardhome.adguardhome=adguardhome"));
+        assert!(script.contains("uci set adguardhome.adguardhome.enabled='1'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.http_address='0.0.0.0:3000'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.dns_port='5353'"));
+        assert!(script.contains("uci commit adguardhome"));
+        assert!(script.contains("/etc/init.d/adguardhome enable"));
+        assert!(script.contains("/etc/init.d/adguardhome start"));
+        assert!(script.contains("uci set dhcp.@dnsmasq[0].noresolv='1'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'"));
+        assert!(script.contains("uci commit dhcp"));
+        assert!(script.contains("/etc/init.d/dnsmasq restart"));
+        assert!(script.contains(
+            "echo \"AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000\""
+        ));
+
+        let custom = render_shell(&plan_for(Profile::Adguard(AdguardProfile {
+            listen_ip: "192.168.1.1".into(),
+            web_port: 8080,
+            dns_port: 5333,
+        })));
+        assert!(custom.contains("uci set adguardhome.adguardhome.http_address='192.168.1.1:8080'"));
+        assert!(custom.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'"));
+        assert!(custom.contains("web UI at 192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn mesh11sd_key_branch_order_and_required_gate_match_1x() {
+        let no_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "testmesh".into(),
+            ..Mesh11sdProfile::default()
+        })));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_mesh_id='testmesh'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_base_ssid='MeshNet'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_encryption='1'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_config='0'"));
+        assert!(!no_key.contains("mesh_gate_key"));
+        assert!(no_key.contains("uci commit mesh11sd"));
+        assert!(no_key.contains("service mesh11sd restart 2>/dev/null || true"));
+        assert!(no_key.contains("echo \"Mesh11sd configured: mesh_id=testmesh ssid=MeshNet\""));
+
+        let with_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "m2".into(),
+            ssid: "Backhaul".into(),
+            encryption: "3".into(),
+            key: "mesh pass".into(),
+            auto_config: "2".into(),
+        })));
+        // 1.x dict insertion order: key BETWEEN encryption and auto_config
+        let enc = with_key.find("mesh_gate_encryption='3'").expect("enc");
+        let key = with_key.find("mesh_gate_key='mesh pass'").expect("key");
+        let auto = with_key.find("auto_config='2'").expect("auto");
+        assert!(enc < key && key < auto, "1.x option order must hold");
+
+        // required-param gate
+        assert!(matches!(
+            Mesh11sdProfile::default().validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn rescue_watchdog_payload_is_verbatim_with_target_substituted() {
+        let script = render_shell(&plan_for(Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: "192.168.105.10".into(),
+        })));
+        assert!(script.contains("cat > /etc/init.d/rescue-watchdog << 'WD_EOF'"));
+        assert!(script.contains("procd_set_param respawn 3600 5 0"));
+        assert!(script.contains("TARGET=\"${WATCHDOG_TARGET:-192.168.105.10}\""));
+        assert!(script.contains("[ \"$FAILS\" -ge 3 ]"));
+        assert!(script.contains("/etc/init.d/rescue-watchdog enable"));
+        // no unsubstituted placeholder survives
+        assert!(!script.contains("__TARGET__"));
     }
 
     #[test]
