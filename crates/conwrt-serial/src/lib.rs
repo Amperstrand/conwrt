@@ -79,6 +79,7 @@ pub mod console;
 pub mod flash;
 pub mod io;
 pub mod lint;
+pub mod monitor;
 
 pub use backup::{
     BackupError, BackupSelection, DumpOutcome, Partition, decode_dump_lines, dump_partition,
@@ -100,3 +101,7 @@ pub use flash::{
 };
 pub use io::{ConsoleError, ConsoleIo, open_port, parse_tcp_endpoint};
 pub use lint::{LintError, MAX_LINE};
+pub use monitor::{
+    BootStage, MonitorConfig, MonitorError, MonitorSession, StageTransition, detect_boot_stage,
+    format_bytes, resolve_command,
+};
