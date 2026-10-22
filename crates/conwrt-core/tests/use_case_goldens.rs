@@ -36,6 +36,7 @@
 //! print(r["ssh-hardening"].build_configure({}))
 //! print(r["travelmate"].build_configure({}))
 //! print(r["adguard"].build_configure({}))
+//! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -48,8 +49,8 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, Profile, SqmProfile, SshHardeningProfile,
-    TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
+    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Profile, SqmProfile,
+    SshHardeningProfile, TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
     WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
@@ -193,6 +194,17 @@ fn adguard_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Adguard(AdguardProfile::default()),
         include_str!("goldens/adguard.sh"),
+    );
+}
+
+#[test]
+fn mesh11sd_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "testmesh".into(),
+            ..Mesh11sdProfile::default()
+        }),
+        include_str!("goldens/mesh11sd.sh"),
     );
 }
 

@@ -490,6 +490,54 @@ impl Default for AdguardProfile {
     }
 }
 
+/// Automated 802.11s mesh networking — port of the tested 1.x
+/// `mesh11sd` preset (`scripts/use_cases/mesh11sd.py`). The plan swaps
+/// wpad-basic for full wpad (verbatim 1.x shell, opkg-era commands
+/// kept for parity — they no-op on apk systems), then shapes the
+/// daemon's `setup` section. Option order matters for byte parity:
+/// `mesh_gate_key` lands BETWEEN `mesh_gate_encryption` and
+/// `auto_config` (1.x dict insertion order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mesh11sdProfile {
+    /// Unique mesh network ID, required — must match on all nodes
+    /// (1.x required-param gate).
+    pub mesh_id: String,
+    /// Base SSID for the mesh gate AP (1.x default `MeshNet`).
+    pub ssid: String,
+    /// Mesh gate encryption: `0`=none, `1`=wpa3, `2`=wpa2, `3`=mixed
+    /// (1.x default `1`; kept a string for parity).
+    pub encryption: String,
+    /// WiFi key for the mesh gate AP (empty = none).
+    pub key: String,
+    /// Auto-config mode: `0`=disabled, `1`=auto, `2`=auto+commit
+    /// (1.x default `0`).
+    pub auto_config: String,
+}
+
+impl Default for Mesh11sdProfile {
+    fn default() -> Self {
+        Self {
+            mesh_id: String::new(),
+            ssid: "MeshNet".into(),
+            encryption: "1".into(),
+            key: String::new(),
+            auto_config: "0".into(),
+        }
+    }
+}
+
+impl Mesh11sdProfile {
+    /// 1.x has exactly one gate: `mesh_id` is a required param.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.mesh_id.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "mesh_id is required (must match on all mesh nodes)".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -628,6 +676,8 @@ pub enum Profile {
     Travelmate(TravelmateProfile),
     /// Network-wide ad blocking via AdGuard Home.
     Adguard(AdguardProfile),
+    /// Automated 802.11s mesh networking.
+    Mesh11sd(Mesh11sdProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -645,6 +695,7 @@ impl Profile {
             Profile::SshHardening(_) => "ssh-hardening",
             Profile::Travelmate(_) => "travelmate",
             Profile::Adguard(_) => "adguard",
+            Profile::Mesh11sd(_) => "mesh11sd",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -663,6 +714,7 @@ impl Profile {
             Profile::SshHardening(_) => &[],
             Profile::Travelmate(_) => &["wifi"],
             Profile::Adguard(_) => &[],
+            Profile::Mesh11sd(_) => &["wifi"],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -974,6 +1026,7 @@ pub fn plan_profile(
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
         Profile::Adguard(ag) => plan_adguard(model, ag),
+        Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1930,6 +1983,76 @@ fn plan_adguard(model: &DeviceModel, ag: &AdguardProfile) -> Result<Plan, Unsupp
     ];
     Ok(Plan {
         profile_id: "adguard".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_mesh11sd(model: &DeviceModel, mesh: &Mesh11sdProfile) -> Result<Plan, Unsupported> {
+    mesh.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut setup_options = vec![
+        ("auto_mesh_id".into(), literal(mesh.mesh_id.clone())),
+        ("mesh_gate_base_ssid".into(), literal(mesh.ssid.clone())),
+        (
+            "mesh_gate_encryption".into(),
+            literal(mesh.encryption.clone()),
+        ),
+    ];
+    if !mesh.key.is_empty() {
+        setup_options.push(("mesh_gate_key".into(), literal(mesh.key.clone())));
+    }
+    setup_options.push(("auto_config".into(), literal(mesh.auto_config.clone())));
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "mesh11sd".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ip-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "kmod-nft-bridge".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "vxlan".into(),
+        },
+        PlanOp::Shell {
+            command: "opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl \
+                      wpad-basic 2>/dev/null || true"
+                .into(),
+        },
+        PlanOp::Shell {
+            command: "opkg install wpad-mbedtls 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: "service wpad restart 2>/dev/null || true".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "mesh11sd".into(),
+            section: "setup".into(),
+            options: setup_options,
+        },
+        PlanOp::CommitUci {
+            config: "mesh11sd".into(),
+        },
+        PlanOp::Shell {
+            command: "service mesh11sd restart 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"Mesh11sd configured: mesh_id={} ssid={}\"",
+                mesh.mesh_id, mesh.ssid
+            ),
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "mesh id persisted".into(),
+        command: "uci -q get mesh11sd.setup.auto_mesh_id".into(),
+        expect_contains: mesh.mesh_id.clone(),
+    }];
+    Ok(Plan {
+        profile_id: "mesh11sd".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -3229,6 +3352,41 @@ mod tests {
         assert!(custom.contains("uci set adguardhome.adguardhome.http_address='192.168.1.1:8080'"));
         assert!(custom.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'"));
         assert!(custom.contains("web UI at 192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn mesh11sd_key_branch_order_and_required_gate_match_1x() {
+        let no_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "testmesh".into(),
+            ..Mesh11sdProfile::default()
+        })));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_mesh_id='testmesh'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_base_ssid='MeshNet'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_encryption='1'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_config='0'"));
+        assert!(!no_key.contains("mesh_gate_key"));
+        assert!(no_key.contains("uci commit mesh11sd"));
+        assert!(no_key.contains("service mesh11sd restart 2>/dev/null || true"));
+        assert!(no_key.contains("echo \"Mesh11sd configured: mesh_id=testmesh ssid=MeshNet\""));
+
+        let with_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "m2".into(),
+            ssid: "Backhaul".into(),
+            encryption: "3".into(),
+            key: "mesh pass".into(),
+            auto_config: "2".into(),
+        })));
+        // 1.x dict insertion order: key BETWEEN encryption and auto_config
+        let enc = with_key.find("mesh_gate_encryption='3'").expect("enc");
+        let key = with_key.find("mesh_gate_key='mesh pass'").expect("key");
+        let auto = with_key.find("auto_config='2'").expect("auto");
+        assert!(enc < key && key < auto, "1.x option order must hold");
+
+        // required-param gate
+        assert!(matches!(
+            Mesh11sdProfile::default().validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
     }
 
     #[test]
