@@ -35,12 +35,12 @@ from conwrt.cli import _build_parser  # noqa: E402
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
-        "flash", "list", "list-use-cases", "cache", "setup-mgmt-wifi", "backup",
+        "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
         "-h", "--help", "--version", "-V",
-        "probe", "flow", "lan-migrate", "image", "-h", "--help", "--version", "-V",
-        "probe", "watch", "flow", "lan-migrate", "image", "-h", "--help", "--version", "-V",
+        "probe", "flow", "lan-migrate", "-h", "--help", "--version", "-V",
+        "probe", "watch", "flow", "lan-migrate", "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
@@ -66,8 +66,7 @@ def main() -> int:
     _COMMAND_MAP = {
         "list": ("conwrt.cmd_info", "cmd_list"),
         "list-use-cases": ("conwrt.cmd_info", "cmd_list_use_cases"),
-        "cache": ("conwrt.cmd_info", "cmd_cache"),
-        "setup-mgmt-wifi": ("conwrt.commands_wifi", "cmd_setup_mgmt_wifi"),
+            "setup-mgmt-wifi": ("conwrt.commands_wifi", "cmd_setup_mgmt_wifi"),
         "configure": ("conwrt.commands_configure", "cmd_configure"),
         "backup": ("conwrt.cmd_backup", "cmd_backup"),
         "auto": ("conwrt.cmd_detect", "cmd_auto"),
@@ -81,8 +80,7 @@ def main() -> int:
         "bench-doctor": ("bench_doctor", "cmd_bench_doctor"),
         "recovery-probe": ("conwrt.cmd_recovery_probe", "cmd_recovery_probe"),
         "boot-watch": ("conwrt.cmd_boot_watch", "cmd_boot_watch"),
-        "image": ("conwrt.cmd_image", "cmd_image"),
-    }
+        }
 
     entry = _COMMAND_MAP.get(command)
     if entry:

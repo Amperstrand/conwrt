@@ -90,7 +90,7 @@ source-image: ## Download + verify the vanilla OpenWrt image only (MODEL= requir
 		echo "Usage: make source-image MODEL=glinet-mt3000 [RELEASE=24.10.2]"; \
 		exit 1; \
 	fi
-	@$(SCRIPTS_DIR)/conwrt.py image --model-id $(MODEL) $(if $(RELEASE),--release $(RELEASE),) $(ARGS)
+	@cargo run --quiet -p conwrt-cli -- source-image --model-id $(MODEL) $(if $(RELEASE),--release $(RELEASE),) $(ARGS)
 ## Usage: make source-image MODEL=glinet-mt3000 RELEASE=24.10.2
 
 recovery: ## Flash a device in recovery mode for any model (MODEL=, optionally IFACE=)

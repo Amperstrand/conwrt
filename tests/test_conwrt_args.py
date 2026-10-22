@@ -90,11 +90,15 @@ class TestSubcommandRouting:
             args = conwrt._build_parser().parse_args()
             assert args.command == "list"
 
-    def test_cache_command(self):
+    def test_cache_command_removed(self):
+        # 1.x `cache` retired (parity-matrix §3, retirement queue #3):
+        # the Rust `conwrt cache list|clean` is the successor surface.
+        import pytest
+
         import conwrt
         with patch("sys.argv", ["conwrt", "cache", "list"]):
-            args = conwrt._build_parser().parse_args()
-            assert args.command == "cache"
+            with pytest.raises(SystemExit):
+                conwrt._build_parser().parse_args()
 
     def test_backup_command(self):
         import conwrt

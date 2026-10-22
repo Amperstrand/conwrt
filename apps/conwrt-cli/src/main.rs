@@ -112,6 +112,11 @@ enum Command {
         #[command(subcommand)]
         command: MaasCommand,
     },
+    /// Manage the firmware images cache (1.x `conwrt.py cache` parity).
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
     /// Source the vanilla OpenWrt image for a model from
     /// downloads.openwrt.org: resolve release/flavour through the
     /// precedence chains (CLI > env > model > default), fetch the
@@ -409,6 +414,32 @@ struct ProfileArgs {
     #[arg(long)]
     trm_no_captive: bool,
 }
+/// Subcommands of `conwrt cache` (1.x `conwrt.py cache` parity).
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// List cached firmware builds (ASU model/hash layout).
+    List {
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+    },
+    /// Remove cached builds. Without `--yes` only prints the plan.
+    Clean {
+        /// Restrict to one model (hyphen/underscore spellings both match).
+        #[arg(long)]
+        model_id: Option<String>,
+        /// Keep only the newest build per model (by cache-dir mtime).
+        #[arg(long)]
+        keep_latest: bool,
+        /// Actually remove (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+    },
+}
+
 #[derive(Subcommand)]
 enum MaasCommand {
     /// Run the lab disk pipeline (verify → write → verify → inject) on a
@@ -539,6 +570,7 @@ fn main() -> ExitCode {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
+        Command::Cache { command } => cmd_cache(command),
         Command::SourceImage {
             model_id,
             release,
@@ -1646,6 +1678,194 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+    }
+}
+
+fn cmd_cache(command: CacheCommand) -> ExitCode {
+    match command {
+        CacheCommand::List { images_root } => cache_list(&images_root),
+        CacheCommand::Clean {
+            model_id,
+            keep_latest,
+            yes,
+            images_root,
+        } => cache_clean(&model_id, keep_latest, yes, &images_root),
+    }
+}
+
+fn cache_list(images_root: &Path) -> ExitCode {
+    let Ok(model_dirs) = std::fs::read_dir(images_root) else {
+        eprintln!("No images/ directory found.");
+        return ExitCode::from(1);
+    };
+    let mut rows: Vec<(String, String, String, String, u64)> = Vec::new();
+    let mut model_dirs: Vec<_> = model_dirs.filter_map(|e| e.ok()).collect();
+    model_dirs.sort_by_key(|e| e.file_name());
+    for model_dir in model_dirs {
+        if !model_dir.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(hash_dirs) = std::fs::read_dir(model_dir.path()) else {
+            continue;
+        };
+        let mut hash_dirs: Vec<_> = hash_dirs.filter_map(|e| e.ok()).collect();
+        hash_dirs.sort_by_key(|e| e.file_name());
+        for hash_dir in hash_dirs {
+            if !hash_dir.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dir = hash_dir.path();
+            let mut version = "?".to_string();
+            let mut code = String::new();
+            let mut types: Vec<&str> = Vec::new();
+            let mut total = 0u64;
+            let Ok(files) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for file in files.filter_map(|e| e.ok()) {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let Ok(meta) = file.metadata() else {
+                    continue;
+                };
+                if name.ends_with(".metadata.json") {
+                    if let Ok(text) = std::fs::read_to_string(file.path()) {
+                        if let Ok(value) = serde_json_parse(&text) {
+                            version = value
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            code = value
+                                .get("version_code")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .chars()
+                                .take(20)
+                                .collect();
+                        }
+                    }
+                } else if name.ends_with(".bin") && meta.is_file() {
+                    total += meta.len();
+                    let kind = if name.contains("sysupgrade") {
+                        "sysupgrade"
+                    } else if name.contains("recovery") {
+                        "recovery"
+                    } else if name.contains("factory") {
+                        "factory"
+                    } else {
+                        "other"
+                    };
+                    types.push(kind);
+                }
+            }
+            if !code.is_empty() {
+                version.push_str(&format!(" ({code})"));
+            }
+            types.sort_unstable();
+            types.dedup();
+            rows.push((
+                model_dir.file_name().to_string_lossy().into_owned(),
+                hash_dir.file_name().to_string_lossy().into_owned(),
+                version,
+                if types.is_empty() {
+                    "none".to_string()
+                } else {
+                    types.join(", ")
+                },
+                total,
+            ));
+        }
+    }
+    if rows.is_empty() {
+        println!("No cached firmware images found.");
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "{:<30}  {:<14}  {:<35}  {:<30}  {:>8}",
+        "Model", "Hash", "Version", "Types", "Size"
+    );
+    println!("{}", "-".repeat(130));
+    for (model, hash, version, types, total) in &rows {
+        let hash: String = hash.chars().take(12).collect();
+        println!(
+            "{:<30}  {:<14}  {:<35}  {:<30}  {:>7.1} MB",
+            model,
+            hash,
+            version,
+            types,
+            *total as f64 / 1024.0 / 1024.0
+        );
+    }
+    println!("\nTotal: {} cached build(s)", rows.len());
+    ExitCode::SUCCESS
+}
+
+/// Minimal `serde_json::Value` parse without naming the crate at the
+/// call sites (conwrt-cli has no direct serde_json dependency).
+fn serde_json_parse(text: &str) -> Result<serde_json::Value, ()> {
+    serde_json::from_str(text).map_err(|_| ())
+}
+
+fn cache_clean(
+    model_id: &Option<String>,
+    keep_latest: bool,
+    yes: bool,
+    images_root: &Path,
+) -> ExitCode {
+    use conwrt_image::clean::{CleanOptions, clean_cache, plan_cache_clean};
+
+    let options = CleanOptions {
+        keep_latest,
+        profile: model_id.clone(),
+    };
+    let plan = match plan_cache_clean(images_root, &options) {
+        Ok(plan) => plan,
+        Err(e) => {
+            eprintln!("cache clean failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    if plan.removed.is_empty() {
+        match model_id {
+            Some(id) => println!("No cached images found for model '{id}'."),
+            None => println!("No cached images found."),
+        }
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "Would remove {} cached build(s) ({:.1} MB):",
+        plan.removed.len(),
+        plan.freed_bytes as f64 / 1024.0 / 1024.0
+    );
+    for dir in &plan.removed {
+        let model = dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hash: String = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().chars().take(12).collect())
+            .unwrap_or_default();
+        println!("  {model}/{hash}...");
+    }
+    if !yes {
+        println!("\n(dry run — re-run with --yes to remove)");
+        return ExitCode::SUCCESS;
+    }
+    match clean_cache(images_root, &options) {
+        Ok(report) => {
+            println!(
+                "Removed {} cached build(s), freed {:.1} MB",
+                report.removed.len(),
+                report.freed_bytes as f64 / 1024.0 / 1024.0
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("cache clean failed: {e}");
+            ExitCode::from(1)
         }
     }
 }
