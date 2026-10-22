@@ -94,6 +94,21 @@ async fn wireguard_client_apply_verify_revert_lifecycle_on_real_hardware() {
         "SPECIMEN GATE: br-lan MAC mismatch"
     );
 
+    // Config-preservation gate (Codex review P1): the teardown deletes
+    // the plan-owned sections unconditionally — refuse to run on a
+    // device that already carries wireguard config this test did not
+    // create. Use a clean specimen (or remove the sections yourself).
+    let preexisting = session
+        .exec("uci -q get network.wg0.proto >/dev/null 2>&1 && echo present; uci -q get firewall.wg_client_vpn.name >/dev/null 2>&1 && echo present")
+        .await
+        .expect("preexisting-config readback");
+    let preexisting = String::from_utf8_lossy(&preexisting.stdout).into_owned();
+    assert!(
+        !preexisting.contains("present"),
+        "REFUSING: wg0 / wg_client_* sections already configured on the specimen — \
+         this lifecycle test would overwrite and then delete them"
+    );
+
     let model = conwrt_types::DeviceModel {
         id: format!("hw-{}", report.board_name.clone().unwrap_or_default()),
         vendor: "D-Link".into(),
