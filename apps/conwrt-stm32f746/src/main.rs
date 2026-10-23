@@ -339,6 +339,13 @@ async fn pump_task(
         PUMP_TX_BUF.uninit().write([0u8; 2048]),
         PUMP_RX_BUF.uninit().write([0u8; 2048]),
     );
+    // Bounded lock holds (#452 review round 2): pump.step awaits wire
+    // writes while holding the window mutex; without a timeout a dead
+    // peer with a full buffer would hold it FOREVER — every controller
+    // chunk would see 'window busy' with no recovery. The timeout
+    // bounds every pump-side await (connect included), so 'window
+    // busy' is transient by construction.
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
     // The id this task last spent a wire attempt on: a completed or
     // failed POST is never retried for the same id (the one-request
     // window is spent); a NEW id (fresh controller feed) re-arms.
