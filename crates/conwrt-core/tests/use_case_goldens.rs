@@ -108,6 +108,11 @@ fn command_lines(script: &str) -> Vec<String> {
         // (Codex #486 P1-1) — excluded like the install lines above,
         // pinned by unit test instead
         .filter(|l| !l.starts_with("opkg remove dnsmasq "))
+        // ssl TLS-backend guard, same package-delivery doctrine: the
+        // libustream variants own the same libustream-ssl.so, so the
+        // plan installs wolfssl only when no backend is present
+        // (Codex #486 round 5) — 2.x-only, pinned by unit test
+        .filter(|l| !l.starts_with("if ! (opkg list-installed"))
         .filter(|l| !l.starts_with("list track_ip "))
         .filter(|l| !(l.starts_with("uci add_list mwan3.") && l.contains(".track_ip=")))
         // auto-sqm dynamic cron: 2.x makes re-apply idempotent by

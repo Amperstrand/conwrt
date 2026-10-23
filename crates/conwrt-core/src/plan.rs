@@ -3126,9 +3126,22 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
 
 fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
     ssl.validate()?;
+    // libustream-{wolfssl,mbedtls,openssl} all own libustream-ssl.so —
+    // installing wolfssl next to an existing backend is a file-clash
+    // abort under `set -e` (Codex #486 round 5). ANY backend serves
+    // uhttpd TLS, so the plan installs wolfssl only when NO
+    // libustream provider is present and preserves the installed one
+    // otherwise (1.x's hardcoded wolfssl list entry stays an
+    // image-build choice, where a fresh image has no clash).
     let mut ops = vec![
-        PlanOp::EnsurePackage {
-            name: "libustream-wolfssl".into(),
+        PlanOp::Shell {
+            command: concat!(
+                "if ! (opkg list-installed 2>/dev/null || apk info 2>/dev/null) ",
+                "| grep -q '^libustream-'; then ",
+                "command -v apk >/dev/null 2>&1 && apk add libustream-wolfssl ",
+                "|| { opkg update && opkg install libustream-wolfssl; }; fi",
+            )
+            .into(),
         },
         PlanOp::EnsurePackage {
             name: "ca-bundle".into(),
@@ -4985,7 +4998,22 @@ mod tests {
 
     #[test]
     fn ssl_shape_branches_and_provider_gate_match_1x() {
-        let script = render_shell(&plan_for(Profile::Ssl(SslProfile::default())));
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let script = render_shell(&plan);
+        // TLS-backend guard (Codex #486 round 5): the libustream
+        // variants own the same libustream-ssl.so, so wolfssl installs
+        // ONLY when no backend is present — an existing
+        // mbedtls/openssl backend is preserved, never clashed
+        assert!(script.contains("| grep -q '^libustream-'"));
+        assert!(script.contains("opkg install libustream-wolfssl"));
+        assert!(!plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "libustream-wolfssl"
+        )));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "ca-bundle"
+        )));
         // cert-presence guard wraps the whole uhttpd block (Codex #486
         // P1 round 2): a cert-less router skips the wiring loudly
         // instead of pointing uhttpd at missing files
