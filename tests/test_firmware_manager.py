@@ -220,3 +220,30 @@ class TestAsuProfileFromRegistry:
             if not model.get("openwrt", {}).get("profile"):
                 missing.append(path.stem)
         assert not missing, f"models missing openwrt.profile: {missing}"
+
+    def test_explicit_target_still_gets_registry_profile(self, monkeypatch, tmp_path):
+        """--target must not bypass canonicalization (#506 review): the
+        registry profile rides the request even when the caller pins
+        the target explicitly."""
+        import argparse
+        import urllib.error
+
+        captured = {}
+
+        def fake_post(url, body, timeout=30):
+            captured.update(body)
+            raise urllib.error.HTTPError(url, 400, "stopped-by-test", None, None)
+
+        monkeypatch.setattr(fm, "_http_post_json", fake_post)
+        monkeypatch.setattr(fm, "IMAGES_DIR", tmp_path / "images")
+        monkeypatch.setenv("CONWRT_CONFIG", str(tmp_path / "no-such-config.toml"))
+
+        ns = argparse.Namespace(
+            profile="dlink_covr_x1860_a1", version="24",
+            target="ramips/mt7621", packages=None, ssh_key=None,
+            password=None, wan_ssh=False, tofb=False, dry_run=False,
+        )
+        rc = fm.cmd_request(ns)
+        assert rc == 1
+        assert captured["profile"] == "dlink_covr-x1860-a1"
+        assert captured["target"] == "ramips/mt7621"

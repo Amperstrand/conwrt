@@ -249,12 +249,18 @@ VERIFY_PROBES = {
 _IMAGE_CACHE: dict[str, str] = {}
 
 
+def _bench_model_id() -> str:
+    """The bench model id (env or the x1860 default) — one source for
+    image requests AND flashing, so CONWRT_BENCH_MODEL is honored
+    throughout the flow."""
+    return os.environ.get("CONWRT_BENCH_MODEL", "dlink-covr-x1860-a1")
+
+
 def _asu_profile() -> str:
     """Image-builder profile from the model registry — the ASU name is a
     per-device fact (openwrt.profile), never id-mangled: the bench model
     is dlink-covr-x1860-a1 but its profile is dlink_covr-x1860-a1 (#487)."""
-    model_id = os.environ.get("CONWRT_BENCH_MODEL", "dlink-covr-x1860-a1")
-    model = json.loads((REPO / "models" / f"{model_id}.json").read_text())
+    model = json.loads((REPO / "models" / f"{_bench_model_id()}.json").read_text())
     return model["openwrt"]["profile"]
 
 
@@ -300,7 +306,7 @@ def _flash(image: str) -> bool:
     variant = _image_variant(image)
     r = subprocess.run(
         ["python3", "scripts/conwrt.py", "flash", "--model-id",
-         "dlink-covr-x1860-a1", "--image", variant, "--interface", IFACE,
+         _bench_model_id(), "--image", variant, "--interface", IFACE,
          "--no-voice"],
         cwd=str(REPO), capture_output=True, text=True, timeout=1800,
         check=False,

@@ -252,11 +252,20 @@ def cmd_request(args: argparse.Namespace) -> int:
     # (openwrt.profile in the model registry, ultimately from the
     # target's profiles.json), NOT derivable by separator-swapping the
     # model id: 'dlink-covr-x1860-a1' the id, 'dlink_covr-x1860-a1' the
-    # profile. Callers may pass either spelling; the registry wins (#487).
-    # The cache stays keyed on the passed profile for layout compat.
+    # profile. Callers may pass either spelling — with or without an
+    # explicit --target — and the registry wins whenever the profile
+    # maps to a known model (#487). The cache is keyed by the SAME
+    # canonical name (matching the Rust conwrt-image layout), so a
+    # cache hit always identifies the actual ASU request.
     asu_profile: str = profile
-    if model_data is not None:
-        asu_profile = model_data["openwrt"].get("profile") or profile
+    registry = model_data if model_data is not None else None
+    if registry is None:
+        try:
+            registry = load_model(profile.replace("_", "-"))
+        except FileNotFoundError:
+            registry = None
+    if registry is not None:
+        asu_profile = registry["openwrt"].get("profile") or profile
         if asu_profile != profile:
             logger.info("ASU profile '%s' (registry; arg was '%s')", asu_profile, profile)
 
@@ -328,12 +337,12 @@ def cmd_request(args: argparse.Namespace) -> int:
         "openwrt",
         version,
         target,
-        profile,
+        asu_profile,
         packages_to_send,
         defaults_script,
     )
 
-    cached = _find_cached_firmware(profile, cache_key)
+    cached = _find_cached_firmware(asu_profile, cache_key)
     if cached:
         logger.info("firmware already cached at %s (cache key=%s)", cached, cache_key[:12])
         print(str(cached))
@@ -412,7 +421,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("ASU response contains no images")
         return 1
 
-    hash_dir = IMAGES_DIR / profile / cache_key
+    hash_dir = IMAGES_DIR / asu_profile / cache_key
     hash_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded_images: list[dict[str, Any]] = []
@@ -483,7 +492,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         "version": status_data.get("version", version),
         "version_code": status_data.get("version_code", ""),
         "target": status_data.get("target", target),
-        "profile": status_data.get("profile", profile),
+        "profile": status_data.get("profile", asu_profile),
         "packages": packages_to_send or [],
         "packages_all": status_data.get("packages", {}),
         "defaults": defaults_script if defaults_script else None,
