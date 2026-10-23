@@ -39,6 +39,8 @@
 //! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
 //! print(r["rescue-watchdog"].build_configure({"target": "192.168.105.10"}))
 //! print(r["mwan3"].build_configure({}))
+//! print(r["nodns"].build_configure({}))
+//! print(r["auto-sqm"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
 //! EOF
 //! ```
@@ -51,9 +53,10 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, Profile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile, TetherVariant,
-    TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
+    NodnsProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile,
+    TetherVariant, TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
+    render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -97,6 +100,12 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.starts_with("&& apk add "))
         .filter(|l| !l.starts_with("list track_ip "))
         .filter(|l| !(l.starts_with("uci add_list mwan3.") && l.contains(".track_ip=")))
+        // auto-sqm dynamic cron: 2.x makes re-apply idempotent by
+        // dropping prior entries first (1.x plain-appends and
+        // accumulates duplicates); both line forms are excluded from
+        // golden comparison, the corrected form is unit-pinned
+        .filter(|l| !(l.starts_with("sed -i '/auto-sqm/d'") && l.contains("crontabs")))
+        .filter(|l| !(l.starts_with("echo '0 */") && l.contains("/usr/sbin/auto-sqm'")))
         .map(|l| l.to_string())
         .collect()
 }
@@ -234,6 +243,22 @@ fn mwan3_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Mwan3(Mwan3Profile::default()),
         include_str!("goldens/mwan3.sh"),
+    );
+}
+
+#[test]
+fn nodns_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Nodns(NodnsProfile::default()),
+        include_str!("goldens/nodns.sh"),
+    );
+}
+
+#[test]
+fn auto_sqm_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::AutoSqm(AutoSqmProfile::default()),
+        include_str!("goldens/auto-sqm.sh"),
     );
 }
 
