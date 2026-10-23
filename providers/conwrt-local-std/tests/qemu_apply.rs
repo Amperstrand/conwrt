@@ -9,24 +9,29 @@
 //!
 //! Coverage: `sqm` (prebaked packages), `wireguard-client` (packages
 //! prebaked in the fixture image — full plan applies, kill-switch verify
-//! loop runs its real 30 s failure tail), and `tether` (shell surface
+//! loop runs its real 30 s failure tail), `tether` (shell surface
 //! only: the USB kmods are NOT prebakeable into the fixture image and
 //! the VM has no USB device, so `EnsurePackage` ops are stripped and the
 //! hardware-gated parts — USB detection actually finding a device,
 //! `network.usbwan` coming up — are marked and not asserted; what IS
 //! asserted is the script applying cleanly and the ADB hotplug hook
-//! installing, the parts a VM can prove), and `openclash` + `ssl` (§4
+//! installing, the parts a VM can prove), `openclash` + `ssl` (§4
 //! ports of PR #486: config surface only — package delivery is stripped
 //! like tether's (luci-app-openclash is third-party, not prebakeable;
 //! the ssl TLS-backend guard is package-manager territory), a stub
 //! rc.common service + the package's default uci section stand in for
 //! the package, and ssl is proven in BOTH the cert-less negative
 //! (skips loudly, verification fails by name) and the cert-present
-//! positive (host-minted self-signed certs, full verify).
+//! positive (host-minted self-signed certs, full verify)), and
+//! `nodns` + `pbr` (§4 ring-2 leg: nodns carries zero fixture-foreign
+//! dependencies so the FULL plan — initd + poll-script heredocs,
+//! dnsmasq addn-hosts wiring, service enable — applies verbatim; pbr
+//! follows the openclash strip+stub pattern for its non-prebaked
+//! packages, with the unquoted interface lines applied and read back).
 
 use conwrt_core::plan::{
-    OpenClashProfile, PlanOp, Profile, SqmProfile, SslProfile, TetherProfile,
-    WireguardClientProfile, WireguardServerProfile, plan_profile,
+    NodnsProfile, OpenClashProfile, PbrProfile, PlanOp, Profile, SqmProfile, SslProfile,
+    TetherProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
@@ -340,6 +345,137 @@ async fn wireguard_server_plan_applies_and_verifies_on_real_openwrt() {
              rm -f /etc/wireguard/server_public_key; \
              uci commit network; uci commit firewall; true",
         )
+        .await;
+}
+
+#[tokio::test]
+async fn nodns_full_plan_applies_and_verifies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // FULL plan, nothing stripped: the preset's whole footprint is
+    // shell + curl + dnsmasq addn-hosts wiring — all in the fixture
+    // base image. The initd + poll-script heredocs, the dnsmasq
+    // addn-hosts list, and the service enable all run for real.
+    let plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Nodns(NodnsProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let readback = session
+        .exec(
+            "uci -q get dhcp.@dnsmasq[0].addnhosts; \
+             test -x /usr/bin/nodns-poll.sh && echo poll-ok; \
+             test -f /etc/init.d/nodns-bridge && echo initd-ok; \
+             grep -q 'API_URL=\"https://nodns.shop\"' /usr/bin/nodns-poll.sh && echo url-ok",
+        )
+        .await
+        .expect("nodns readback");
+    let readback = String::from_utf8_lossy(&readback.stdout);
+    assert!(
+        readback.contains("/etc/dnsmasq.d/nodns.hosts"),
+        "got: {readback}"
+    );
+    assert!(readback.contains("poll-ok"), "got: {readback}");
+    assert!(readback.contains("initd-ok"), "got: {readback}");
+    assert!(readback.contains("url-ok"), "got: {readback}");
+
+    // rollback so repeated runs stay clean (stop first — respawn would
+    // relaunch the poll loop against the live URL)
+    let _ = session
+        .exec(
+            "/etc/init.d/nodns-bridge stop 2>/dev/null; \
+             /etc/init.d/nodns-bridge disable 2>/dev/null; \
+             rm -f /etc/init.d/nodns-bridge /usr/bin/nodns-poll.sh /etc/rc.d/S99nodns-bridge; \
+             uci -q del_list dhcp.@dnsmasq[0].addnhosts='/etc/dnsmasq.d/nodns.hosts'; \
+             uci commit dhcp; rm -rf /etc/dnsmasq.d; true",
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn pbr_config_surface_applies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebaked packages (openclash pattern): the
+    // pbr package ships /etc/config/pbr and an init script the plan's
+    // enable/restart + enabled-verification target.
+    let _ = session
+        .exec(
+            "touch /etc/config/pbr; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nUSE_PROCD=1\\nstart() { :; }\\n' > /etc/init.d/pbr; \
+             chmod +x /etc/init.d/pbr; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Pbr(PbrProfile {
+            wan_interface: "wwan".into(),
+            lan_interface: "guest".into(),
+            strict_enforcement: false,
+        }),
+    )
+    .expect("plan for confirmed VM");
+    plan.ops
+        .retain(|op| !matches!(op, PlanOp::EnsurePackage { .. }));
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    // the UNQUOTED interface lines are the byte-parity risk this port
+    // gates with its charset validator — read them back on a real uci
+    let uci = session
+        .exec("uci -q show pbr.config")
+        .await
+        .expect("pbr readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("enabled='1'"), "got: {uci}");
+    assert!(uci.contains("strict_enforcement='0'"), "got: {uci}");
+    assert!(
+        uci.contains("netifd_interface_default='wwan'"),
+        "got: {uci}"
+    );
+    assert!(uci.contains("netifd_interface_local='guest'"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec("rm -f /etc/init.d/pbr /etc/rc.d/S99pbr; rm -f /etc/config/pbr; true")
         .await;
 }
 

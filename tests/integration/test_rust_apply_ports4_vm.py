@@ -35,6 +35,8 @@ def test_qemu_apply_openclash_and_ssl_on_fixture_vm(openwrt_vm):
             "--nocapture",
             "openclash",
             "ssl",
+            "nodns",
+            "pbr",
         ],
         capture_output=True,
         text=True,
@@ -44,7 +46,7 @@ def test_qemu_apply_openclash_and_ssl_on_fixture_vm(openwrt_vm):
     )
 
     assert result.returncode == 0, (
-        f"qemu_apply openclash+ssl failed (exit {result.returncode}):\n"
+        f"qemu_apply openclash+ssl+nodns+pbr failed (exit {result.returncode}):\n"
         f"stdout: {result.stdout[-4000:]}\nstderr: {result.stderr[-2000:]}"
     )
     # both tests must have RUN, not silently skipped (a skip here means
@@ -52,6 +54,8 @@ def test_qemu_apply_openclash_and_ssl_on_fixture_vm(openwrt_vm):
     for needle in (
         "openclash_config_surface_applies_on_real_openwrt",
         "ssl_certless_negative_and_cert_present_positive_on_real_openwrt",
+        "nodns_full_plan_applies_and_verifies_on_real_openwrt",
+        "pbr_config_surface_applies_on_real_openwrt",
     ):
         assert f"test {needle} ... ok" in result.stdout, (
             f"{needle} did not run green; stdout tail: {result.stdout[-2000:]}"
