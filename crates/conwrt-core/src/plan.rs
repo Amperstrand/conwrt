@@ -636,6 +636,61 @@ impl Mwan3Profile {
     }
 }
 
+/// nftables-native policy-based routing — port of the tested 1.x `pbr`
+/// preset (`scripts/use_cases/pbr.py`, verified on OpenWrt 24.10.2 in
+/// QEMU/KVM). pbr is the fw4-native successor to mwan3's iptables
+/// marking: this plan enables the service with fw4 include-file mode,
+/// pins the default WAN interface for policy routing, and registers
+/// the LAN as a local interface. pbr does NOT do multi-WAN load
+/// balancing on its own (mwan4 integration arrives with mwan4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PbrProfile {
+    /// WAN UCI interface used for default routing (1.x default `wan`).
+    pub wan_interface: String,
+    /// LAN interface counted as local traffic (1.x default `lan`).
+    pub lan_interface: String,
+    /// Drop traffic that matches no policy (1.x default on).
+    pub strict_enforcement: bool,
+}
+
+impl Default for PbrProfile {
+    fn default() -> Self {
+        Self {
+            wan_interface: "wan".into(),
+            lan_interface: "lan".into(),
+            strict_enforcement: true,
+        }
+    }
+}
+
+impl PbrProfile {
+    /// 1.x interpolated `wan_interface`/`lan_interface` UNQUOTED into
+    /// two shell lines (`netifd_interface_default=`, `add_list …
+    /// netifd_interface_local=`) — a command-injection hole for
+    /// hostile param values. The port gates both with the 1.x
+    /// `shell_safe::interface_name` charset (`[A-Za-z0-9_.:-]+`); the
+    /// same gate landed Python-side with this port (mwan3/#448
+    /// precedent). Valid input renders byte-identically.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.wan_interface) {
+            return Err(Unsupported::InvalidParams(
+                "wan_interface contains unsafe characters".into(),
+            ));
+        }
+        if !iface_ok(&self.lan_interface) {
+            return Err(Unsupported::InvalidParams(
+                "lan_interface contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -780,6 +835,8 @@ pub enum Profile {
     RescueWatchdog(RescueWatchdogProfile),
     /// Multi-WAN failover / load balancing.
     Mwan3(Mwan3Profile),
+    /// nftables-native policy-based routing.
+    Pbr(PbrProfile),
     /// Local DNS cache of nodns records via dnsmasq.
     Nodns(NodnsProfile),
     /// Auto-measured SQM (static or dynamic re-tune).
@@ -804,6 +861,7 @@ impl Profile {
             Profile::Mesh11sd(_) => "mesh11sd",
             Profile::RescueWatchdog(_) => "rescue-watchdog",
             Profile::Mwan3(_) => "mwan3",
+            Profile::Pbr(_) => "pbr",
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
@@ -827,6 +885,7 @@ impl Profile {
             Profile::Mesh11sd(_) => &["wifi"],
             Profile::RescueWatchdog(_) => &[],
             Profile::Mwan3(_) => &[],
+            Profile::Pbr(_) => &[],
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
@@ -1143,6 +1202,7 @@ pub fn plan_profile(
         Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
         Profile::RescueWatchdog(wd) => plan_rescue_watchdog(model, wd),
         Profile::Mwan3(mw) => plan_mwan3(model, mw),
+        Profile::Pbr(pbr) => plan_pbr(model, pbr),
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
@@ -2727,6 +2787,87 @@ fn plan_mwan3(model: &DeviceModel, mw: &Mwan3Profile) -> Result<Plan, Unsupporte
     ];
     Ok(Plan {
         profile_id: "mwan3".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> {
+    pbr.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let strict = if pbr.strict_enforcement { "1" } else { "0" };
+    let ops = vec![
+        PlanOp::EnsurePackage { name: "pbr".into() },
+        PlanOp::EnsurePackage {
+            name: "luci-app-pbr".into(),
+        },
+        PlanOp::Shell {
+            command: "uci set pbr.config=pbr".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "pbr".into(),
+            section: "config".into(),
+            options: vec![
+                ("enabled".into(), literal("1".into())),
+                ("verbosity".into(), literal("2".into())),
+                ("strict_enforcement".into(), literal(strict.into())),
+                ("resolver_set".into(), literal("none".into())),
+                ("nft_file_helper".into(), literal("1".into())),
+            ],
+        },
+        // 1.x renders these two UNQUOTED (bare interface names); the
+        // validate() charset gate is what makes the verbatim render safe.
+        PlanOp::Shell {
+            command: format!(
+                "uci set pbr.config.netifd_interface_default={}",
+                pbr.wan_interface
+            ),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "uci add_list pbr.config.netifd_interface_local={}",
+                pbr.lan_interface
+            ),
+        },
+        PlanOp::CommitUci {
+            config: "pbr".into(),
+        },
+        PlanOp::Service {
+            name: "pbr".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "pbr".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: "echo \"pbr configured. Verify with: nft list table inet pbr 2>/dev/null\""
+                .into(),
+        },
+        PlanOp::Shell {
+            command: "echo \"Check status: /etc/init.d/pbr status\"".into(),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "pbr enabled in uci".into(),
+            command: "uci -q get pbr.config.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "default WAN interface persisted".into(),
+            command: "uci -q get pbr.config.netifd_interface_default".into(),
+            expect_contains: pbr.wan_interface.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/pbr enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "pbr".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -4354,6 +4495,59 @@ mod tests {
             Mwan3Profile {
                 policy: "x'; rm -rf /; '".into(),
                 ..Mwan3Profile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn pbr_shape_gates_and_strict_branch_match_1x() {
+        let script = render_shell(&plan_for(Profile::Pbr(PbrProfile::default())));
+        assert!(script.contains("uci set pbr.config=pbr"));
+        assert!(script.contains("uci set pbr.config.enabled='1'"));
+        assert!(script.contains("uci set pbr.config.verbosity='2'"));
+        assert!(script.contains("uci set pbr.config.strict_enforcement='1'"));
+        assert!(script.contains("uci set pbr.config.resolver_set='none'"));
+        assert!(script.contains("uci set pbr.config.nft_file_helper='1'"));
+        // 1.x renders the interface wiring UNQUOTED (byte parity); the
+        // validate() charset gate is the safety story for these bytes
+        assert!(script.contains("uci set pbr.config.netifd_interface_default=wan"));
+        assert!(script.contains("uci add_list pbr.config.netifd_interface_local=lan"));
+        assert!(script.contains("uci commit pbr"));
+        assert!(script.contains("/etc/init.d/pbr enable"));
+        assert!(script.contains("/etc/init.d/pbr restart"));
+        assert!(
+            script.contains(
+                "echo \"pbr configured. Verify with: nft list table inet pbr 2>/dev/null\""
+            )
+        );
+        assert!(script.contains("echo \"Check status: /etc/init.d/pbr status\""));
+
+        // strict off flips the enforcement bit; custom interfaces ride
+        // the same unquoted lines
+        let lenient = render_shell(&plan_for(Profile::Pbr(PbrProfile {
+            wan_interface: "wwan".into(),
+            lan_interface: "guest".into(),
+            strict_enforcement: false,
+        })));
+        assert!(lenient.contains("uci set pbr.config.strict_enforcement='0'"));
+        assert!(lenient.contains("uci set pbr.config.netifd_interface_default=wwan"));
+        assert!(lenient.contains("uci add_list pbr.config.netifd_interface_local=guest"));
+
+        // interface_name charset gate (both directions of the wiring)
+        assert!(matches!(
+            PbrProfile {
+                wan_interface: "wan; rm -rf /".into(),
+                ..PbrProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            PbrProfile {
+                lan_interface: "$(reboot)".into(),
+                ..PbrProfile::default()
             }
             .validate(),
             Err(Unsupported::InvalidParams(_))
