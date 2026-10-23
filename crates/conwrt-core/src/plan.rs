@@ -698,10 +698,20 @@ impl PbrProfile {
 /// (proxy/core/dashboard/DNS mode), and service enable. The proxy
 /// cannot run without a subscription config, which is a POST-FLASH
 /// step via the LuCI web UI — this plan stops at the same boundary
-/// line as 1.x (its closing echo). The 1.x `packages_remove:
-/// [dnsmasq]` (swapped for `dnsmasq-full`) is an image-build
-/// directive, not a configure op — the plan carries only the
-/// EnsurePackage set, in 1.x order.
+/// line as 1.x (its closing echo). Package-delivery boundary:
+/// `luci-app-openclash` ships from the third-party vernesong feed,
+/// NOT official OpenWrt packages (1.x shares this gap — its
+/// `packages_via="auto"` list fails to resolve on stock devices and
+/// the public ASU alike). The intended delivery is a baked image or a
+/// preinstalled device, where the leading `EnsurePackage`
+/// short-circuits on `opkg list-installed`; on a stock device the
+/// apply aborts loudly at the FIRST op — before any configuration is
+/// touched — rather than leaving dangling config for absent software.
+/// An acquisition phase (feed setup / release-IPK download) is M7
+/// image-pipeline work, not a plan op. The 1.x `packages_remove:
+/// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build
+/// directive, but rides the plan as a guarded removal because this
+/// plan installs packages at apply time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenClashProfile {
     /// Default proxy protocol (1.x default `ss`; vmess/trojan/vless…).
