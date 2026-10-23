@@ -21,7 +21,7 @@ def cmd_setup_nor_recovery(args: argparse.Namespace) -> int:
         model = load_model(model_id)
     except FileNotFoundError:
         print(f"ERROR: Model '{model_id}' not found in models/ directory.", file=sys.stderr)
-        print("Use 'conwrt list' to see available models.", file=sys.stderr)
+        print("Use 'conwrt models' to see available models.", file=sys.stderr)
         return 1
 
     nor = model.get("nor_recovery")

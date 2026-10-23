@@ -333,8 +333,16 @@ Use cases and packages are defined once in `scripts/use_cases/` and applied via 
 ### List available device models
 
 ```bash
-python3 scripts/conwrt.py list
+cargo run -q -p conwrt-cli -- models
 ```
+
+(1.x `conwrt.py list` deprecated 2026-10-23 — parity-matrix §7, the
+first per-command CLI retirement. `conwrt models` is the successor,
+byte-parity pinned both sides by `tests/test_parity_rust_models.py`.
+The Python command stays functional — `scripts/conwrt-openwrt-install.sh`
+runs it as the on-router install smoke check, where no Rust binary
+exists — and prints the migration notice until the flash engine
+retires.)
 
 ### Source the vanilla OpenWrt image for a model
 

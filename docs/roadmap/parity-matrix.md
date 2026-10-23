@@ -68,7 +68,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| `scripts/conwrt.py` + `scripts/conwrt/cli.py` + 12 `cmd_*` | ~3000 | partial — `conwrt-cli`: models/identify/diagnose/probe/discover-v6/fingerprint/apply/plan/agent/maas | `apps/conwrt-cli/tests/cli_maas.rs`; ring-2 apply test | Per-command: retire a `cmd_*` when its Rust twin passes the same QEMU oracle; `make ci` shrinks accordingly |
+| `scripts/conwrt.py` + `scripts/conwrt/cli.py` + 12 `cmd_*` | ~3000 | partial — `conwrt-cli`: models/identify/diagnose/probe/discover-v6/fingerprint/apply/plan/agent/maas | `apps/conwrt-cli/tests/cli_maas.rs`; ring-2 apply test; **§7 item 1 `list` → `conwrt models`: byte parity pinned both sides** — `tests/test_parity_rust_models.py` runs `conwrt.py list` AND `conwrt models` against one committed golden (`tests/fixtures/parity/models_list.txt`, Rust-generated); the two tables differed (flash-method order: JSON insertion vs BTreeMap sorted; Rust count footer) — per this matrix the RUST output is the go-forward shape and the Python twin was aligned to it (sorted methods, `N model(s) valid in models` footer) rather than faking equality | Per-command: retire a `cmd_*` when its Rust twin passes the same QEMU oracle; `make ci` shrinks accordingly. **`conwrt.py list` DEPRECATED 2026-10-23** (§7 item 1): docs swapped (README, getting-started, in-CLI pointers), soft-deprecation gate already in place; removal BLOCKED by the internal caller `scripts/conwrt-openwrt-install.sh` (on-router smoke check — no Rust binary on-router), rides the §3 flash-engine retirement (M7-M8). Next per-command candidates: `probe`/`discover-v6` twins |
 | `scripts/conwrt_tui.py`, `conwrt-lite` | ~1500 | none | — | None — M7 UI |
 
 ## 8. Bench & lab tooling — sanctioned PERMANENT Python
@@ -115,6 +115,13 @@ are operator tooling, not product surface. Review annually, not per-M9.
    transport.
 5. Everything else: per-row gates above; nothing retires without a
    green Rust twin AND a removal PR citing this file's row.
+6. **§7 per-command CLI retirement** (started 2026-10-23): item 1
+   `conwrt.py list` → `conwrt models` **DEPRECATED** — byte parity
+   pinned both sides (`tests/test_parity_rust_models.py`), docs
+   swapped, Python output aligned to the Rust table shape. Removal
+   rides the flash-engine retirement (the on-router install script
+   still calls it). Next: `probe`/`discover-v6` follow the same
+   pattern (2026-10-23 handoff ordering).
 
 Deprecation audit (2026-10-22) — candidates considered and NOT
 deprecated, with the blocking gate: `serial_transport.py` (parity-tested

@@ -5,10 +5,22 @@ import shutil
 import sys
 from pathlib import Path
 
-from model_loader import load_model, list_models
+from model_loader import MODELS_DIR, load_model, list_models
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    """List the model corpus (deprecated — parity-matrix §7, item 1).
+
+    Output is byte-aligned with the Rust successor ``conwrt models``
+    (``cmd_models_validate`` in apps/conwrt-cli): flash-method names are
+    SORTED (the Rust side reads them from a BTreeMap — deterministic;
+    JSON insertion order here would drift with any key rewrite of a
+    model file) and the table ends with the ``N model(s) valid in
+    <dir>`` footer. A model with no flash methods prints ``[]``, as the
+    Rust side does (unreachable on a valid corpus — the schema requires
+    minProperties 1). Both sides are byte-pinned against one golden by
+    tests/test_parity_rust_models.py.
+    """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from rust_migration import soft_deprecated
 
@@ -24,9 +36,10 @@ def cmd_list(args: argparse.Namespace) -> int:
         model_id = model.get("id", "?")
         vendor = model.get("vendor", "?")
         target = model.get("openwrt", {}).get("target", "?")
-        methods = ", ".join(model.get("flash_methods", {}).keys()) or "none"
+        methods = ", ".join(sorted(model.get("flash_methods", {}).keys()))
         desc = model.get("description", "")
         print(f"{model_id:<40s}  {vendor:<12s}  {target:<22s}  [{methods}]  {desc}")
+    print(f"\n{len(models)} model(s) valid in {MODELS_DIR.name}")
     return 0
 
 

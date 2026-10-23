@@ -190,9 +190,9 @@ class TestModelNotFound:
 
     @patch("conwrt.cmd_nor_recovery.load_model", side_effect=FileNotFoundError)
     @patch("conwrt.cmd_nor_recovery.log")
-    def test_stderr_mentions_list_command(self, mock_log, mock_load, capsys):
+    def test_stderr_mentions_models_command(self, mock_log, mock_load, capsys):
         cmd_setup_nor_recovery(_args())
-        assert "conwrt list" in capsys.readouterr().err
+        assert "conwrt models" in capsys.readouterr().err
 
 
 class TestNoNorRecoverySection:

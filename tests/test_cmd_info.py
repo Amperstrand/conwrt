@@ -37,6 +37,26 @@ class TestCmdListWithModels:
         assert "test-device-v1" in captured.out
         assert "TestCorp" in captured.out
         assert "sysupgrade" in captured.out
+        assert "1 model(s) valid in models" in captured.out  # `conwrt models` footer shape
+
+    @patch(
+        "conwrt.cmd_info.list_models",
+        return_value=[
+            {
+                "id": "sort-device-v1",
+                "vendor": "TestCorp",
+                "openwrt": {"target": "testarch/testsub"},
+                # insertion order deliberately non-alphabetical: `conwrt models` sorts (BTreeMap)
+                "flash_methods": {"zycast": {}, "sysupgrade": {}, "recovery-http": {}},
+                "description": "A test device",
+            }
+        ],
+    )
+    def test_flash_methods_sorted_rust_shape(self, mock_list, capsys):
+        result = cmd_list(Namespace())
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "[recovery-http, sysupgrade, zycast]" in out
 
     @patch(
         "conwrt.cmd_info.list_models",
@@ -54,6 +74,6 @@ class TestCmdListWithModels:
         assert result == 0
         captured = capsys.readouterr()
         assert "bare-model" in captured.out
-        assert "none" in captured.out
+        assert "[]" in captured.out  # `conwrt models` renders empty set as []; schema forbids it in-corpus
 
 
