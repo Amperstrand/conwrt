@@ -190,11 +190,7 @@ rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 parity-check: ## #118: Python(jsonschema) and Rust(types) must agree on corpus + negatives
 	@python3 -m pytest tests/test_model_schema_parity.py -q
 	@cargo run --quiet -p conwrt-cli -- models --dir models >/dev/null
-	@for d in tests/fixtures/schema-negative/*/; do \
-	  if cargo run --quiet -p conwrt-cli -- models --dir "$$d" >/dev/null 2>&1; then \
-	    echo "PARITY DRIFT: Rust accepted a schema-negative fixture: $$d"; exit 1; fi; \
-	done
-	@echo "parity OK: both validators agree on the corpus and every negative fixture"
+	@python3 scripts/parity_negative_check.py
 
 rust-test: ## Run Rust workspace tests only
 	cargo test --workspace
