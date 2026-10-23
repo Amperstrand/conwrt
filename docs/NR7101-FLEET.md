@@ -1,3 +1,4 @@
+<!-- Unit-level values redacted 2026-10-23: full unredacted census archived in the private conwrt-bench registry. -->
 # NR7101 — Species Guide: Modem Firmware, RF Survey, Flashing (2026-09-27)
 
 Live-verified 2026-09-27 by the session-review lane. Purpose: species-level
