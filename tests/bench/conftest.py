@@ -271,9 +271,17 @@ def _request_image(scenario: Scenario) -> str:
             timeout=900, check=False,
         )
         image = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
-        if r.returncode != 0 or not image or not Path(image).is_file():
+        # the manager prints the build's hash DIRECTORY (cache hit or
+        # fresh download alike) — accept it, or an image file for
+        # callers that resolved one already
+        img_path = Path(image) if image else None
+        if r.returncode != 0 or img_path is None or not (
+            img_path.is_dir() or img_path.is_file()
+        ):
             pytest.fail(f"ASU image request failed for {scenario.name}: "
                         f"{r.stdout[-200:]} {r.stderr[-200:]}")
+        if img_path.is_dir() and not sorted(img_path.glob("*sysupgrade.bin")):
+            pytest.fail(f"ASU build dir has no sysupgrade image: {img_path}")
         _IMAGE_CACHE[scenario.name] = image
         return image
     finally:
@@ -294,8 +302,28 @@ def _image_variant(image: str) -> str:
     return str(matches[0]) if matches else image
 
 
+def _assert_board_matches_model() -> None:
+    """AGENTS.md identify-before-flash: refuse to flash unless the live
+    board name matches the configured bench model. When SSH is down
+    (recovery mode) the board is unreadable and conwrt's own recovery
+    probing stays the last line of defense; the check guards the
+    SSH-alive path where a wrong CONWRT_BENCH_MODEL would otherwise
+    upload another model's image."""
+    model = json.loads((REPO / "models" / f"{_bench_model_id()}.json").read_text())
+    ow = model["openwrt"]
+    accepted = {n for n in {ow.get("device"), *(ow.get("board_names") or [])} if n}
+    live = ssh_run("cat /tmp/sysinfo/board_name", timeout=15)
+    board = live.stdout.strip().splitlines()[0] if live.stdout.strip() else ""
+    if board and board not in accepted:
+        pytest.fail(
+            f"refusing to flash: live board {board!r} does not match "
+            f"CONWRT_BENCH_MODEL={_bench_model_id()} (accepted: {sorted(accepted)})"
+        )
+
+
 def _flash(image: str) -> bool:
     """Flash via conwrt (auto-detects sysupgrade vs recovery state)."""
+    _assert_board_matches_model()
     variant = _image_variant(image)
     r = subprocess.run(
         ["python3", "scripts/conwrt.py", "flash", "--model-id",
