@@ -41,7 +41,7 @@ after ~10s. From that data alone:
 
 | Path | Would it have worked? | Why |
 |---|---|---|
-| **EUI-64 link-local derivation** | **YES — the killer move** | `fe80::<MAC with FFFE + XOR 0x02>` — b4:2d:56:25:47:a2 → fe80::b62d:56ff:fe25:47a2. Linux/OpenWrt default link-locals are EUI-64. ping6 on the access VLAN → alive → banner → dbclient. Zero history needed. |
+| **EUI-64 link-local derivation** | **YES — the killer move** | `fe80::<MAC with FFFE + XOR 0x02>` — b4:2d:56:xx:xx:xx → fe80::b62d:56ff:fe25:xxxx (derivation shown for the redacted example). Linux/OpenWrt default link-locals are EUI-64. ping6 on the access VLAN → alive → banner → dbclient. Zero history needed. |
 | **Long passive listen** | YES | Both units RA every ~16s forever (odhcpd ULA). September's ~90s races treated boot-window as the only signal period. |
 | **Sweep the probe host's own subnets** | YES | The switch LIVED in 192.168.13.0/24. A .13 sweep on the access VLANs would have found lan7 in minutes. |
 | **Credential brute force** | YES | Dropbear has no lockout. A ~10-entry ladder (empty/conwrt/<bench-password-2026>/new2day/admin/admin...) cracks both units. |
