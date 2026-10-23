@@ -3168,6 +3168,11 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
         ops.push(PlanOp::Shell {
             command: concat!(
                 "if uci -q show nodogsplash >/dev/null 2>&1; then\n",
+                // del_list-before-add_list keeps re-runs idempotent:
+                // uci lists are append-only, so a plain add_list
+                // accumulates duplicate entries on every apply
+                // (guarded: del_list exits nonzero on a missing value)
+                "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true\n",
                 "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'\n",
                 "uci commit nodogsplash\n",
                 "/etc/init.d/nodogsplash restart\n",
@@ -4953,6 +4958,11 @@ mod tests {
         // (Codex #486 P2 round 2): failures abort instead of riding a
         // trailing `|| true` to a fake success
         assert!(script.contains("if uci -q show nodogsplash >/dev/null 2>&1; then"));
+        // del_list-before-add_list keeps re-runs idempotent (Codex #486
+        // round 4): uci lists are append-only
+        assert!(script.contains(
+            "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true"
+        ));
         assert!(script.contains(
             "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'"
         ));

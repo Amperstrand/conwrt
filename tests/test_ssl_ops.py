@@ -64,6 +64,22 @@ def test_nodogsplash_branch_propagates_failures():
     assert "nodogsplash restart || true" not in script
 
 
+def test_nodogsplash_allow_entry_is_reapply_idempotent():
+    """Regression (Codex #486 round 4): uci lists are append-only — a
+    bare add_list accumulates a duplicate 'allow tcp port 443' entry
+    on every re-run. The exact value must be deleted (guarded) before
+    it is added."""
+    script = _ssl().build_configure({})
+    assert (
+        "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router="
+        "'allow tcp port 443' || true" in script
+    )
+    add = script.count(
+        "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'"
+    )
+    assert add == 1
+
+
 @pytest.mark.parametrize(
     "hostile",
     ["lancert\nreboot", "qip; poweroff", "$(reboot)", "", "letsencrypt"],

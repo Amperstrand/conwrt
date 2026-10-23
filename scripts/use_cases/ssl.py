@@ -247,9 +247,14 @@ def _build_ssl_ops(params: dict[str, Any]) -> list[Op]:
         # `|| true` would mask real failures (missing anonymous section,
         # failed commit, failed restart) as success alongside the
         # intended package-absent no-op. Absent nodogsplash skips the
-        # branch; present-but-failing aborts loudly under set -e.
+        # branch; present-but-failing aborts loudly under set -e. The
+        # del_list before add_list keeps re-runs idempotent — uci lists
+        # are append-only, so a plain add_list would accumulate
+        # duplicate 'allow tcp port 443' entries on every apply.
         ops.append(ShellCommand(command=(
             "if uci -q show nodogsplash >/dev/null 2>&1; then\n"
+            "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router="
+            "'allow tcp port 443' || true\n"
             "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'\n"
             "uci commit nodogsplash\n"
             "/etc/init.d/nodogsplash restart\n"

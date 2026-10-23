@@ -15,6 +15,7 @@ echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wir
 fi
 # -- Allow port 443 through nodogsplash --
 if uci -q show nodogsplash >/dev/null 2>&1; then
+uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true
 uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'
 uci commit nodogsplash
 /etc/init.d/nodogsplash restart
