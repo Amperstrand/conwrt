@@ -76,7 +76,8 @@ pub fn send_sysrq(io: &mut dyn BreakIo, key: SysrqKey) -> Result<(), RecoveryErr
     io.send_break_for(Duration::from_millis(250))
         .map_err(|e| RecoveryError::Io(e.to_string()))?;
     std::thread::sleep(SYSRQ_KEY_DELAY);
-    io.write_all_bytes(&[key.as_char()]).map_err(|e| RecoveryError::Io(e.to_string()))?;
+    io.write_all_bytes(&[key.as_char()])
+        .map_err(|e| RecoveryError::Io(e.to_string()))?;
     Ok(())
 }
 
@@ -98,8 +99,11 @@ pub enum DeviceState {
 
 /// Classify a device from two observer-side probes: last console output
 /// age and network liveness.
-pub fn classify(console_output_age: Option<Duration>, net_alive: bool,
-                quiet_threshold: Duration) -> DeviceState {
+pub fn classify(
+    console_output_age: Option<Duration>,
+    net_alive: bool,
+    quiet_threshold: Duration,
+) -> DeviceState {
     if net_alive {
         return DeviceState::Healthy;
     }
@@ -114,14 +118,19 @@ pub fn classify(console_output_age: Option<Duration>, net_alive: bool,
 /// marker on the console. `boot_marker` is a raw byte pattern that the
 /// target's bootloader/kernel prints at boot start (e.g.
 /// `b"Starting kernel"` or a bootloader banner).
-pub fn reboot_wedged(io: &mut dyn BreakIo, boot_marker: &[u8],
-                     timeout: Duration) -> Result<RecoveryOutcome, RecoveryError> {
+pub fn reboot_wedged(
+    io: &mut dyn BreakIo,
+    boot_marker: &[u8],
+    timeout: Duration,
+) -> Result<RecoveryOutcome, RecoveryError> {
     send_sysrq(io, SysrqKey::Reboot)?;
     let deadline = Instant::now() + timeout;
     let mut seen = Vec::with_capacity(4096);
     let mut chunk = [0u8; 1024];
     while Instant::now() < deadline {
-        let n = io.read(&mut chunk).map_err(|e| RecoveryError::Io(e.to_string()))?;
+        let n = io
+            .read(&mut chunk)
+            .map_err(|e| RecoveryError::Io(e.to_string()))?;
         if n > 0 {
             seen.extend_from_slice(&chunk[..n]);
             if contains_subslice(&seen, boot_marker) {
@@ -132,7 +141,9 @@ pub fn reboot_wedged(io: &mut dyn BreakIo, boot_marker: &[u8],
             }
         }
     }
-    Err(RecoveryError::NoBootMarker { captured: seen.len() })
+    Err(RecoveryError::NoBootMarker {
+        captured: seen.len(),
+    })
 }
 
 /// Keep reading until `quiet` passes with no bytes (bounded).
@@ -141,7 +152,9 @@ fn drain_until_quiet(io: &mut dyn ConsoleIo, quiet: Duration) -> Result<(), Reco
     let mut last = Instant::now();
     let mut chunk = [0u8; 4096];
     while Instant::now() < deadline {
-        let n = io.read(&mut chunk).map_err(|e| RecoveryError::Io(e.to_string()))?;
+        let n = io
+            .read(&mut chunk)
+            .map_err(|e| RecoveryError::Io(e.to_string()))?;
         if n > 0 {
             last = Instant::now();
         } else if last.elapsed() >= quiet {
@@ -187,14 +200,14 @@ impl std::fmt::Display for RecoveryError {
             RecoveryError::NoBreakSupport => write!(f, "transport cannot send UART break"),
             RecoveryError::NoBootMarker { captured } => write!(
                 f,
-                "no boot marker after sysrq-b ({} bytes captured)", captured
+                "no boot marker after sysrq-b ({} bytes captured)",
+                captured
             ),
         }
     }
 }
 
 impl std::error::Error for RecoveryError {}
-
 
 #[cfg(test)]
 mod tests {
@@ -204,16 +217,23 @@ mod tests {
     fn classify_table() {
         let t = Duration::from_secs(5);
         assert_eq!(classify(None, true, t), DeviceState::Healthy);
-        assert_eq!(classify(Some(Duration::from_secs(1)), false, t),
-                   DeviceState::WedgedLivelock);
-        assert_eq!(classify(Some(Duration::from_secs(60)), false, t),
-                   DeviceState::ConsoleWentQuiet);
+        assert_eq!(
+            classify(Some(Duration::from_secs(1)), false, t),
+            DeviceState::WedgedLivelock
+        );
+        assert_eq!(
+            classify(Some(Duration::from_secs(60)), false, t),
+            DeviceState::ConsoleWentQuiet
+        );
         assert_eq!(classify(None, false, t), DeviceState::Unreachable);
     }
 
     #[test]
     fn marker_matching() {
-        assert!(contains_subslice(b"xx Starting kernel.\r\n", b"Starting kernel"));
+        assert!(contains_subslice(
+            b"xx Starting kernel.\r\n",
+            b"Starting kernel"
+        ));
         assert!(!contains_subslice(b"booting", b"Starting kernel"));
     }
 }

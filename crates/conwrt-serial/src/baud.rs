@@ -9,23 +9,45 @@
 
 /// Boot stage signature table (byte patterns per stage).
 const BOOT_SIGNATURES: &[(&str, &[&[u8]])] = &[
-    ("uboot", &[
-        b"U-Boot", b"u-boot", b"Bootloader", b"bootmenu",
-        b"Hit any key to stop autoboot",
-        b"Net:   ", b"eth0: ", b"ethaddr=",
-    ]),
-    ("zloader", &[
-        b"Z-Loader", b"Z-LOADER", b"ZyNOS", b"BootBase",
-        b"Multiboot", b"Press ENTER to debug mode",
-        b"multiboot listening", b"Multiboot Listening",
-    ]),
-    ("kernel", &[
-        b"[    0.000000] Linux version",
-        b"Starting kernel",
-        b"Booting Linux",
-        b"Decompressing Linux",
-    ]),
-    ("openwrt", &[b"OpenWrt", b"LEDE", b"BusyBox", b"root@OpenWrt"]),
+    (
+        "uboot",
+        &[
+            b"U-Boot",
+            b"u-boot",
+            b"Bootloader",
+            b"bootmenu",
+            b"Hit any key to stop autoboot",
+            b"Net:   ",
+            b"eth0: ",
+            b"ethaddr=",
+        ],
+    ),
+    (
+        "zloader",
+        &[
+            b"Z-Loader",
+            b"Z-LOADER",
+            b"ZyNOS",
+            b"BootBase",
+            b"Multiboot",
+            b"Press ENTER to debug mode",
+            b"multiboot listening",
+            b"Multiboot Listening",
+        ],
+    ),
+    (
+        "kernel",
+        &[
+            b"[    0.000000] Linux version",
+            b"Starting kernel",
+            b"Booting Linux",
+            b"Decompressing Linux",
+        ],
+    ),
+    (
+        "openwrt",
+        &[b"OpenWrt", b"LEDE", b"BusyBox", b"root@OpenWrt"],
+    ),
 ];
 
 /// Detect the boot stage from a byte sample; keeps `current` when nothing
@@ -48,11 +70,21 @@ pub const COMMON_BAUDS: &[u32] = &[
 
 /// Known boot patterns that indicate a correct baud rate.
 const BOOT_PATTERNS: &[&[u8]] = &[
-    b"U-Boot", b"u-boot", b"uboot",
-    b"Z-Loader", b"Z-LOADER", b"ZyNOS", b"BootBase",
-    b"Linux version", b"Starting kernel", b"Booting",
-    b"OpenWrt", b"LEDE", b"BusyBox",
-    b"Decompressing", b"Loading",
+    b"U-Boot",
+    b"u-boot",
+    b"uboot",
+    b"Z-Loader",
+    b"Z-LOADER",
+    b"ZyNOS",
+    b"BootBase",
+    b"Linux version",
+    b"Starting kernel",
+    b"Booting",
+    b"OpenWrt",
+    b"LEDE",
+    b"BusyBox",
+    b"Decompressing",
+    b"Loading",
     b"\r\n",
 ];
 
@@ -74,8 +106,7 @@ pub fn score_baud_data(data: &[u8]) -> (u32, String) {
     let printable = data.iter().filter(|&&b| is_printable(b)).count() as f64;
     let ascii_ratio = printable / total;
 
-    let pattern_hits = BOOT_PATTERNS.iter()
-        .filter(|&&p| contains(data, p)).count();
+    let pattern_hits = BOOT_PATTERNS.iter().filter(|&&p| contains(data, p)).count();
 
     // byte-distribution entropy
     let mut counts = [0u32; 256];
@@ -134,7 +165,11 @@ pub fn score_baud_data(data: &[u8]) -> (u32, String) {
     let score = score.max(0) as u32;
     let reason = format!(
         "ascii={:.0}%, patterns={}, entropy={:.1}, nulls={}, run={}",
-        ascii_ratio * 100.0, pattern_hits, entropy, nulls, max_run
+        ascii_ratio * 100.0,
+        pattern_hits,
+        entropy,
+        nulls,
+        max_run
     );
     (score, reason)
 }

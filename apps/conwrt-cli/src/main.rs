@@ -644,11 +644,8 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::SerialBaud {
-            port,
-            listen_secs,
-        } => {
-            use conwrt_serial::baud::{score_baud_data, COMMON_BAUDS};
+        Command::SerialBaud { port, listen_secs } => {
+            use conwrt_serial::baud::{COMMON_BAUDS, score_baud_data};
             use conwrt_serial::io::open_port;
             use std::time::Duration;
 
@@ -661,11 +658,13 @@ fn main() -> ExitCode {
                 let _ = io.write_all_bytes(b"\r");
                 let mut buf = vec![0u8; 8192];
                 let mut sample = Vec::new();
-                let deadline = std::time::Instant::now() +
-                    std::time::Duration::from_secs(listen_secs as u64);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(listen_secs as u64);
                 while std::time::Instant::now() < deadline {
                     if let Ok(n) = io.read(&mut buf) {
-                        if n > 0 { sample.extend_from_slice(&buf[..n]); }
+                        if n > 0 {
+                            sample.extend_from_slice(&buf[..n]);
+                        }
                     }
                 }
                 let (score, reason) = score_baud_data(&sample);
@@ -679,7 +678,10 @@ fn main() -> ExitCode {
                     println!("best guess: {rate} (score {score})");
                     ExitCode::SUCCESS
                 }
-                _ => { eprintln!("conwrt: no console data at any candidate rate"); ExitCode::from(4) }
+                _ => {
+                    eprintln!("conwrt: no console data at any candidate rate");
+                    ExitCode::from(4)
+                }
             }
         }
         Command::SerialRecover {
@@ -706,7 +708,9 @@ fn main() -> ExitCode {
                 Duration::from_secs(timeout as u64),
             ) {
                 Ok(out) => {
-                    println!("{out:?} - keep this console reader attached until the device is stable.");
+                    println!(
+                        "{out:?} - keep this console reader attached until the device is stable."
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -715,7 +719,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-    Command::Models { dir } => cmd_models_validate(&dir),
+        Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
         Command::Cache { command } => cmd_cache(command),

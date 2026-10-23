@@ -443,11 +443,9 @@ impl crate::recovery::BreakIo for SerialPortIo {
             .port
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "port closed"))?;
-        port.set_break()
-            .map_err(io::Error::other)?;
+        port.set_break().map_err(io::Error::other)?;
         std::thread::sleep(dur);
-        port.clear_break()
-            .map_err(io::Error::other)?;
+        port.clear_break().map_err(io::Error::other)?;
         Ok(())
     }
 }
@@ -517,5 +515,3 @@ mod tests {
         assert!(msg.contains("timed out"), "msg: {msg}");
     }
 }
-
-
