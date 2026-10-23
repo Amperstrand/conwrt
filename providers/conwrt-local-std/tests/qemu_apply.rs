@@ -357,17 +357,19 @@ fn sqm_defaults() -> SqmProfile {
 
 /// Strip the package-delivery ops a VM cannot honor: luci-app-openclash
 /// is third-party (vernesong feed — not prebakeable into the fixture
-/// image), and the dnsmasq→dnsmasq-full swap is opkg/apk territory. On
-/// real hardware the full plan applies unchanged (tether precedent).
+/// image), the dnsmasq→dnsmasq-full swap is opkg/apk territory, and the
+/// ssl TLS-backend guard may attempt a package install on a backend-less
+/// fixture (the VM has no package feeds). On real hardware the full
+/// plan applies unchanged (tether precedent).
 fn strip_package_ops(plan: &mut conwrt_core::plan::Plan) {
     plan.ops.retain(|op| match op {
         PlanOp::EnsurePackage { .. } => false,
-        // the guarded dnsmasq swap opens with an opkg state probe
         PlanOp::Shell { command } => {
+            // both guards open by probing the installed-package state
             !command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")
+                && !command.starts_with("if ! (opkg list-installed")
         }
-        // the ssl TLS-backend guard probes the package managers
-        _ => !matches!(op, PlanOp::Shell { command } if command.starts_with("if ! (opkg list-installed")),
+        _ => true,
     });
 }
 
