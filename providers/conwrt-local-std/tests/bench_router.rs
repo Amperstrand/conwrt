@@ -57,7 +57,7 @@ fn assert_specimen_mac(ip: &str) {
     let expected = conwrt_types::MacAddress::parse(&expected).expect("parse CONWRT_BENCH_MAC");
     let table =
         std::fs::read_to_string("/proc/net/arp").expect("read /proc/net/arp on Linux benches");
-    let found = conwrt_local_std::lookup_arp_table(&table, ip.parse().unwrap());
+    let found = conwrt_local_std::lookup_arp_table(&table, ip.parse().unwrap(), None);
     assert_eq!(
         found,
         Some(expected),
