@@ -21,24 +21,29 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 ## Unit census
 
-| Unit | MAC | IMEI | Modem fw | State (2026-09-27) |
-|---|---|---|---|---|
-| ex-Telenor ("TollGate") | `78:c5:7d:13:91:9c` | 354351111598628 | `RG502QEAAAR11A03M4G` | **LIVE**: house LAN `192.168.12.124`, OpenWrt 25.12.5 r33051, hostname TollGate, WiFi APs + captive-portal role, switch **lan8** (VLAN 1008), PoE ~4.5 W |
-| ex-Altibox (stock) | `78:c5:7d:23:de:fe` | unknown | unknown (unqueryable) | **DARK**: last seen in `zyxel_research/NR7101.md` on lan3 @ `192.168.2.1` ICMP-only; now no link on lan2–lan7, zero ARP/FDB trace. Physical recovery = owner action |
-| ice+ unit | `4c:c5:3e:b6:1d:90` | 354351110824785 | `RG502QEAACR13A03M4G_ZYXEL` | Field-deployed (2026-05 record: ice.net LTE B3, data OK). Not bench-connected |
+Specimen identifiers (full MACs, IMEIs, LAN IPs, ports/VLANs, hostnames)
+are operator-private and live in the private lab project:
+`conwrt-bench/docs/nr7101-fleet-census-private.md` (#290 — AGENTS
+species-level mandate). Species-level fleet summary:
+
+| Unit | Modem fw family | State (2026-09-27) |
+|---|---|---|
+| ex-Telenor ("TollGate") | `RG502QEAAAR11A03M4G` | **LIVE** on the house LAN, OpenWrt 25.12.5, WiFi APs + captive-portal role, PoE ~4.5 W |
+| ex-Altibox (stock) | unknown (unqueryable) | **DARK**: last seen on a research-bench port, ICMP-only; now zero ARP/FDB trace. Physical recovery = owner action |
+| ice+ unit | `RG502QEAACR13A03M4G_ZYXEL` | Field-deployed (2026-05 record: ice.net LTE B3, data OK). Not bench-connected |
 
 ## Reachability map (ex-Telenor unit)
 
-Two-hop path; **only ai-legion-small's SSH key** is authorized (4 keys in
-dropbear; x280 and ai-legion keys rejected; root password set):
+Two-hop SSH path via the bench jump host; only one fleet key is
+authorized (4 keys in dropbear; two legacy keys rejected; root password
+set). The concrete path, addresses, and authorized-key identity are in
+the private census dossier above.
 
-    x280 → ai-legion-small → ssh root@192.168.12.124
-
-**Stale paths — do not trust older docs**: `192.168.1.1` (switch.1002) and
-`192.168.2.1` are gone; the unit now DHCPs on the house LAN. Old port map
-(lan2) is stale; current cable = **lan8**. This is also the unit carrying the
-rogue-DHCP risk documented in `docs/NETWORK-SEGMENTATION.md` (house lease
-`.13.124`).
+Stale paths — do not trust older docs: the recovery-subnet and old
+research-bench addresses are gone; the unit now DHCPs on the house LAN.
+The current cable/port map is in the private dossier. This is the unit
+carrying the rogue-DHCP risk documented in
+`docs/NETWORK-SEGMENTATION.md`.
 
 ## Bench switch snapshot (OpenWrt switch `192.168.13.2`)
 

@@ -74,7 +74,8 @@ Facts that matter:
   GS1900-8HP was kept factory-flat by operator decision (2026-09-24, fleet
   OEM-automation target). All its ports sit untagged in VLAN 13 — the house
   LAN. Proof: NR7101 DUT currently holds a house lease (`TollGate`,
-  192.168.13.124, MAC `78:c5:7d:13:91:9c` learned on eth1). If that unit (or
+  `192.168.13.124` — full unit identifiers redacted, #290; unit census in
+  the private lab project — learned on eth1). If that unit (or
   any future DUT there) boots OpenWrt defaults, its dnsmasq **is** a rogue
   DHCP server on the production segment, and the WiFi race is lost or won by
   milliseconds.
