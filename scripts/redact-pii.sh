@@ -49,13 +49,16 @@ SEDEXPR=(
 
 # Private rules: raw identifier values must NOT live in this tracked
 # script (they would re-publish what they scrub). Each .sh file in the
-# gitignored data/redact-pii-rules/ appends entries:
-#   SEDEXPR+=( -e 's/<raw>/<redacted>/g' )
-# Canonical copies live in the private lab project (conwrt-bench,
-# docs/redact-pii-rules/) — restore them into data/redact-pii-rules/
-# before running a history rewrite from a fresh checkout.
-if [ -d "$(dirname "$0")/../data/redact-pii-rules" ]; then
-  for _rules in "$(dirname "$0")"/../data/redact-pii-rules/*.sh; do
+# rules dir appends entries:  SEDEXPR+=( -e 's/<raw>/<redacted>/g' )
+# The rules dir MUST live OUTSIDE any git worktree: filter-branch's
+# tree-filter runs `git clean -d -q -f -x` per commit, which deletes
+# gitignored (untracked) files — in-tree rules would be wiped before
+# they ever apply. Default: ~/.config/conwrt/redact-pii-rules/ (create
+# from the canonical copies in the private lab project, conwrt-bench
+# docs/redact-pii-rules/). Override: REDACT_PII_RULES_DIR=<dir>.
+_rules_dir="${REDACT_PII_RULES_DIR:-$HOME/.config/conwrt/redact-pii-rules}"
+if [ -d "$_rules_dir" ]; then
+  for _rules in "$_rules_dir"/*.sh; do
     [ -e "$_rules" ] || continue
     # shellcheck disable=SC1090
     source "$_rules"

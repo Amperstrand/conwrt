@@ -1,7 +1,9 @@
-# NR7101 Fleet — Census, Reachability, Modem Firmware, RF Survey (2026-09-27)
+# NR7101 — Species Guide: Modem Firmware, RF Survey, Flashing (2026-09-27)
 
-Live-verified 2026-09-27 by the session-review lane. Purpose: single reference for
-the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
+Live-verified 2026-09-27 by the session-review lane. Purpose: species-level
+reference for the NR7101 (firmware guidance, RF behavior, flash methods) and
+the onboarding path for **any NR7101 unit** later. Fleet census and unit
+coordinates live in the private lab project (see the census section).
 
 ## TL;DR
 
@@ -19,25 +21,22 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 ## Unit census
 
-The per-unit census — unit count, provenance, per-unit modem firmware,
-deployment/bench state, and the live unit's reachability map — is
-operator-private fleet inventory and lives in the private lab project:
-`conwrt-bench/docs/nr7101-fleet-census-private.md` (#290 — AGENTS
-species-level mandate: unit inventory belongs in the private project,
-identifiers or not). Species-level facts that belong here: multiple
-distinct NR7101 units exist in the operator's records (different modem
-firmware families — see the modem-firmware section below for what that
-means for flashing); exactly one has been bench-active. Stale addresses
-in older public docs must not be trusted; current coordinates are in
-the dossier. The rogue-DHCP risk class for any bench DUT is documented
-in `docs/NETWORK-SEGMENTATION.md`.
+Everything about the operator's concrete units — census, provenance,
+per-unit firmware, deployment/bench state, reachability, coordinates —
+is fleet inventory and lives ONLY in the private lab project:
+`conwrt-bench/docs/nr7101-fleet-census-private.md` (#290 — unit
+inventory belongs in the private project, identifiers or not). Nothing
+in this public doc describes the operator's units; addresses in older
+revisions must not be trusted. Species-level guidance (modem firmware
+families and what they mean for flashing) is in the modem-firmware
+section below. The rogue-DHCP risk class for bench DUTs generally is
+documented in `docs/NETWORK-SEGMENTATION.md`.
 
 ## Bench switch snapshot
 
-(Switch address and the per-port unit map are bench topology — private
-census dossier, #290.) Species-level facts that survive redaction: one
-trunk/uplink port; the single seated NR7101 draws ~4.5 W PoE; the
-remaining DUT ports were empty at census time (2026-09-27).
+(Bench switch specifics are topology — private census dossier, #290.)
+Species-level facts: NR7101 draws ~4-5 W PoE (well inside any GS1900
+PoE budget; budget math for a full bench lives with the bench docs).
 - PoE budget 65 W, consumption ~4.5 W. Control: `ubus call poe manage '{"port":"lanN","action":"enable|disable"}'`.
 - Read port state: `/sys/class/net/lanN/carrier`; `ubus call poe info`.
 
