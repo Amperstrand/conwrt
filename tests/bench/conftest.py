@@ -280,7 +280,8 @@ def _request_image(scenario: Scenario) -> str:
         ):
             pytest.fail(f"ASU image request failed for {scenario.name}: "
                         f"{r.stdout[-200:]} {r.stderr[-200:]}")
-        if img_path.is_dir() and not sorted(img_path.glob("*sysupgrade.bin")):
+        # .bin is the common case; FIT-based targets ship sysupgrade.itb
+        if img_path.is_dir() and not sorted(img_path.glob("*sysupgrade.*")):
             pytest.fail(f"ASU build dir has no sysupgrade image: {img_path}")
         _IMAGE_CACHE[scenario.name] = image
         return image
@@ -297,7 +298,7 @@ def _image_variant(image: str) -> str:
     path = Path(image)
     directory = path.parent if path.is_file() else path
     alive = ssh_run("echo ok", timeout=15).returncode == 0
-    want = "*sysupgrade.bin" if alive else "*recovery.bin"
+    want = "*sysupgrade.*" if alive else "*recovery.*"
     matches = sorted(directory.glob(want))
     return str(matches[0]) if matches else image
 
