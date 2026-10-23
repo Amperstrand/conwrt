@@ -3142,8 +3142,13 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
     // branch uses an explicit existence guard with a propagating body:
     // a trailing `|| true` masked real failures (missing section,
     // failed commit/restart) as success (Codex #486 P2 round 2).
-    // Verification is in-script (status echo per branch) because
-    // post-hoc checks cannot express the runtime skip paths.
+    // The skip path must NOT read as success: with the uhttpd branch
+    // enabled, verification requires the certs to exist AND the uci
+    // readbacks to show the wiring — a cert-less device fails the
+    // apply loudly instead of reporting `applied` for a no-op
+    // (Codex #486 P1 round 3). The nds-only configuration (uhttpd
+    // branch off) keeps no post-hoc checks: its outcome is genuinely
+    // runtime-conditional on nodogsplash being installed.
     if ssl.enable_uhttpd_https {
         ops.push(PlanOp::Shell {
             command: concat!(
@@ -3182,11 +3187,33 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
             .into(),
         });
     }
+    let mut verification = Vec::new();
+    if ssl.enable_uhttpd_https {
+        verification.extend([
+            VerificationCheck {
+                description: "certs deployed for uhttpd HTTPS (host-side post-flash step)".into(),
+                command: "[ -f /etc/tollgate/ssl/server.crt ] && \
+                          [ -f /etc/tollgate/ssl/server.key ] && echo present"
+                    .into(),
+                expect_contains: "present".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd cert path persisted".into(),
+                command: "uci -q get uhttpd.main.cert".into(),
+                expect_contains: "/etc/tollgate/ssl/server.crt".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd listens on 443".into(),
+                command: "uci -q get uhttpd.main.listen_https".into(),
+                expect_contains: "0.0.0.0:443".into(),
+            },
+        ]);
+    }
     Ok(Plan {
         profile_id: "ssl".into(),
         model_id: model.id.clone(),
         ops,
-        verification: Vec::new(),
+        verification,
     })
 }
 
@@ -4968,6 +4995,28 @@ mod tests {
         ));
         assert!(!script.contains("nodogsplash restart || true"));
         assert!(script.contains("echo 'ssl: nodogsplash allows tcp/443 to the router'"));
+
+        // cert-less skip must FAIL the apply, not report `applied` for
+        // a no-op (Codex #486 round 3): outcome verification gates on
+        // certs existing plus the uci readbacks
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let descriptions: Vec<&str> = plan
+            .verification
+            .iter()
+            .map(|c| c.description.as_str())
+            .collect();
+        assert!(
+            descriptions.contains(&"certs deployed for uhttpd HTTPS (host-side post-flash step)")
+        );
+        assert!(descriptions.contains(&"uhttpd cert path persisted"));
+        assert!(descriptions.contains(&"uhttpd listens on 443"));
+        // nds-only shape keeps no post-hoc checks (runtime-conditional
+        // outcome when nodogsplash is absent)
+        let nds_only = plan_for(Profile::Ssl(SslProfile {
+            enable_uhttpd_https: false,
+            ..SslProfile::default()
+        }));
+        assert!(nds_only.verification.is_empty());
 
         // uhttpd off drops the whole HTTPS block, keeps the nds line
         let no_uhttpd = render_shell(&plan_for(Profile::Ssl(SslProfile {
