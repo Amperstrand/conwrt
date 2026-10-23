@@ -55,7 +55,7 @@ def test_conwrt_configure_applies_sqm(openwrt_vm, ssh_cmd, tmp_path):
         ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
          "--model-id", "virtual-x86-64",
          "--ip", openwrt_vm["host"], "--port", str(openwrt_vm["port"]),
-         "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
+         "--ssh-key", str(conftest.SSH_KEY)],
         capture_output=True, text=True, timeout=300,
         cwd=str(REPO_ROOT), env=env,
     )

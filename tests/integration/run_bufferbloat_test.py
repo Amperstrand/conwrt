@@ -284,7 +284,7 @@ def main():
         "python3", str(conwrt / "scripts" / "conwrt.py"), "configure",
         "--model-id", "virtual-x86-64",
         "--ip", args.host, "--port", str(args.port),
-        "--ssh-key", str(Path(args.key or Path(__file__).parent / ".vm_ssh_key").with_suffix(".pub")),
+        "--ssh-key", str(Path(args.key or Path(__file__).parent / ".vm_ssh_key")),
     ], timeout=600, env=env)
     (out / "conwrt-output.txt").write_text(
         f"exit={result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")

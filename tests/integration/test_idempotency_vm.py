@@ -65,7 +65,7 @@ def _run_configure() -> subprocess.CompletedProcess:
         ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
          "--model-id", "virtual-x86-64", "--ip", "127.0.0.1",
          "--port", str(port_from_env("CONWRT_VM_SESSION_PORT", 2222)),
-         "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
+         "--ssh-key", str(conftest.SSH_KEY)],
         capture_output=True, text=True, timeout=600, cwd=str(REPO_ROOT), env=env,
     )
 

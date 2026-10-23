@@ -31,7 +31,7 @@ def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str,
         ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
          "--model-id", "virtual-x86-64",
          "--ip", host,
-         *(["--port", str(port)] if port else []), "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
+         *(["--port", str(port)] if port else []), "--ssh-key", str(conftest.SSH_KEY)],
         capture_output=True, text=True, timeout=600,
         cwd=str(REPO_ROOT), env=env,
     )

@@ -82,7 +82,7 @@ def test_nordvpn_config_file_applies_and_kernel_accepts(openwrt_vm, wireguard_in
         r = subprocess.run(
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
              "--model-id", "virtual-x86-64", "--ip", "127.0.0.1",
-             "--port", str(SESSION_PORT), "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
+             "--port", str(SESSION_PORT), "--ssh-key", str(conftest.SSH_KEY)],
             capture_output=True, text=True, timeout=600, env=env,
         )
         assert r.returncode == 0, f"configure failed:\n{r.stdout[-800:]}\n{r.stderr[-400:]}"
