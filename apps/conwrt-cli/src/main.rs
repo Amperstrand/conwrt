@@ -20,8 +20,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
+    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
+    PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TravelmateProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -303,6 +304,9 @@ enum ProfileChoice {
     GuestWifi,
     Travelmate,
     Pbr,
+    Mwan3,
+    Nodns,
+    AutoSqm,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -405,6 +409,33 @@ struct ProfileArgs {
     /// pbr: WAN UCI interface for default routing (default `wan`).
     #[arg(long)]
     pbr_wan: Option<String>,
+    /// mwan3: primary WAN interface (default `wan`).
+    #[arg(long)]
+    mwan3_primary: Option<String>,
+    /// mwan3: secondary WAN interface (default `usbwan`).
+    #[arg(long)]
+    mwan3_secondary: Option<String>,
+    /// mwan3: `failover` or `balanced` (default `failover`).
+    #[arg(long)]
+    mwan3_policy: Option<String>,
+    /// nodns: DNS zone to cache (default `nodns.shop`).
+    #[arg(long)]
+    nodns_zone: Option<String>,
+    /// nodns: bot API base URL (default `https://nodns.shop`).
+    #[arg(long)]
+    nodns_api_url: Option<String>,
+    /// nodns: polling interval in seconds, 60–86400 (default 300).
+    #[arg(long)]
+    nodns_poll_interval: Option<u32>,
+    /// auto-sqm: `static` or `dynamic` (default `static`).
+    #[arg(long)]
+    autosqm_mode: Option<String>,
+    /// auto-sqm: WAN interface to measure/shape (default `wan`).
+    #[arg(long)]
+    autosqm_interface: Option<String>,
+    /// auto-sqm: apply SQM at this % of measured speed (default 90).
+    #[arg(long)]
+    autosqm_target_percent: Option<u32>,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1265,6 +1296,38 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             wan_interface: args.pbr_wan.clone().unwrap_or_else(|| "wan".into()),
             lan_interface: args.pbr_lan.clone().unwrap_or_else(|| "lan".into()),
             ..PbrProfile::default()
+        })),
+        ProfileChoice::Mwan3 => Ok(Profile::Mwan3(Mwan3Profile {
+            primary: args.mwan3_primary.clone().unwrap_or_else(|| "wan".into()),
+            secondary: args
+                .mwan3_secondary
+                .clone()
+                .unwrap_or_else(|| "usbwan".into()),
+            policy: args
+                .mwan3_policy
+                .clone()
+                .unwrap_or_else(|| "failover".into()),
+            ..Mwan3Profile::default()
+        })),
+        ProfileChoice::Nodns => Ok(Profile::Nodns(NodnsProfile {
+            zone: args
+                .nodns_zone
+                .clone()
+                .unwrap_or_else(|| "nodns.shop".into()),
+            api_url: args
+                .nodns_api_url
+                .clone()
+                .unwrap_or_else(|| "https://nodns.shop".into()),
+            poll_interval: args.nodns_poll_interval.unwrap_or(300),
+        })),
+        ProfileChoice::AutoSqm => Ok(Profile::AutoSqm(AutoSqmProfile {
+            mode: args.autosqm_mode.clone().unwrap_or_else(|| "static".into()),
+            interface: args
+                .autosqm_interface
+                .clone()
+                .unwrap_or_else(|| "wan".into()),
+            target_percent: args.autosqm_target_percent.unwrap_or(90),
+            ..AutoSqmProfile::default()
         })),
     }
 }
@@ -2298,6 +2361,15 @@ mod tests {
             ap_no_isolation: false,
             pbr_wan: None,
             pbr_lan: None,
+            mwan3_primary: None,
+            mwan3_secondary: None,
+            mwan3_policy: None,
+            nodns_zone: None,
+            nodns_api_url: None,
+            nodns_poll_interval: None,
+            autosqm_mode: None,
+            autosqm_interface: None,
+            autosqm_target_percent: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
