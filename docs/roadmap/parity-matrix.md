@@ -68,7 +68,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| `scripts/conwrt.py` + `scripts/conwrt/cli.py` + 12 `cmd_*` | ~3000 | partial — `conwrt-cli`: models/identify/diagnose/probe/discover-v6/fingerprint/apply/plan/agent/maas | `apps/conwrt-cli/tests/cli_maas.rs`; ring-2 apply test; **§7 item 1 `list` → `conwrt models`: byte parity pinned both sides** — `tests/test_parity_rust_models.py` runs `conwrt.py list` AND `conwrt models` against one committed golden (`tests/fixtures/parity/models_list.txt`, Rust-generated); the two tables differed (flash-method order: JSON insertion vs BTreeMap sorted; Rust count footer) — per this matrix the RUST output is the go-forward shape and the Python twin was aligned to it (sorted methods, `N model(s) valid in models` footer) rather than faking equality | Per-command: retire a `cmd_*` when its Rust twin passes the same QEMU oracle; `make ci` shrinks accordingly. **`conwrt.py list` DEPRECATED 2026-10-23** (§7 item 1): docs swapped (README, getting-started, in-CLI pointers), soft-deprecation gate already in place; removal BLOCKED by the internal caller `scripts/conwrt-openwrt-install.sh` (on-router smoke check — no Rust binary on-router), rides the §3 flash-engine retirement (M7-M8). Next per-command candidates: `probe`/`discover-v6` twins |
+| `scripts/conwrt.py` + `scripts/conwrt/cli.py` + 12 `cmd_*` | ~3000 | partial — `conwrt-cli`: models/identify/diagnose/probe/discover-v6/fingerprint/apply/plan/agent/maas | `apps/conwrt-cli/tests/cli_maas.rs`; ring-2 apply test; **§7 item 1 `list` → `conwrt models`: byte parity pinned both sides** — `tests/test_parity_rust_models.py` runs `conwrt.py list` AND `conwrt models` against one committed golden (`tests/fixtures/parity/models_list.txt`, Rust-generated); the two tables differed (flash-method order: JSON insertion vs BTreeMap sorted; Rust count footer) — per this matrix the RUST output is the go-forward shape and the Python twin was aligned to it (sorted methods, `N model(s) valid in models` footer) rather than faking equality | Per-command: retire a `cmd_*` when its Rust twin passes the same QEMU oracle; `make ci` shrinks accordingly. **`conwrt.py list` DEPRECATED 2026-10-23** (§7 item 1): docs swapped (README, getting-started, in-CLI pointers), soft-deprecation gate already in place; removal BLOCKED by the internal caller `scripts/conwrt-openwrt-install.sh` (on-router smoke check — no Rust binary on-router), rides the §3 flash-engine retirement (M7-M8). **§7 item 2 `probe`/`discover-v6` AUDITED 2026-10-23 — deprecation gate UNMET** (restraint, not action): (a) no Rust twin for the multi-target sweep (target collection from models + /24 interface-alias orchestration + multi-IP loop is Python-only and load-bearing for `cmd_watch`), (b) the single-target `conwrt diagnose` deliberately classifies stricter (`ssh-only` vs the Python sweep's speculative `openwrt` on any SSH responder — §2 divergence, not drift), (c) no QEMU-oracle case exists for probe. `discover-v6` is Rust-first with no Python CLI twin — nothing to retire. Evidence pinned instead: the deterministic Rust diagnostic surface (`apps/conwrt-cli/tests/cli_probe.rs`, all 6 scenarios) and the Python sweep's corpus target universe (`tests/test_probe_corpus.py` golden — all 24 models' default/recovery IPs currently collapse into the 4 fallback addresses). §7 per-command track pauses until a Rust sweep or the pcap classifier (M7-M8) lands |
 | `scripts/conwrt_tui.py`, `conwrt-lite` | ~1500 | none | — | None — M7 UI |
 
 ## 8. Bench & lab tooling — sanctioned PERMANENT Python
@@ -120,8 +120,13 @@ are operator tooling, not product surface. Review annually, not per-M9.
    pinned both sides (`tests/test_parity_rust_models.py`), docs
    swapped, Python output aligned to the Rust table shape. Removal
    rides the flash-engine retirement (the on-router install script
-   still calls it). Next: `probe`/`discover-v6` follow the same
-   pattern (2026-10-23 handoff ordering).
+   still calls it). Item 2 `probe`/`discover-v6` **AUDITED — gate
+   UNMET** (2026-10-23): no Rust sweep twin, deliberate ssh-only
+   divergence (§2), no probe oracle; `discover-v6` has no Python
+   twin. Pinned instead: `apps/conwrt-cli/tests/cli_probe.rs` (all
+   6 diagnostic scenarios) + `tests/test_probe_corpus.py` (sweep
+   target universe). The track resumes when a Rust sweep or the
+   pcap classifier (M7-M8) lands.
 
 Deprecation audit (2026-10-22) — candidates considered and NOT
 deprecated, with the blocking gate: `serial_transport.py` (parity-tested

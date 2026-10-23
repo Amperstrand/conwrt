@@ -9,7 +9,7 @@ has reached feature parity for that capability. It moves to **retired**
 | Python surface | Rust replacement | Parity | Stage |
 |---|---|---|---|
 | `conwrt list` (model listing) | `conwrt models` | ✅ **byte parity** on the real 24-model corpus — one golden pins both sides (`tests/test_parity_rust_models.py`); Python output aligned to the Rust shape (sorted flash methods + `N model(s) valid` footer) | **deprecated** (2026-10-23, §7 item 1; removal rides the flash-engine retirement — `conwrt-openwrt-install.sh` calls it on-router) |
-| `router-probe.py` (boot-state probe) | `conwrt diagnose --ip <addr>` | ✅ same evidence model, stricter classification (`ssh-only` vs speculative `openwrt`) | **soft-deprecated** (2026-10-12) |
+| `router-probe.py` (boot-state probe) | `conwrt diagnose --ip <addr>` | ✅ same evidence model, stricter classification (`ssh-only` vs speculative `openwrt`); deterministic scenario surface pinned `apps/conwrt-cli/tests/cli_probe.rs` (§7 item-2 audit, 2026-10-23) | **soft-deprecated** (2026-10-12); the `conwrt.py probe` multi-target SWEEP is NOT deprecated — no Rust twin (matrix §7 audit) |
 | `make validate-models` (CI) | `conwrt models` / `make rust-ci` | ✅ equivalent validation | not gated (CI infra, no user friction) |
 | `router-fingerprint.py` | `conwrt fingerprint` | ✅ core parity (authenticated release/board/hostname; specimen & port inventory remain 1.x-only) | **merged #130** (2026-10-13) |
 | `conwrt.py flash` (sysupgrade) | sysupgrade example → CLI | ❌ Rust lifecycle proven (ring-2/ring-3) but not CLI-complete | — |
