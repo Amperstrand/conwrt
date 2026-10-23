@@ -49,6 +49,24 @@ enum Command {
     /// List or dump /dev/mtd partitions over serial (Rust port of
     /// scripts/serial-backup.py).
 
+    /// Bench rescue: classify the console state of a wedged/dark box and
+    /// run the action ladder (field-validated 2026-10-23): U-Boot prompt ->
+    /// `reset` (remote reboot); livelock -> BREAK+b probe (shallow recovers,
+    /// deep ignores); pre-U-Boot stall / silence -> report needs-mains.
+    BenchRescue {
+        /// Serial port spec (/dev path or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Baud rate.
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Seconds to watch before each classification.
+        #[arg(long, default_value_t = 10)]
+        watch_secs: u32,
+        /// Number of classify-act cycles (default 1 = single verdict).
+        #[arg(long, default_value_t = 1)]
+        cycles: u32,
+    },
     /// Detect the likely baud rate of a serial console: opens the port at
     /// each candidate rate, scores received data (ComScope/baudowl
     /// scoring; Rust port of scripts/serial_baud.py).
@@ -644,6 +662,59 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::BenchRescue {
+            port,
+            baud,
+            watch_secs,
+            cycles,
+        } => {
+            use conwrt_serial::rescue::{action_for, classify, RescueAction};
+            use conwrt_serial::io::{ConsoleIo, SerialPortIo};
+            use std::time::Duration;
+
+            let mut io = match SerialPortIo::open(&port, baud, Duration::from_millis(200)) {
+                Ok(t) => t,
+                Err(e) => { eprintln!("conwrt: open {port}: {e}"); return ExitCode::from(2); }
+            };
+            for cycle in 0..cycles.max(1) {
+                let _ = cycle;
+                // drain-then-watch: collect fresh bytes for the window
+                let mut buf = vec![0u8; 8192];
+                let mut tail = Vec::new();
+                let deadline = std::time::Instant::now()
+                    + Duration::from_secs(watch_secs as u64);
+                while std::time::Instant::now() < deadline {
+                    match ConsoleIo::read(&mut io, &mut buf) {
+                        Ok(0) | Err(_) => {}
+                        Ok(n) => tail.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let text = String::from_utf8_lossy(&tail).into_owned();
+                let state = classify(&text);
+                match action_for(&state) {
+                    RescueAction::Wait => {
+                        println!("state: {state:?} — progressing, wait");
+                        continue;
+                    }
+                    RescueAction::SendReset => {
+                        println!("state: {state:?} — sending U-Boot reset");
+                        let _ = io.write_all_bytes(b"reset\r");
+                    }
+                    RescueAction::ProbeBreakRecover => {
+                        println!("state: {state:?} — BREAK+b probe");
+                        use conwrt_serial::recovery::BreakIo;
+                        let _ = io.send_break_for(Duration::from_millis(300));
+                        let _ = io.write_all_bytes(b"b");
+                    }
+                    RescueAction::NeedsMains { why } => {
+                        eprintln!("state: {state:?} — NEEDS MAINS: {why}");
+                        return ExitCode::from(3);
+                    }
+                }
+            }
+            println!("cycles complete");
+            ExitCode::SUCCESS
+        }
         Command::SerialBaud { port, listen_secs } => {
             use conwrt_serial::baud::{COMMON_BAUDS, score_baud_data};
             use conwrt_serial::io::open_port;
