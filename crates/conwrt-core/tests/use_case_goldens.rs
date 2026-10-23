@@ -104,10 +104,11 @@ fn command_lines(script: &str) -> Vec<String> {
         // openclash dnsmasq→dnsmasq-full swap: the 1.x configure script
         // carries NO package ops (packages ride the ASU image build,
         // where packages_remove handles the swap); the 2.x apply path
-        // installs at runtime, so the guarded removal is 2.x-only
-        // (Codex #486 P1-1) — excluded like the install lines above,
-        // pinned by unit test instead
-        .filter(|l| !l.starts_with("opkg remove dnsmasq "))
+        // swaps at runtime — download-first so a dead feed never
+        // leaves the router without dnsmasq (Codex #486 rounds 1+4+6)
+        // — 2.x-only, excluded like the install lines above and pinned
+        // by unit test instead
+        .filter(|l| !l.starts_with("if [ -n \"$(opkg list-installed dnsmasq"))
         // ssl TLS-backend guard, same package-delivery doctrine: the
         // libustream variants own the same libustream-ssl.so, so the
         // plan installs wolfssl only when no backend is present

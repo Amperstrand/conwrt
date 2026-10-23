@@ -35,6 +35,10 @@ def _build_openclash_ops(params: dict[str, Any]) -> list[Op]:
     return [
         Comment(text="--- OpenClash transparent proxy ---"),
         ShellCommand(command="mkdir -p /etc/openclash/config"),
+        # AGENTS.md staging-debris rule: an aborted earlier session may
+        # have left uncommitted /tmp/.uci changes for openclash — the
+        # commit below would otherwise make them permanent.
+        ShellCommand(command="uci -q revert openclash 2>/dev/null || true"),
         UciSet(config="openclash", section="config", values={
             "enable": "1",
             "config_path": "/etc/openclash/config/config.yaml",

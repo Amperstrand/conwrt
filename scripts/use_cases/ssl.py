@@ -228,6 +228,7 @@ def _build_ssl_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(ShellCommand(command=(
             "if [ -f /etc/tollgate/ssl/server.crt ] && "
             "[ -f /etc/tollgate/ssl/server.key ]; then\n"
+            "uci -q revert uhttpd 2>/dev/null || true\n"
             "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'\n"
             "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'\n"
             "uci -q delete uhttpd.main.listen_https || true\n"
@@ -253,6 +254,7 @@ def _build_ssl_ops(params: dict[str, Any]) -> list[Op]:
         # duplicate 'allow tcp port 443' entries on every apply.
         ops.append(ShellCommand(command=(
             "if uci -q show nodogsplash >/dev/null 2>&1; then\n"
+            "uci -q revert nodogsplash 2>/dev/null || true\n"
             "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router="
             "'allow tcp port 443' || true\n"
             "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'\n"

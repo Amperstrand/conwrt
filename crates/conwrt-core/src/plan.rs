@@ -3013,20 +3013,29 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
 fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Unsupported> {
     oc.validate()?;
     let literal = |v: String| UciValue::Literal(v);
-    // Package order is load-bearing at apply time (Codex #486 round
-    // 4): dnsmasq and dnsmasq-full conflict (both provide dnsmasq) —
-    // 1.x carries the swap as an image-build `packages_remove`
-    // directive where order does not matter, but this plan installs
-    // at apply time and luci-app-openclash DEPENDS on dnsmasq-full, so
-    // the swap must LEAD: on an opkg device still running default
-    // dnsmasq, resolving luci-app-openclash first would hit the
-    // conflict and abort under `set -e` before the swap is reached.
-    // The removal is guarded (`|| true`): a no-op where dnsmasq-full
-    // already replaced dnsmasq and on apk systems (opkg absent; apk
-    // replaces the provider without a conflict).
+    // Package order and swap safety are load-bearing at apply time
+    // (Codex #486 rounds 1+4+6): dnsmasq and dnsmasq-full conflict
+    // (both provide dnsmasq), luci-app-openclash DEPENDS on
+    // dnsmasq-full, and the removal must never run before the
+    // replacement is provably installable — a dead feed after a bare
+    // removal would leave the router with NO dnsmasq (DNS+DHCP outage
+    // class). The swap therefore: runs only when dnsmasq is installed
+    // AND dnsmasq-full is not; downloads the dnsmasq-full ipk to /tmp
+    // FIRST (proving feed + package availability); and only then
+    // removes and installs from the local file (offline-safe). 1.x
+    // carries the swap as an image-build `packages_remove` directive
+    // where none of this applies. No-op on apk systems (opkg absent;
+    // apk replaces the provider without a conflict) and where
+    // dnsmasq-full is already installed.
     let mut ops: Vec<PlanOp> = vec![
         PlanOp::Shell {
-            command: "opkg remove dnsmasq 2>/dev/null || true".into(),
+            command: concat!(
+                "if [ -n \"$(opkg list-installed dnsmasq 2>/dev/null)\" ] ",
+                "&& [ -z \"$(opkg list-installed dnsmasq-full 2>/dev/null)\" ]; then ",
+                "(cd /tmp && opkg update && opkg download dnsmasq-full) ",
+                "&& opkg remove dnsmasq && opkg install /tmp/dnsmasq-full_*.ipk; fi",
+            )
+            .into(),
         },
         PlanOp::EnsurePackage {
             name: "dnsmasq-full".into(),
@@ -3059,6 +3068,13 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
     ops.extend([
         PlanOp::Shell {
             command: "mkdir -p /etc/openclash/config".into(),
+        },
+        // AGENTS.md staging-debris rule: an aborted earlier session may
+        // have left uncommitted /tmp/.uci changes for openclash — the
+        // later `uci commit openclash` would make them permanent.
+        // Start every apply from the persisted baseline.
+        PlanOp::RevertUci {
+            config: "openclash".into(),
         },
         PlanOp::SetUciOptions {
             config: "openclash".into(),
@@ -3169,6 +3185,10 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
             command: concat!(
                 "if [ -f /etc/tollgate/ssl/server.crt ] && ",
                 "[ -f /etc/tollgate/ssl/server.key ]; then\n",
+                // AGENTS.md staging-debris rule: revert /tmp/.uci
+                // leftovers for this config before staging — the
+                // commit below would otherwise make them permanent
+                "uci -q revert uhttpd 2>/dev/null || true\n",
                 "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'\n",
                 "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'\n",
                 "uci -q delete uhttpd.main.listen_https || true\n",
@@ -3188,6 +3208,8 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
         ops.push(PlanOp::Shell {
             command: concat!(
                 "if uci -q show nodogsplash >/dev/null 2>&1; then\n",
+                // staging-debris rule, same as the uhttpd guard above
+                "uci -q revert nodogsplash 2>/dev/null || true\n",
                 // del_list-before-add_list keeps re-runs idempotent:
                 // uci lists are append-only, so a plain add_list
                 // accumulates duplicate entries on every apply
@@ -4919,11 +4941,13 @@ mod tests {
         // dnsmasq→dnsmasq-full swap rides the plan AND LEADS the
         // package installs (Codex #486 rounds 1+4): luci-app-openclash
         // depends on dnsmasq-full, so on an opkg device with default
-        // dnsmasq the swap must complete before the dependent resolves
+        // dnsmasq the swap must complete before the dependent resolves.
+        // Download-first (round 6): a dead feed aborts BEFORE the
+        // removal, never leaving the router without dnsmasq.
         let swap = plan
             .ops
             .iter()
-            .position(|op| matches!(op, PlanOp::Shell { command } if command.starts_with("opkg remove dnsmasq")))
+            .position(|op| matches!(op, PlanOp::Shell { command } if command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")))
             .expect("swap op present");
         let full = plan
             .ops
@@ -4941,7 +4965,9 @@ mod tests {
             swap < full && full < luci,
             "swap must precede dnsmasq-full, which must precede luci-app-openclash"
         );
-        assert!(script.contains("opkg remove dnsmasq 2>/dev/null || true"));
+        assert!(script.contains("opkg download dnsmasq-full) && opkg remove dnsmasq"));
+        // staged /tmp/.uci debris reverted before the first mutation
+        assert!(script.contains("uci -q revert openclash 2>/dev/null || true"));
         assert!(script.contains("mkdir -p /etc/openclash/config"));
         assert!(script.contains("uci set openclash.config.enable='1'"));
         assert!(
@@ -5031,6 +5057,10 @@ mod tests {
         assert!(script.contains("uci commit uhttpd"));
         assert!(script.contains("/etc/init.d/uhttpd restart"));
         assert!(script.contains("echo 'ssl: uhttpd HTTPS wired on :443'"));
+        // staged /tmp/.uci debris reverted inside each guard before
+        // the first mutation (AGENTS.md staging rule)
+        assert!(script.contains("uci -q revert uhttpd 2>/dev/null || true"));
+        assert!(script.contains("uci -q revert nodogsplash 2>/dev/null || true"));
         assert!(script.contains(
             "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2"
         ));
