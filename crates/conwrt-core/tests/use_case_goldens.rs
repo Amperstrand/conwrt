@@ -39,6 +39,7 @@
 //! print(r["mesh11sd"].build_configure({"mesh_id": "testmesh"}))
 //! print(r["rescue-watchdog"].build_configure({"target": "192.168.105.10"}))
 //! print(r["mwan3"].build_configure({}))
+//! print(r["pbr"].build_configure({}))
 //! print(r["nodns"].build_configure({}))
 //! print(r["auto-sqm"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
@@ -54,9 +55,9 @@
 
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
-    NodnsProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TetherProfile,
-    TetherVariant, TravelmateProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
-    render_shell,
+    NodnsProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
+    TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -243,6 +244,14 @@ fn mwan3_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Mwan3(Mwan3Profile::default()),
         include_str!("goldens/mwan3.sh"),
+    );
+}
+
+#[test]
+fn pbr_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Pbr(PbrProfile::default()),
+        include_str!("goldens/pbr.sh"),
     );
 }
 

@@ -20,7 +20,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, DohProfile, GuestWifiProfile, RescueWatchdogProfile, SqmProfile,
+    AdguardProfile, DohProfile, GuestWifiProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
@@ -302,6 +302,7 @@ enum ProfileChoice {
     WireguardServer,
     GuestWifi,
     Travelmate,
+    Pbr,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -401,6 +402,12 @@ struct ProfileArgs {
     /// guest-wifi: opt OUT of client isolation (default isolates).
     #[arg(long)]
     ap_no_isolation: bool,
+    /// pbr: WAN UCI interface for default routing (default `wan`).
+    #[arg(long)]
+    pbr_wan: Option<String>,
+    /// pbr: LAN interface counted as local traffic (default `lan`).
+    #[arg(long)]
+    pbr_lan: Option<String>,
     /// travelmate: WiFi radio for upstream scanning.
     #[arg(long)]
     trm_radio: Option<String>,
@@ -1253,6 +1260,11 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             retry: args.trm_retry.unwrap_or(5),
             captive: !args.trm_no_captive,
             ..TravelmateProfile::default()
+        })),
+        ProfileChoice::Pbr => Ok(Profile::Pbr(PbrProfile {
+            wan_interface: args.pbr_wan.clone().unwrap_or_else(|| "wan".into()),
+            lan_interface: args.pbr_lan.clone().unwrap_or_else(|| "lan".into()),
+            ..PbrProfile::default()
         })),
     }
 }
@@ -2284,6 +2296,8 @@ mod tests {
             ap_encryption: None,
             ap_band: None,
             ap_no_isolation: false,
+            pbr_wan: None,
+            pbr_lan: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
