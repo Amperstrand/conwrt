@@ -26,6 +26,7 @@ conwrt-agent-proto = { path = "../../crates/conwrt-agent-proto" }
 conwrt-image = { path = "../../crates/conwrt-image" }
 conwrt-serial = { path = "../../crates/conwrt-serial" }
 conwrt-maas = { path = "../../crates/conwrt-maas" }
+conwrt-zycast = { path = "../../crates/conwrt-zycast" }
 clap = { workspace = true }
 pollster = { workspace = true }
 tokio = { workspace = true }
