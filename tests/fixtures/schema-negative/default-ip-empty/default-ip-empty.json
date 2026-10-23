@@ -11,5 +11,10 @@
   },
   "capabilities": [
     "ethernet"
-  ]
+  ],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade"
+    }
+  }
 }
