@@ -289,3 +289,17 @@ mipsel-ELF check instead of demanding static (feed std is
 `crt-static=false` → dynamic musl, correct on-device). Bootstrap
 footnote: the feed builds LLVM from source
 (`--set=llvm.download-ci-llvm=false`) — the 25G floor is realistic.
+
+### Wire proof (2026-10-23, netns-isolated, hardware-safe)
+
+`scripts/zycast_netns_proof.sh` + `scripts/zycast_wire_check.py` run the
+mipsel binary's `send` under `qemu-mipsel-static` inside an isolated
+network namespace (loopback only, 224/4 routed to lo — **zero packets
+leave the host**), capture with tcpdump, and verify every frame against
+`encode_packet`'s wire format: magic `zyx\0`, end-around-carry chunk
+checksums, be32 index/len/total, Ras bitmap, `FF`/flag, 30+1024 framing,
+payload == image slice, chunk ordering across loops, packet count
+= chunks × loops, and bounded sender exit. **PASS (×2 runs, fresh random
+images)** — the throwaway binary is proven wire-correct, not just
+runnable. Evidence pcap: `data/sdk-lane/netns-proof.pcap` (gitignored;
+regenerate with the runner).
