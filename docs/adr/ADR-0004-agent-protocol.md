@@ -1,6 +1,6 @@
 # ADR 0004: Conwrt agent protocol — postcard + COBS, leased resources
 
-Status: accepted (protocol details provisional until M3 prototype)
+Status: accepted (spike verdict 2026-10-12; M3 production validation recorded 2026-10-23 — see both sections)
 Milestone: M3 (prototype), M5 (MCU agents)
 
 ## Context
@@ -89,6 +89,53 @@ Decision: build `conwrt-agent-proto` (M3) on postcard-rpc 0.12 with a thin
 shared COBS pump and two wires (TCP, USB-CDC). The device
 one-connection-per-`run()` model maps directly onto the lease/reconnect
 semantics of §5. Full API findings and measurements: issue #107.
+
+## M3 production validation (2026-10-23)
+
+The provisional clause is retired: `conwrt-agent-proto` has carried the
+M3 design in production-shaped code since the spike, and the milestone's
+exit criterion — *the M2 diagnostic workflow runs unchanged against
+remote providers* — has standing test evidence.
+
+What shipped on the adopted stack (postcard-rpc 0.12 + shared COBS pump):
+
+- **Protocol v2 with real lease semantics**: `Granted` surfaces
+  `lease_id` (#378); controller-loss policies (§5 `abort`/`complete`)
+  live in `leases` with heartbeat expiry; CLI heartbeats + release-on-
+  Ctrl-C on the controller side.
+- **Resumable firmware-class streams** as designed (§6): windowed
+  executor transfer separating offset from state (#226 slices), POST
+  pump for executor pushes, transfer status that survives
+  reconnection.
+- **Safety posture of §8 v0**: loopback-only default listener, non-
+  loopback requires explicit opt-in, capability details validated as
+  the documented colon syntax (#335) — network pairing + session
+  encryption remain future work (see Open questions).
+- **The exit criterion, tested**: `tests/{e2e,integration,qemu_e2e,
+  router_to_router,two_instance,hil_mock}.rs` — including QEMU VM
+  round-trips, router-to-router runs, and the HIL lossy-resume replay
+  under connection churn (#226 ring-2); plus the on-OpenWrt execution
+  proof (static-pie deploy to a 25.12.5 VM, router-as-agent diagnosing
+  another host — commit 28543b2).
+- **Tier discipline holds** (ADR-0002): the crate builds `no_std` +
+  `alloc` by default; MCU consumers (F746 slices) reuse
+  `protocol`/`cobs`/`leases` verbatim.
+
+## Open questions
+
+- **§8 network security**: v0 trusts the physical link (USB CDC) or
+  loopback only. Pairing + rustls/embedded-tls session encryption +
+  per-lease permission scopes are designed but unbuilt — the trigger
+  for building them is the first non-bench network deployment.
+- **Remote Ethernet level 3** (raw frames for U-Boot-era targets): the
+  four-level model (§7) stands; only levels 1–2 have implementations.
+- **postcard-rpc 0.x churn**: additive-only message evolution +
+  schema-fingerprint gates are the standing mitigation; the fork option
+  (custom header/dispatch over the same postcard+COBS primitives)
+  remains the named escape hatch if 0.x breaks us.
+- **Protocol v2 → v3**: no concrete driver yet; the versioned-header
+  mismatch ⇒ structured refusal rule (§1) is the gate that makes a
+  future bump cheap.
 
 ## Alternatives considered
 
