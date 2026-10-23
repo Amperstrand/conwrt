@@ -72,6 +72,7 @@
 //!   only (CI rule: no network beyond localhost).
 
 pub mod backup;
+pub mod baud;
 pub mod boot_capture;
 pub mod collect;
 pub mod configure;
@@ -80,6 +81,7 @@ pub mod flash;
 pub mod io;
 pub mod lint;
 pub mod monitor;
+pub mod recovery;
 
 pub use backup::{
     BackupError, BackupSelection, DumpOutcome, Partition, decode_dump_lines, dump_partition,

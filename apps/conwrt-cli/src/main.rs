@@ -46,6 +46,45 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// List or dump /dev/mtd partitions over serial (Rust port of
+    /// scripts/serial-backup.py).
+
+    /// Detect the likely baud rate of a serial console: opens the port at
+    /// each candidate rate, scores received data (ComScope/baudowl
+    /// scoring; Rust port of scripts/serial_baud.py).
+    SerialBaud {
+        /// Serial port spec (local /dev only).
+        #[arg(long)]
+        port: String,
+        /// Seconds to listen per candidate rate.
+        #[arg(long, default_value_t = 3)]
+        listen_secs: u32,
+    },
+    /// First-contact configuration over serial (Rust port of
+    /// scripts/serial-configure.py): show state, set LAN IP, toggle
+    /// password auth, install an SSH key.
+
+    /// Serial console monitor: dual logging (raw + timestamped), boot-stage
+    /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
+    /// (Rust port of scripts/serial-console.py --monitor).
+
+    /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
+    /// (RTL8382 field-proven 25+ times; works when console input is dead).
+    SerialRecover {
+        /// Serial port spec, e.g. /dev/serial/by-id/usb-FTDI_...-port0.
+        #[arg(long)]
+        port: String,
+        /// Baud rate (GS1900 console: 115200).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Boot marker to wait for after the reboot (default: the OpenWrt
+        /// kernel handoff line).
+        #[arg(long, default_value = "Starting kernel")]
+        marker: String,
+        /// Overall timeout in seconds.
+        #[arg(long, default_value_t = 240)]
+        timeout: u32,
+    },
     /// Validate device model JSON files against the model schema.
     Models {
         /// Directory containing `*.json` model files.
@@ -605,6 +644,81 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::SerialBaud { port, listen_secs } => {
+            use conwrt_serial::baud::{COMMON_BAUDS, score_baud_data};
+            use conwrt_serial::io::open_port;
+            use std::time::Duration;
+
+            // Wake the console (askfirst) and listen at each rate.
+            let mut best: Option<(u32, u32)> = None;
+            for &rate in COMMON_BAUDS {
+                let Ok(mut io) = open_port(&port, rate, Duration::from_millis(500)) else {
+                    continue;
+                };
+                let _ = io.write_all_bytes(b"\r");
+                let mut buf = vec![0u8; 8192];
+                let mut sample = Vec::new();
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(listen_secs as u64);
+                while std::time::Instant::now() < deadline {
+                    if let Ok(n) = io.read(&mut buf) {
+                        if n > 0 {
+                            sample.extend_from_slice(&buf[..n]);
+                        }
+                    }
+                }
+                let (score, reason) = score_baud_data(&sample);
+                println!("{rate:>7}: {score:>4}  ({reason})");
+                if best.is_none_or(|(bs, _)| score > bs) {
+                    best = Some((rate, score));
+                }
+            }
+            match best {
+                Some((rate, score)) if score > 0 => {
+                    println!("best guess: {rate} (score {score})");
+                    ExitCode::SUCCESS
+                }
+                _ => {
+                    eprintln!("conwrt: no console data at any candidate rate");
+                    ExitCode::from(4)
+                }
+            }
+        }
+        Command::SerialRecover {
+            port,
+            baud,
+            marker,
+            timeout,
+        } => {
+            use conwrt_serial::io::open_break_port;
+            use conwrt_serial::recovery::reboot_wedged;
+            use std::time::Duration;
+
+            let mut io = match open_break_port(&port, baud, Duration::from_secs(1)) {
+                Ok(io) => io,
+                Err(e) => {
+                    eprintln!("conwrt: open {port}: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            println!("BREAK + sysrq-b on {port} ...");
+            match reboot_wedged(
+                io.as_mut(),
+                marker.as_bytes(),
+                Duration::from_secs(timeout as u64),
+            ) {
+                Ok(out) => {
+                    println!(
+                        "{out:?} - keep this console reader attached until the device is stable."
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("conwrt: recovery: {e}");
+                    ExitCode::from(3)
+                }
+            }
+        }
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
