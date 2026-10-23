@@ -19,11 +19,7 @@ from profile.ops import (
     BlankLine,
     Comment,
     Op,
-    ServiceAction,
     ShellCommand,
-    UciAddList,
-    UciCommit,
-    UciSet,
     render_shell,
 )
 from shell_safe import require_choice
@@ -221,35 +217,45 @@ def _build_ssl_ops(params: dict[str, Any]) -> list[Op]:
 
     if r["enable_uhttpd_https"]:
         ops.append(Comment(text="-- uhttpd HTTPS (admin interface) --"))
-        ops.append(UciSet(config="uhttpd", section="main", values={
-            "cert": "/etc/tollgate/ssl/server.crt",
-            "key": "/etc/tollgate/ssl/server.key",
-        }))
-        # `uci -q delete` exits nonzero when the option is absent
-        # (HTTP-only configs) — the reset must be idempotent so both
-        # listeners always land.
-        ops.append(ShellCommand(
-            command="uci -q delete uhttpd.main.listen_https || true"
-        ))
-        ops.append(UciAddList(
-            config="uhttpd", section="main", option="listen_https",
-            value="0.0.0.0:443",
-        ))
-        ops.append(UciAddList(
-            config="uhttpd", section="main", option="listen_https",
-            value="[::]:443",
-        ))
-        ops.append(UciCommit(config="uhttpd"))
-        ops.append(ServiceAction(name="uhttpd", action="restart"))
+        # Certs land post-flash (host-side download + SCP via
+        # deploy_ssl_post_flash). Wire uhttpd only once both files
+        # exist: pointed at missing certs, uhttpd drops the HTTPS
+        # listener or exits — so a cert-less router must not take the
+        # wiring yet. Inside the guard the listen_https reset stays
+        # idempotent: `uci -q delete` exits nonzero when the option is
+        # absent, so the delete is guarded and both listeners always
+        # land.
+        ops.append(ShellCommand(command=(
+            "if [ -f /etc/tollgate/ssl/server.crt ] && "
+            "[ -f /etc/tollgate/ssl/server.key ]; then\n"
+            "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'\n"
+            "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'\n"
+            "uci -q delete uhttpd.main.listen_https || true\n"
+            "uci add_list uhttpd.main.listen_https='0.0.0.0:443'\n"
+            "uci add_list uhttpd.main.listen_https='[::]:443'\n"
+            "uci commit uhttpd\n"
+            "/etc/init.d/uhttpd restart\n"
+            "echo 'ssl: uhttpd HTTPS wired on :443'\n"
+            "else\n"
+            "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2\n"
+            "fi"
+        )))
 
     if r["open_port_443_nds"]:
         ops.append(Comment(text="-- Allow port 443 through nodogsplash --"))
-        ops.append(ShellCommand(
-            command="uci -q show nodogsplash >/dev/null 2>&1 && "
-                    "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && "
-                    "uci commit nodogsplash && "
-                    "/etc/init.d/nodogsplash restart || true"
-        ))
+        # Explicit existence guard with a propagating body: a trailing
+        # `|| true` would mask real failures (missing anonymous section,
+        # failed commit, failed restart) as success alongside the
+        # intended package-absent no-op. Absent nodogsplash skips the
+        # branch; present-but-failing aborts loudly under set -e.
+        ops.append(ShellCommand(command=(
+            "if uci -q show nodogsplash >/dev/null 2>&1; then\n"
+            "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'\n"
+            "uci commit nodogsplash\n"
+            "/etc/init.d/nodogsplash restart\n"
+            "echo 'ssl: nodogsplash allows tcp/443 to the router'\n"
+            "fi"
+        )))
 
     ops.append(BlankLine())
     return ops

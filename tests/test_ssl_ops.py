@@ -31,13 +31,37 @@ def test_default_build_smoke():
 
 
 def test_listen_https_reset_is_idempotent():
-    """Regression (Codex #486 P1-2): the old &&-chained reset silently
+    """Regression (Codex #486 round 1): the old &&-chained reset silently
     no-opped when listen_https was absent — `uci -q delete` exits
     nonzero on a missing option, so the chain stopped and neither
     listener was added. The reset must delete guarded, then add both."""
     script = _ssl().build_configure({})
     assert "uci -q delete uhttpd.main.listen_https || true" in script
     assert "listen_https &&" not in script
+
+
+def test_uhttpd_wiring_guards_on_certs_present():
+    """Regression (Codex #486 round 2): pointing uhttpd at cert files
+    that do not exist yet (they land post-flash via
+    deploy_ssl_post_flash) makes uhttpd drop the HTTPS listener or
+    exit — the wiring must be guarded on both files existing, with a
+    loud skip message otherwise."""
+    script = _ssl().build_configure({})
+    assert (
+        "if [ -f /etc/tollgate/ssl/server.crt ] && "
+        "[ -f /etc/tollgate/ssl/server.key ]; then" in script
+    )
+    assert "certs not present yet" in script
+
+
+def test_nodogsplash_branch_propagates_failures():
+    """Regression (Codex #486 round 2): the old trailing `|| true`
+    masked real failures (missing section, failed commit/restart) as
+    success. The branch must be an explicit existence guard whose body
+    propagates errors."""
+    script = _ssl().build_configure({})
+    assert "if uci -q show nodogsplash >/dev/null 2>&1; then" in script
+    assert "nodogsplash restart || true" not in script
 
 
 @pytest.mark.parametrize(

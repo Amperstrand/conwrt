@@ -758,10 +758,11 @@ impl OpenClashProfile {
 /// and `listen_https` on :443) and the optional nodogsplash 443
 /// pass-through. The certificates themselves are NOT flash-time
 /// material: 1.x downloads them HOST-side (lancert.dev / qip.sh) and
-/// SCPs them post-flash (`deploy_ssl_post_flash`) — the referenced
-/// `/etc/tollgate/ssl/*` paths exist only after that deploy (a
-/// documented boundary, not a gap; certs expire in 90 days and are
-/// renewed by re-running the host-side deploy).
+/// SCPs them post-flash (`deploy_ssl_post_flash`) — the plan guards
+/// the uhttpd wiring on both cert files existing at runtime, so a
+/// cert-less router skips it with a loud message instead of pointing
+/// uhttpd at missing files (certs expire in 90 days; re-deploy and
+/// re-run to renew).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SslProfile {
     /// Cert provider — the 1.x ParamDef choice set
@@ -3113,7 +3114,6 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
 
 fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
     ssl.validate()?;
-    let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
         PlanOp::EnsurePackage {
             name: "libustream-wolfssl".into(),
@@ -3122,75 +3122,56 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
             name: "ca-bundle".into(),
         },
     ];
-    let mut verification = Vec::new();
+    // Both branches are runtime-conditional compound payloads (the 1.x
+    // nodogsplash-guard idiom, applied to the cert dependency too):
+    // uhttpd HTTPS is wired only when the post-flash certs already
+    // exist — pointed at missing cert files uhttpd drops the HTTPS
+    // listener or exits, so a cert-less router must not take the
+    // wiring yet (Codex #486 P1 round 2). The listen_https reset stays
+    // idempotent inside the guard (round-1 fix). The nodogsplash
+    // branch uses an explicit existence guard with a propagating body:
+    // a trailing `|| true` masked real failures (missing section,
+    // failed commit/restart) as success (Codex #486 P2 round 2).
+    // Verification is in-script (status echo per branch) because
+    // post-hoc checks cannot express the runtime skip paths.
     if ssl.enable_uhttpd_https {
-        ops.extend([
-            PlanOp::SetUciOptions {
-                config: "uhttpd".into(),
-                section: "main".into(),
-                options: vec![
-                    (
-                        "cert".into(),
-                        literal("/etc/tollgate/ssl/server.crt".into()),
-                    ),
-                    ("key".into(), literal("/etc/tollgate/ssl/server.key".into())),
-                ],
-            },
-            // 1.x chained this reset with `&&`, so an HTTP-only config
-            // (no existing listen_https — `uci -q delete` exits
-            // nonzero) silently skipped BOTH add_list lines and aborted
-            // under `set -e`; fixed idempotent form on both sides
-            // (Codex #486 P1-2)
-            PlanOp::UciDeleteOption {
-                config: "uhttpd".into(),
-                section: "main".into(),
-                option: "listen_https".into(),
-            },
-            PlanOp::UciAddList {
-                config: "uhttpd".into(),
-                section: "main".into(),
-                option: "listen_https".into(),
-                value: "0.0.0.0:443".into(),
-            },
-            PlanOp::UciAddList {
-                config: "uhttpd".into(),
-                section: "main".into(),
-                option: "listen_https".into(),
-                value: "[::]:443".into(),
-            },
-            PlanOp::CommitUci {
-                config: "uhttpd".into(),
-            },
-            PlanOp::Service {
-                name: "uhttpd".into(),
-                action: ServiceAction::Restart,
-            },
-        ]);
-        verification.extend([
-            VerificationCheck {
-                description: "uhttpd cert path persisted".into(),
-                command: "uci -q get uhttpd.main.cert".into(),
-                expect_contains: "/etc/tollgate/ssl/server.crt".into(),
-            },
-            VerificationCheck {
-                description: "uhttpd listens on 443".into(),
-                command: "uci -q get uhttpd.main.listen_https".into(),
-                expect_contains: "0.0.0.0:443".into(),
-            },
-        ]);
+        ops.push(PlanOp::Shell {
+            command: concat!(
+                "if [ -f /etc/tollgate/ssl/server.crt ] && ",
+                "[ -f /etc/tollgate/ssl/server.key ]; then\n",
+                "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'\n",
+                "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'\n",
+                "uci -q delete uhttpd.main.listen_https || true\n",
+                "uci add_list uhttpd.main.listen_https='0.0.0.0:443'\n",
+                "uci add_list uhttpd.main.listen_https='[::]:443'\n",
+                "uci commit uhttpd\n",
+                "/etc/init.d/uhttpd restart\n",
+                "echo 'ssl: uhttpd HTTPS wired on :443'\n",
+                "else\n",
+                "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2\n",
+                "fi",
+            )
+            .into(),
+        });
     }
     if ssl.open_port_443_nds {
         ops.push(PlanOp::Shell {
-            // verbatim 1.x compound line: guarded by `uci -q show` so it
-            // no-ops when nodogsplash is absent; fully static
-            command: "uci -q show nodogsplash >/dev/null 2>&1 && uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && uci commit nodogsplash && /etc/init.d/nodogsplash restart || true".into(),
+            command: concat!(
+                "if uci -q show nodogsplash >/dev/null 2>&1; then\n",
+                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'\n",
+                "uci commit nodogsplash\n",
+                "/etc/init.d/nodogsplash restart\n",
+                "echo 'ssl: nodogsplash allows tcp/443 to the router'\n",
+                "fi",
+            )
+            .into(),
         });
     }
     Ok(Plan {
         profile_id: "ssl".into(),
         model_id: model.id.clone(),
         ops,
-        verification,
+        verification: Vec::new(),
     })
 }
 
@@ -4938,9 +4919,15 @@ mod tests {
     #[test]
     fn ssl_shape_branches_and_provider_gate_match_1x() {
         let script = render_shell(&plan_for(Profile::Ssl(SslProfile::default())));
+        // cert-presence guard wraps the whole uhttpd block (Codex #486
+        // P1 round 2): a cert-less router skips the wiring loudly
+        // instead of pointing uhttpd at missing files
+        assert!(script.contains(
+            "if [ -f /etc/tollgate/ssl/server.crt ] && [ -f /etc/tollgate/ssl/server.key ]; then"
+        ));
         assert!(script.contains("uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'"));
         assert!(script.contains("uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'"));
-        // idempotent listen_https reset (Codex #486 P1-2): delete is
+        // idempotent listen_https reset (round-1 fix): the delete is
         // guarded so an HTTP-only config still gets both listeners
         assert!(script.contains("uci -q delete uhttpd.main.listen_https || true"));
         assert!(script.contains("uci add_list uhttpd.main.listen_https='0.0.0.0:443'"));
@@ -4948,9 +4935,19 @@ mod tests {
         assert!(!script.contains("listen_https &&"));
         assert!(script.contains("uci commit uhttpd"));
         assert!(script.contains("/etc/init.d/uhttpd restart"));
+        assert!(script.contains("echo 'ssl: uhttpd HTTPS wired on :443'"));
         assert!(script.contains(
-            "uci -q show nodogsplash >/dev/null 2>&1 && uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && uci commit nodogsplash && /etc/init.d/nodogsplash restart || true"
+            "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2"
         ));
+        // explicit nodogsplash existence guard with a propagating body
+        // (Codex #486 P2 round 2): failures abort instead of riding a
+        // trailing `|| true` to a fake success
+        assert!(script.contains("if uci -q show nodogsplash >/dev/null 2>&1; then"));
+        assert!(script.contains(
+            "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'"
+        ));
+        assert!(!script.contains("nodogsplash restart || true"));
+        assert!(script.contains("echo 'ssl: nodogsplash allows tcp/443 to the router'"));
 
         // uhttpd off drops the whole HTTPS block, keeps the nds line
         let no_uhttpd = render_shell(&plan_for(Profile::Ssl(SslProfile {
