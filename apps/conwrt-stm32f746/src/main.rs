@@ -401,7 +401,19 @@ async fn pump_task(
         }
         socket = io.into_inner();
         socket.abort();
-        attempted = Some(id);
+        // Record the id the pump ACTUALLY served: the window may have
+        // re-targeted while the connection was pending — marking the
+        // stale pre-connect id would retry the freshly-posted one and
+        // burn a second recovery window (#452 review round 1).
+        let served = pump.bound_id().unwrap_or(id);
+        if served != id {
+            defmt::warn!(
+                "recovery: window re-targeted {} -> {} mid-connect",
+                id,
+                served
+            );
+        }
+        attempted = Some(served);
     }
 }
 
@@ -506,8 +518,10 @@ fn capabilities() -> Vec<CapabilityInfo> {
                     // window into the recovery POST (one attempt per
                     // transfer id; verdict on RTT). Target = build-time
                     // CONWRT_RECOVERY_TARGET (default the D-Link
-                    // recovery LAN); the controller just streams.
-                    String::from("full"),
+                    // recovery LAN); the controller just streams. The
+                    // path is wired but NOT yet live-validated — the
+                    // bench leg (gated) is that validation.
+                    String::from("full-bench-pending"),
                 ),
             ]),
         },
