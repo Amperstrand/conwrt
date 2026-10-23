@@ -40,18 +40,19 @@ def conwrt_bin() -> Path:
         pytest.skip("cargo toolchain not available for the Rust parity binary")
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target"))
     bin_path = target_dir / "debug" / "conwrt"
-    if not bin_path.exists():
-        build = subprocess.run(
-            [cargo, "build", "-q", "-p", "conwrt-cli", "--bin", "conwrt"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
+    # Always build (incremental): an existence check would test a stale
+    # binary and false-pass Rust-side drift.
+    build = subprocess.run(
+        [cargo, "build", "-q", "-p", "conwrt-cli", "--bin", "conwrt"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    if build.returncode != 0:
+        pytest.fail(
+            f"conwrt build failed (exit {build.returncode}):\n"
+            f"{build.stderr.strip()}"
         )
-        if build.returncode != 0:
-            pytest.fail(
-                f"conwrt build failed (exit {build.returncode}):\n"
-                f"{build.stderr.strip()}"
-            )
     assert bin_path.exists(), f"{bin_path} missing after cargo build"
     return bin_path
 
