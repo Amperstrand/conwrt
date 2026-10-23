@@ -3002,22 +3002,47 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
 fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Unsupported> {
     oc.validate()?;
     let literal = |v: String| UciValue::Literal(v);
-    let mut ops: Vec<PlanOp> = [
-        "luci-app-openclash",
-        "coreutils-nohup",
-        "bash",
-        "iptables",
-        "dnsmasq-full",
-        "curl",
-        "ca-certificates",
-        "ca-bundle",
-        "logd",
-    ]
-    .iter()
-    .map(|name| PlanOp::EnsurePackage {
-        name: (*name).into(),
-    })
-    .collect();
+    let mut ops: Vec<PlanOp> = vec![
+        PlanOp::EnsurePackage {
+            name: "luci-app-openclash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "coreutils-nohup".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "bash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "iptables".into(),
+        },
+        // dnsmasq and dnsmasq-full conflict (both provide dnsmasq):
+        // 1.x carries the swap as an image-build `packages_remove`
+        // directive, but this plan installs packages at apply time —
+        // on an opkg device still running default dnsmasq, the
+        // dnsmasq-full install below aborts under `set -e` unless the
+        // swap rides the plan too (Codex #486 P1-1; mesh11sd's
+        // wpad-swap idiom). Guarded no-op where dnsmasq-full already
+        // replaced dnsmasq, and on apk systems (opkg absent; apk
+        // replaces the provider without a conflict).
+        PlanOp::Shell {
+            command: "opkg remove dnsmasq 2>/dev/null || true".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "dnsmasq-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-certificates".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "logd".into(),
+        },
+    ];
     ops.extend([
         PlanOp::Shell {
             command: "mkdir -p /etc/openclash/config".into(),
@@ -3108,17 +3133,30 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
                         "cert".into(),
                         literal("/etc/tollgate/ssl/server.crt".into()),
                     ),
-                    (
-                        "key".into(),
-                        literal("/etc/tollgate/ssl/server.key".into()),
-                    ),
+                    ("key".into(), literal("/etc/tollgate/ssl/server.key".into())),
                 ],
             },
-            // 1.x renders the listen_https reset as ONE &&-joined line;
-            // decomposing it into typed ops would break command-line
-            // byte parity, and the line is fully static (no interpolation)
-            PlanOp::Shell {
-                command: "uci -q delete uhttpd.main.listen_https && uci add_list uhttpd.main.listen_https='0.0.0.0:443' && uci add_list uhttpd.main.listen_https='[::]:443'".into(),
+            // 1.x chained this reset with `&&`, so an HTTP-only config
+            // (no existing listen_https — `uci -q delete` exits
+            // nonzero) silently skipped BOTH add_list lines and aborted
+            // under `set -e`; fixed idempotent form on both sides
+            // (Codex #486 P1-2)
+            PlanOp::UciDeleteOption {
+                config: "uhttpd".into(),
+                section: "main".into(),
+                option: "listen_https".into(),
+            },
+            PlanOp::UciAddList {
+                config: "uhttpd".into(),
+                section: "main".into(),
+                option: "listen_https".into(),
+                value: "0.0.0.0:443".into(),
+            },
+            PlanOp::UciAddList {
+                config: "uhttpd".into(),
+                section: "main".into(),
+                option: "listen_https".into(),
+                value: "[::]:443".into(),
             },
             PlanOp::CommitUci {
                 config: "uhttpd".into(),
@@ -4839,6 +4877,10 @@ mod tests {
     #[test]
     fn openclash_shape_gates_and_branches_match_1x() {
         let script = render_shell(&plan_for(Profile::OpenClash(OpenClashProfile::default())));
+        // dnsmasq→dnsmasq-full swap rides the plan (Codex #486 P1-1):
+        // guarded so it no-ops where dnsmasq-full already replaced
+        // dnsmasq and on apk systems
+        assert!(script.contains("opkg remove dnsmasq 2>/dev/null || true"));
         assert!(script.contains("mkdir -p /etc/openclash/config"));
         assert!(script.contains("uci set openclash.config.enable='1'"));
         assert!(
@@ -4898,9 +4940,12 @@ mod tests {
         let script = render_shell(&plan_for(Profile::Ssl(SslProfile::default())));
         assert!(script.contains("uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'"));
         assert!(script.contains("uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'"));
-        assert!(script.contains(
-            "uci -q delete uhttpd.main.listen_https && uci add_list uhttpd.main.listen_https='0.0.0.0:443' && uci add_list uhttpd.main.listen_https='[::]:443'"
-        ));
+        // idempotent listen_https reset (Codex #486 P1-2): delete is
+        // guarded so an HTTP-only config still gets both listeners
+        assert!(script.contains("uci -q delete uhttpd.main.listen_https || true"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='0.0.0.0:443'"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='[::]:443'"));
+        assert!(!script.contains("listen_https &&"));
         assert!(script.contains("uci commit uhttpd"));
         assert!(script.contains("/etc/init.d/uhttpd restart"));
         assert!(script.contains(

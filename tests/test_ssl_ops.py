@@ -24,9 +24,20 @@ def test_default_build_smoke():
     assert "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'" in script
     assert "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'" in script
     assert "uci add_list uhttpd.main.listen_https='0.0.0.0:443'" in script
+    assert "uci add_list uhttpd.main.listen_https='[::]:443'" in script
     assert "uci commit uhttpd" in script
     assert "/etc/init.d/uhttpd restart" in script
     assert "users_to_router='allow tcp port 443'" in script
+
+
+def test_listen_https_reset_is_idempotent():
+    """Regression (Codex #486 P1-2): the old &&-chained reset silently
+    no-opped when listen_https was absent — `uci -q delete` exits
+    nonzero on a missing option, so the chain stopped and neither
+    listener was added. The reset must delete guarded, then add both."""
+    script = _ssl().build_configure({})
+    assert "uci -q delete uhttpd.main.listen_https || true" in script
+    assert "listen_https &&" not in script
 
 
 @pytest.mark.parametrize(

@@ -21,6 +21,7 @@ from profile.ops import (
     Op,
     ServiceAction,
     ShellCommand,
+    UciAddList,
     UciCommit,
     UciSet,
     render_shell,
@@ -224,10 +225,19 @@ def _build_ssl_ops(params: dict[str, Any]) -> list[Op]:
             "cert": "/etc/tollgate/ssl/server.crt",
             "key": "/etc/tollgate/ssl/server.key",
         }))
+        # `uci -q delete` exits nonzero when the option is absent
+        # (HTTP-only configs) — the reset must be idempotent so both
+        # listeners always land.
         ops.append(ShellCommand(
-            command="uci -q delete uhttpd.main.listen_https && "
-                    "uci add_list uhttpd.main.listen_https='0.0.0.0:443' && "
-                    "uci add_list uhttpd.main.listen_https='[::]:443'"
+            command="uci -q delete uhttpd.main.listen_https || true"
+        ))
+        ops.append(UciAddList(
+            config="uhttpd", section="main", option="listen_https",
+            value="0.0.0.0:443",
+        ))
+        ops.append(UciAddList(
+            config="uhttpd", section="main", option="listen_https",
+            value="[::]:443",
         ))
         ops.append(UciCommit(config="uhttpd"))
         ops.append(ServiceAction(name="uhttpd", action="restart"))

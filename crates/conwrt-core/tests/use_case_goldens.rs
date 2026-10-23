@@ -101,6 +101,13 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.starts_with("opkg install "))
         .filter(|l| !l.starts_with("if command -v apk "))
         .filter(|l| !l.starts_with("&& apk add "))
+        // openclash dnsmasq→dnsmasq-full swap: the 1.x configure script
+        // carries NO package ops (packages ride the ASU image build,
+        // where packages_remove handles the swap); the 2.x apply path
+        // installs at runtime, so the guarded removal is 2.x-only
+        // (Codex #486 P1-1) — excluded like the install lines above,
+        // pinned by unit test instead
+        .filter(|l| !l.starts_with("opkg remove dnsmasq "))
         .filter(|l| !l.starts_with("list track_ip "))
         .filter(|l| !(l.starts_with("uci add_list mwan3.") && l.contains(".track_ip=")))
         // auto-sqm dynamic cron: 2.x makes re-apply idempotent by

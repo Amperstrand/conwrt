@@ -3,7 +3,9 @@
 # -- uhttpd HTTPS (admin interface) --
 uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'
 uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'
-uci -q delete uhttpd.main.listen_https && uci add_list uhttpd.main.listen_https='0.0.0.0:443' && uci add_list uhttpd.main.listen_https='[::]:443'
+uci -q delete uhttpd.main.listen_https || true
+uci add_list uhttpd.main.listen_https='0.0.0.0:443'
+uci add_list uhttpd.main.listen_https='[::]:443'
 uci commit uhttpd
 /etc/init.d/uhttpd restart
 # -- Allow port 443 through nodogsplash --
