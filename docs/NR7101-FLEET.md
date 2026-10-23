@@ -163,7 +163,7 @@ The bench network was resegmented. The NR7101 moved:
 - **New**: 192.168.12.124 (LAB VLAN on ERX) — isolated from house WiFi
 
 All tooling updated:
-- modemifd reader.conf: DEVICENAME now 192.168.12.124:7002
+- modemifd reader (now [Amperstrand/ifd-modemifd](https://github.com/Amperstrand/ifd-modemifd), Rust): reader.conf DEVICENAME follows the unit's current address; the retired C implementation was removed from this repo
 - modem-at-bridge (socat): restarted on new subnet
 - pcscd: verified reader + ICCID + logical channel working
 
