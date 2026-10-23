@@ -3154,8 +3154,12 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
             command: concat!(
                 "if ! (opkg list-installed 2>/dev/null || apk info 2>/dev/null) ",
                 "| grep -q '^libustream-'; then ",
-                "command -v apk >/dev/null 2>&1 && apk add libustream-wolfssl ",
-                "|| { opkg update && opkg install libustream-wolfssl; }; fi",
+                // manager-scoped install with the renderer's own
+                // fresh-index self-heal (apk update && apk add) — the
+                // retry never crosses into the other package manager
+                "if command -v apk >/dev/null 2>&1; then ",
+                "apk add libustream-wolfssl || { apk update && apk add libustream-wolfssl; }; ",
+                "else opkg update && opkg install libustream-wolfssl; fi; fi",
             )
             .into(),
         },
@@ -3188,14 +3192,22 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
             command: concat!(
                 "if [ -f /etc/tollgate/ssl/server.crt ] && ",
                 "[ -f /etc/tollgate/ssl/server.key ]; then ",
-                "uci -q revert uhttpd 2>/dev/null || true; ",
-                "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'; ",
-                "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'; ",
-                "uci -q delete uhttpd.main.listen_https || true; ",
-                "uci add_list uhttpd.main.listen_https='0.0.0.0:443'; ",
-                "uci add_list uhttpd.main.listen_https='[::]:443'; ",
-                "uci commit uhttpd; ",
-                "/etc/init.d/uhttpd restart; ",
+                // &&-chained fail-fast body (the 1.x transport runs
+                // control-flow scripts WITHOUT set -e — a `;` chain
+                // would let a failed uci set ride a trailing echo to a
+                // fake success). Best-effort steps (revert, delete)
+                // are isolated in groups so `|| true` cannot swallow a
+                // neighboring hard failure; the post-commit readback
+                // gates the success echo.
+                "(uci -q revert uhttpd 2>/dev/null || true) && ",
+                "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt' && ",
+                "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key' && ",
+                "(uci -q delete uhttpd.main.listen_https || true) && ",
+                "uci add_list uhttpd.main.listen_https='0.0.0.0:443' && ",
+                "uci add_list uhttpd.main.listen_https='[::]:443' && ",
+                "uci commit uhttpd && ",
+                "uci -q get uhttpd.main.listen_https | grep -q '0.0.0.0:443' && ",
+                "/etc/init.d/uhttpd restart && ",
                 "echo 'ssl: uhttpd HTTPS wired on :443'; ",
                 "else ",
                 "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2; ",
@@ -3208,11 +3220,12 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
         ops.push(PlanOp::Shell {
             command: concat!(
                 "if uci -q show nodogsplash >/dev/null 2>&1; then ",
-                "uci -q revert nodogsplash 2>/dev/null || true; ",
-                "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true; ",
-                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'; ",
-                "uci commit nodogsplash; ",
-                "/etc/init.d/nodogsplash restart; ",
+                "(uci -q revert nodogsplash 2>/dev/null || true) && ",
+                "(uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true) && ",
+                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && ",
+                "uci commit nodogsplash && ",
+                "uci -q get nodogsplash.@nodogsplash[0].users_to_router | grep -q 'allow tcp port 443' && ",
+                "/etc/init.d/nodogsplash restart && ",
                 "echo 'ssl: nodogsplash allows tcp/443 to the router'; ",
                 "fi",
             )

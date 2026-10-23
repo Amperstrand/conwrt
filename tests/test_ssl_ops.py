@@ -103,6 +103,26 @@ def test_nodogsplash_allow_entry_is_reapply_idempotent():
     assert add == 1
 
 
+def test_guard_bodies_fail_fast_with_readback():
+    """Regression (Codex #486 round 9): the transport runs control-flow
+    scripts WITHOUT set -e — `;`-chained bodies let a failed step ride
+    the trailing echo to a fake success. Bodies must be &&-chained
+    (best-effort steps grouped so `|| true` cannot swallow a neighbor),
+    with a post-commit uci readback gating the success echo."""
+    script = _ssl().build_configure({})
+    assert "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key' &&" in script
+    assert "uci commit uhttpd &&" in script
+    assert (
+        "uci -q get uhttpd.main.listen_https | grep -q '0.0.0.0:443' && "
+        "/etc/init.d/uhttpd restart" in script
+    )
+    assert "uci commit nodogsplash &&" in script
+    assert (
+        "uci -q get nodogsplash.@nodogsplash[0].users_to_router "
+        "| grep -q 'allow tcp port 443' &&" in script
+    )
+
+
 @pytest.mark.parametrize(
     "hostile",
     ["lancert\nreboot", "qip; poweroff", "$(reboot)", "", "letsencrypt"],
