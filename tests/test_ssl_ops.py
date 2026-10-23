@@ -10,6 +10,8 @@ live shell. The Rust twin applies the same choice gate
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from use_cases import registry
@@ -17,6 +19,27 @@ from use_cases import registry
 
 def _ssl():
     return registry()["ssl"]
+
+
+def test_transport_join_keeps_script_valid_shell():
+    """Regression (Codex #486 round 8): apply.py::_run_step_script routes
+    line-start `if` scripts through a ` && ` line-join — multi-line
+    conditionals came out as `then && uci ...`, which `sh -n` rejects
+    before any SSL configuration ran. Every conditional must be a
+    single `;`-joined line so the join is a no-op."""
+    from profile.apply import _CONTROL_FLOW_RE, _shell_lines_without_comments
+
+    script = _ssl().build_configure({})
+    assert _CONTROL_FLOW_RE.search(script), "guards must ride the control-flow branch"
+    payload = " && ".join(_shell_lines_without_comments(script)) + "\n"
+    joined = subprocess.run(
+        ["sh", "-n"], input=payload, capture_output=True, text=True
+    )
+    assert joined.returncode == 0, f"joined payload invalid: {joined.stderr}"
+    verbatim = subprocess.run(
+        ["sh", "-n"], input=script, capture_output=True, text=True
+    )
+    assert verbatim.returncode == 0, f"render invalid: {verbatim.stderr}"
 
 
 def test_default_build_smoke():
