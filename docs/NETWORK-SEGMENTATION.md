@@ -3,7 +3,8 @@
 **Status: eth1 phase COMPLETE 2026-09-28 — execution record and evidence in
 [conwrt-bench issue #28](https://github.com/Amperstrand/conwrt-bench/issues/28).
 Island fully migrated with zero WiFi downtime: NR7101 self-migrated to
-192.168.12.124, both rogue AP3915i disarmed, stock GS1900 re-homed to static
+its new LAB-VLAN address (exact address private, #290), both rogue
+AP3915i disarmed, stock GS1900 re-homed to static
 192.168.12.3 and flash-saved. Rogue containment was proven against the REAL
 rogues (zero rogue packets ever reached VLAN 13). New since: the ER6P DUT rig
 now occupies ERX eth4 (mgmt static 192.168.13.4 on tagged VLAN 13 — **migrated 2026-09-28 to tagged VLAN
@@ -74,7 +75,9 @@ Facts that matter:
   GS1900-8HP was kept factory-flat by operator decision (2026-09-24, fleet
   OEM-automation target). All its ports sit untagged in VLAN 13 — the house
   LAN. Proof: NR7101 DUT currently holds a house lease (`TollGate`,
-  192.168.13.124, MAC `78:c5:7d:13:91:9c` learned on eth1). If that unit (or
+  a `192.168.13.x` host lease — full unit identifiers and exact address
+  redacted, #290; census in the private lab project — learned on eth1).
+  If that unit (or
   any future DUT there) boots OpenWrt defaults, its dnsmasq **is** a rogue
   DHCP server on the production segment, and the WiFi race is lost or won by
   milliseconds.

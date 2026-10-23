@@ -1,17 +1,17 @@
-# NR7101 Fleet — Census, Reachability, Modem Firmware, RF Survey (2026-09-27)
+# NR7101 — Species Guide: Modem Firmware, RF Survey, Flashing (2026-09-27)
 
-Live-verified 2026-09-27 by the session-review lane. Purpose: single reference for
-the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
+Live-verified 2026-09-27 by the session-review lane. Purpose: species-level
+reference for the NR7101 (firmware guidance, RF behavior, flash methods) and
+the onboarding path for **any NR7101 unit** later. Fleet census and unit
+coordinates live in the private lab project (see the census section).
 
 ## TL;DR
 
-- **Three distinct NR7101 units** exist in records (distinct IMEIs/MACs). Exactly
-  **one is on the bench and reachable**: the ex-Telenor unit, now the house
-  "TollGate" DUT at `192.168.12.124` (OpenWrt 25.12.5), cabled on **switch lan8**.
-- The **Altibox unit is off-bench/dark** (no carrier on any DUT port, no ARP/FDB
-  trace). A third **ice+ unit** was recorded 2026-05 with working ice.net service
-  and is field-deployed, not benched.
-- Modem = **Quectel RG502Q-EA**. Bench unit firmware: `RG502QEAAAR11A03M4G`.
+- Fleet census (unit count, provenance, per-unit state) is operator-private
+  inventory — private census dossier (#290); multiple units exist across
+  modem firmware families, exactly one bench-active.
+- Modem = **Quectel RG502Q-EA**. Firmware families seen on the bench:
+  `RG502QEAAAR11A03M4G`.
   **Stay on R11A03**; if ever deployed with live service, walk to **R11A07M4G
   and stop**. Avoid R13A04. Never cross QEAAAR/AACR tracks.
 - RF survey from the bench: **Telenor + ice both LTE/5G-NSA visible**, RSRP
@@ -21,30 +21,22 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 ## Unit census
 
-| Unit | MAC | IMEI | Modem fw | State (2026-09-27) |
-|---|---|---|---|---|
-| ex-Telenor ("TollGate") | `78:c5:7d:13:91:9c` | 354351111598628 | `RG502QEAAAR11A03M4G` | **LIVE**: house LAN `192.168.12.124`, OpenWrt 25.12.5 r33051, hostname TollGate, WiFi APs + captive-portal role, switch **lan8** (VLAN 1008), PoE ~4.5 W |
-| ex-Altibox (stock) | `78:c5:7d:23:de:fe` | unknown | unknown (unqueryable) | **DARK**: last seen in `zyxel_research/NR7101.md` on lan3 @ `192.168.2.1` ICMP-only; now no link on lan2–lan7, zero ARP/FDB trace. Physical recovery = owner action |
-| ice+ unit | `4c:c5:3e:b6:1d:90` | 354351110824785 | `RG502QEAACR13A03M4G_ZYXEL` | Field-deployed (2026-05 record: ice.net LTE B3, data OK). Not bench-connected |
+Everything about the operator's concrete units — census, provenance,
+per-unit firmware, deployment/bench state, reachability, coordinates —
+is fleet inventory and lives ONLY in the private lab project:
+`conwrt-bench/docs/nr7101-fleet-census-private.md` (#290 — unit
+inventory belongs in the private project, identifiers or not). Nothing
+in this public doc describes the operator's units; addresses in older
+revisions must not be trusted. Species-level guidance (modem firmware
+families and what they mean for flashing) is in the modem-firmware
+section below. The rogue-DHCP risk class for bench DUTs generally is
+documented in `docs/NETWORK-SEGMENTATION.md`.
 
-## Reachability map (ex-Telenor unit)
+## Bench switch snapshot
 
-Two-hop path; **only ai-legion-small's SSH key** is authorized (4 keys in
-dropbear; x280 and ai-legion keys rejected; root password set):
-
-    x280 → ai-legion-small → ssh root@192.168.12.124
-
-**Stale paths — do not trust older docs**: `192.168.1.1` (switch.1002) and
-`192.168.2.1` are gone; the unit now DHCPs on the house LAN. Old port map
-(lan2) is stale; current cable = **lan8**. This is also the unit carrying the
-rogue-DHCP risk documented in `docs/NETWORK-SEGMENTATION.md` (house lease
-`.13.124`).
-
-## Bench switch snapshot (OpenWrt switch `192.168.13.2`)
-
-- **lan1** = trunk/uplink (VLAN 1 untagged mgmt + tagged 1002/1003/…).
-- **lan8** = NR7101 TollGate (carrier up, PoE ~4.5 W).
-- **lan2–lan7** = no carrier (empty).
+(Bench switch specifics are topology — private census dossier, #290.)
+Species-level facts: NR7101 draws ~4-5 W PoE (well inside any GS1900
+PoE budget; budget math for a full bench lives with the bench docs).
 - PoE budget 65 W, consumption ~4.5 W. Control: `ubus call poe manage '{"port":"lanN","action":"enable|disable"}'`.
 - Read port state: `/sys/class/net/lanN/carrier`; `ubus call poe info`.
 
@@ -123,9 +115,8 @@ network (disclosed).
 
 ## Open items
 
-- Altibox unit: physical location unknown — owner action if wanted back.
-- Seated Telenor SIM is inactive; leave or pull (inert either way).
-- ice+ field unit: consider a live inventory refresh next time on bench.
+- Per-unit open items (physical recovery, SIM state, field-refresh) are
+  fleet inventory — tracked in the private census dossier (#290).
 
 ## Service activation paths (research 2026-09-27)
 
@@ -158,13 +149,11 @@ scriptable attach/detach test rig.
 
 ## IP Update (2026-09-28)
 
-The bench network was resegmented. The NR7101 moved:
-- **Old**: 192.168.13.124 (house LAN, VLAN 1) — rogue-DHCP risk, removed
-- **New**: 192.168.12.124 (LAB VLAN on ERX) — isolated from house WiFi
-
-All tooling updated:
-- modemifd reader.conf: DEVICENAME now 192.168.12.124:7002
-- modem-at-bridge (socat): restarted on new subnet
+The bench network was resegmented (2026-09-28): the NR7101 moved OFF the
+house LAN (rogue-DHCP risk removed) onto an isolated LAB VLAN on the ERX.
+Concrete addresses and the tooling endpoints that follow them live in the
+private census dossier (#290); all tooling (modemifd reader, modem-at-bridge)
+was repointed at the resegmentation.
 - pcscd: verified reader + ICCID + logical channel working
 
 The NR7101 is also the lpac host: /usr/bin/lpac (v2.3.0, MIPS) deployed
