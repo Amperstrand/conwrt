@@ -7,7 +7,8 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 - **Three distinct NR7101 units** exist in records (distinct IMEIs/MACs). Exactly
   **one is on the bench and reachable**: the ex-Telenor unit, now the house
-  "TollGate" DUT at `192.168.12.124` (OpenWrt 25.12.5), cabled on **switch lan8**.
+  "TollGate" DUT (OpenWrt 25.12.5) — current address and cable/port map in the
+  private census dossier (#290).
 - The **Altibox unit is off-bench/dark** (no carrier on any DUT port, no ARP/FDB
   trace). A third **ice+ unit** was recorded 2026-05 with working ice.net service
   and is field-deployed, not benched.
@@ -45,11 +46,12 @@ The current cable/port map is in the private dossier. This is the unit
 carrying the rogue-DHCP risk documented in
 `docs/NETWORK-SEGMENTATION.md`.
 
-## Bench switch snapshot (OpenWrt switch `192.168.13.2`)
+## Bench switch snapshot
 
-- **lan1** = trunk/uplink (VLAN 1 untagged mgmt + tagged 1002/1003/…).
-- **lan8** = NR7101 TollGate (carrier up, PoE ~4.5 W).
-- **lan2–lan7** = no carrier (empty).
+(Switch address and the per-port unit map are bench topology — private
+census dossier, #290.) Species-level facts that survive redaction: one
+trunk/uplink port; the single seated NR7101 draws ~4.5 W PoE; the
+remaining DUT ports were empty at census time (2026-09-27).
 - PoE budget 65 W, consumption ~4.5 W. Control: `ubus call poe manage '{"port":"lanN","action":"enable|disable"}'`.
 - Read port state: `/sys/class/net/lanN/carrier`; `ubus call poe info`.
 
@@ -163,13 +165,11 @@ scriptable attach/detach test rig.
 
 ## IP Update (2026-09-28)
 
-The bench network was resegmented. The NR7101 moved:
-- **Old**: 192.168.13.124 (house LAN, VLAN 1) — rogue-DHCP risk, removed
-- **New**: 192.168.12.124 (LAB VLAN on ERX) — isolated from house WiFi
-
-All tooling updated:
-- modemifd reader.conf: DEVICENAME now 192.168.12.124:7002
-- modem-at-bridge (socat): restarted on new subnet
+The bench network was resegmented (2026-09-28): the NR7101 moved OFF the
+house LAN (rogue-DHCP risk removed) onto an isolated LAB VLAN on the ERX.
+Concrete addresses and the tooling endpoints that follow them live in the
+private census dossier (#290); all tooling (modemifd reader, modem-at-bridge)
+was repointed at the resegmentation.
 - pcscd: verified reader + ICCID + logical channel working
 
 The NR7101 is also the lpac host: /usr/bin/lpac (v2.3.0, MIPS) deployed

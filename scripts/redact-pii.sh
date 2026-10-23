@@ -58,6 +58,8 @@ SEDEXPR=(
 # List of files that contain PII (from audit)
 PII_FILES=(
   AGENTS.md
+  docs/NETWORK-SEGMENTATION.md
+  docs/NR7101-FLEET.md
   models/dlink-covr-x1860-a1.json
   models/extreme-networks-ws-ap3915i.json
   models/ubnt-edgerouter-6p.json
