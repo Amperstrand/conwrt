@@ -71,8 +71,12 @@ fn watch(args: WatchArgs) -> u8 {
 
     let control_child: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
     let control = {
-        let (ok, iface, ip, child) =
-            (control_ok.clone(), args.interface.clone(), args.ip.clone(), control_child.clone());
+        let (ok, iface, ip, child) = (
+            control_ok.clone(),
+            args.interface.clone(),
+            args.ip.clone(),
+            control_child.clone(),
+        );
         thread::spawn(move || {
             let filter = format!("not host {ip}");
             if let Some(mut c) = spawn_tcpdump(&iface, &filter) {
@@ -88,8 +92,12 @@ fn watch(args: WatchArgs) -> u8 {
 
     let passive_child: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
     let passive = {
-        let (evs, iface, ip, child) =
-            (events.clone(), args.interface.clone(), args.ip.clone(), passive_child.clone());
+        let (evs, iface, ip, child) = (
+            events.clone(),
+            args.interface.clone(),
+            args.ip.clone(),
+            passive_child.clone(),
+        );
         thread::spawn(move || {
             let filter = format!("host {ip}");
             let t0 = Instant::now();
