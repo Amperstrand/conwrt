@@ -31,7 +31,8 @@
 
 use conwrt_core::plan::{
     NodnsProfile, OpenClashProfile, PbrProfile, PlanOp, Profile, SqmProfile, SslProfile,
-    TetherProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
+    TetherProfile, VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
@@ -507,6 +508,108 @@ fn strip_package_ops(plan: &mut conwrt_core::plan::Plan) {
         }
         _ => true,
     });
+}
+
+#[tokio::test]
+async fn vpn_pia_openvpn_applies_and_proves_the_honest_failure_path() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebaked openvpn-openssl package: uci needs
+    // the config file to exist, and the payload's restart-||-start tail
+    // needs the init script (openclash stub pattern).
+    let _ = session
+        .exec(
+            "touch /etc/config/openvpn; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nstart() { :; }\\nrestart() { :; }\\n' > /etc/init.d/openvpn; \
+             chmod +x /etc/init.d/openvpn; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "ring2-testpass".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        }),
+    )
+    .expect("plan for confirmed VM");
+    plan.ops
+        .retain(|op| !matches!(op, PlanOp::EnsurePackage { .. }));
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 (the failure TAIL restores WAN by design):\n{}\nstderr:\n{}",
+        outcome.script, outcome.stderr
+    );
+
+    // The honest-failure contract (#514 round-1 review): with no real
+    // tunnel the tun0 verification check FAILS BY NAME instead of the
+    // apply reading as success.
+    assert!(
+        !outcome.fully_verified(),
+        "a tunnel-less VM must NOT verify as applied"
+    );
+    let failed: Vec<&str> = outcome
+        .verification
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.description.as_str())
+        .collect();
+    assert!(
+        failed.iter().any(|d| d.contains("tun0 has an address")),
+        "the tun0 readiness check must be the named failure, got: {failed:?}"
+    );
+
+    // Everything a VM CAN prove read back on real uci: the openvpn
+    // instance, the vpn zone migration (wg0 → tun0), the kill switch
+    // REMOVED by the failure tail, and the tunnel DNS.
+    let uci = session
+        .exec(
+            "uci -q get openvpn.pia.enabled; \
+             uci -q get firewall.vpn_zone.network; \
+             uci -q get firewall.vpn_killswitch.target || echo killswitch-gone; \
+             uci -q get dhcp.@dnsmasq[0].server | tr '\\n' ' '; \
+             uci -q get dhcp.@dnsmasq[0].noresolv",
+        )
+        .await
+        .expect("pia readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("1"), "openvpn.pia.enabled: {uci}");
+    assert!(uci.contains("tun0"), "vpn_zone.network: {uci}");
+    assert!(
+        uci.contains("killswitch-gone"),
+        "the failure tail must have removed the kill switch: {uci}"
+    );
+    assert!(uci.contains("10.0.0.243"), "tunnel DNS: {uci}");
+    // the noresolv readback prints the bare value `1` (trailing newline)
+    assert!(
+        uci.trim_end().ends_with('1'),
+        "noresolv must read back 1: {uci}"
+    );
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            r#"rm -f /etc/init.d/openvpn /etc/rc.d/S99openvpn /etc/config/openvpn \
+                   /tmp/pia_openvpn_setup.sh /etc/openvpn/pia-ca.rsa.4096.crt /etc/openvpn/pia.auth; \
+             rmdir /etc/openvpn 2>/dev/null; \
+             while uci -q show firewall 2>/dev/null | grep -q "name='vpn'"; do _s=$(uci -q show firewall | grep "name='vpn'" | head -1 | cut -d. -f2 | cut -d= -f1); uci -q delete "firewall.$_s"; done; \
+             uci -q delete firewall.vpn_fwd; uci -q delete firewall.vpn_mgmt; \
+             for d in 10.0.0.241 10.0.0.242 10.0.0.243; do uci -q del_list dhcp.@dnsmasq[0].server="$d"; done; \
+             uci -q delete dhcp.@dnsmasq[0].noresolv; \
+             uci commit firewall; uci commit dhcp; true"#,
+        )
+        .await;
 }
 
 #[tokio::test]

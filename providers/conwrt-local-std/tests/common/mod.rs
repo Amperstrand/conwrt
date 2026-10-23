@@ -44,6 +44,10 @@ pub enum SourceState {
 pub struct ChannelRole {
     sink: Option<SinkState>,
     source: Option<(String, SourceState)>,
+    /// `sh -s` exec: buffers stdin until EOF, then answers from
+    /// exec_responses keyed by the fed script (mirrors how the real
+    /// apply path transports plans).
+    stdin_exec: Option<String>,
 }
 
 /// The scripted fixture server.
@@ -101,6 +105,18 @@ impl russh::server::Handler for FixtureServer {
                 return Ok(());
             }
         }
+        if request.trim() == "sh -s" {
+            session.channel_success(channel)?;
+            self.roles.insert(
+                channel,
+                ChannelRole {
+                    sink: None,
+                    source: None,
+                    stdin_exec: Some(String::new()),
+                },
+            );
+            return Ok(());
+        }
         if let Some(dir) = request.strip_prefix("scp -t ") {
             session.channel_success(channel)?;
             session.data(channel, &[0u8][..])?;
@@ -111,6 +127,7 @@ impl russh::server::Handler for FixtureServer {
                         dir: dir.trim().to_string(),
                     }),
                     source: None,
+                    stdin_exec: None,
                 },
             );
         } else if let Some(path) = request.strip_prefix("scp -f ") {
@@ -125,6 +142,7 @@ impl russh::server::Handler for FixtureServer {
                     ChannelRole {
                         sink: None,
                         source: Some((path.clone(), SourceState::AwaitZero { payload: content })),
+                        stdin_exec: None,
                     },
                 );
             } else {
@@ -180,6 +198,34 @@ impl russh::server::Handler for FixtureServer {
         Ok(())
     }
 
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // a `sh -s` exec just finished feeding its script: answer from
+        // the scripted responses keyed by the fed text
+        if let Some(role) = self.roles.get_mut(&channel)
+            && let Some(script) = role.stdin_exec.take()
+        {
+            let scripted = self
+                .exec_responses
+                .lock()
+                .expect("exec_responses")
+                .get(&script)
+                .cloned();
+            if let Some((exit_code, stdout)) = scripted {
+                session.data(channel, stdout.into_bytes())?;
+                session.exit_status_request(channel, exit_code)?;
+            } else {
+                session.exit_status_request(channel, 127)?;
+            }
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
     async fn data(
         &mut self,
         channel: ChannelId,
@@ -187,6 +233,10 @@ impl russh::server::Handler for FixtureServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let role = self.roles.entry(channel).or_default();
+        if let Some(buf) = &mut role.stdin_exec {
+            buf.push_str(&String::from_utf8_lossy(data));
+            return Ok(());
+        }
         if let Some(sink) = &mut role.sink {
             match sink {
                 SinkState::AwaitHeader { dir } => {
