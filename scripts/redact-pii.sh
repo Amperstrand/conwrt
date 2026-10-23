@@ -70,6 +70,8 @@ PII_FILES=(
   AGENTS.md
   docs/NETWORK-SEGMENTATION.md
   docs/NR7101-FLEET.md
+  docs/device-recovery-status.md
+  docs/process.md
   models/dlink-covr-x1860-a1.json
   models/extreme-networks-ws-ap3915i.json
   models/ubnt-edgerouter-6p.json
@@ -79,6 +81,9 @@ PII_FILES=(
   models/zyxel-gs1920-24.json
   models/zyxel-nr7101.json
   recipes/dlink/covr-x1860/notes.md
+  recipes/extreme-networks/ws-ap3915i/RECOVERY-2026-09-22-lan7-lan8.md
+  recipes/extreme-networks/ws-ap3915i/SERIAL-RESCUE-2026-09.md
+  recipes/zyxel/gs1920-24/notes.md
   recipes/extreme-networks/ws-ap3915i/REVIEW-UNIT2-FLASH-PLAN.md
   recipes/extreme-networks/ws-ap3915i/SESSION-WRITEUP.md
   recipes/extreme-networks/ws-ap3915i/UNIT2-AP3915i-ROW.md
