@@ -311,7 +311,15 @@ def _assert_board_matches_model() -> None:
     upload another model's image."""
     model = json.loads((REPO / "models" / f"{_bench_model_id()}.json").read_text())
     ow = model["openwrt"]
-    accepted = {n for n in {ow.get("device"), *(ow.get("board_names") or [])} if n}
+    accepted = {
+        n
+        for n in {
+            ow.get("device"),
+            ow.get("board_name"),  # singular (zyxel models register AAOB here)
+            *(ow.get("board_names") or []),
+        }
+        if n
+    }
     live = ssh_run("cat /tmp/sysinfo/board_name", timeout=15)
     board = live.stdout.strip().splitlines()[0] if live.stdout.strip() else ""
     if board and board not in accepted:
