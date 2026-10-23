@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from model_loader import load_model
+from model_loader import resolve_model_any as _resolve_registry_model
 from config import load_config as _load_config
 from flash.context import sha256_file
 from profile.builder import build_plan
@@ -225,24 +225,20 @@ def cmd_request(args: argparse.Namespace) -> int:
     model_capabilities: Optional[list[str]] = getattr(args, "model_capabilities", None)
 
     if not target:
-        model_id = profile.replace("_", "-")
-
-        try:
-            model_data = load_model(model_id)
-            target = model_data["openwrt"]["target"]
-            model_capabilities = model_data.get("capabilities", [])
-            logger.info(
-                "resolved target=%s from model %s",
-                target,
-                model_data.get("vendor", model_id),
-            )
-        except FileNotFoundError as exc:
+        model_data = _resolve_registry_model(profile)
+        if model_data is None:
             logger.error(
-                "unknown profile '%s': %s",
-                profile,
-                exc,
+                "unknown profile '%s': no models/*.json matches it as model id, "
+                "underscored id, or openwrt.profile", profile,
             )
             return 1
+        target = model_data["openwrt"]["target"]
+        model_capabilities = model_data.get("capabilities", [])
+        logger.info(
+            "resolved target=%s from model %s",
+            target,
+            model_data.get("vendor", model_data.get("id", profile)),
+        )
 
     if not target:
         logger.error("could not resolve target for profile '%s'", profile)
@@ -252,22 +248,17 @@ def cmd_request(args: argparse.Namespace) -> int:
     # (openwrt.profile in the model registry, ultimately from the
     # target's profiles.json), NOT derivable by separator-swapping the
     # model id: 'dlink-covr-x1860-a1' the id, 'dlink_covr-x1860-a1' the
-    # profile. Callers may pass either spelling — with or without an
-    # explicit --target — and the registry wins whenever the profile
+    # profile (and 'glinet-mt3000' the id, 'glinet_gl-mt3000' the
+    # profile — the swap is NOT invertible). Callers may pass the model
+    # id, its underscored form, or the profile itself — with or without
+    # an explicit --target — and the registry wins whenever the profile
     # maps to a known model (#487). The cache is keyed by the SAME
     # canonical name (matching the Rust conwrt-image layout), so a
     # cache hit always identifies the actual ASU request.
-    asu_profile: str = profile
-    registry = model_data if model_data is not None else None
-    if registry is None:
-        try:
-            registry = load_model(profile.replace("_", "-"))
-        except FileNotFoundError:
-            registry = None
-    if registry is not None:
-        asu_profile = registry["openwrt"].get("profile") or profile
-        if asu_profile != profile:
-            logger.info("ASU profile '%s' (registry; arg was '%s')", asu_profile, profile)
+    registry = model_data if model_data is not None else _resolve_registry_model(profile)
+    asu_profile: str = (registry or {}).get("openwrt", {}).get("profile") or profile
+    if asu_profile != profile:
+        logger.info("ASU profile '%s' (registry; arg was '%s')", asu_profile, profile)
 
     plan = build_plan(
         cfg,
@@ -309,7 +300,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             print("--- defaults script ---")
             print(defaults_script)
         cache_key = _compute_cache_key(
-            "openwrt", version, target, profile, packages_to_send or None, defaults_script,
+            "openwrt", version, target, asu_profile, packages_to_send or None, defaults_script,
         )
         print(f"\ncache_key={cache_key}")
         return 0

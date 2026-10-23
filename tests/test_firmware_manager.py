@@ -247,3 +247,33 @@ class TestAsuProfileFromRegistry:
         assert rc == 1
         assert captured["profile"] == "dlink_covr-x1860-a1"
         assert captured["target"] == "ramips/mt7621"
+
+    def test_plain_model_id_and_profile_form_both_resolve(self, monkeypatch, tmp_path):
+        """The swap is NOT invertible (glinet-mt3000 the id vs
+        glinet_gl-mt3000 the profile): the registry must accept the id,
+        the underscored id, and the profile form itself (#506 round 2)."""
+        import argparse
+        import urllib.error
+
+        def body_for(profile_arg):
+            captured = {}
+
+            def fake_post(url, body, timeout=30):
+                captured.update(body)
+                raise urllib.error.HTTPError(url, 400, "stopped-by-test", None, None)
+
+            monkeypatch.setattr(fm, "_http_post_json", fake_post)
+            monkeypatch.setattr(fm, "IMAGES_DIR", tmp_path / "images")
+            monkeypatch.setenv("CONWRT_CONFIG", str(tmp_path / "no-such-config.toml"))
+            ns = argparse.Namespace(
+                profile=profile_arg, version="24", target=None, packages=None,
+                ssh_key=None, password=None, wan_ssh=False, tofb=False,
+                dry_run=False,
+            )
+            assert fm.cmd_request(ns) == 1
+            return captured
+
+        for arg in ("glinet-mt3000", "glinet_mt3000", "glinet_gl-mt3000"):
+            body = body_for(arg)
+            assert body["profile"] == "glinet_gl-mt3000", f"arg {arg}: {body}"
+            assert body["target"] == "mediatek/filogic", f"arg {arg}: {body}"

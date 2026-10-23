@@ -84,6 +84,24 @@ def openwrt_asu_profile(model: dict[str, Any]) -> str:
     return profile
 
 
+def resolve_model_any(name: str) -> Optional[dict[str, Any]]:
+    """Resolve a model by id, underscored id, or image-builder profile.
+
+    Separator swaps are NOT invertible — 'glinet-mt3000' the conwrt id
+    vs 'glinet_gl-mt3000' the ASU profile — so all three forms are
+    matched against the registry directly (#487).
+    """
+    wanted = name.strip()
+    alt = wanted.replace("_", "-")
+    for model in list_models():
+        model_id = model.get("id", "")
+        if wanted in (model_id, model_id.replace("_", "-")) or alt == model_id:
+            return model
+        if model.get("openwrt", {}).get("profile") == wanted:
+            return model
+    return None
+
+
 def list_models() -> list[dict[str, Any]]:
     """Load all model definitions."""
     models = []
