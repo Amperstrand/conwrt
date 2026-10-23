@@ -5,14 +5,11 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 ## TL;DR
 
-- **Three distinct NR7101 units** exist in records (distinct IMEIs/MACs). Exactly
-  **one is on the bench and reachable**: the ex-Telenor unit, now the house
-  "TollGate" DUT (OpenWrt 25.12.5) — current address and cable/port map in the
-  private census dossier (#290).
-- The **Altibox unit is off-bench/dark** (no carrier on any DUT port, no ARP/FDB
-  trace). A third **ice+ unit** was recorded 2026-05 with working ice.net service
-  and is field-deployed, not benched.
-- Modem = **Quectel RG502Q-EA**. Bench unit firmware: `RG502QEAAAR11A03M4G`.
+- Fleet census (unit count, provenance, per-unit state) is operator-private
+  inventory — private census dossier (#290); multiple units exist across
+  modem firmware families, exactly one bench-active.
+- Modem = **Quectel RG502Q-EA**. Firmware families seen on the bench:
+  `RG502QEAAAR11A03M4G`.
   **Stay on R11A03**; if ever deployed with live service, walk to **R11A07M4G
   and stop**. Avoid R13A04. Never cross QEAAAR/AACR tracks.
 - RF survey from the bench: **Telenor + ice both LTE/5G-NSA visible**, RSRP
@@ -22,29 +19,18 @@ the NR7101 fleet now, and the onboarding path for **more NR7101 units** later.
 
 ## Unit census
 
-Specimen identifiers (full MACs, IMEIs, LAN IPs, ports/VLANs, hostnames)
-are operator-private and live in the private lab project:
+The per-unit census — unit count, provenance, per-unit modem firmware,
+deployment/bench state, and the live unit's reachability map — is
+operator-private fleet inventory and lives in the private lab project:
 `conwrt-bench/docs/nr7101-fleet-census-private.md` (#290 — AGENTS
-species-level mandate). Species-level fleet summary:
-
-| Unit | Modem fw family | State (2026-09-27) |
-|---|---|---|
-| ex-Telenor ("TollGate") | `RG502QEAAAR11A03M4G` | **LIVE** on the house LAN, OpenWrt 25.12.5, WiFi APs + captive-portal role, PoE ~4.5 W |
-| ex-Altibox (stock) | unknown (unqueryable) | **DARK**: last seen on a research-bench port, ICMP-only; now zero ARP/FDB trace. Physical recovery = owner action |
-| ice+ unit | `RG502QEAACR13A03M4G_ZYXEL` | Field-deployed (2026-05 record: ice.net LTE B3, data OK). Not bench-connected |
-
-## Reachability map (ex-Telenor unit)
-
-Two-hop SSH path via the bench jump host; only one fleet key is
-authorized (4 keys in dropbear; two legacy keys rejected; root password
-set). The concrete path, addresses, and authorized-key identity are in
-the private census dossier above.
-
-Stale paths — do not trust older docs: the recovery-subnet and old
-research-bench addresses are gone; the unit now DHCPs on the house LAN.
-The current cable/port map is in the private dossier. This is the unit
-carrying the rogue-DHCP risk documented in
-`docs/NETWORK-SEGMENTATION.md`.
+species-level mandate: unit inventory belongs in the private project,
+identifiers or not). Species-level facts that belong here: multiple
+distinct NR7101 units exist in the operator's records (different modem
+firmware families — see the modem-firmware section below for what that
+means for flashing); exactly one has been bench-active. Stale addresses
+in older public docs must not be trusted; current coordinates are in
+the dossier. The rogue-DHCP risk class for any bench DUT is documented
+in `docs/NETWORK-SEGMENTATION.md`.
 
 ## Bench switch snapshot
 
@@ -130,9 +116,8 @@ network (disclosed).
 
 ## Open items
 
-- Altibox unit: physical location unknown — owner action if wanted back.
-- Seated Telenor SIM is inactive; leave or pull (inert either way).
-- ice+ field unit: consider a live inventory refresh next time on bench.
+- Per-unit open items (physical recovery, SIM state, field-refresh) are
+  fleet inventory — tracked in the private census dossier (#290).
 
 ## Service activation paths (research 2026-09-27)
 
