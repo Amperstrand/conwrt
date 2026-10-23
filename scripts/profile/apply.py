@@ -104,6 +104,20 @@ _HEREDOC_RE = re.compile(r"<<")
 _CONTROL_FLOW_RE = re.compile(
     r"^\s*(case|for|while|until|if|function)\b|\\$", re.MULTILINE
 )
+# Multi-line control-flow BLOCKS (a line opening one — ending in
+# `then`/`do`/`in` — or a structural continuation line — `else`/`fi`/
+# `done`/`esac`) can never survive that join: it splices `then &&`
+# between their lines into an ash syntax error. These scripts are
+# authored for verbatim `sh` execution (uci-defaults / first-boot
+# semantics), so they are transported verbatim like heredoc payloads —
+# without `set -e`, since their bodies carry their own `|| true` /
+# if-fallback error handling. Found by the all-preset transport sweep
+# (tests/test_use_case_transport_sweep.py): tether-android,
+# tether-ios, and maas-portable-lab shipped this way.
+_MULTI_LINE_BLOCK_RE = re.compile(
+    r"(\bthen|\bdo|\bin)\s*$|^\s*(else|fi|done|esac)\b",
+    re.MULTILINE,
+)
 
 
 def _shell_lines_without_comments(script: str) -> list[str]:
@@ -126,8 +140,11 @@ def _run_step_script(
         payload = "set -e\n" + script.strip() + "\n"
         timeout = max(timeout, 600)
     elif _CONTROL_FLOW_RE.search(script):
-        lines = _shell_lines_without_comments(script)
-        payload = " && ".join(lines) + "\n"
+        if _MULTI_LINE_BLOCK_RE.search(script):
+            payload = script.strip() + "\n"
+        else:
+            lines = _shell_lines_without_comments(script)
+            payload = " && ".join(lines) + "\n"
     else:
         chain = " && ".join(_shell_lines_without_comments(script))
         return _run_ssh(ip, chain, ssh_key, log, timeout=timeout)

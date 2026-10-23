@@ -15,11 +15,18 @@
 //! hardware-gated parts — USB detection actually finding a device,
 //! `network.usbwan` coming up — are marked and not asserted; what IS
 //! asserted is the script applying cleanly and the ADB hotplug hook
-//! installing, the parts a VM can prove).
+//! installing, the parts a VM can prove), and `openclash` + `ssl` (§4
+//! ports of PR #486: config surface only — package delivery is stripped
+//! like tether's (luci-app-openclash is third-party, not prebakeable;
+//! the ssl TLS-backend guard is package-manager territory), a stub
+//! rc.common service + the package's default uci section stand in for
+//! the package, and ssl is proven in BOTH the cert-less negative
+//! (skips loudly, verification fails by name) and the cert-present
+//! positive (host-minted self-signed certs, full verify).
 
 use conwrt_core::plan::{
-    PlanOp, Profile, SqmProfile, TetherProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile,
+    OpenClashProfile, PlanOp, Profile, SqmProfile, SslProfile, TetherProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
@@ -346,4 +353,212 @@ fn sqm_defaults() -> SqmProfile {
         link_layer: "none".into(),
         overhead: 0,
     }
+}
+
+/// Strip the package-delivery ops a VM cannot honor: luci-app-openclash
+/// is third-party (vernesong feed — not prebakeable into the fixture
+/// image), the dnsmasq→dnsmasq-full swap is opkg/apk territory, and the
+/// ssl TLS-backend guard may attempt a package install on a backend-less
+/// fixture (the VM has no package feeds). On real hardware the full
+/// plan applies unchanged (tether precedent).
+fn strip_package_ops(plan: &mut conwrt_core::plan::Plan) {
+    plan.ops.retain(|op| match op {
+        PlanOp::EnsurePackage { .. } => false,
+        PlanOp::Shell { command } => {
+            // both guards open by probing the installed-package state
+            !command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")
+                && !command.starts_with("if ! (opkg list-installed")
+        }
+        _ => true,
+    });
+}
+
+#[tokio::test]
+async fn openclash_config_surface_applies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebakeable package: the package ships
+    // /etc/config/openclash with a named `config` section (the plan's
+    // SetUciOptions targets it) and an rc.common init script (the
+    // plan's Service enable + enabled verification target it).
+    let _ = session
+        .exec(
+            "touch /etc/config/openclash; uci set openclash.config=openclash; uci commit openclash; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nstart() { :; }\\n' > /etc/init.d/openclash; \
+             chmod +x /etc/init.d/openclash; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::OpenClash(OpenClashProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+    strip_package_ops(&mut plan);
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let uci = session
+        .exec("uci -q show openclash.config")
+        .await
+        .expect("openclash readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("enable='1'"), "got: {uci}");
+    assert!(uci.contains("core_type='Meta'"), "got: {uci}");
+    assert!(uci.contains("proxy_type='ss'"), "got: {uci}");
+    assert!(uci.contains("operation_mode='redir-host'"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "rm -f /etc/init.d/openclash /etc/rc.d/S99openclash; \
+             rm -rf /etc/openclash /etc/config/openclash; true",
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn ssl_certless_negative_and_cert_present_positive_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Phase A — cert-less negative: the runtime guard must skip the
+    // uhttpd wiring loudly and the apply must FAIL verification by
+    // name instead of reporting `applied` for a no-op (the #486
+    // round-3 contract).
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Ssl(SslProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+    strip_package_ops(&mut plan);
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "cert-less script must still exit 0 (guard skips, nds absent skips):\n{}",
+        outcome.script
+    );
+    assert!(
+        !outcome.fully_verified(),
+        "cert-less apply must NOT verify as applied"
+    );
+    let failed: Vec<&str> = outcome
+        .verification
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.description.as_str())
+        .collect();
+    assert!(
+        failed.iter().any(|d| d.contains("certs deployed")),
+        "the certs-present check must be the named failure, got: {failed:?}"
+    );
+
+    // Phase B — cert-present positive: host-minted self-signed certs
+    // written to the VM, then the same plan wires uhttpd end-to-end
+    // and fully verifies (certs-present, cert path, listen_https).
+    let dir = std::env::temp_dir().join("conwrt-ring2-ssl");
+    std::fs::create_dir_all(&dir).expect("cert scratch dir");
+    let (crt, key) = (dir.join("server.crt"), dir.join("server.key"));
+    let openssl = std::process::Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            key.to_str().unwrap(),
+            "-out",
+            crt.to_str().unwrap(),
+            "-days",
+            "2",
+            "-subj",
+            "/CN=ring2-vm.local",
+        ])
+        .output()
+        .expect("host openssl");
+    assert!(openssl.status.success(), "openssl must mint a test cert");
+
+    let write_pem = |path: &std::path::Path, remote: &str| {
+        let body = std::fs::read_to_string(path).expect("pem read");
+        let mut args = String::from("mkdir -p /etc/tollgate/ssl; printf '%s\\n' ");
+        for line in body.lines() {
+            args.push('\'');
+            args.push_str(line);
+            args.push_str("' ");
+        }
+        args.push_str(&format!("> {remote}; true"));
+        args
+    };
+    let _ = session
+        .exec(&write_pem(&crt, "/etc/tollgate/ssl/server.crt"))
+        .await;
+    let _ = session
+        .exec(&write_pem(&key, "/etc/tollgate/ssl/server.key"))
+        .await;
+    let staged = session
+        .exec("ls /etc/tollgate/ssl/server.crt /etc/tollgate/ssl/server.key >/dev/null 2>&1 && echo staged || echo missing")
+        .await
+        .expect("cert staging check");
+    assert_eq!(
+        String::from_utf8_lossy(&staged.stdout).trim(),
+        "staged",
+        "certs must be on the VM before the positive phase"
+    );
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "cert-present script must exit 0 on the VM:\n{}\nstderr:\n{}",
+        outcome.script, outcome.stderr
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let uci = session
+        .exec("uci -q get uhttpd.main.listen_https")
+        .await
+        .expect("listen_https readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("0.0.0.0:443"), "got: {uci}");
+    assert!(uci.contains("[::]:443"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "uci -q delete uhttpd.main.cert; uci -q delete uhttpd.main.key; \
+             uci -q delete uhttpd.main.listen_https; \
+             uci add_list uhttpd.main.listen_https='0.0.0.0:443'; \
+             uci add_list uhttpd.main.listen_https='[::]:443'; \
+             uci commit uhttpd; rm -rf /etc/tollgate/ssl; true",
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
 }
