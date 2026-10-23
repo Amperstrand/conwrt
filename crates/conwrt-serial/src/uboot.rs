@@ -318,6 +318,16 @@ pub fn flash_stage_loady(
     })?;
     read_for(io.as_mut(), 4.0, &mut transcript);
 
+    // Settle + fresh line before ANY post-transfer command (bench lesson
+    // 2026-10-23, twice): the YMODEM end-batch padding echoes back into
+    // the next command line ("Unknown command '\x1a..iminfo'", and a
+    // bare bootm at the stock address). Drain, then a lone newline to
+    // draw a clean prompt, before iminfo/bootm.
+    std::thread::sleep(Duration::from_millis(500));
+    io.write_all_bytes(b"\n")
+        .map_err(|e| UbootError::Io(e.to_string()))?;
+    read_for(io.as_mut(), 1.5, &mut transcript);
+
     let want = image.len() as u64;
     match parse_total_size(&transcript) {
         Some(got) if got == want => {}
