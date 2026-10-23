@@ -336,32 +336,6 @@ def openwrt_vm():
             f"Serial log tail:\n{serial_tail}"
         )
 
-    ssh_dir = Path.home() / ".ssh"
-    ssh_dir.mkdir(parents=True, exist_ok=True)
-    ssh_config = ssh_dir / "config"
-    existing = ssh_config.read_text() if ssh_config.exists() else ""
-    wanted = (
-        f"\nHost {SSH_HOST}\n"
-        f"    Port {SSH_PORT}\n"
-        f"    IdentityFile {SSH_KEY}\n"
-        f"    StrictHostKeyChecking no\n"
-        f"    UserKnownHostsFile /dev/null\n"
-    )
-    if wanted not in existing:
-        # the port is env-overridable — a stale entry must never be trusted
-        lines = existing.splitlines(keepends=True)
-        kept: list[str] = []
-        i = 0
-        while i < len(lines):
-            if lines[i].strip() == f"Host {SSH_HOST}":
-                i += 1
-                while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
-                    i += 1
-                continue
-            kept.append(lines[i])
-            i += 1
-        ssh_config.write_text("".join(kept) + wanted)
-
     yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY),
            "wg_fwd_port": wg_fwd_port}
 

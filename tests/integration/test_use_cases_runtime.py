@@ -19,6 +19,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from vm_port import port_from_env  # noqa: E402
+import conftest  # noqa: E402  (SSH_KEY)
 pytestmark = [pytest.mark.hardware]
 
 
@@ -43,7 +44,9 @@ def _configure_and_verify(config_toml_content, openwrt_vm, checks):
     env = {**os.environ, "CONWRT_CONFIG": str(config_toml)}
     result = subprocess.run(
         ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-         "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
+         "--model-id", "virtual-x86-64", "--ip", "127.0.0.1",
+         "--port", str(port_from_env("CONWRT_VM_SESSION_PORT", 2222)),
+         "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
         capture_output=True, text=True, timeout=600, env=env,
     )
     assert result.returncode == 0, f"configure failed: {result.stderr[:200]}"

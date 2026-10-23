@@ -26,6 +26,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from vm_port import port_from_env  # noqa: E402
+import conftest  # noqa: E402  (SSH_KEY)
 
 pytestmark = [pytest.mark.hardware]
 
@@ -80,7 +81,8 @@ def test_nordvpn_config_file_applies_and_kernel_accepts(openwrt_vm, wireguard_in
         env = {**os.environ, "CONWRT_CONFIG": str(config_toml)}
         r = subprocess.run(
             ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
-             "--model-id", "virtual-x86-64", "--ip", "127.0.0.1"],
+             "--model-id", "virtual-x86-64", "--ip", "127.0.0.1",
+             "--port", str(SESSION_PORT), "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
             capture_output=True, text=True, timeout=600, env=env,
         )
         assert r.returncode == 0, f"configure failed:\n{r.stdout[-800:]}\n{r.stderr[-400:]}"

@@ -14,11 +14,15 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+import sys  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest  # noqa: E402  (SSH_KEY)
 
 pytestmark = [pytest.mark.hardware]
 
 
-def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str) -> subprocess.CompletedProcess:
+def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str,
+                           port: int | None = None) -> subprocess.CompletedProcess:
     config_toml = tmp_path / "config.toml"
     config_toml.write_text(textwrap.dedent(config_toml_content))
 
@@ -26,7 +30,8 @@ def _run_conwrt_configure(config_toml_content: str, tmp_path: Path, host: str) -
     return subprocess.run(
         ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
          "--model-id", "virtual-x86-64",
-         "--ip", host],
+         "--ip", host,
+         *(["--port", str(port)] if port else []), "--ssh-key", str(conftest.SSH_KEY.with_suffix(".pub"))],
         capture_output=True, text=True, timeout=600,
         cwd=str(REPO_ROOT), env=env,
     )
@@ -47,7 +52,7 @@ def test_doh_configures_https_dns_proxy(openwrt_vm, ssh_cmd, tmp_path):
 
         [use_cases.doh]
         provider = "cloudflare"
-    """, tmp_path, openwrt_vm["host"])
+    """, tmp_path, openwrt_vm["host"], openwrt_vm["port"])
 
     assert result.returncode == 0, f"conwrt configure failed:\n{result.stderr}"
 
@@ -73,7 +78,7 @@ def test_guest_wifi_creates_isolated_network(openwrt_vm, ssh_cmd, tmp_path):
         [use_cases.guest-wifi]
         ssid = "TestGuest"
         key = "guestpass123"
-    """, tmp_path, openwrt_vm["host"])
+    """, tmp_path, openwrt_vm["host"], openwrt_vm["port"])
 
     assert result.returncode == 0, f"conwrt configure failed:\n{result.stderr}"
 
@@ -94,7 +99,7 @@ def test_nodns_configures_local_cache(openwrt_vm, ssh_cmd, tmp_path):
 
         [use_cases]
         enabled = ["nodns"]
-    """, tmp_path, openwrt_vm["host"])
+    """, tmp_path, openwrt_vm["host"], openwrt_vm["port"])
 
     assert result.returncode == 0, f"conwrt configure failed:\n{result.stderr}"
 
@@ -121,7 +126,7 @@ def test_multiple_use_cases_combined(openwrt_vm, ssh_cmd, tmp_path):
 
         [use_cases.doh]
         provider = "google"
-    """, tmp_path, openwrt_vm["host"])
+    """, tmp_path, openwrt_vm["host"], openwrt_vm["port"])
 
     assert result.returncode == 0, f"conwrt configure failed:\n{result.stderr}"
 
