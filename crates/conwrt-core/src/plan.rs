@@ -815,6 +815,150 @@ impl SslProfile {
     }
 }
 
+/// Private Internet Access via OpenVPN (tun0) — port of the 1.x
+/// `vpn-pia-openvpn` preset (`scripts/use_cases/vpn_providers/pia.py`,
+/// the validated static recipe: RSA-4096 CA, UDP 8080 pool +
+/// remote-random, IPv6 pull-filters, NO persist-tun). Everything is
+/// resolved at BUILD time: the device receives static files (CA +
+/// credentials + endpoint pool) and makes no PIA API calls. The
+/// WireGuard variant (vpn-pia) is torn down first so the two
+/// technologies never fight over the vpn zone. 1.x marks the
+/// op-path untested-on-hardware (the recipe itself was validated
+/// manually on GL-MT3000 / 25.12.5) — same evidence bar here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnPiaOpenvpnProfile {
+    /// PIA account username (the p-number). Required: the Rust surface
+    /// refuses to plan an unconfigured VPN (1.x image-bakes a comment
+    /// stub; `apply` needs real intent).
+    pub username: String,
+    /// PIA account password. Lands as a literal line inside the
+    /// quoted auth heredoc — validate() rejects control characters
+    /// (a newline would inject script lines: the mwan3/#448 class).
+    pub password: String,
+    /// OpenVPN server port (PIA modern default 8080; kept a string
+    /// for 1.x parity).
+    pub port: String,
+    /// Upstream gateway IP; pins the endpoint pool's /32 routes to
+    /// the upstream so tunnel traffic never routes via tun (empty =
+    /// no route pinning — 1.x parity).
+    pub upstream_gateway: String,
+    /// Upstream interface name for the route pins (1.x default `wan`).
+    pub upstream_iface: String,
+    /// Block all non-VPN traffic if the tunnel drops (1.x default on;
+    /// the verify loop auto-removes it when the tunnel never comes up
+    /// so a bad config cannot blackhole the LAN).
+    pub kill_switch: bool,
+    /// Accept SSH/LuCI (22/80/443) from the VPN zone to the router
+    /// (1.x default on — remote management through the exit).
+    pub allow_management: bool,
+    /// Endpoint pool (default: the validated 10-host US pool).
+    pub remotes: Vec<String>,
+}
+
+impl Default for VpnPiaOpenvpnProfile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            port: "8080".into(),
+            upstream_gateway: String::new(),
+            upstream_iface: "wan".into(),
+            kill_switch: true,
+            allow_management: true,
+            remotes: [
+                "151.241.122.99",
+                "37.19.197.168",
+                "151.241.119.192",
+                "37.19.220.37",
+                "181.41.206.48",
+                "102.129.153.205",
+                "145.79.182.176",
+                "193.56.117.160",
+                "191.96.106.197",
+                "173.239.198.91",
+            ]
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
+        }
+    }
+}
+
+impl VpnPiaOpenvpnProfile {
+    /// 1.x had no validators on this preset (only non-empty ParamDefs).
+    /// The port adds the gates the rendered payload needs: username and
+    /// password must be non-empty and free of control characters — they
+    /// land as literal lines inside single-quoted heredocs, so a
+    /// newline injects script lines (mwan3/#448 class); each remote and
+    /// the optional gateway must be dotted-quad IPv4 (they interpolate
+    /// into an unquoted `for` token list and an `ip route replace`
+    /// line); the interface name rides the 1.x `interface_name`
+    /// charset.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ctrl = |v: &str| v.chars().any(|c| c.is_ascii_control());
+        if self.username.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "username is required (the PIA p-number)".into(),
+            ));
+        }
+        if ctrl(&self.username) || ctrl(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "username/password must not contain control characters".into(),
+            ));
+        }
+        // a credential that EXACTLY equals a heredoc delimiter would
+        // terminate its heredoc early and run as shell (Codex #514 P1:
+        // termination requires the line to equal the delimiter alone)
+        for field in [&self.username, &self.password] {
+            if matches!(
+                field.as_str(),
+                "VPN_SETUP_EOF" | "PIA_CA_EOF" | "PIA_AUTH_EOF"
+            ) {
+                return Err(Unsupported::InvalidParams(
+                    "username/password must not equal a heredoc delimiter".into(),
+                ));
+            }
+        }
+        if self.password.is_empty() {
+            return Err(Unsupported::InvalidParams("password is required".into()));
+        }
+        if self.port.is_empty() || !self.port.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Unsupported::InvalidParams("port must be numeric".into()));
+        }
+        let ipv4 = |v: &str| {
+            let o: Vec<&str> = v.split('.').collect();
+            o.len() == 4
+                && o.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars().all(|c| c.is_ascii_digit())
+                        && p.parse::<u8>().is_ok()
+                })
+        };
+        if !self.upstream_gateway.is_empty() && !ipv4(&self.upstream_gateway) {
+            return Err(Unsupported::InvalidParams(
+                "upstream_gateway must be an IPv4 address".into(),
+            ));
+        }
+        if !self
+            .upstream_iface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "upstream_iface contains unsafe characters".into(),
+            ));
+        }
+        for r in &self.remotes {
+            if !ipv4(r) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "remotes entry {r:?} must be an IPv4 address"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -973,6 +1117,9 @@ pub enum Profile {
     /// Trusted HTTPS certificates for LAN services (flash-time uhttpd
     /// wiring; cert download/SCP is a host-side post-flash step).
     Ssl(SslProfile),
+    /// Private Internet Access via OpenVPN (validated static recipe;
+    /// tun0, remote-random endpoint pool, kill switch).
+    VpnPiaOpenvpn(VpnPiaOpenvpnProfile),
 }
 
 impl Profile {
@@ -997,6 +1144,7 @@ impl Profile {
             Profile::GuestWifi(_) => "guest-wifi",
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
+            Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
         }
     }
 
@@ -1023,6 +1171,7 @@ impl Profile {
             Profile::GuestWifi(_) => &["wifi"],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
+            Profile::VpnPiaOpenvpn(_) => &[],
         }
     }
 }
@@ -1342,6 +1491,7 @@ pub fn plan_profile(
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
         Profile::OpenClash(oc) => plan_openclash(model, oc),
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
+        Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
     }
 }
 
@@ -3144,6 +3294,292 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
     ];
     Ok(Plan {
         profile_id: "openclash".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+const PIA_OPENVPN_CA: &str = concat!(
+    "-----BEGIN CERTIFICATE-----\n",
+    "MIIHqzCCBZOgAwIBAgIJAJ0u+vODZJntMA0GCSqGSIb3DQEBDQUAMIHoMQswCQYD\n",
+    "VQQGEwJVUzELMAkGA1UECBMCQ0ExEzARBgNVBAcTCkxvc0FuZ2VsZXMxIDAeBgNV\n",
+    "BAoTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMSAwHgYDVQQLExdQcml2YXRlIElu\n",
+    "dGVybmV0IEFjY2VzczEgMB4GA1UEAxMXUHJpdmF0ZSBJbnRlcm5ldCBBY2Nlc3Mx\n",
+    "IDAeBgNVBCkTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMS8wLQYJKoZIhvcNAQkB\n",
+    "FiBzZWN1cmVAcHJpdmF0ZWludGVybmV0YWNjZXNzLmNvbTAeFw0xNDA0MTcxNzQw\n",
+    "MzNaFw0zNDA0MTIxNzQwMzNaMIHoMQswCQYDVQQGEwJVUzELMAkGA1UECBMCQ0Ex\n",
+    "EzARBgNVBAcTCkxvc0FuZ2VsZXMxIDAeBgNVBAoTF1ByaXZhdGUgSW50ZXJuZXQg\n",
+    "QWNjZXNzMSAwHgYDVQQLExdQcml2YXRlIEludGVybmV0IEFjY2VzczEgMB4GA1UE\n",
+    "AxMXUHJpdmF0ZSBJbnRlcm5ldCBBY2Nlc3MxIDAeBgNVBCkTF1ByaXZhdGUgSW50\n",
+    "ZXJuZXQgQWNjZXNzMS8wLQYJKoZIhvcNAQkBFiBzZWN1cmVAcHJpdmF0ZWludGVy\n",
+    "bmV0YWNjZXNzLmNvbTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBALVk\n",
+    "hjumaqBbL8aSgj6xbX1QPTfTd1qHsAZd2B97m8Vw31c/2yQgZNf5qZY0+jOIHULN\n",
+    "De4R9TIvyBEbvnAg/OkPw8n/+ScgYOeH876VUXzjLDBnDb8DLr/+w9oVsuDeFJ9K\n",
+    "V2UFM1OYX0SnkHnrYAN2QLF98ESK4NCSU01h5zkcgmQ+qKSfA9Ny0/UpsKPBFqsQ\n",
+    "25NvjDWFhCpeqCHKUJ4Be27CDbSl7lAkBuHMPHJs8f8xPgAbHRXZOxVCpayZ2SND\n",
+    "fCwsnGWpWFoMGvdMbygngCn6jA/W1VSFOlRlfLuuGe7QFfDwA0jaLCxuWt/BgZyl\n",
+    "p7tAzYKR8lnWmtUCPm4+BtjyVDYtDCiGBD9Z4P13RFWvJHw5aapx/5W/CuvVyI7p\n",
+    "Kwvc2IT+KPxCUhH1XI8ca5RN3C9NoPJJf6qpg4g0rJH3aaWkoMRrYvQ+5PXXYUzj\n",
+    "tRHImghRGd/ydERYoAZXuGSbPkm9Y/p2X8unLcW+F0xpJD98+ZI+tzSsI99Zs5wi\n",
+    "jSUGYr9/j18KHFTMQ8n+1jauc5bCCegN27dPeKXNSZ5riXFL2XX6BkY68y58UaNz\n",
+    "meGMiUL9BOV1iV+PMb7B7PYs7oFLjAhh0EdyvfHkrh/ZV9BEhtFa7yXp8XR0J6vz\n",
+    "1YV9R6DYJmLjOEbhU8N0gc3tZm4Qz39lIIG6w3FDAgMBAAGjggFUMIIBUDAdBgNV\n",
+    "HQ4EFgQUrsRtyWJftjpdRM0+925Y6Cl08SUwggEfBgNVHSMEggEWMIIBEoAUrsRt\n",
+    "yWJftjpdRM0+925Y6Cl08SWhge6kgeswgegxCzAJBgNVBAYTAlVTMQswCQYDVQQI\n",
+    "EwJDQTETMBEGA1UEBxMKTG9zQW5nZWxlczEgMB4GA1UEChMXUHJpdmF0ZSBJbnRl\n",
+    "cm5ldCBBY2Nlc3MxIDAeBgNVBAsTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMSAw\n",
+    "HgYDVQQDExdQcml2YXRlIEludGVybmV0IEFjY2VzczEgMB4GA1UEKRMXUHJpdmF0\n",
+    "ZSBJbnRlcm5ldCBBY2Nlc3MxLzAtBgkqhkiG9w0BCQEWIHNlY3VyZUBwcml2YXRl\n",
+    "aW50ZXJuZXRhY2Nlc3MuY29tggkAnS7684Nkme0wDAYDVR0TBAUwAwEB/zANBgkq\n",
+    "hkiG9w0BAQ0FAAOCAgEAJsfhsPk3r8kLXLxY+v+vHzbr4ufNtqnL9/1Uuf8NrsCt\n",
+    "pXAoyZ0YqfbkWx3NHTZ7OE9ZRhdMP/RqHQE1p4N4Sa1nZKhTKasV6KhHDqSCt/dv\n",
+    "Em89xWm2MVA7nyzQxVlHa9AkcBaemcXEiyT19XdpiXOP4Vhs+J1R5m8zQOxZlV1G\n",
+    "tF9vsXmJqWZpOVPmZ8f35BCsYPvv4yMewnrtAC8PFEK/bOPeYcKN50bol22QYaZu\n",
+    "LfpkHfNiFTnfMh8sl/ablPyNY7DUNiP5DRcMdIwmfGQxR5WEQoHL3yPJ42LkB5zs\n",
+    "6jIm26DGNXfwura/mi105+ENH1CaROtRYwkiHb08U6qLXXJz80mWJkT90nr8Asj3\n",
+    "5xN2cUppg74nG3YVav/38P48T56hG1NHbYF5uOCske19F6wi9maUoto/3vEr0rnX\n",
+    "JUp2KODmKdvBI7co245lHBABWikk8VfejQSlCtDBXn644ZMtAdoxKNfR2WTFVEwJ\n",
+    "iyd1Fzx0yujuiXDROLhISLQDRjVVAvawrAtLZWYK31bY7KlezPlQnl/D9Asxe85l\n",
+    "8jO5+0LdJ6VyOs/Hd4w52alDW/MFySDZSfQHMTIc30hLBJ8OnCEIvluVQQ2UQvoW\n",
+    "+no177N9L2Y+M9TcTA62ZyMXShHQGeh20rb4kK8f+iFX8NxtdHVSkxMEFSfDDyQ=\n",
+    "-----END CERTIFICATE-----\n",
+);
+
+fn plan_vpn_pia_openvpn(
+    model: &DeviceModel,
+    pia: &VpnPiaOpenvpnProfile,
+) -> Result<Plan, Unsupported> {
+    pia.validate()?;
+    let remote_lines = pia
+        .remotes
+        .iter()
+        .map(|host| {
+            format!(
+                "uci add_list openvpn.pia.remote='{host} {port}'",
+                port = pia.port
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let route_block = if pia.upstream_gateway.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "# pin the endpoint pool's route to the upstream (no v4 route via tun)\nfor _pia_ep in {}; do\n    ip route replace $_pia_ep/32 via {} dev {} 2>/dev/null || true\ndone\n",
+            pia.remotes.join(" "),
+            pia.upstream_gateway,
+            pia.upstream_iface
+        )
+    };
+    // the whole setup rides ONE heredoc payload (1.x transport_sh):
+    // single-quoted delimiter keeps variables literal at write time and
+    // the body runs verbatim via sh. username/password land as literal
+    // auth lines — validate()'s control-character gate makes that safe.
+    let body = format!(
+        concat!(
+            "# Clean up old WireGuard interface + peers\n",
+            "uci -q delete network.wg0\n",
+            "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+            "    uci delete network.@wireguard_wg0[0]\n",
+            "done\n",
+            "\n\n",
+            "# Tear down any previous OpenVPN instance\n",
+            "uci -q delete openvpn.pia\n",
+            "\n",
+            "mkdir -p /etc/openvpn\n",
+            "cat > /etc/openvpn/pia-ca.rsa.4096.crt << 'PIA_CA_EOF'\n",
+            "{CA}\n",
+            "PIA_CA_EOF\n",
+            "cat > /etc/openvpn/pia.auth << 'PIA_AUTH_EOF'\n",
+            "{USERNAME}\n",
+            "{PASSWORD}\n",
+            "PIA_AUTH_EOF\n",
+            "chmod 600 /etc/openvpn/pia.auth\n",
+            "\n",
+            "uci set openvpn.pia=openvpn\n",
+            "uci set openvpn.pia.enabled='1'\n",
+            "uci set openvpn.pia.client='1'\n",
+            "uci set openvpn.pia.dev='tun'\n",
+            "uci set openvpn.pia.proto='udp'\n",
+            "{REMOTE_LINES}\n",
+            "uci set openvpn.pia.remote_random='1'\n",
+            "uci set openvpn.pia.resolv_retry='infinite'\n",
+            "uci set openvpn.pia.nobind='1'\n",
+            "uci set openvpn.pia.persist_key='1'\n",
+            "# NO persist_tun (validated lesson): a dead tunnel must tear its routes\n",
+            "# down, not blackhole the LAN behind stale routes.\n",
+            "uci set openvpn.pia.ca='/etc/openvpn/pia-ca.rsa.4096.crt'\n",
+            "uci set openvpn.pia.auth_user_pass='/etc/openvpn/pia.auth'\n",
+            "uci set openvpn.pia.auth_nocache='1'\n",
+            "uci set openvpn.pia.remote_cert_tls='server'\n",
+            "uci set openvpn.pia.data_ciphers='AES-256-GCM:AES-128-GCM:AES-256-CBC'\n",
+            "uci set openvpn.pia.data_ciphers_fallback='AES-256-CBC'\n",
+            "uci set openvpn.pia.auth='sha256'\n",
+            "uci set openvpn.pia.reneg_sec='0'\n",
+            "uci set openvpn.pia.disable_occ='1'\n",
+            "uci set openvpn.pia.mssfix='1420'\n",
+            "uci set openvpn.pia.verb='3'\n",
+            "uci set openvpn.pia.pull='1'\n",
+            "# PIA has no IPv6: it pushes route-ipv6/ifconfig-ipv6 anyway, which\n",
+            "# blackholes v6 on the v4-only tun0 (broke Signal on the validated box).\n",
+            "uci add_list openvpn.pia.pull_filter='ignore \"route-ipv6\"'\n",
+            "uci add_list openvpn.pia.pull_filter='ignore \"ifconfig-ipv6\"'\n",
+            "uci commit openvpn\n",
+            "\n",
+            "{ROUTE_BLOCK}",
+            "# tun0 joins the vpn zone (wg0 was removed by the cleanup above)\n",
+            "uci -q del_list firewall.vpn_zone.network='wg0'\n",
+            "uci -q add_list firewall.vpn_zone.network='tun0'\n",
+            "/etc/init.d/openvpn restart || /etc/init.d/openvpn start\n",
+        ),
+        CA = PIA_OPENVPN_CA,
+        USERNAME = pia.username,
+        PASSWORD = pia.password,
+        REMOTE_LINES = remote_lines,
+        ROUTE_BLOCK = route_block,
+    );
+    let payload = format!(
+        "cat > /tmp/pia_openvpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/pia_openvpn_setup.sh",
+        body.trim_end()
+    );
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "openvpn-openssl".into(),
+        },
+        PlanOp::Shell { command: payload },
+        // stale-section cleanup keeps re-runs idempotent (1.x
+        // uci_cleanup_sections; the shared vpn-zone family name lets a
+        // technology switch — wg → openvpn — retire the old rules)
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "dest='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='Allow-VPN-Management'".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_zone".into(),
+            section_type: "zone".into(),
+            options: vec![
+                ("name".into(), literal("vpn".into())),
+                ("input".into(), literal("REJECT".into())),
+                ("output".into(), literal("ACCEPT".into())),
+                ("forward".into(), literal("REJECT".into())),
+                ("masq".into(), literal("1".into())),
+                ("mtu_fix".into(), literal("1".into())),
+                ("network".into(), literal("tun0".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_fwd".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("vpn".into())),
+            ],
+        },
+    ];
+    if pia.allow_management {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_mgmt".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-VPN-Management".into())),
+                ("src".into(), literal("vpn".into())),
+                ("proto".into(), literal("tcp".into())),
+                ("dest_port".into(), literal("22 80 443".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        });
+    }
+    if pia.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    for dns in ["10.0.0.241", "10.0.0.242", "10.0.0.243"] {
+        ops.push(PlanOp::Shell {
+            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: dns.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "dhcp".into(),
+        section: "@dnsmasq[0]".into(),
+        options: vec![("noresolv".into(), literal("1".into()))],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "dhcp".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "dnsmasq".into(),
+        action: ServiceAction::Restart,
+    });
+    if pia.kill_switch {
+        // failure TAIL, not verification: a tunnel that never comes up
+        // gets its kill switch REMOVED so a bad config cannot blackhole
+        // the LAN (validated lesson)
+        ops.push(PlanOp::Shell {
+            command: "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
+        });
+    }
+    // the 45s tail restores WAN on failure and exits 0 by design —
+    // this check is what makes the apply HONEST about the outcome:
+    // verified requires tun0 to actually hold an address (Codex #514
+    // P2: auth failure / dead endpoints must not read as success)
+    let verification = vec![
+        VerificationCheck {
+            description: "openvpn instance enabled".into(),
+            command: "uci -q get openvpn.pia.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "tun0 has an address (tunnel actually up)".into(),
+            command: "ip -4 addr show dev tun0 2>/dev/null | grep -q inet && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-pia-openvpn".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -5162,6 +5598,101 @@ mod tests {
                 }
                 .validate()
                 .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_pia_openvpn_shape_gates_and_branches_match_1x() {
+        let plan = plan_for(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        }));
+        let script = render_shell(&plan);
+        // one heredoc payload, run verbatim via sh (1.x transport_sh)
+        assert!(script.contains("cat > /tmp/pia_openvpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("sh /tmp/pia_openvpn_setup.sh"));
+        // credentials ride the quoted auth heredoc; the CA rides its own
+        assert!(
+            script.contains("cat > /etc/openvpn/pia.auth << 'PIA_AUTH_EOF'\np1234567\ntestpass")
+        );
+        assert!(script.contains("chmod 600 /etc/openvpn/pia.auth"));
+        // endpoint pool + remote-random + the validated no-persist-tun
+        assert!(script.contains("uci add_list openvpn.pia.remote='151.241.122.99 8080'"));
+        assert!(script.contains("uci set openvpn.pia.remote_random='1'"));
+        assert!(!script.contains("uci set openvpn.pia.persist_tun"));
+        // kill switch + management rules + tunnel DNS
+        assert!(script.contains("uci set firewall.vpn_killswitch.target='REJECT'"));
+        assert!(script.contains("uci set firewall.vpn_mgmt.name='Allow-VPN-Management'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='10.0.0.243'"));
+        // the failure TAIL removes the kill switch when tun0 never comes up
+        assert!(script.contains("removing kill switch to restore WAN"));
+
+        // branches: kill switch off drops the rule AND the tail; mgmt off
+        // drops the rule; empty gateway drops the route pin block
+        let no_kill = render_shell(&plan_for(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            kill_switch: false,
+            allow_management: false,
+            ..VpnPiaOpenvpnProfile::default()
+        })));
+        assert!(!no_kill.contains("vpn_killswitch"));
+        assert!(!no_kill.contains("vpn_mgmt"));
+        assert!(!no_kill.contains("ip route replace"));
+        assert!(no_kill.contains("vpn_zone"));
+
+        // gates: required creds, control chars (heredoc line injection),
+        // IPv4 remotes/gateway, numeric port, iface charset
+        assert!(matches!(
+            VpnPiaOpenvpnProfile::default().validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        let base = VpnPiaOpenvpnProfile {
+            username: "p1".into(),
+            password: "pw".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        };
+        assert!(base.validate().is_ok());
+        for hostile in [
+            VpnPiaOpenvpnProfile {
+                password: "line1\nline2".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                password: "PIA_AUTH_EOF".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                username: "VPN_SETUP_EOF".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                username: "p1\nroot".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                port: "8080; reboot".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                upstream_gateway: "not-an-ip".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                upstream_iface: "wan; poweroff".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                remotes: vec!["$(reboot)".into()],
+                ..base
+            },
+        ] {
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "gate must reject {hostile:?}"
             );
         }
     }

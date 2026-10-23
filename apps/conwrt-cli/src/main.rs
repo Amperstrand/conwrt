@@ -22,7 +22,8 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
+    SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -350,6 +351,9 @@ enum ProfileChoice {
     #[value(name = "openclash")]
     OpenClash,
     Ssl,
+    /// 1.x spelling: hyphenated multi-word profile name.
+    #[value(name = "vpn-pia-openvpn")]
+    VpnPiaOpenvpn,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -498,6 +502,27 @@ struct ProfileArgs {
     /// ssl: opt OUT of the nodogsplash port-443 pass-through (default on).
     #[arg(long)]
     ssl_no_443_nds: bool,
+    /// vpn-pia-openvpn: PIA username (the p-number; required).
+    #[arg(long)]
+    pia_ovpn_username: Option<String>,
+    /// vpn-pia-openvpn: PIA password (required).
+    #[arg(long)]
+    pia_ovpn_password: Option<String>,
+    /// vpn-pia-openvpn: OpenVPN server port (default 8080).
+    #[arg(long)]
+    pia_ovpn_port: Option<String>,
+    /// vpn-pia-openvpn: upstream gateway IP pinning the endpoint routes.
+    #[arg(long)]
+    pia_ovpn_gateway: Option<String>,
+    /// vpn-pia-openvpn: upstream interface for the route pins (default wan).
+    #[arg(long)]
+    pia_ovpn_iface: Option<String>,
+    /// vpn-pia-openvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    pia_ovpn_no_kill_switch: bool,
+    /// vpn-pia-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    pia_ovpn_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1488,6 +1513,31 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnPiaOpenvpn => {
+            let (username, password) = match (
+                args.pia_ovpn_username.clone(),
+                args.pia_ovpn_password.clone(),
+            ) {
+                (Some(u), Some(p)) => (u, p),
+                _ => {
+                    return Err(
+                        "--pia-ovpn-username and --pia-ovpn-password are required for \
+                         vpn-pia-openvpn"
+                            .into(),
+                    );
+                }
+            };
+            Ok(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+                username,
+                password,
+                port: args.pia_ovpn_port.clone().unwrap_or_else(|| "8080".into()),
+                upstream_gateway: args.pia_ovpn_gateway.clone().unwrap_or_default(),
+                upstream_iface: args.pia_ovpn_iface.clone().unwrap_or_else(|| "wan".into()),
+                kill_switch: !args.pia_ovpn_no_kill_switch,
+                allow_management: !args.pia_ovpn_no_management,
+                ..VpnPiaOpenvpnProfile::default()
+            }))
+        }
     }
 }
 
@@ -2535,6 +2585,13 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            pia_ovpn_username: None,
+            pia_ovpn_password: None,
+            pia_ovpn_port: None,
+            pia_ovpn_gateway: None,
+            pia_ovpn_iface: None,
+            pia_ovpn_no_kill_switch: false,
+            pia_ovpn_no_management: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
