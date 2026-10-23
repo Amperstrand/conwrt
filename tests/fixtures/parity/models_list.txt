@@ -1,0 +1,28 @@
+Model ID                                  Vendor        Target                  Flash Methods         Description
+--------------------------------------------------------------------------------------------------------------------------------------------
+asus-lyra-map-ac2200                      ASUS          ipq40xx/generic         [stock-ssh-mtd, sysupgrade, wifi-sta-flash]  Lyra MAP-AC2200 tri-band WiFi mesh node (IPQ4019 + QCA9886)
+comfast-cf-wr632ax                        COMFAST       mediatek/filogic        [recovery-http, sysupgrade, tftp]  CF-WR632AX WiFi 6 travel router (MT7981B Filogic 830, 2.5G WAN)
+dlink-covr-x1860-a1                       D-Link        ramips/mt7621           [dlink-hnap, recovery-http, sysupgrade]  COVR-X1860 A1 mesh WiFi
+extreme-networks-ws-ap3915i               Extreme Networks  ipq40xx/generic         [extreme-rdwr-tftp-initramfs, sysupgrade, tftp]  WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg
+glinet-gl-ar150                           GL.iNet       ath79/generic           [sysupgrade]  AR150 Mini Router (all variants)
+glinet-gl-ar300m-lite                     GL.iNet       ath79/generic           [recovery-http, sysupgrade]  AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)
+glinet-gl-ar300m-nand                     GL.iNet       ath79/nand              [recovery-http, sysupgrade]  AR300M / AR300M-Ext / AR300MD (NAND boot, switch LEFT)
+glinet-gl-ar300m-nor                      GL.iNet       ath79/nand              [recovery-http, sysupgrade]  AR300M / AR300M-Ext (NOR boot). NOT recommended for general use — NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.
+glinet-mt3000                             GL.iNet       mediatek/filogic        [sysupgrade, uboot-http]  Beryl AX (GL-MT3000) WiFi 6 travel router
+glinet-mt6000                             GL.iNet       mediatek/filogic        [sysupgrade, uboot-http]  Flint 2 (GL-MT6000) WiFi 6 router
+linksys-mx4200-v1                         Linksys       qualcommax/ipq807x      [linksys-jnap-cve, sysupgrade]  Velop AX4200 WiFi 6 System V1 — CVE-2019-16340 auth bypass for initial flash
+linksys-whw03-v1                          Linksys       ipq40xx/generic         [sysupgrade]  Velop Tri-Band V1 (WHW03) — U-Boot HTTP recovery signatures needed
+linksys-whw03-v2                          Linksys       ipq40xx/generic         [sysupgrade]  Velop Tri-Band V2 (WHW03 V2) — U-Boot HTTP recovery signatures needed
+raspberrypi-4b                            Raspberry Pi Ltd  bcm27xx/bcm2711         [eeprom-update-netboot, netboot-rescue, rpiboot-usb, sd-image, usb-image]  Raspberry Pi 4 Model B (BCM2711) single-board computer, 1-8GB RAM, gigabit ethernet, USB3, microSD3.0. Runs OpenWrt, Ubuntu Server, Raspberry Pi OS. Boots from SD, USB mass storage, or network (EEPROM bootloader).
+ubnt-edgerouter-6p                        Ubiquiti      octeon/generic          [edgeos-kernel-swap, sysupgrade, tftp]  EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi
+ubnt-edgerouter-x                         Ubiquiti      ramips/mt7621           [sysupgrade]  EdgeRouter X (ER-X) — MediaTek MT7621A, 5x GbE, no WiFi
+virtual-x86-64                            QEMU          x86/64                  [sysupgrade]  Virtual x86_64 OpenWrt instance (QEMU/KVM) for CI testing
+zyxel-ex5700-telenor                      Zyxel         mediatek/filogic        [sysupgrade]  EX5700 (Telenor) — MediaTek MT7986B, WiFi 6 tri-band
+zyxel-gs1900-24e                          Zyxel         realtek/rtl838x         [mtd-write, oem-http, serial-tftp-openwrt, sysupgrade]  GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M
+zyxel-gs1900-8hp-a1                       Zyxel         realtek/rtl838x         [mtd-write, oem-http, serial-tftp-openwrt, sysupgrade]  GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget
+zyxel-gs1900-8hp-b1                       Zyxel         realtek/rtl838x         [mtd-write, oem-http, serial-tftp-openwrt, sysupgrade]  GS1900-8HP B1 (formerly v1) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget
+zyxel-gs1920-24                           Zyxel         realtek/rtl839x         [oem-ftp, serial-tftp-openwrt, sysupgrade]  GS1920-24 24-port managed gigabit switch (non-PoE), Realtek RTL8392M
+zyxel-nr7101                              Zyxel         ramips/mt7621           [sysupgrade, zycast]  NR7101 — 5G/NR outdoor router, MediaTek MT7621
+zyxel-wx5600-t0                           Zyxel         mediatek/filogic        [serial-tftp-openwrt, serial-tftp-stock-restore, sysupgrade]  WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B
+
+24 model(s) valid in models

@@ -23,7 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--model-id", required=False,
                         help=f"Model ID from models/ directory (e.g. glinet-mt3000, dlink-covr-x1860-a1). "
                              f"Auto-detected if device is running OpenWrt. "
-                             f"Use 'conwrt list' to see all available. "
+                             f"Use 'conwrt models' to see all available. "
                              f"Known: {', '.join(sorted(available_ids)) or 'none loaded'}")
 
     firmware_group = flash_parser.add_mutually_exclusive_group()

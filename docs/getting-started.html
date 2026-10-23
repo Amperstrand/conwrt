@@ -53,6 +53,7 @@
   <ul>
     <li>macOS (uses <code>say</code> for voice guidance, <code>ifconfig</code> for interface detection) or Linux</li>
     <li>Python 3.10+</li>
+    <li>Rust toolchain via <a href="https://rustup.rs">rustup</a> (for <code>conwrt models</code> and the Rust CLI)</li>
     <li><code>tcpdump</code> and <code>sudo</code> for pcap capture and network monitoring</li>
     <li>An ethernet cable and a router to flash</li>
     <li>A firmware image OR willingness to request one from ASU</li>
@@ -75,7 +76,8 @@ python -m pip install -e '.[dev]'</pre>
 <div class="step">
   <h2><span class="step-number">2</span>Check supported devices</h2>
   <p>Run this command to see which device models conwrt supports:</p>
-  <pre>python3 scripts/conwrt.py list</pre>
+  <pre>cargo run -q -p conwrt-cli -- models</pre>
+  <p>(1.x <code>conwrt.py list</code> is deprecated — parity-matrix §7.)</p>
   <p>If your device is listed, you are in <strong>Stage 2</strong> (automated flashing). If not listed, you need <strong>Stage 1</strong> (AI-assisted discovery) — see the <code>prompts/</code> directory for templates.</p>
 </div>
 
