@@ -691,6 +691,130 @@ impl PbrProfile {
     }
 }
 
+/// Transparent proxy via Clash/Mihomo — port of the 1.x `openclash`
+/// preset (`scripts/use_cases/openclash.py`, ops characterization +
+/// transport parity). The plan types ONLY the flash-time config: the
+/// package set, the config dir, the `openclash.config` uci section
+/// (proxy/core/dashboard/DNS mode), and service enable. The proxy
+/// cannot run without a subscription config, which is a POST-FLASH
+/// step via the LuCI web UI — this plan stops at the same boundary
+/// line as 1.x (its closing echo). Package-delivery boundary:
+/// `luci-app-openclash` ships from the third-party vernesong feed,
+/// NOT official OpenWrt packages (1.x shares this gap — its
+/// `packages_via="auto"` list fails to resolve on stock devices and
+/// the public ASU alike). The intended delivery is a baked image or a
+/// preinstalled device, where the leading `EnsurePackage`
+/// short-circuits on `opkg list-installed`; on a stock device the
+/// apply aborts loudly at the FIRST op — before any configuration is
+/// touched — rather than leaving dangling config for absent software.
+/// An acquisition phase (feed setup / release-IPK download) is M7
+/// image-pipeline work, not a plan op. The 1.x `packages_remove:
+/// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build
+/// directive, but rides the plan as a guarded removal because this
+/// plan installs packages at apply time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenClashProfile {
+    /// Default proxy protocol (1.x default `ss`; vmess/trojan/vless…).
+    pub proxy_type: String,
+    /// Clash core (1.x default `Meta` = Mihomo; also Dev, Tun).
+    pub core_type: String,
+    /// DNS mode (1.x default `redir-host`; also fake-ip).
+    pub dns_mode: String,
+}
+
+impl Default for OpenClashProfile {
+    fn default() -> Self {
+        Self {
+            proxy_type: "ss".into(),
+            core_type: "Meta".into(),
+            dns_mode: "redir-host".into(),
+        }
+    }
+}
+
+impl OpenClashProfile {
+    /// 1.x interpolated `core_type`/`proxy_type` into a DOUBLE-quoted
+    /// `echo` line (the uci values ride safe single-quoting, the echo
+    /// does not) — a `"`/`$()`/backtick value was a command-injection
+    /// hole (the mwan3/#448 class, found by this port). The port
+    /// gates all three params with the `[A-Za-z0-9._-]+` token
+    /// charset; the same gate landed Python-side (`_token` in
+    /// openclash.py `_resolve_params`). Valid input renders
+    /// byte-identically.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        for (field, value) in [
+            ("proxy_type", &self.proxy_type),
+            ("core_type", &self.core_type),
+            ("dns_mode", &self.dns_mode),
+        ] {
+            let ok = !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if !ok {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} contains unsafe characters"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Trusted HTTPS certificates for LAN services — port of the tested
+/// 1.x `ssl` preset (`scripts/use_cases/ssl.py`, verified on
+/// COVR-X1860: cert download + uhttpd config, lancert/qip providers).
+/// The flash-time plan types the uhttpd HTTPS wiring (cert/key paths
+/// and `listen_https` on :443) and the optional nodogsplash 443
+/// pass-through. The certificates themselves are NOT flash-time
+/// material: 1.x downloads them HOST-side (lancert.dev / qip.sh) and
+/// SCPs them post-flash (`deploy_ssl_post_flash`) — the plan guards
+/// the uhttpd wiring on both cert files existing at runtime, so a
+/// cert-less router skips it with a loud message instead of pointing
+/// uhttpd at missing files (certs expire in 90 days; re-deploy and
+/// re-run to renew).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SslProfile {
+    /// Cert provider — the 1.x ParamDef choice set
+    /// (`lancert` per-IP, `qip` wildcard-per-subnet, `manual`
+    /// host-supplied files). Labels the config only; the uhttpd /
+    /// nodogsplash wiring is provider-independent.
+    pub provider: String,
+    /// Configure uhttpd to serve HTTPS on port 443 (1.x default on).
+    pub enable_uhttpd_https: bool,
+    /// Allow unauthenticated clients to reach port 443 through
+    /// nodogsplash (1.x default on).
+    pub open_port_443_nds: bool,
+}
+
+impl Default for SslProfile {
+    fn default() -> Self {
+        Self {
+            provider: "lancert".into(),
+            enable_uhttpd_https: true,
+            open_port_443_nds: true,
+        }
+    }
+}
+
+impl SslProfile {
+    /// 1.x declared `choices=("lancert", "qip", "manual")` on the
+    /// provider ParamDef but `_resolve_params` never enforced it —
+    /// and the value was interpolated into a rendered comment line,
+    /// where a newline injected live shell (mwan3/#448 class, found
+    /// by this port). The port enforces the declared choice set; the
+    /// same gate landed Python-side (`require_choice` in ssl.py
+    /// `_resolve_params`).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(self.provider.as_str(), "lancert" | "qip" | "manual") {
+            return Err(Unsupported::InvalidParams(
+                "provider must be one of: lancert, manual, qip".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -843,6 +967,12 @@ pub enum Profile {
     AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
+    /// Transparent proxy via Clash/Mihomo (flash-time config only —
+    /// subscription import is post-flash via the LuCI web UI).
+    OpenClash(OpenClashProfile),
+    /// Trusted HTTPS certificates for LAN services (flash-time uhttpd
+    /// wiring; cert download/SCP is a host-side post-flash step).
+    Ssl(SslProfile),
 }
 
 impl Profile {
@@ -865,6 +995,8 @@ impl Profile {
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
+            Profile::OpenClash(_) => "openclash",
+            Profile::Ssl(_) => "ssl",
         }
     }
 
@@ -889,6 +1021,8 @@ impl Profile {
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
+            Profile::OpenClash(_) => &[],
+            Profile::Ssl(_) => &[],
         }
     }
 }
@@ -1206,6 +1340,8 @@ pub fn plan_profile(
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
+        Profile::OpenClash(oc) => plan_openclash(model, oc),
+        Profile::Ssl(ssl) => plan_ssl(model, ssl),
     }
 }
 
@@ -2868,6 +3004,258 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
     ];
     Ok(Plan {
         profile_id: "pbr".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Unsupported> {
+    oc.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // Package order and swap safety are load-bearing at apply time
+    // (Codex #486 rounds 1+4+6): dnsmasq and dnsmasq-full conflict
+    // (both provide dnsmasq), luci-app-openclash DEPENDS on
+    // dnsmasq-full, and the removal must never run before the
+    // replacement is provably installable — a dead feed after a bare
+    // removal would leave the router with NO dnsmasq (DNS+DHCP outage
+    // class). The swap therefore: runs only when dnsmasq is installed
+    // AND dnsmasq-full is not; downloads the dnsmasq-full ipk to /tmp
+    // FIRST (proving feed + package availability); and only then
+    // removes and installs from the local file (offline-safe). 1.x
+    // carries the swap as an image-build `packages_remove` directive
+    // where none of this applies. No-op on apk systems (opkg absent;
+    // apk replaces the provider without a conflict) and where
+    // dnsmasq-full is already installed.
+    let mut ops: Vec<PlanOp> = vec![
+        PlanOp::Shell {
+            command: concat!(
+                "if [ -n \"$(opkg list-installed dnsmasq 2>/dev/null)\" ] ",
+                "&& [ -z \"$(opkg list-installed dnsmasq-full 2>/dev/null)\" ]; then ",
+                "(cd /tmp && opkg update && opkg download dnsmasq-full) ",
+                "&& opkg remove dnsmasq && opkg install /tmp/dnsmasq-full_*.ipk; fi",
+            )
+            .into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "dnsmasq-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-openclash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "coreutils-nohup".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "bash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "iptables".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-certificates".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "logd".into(),
+        },
+    ];
+    ops.extend([
+        PlanOp::Shell {
+            command: "mkdir -p /etc/openclash/config".into(),
+        },
+        // AGENTS.md staging-debris rule: an aborted earlier session may
+        // have left uncommitted /tmp/.uci changes for openclash — the
+        // later `uci commit openclash` would make them permanent.
+        // Start every apply from the persisted baseline.
+        PlanOp::RevertUci {
+            config: "openclash".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "openclash".into(),
+            section: "config".into(),
+            options: vec![
+                ("enable".into(), literal("1".into())),
+                (
+                    "config_path".into(),
+                    literal("/etc/openclash/config/config.yaml".into()),
+                ),
+                ("proxy_type".into(), literal(oc.proxy_type.clone())),
+                ("core_type".into(), literal(oc.core_type.clone())),
+                ("dashboard_type".into(), literal("Official".into())),
+                ("dns_mode".into(), literal(oc.dns_mode.clone())),
+                ("operation_mode".into(), literal(oc.dns_mode.clone())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "openclash".into(),
+        },
+        PlanOp::Service {
+            name: "openclash".into(),
+            action: ServiceAction::Enable,
+        },
+        // core_type/proxy_type interpolate into a DOUBLE-quoted echo;
+        // validate()'s token gate is what makes the verbatim render safe
+        PlanOp::Shell {
+            command: format!(
+                "echo \"OpenClash configured: {} core, {} proxy\"",
+                oc.core_type, oc.proxy_type
+            ),
+        },
+        // post-flash boundary, byte-identical to 1.x: the subscription
+        // config is imported via the LuCI web UI AFTER flash — this
+        // plan stops here
+        PlanOp::Shell {
+            command: "echo \"Post-flash: import your subscription config via the LuCI web UI\""
+                .into(),
+        },
+    ]);
+    let verification = vec![
+        VerificationCheck {
+            description: "openclash enabled in uci".into(),
+            command: "uci -q get openclash.config.enable".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "clash core persisted".into(),
+            command: "uci -q get openclash.config.core_type".into(),
+            expect_contains: oc.core_type.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/openclash enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "openclash".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
+    ssl.validate()?;
+    // libustream-{wolfssl,mbedtls,openssl} all own libustream-ssl.so —
+    // installing wolfssl next to an existing backend is a file-clash
+    // abort under `set -e` (Codex #486 round 5). ANY backend serves
+    // uhttpd TLS, so the plan installs wolfssl only when NO
+    // libustream provider is present and preserves the installed one
+    // otherwise (1.x's hardcoded wolfssl list entry stays an
+    // image-build choice, where a fresh image has no clash).
+    let mut ops = vec![
+        PlanOp::Shell {
+            command: concat!(
+                "if ! (opkg list-installed 2>/dev/null || apk info 2>/dev/null) ",
+                "| grep -q '^libustream-'; then ",
+                // manager-scoped install with the renderer's own
+                // fresh-index self-heal (apk update && apk add) — the
+                // retry never crosses into the other package manager
+                "if command -v apk >/dev/null 2>&1; then ",
+                "apk add libustream-wolfssl || { apk update && apk add libustream-wolfssl; }; ",
+                "else opkg update && opkg install libustream-wolfssl; fi; fi",
+            )
+            .into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+    ];
+    // Both branches are runtime-conditional payloads kept as SINGLE
+    // `;`-joined lines: the 1.x transport (apply.py::_run_step_script)
+    // routes any line-start `if` through a ` && ` line-join that would
+    // mangle a multi-line block into invalid shell (`then && uci …`)
+    // — a one-line conditional survives the join untouched. The
+    // uhttpd wiring is guarded on the post-flash certs existing:
+    // pointed at missing cert files uhttpd drops the HTTPS listener
+    // or exits, so a cert-less router must not take the wiring yet
+    // (Codex #486 P1 round 2). Each guard reverts its config's staged
+    // /tmp/.uci debris first (AGENTS.md staging rule), the
+    // listen_https reset stays idempotent (round-1 fix), and the
+    // nodogsplash body uses del_list-before-add_list with no trailing
+    // `|| true` (rounds 2+4 fixes: failures abort instead of masking
+    // as success). The skip path must NOT read as success: with the
+    // uhttpd branch enabled, verification requires the certs to exist
+    // AND the uci readbacks to show the wiring — a cert-less device
+    // fails the apply loudly instead of reporting `applied` for a
+    // no-op (Codex #486 P1 round 3). The nds-only configuration keeps
+    // no post-hoc checks: its outcome is genuinely runtime-conditional
+    // on nodogsplash being installed.
+    if ssl.enable_uhttpd_https {
+        ops.push(PlanOp::Shell {
+            command: concat!(
+                "if [ -f /etc/tollgate/ssl/server.crt ] && ",
+                "[ -f /etc/tollgate/ssl/server.key ]; then ",
+                // &&-chained fail-fast body (the 1.x transport runs
+                // control-flow scripts WITHOUT set -e — a `;` chain
+                // would let a failed uci set ride a trailing echo to a
+                // fake success). Best-effort steps (revert, delete)
+                // are isolated in groups so `|| true` cannot swallow a
+                // neighboring hard failure; the post-commit readback
+                // gates the success echo.
+                "(uci -q revert uhttpd 2>/dev/null || true) && ",
+                "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt' && ",
+                "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key' && ",
+                "(uci -q delete uhttpd.main.listen_https || true) && ",
+                "uci add_list uhttpd.main.listen_https='0.0.0.0:443' && ",
+                "uci add_list uhttpd.main.listen_https='[::]:443' && ",
+                "uci commit uhttpd && ",
+                "uci -q get uhttpd.main.listen_https | grep -q '0.0.0.0:443' && ",
+                "/etc/init.d/uhttpd restart && ",
+                "echo 'ssl: uhttpd HTTPS wired on :443'; ",
+                "else ",
+                "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2; ",
+                "fi",
+            )
+            .into(),
+        });
+    }
+    if ssl.open_port_443_nds {
+        ops.push(PlanOp::Shell {
+            command: concat!(
+                "if uci -q show nodogsplash >/dev/null 2>&1; then ",
+                "(uci -q revert nodogsplash 2>/dev/null || true) && ",
+                "(uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true) && ",
+                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && ",
+                "uci commit nodogsplash && ",
+                "uci -q get nodogsplash.@nodogsplash[0].users_to_router | grep -q 'allow tcp port 443' && ",
+                "/etc/init.d/nodogsplash restart && ",
+                "echo 'ssl: nodogsplash allows tcp/443 to the router'; ",
+                "fi",
+            )
+            .into(),
+        });
+    }
+    let mut verification = Vec::new();
+    if ssl.enable_uhttpd_https {
+        verification.extend([
+            VerificationCheck {
+                description: "certs deployed for uhttpd HTTPS (host-side post-flash step)".into(),
+                command: "[ -f /etc/tollgate/ssl/server.crt ] && \
+                          [ -f /etc/tollgate/ssl/server.key ] && echo present"
+                    .into(),
+                expect_contains: "present".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd cert path persisted".into(),
+                command: "uci -q get uhttpd.main.cert".into(),
+                expect_contains: "/etc/tollgate/ssl/server.crt".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd listens on 443".into(),
+                command: "uci -q get uhttpd.main.listen_https".into(),
+                expect_contains: "0.0.0.0:443".into(),
+            },
+        ]);
+    }
+    Ok(Plan {
+        profile_id: "ssl".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -4552,6 +4940,220 @@ mod tests {
             .validate(),
             Err(Unsupported::InvalidParams(_))
         ));
+    }
+
+    #[test]
+    fn openclash_shape_gates_and_branches_match_1x() {
+        let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
+        let script = render_shell(&plan);
+        // dnsmasq→dnsmasq-full swap rides the plan AND LEADS the
+        // package installs (Codex #486 rounds 1+4): luci-app-openclash
+        // depends on dnsmasq-full, so on an opkg device with default
+        // dnsmasq the swap must complete before the dependent resolves.
+        // Download-first (round 6): a dead feed aborts BEFORE the
+        // removal, never leaving the router without dnsmasq.
+        let swap = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::Shell { command } if command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")))
+            .expect("swap op present");
+        let full = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "dnsmasq-full"))
+            .expect("dnsmasq-full install present");
+        let luci = plan
+            .ops
+            .iter()
+            .position(
+                |op| matches!(op, PlanOp::EnsurePackage { name } if name == "luci-app-openclash"),
+            )
+            .expect("luci-app-openclash install present");
+        assert!(
+            swap < full && full < luci,
+            "swap must precede dnsmasq-full, which must precede luci-app-openclash"
+        );
+        assert!(script.contains("opkg download dnsmasq-full) && opkg remove dnsmasq"));
+        // staged /tmp/.uci debris reverted before the first mutation
+        assert!(script.contains("uci -q revert openclash 2>/dev/null || true"));
+        assert!(script.contains("mkdir -p /etc/openclash/config"));
+        assert!(script.contains("uci set openclash.config.enable='1'"));
+        assert!(
+            script.contains(
+                "uci set openclash.config.config_path='/etc/openclash/config/config.yaml'"
+            )
+        );
+        assert!(script.contains("uci set openclash.config.proxy_type='ss'"));
+        assert!(script.contains("uci set openclash.config.core_type='Meta'"));
+        assert!(script.contains("uci set openclash.config.dashboard_type='Official'"));
+        assert!(script.contains("uci set openclash.config.dns_mode='redir-host'"));
+        assert!(script.contains("uci set openclash.config.operation_mode='redir-host'"));
+        assert!(script.contains("uci commit openclash"));
+        assert!(script.contains("/etc/init.d/openclash enable"));
+        assert!(script.contains("echo \"OpenClash configured: Meta core, ss proxy\""));
+        assert!(
+            script.contains(
+                "echo \"Post-flash: import your subscription config via the LuCI web UI\""
+            )
+        );
+
+        // custom params ride the same lines; operation_mode mirrors dns_mode
+        let custom = render_shell(&plan_for(Profile::OpenClash(OpenClashProfile {
+            proxy_type: "trojan".into(),
+            core_type: "Tun".into(),
+            dns_mode: "fake-ip".into(),
+        })));
+        assert!(custom.contains("uci set openclash.config.proxy_type='trojan'"));
+        assert!(custom.contains("uci set openclash.config.core_type='Tun'"));
+        assert!(custom.contains("uci set openclash.config.dns_mode='fake-ip'"));
+        assert!(custom.contains("uci set openclash.config.operation_mode='fake-ip'"));
+        assert!(custom.contains("echo \"OpenClash configured: Tun core, trojan proxy\""));
+
+        // token charset gate on every interpolated param (the
+        // double-quoted echo is the hole this closes — mwan3/#448 class)
+        for (field, hostile_value) in [
+            ("proxy_type", "ss\"; reboot; echo \""),
+            ("core_type", "$(poweroff)"),
+            ("dns_mode", "redir-host\nreboot"),
+            ("proxy_type", ""),
+        ] {
+            let mut hostile = OpenClashProfile::default();
+            match field {
+                "proxy_type" => hostile.proxy_type = hostile_value.into(),
+                "core_type" => hostile.core_type = hostile_value.into(),
+                _ => hostile.dns_mode = hostile_value.into(),
+            }
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "{field} gate must reject {hostile_value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssl_shape_branches_and_provider_gate_match_1x() {
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let script = render_shell(&plan);
+        // TLS-backend guard (Codex #486 round 5): the libustream
+        // variants own the same libustream-ssl.so, so wolfssl installs
+        // ONLY when no backend is present — an existing
+        // mbedtls/openssl backend is preserved, never clashed
+        assert!(script.contains("| grep -q '^libustream-'"));
+        assert!(script.contains("opkg install libustream-wolfssl"));
+        assert!(!plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "libustream-wolfssl"
+        )));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "ca-bundle"
+        )));
+        // cert-presence guard wraps the whole uhttpd block (Codex #486
+        // P1 round 2): a cert-less router skips the wiring loudly
+        // instead of pointing uhttpd at missing files
+        assert!(script.contains(
+            "if [ -f /etc/tollgate/ssl/server.crt ] && [ -f /etc/tollgate/ssl/server.key ]; then"
+        ));
+        assert!(script.contains("uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'"));
+        assert!(script.contains("uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'"));
+        // idempotent listen_https reset (round-1 fix): the delete is
+        // guarded so an HTTP-only config still gets both listeners
+        assert!(script.contains("uci -q delete uhttpd.main.listen_https || true"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='0.0.0.0:443'"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='[::]:443'"));
+        assert!(!script.contains("listen_https &&"));
+        assert!(script.contains("uci commit uhttpd"));
+        assert!(script.contains("/etc/init.d/uhttpd restart"));
+        assert!(script.contains("echo 'ssl: uhttpd HTTPS wired on :443'"));
+        // staged /tmp/.uci debris reverted inside each guard before
+        // the first mutation (AGENTS.md staging rule)
+        assert!(script.contains("uci -q revert uhttpd 2>/dev/null || true"));
+        assert!(script.contains("uci -q revert nodogsplash 2>/dev/null || true"));
+        assert!(script.contains(
+            "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2"
+        ));
+        // explicit nodogsplash existence guard with a propagating body
+        // (Codex #486 P2 round 2): failures abort instead of riding a
+        // trailing `|| true` to a fake success
+        assert!(script.contains("if uci -q show nodogsplash >/dev/null 2>&1; then"));
+        // del_list-before-add_list keeps re-runs idempotent (Codex #486
+        // round 4): uci lists are append-only
+        assert!(script.contains(
+            "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true"
+        ));
+        assert!(script.contains(
+            "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'"
+        ));
+        assert!(!script.contains("nodogsplash restart || true"));
+        assert!(script.contains("echo 'ssl: nodogsplash allows tcp/443 to the router'"));
+
+        // cert-less skip must FAIL the apply, not report `applied` for
+        // a no-op (Codex #486 round 3): outcome verification gates on
+        // certs existing plus the uci readbacks
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let descriptions: Vec<&str> = plan
+            .verification
+            .iter()
+            .map(|c| c.description.as_str())
+            .collect();
+        assert!(
+            descriptions.contains(&"certs deployed for uhttpd HTTPS (host-side post-flash step)")
+        );
+        assert!(descriptions.contains(&"uhttpd cert path persisted"));
+        assert!(descriptions.contains(&"uhttpd listens on 443"));
+        // nds-only shape keeps no post-hoc checks (runtime-conditional
+        // outcome when nodogsplash is absent)
+        let nds_only = plan_for(Profile::Ssl(SslProfile {
+            enable_uhttpd_https: false,
+            ..SslProfile::default()
+        }));
+        assert!(nds_only.verification.is_empty());
+
+        // uhttpd off drops the whole HTTPS block, keeps the nds line
+        let no_uhttpd = render_shell(&plan_for(Profile::Ssl(SslProfile {
+            enable_uhttpd_https: false,
+            ..SslProfile::default()
+        })));
+        assert!(!no_uhttpd.contains("uhttpd"));
+        assert!(no_uhttpd.contains("nodogsplash"));
+
+        // nds off drops only the nodogsplash line
+        let no_nds = render_shell(&plan_for(Profile::Ssl(SslProfile {
+            open_port_443_nds: false,
+            ..SslProfile::default()
+        })));
+        assert!(no_nds.contains("uci commit uhttpd"));
+        assert!(!no_nds.contains("nodogsplash"));
+
+        // provider choice gate — 1.x declared the choices but never
+        // enforced them in _resolve_params (newline injection into the
+        // comment line was live shell)
+        assert!(matches!(
+            SslProfile {
+                provider: "lancert\nreboot".into(),
+                ..SslProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            SslProfile {
+                provider: "evil".into(),
+                ..SslProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        for ok in ["lancert", "qip", "manual"] {
+            assert!(
+                SslProfile {
+                    provider: ok.into(),
+                    ..SslProfile::default()
+                }
+                .validate()
+                .is_ok()
+            );
+        }
     }
 
     #[test]

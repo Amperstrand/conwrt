@@ -43,6 +43,8 @@
 //! print(r["nodns"].build_configure({}))
 //! print(r["auto-sqm"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
+//! print(r["openclash"].build_configure({}))
+//! print(r["ssl"].build_configure({}))
 //! EOF
 //! ```
 //!
@@ -55,9 +57,9 @@
 
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
-    NodnsProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -99,6 +101,19 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.starts_with("opkg install "))
         .filter(|l| !l.starts_with("if command -v apk "))
         .filter(|l| !l.starts_with("&& apk add "))
+        // openclash dnsmasq→dnsmasq-full swap: the 1.x configure script
+        // carries NO package ops (packages ride the ASU image build,
+        // where packages_remove handles the swap); the 2.x apply path
+        // swaps at runtime — download-first so a dead feed never
+        // leaves the router without dnsmasq (Codex #486 rounds 1+4+6)
+        // — 2.x-only, excluded like the install lines above and pinned
+        // by unit test instead
+        .filter(|l| !l.starts_with("if [ -n \"$(opkg list-installed dnsmasq"))
+        // ssl TLS-backend guard, same package-delivery doctrine: the
+        // libustream variants own the same libustream-ssl.so, so the
+        // plan installs wolfssl only when no backend is present
+        // (Codex #486 round 5) — 2.x-only, pinned by unit test
+        .filter(|l| !l.starts_with("if ! (opkg list-installed"))
         .filter(|l| !l.starts_with("list track_ip "))
         .filter(|l| !(l.starts_with("uci add_list mwan3.") && l.contains(".track_ip=")))
         // auto-sqm dynamic cron: 2.x makes re-apply idempotent by
@@ -276,6 +291,22 @@ fn guest_wifi_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::GuestWifi(GuestWifiProfile::default()),
         include_str!("goldens/guest-wifi.sh"),
+    );
+}
+
+#[test]
+fn openclash_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::OpenClash(OpenClashProfile::default()),
+        include_str!("goldens/openclash.sh"),
+    );
+}
+
+#[test]
+fn ssl_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ssl(SslProfile::default()),
+        include_str!("goldens/ssl.sh"),
     );
 }
 

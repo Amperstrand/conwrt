@@ -1,18 +1,32 @@
 """openclash — transparent proxy via Clash/Mihomo for censorship bypass."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _token(value: str, field: str) -> str:
+    if not _TOKEN_RE.fullmatch(value):
+        raise ValueError(f"{field} contains unsafe characters: {value!r}")
+    return value
+
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    # core_type/proxy_type interpolate into a DOUBLE-quoted echo line
+    # below (the uci values ride safe single-quoting) — gate all three
+    # with a token charset so a `"`/`$()`/backtick value cannot inject
+    # shell (mwan3/#448 class; the Rust port applies the same gate,
+    # plan.rs OpenClashProfile::validate).
     return {
-        "proxy_type": params.get("proxy_type", "ss"),
-        "core_type": params.get("core_type", "Meta"),
-        "dns_mode": params.get("dns_mode", "redir-host"),
+        "proxy_type": _token(str(params.get("proxy_type", "ss")), "proxy_type"),
+        "core_type": _token(str(params.get("core_type", "Meta")), "core_type"),
+        "dns_mode": _token(str(params.get("dns_mode", "redir-host")), "dns_mode"),
     }
 
 
@@ -21,6 +35,10 @@ def _build_openclash_ops(params: dict[str, Any]) -> list[Op]:
     return [
         Comment(text="--- OpenClash transparent proxy ---"),
         ShellCommand(command="mkdir -p /etc/openclash/config"),
+        # AGENTS.md staging-debris rule: an aborted earlier session may
+        # have left uncommitted /tmp/.uci changes for openclash — the
+        # commit below would otherwise make them permanent.
+        ShellCommand(command="uci -q revert openclash 2>/dev/null || true"),
         UciSet(config="openclash", section="config", values={
             "enable": "1",
             "config_path": "/etc/openclash/config/config.yaml",
