@@ -3013,7 +3013,24 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
 fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Unsupported> {
     oc.validate()?;
     let literal = |v: String| UciValue::Literal(v);
+    // Package order is load-bearing at apply time (Codex #486 round
+    // 4): dnsmasq and dnsmasq-full conflict (both provide dnsmasq) —
+    // 1.x carries the swap as an image-build `packages_remove`
+    // directive where order does not matter, but this plan installs
+    // at apply time and luci-app-openclash DEPENDS on dnsmasq-full, so
+    // the swap must LEAD: on an opkg device still running default
+    // dnsmasq, resolving luci-app-openclash first would hit the
+    // conflict and abort under `set -e` before the swap is reached.
+    // The removal is guarded (`|| true`): a no-op where dnsmasq-full
+    // already replaced dnsmasq and on apk systems (opkg absent; apk
+    // replaces the provider without a conflict).
     let mut ops: Vec<PlanOp> = vec![
+        PlanOp::Shell {
+            command: "opkg remove dnsmasq 2>/dev/null || true".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "dnsmasq-full".into(),
+        },
         PlanOp::EnsurePackage {
             name: "luci-app-openclash".into(),
         },
@@ -3025,21 +3042,6 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
         },
         PlanOp::EnsurePackage {
             name: "iptables".into(),
-        },
-        // dnsmasq and dnsmasq-full conflict (both provide dnsmasq):
-        // 1.x carries the swap as an image-build `packages_remove`
-        // directive, but this plan installs packages at apply time —
-        // on an opkg device still running default dnsmasq, the
-        // dnsmasq-full install below aborts under `set -e` unless the
-        // swap rides the plan too (Codex #486 P1-1; mesh11sd's
-        // wpad-swap idiom). Guarded no-op where dnsmasq-full already
-        // replaced dnsmasq, and on apk systems (opkg absent; apk
-        // replaces the provider without a conflict).
-        PlanOp::Shell {
-            command: "opkg remove dnsmasq 2>/dev/null || true".into(),
-        },
-        PlanOp::EnsurePackage {
-            name: "dnsmasq-full".into(),
         },
         PlanOp::EnsurePackage {
             name: "curl".into(),
@@ -4899,10 +4901,33 @@ mod tests {
 
     #[test]
     fn openclash_shape_gates_and_branches_match_1x() {
-        let script = render_shell(&plan_for(Profile::OpenClash(OpenClashProfile::default())));
-        // dnsmasq→dnsmasq-full swap rides the plan (Codex #486 P1-1):
-        // guarded so it no-ops where dnsmasq-full already replaced
-        // dnsmasq and on apk systems
+        let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
+        let script = render_shell(&plan);
+        // dnsmasq→dnsmasq-full swap rides the plan AND LEADS the
+        // package installs (Codex #486 rounds 1+4): luci-app-openclash
+        // depends on dnsmasq-full, so on an opkg device with default
+        // dnsmasq the swap must complete before the dependent resolves
+        let swap = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::Shell { command } if command.starts_with("opkg remove dnsmasq")))
+            .expect("swap op present");
+        let full = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "dnsmasq-full"))
+            .expect("dnsmasq-full install present");
+        let luci = plan
+            .ops
+            .iter()
+            .position(
+                |op| matches!(op, PlanOp::EnsurePackage { name } if name == "luci-app-openclash"),
+            )
+            .expect("luci-app-openclash install present");
+        assert!(
+            swap < full && full < luci,
+            "swap must precede dnsmasq-full, which must precede luci-app-openclash"
+        );
         assert!(script.contains("opkg remove dnsmasq 2>/dev/null || true"));
         assert!(script.contains("mkdir -p /etc/openclash/config"));
         assert!(script.contains("uci set openclash.config.enable='1'"));
