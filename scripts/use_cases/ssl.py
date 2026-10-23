@@ -25,6 +25,7 @@ from profile.ops import (
     UciSet,
     render_shell,
 )
+from shell_safe import require_choice
 
 from . import ParamDef, UseCase, register
 
@@ -195,7 +196,14 @@ def deploy_ssl_post_flash(
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
-    provider = str(params.get("provider", "lancert"))
+    # Enforce the ParamDef choices here too: build_configure() bypasses
+    # apply_defaults(), and the provider is interpolated into a rendered
+    # comment line — a newline value injected live shell (mwan3/#448
+    # class; the Rust port applies the same gate, plan.rs
+    # SslProfile::validate).
+    provider = require_choice(
+        str(params.get("provider", "lancert")), ("lancert", "qip", "manual"), "provider"
+    )
     return {
         "provider": provider,
         "enable_uhttpd_https": params.get("enable_uhttpd_https", True),

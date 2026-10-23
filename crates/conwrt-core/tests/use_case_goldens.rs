@@ -43,6 +43,8 @@
 //! print(r["nodns"].build_configure({}))
 //! print(r["auto-sqm"].build_configure({}))
 //! print(r["guest-wifi"].build_configure({}))
+//! print(r["openclash"].build_configure({}))
+//! print(r["ssl"].build_configure({}))
 //! EOF
 //! ```
 //!
@@ -55,9 +57,9 @@
 
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
-    NodnsProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    TetherProfile, TetherVariant, TravelmateProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -276,6 +278,22 @@ fn guest_wifi_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::GuestWifi(GuestWifiProfile::default()),
         include_str!("goldens/guest-wifi.sh"),
+    );
+}
+
+#[test]
+fn openclash_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::OpenClash(OpenClashProfile::default()),
+        include_str!("goldens/openclash.sh"),
+    );
+}
+
+#[test]
+fn ssl_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ssl(SslProfile::default()),
+        include_str!("goldens/ssl.sh"),
     );
 }
 

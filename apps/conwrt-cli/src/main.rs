@@ -21,8 +21,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
-    PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TravelmateProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
+    SslProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -346,6 +346,10 @@ enum ProfileChoice {
     Mwan3,
     Nodns,
     AutoSqm,
+    /// 1.x use-case name is one word (`openclash`), not kebab-case.
+    #[value(name = "openclash")]
+    OpenClash,
+    Ssl,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -475,6 +479,25 @@ struct ProfileArgs {
     /// auto-sqm: apply SQM at this % of measured speed (default 90).
     #[arg(long)]
     autosqm_target_percent: Option<u32>,
+    /// openclash: default proxy protocol (default `ss`).
+    #[arg(long)]
+    openclash_proxy_type: Option<String>,
+    /// openclash: Clash core — Meta, Dev, or Tun (default `Meta`).
+    #[arg(long)]
+    openclash_core_type: Option<String>,
+    /// openclash: DNS mode — redir-host or fake-ip (default `redir-host`).
+    #[arg(long)]
+    openclash_dns_mode: Option<String>,
+    /// ssl: cert provider — lancert, qip, or manual (default `lancert`;
+    /// cert download/SCP itself is a host-side post-flash step).
+    #[arg(long)]
+    ssl_provider: Option<String>,
+    /// ssl: opt OUT of the uhttpd HTTPS-on-443 wiring (default on).
+    #[arg(long)]
+    ssl_no_uhttpd_https: bool,
+    /// ssl: opt OUT of the nodogsplash port-443 pass-through (default on).
+    #[arg(long)]
+    ssl_no_443_nds: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1442,6 +1465,28 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 .unwrap_or_else(|| "wan".into()),
             target_percent: args.autosqm_target_percent.unwrap_or(90),
             ..AutoSqmProfile::default()
+        })),
+        ProfileChoice::OpenClash => Ok(Profile::OpenClash(OpenClashProfile {
+            proxy_type: args
+                .openclash_proxy_type
+                .clone()
+                .unwrap_or_else(|| "ss".into()),
+            core_type: args
+                .openclash_core_type
+                .clone()
+                .unwrap_or_else(|| "Meta".into()),
+            dns_mode: args
+                .openclash_dns_mode
+                .clone()
+                .unwrap_or_else(|| "redir-host".into()),
+        })),
+        ProfileChoice::Ssl => Ok(Profile::Ssl(SslProfile {
+            provider: args
+                .ssl_provider
+                .clone()
+                .unwrap_or_else(|| "lancert".into()),
+            enable_uhttpd_https: !args.ssl_no_uhttpd_https,
+            open_port_443_nds: !args.ssl_no_443_nds,
         })),
     }
 }
@@ -2484,6 +2529,12 @@ mod tests {
             autosqm_mode: None,
             autosqm_interface: None,
             autosqm_target_percent: None,
+            openclash_proxy_type: None,
+            openclash_core_type: None,
+            openclash_dns_mode: None,
+            ssl_provider: None,
+            ssl_no_uhttpd_https: false,
+            ssl_no_443_nds: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
@@ -2572,6 +2623,27 @@ mod tests {
             (tm.radio.as_str(), tm.timeout, tm.retry, tm.captive),
             ("radio0", 60, 5, true)
         );
+
+        let oc = build_profile(&profile_args(ProfileChoice::OpenClash)).expect("openclash");
+        let Profile::OpenClash(oc) = &oc else {
+            panic!("openclash profile");
+        };
+        assert_eq!(
+            (
+                oc.proxy_type.as_str(),
+                oc.core_type.as_str(),
+                oc.dns_mode.as_str()
+            ),
+            ("ss", "Meta", "redir-host")
+        );
+
+        let ssl = build_profile(&profile_args(ProfileChoice::Ssl)).expect("ssl");
+        let Profile::Ssl(ssl) = &ssl else {
+            panic!("ssl profile");
+        };
+        assert_eq!(ssl.provider, "lancert");
+        assert!(ssl.enable_uhttpd_https);
+        assert!(ssl.open_port_443_nds);
     }
 
     #[test]
