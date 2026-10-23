@@ -133,7 +133,9 @@ class TestMultiLineTransportBranch:
 
     def test_multi_line_blocks_go_verbatim(self):
         # a block spanning lines could never survive the join — it must
-        # arrive byte-for-byte as authored (first-boot semantics)
+        # arrive byte-for-byte as authored under a set -e prefix (heredoc
+        # parity, #495): mid-script failures propagate instead of riding
+        # a trailing echo to a fake success
         script = (
             "for _ in $(seq 1 3); do\n"
             "  ping -c1 bench >/dev/null 2>&1 || true\n"
@@ -142,7 +144,24 @@ class TestMultiLineTransportBranch:
         )
         cmd, payload = _captured_payload(script)
         assert "sh -s" in cmd
-        assert payload == script.strip() + "\n", "multi-line block must ride verbatim"
+        assert payload == "set -e\n" + script.strip() + "\n", (
+            "multi-line block must ride verbatim under set -e"
+        )
         assert " && " not in payload
         verbatim = subprocess.run(["sh", "-n"], input=payload, capture_output=True, text=True)
         assert verbatim.returncode == 0, verbatim.stderr
+
+    def test_set_e_safe_fallback_idioms_survive(self):
+        # the idioms these payloads rely on must NOT abort under the
+        # transported set -e: POSIX exempts a failure before the last
+        # command of an AND-OR list (verified in dash, pinned here)
+        body = (
+            "for cand in usb0 usb1; do\n"
+            "    [ -e \"/sys/class/net/$cand\" ] && USB_DEV=\"$cand\" && break\n"
+            "done\n"
+            "[ -e /nonexistent ] && X=$(cat /nonexistent)\n"
+            "echo survived"
+        )
+        r = subprocess.run(["sh", "-e", "-c", body], capture_output=True, text=True)
+        assert r.returncode == 0, f"AND-list fallbacks must be set -e safe: {r.stderr}"
+        assert "survived" in r.stdout
