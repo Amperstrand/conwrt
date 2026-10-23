@@ -28,15 +28,6 @@ SEDEXPR=(
   -e 's/00:e0:4c:68:14:06/00:e0:4c:xx:xx:xx/g'
   -e 's/fe80::764d:28ff:fe72:f69f/fe80::xxxx:xxff:fexx:xxxx/g'
   -e 's/S150H29001559/XXXXX-XXXXXXXXX/g'
-  -e 's/78:c5:7d:13:91:9c/78:c5:7d:xx:xx:xx/g'
-  -e 's/78:c5:7d:23:de:fe/78:c5:7d:xx:xx:xx/g'
-  -e 's/4c:c5:3e:b6:1d:90/4c:c5:3e:xx:xx:xx/g'
-  -e 's/78:C5:7D:13:91:9C/78:C5:7D:XX:XX:XX/g'
-  -e 's/78:C5:7D:23:DE:FE/78:C5:7D:XX:XX:XX/g'
-  -e 's/4C:C5:3E:B6:1D:90/4C:C5:3E:XX:XX:XX/g'
-  -e 's/354351111598628/XXXXXXXXXXXXXXX/g'
-  -e 's/354351110824785/XXXXXXXXXXXXXXX/g'
-  -e 's/192\.168\.12\.124/192.168.X.X/g'
   -e 's/192\.168\.1\.100/192.168.1.X/g'
   -e 's/192\.168\.1\.147/192.168.1.X/g'
   -e 's/192\.168\.1\.158/192.168.1.X/g'
@@ -53,7 +44,23 @@ SEDEXPR=(
   -e 's/macbooks-MBP/REDACTED_HOST/g'
   -e 's/id_ed25519_gitlab/REDACTED_KEY/g'
   -e 's/Q\/7PTDaaakgRBt+eTV5jgNX0UuZfbZb53Ipb+FHyMRk/REDACTED_FINGERPRINT/g'
+
 )
+
+# Private rules: raw identifier values must NOT live in this tracked
+# script (they would re-publish what they scrub). Each .sh file in the
+# gitignored data/redact-pii-rules/ appends entries:
+#   SEDEXPR+=( -e 's/<raw>/<redacted>/g' )
+# Canonical copies live in the private lab project (conwrt-bench,
+# docs/redact-pii-rules/) — restore them into data/redact-pii-rules/
+# before running a history rewrite from a fresh checkout.
+if [ -d "$(dirname "$0")/../data/redact-pii-rules" ]; then
+  for _rules in "$(dirname "$0")"/../data/redact-pii-rules/*.sh; do
+    [ -e "$_rules" ] || continue
+    # shellcheck disable=SC1090
+    source "$_rules"
+  done
+fi
 
 # List of files that contain PII (from audit)
 PII_FILES=(
