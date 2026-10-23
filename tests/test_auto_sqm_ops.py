@@ -72,3 +72,26 @@ class TestAutoSqmOpsCustomParams:
         rendered = render_shell(_build_auto_sqm_ops({"qdisc": "fq_codel", "script": "simple.qos"}))
         assert "uci set auto_sqm.config.qdisc='fq_codel'" in rendered
         assert "uci set auto_sqm.config.script='simple.qos'" in rendered
+
+
+class TestAutoSqmRuntimeScriptPins:
+    """#470 — the on-device runtime payload binds SQM to the resolved
+    DEVICE (UCI network names break on WiFi-STA/alias setups) and
+    reverts staging debris before its commit."""
+
+    def test_sqm_binds_to_resolved_device_not_network_name(self):
+        from use_cases.auto_sqm import _AUTO_SQM_SCRIPT
+
+        assert '_sqm_dev=$(uci -q get network."$INTERFACE".device 2>/dev/null)' in _AUTO_SQM_SCRIPT
+        assert '[ -z "$_sqm_dev" ] && _sqm_dev="$DEVICE"' in _AUTO_SQM_SCRIPT
+        assert 'uci set sqm.$INTERFACE.interface="$_sqm_dev"' in _AUTO_SQM_SCRIPT
+        assert 'uci set sqm.$INTERFACE.interface="$INTERFACE"' not in _AUTO_SQM_SCRIPT
+
+    def test_apply_reverts_staging_before_commit(self):
+        from use_cases.auto_sqm import _AUTO_SQM_SCRIPT
+
+        assert "uci revert sqm" in _AUTO_SQM_SCRIPT
+        assert (
+            _AUTO_SQM_SCRIPT.index("uci revert sqm")
+            < _AUTO_SQM_SCRIPT.index("uci set sqm.$INTERFACE=queue")
+        )
