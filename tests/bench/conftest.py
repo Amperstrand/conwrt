@@ -315,7 +315,7 @@ def _image_variant(image: str) -> str:
     path = Path(image)
     directory = path.parent if path.is_file() else path
     alive = ssh_run("echo ok", timeout=15).returncode == 0
-    want = "*sysupgrade.bin" if alive else "*recovery.bin"
+    want = "*sysupgrade.*" if alive else "*recovery.*"
     matches = sorted(directory.glob(want))
     return str(matches[0]) if matches else image
 

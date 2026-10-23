@@ -906,6 +906,19 @@ impl VpnPiaOpenvpnProfile {
                 "username/password must not contain control characters".into(),
             ));
         }
+        // a credential that EXACTLY equals a heredoc delimiter would
+        // terminate its heredoc early and run as shell (Codex #514 P1:
+        // termination requires the line to equal the delimiter alone)
+        for field in [&self.username, &self.password] {
+            if matches!(
+                field.as_str(),
+                "VPN_SETUP_EOF" | "PIA_CA_EOF" | "PIA_AUTH_EOF"
+            ) {
+                return Err(Unsupported::InvalidParams(
+                    "username/password must not equal a heredoc delimiter".into(),
+                ));
+            }
+        }
         if self.password.is_empty() {
             return Err(Unsupported::InvalidParams("password is required".into()));
         }
@@ -3548,11 +3561,23 @@ fn plan_vpn_pia_openvpn(
             command: "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
         });
     }
-    let verification = vec![VerificationCheck {
-        description: "openvpn instance enabled".into(),
-        command: "uci -q get openvpn.pia.enabled".into(),
-        expect_contains: "1".into(),
-    }];
+    // the 45s tail restores WAN on failure and exits 0 by design —
+    // this check is what makes the apply HONEST about the outcome:
+    // verified requires tun0 to actually hold an address (Codex #514
+    // P2: auth failure / dead endpoints must not read as success)
+    let verification = vec![
+        VerificationCheck {
+            description: "openvpn instance enabled".into(),
+            command: "uci -q get openvpn.pia.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "tun0 has an address (tunnel actually up)".into(),
+            command: "ip -4 addr show dev tun0 2>/dev/null | grep -q inet && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
     Ok(Plan {
         profile_id: "vpn-pia-openvpn".into(),
         model_id: model.id.clone(),
@@ -5634,6 +5659,14 @@ mod tests {
         for hostile in [
             VpnPiaOpenvpnProfile {
                 password: "line1\nline2".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                password: "PIA_AUTH_EOF".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                username: "VPN_SETUP_EOF".into(),
                 ..base.clone()
             },
             VpnPiaOpenvpnProfile {
