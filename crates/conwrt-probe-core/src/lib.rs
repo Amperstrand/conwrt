@@ -56,4 +56,6 @@ pub mod banner;
 pub mod milestones;
 pub mod schedule;
 pub mod state;
+
 pub mod vocab;
+pub mod watch;

@@ -27,6 +27,8 @@ use conwrt_core::plan::{
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
+
+mod watch;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
@@ -228,6 +230,24 @@ enum Command {
         /// Directory containing `*.json` model files.
         #[arg(long, default_value = "models")]
         dir: PathBuf,
+    },
+    /// Dark-watch: watch a dark/flapping target over time and classify WHY
+    /// it is dark (boot loop with cycle period / hung after boot / silent /
+    /// inconclusive). The dark-device doctrine is built in: silence only
+    /// counts when the capture path is proven by foreign traffic.
+    DarkWatch {
+        /// Target IPv4 address.
+        #[arg(long, default_value = "192.168.1.1")]
+        ip: String,
+        /// Interface for the passive stream and positive control.
+        #[arg(long)]
+        interface: String,
+        /// Watch duration in seconds.
+        #[arg(long, default_value_t = 180)]
+        duration: u64,
+        /// Seconds between active probes.
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
     },
     /// Apply a desired-state profile to a device over SSH. DRY-RUN by
     /// default: prints the exact script. Mutating execution requires
@@ -799,6 +819,17 @@ fn main() -> ExitCode {
             dir,
         } => cmd_diagnose(ip, interface, http_port, ssh_port, key, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::DarkWatch {
+            ip,
+            interface,
+            duration,
+            interval,
+        } => watch::run(watch::WatchArgs {
+            ip,
+            interface,
+            duration_s: duration,
+            interval_s: interval,
+        }),
         Command::Fingerprint {
             ip,
             relearn_host_key,
