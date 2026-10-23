@@ -103,6 +103,17 @@ impl<'a> PostPump<'a> {
         self
     }
 
+    /// The transfer id this pump has bound (the window it will serve or
+    /// served) — `None` before the first step. Callers gate retry logic
+    /// on THIS, not on a pre-connect window read: the window may be
+    /// re-targeted while a connection is being established (review
+    /// round 1, #452 — marking the stale id attempted a second POST
+    /// for the freshly-bound one).
+    #[must_use]
+    pub fn bound_id(&self) -> Option<u64> {
+        self.bound_id
+    }
+
     /// Whether the request head has been written — the point of no
     /// return for the one-request window (delegates to the live
     /// [`RecoveryPost`], `false` before the first step).

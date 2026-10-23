@@ -1,4 +1,17 @@
-"""Apply a ProfilePlan to a running router via SSH."""
+"""Apply a ProfilePlan to a running router via SSH.
+
+DEPRECATED transport for flows the Rust successor covers (parity-matrix
+§6, retirement queue #4, 2026-10-22): `conwrt apply --execute`
+(russh-based: TOFU trust store, fingerprint-confirmed identity,
+board/model gate) is the operator default for sqm (proven in the QEMU
+oracle suite, tests/integration/test_rust_apply_sqm.py) and now also
+exposes ssh-hardening, adguard, rescue-watchdog, and wireguard-client
+(per-profile parity evidence in matrix §4; ring-2 QEMU apply for
+wireguard/tether). This SSH transport remains for the flows
+`conwrt apply` does not cover yet (ubus transport, the remaining
+use-case profiles); it retires per the matrix as each flow's Rust
+proof lands. No paramiko is involved — this is the subprocess-ssh path.
+"""
 from __future__ import annotations
 
 import os

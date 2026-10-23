@@ -41,7 +41,7 @@ const BOOT_PREFIX: &str = "Z-LOADER V1.30 | 06/03/2020 08:39:30\r\nMultiboot Lis
 const KERNEL_LINES: &str =
     "Starting kernel ...\r\n[    3.873775] init: - preinit -\r\nroot@OpenWrt:~# \r\n";
 
-fn pty_parts() -> (std::fs::File, String) {
+fn pty_parts() -> (std::fs::File, std::fs::File, String) {
     let pair = openpty(None, None).expect("openpty");
     let mut term = tcgetattr(&pair.slave).expect("tcgetattr slave");
     cfmakeraw(&mut term);
@@ -52,9 +52,12 @@ fn pty_parts() -> (std::fs::File, String) {
     )
     .expect("setraw slave");
     let slave_path = ttyname(&pair.slave).expect("ttyname slave");
-    drop(pair.slave);
+    // Held until the test's scope ends: a pts whose last slave fd closes
+    // can refuse the later path-based reopen under CI load with EIO
+    // (#422 — same fix as flash_b64's harness).
     (
         std::fs::File::from(pair.master),
+        std::fs::File::from(pair.slave),
         slave_path.display().to_string(),
     )
 }
@@ -90,7 +93,7 @@ fn milestone_names(report: &BootCaptureReport) -> Vec<BootMilestone> {
 /// pin rolling-buffer matching) → silence.
 #[test]
 fn break_then_recovery_then_boot_stream_latches_milestones() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let device = {
         let mut dev = master.try_clone().expect("clone master");
         thread::spawn(move || {
@@ -143,7 +146,7 @@ fn break_then_recovery_then_boot_stream_latches_milestones() {
 /// captures from the first byte.
 #[test]
 fn already_on_captures_without_reopen() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let device = {
         let mut dev = master.try_clone().expect("clone master");
         thread::spawn(move || {
@@ -170,7 +173,7 @@ fn already_on_captures_without_reopen() {
 /// `0xff` is a break signature too (Python `wait_for_break` parity).
 #[test]
 fn ff_byte_is_a_break_signature() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let device = {
         let mut dev = master.try_clone().expect("clone master");
         thread::spawn(move || {
@@ -197,7 +200,7 @@ fn ff_byte_is_a_break_signature() {
 /// boot attempt.
 #[test]
 fn mid_capture_break_recovers_and_captures_second_boot() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let device = {
         let mut dev = master.try_clone().expect("clone master");
         thread::spawn(move || {
@@ -241,7 +244,7 @@ fn mid_capture_break_recovers_and_captures_second_boot() {
 /// timeout, no hang.
 #[test]
 fn wait_timeout_is_typed() {
-    let (master, slave_path) = pty_parts();
+    let (master, _held_slave, slave_path) = pty_parts();
     let mut opener = SpecOpener {
         spec: slave_path,
         baud: 115_200,

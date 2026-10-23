@@ -70,6 +70,12 @@ _DROP_LINE_PREFIXES = ("opkg install ", "if command -v apk ", "&& apk add ")
 
 def _normalize_line(line: str) -> list[str] | None:
     stripped = line.strip()
+    # 2.x runs under a `set -e` preamble (itself dropped above) and so
+    # guards best-effort substitutions with `|| true` — the 1.x render
+    # is bare. Strip the shim inside `$( ... )` before tokenizing (the
+    # token-level `|| true` drop below cannot see it: the closing paren
+    # glues to the word).
+    stripped = stripped.replace(" || true)", ")")
     if not stripped or stripped.startswith("#"):
         return None
     if stripped == "set -e" or stripped.startswith("#!"):
@@ -117,11 +123,20 @@ def plan_render_bin() -> Path:
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target"))
     bin_path = target_dir / "debug" / "conwrt-plan-render"
     if not bin_path.exists():
-        subprocess.run(
+        build = subprocess.run(
             [cargo, "build", "-q", "-p", "conwrt-cli", "--bin", "conwrt-plan-render"],
             cwd=REPO,
-            check=True,
+            capture_output=True,
+            text=True,
         )
+        if build.returncode != 0:
+            # check=True used to raise CalledProcessError with the reason
+            # swallowed — the 2026-10-22 runner rustup failures (#439/#443)
+            # cost a debug round purely to recover this stderr.
+            pytest.fail(
+                f"conwrt-plan-render build failed (exit {build.returncode}):\n"
+                f"{build.stderr.strip()}"
+            )
     assert bin_path.exists(), f"{bin_path} missing after cargo build"
     return bin_path
 

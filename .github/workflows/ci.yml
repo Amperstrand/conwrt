@@ -18,6 +18,23 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install OS tools
         run: sudo apt-get update && sudo apt-get install -y jq
+      # The parity fixture builds conwrt-plan-render with the runner's
+      # bare cargo; without this step rustup auto-installs the pinned
+      # toolchain MID-TEST and its component install can conflict
+      # (2026-10-22: clippy-preview 'bin/cargo-clippy' conflict rolled
+      # back the install — PRs #439/#443 both hit it). Provision first,
+      # exactly like the Rust workflow; a plain toolchain is enough for
+      # `cargo build`.
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.99.0"
+          # Mirrors the Rust workflow: the repo pin (rust-toolchain.toml)
+          # demands these components, and a pin-triggered mid-build
+          # `rustup component add` conflicts on the runner (the
+          # rustfmt-preview/cargo-fmt hardlink clash, 2026-10-22
+          # #439/#443). Provisioning them with the toolchain satisfies
+          # the pin before any cargo run.
+          components: "rustfmt, clippy"
       - name: Install dev dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
       - name: Run non-hardware CI

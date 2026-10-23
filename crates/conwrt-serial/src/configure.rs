@@ -1,100 +1,317 @@
-//! # First-contact configuration over serial (Rust port of
-//! `scripts/serial-configure.py`)
+//! Serial configuration of an OpenWrt device — the Rust port of
+//! `scripts/serial-configure.py` (parity-matrix §5), built on the
+//! [`crate::console`] RC-marker driver.
 //!
-//! Orchestration over the console driver: show firmware/network/dropbear
-//! state, set the LAN IP, toggle password auth, install an SSH key, run an
-//! arbitrary command. Command delivery goes through the crate's linted
-//! path — all commands are generated as literals on the host (the lint
-//! refuses runtime variables by design).
+//! When network access is unavailable (wrong IP, no SSH, broken
+//! firmware), these typed operations configure the device over the
+//! serial console: LAN IP change (with uci readback verification),
+//! password auth enable/disable, SSH authorized-key install (with an
+//! on-device `wc -c` byte check), config/firmware inspection, and
+//! arbitrary commands.
 //!
-//! Delta over the Python (documented): steps are a declarative plan that
-//! is printed before execution, and every write step carries a verify
-//! command whose output is returned to the caller.
+//! Python parity notes:
+//!
+//! * The Python tool's `send_and_read` (write, sleep, drain, filter)
+//!   is replaced by [`SerialConsole::run`] RC-marker collection — the
+//!   #412 command-FIFO semantics: each command's reply is delimited by
+//!   its `__RC0__`/`__RC1__` marker instead of a guessed 2 s sleep.
+//!   Wire bytes of the uci/dropbear/init.d commands are identical.
+//! * [`filter_reply`] ports the Python reply filter verbatim (strip
+//!   the echoed command, `root@` prompt lines, and `^C` noise) for
+//!   real-device output where the tty echoes the typed line.
 
-use crate::console::SerialConsole;
-use crate::collect::CmdOutcome;
-use std::time::Duration;
+use std::path::Path;
 
-/// Per-step collection window (the Python used fixed sleeps; the driver
-/// collects until the prompt).
-const STEP_WINDOW: Duration = Duration::from_secs(20);
+use thiserror::Error;
 
-/// One planned console step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
-    /// Human description (printed before execution).
-    pub what: &'static str,
-    /// The command to run.
-    pub cmd: String,
-    /// Optional verification command whose output is reported.
-    pub verify: Option<String>,
+use crate::collect::{CmdOutcome, RC_FAIL, RC_OK};
+use crate::console::{PortOpener, SerialConsole, Sleeper};
+use crate::io::ConsoleError;
+
+/// Dropbear uci selector for password auth (Python parity).
+pub const DROPBEAR_AUTH_SELECT: &str = "dropbear.@dropbear[0].PasswordAuth";
+
+/// Why a configure operation failed. Messages are operator-safe.
+#[derive(Debug, Error)]
+pub enum ConfigureError {
+    /// Transport failure.
+    #[error(transparent)]
+    Console(#[from] ConsoleError),
+    /// A uci/dropbear/init.d step did not complete with rc 0.
+    #[error("configure step {step:?} failed (rc {rc}): {output}")]
+    StepFailed {
+        /// Which logical step failed (e.g. `"uci set network.lan.ipaddr"`).
+        step: &'static str,
+        /// The collected rc (1 = `__RC1__`, 2 = timeout).
+        rc: u8,
+        /// Collected console output.
+        output: String,
+    },
+    /// The readback of `network.lan.ipaddr` differs from the requested
+    /// address — the setting did not take.
+    #[error("LAN IP readback mismatch: set {requested}, device reports {actual}")]
+    IpVerifyMismatch {
+        /// The address that was requested.
+        requested: String,
+        /// What `uci get network.lan.ipaddr` returned.
+        actual: String,
+    },
+    /// The authorized-key file could not be read on the host.
+    #[error("cannot read key file {path}: {source}")]
+    KeyFile {
+        /// The host path that failed.
+        path: String,
+        /// The underlying read error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The on-device `wc -c /etc/dropbear/authorized_keys` reply could
+    /// not be parsed to a byte count.
+    #[error("could not parse device wc -c reply: {output:?}")]
+    WcUnparseable {
+        /// The raw collected console output.
+        output: String,
+    },
+    /// The installed key's on-device byte count differs from the host
+    /// key text — the write was truncated or mangled.
+    #[error("authorized_keys size mismatch: wrote {written}, device reports {reported}")]
+    KeySizeMismatch {
+        /// Bytes the host sent (key text without trailing newline).
+        written: usize,
+        /// The device's `wc -c` count.
+        reported: usize,
+    },
 }
 
-/// Build the show-state plan (firmware + network + dropbear).
-pub fn show_plan() -> Vec<Step> {
-    vec![
-        Step { what: "firmware", cmd: "cat /etc/openwrt_release".into(), verify: None },
-        Step { what: "network", cmd: "uci show network.lan".into(), verify: None },
-        Step { what: "dropbear", cmd: "uci show dropbear".into(), verify: None },
-    ]
+fn step(outcome: CmdOutcome, step_name: &'static str) -> Result<String, ConfigureError> {
+    if outcome.rc != 0 {
+        return Err(ConfigureError::StepFailed {
+            step: step_name,
+            rc: outcome.rc,
+            output: outcome.output,
+        });
+    }
+    Ok(outcome.output)
 }
 
-/// Build the set-LAN-IP plan (write + commit + apply + verify).
-pub fn set_ip_plan(ip: &str) -> Vec<Step> {
-    vec![
-        Step { what: "set lan ipaddr", cmd: format!("uci set network.lan.ipaddr='{ip}'"), verify: None },
-        Step { what: "commit", cmd: "uci commit network".into(), verify: None },
-        Step { what: "apply", cmd: "ifup lan".into(), verify: None },
-        Step { what: "verify", cmd: "uci get network.lan.ipaddr".into(), verify: None },
-    ]
+/// Python `send_and_read`'s line filter, adapted to the RC-marker
+/// transport: drop empty lines, the echoed command line, `root@`
+/// prompt lines, `^C` noise, and the driver's own `__RC` marker lines
+/// (Python replies carried no markers — on this driver they are
+/// plumbing, never device content). Pure.
+#[must_use]
+pub fn filter_reply(reply: &str, command: &str) -> String {
+    let lines: Vec<&str> = reply
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && *l != RC_OK
+                && *l != RC_FAIL
+                && !l.contains(command)
+                && !l.contains("root@")
+                && !l.starts_with("^C")
+        })
+        .collect();
+    lines.join("\n")
 }
 
-/// Build the password-auth toggle plan.
-pub fn password_auth_plan(enable: bool) -> Vec<Step> {
-    let val = if enable { "on" } else { "off" };
-    vec![
-        Step { what: "set PasswordAuth", cmd: format!("uci set dropbear.@dropbear[0].PasswordAuth='{val}'"), verify: None },
-        Step { what: "commit", cmd: "uci commit dropbear".into(), verify: None },
-        Step { what: "restart", cmd: "/etc/init.d/dropbear restart".into(), verify: None },
-    ]
+/// `cat /etc/openwrt_release` — firmware banner block.
+///
+/// # Errors
+/// [`ConfigureError::Console`] on transport failure; the command's own
+/// failure (missing file on a non-OpenWrt device) surfaces as
+/// [`ConfigureError::StepFailed`].
+pub fn show_firmware<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    timeout: std::time::Duration,
+) -> Result<String, ConfigureError> {
+    let out = console.run("cat /etc/openwrt_release", timeout)?;
+    step(out, "cat /etc/openwrt_release").map(|s| filter_reply(&s, "cat /etc/openwrt_release"))
 }
 
-/// Build the authorized-key install plan. The key is embedded as a literal
-/// (single-quoted; the lint rejects anything else).
-pub fn install_key_plan(key: &str) -> Vec<Step> {
+/// `uci show network.lan` — the LAN network config block.
+///
+/// # Errors
+/// As [`show_firmware`].
+pub fn show_network_config<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    timeout: std::time::Duration,
+) -> Result<String, ConfigureError> {
+    let out = console.run("uci show network.lan", timeout)?;
+    step(out, "uci show network.lan").map(|s| filter_reply(&s, "uci show network.lan"))
+}
+
+/// `uci show dropbear` — the SSH daemon config block.
+///
+/// # Errors
+/// As [`show_firmware`].
+pub fn show_dropbear_config<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    timeout: std::time::Duration,
+) -> Result<String, ConfigureError> {
+    let out = console.run("uci show dropbear", timeout)?;
+    step(out, "uci show dropbear").map(|s| filter_reply(&s, "uci show dropbear"))
+}
+
+/// Set the LAN IP: `uci set`, VERIFY the stored value by reading it
+/// back BEFORE committing (`uci get` — a mangled or ignored set aborts
+/// with nothing persisted), then `uci commit network` + `ifup lan`.
+/// The pre-commit gate upgrades the Python flow, which committed and
+/// reconfigured the interface before noticing a bad readback.
+///
+/// # Errors
+/// [`ConfigureError::StepFailed`] for any uci/ifup step;
+/// [`ConfigureError::IpVerifyMismatch`] when the readback differs
+/// (nothing committed); [`ConfigureError::Console`] on transport
+/// failure.
+pub fn set_lan_ip<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    ip: &str,
+    timeout: std::time::Duration,
+) -> Result<(), ConfigureError> {
+    step(
+        console.run(&format!("uci set network.lan.ipaddr='{ip}'"), timeout)?,
+        "uci set network.lan.ipaddr",
+    )?;
+    let readback = console.run("uci get network.lan.ipaddr", timeout)?;
+    let readback = step(readback, "uci get network.lan.ipaddr")?;
+    let actual = filter_reply(&readback, "uci get network.lan.ipaddr");
+    if actual != ip {
+        return Err(ConfigureError::IpVerifyMismatch {
+            requested: ip.to_string(),
+            actual,
+        });
+    }
+    step(
+        console.run("uci commit network", timeout)?,
+        "uci commit network",
+    )?;
+    step(console.run("ifup lan", timeout)?, "ifup lan")?;
+    Ok(())
+}
+
+/// Enable or disable dropbear password auth (`uci set/commit` +
+/// init.d restart). `false` = key-only login.
+///
+/// # Errors
+/// [`ConfigureError::StepFailed`] for any step;
+/// [`ConfigureError::Console`] on transport failure.
+pub fn set_password_auth<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    enabled: bool,
+    timeout: std::time::Duration,
+) -> Result<(), ConfigureError> {
+    let value = if enabled { "on" } else { "off" };
+    step(
+        console.run(
+            &format!("uci set {DROPBEAR_AUTH_SELECT}='{value}'"),
+            timeout,
+        )?,
+        "uci set dropbear PasswordAuth",
+    )?;
+    step(
+        console.run("uci commit dropbear", timeout)?,
+        "uci commit dropbear",
+    )?;
+    step(
+        console.run("/etc/init.d/dropbear restart", timeout)?,
+        "dropbear restart",
+    )?;
+    Ok(())
+}
+
+/// Install an SSH public key: `mkdir -p /etc/dropbear`, single
+/// `echo 'KEY' > authorized_keys` (the Python wire format — the key
+/// text carries no single quotes, so the quoting is safe), `chmod 600`,
+/// then a receiver-side `wc -c` byte-count check (the #405 rule: the
+/// write is only accepted when the DEVICE's count matches the host's).
+///
+/// NB: an RSA public key line (~500+ chars) exceeds the 200-char
+/// script-line lint budget — this path sends the raw line exactly like
+/// the Python tool (proven on the bench with ed25519 keys); long-key
+/// chunking stays with [`crate::console::SerialConsole::send_script`].
+///
+/// # Errors
+/// [`ConfigureError::KeyFile`] when the host file cannot be read;
+/// [`ConfigureError::StepFailed`] for device steps;
+/// [`ConfigureError::WcUnparseable`] / [`ConfigureError::KeySizeMismatch`]
+/// for the verification; [`ConfigureError::Console`] on transport.
+pub fn install_authorized_key<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    key_path: &Path,
+    timeout: std::time::Duration,
+) -> Result<usize, ConfigureError> {
+    let key = std::fs::read_to_string(key_path).map_err(|source| ConfigureError::KeyFile {
+        path: key_path.display().to_string(),
+        source,
+    })?;
     let key = key.trim();
-    vec![
-        Step { what: "mkdir", cmd: "mkdir -p /etc/dropbear".into(), verify: None },
-        Step { what: "write key", cmd: format!("echo '{key}' > /etc/dropbear/authorized_keys"), verify: None },
-        Step { what: "perm", cmd: "chmod 600 /etc/dropbear/authorized_keys".into(), verify: None },
-        Step { what: "verify", cmd: "wc -c /etc/dropbear/authorized_keys".into(), verify: None },
-    ]
+    step(
+        console.run("mkdir -p /etc/dropbear", timeout)?,
+        "mkdir -p /etc/dropbear",
+    )?;
+    step(
+        console.run(
+            &format!("echo '{key}' > /etc/dropbear/authorized_keys"),
+            timeout,
+        )?,
+        "write authorized_keys",
+    )?;
+    step(
+        console.run("chmod 600 /etc/dropbear/authorized_keys", timeout)?,
+        "chmod authorized_keys",
+    )?;
+    verify_key_size(console, key, timeout)
 }
 
-/// Result of one executed step.
-#[derive(Debug)]
-pub struct StepResult {
-    /// The step description that ran.
-    pub what: &'static str,
-    /// 0 = success marker, 1 = failure marker, 2 = timeout.
-    pub rc: u8,
-    /// Collected console output.
-    pub output: String,
+/// The `wc -c` verification shared by the install paths. Returns the
+/// verified on-device byte count (key text + the echo newline).
+fn verify_key_size<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    key: &str,
+    timeout: std::time::Duration,
+) -> Result<usize, ConfigureError> {
+    let wc = console.run("wc -c /etc/dropbear/authorized_keys", timeout)?;
+    let wc = step(wc, "wc -c authorized_keys")?;
+    let reported = parse_wc_bytes(&filter_reply(&wc, "wc -c /etc/dropbear/authorized_keys"))
+        .ok_or(ConfigureError::WcUnparseable { output: wc })?;
+    let written = key.len() + 1; // BusyBox echo appends the newline
+    if reported != written {
+        return Err(ConfigureError::KeySizeMismatch { written, reported });
+    }
+    Ok(reported)
 }
 
-/// Execute a plan step by step, printing progress; returns each result.
-pub fn run_plan(console: &mut SerialConsole, plan: &[Step]) ->
-    Result<Vec<StepResult>, crate::io::ConsoleError> {
-    let mut out = Vec::new();
-    for step in plan {
-        let CmdOutcome { rc, output } = console.run(&step.cmd, STEP_WINDOW)?;
-        out.push(StepResult { what: step.what, rc, output: output.clone() });
-        if let Some(v) = &step.verify {
-            let CmdOutcome { rc, output } = console.run(v, STEP_WINDOW)?;
-            out.push(StepResult { what: "verify", rc, output });
+/// Extract the byte count from a `wc -c /path` reply line
+/// (`  123 /etc/dropbear/authorized_keys`). Pure.
+#[must_use]
+pub fn parse_wc_bytes(reply: &str) -> Option<usize> {
+    for line in reply.lines() {
+        if line.contains("/etc/dropbear/authorized_keys") {
+            if let Some(first) = line.split_whitespace().next() {
+                if let Ok(n) = first.parse::<usize>() {
+                    return Some(n);
+                }
+            }
         }
     }
-    Ok(out)
+    None
+}
+
+/// Run one arbitrary shell command and return its filtered reply
+/// (Python `--command`).
+///
+/// # Errors
+/// [`ConfigureError::StepFailed`] when the command itself fails (rc 1);
+/// [`ConfigureError::Console`] on transport failure.
+pub fn run_command<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    command: &str,
+    timeout: std::time::Duration,
+) -> Result<String, ConfigureError> {
+    let out = console.run(command, timeout)?;
+    step(out, "command").map(|s| filter_reply(&s, command))
 }
 
 #[cfg(test)]
@@ -102,32 +319,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ip_plan_is_literal_and_ordered() {
-        let plan = set_ip_plan("192.168.12.9");
-        assert_eq!(plan[0].cmd, "uci set network.lan.ipaddr='192.168.12.9'");
-        assert_eq!(plan[3].cmd, "uci get network.lan.ipaddr");
-    }
-
-    #[test]
-    fn key_plan_trims_and_quotes() {
-        let plan = install_key_plan("  ssh-ed25519 AAAA key@host\n");
+    fn filter_strips_echo_prompt_and_ctrl_c() {
+        let reply = "uci get network.lan.ipaddr\r\n192.168.5.1\r\nroot@OpenWrt:~# \r\n^C\r\n";
         assert_eq!(
-            plan[1].cmd,
-            "echo 'ssh-ed25519 AAAA key@host' > /etc/dropbear/authorized_keys"
+            filter_reply(reply, "uci get network.lan.ipaddr"),
+            "192.168.5.1"
         );
     }
 
     #[test]
-    fn password_toggle_values() {
-        assert!(password_auth_plan(true)[0].cmd.contains("'on'"));
-        assert!(password_auth_plan(false)[0].cmd.contains("'off'"));
+    fn filter_strips_rc_marker_lines() {
+        let reply = "192.168.5.1\r\n__RC0__\r\n";
+        assert_eq!(
+            filter_reply(reply, "uci get network.lan.ipaddr"),
+            "192.168.5.1"
+        );
     }
 
     #[test]
-    fn show_plan_is_read_only() {
-        for s in show_plan() {
-            assert!(s.cmd.starts_with("cat ") || s.cmd.starts_with("uci show"),
-                "read-only: {}", s.cmd);
-        }
+    fn filter_keeps_unrelated_root_marker_lines_out() {
+        // a line merely containing root@ is prompt noise, Python parity
+        let reply = "value1\nsomething root@ else\nvalue2";
+        assert_eq!(filter_reply(reply, "cmd"), "value1\nvalue2");
+    }
+
+    #[test]
+    fn filter_empty_reply_is_empty_string() {
+        assert_eq!(filter_reply("", "cmd"), "");
+    }
+
+    #[test]
+    fn wc_parse_extracts_count() {
+        assert_eq!(
+            parse_wc_bytes("  141 /etc/dropbear/authorized_keys\r\n"),
+            Some(141)
+        );
+        assert_eq!(parse_wc_bytes("no numbers here"), None);
+        assert_eq!(parse_wc_bytes("abc /etc/dropbear/authorized_keys"), None);
+    }
+
+    #[test]
+    fn dropbear_selector_is_python_exact() {
+        assert_eq!(DROPBEAR_AUTH_SELECT, "dropbear.@dropbear[0].PasswordAuth");
     }
 }

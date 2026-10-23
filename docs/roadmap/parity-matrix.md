@@ -29,7 +29,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 |---|---|---|---|---|
 | `scripts/router-probe.py` (boot-state detect) | ~300 | **parity-tested** — `conwrt-core` classifier (evidence-based, pure) + `conwrt-local-std::LinkProbe` | `crates/conwrt-core` state tests; CLI `conwrt diagnose` on real provider | Partial — pcap-side boot signatures still Python (`flash/serial_monitor.py` sibling logic); retire probe when pcap classifier lands in Rust |
 | `scripts/router-fingerprint.py` | ~250 | **parity-tested** — `conwrt-local-std::ssh::fingerprint` (authenticated `/etc/openwrt_release` evidence, trust-gated) | `providers/conwrt-local-std/tests/fingerprint.rs` (ring 1, live russh fixture); CLI `conwrt fingerprint`; ring-2 `qemu_dropbear.rs` | **Deprecated for OpenWrt targets (2026-10-22)**: docs swap done (README points at `conwrt fingerprint`), the script prints a deprecation notice on operator use; internal 1.x imports and stock-vendor paths remain until they port |
-| `scripts/conwrt/device_detect.py`, `device_profile.py`, `auto_detect.py` | ~800 | partial — MAC/OUI identification (`conwrt-core::identify`) + `conwrt probe`/`identify` CLI | `identify.rs` unit tests over real corpus | Partial — profile/registry heuristics (HNAP, OEM pages) not ported |
+| `scripts/conwrt/device_detect.py`, `device_profile.py`, `auto_detect.py` | ~800 | partial — MAC/OUI identification (`conwrt-core::identify`) + `conwrt probe`/`identify` CLI | `identify.rs` unit tests over real corpus | Partial — profile/registry heuristics (HNAP, OEM pages) not ported. Classifier refinement LANDED (2026-10-22): `conwrt diagnose --key` composes the unauthenticated verdict with a key-authenticated board read — headless OpenWrt (no LuCI) now resolves `ssh-only` → `openwrt` (and vendor boxes → `stock-vendor`), live-proven on the x1860 |
 | `scripts/conwrt/hnap.py`, `oem_handlers.py` | ~700 | none | — | None — OEM-specific; port per-model on demand |
 
 ## 3. Flash engine (the safety-critical core)
@@ -39,16 +39,16 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 | `scripts/conwrt/context.py`, `detect.py`, `preflight.py`, `port_isolator.py` (event state machine) | ~2500 | partial — `conwrt-core` diagnose workflow (mock-proven); no pcap event loop in Rust | `crates/conwrt-core/tests/diagnose_workflow.rs` | None for the pcap-driven engine — M7/M8; the AGENTS-embedded hardware lessons (sysupgrade 246, UART break, Z-Loader timing) must carry over test-first |
 | `scripts/conwrt/serial_monitor.py` | ~300 | partial — milestone parsing concepts in `conwrt-core`; live serial read loop remains Python | `tests/test_flash_serial_monitor.py` (29 tests, the #202 fix) | None — serial stack Rust port is M5+ (embedded-io) |
 | `scripts/flash/` (upload, recovery flows) | ~1800 | none (XMODEM transport only, see §5) | — | None |
-| `scripts/firmware-manager.py` (ASU) | ~900 | **partial → parity-tested** — `conwrt-image`: submit/poll/download/sha-verify/cache + **`conwrt image` CLI with `--packages`/`--defaults`** (model-resolved, cache short-circuit; #214-era slice) | `crates/conwrt-image` httpmock tests + `apps/conwrt-cli/tests/cli_image.rs` (binary e2e: submit→poll→download→verify→cache→short-circuit) | Partial — remaining gap is the config.toml use-case profile (plan→packages/defaults pipeline, M7); vanilla `image` sourcing stays Python until its own slice |
+| `scripts/firmware-manager.py` (ASU) | ~900 | **partial → parity-tested** — `conwrt-image`: submit/poll/download/sha-verify/cache + **`conwrt image` CLI with `--packages`/`--defaults`** (model-resolved, cache short-circuit; #214-era slice) | `crates/conwrt-image` httpmock tests + `apps/conwrt-cli/tests/cli_image.rs` (binary e2e: submit→poll→download→verify→cache→short-circuit) | Partial — `request`-with-packages is **real-ASU-proven** (2026-10-22: x1860 25.12.6 build w/ sqm + seat defaults, sha-verified, cache short-circuit, netmask guard `validate_defaults_script`); remaining gap is the config.toml use-case profile (plan→packages/defaults pipeline, M7); vanilla sourcing now Rust (⁠`conwrt source-image⁠`, live-parity-proven 2026-10-22: same URL, cache-hit on the 1.x-downloaded file, sha verified against the real index) — retirement queue #3 COMPLETE |
 | `scripts/maas_flash.py`, `maas_wol_webhook.py`, MAAS tooling | ~900 | **parity-tested** — `conwrt-maas` (flash pipeline, provider, HTTP client) + CLI `conwrt maas` | #200/#201; wiremock/httpmock suites; `docs/maas-*` | Superseded for the flows `conwrt maas` covers (image status tool #205 is Python by design — evidence reading, keep until MAAS API settles) |
 
 ## 4. Configure / profiles / use cases
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| `scripts/profile/ops.py` + `apply.py` (typed ops pipeline) | ~900 | **partial — parity-tested for the apply path**: `conwrt-core::plan` (typed ops) + `conwrt-local-std::execute::apply_plan` over russh | `providers/conwrt-local-std/tests/qemu_apply.rs` (ring 2: real QEMU Dropbear VM, rendered script == Python-shaped uci) | Partial — 11 of 34 use cases typed (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate); each additional profile lands with its parity test |
+| `scripts/profile/ops.py` + `apply.py` (typed ops pipeline) | ~900 | **partial — parity-tested for the apply path**: `conwrt-core::plan` (typed ops) + `conwrt-local-std::execute::apply_plan` over russh | `providers/conwrt-local-std/tests/qemu_apply.rs` (ring 2: real QEMU Dropbear VM, rendered script == Python-shaped uci) | Partial — 17 of 34 use cases typed (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate, adguard, mesh11sd, rescue-watchdog, mwan3, nodns, auto-sqm); each additional profile lands with its parity test |
 | `scripts/profile/overlay.py`, `builder.py`, `wifi.py`, `uci_helpers.py` | ~1200 | partial — plan/render shell path only | `conwrt-core/src/plan.rs` | None — bake/overlay (ASU first-boot) pipeline is M7 |
-| `scripts/use_cases/*` (30 plugins) | ~5000 | partial (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate) | plan.rs unit tests mirror the 1.x validators; `crates/conwrt-core/tests/use_case_goldens.rs` byte-compares rendered command lines against goldens generated from the actual 1.x builders (`tests/goldens/*.sh`, incl. wireguard-server + ssh-hardening + travelmate); ring-2 apply for wireguard-client (full plan, prebaked pkgs) + tether (shell surface; USB parts hardware-gated) in `qemu_apply.rs`; travelmate additionally ring-3 **green end-to-end** (x1860-1 real hardware, clean-slate run: apply + uci verify + paired-`uplink` recognition + auto-join of a host-seeded network + `net ok` captive probe + verified teardown — `hw_travelmate.rs`, runnable unattended via env pins; preset still NOT deprecated: the ASU bake pipeline needs the Python plugin until M7) | Per-plugin: port on demand with its parity test |
+| `scripts/use_cases/*` (30 plugins) | ~5000 | partial (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate, adguard, mesh11sd, rescue-watchdog, mwan3, nodns, auto-sqm) | plan.rs unit tests mirror the 1.x validators; `crates/conwrt-core/tests/use_case_goldens.rs` byte-compares rendered command lines against goldens generated from the actual 1.x builders (`tests/goldens/*.sh`, incl. wireguard-server + ssh-hardening + travelmate); ring-2 apply for wireguard-client (full plan, prebaked pkgs) + tether (shell surface; USB parts hardware-gated) in `qemu_apply.rs`; travelmate additionally ring-3 **green end-to-end** (x1860-1 real hardware, clean-slate run: apply + uci verify + paired-`uplink` recognition + auto-join of a host-seeded network + `net ok` captive probe + verified teardown — `hw_travelmate.rs`, runnable unattended via env pins; preset still NOT deprecated: the ASU bake pipeline needs the Python plugin until M7) | Per-plugin: port on demand with its parity test |
 | `scripts/configure-stock-switch.py`, `cmd_lan_migrate.py` | ~400 | none | — | None — bench-adjacent one-offs |
 
 ## 5. Serial & protocols
@@ -62,7 +62,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-| SSH transport in `conwrt.py`/`profile/apply.py` (paramiko/subprocess ssh) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | Superseded for the apply/fingerprint flows the Rust CLI covers; full retirement rides the CLI slice |
+| SSH transport in `conwrt.py`/`profile/apply.py` (subprocess ssh; the paramiko mention was stale) | ~600 | **parity-tested** — russh stack: host-key ladder + refusal taxonomy + persistent TOFU store + redacted creds (#207/#209) | `providers/conwrt-local-std/tests/ssh_fixture.rs` (12 tests incl. zero-auth-before-approval pins) + `qemu_dropbear.rs` (ring 2) | **Deprecated for sqm + ssh-hardening + adguard + rescue-watchdog + wireguard-client apply flows** (2026-10-22): `conwrt apply --execute` exposes all five (sqm oracle-proven; the rest carry per-row §4 evidence + ring-2); transport banner in `apply.py`. Full retirement rides the remaining profiles' Rust proofs + the ubus transport |
 
 ## 7. CLI surface
 
@@ -105,12 +105,14 @@ are operator tooling, not product surface. Review annually, not per-M9.
    parity (request-with-packages is the remaining gap). **OPEN** —
    gate unmet.
 4. **`profile/apply.py` SSH path** — retire when `conwrt apply
-   --execute` covers the ops set used by CI (sqm today). **OPEN** but
-   closer than written: #429 proves the Rust-RENDERED wireguard plan
-   applies and tunnels on the QEMU VM (the #411 render binary + `sh
-   -s`), and ring-2 `qemu_apply.rs` covers sqm/wireguard/tether via
-   the russh executor. Remaining: switch the CI configure path itself
-   to `conwrt apply --execute`, then deprecate the paramiko path.
+   --execute` covers the ops set used by CI (sqm today).
+   **DEPRECATED 2026-10-22**: `tests/integration/test_rust_apply_sqm.py`
+   proves the Rust apply path inside the QEMU oracle suite (fingerprint
+   + board gate + full verification), and the run caught and fixed a
+   real set -e render bug (`_sqm_dev=$(uci get ...)` without `|| true`
+   aborts under the 2.x `set -e` preamble when `wan.device` is absent).
+   Removal waits on the remaining profiles' Rust proofs + the ubus
+   transport.
 5. Everything else: per-row gates above; nothing retires without a
    green Rust twin AND a removal PR citing this file's row.
 

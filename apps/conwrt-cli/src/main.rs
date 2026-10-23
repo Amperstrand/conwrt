@@ -19,9 +19,13 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
-use conwrt_core::plan::{DohProfile, SqmProfile};
+use conwrt_core::plan::{
+    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
+    PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, TravelmateProfile,
+    WireguardClientProfile, WireguardServerProfile,
+};
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
-use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile, render_shell};
+use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
@@ -44,23 +48,7 @@ struct Cli {
 enum Command {
     /// List or dump /dev/mtd partitions over serial (Rust port of
     /// scripts/serial-backup.py).
-    SerialBackup {
-        /// Serial port spec (/dev path or tcp://HOST:PORT).
-        #[arg(long)]
-        port: String,
-        /// Baud rate.
-        #[arg(long, default_value_t = 115200)]
-        baud: u32,
-        /// List partitions only (no dump).
-        #[arg(long)]
-        list: bool,
-        /// Dump this partition by name (e.g. Factory).
-        #[arg(long)]
-        partition: Option<String>,
-        /// Output directory (default: backups/<port-basename>).
-        #[arg(long)]
-        out_dir: Option<std::path::PathBuf>,
-    },
+
     /// Detect the likely baud rate of a serial console: opens the port at
     /// each candidate rate, scores received data (ComScope/baudowl
     /// scoring; Rust port of scripts/serial_baud.py).
@@ -75,43 +63,11 @@ enum Command {
     /// First-contact configuration over serial (Rust port of
     /// scripts/serial-configure.py): show state, set LAN IP, toggle
     /// password auth, install an SSH key.
-    SerialConfigure {
-        /// Serial port spec (/dev path or tcp://HOST:PORT).
-        #[arg(long)]
-        port: String,
-        /// Baud rate.
-        #[arg(long, default_value_t = 115200)]
-        baud: u32,
-        /// Show firmware + network + dropbear state.
-        #[arg(long)]
-        show: bool,
-        /// Set the LAN IP.
-        #[arg(long)]
-        set_ip: Option<String>,
-        /// Enable dropbear password auth.
-        #[arg(long)]
-        enable_password: bool,
-        /// Disable dropbear password auth (key-only).
-        #[arg(long)]
-        disable_password: bool,
-        /// Install an SSH authorized key from a file.
-        #[arg(long)]
-        install_key: Option<std::path::PathBuf>,
-    },
+
     /// Serial console monitor: dual logging (raw + timestamped), boot-stage
     /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
     /// (Rust port of scripts/serial-console.py --monitor).
-    SerialConsole {
-        /// Serial port spec (/dev path or tcp://HOST:PORT).
-        #[arg(long)]
-        port: String,
-        /// Baud rate.
-        #[arg(long, default_value_t = 115200)]
-        baud: u32,
-        /// Session name; logs go to serial/<name>/{console.raw,console.log,session.json}.
-        #[arg(long, default_value = "session")]
-        session: String,
-    },
+
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -159,6 +115,12 @@ enum Command {
         /// SSH port to probe for the identification banner (22).
         #[arg(long, default_value_t = 22)]
         ssh_port: u16,
+        /// Private key for the authenticated board read: when the
+        /// unauthenticated verdict is `ssh-only`, connect with this key
+        /// and read board identity (`/tmp/sysinfo/board_name` +
+        /// `/etc/openwrt_release`) to resolve the OS ambiguity.
+        #[arg(long)]
+        key: Option<PathBuf>,
         /// Directory containing `*.json` model files.
         #[arg(long, default_value = "models")]
         dir: PathBuf,
@@ -189,6 +151,45 @@ enum Command {
     Maas {
         #[command(subcommand)]
         command: MaasCommand,
+    },
+    /// Manage the firmware images cache (1.x `conwrt.py cache` parity).
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
+    /// Source the vanilla OpenWrt image for a model from
+    /// downloads.openwrt.org: resolve release/flavour through the
+    /// precedence chains (CLI > env > model > default), fetch the
+    /// target's sha256sums index, verify the downloaded bytes, cache
+    /// under images/ (1.x `conwrt.py image` / `make source-image` parity).
+    SourceImage {
+        /// Model id from `conwrt models`.
+        #[arg(long)]
+        model_id: String,
+        /// Full X.Y.Z release; defaults to the model's `openwrt.release`.
+        #[arg(long)]
+        release: Option<String>,
+        /// Image flavour (e.g. squashfs-factory.bin); defaults to the
+        /// model's `openwrt.image_suffix`, then squashfs-sysupgrade.bin.
+        #[arg(long)]
+        image_suffix: Option<String>,
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+        /// downloads server base URL (default: downloads.openwrt.org;
+        /// mirrors work — the layout below `<base>/releases/` is the
+        /// contract).
+        #[arg(long)]
+        downloads_base: Option<String>,
+        /// Skip the sha256sums index check (parity with the 1.x kwarg).
+        #[arg(long)]
+        no_verify: bool,
+        /// Re-download even when a matching cached image exists.
+        #[arg(long)]
+        force: bool,
+        /// Directory containing `*.json` model files.
+        #[arg(long, default_value = "models")]
+        dir: PathBuf,
     },
     /// Request a custom ASU firmware build and cache the verified image
     /// (#117 parity slice for firmware-manager.py `request`).
@@ -232,9 +233,8 @@ enum Command {
     /// default: prints the exact script. Mutating execution requires
     /// --execute AND a fingerprint-confirmed OpenWrt identity.
     Apply {
-        /// Desired-state profile to apply.
-        #[arg(long)]
-        profile: ProfileChoice,
+        #[command(flatten)]
+        profile_args: ProfileArgs,
         /// Explicitly forget the stored host key before connecting
         /// (reflash/reimage escape hatch; logged, never silent).
         #[arg(long)]
@@ -242,21 +242,6 @@ enum Command {
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        download_kbps: Option<u32>,
-        /// Shaper upload rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        upload_kbps: Option<u32>,
-        /// UCI network name to shape (sqm).
-        #[arg(long, default_value = "wan")]
-        interface: String,
-        /// DoH provider name or https:// URL (doh).
-        #[arg(long)]
-        provider: Option<String>,
-        /// DoH local listen port (doh).
-        #[arg(long)]
-        listen_port: Option<u16>,
         /// Target address of the device.
         #[arg(long)]
         ip: IpAddr,
@@ -309,27 +294,11 @@ enum Command {
         password: Option<String>,
     },
     Plan {
-        /// Desired-state profile to plan.
-        #[arg(long)]
-        profile: ProfileChoice,
+        #[command(flatten)]
+        profile_args: ProfileArgs,
         /// Model to plan for (id from `conwrt models`).
         #[arg(long)]
         model_id: String,
-        /// Shaper download rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        download_kbps: Option<u32>,
-        /// Shaper upload rate in Kbit/s (required for sqm).
-        #[arg(long)]
-        upload_kbps: Option<u32>,
-        /// UCI network name to shape (sqm).
-        #[arg(long, default_value = "wan")]
-        interface: String,
-        /// DoH provider name or https:// URL (doh).
-        #[arg(long)]
-        provider: Option<String>,
-        /// DoH local listen port (doh).
-        #[arg(long)]
-        listen_port: Option<u16>,
         /// Target address (used for reporting; the mock answers anything).
         #[arg(long, default_value = "192.168.1.1")]
         ip: IpAddr,
@@ -366,7 +335,188 @@ impl ScenarioChoice {
 enum ProfileChoice {
     Sqm,
     Doh,
+    SshHardening,
+    Adguard,
+    RescueWatchdog,
+    WireguardClient,
+    WireguardServer,
+    GuestWifi,
+    Travelmate,
+    Pbr,
+    Mwan3,
+    Nodns,
+    AutoSqm,
 }
+
+/// Profile selection + per-profile parameters, shared by `apply` and
+/// `plan` (flattened into both subcommands — one help surface, one
+/// `build_profile` consumer).
+#[derive(clap::Args)]
+struct ProfileArgs {
+    /// Desired-state profile to apply.
+    #[arg(long)]
+    profile: ProfileChoice,
+    /// Shaper download rate in Kbit/s (required for sqm).
+    #[arg(long)]
+    download_kbps: Option<u32>,
+    /// Shaper upload rate in Kbit/s (required for sqm).
+    #[arg(long)]
+    upload_kbps: Option<u32>,
+    /// UCI network name to shape (sqm).
+    #[arg(long, default_value = "wan")]
+    interface: String,
+    /// DoH provider name or https:// URL (doh).
+    #[arg(long)]
+    provider: Option<String>,
+    /// DoH local listen port (doh); ssh-hardening dropbear port;
+    /// wireguard-server UDP listen port.
+    #[arg(long)]
+    listen_port: Option<u16>,
+    /// ssh-hardening: idle disconnect timeout in seconds.
+    #[arg(long)]
+    idle_timeout: Option<u32>,
+    /// ssh-hardening: max auth attempts per connection.
+    #[arg(long)]
+    max_auth_tries: Option<u32>,
+    /// ssh-hardening: KEEP password auth (default disables it).
+    #[arg(long)]
+    password_auth: bool,
+    /// adguard: web UI listen address.
+    #[arg(long)]
+    listen_ip: Option<String>,
+    /// adguard: web UI port.
+    #[arg(long)]
+    web_port: Option<u16>,
+    /// adguard: DNS listen port (off 53 to avoid dnsmasq).
+    #[arg(long)]
+    dns_port: Option<u16>,
+    /// rescue-watchdog: management IP pinged once a minute.
+    #[arg(long)]
+    target: Option<String>,
+    /// wireguard-client: VPN server public key (required).
+    #[arg(long)]
+    peer_public_key: Option<String>,
+    /// wireguard-client: VPN server hostname or IPv4 (required).
+    #[arg(long)]
+    endpoint_host: Option<String>,
+    /// wireguard-client: VPN server UDP port.
+    #[arg(long)]
+    endpoint_port: Option<u16>,
+    /// wireguard-client: pre-shared key (optional).
+    #[arg(long)]
+    peer_psk: Option<String>,
+    /// wireguard-client: tunnel address with CIDR.
+    #[arg(long)]
+    address: Option<String>,
+    /// wireguard-client: DNS server through the tunnel.
+    #[arg(long)]
+    dns: Option<String>,
+    /// wireguard-client: IPs routed through the tunnel.
+    #[arg(long)]
+    allowed_ips: Option<String>,
+    /// wireguard-client: opt OUT of the kill switch (1.x default is ON —
+    /// block all traffic when the tunnel is down).
+    #[arg(long)]
+    no_kill_switch: bool,
+    /// wireguard-server: VPN client subnet, server IP + CIDR.
+    #[arg(long)]
+    subnet: Option<String>,
+    /// wireguard-server: first peer's public key (empty = no peer).
+    #[arg(long)]
+    peer1_public_key: Option<String>,
+    /// wireguard-server: first peer's allowed IPs.
+    #[arg(long)]
+    peer1_allowed_ips: Option<String>,
+    /// wireguard-server: first peer's pre-shared key (optional).
+    #[arg(long)]
+    peer1_psk: Option<String>,
+    /// guest-wifi: SSID (required; validated at plan time).
+    #[arg(long)]
+    ap_ssid: Option<String>,
+    /// guest-wifi: WiFi password (empty = open network).
+    #[arg(long)]
+    ap_key: Option<String>,
+    /// guest-wifi: encryption mode (psk2 default, sae for WPA3…).
+    #[arg(long)]
+    ap_encryption: Option<String>,
+    /// guest-wifi: WiFi band (2.4ghz default).
+    #[arg(long)]
+    ap_band: Option<String>,
+    /// guest-wifi: opt OUT of client isolation (default isolates).
+    #[arg(long)]
+    ap_no_isolation: bool,
+    /// pbr: WAN UCI interface for default routing (default `wan`).
+    #[arg(long)]
+    pbr_wan: Option<String>,
+    /// mwan3: primary WAN interface (default `wan`).
+    #[arg(long)]
+    mwan3_primary: Option<String>,
+    /// mwan3: secondary WAN interface (default `usbwan`).
+    #[arg(long)]
+    mwan3_secondary: Option<String>,
+    /// mwan3: `failover` or `balanced` (default `failover`).
+    #[arg(long)]
+    mwan3_policy: Option<String>,
+    /// nodns: DNS zone to cache (default `nodns.shop`).
+    #[arg(long)]
+    nodns_zone: Option<String>,
+    /// nodns: bot API base URL (default `https://nodns.shop`).
+    #[arg(long)]
+    nodns_api_url: Option<String>,
+    /// nodns: polling interval in seconds, 60–86400 (default 300).
+    #[arg(long)]
+    nodns_poll_interval: Option<u32>,
+    /// auto-sqm: `static` or `dynamic` (default `static`).
+    #[arg(long)]
+    autosqm_mode: Option<String>,
+    /// auto-sqm: WAN interface to measure/shape (default `wan`).
+    #[arg(long)]
+    autosqm_interface: Option<String>,
+    /// auto-sqm: apply SQM at this % of measured speed (default 90).
+    #[arg(long)]
+    autosqm_target_percent: Option<u32>,
+    /// pbr: LAN interface counted as local traffic (default `lan`).
+    #[arg(long)]
+    pbr_lan: Option<String>,
+    /// travelmate: WiFi radio for upstream scanning.
+    #[arg(long)]
+    trm_radio: Option<String>,
+    /// travelmate: overall retry timeout in seconds.
+    #[arg(long)]
+    trm_timeout: Option<u32>,
+    /// travelmate: retry count to find a suitable uplink.
+    #[arg(long)]
+    trm_retry: Option<u32>,
+    /// travelmate: opt OUT of captive portal detection.
+    #[arg(long)]
+    trm_no_captive: bool,
+}
+/// Subcommands of `conwrt cache` (1.x `conwrt.py cache` parity).
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// List cached firmware builds (ASU model/hash layout).
+    List {
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+    },
+    /// Remove cached builds. Without `--yes` only prints the plan.
+    Clean {
+        /// Restrict to one model (hyphen/underscore spellings both match).
+        #[arg(long)]
+        model_id: Option<String>,
+        /// Keep only the newest build per model (by cache-dir mtime).
+        #[arg(long)]
+        keep_latest: bool,
+        /// Actually remove (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// Images cache root (default: `images/`).
+        #[arg(long, default_value = "images")]
+        images_root: PathBuf,
+    },
+}
+
 #[derive(Subcommand)]
 enum MaasCommand {
     /// Run the lab disk pipeline (verify → write → verify → inject) on a
@@ -494,55 +644,6 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::SerialBackup {
-            port,
-            baud,
-            list,
-            partition,
-            out_dir,
-        } => {
-            use conwrt_serial::backup::{dump_partition, parse_partitions};
-            use conwrt_serial::console::SerialConsole;
-            use std::time::Duration;
-
-            let mut console = match SerialConsole::with_baud(
-                &port, baud, Duration::from_secs(1)) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("conwrt: open/activate {port}: {e}"); return ExitCode::from(2); }
-            };
-            let mtd = match console
-                .run("cat /proc/mtd", Duration::from_secs(10)) {
-                Ok(o) => o,
-                Err(e) => { eprintln!("conwrt: /proc/mtd: {e}"); return ExitCode::from(3); }
-            };
-            let parts = parse_partitions(&mtd.output);
-            println!("{:<8} {:>10}  name", "dev", "size");
-            for p in &parts {
-                println!("{:<8} {:>10}  {}", p.device, p.size, p.name);
-            }
-            if list {
-                return ExitCode::SUCCESS;
-            }
-            let Some(name) = partition else { return ExitCode::SUCCESS };
-            let Some(p) = parts.iter().find(|p| p.name == name) else {
-                eprintln!("conwrt: no partition named {name}");
-                return ExitCode::from(4);
-            };
-            let dir = out_dir.unwrap_or_else(|| {
-                std::path::PathBuf::from("backups").join(
-                    port.rsplit('/').next().unwrap_or("port"))
-            });
-            let out = dir.join(format!("{}.bin", p.device));
-            println!("dumping {} ({} bytes) -> {}", p.name, p.size, out.display());
-            match dump_partition(&mut console, p, &out) {
-                Ok(conwrt_serial::backup::DumpOutcome::Complete { bytes }) => {
-                    println!("done: {bytes} bytes -> {}", out.display());
-                    ExitCode::SUCCESS
-                }
-                Ok(other) => { eprintln!("conwrt: dump failed: {other:?}"); ExitCode::from(5) }
-                Err(e) => { eprintln!("conwrt: dump error: {e}"); ExitCode::from(5) }
-            }
-        }
         Command::SerialBaud {
             port,
             listen_secs,
@@ -581,96 +682,6 @@ fn main() -> ExitCode {
                 _ => { eprintln!("conwrt: no console data at any candidate rate"); ExitCode::from(4) }
             }
         }
-        Command::SerialConfigure {
-            port,
-            baud,
-            show,
-            set_ip,
-            enable_password,
-            disable_password,
-            install_key,
-        } => {
-            use conwrt_serial::configure::{
-                install_key_plan, password_auth_plan, run_plan, set_ip_plan, show_plan,
-            };
-            use conwrt_serial::console::SerialConsole;
-            use std::time::Duration;
-
-            if !show && set_ip.is_none() && !enable_password && !disable_password
-                && install_key.is_none() {
-                eprintln!("conwrt: nothing to do — pass --show, --set-ip, --enable-password, --disable-password or --install-key");
-                return ExitCode::from(1);
-            }
-            let mut console = match SerialConsole::with_baud(
-                &port, baud, Duration::from_secs(1)) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("conwrt: open/activate {port}: {e}"); return ExitCode::from(2); }
-            };
-            let mut plans = Vec::new();
-            if show { plans.extend(show_plan()); }
-            if let Some(ip) = &set_ip { plans.extend(set_ip_plan(ip)); }
-            if enable_password { plans.extend(password_auth_plan(true)); }
-            if disable_password { plans.extend(password_auth_plan(false)); }
-            if let Some(kf) = &install_key {
-                match std::fs::read_to_string(kf) {
-                    Ok(k) => plans.extend(install_key_plan(&k)),
-                    Err(e) => { eprintln!("conwrt: read {}: {e}", kf.display()); return ExitCode::from(2); }
-                }
-            }
-            for step in &plans { println!("== {}:", step.what); }
-            match run_plan(&mut console, &plans) {
-                Ok(results) => {
-                    for r in results {
-                        println!("-- {} [rc={}]", r.what, r.rc);
-                        if !r.output.trim().is_empty() {
-                            println!("{}", r.output.trim_end());
-                        }
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => { eprintln!("conwrt: plan failed: {e}"); ExitCode::from(3) }
-            }
-        }
-        Command::SerialConsole {
-            port,
-            baud,
-            session,
-        } => {
-            use conwrt_serial::console_monitor::{
-                run_monitor, translate_token, MonitorConfig,
-            };
-            use conwrt_serial::io::open_port;
-            use std::io::BufRead;
-            use std::sync::mpsc;
-            use std::time::Duration;
-
-            let dir = std::path::PathBuf::from("serial").join(&session);
-            let (tx, rx) = mpsc::channel::<Vec<u8>>();
-            // stdin injector: lines -> token translation -> channel
-            std::thread::spawn(move || {
-                let stdin = std::io::stdin();
-                for line in stdin.lock().lines() {
-                    let Ok(line) = line else { break };
-                    let _ = tx.send(translate_token(&line));
-                }
-            });
-            let mut io = match open_port(&port, baud, Duration::from_millis(200)) {
-                Ok(io) => io,
-                Err(e) => {
-                    eprintln!("conwrt: open {port}: {e}");
-                    return ExitCode::from(2);
-                }
-            };
-            println!("monitoring {port} -> {} (stdin lines inject; ESCAPE/ENTER/CTRLC tokens)",
-                     dir.display());
-            match run_monitor(io.as_mut(), &MonitorConfig { session_dir: dir.clone() }, &rx) {
-                Ok(_) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("conwrt: monitor ended: {e} (session meta in {})", dir.display());
-                    ExitCode::SUCCESS // transport end is a normal monitor exit
-                }
-            }
-        }
         Command::SerialRecover {
             port,
             baud,
@@ -707,6 +718,28 @@ fn main() -> ExitCode {
     Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
+        Command::Cache { command } => cmd_cache(command),
+        Command::SourceImage {
+            model_id,
+            release,
+            image_suffix,
+            images_root,
+            downloads_base,
+            no_verify,
+            force,
+            dir,
+        } => cmd_source_image(
+            &SourceImageArgs {
+                model_id: &model_id,
+                release: release.as_deref(),
+                image_suffix: image_suffix.as_deref(),
+                images_root: &images_root,
+                downloads_base: downloads_base.as_deref(),
+                no_verify,
+                force,
+            },
+            &dir,
+        ),
         Command::Image {
             model_id,
             release,
@@ -735,8 +768,9 @@ fn main() -> ExitCode {
             interface,
             http_port,
             ssh_port,
+            key,
             dir,
-        } => cmd_diagnose(ip, interface, http_port, ssh_port, &dir),
+        } => cmd_diagnose(ip, interface, http_port, ssh_port, key, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
         Command::Fingerprint {
             ip,
@@ -755,13 +789,8 @@ fn main() -> ExitCode {
         ),
         Command::Apply {
             relearn_host_key,
-            profile,
+            profile_args,
             model_id,
-            download_kbps,
-            upload_kbps,
-            interface,
-            provider,
-            listen_port,
             ip,
             port,
             user,
@@ -771,13 +800,8 @@ fn main() -> ExitCode {
             dir,
         } => cmd_apply(
             relearn_host_key,
-            profile,
+            profile_args,
             &model_id,
-            download_kbps,
-            upload_kbps,
-            &interface,
-            provider,
-            listen_port,
             ip,
             port,
             &user,
@@ -787,28 +811,12 @@ fn main() -> ExitCode {
             &dir,
         ),
         Command::Plan {
-            profile,
+            profile_args,
             model_id,
-            download_kbps,
-            upload_kbps,
-            interface,
-            provider,
-            listen_port,
             ip,
             scenario,
             dir,
-        } => cmd_plan(
-            profile,
-            &model_id,
-            download_kbps,
-            upload_kbps,
-            &interface,
-            provider,
-            listen_port,
-            ip,
-            scenario,
-            &dir,
-        ),
+        } => cmd_plan(profile_args, &model_id, ip, scenario, &dir),
     }
 }
 fn load_registry(dir: &Path) -> (conwrt_types::registry::ModelRegistry, PathBuf) {
@@ -899,6 +907,7 @@ fn cmd_diagnose(
     interface: Option<String>,
     http_port: u16,
     ssh_port: u16,
+    key: Option<PathBuf>,
     dir: &Path,
 ) -> ExitCode {
     let (registry, _) = load_registry(dir);
@@ -914,15 +923,35 @@ fn cmd_diagnose(
             return ExitCode::from(2);
         }
     };
-    let diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
+    let mut diagnosis = match runtime.block_on(diagnose(&mut prober, ip, registry.models())) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("diagnose failed: {e}");
             return ExitCode::from(2);
         }
     };
+    if let Some(key_path) = key.as_deref() {
+        if diagnosis.state == DeviceState::SshOnly {
+            let addr = format!("{ip}:{ssh_port}");
+            match runtime.block_on(conwrt_local_std::fingerprint::authenticated_board(
+                &addr, key_path,
+            )) {
+                Some(board) => {
+                    diagnosis = conwrt_core::refine_with_authenticated_board(diagnosis, board);
+                }
+                None => eprintln!(
+                    "authenticated board read failed (key refused or unreachable) — \
+                     ssh-only verdict stands"
+                ),
+            }
+        }
+    }
     print_diagnosis(&diagnosis);
-    println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    if key.is_some() {
+        println!("\n(provider: local-std; read-only probes + key-authenticated board read)");
+    } else {
+        println!("\n(provider: local-std; read-only probes — ping, HTTP GET, SSH banner, ARP)");
+    }
     ExitCode::SUCCESS
 }
 fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
@@ -948,15 +977,9 @@ fn print_diagnosis(diagnosis: &conwrt_core::Diagnosis) {
         }
     }
 }
-#[allow(clippy::too_many_arguments)]
 fn cmd_plan(
-    profile: ProfileChoice,
+    profile_args: ProfileArgs,
     model_id: &str,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
     ip: IpAddr,
     scenario: ScenarioChoice,
     dir: &Path,
@@ -977,14 +1000,7 @@ fn cmd_plan(
             return ExitCode::from(2);
         }
     };
-    let profile = match build_profile(
-        profile,
-        download_kbps,
-        upload_kbps,
-        interface,
-        provider,
-        listen_port,
-    ) {
+    let profile = match build_profile(&profile_args) {
         Ok(profile) => profile,
         Err(msg) => {
             eprintln!("{msg}");
@@ -1129,16 +1145,11 @@ fn store_forget(addr: &str) {
     use conwrt_core::ssh::TrustStore;
     FileTrustStore::new(FileTrustStore::default_path()).forget(addr);
 }
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // ssh-target plumbing; grouped under one subcommand
 fn cmd_apply(
     relearn_host_key: bool,
-    profile: ProfileChoice,
+    profile_args: ProfileArgs,
     model_id: &str,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
     ip: IpAddr,
     port: u16,
     user: &str,
@@ -1155,14 +1166,7 @@ fn cmd_apply(
             return ExitCode::from(2);
         }
     };
-    let profile = match build_profile(
-        profile,
-        download_kbps,
-        upload_kbps,
-        interface,
-        provider,
-        listen_port,
-    ) {
+    let profile = match build_profile(&profile_args) {
         Ok(profile) => profile,
         Err(msg) => {
             eprintln!("{msg}");
@@ -1256,11 +1260,26 @@ fn cmd_apply(
         plan.verification.len()
     );
     println!();
-    println!("{}", render_shell(&plan));
+    println!("{}", conwrt_local_std::execute::render_apply_script(&plan));
 
     if !execute {
         println!("# dry-run: no changes made. Re-run with --execute to apply.");
         return ExitCode::SUCCESS;
+    }
+    // Escape-hatch discipline (AGENTS.md): never disable the only working
+    // auth method. Password-only auth + PasswordAuth=off = locked out.
+    // The systemic executor-side gate is tracked in #427; this CLI guard
+    // covers the concrete foot-gun.
+    if let Profile::SshHardening(sh) = &profile {
+        if sh.disable_password_auth && key.is_none() {
+            eprintln!(
+                "refused: ssh-hardening would disable password auth, but this session \
+                 authenticates by password (no --key). Install a key first \
+                 (conwrt apply --key ... after adding it to authorized_keys) — \
+                 refusing to cut the only working door."
+            );
+            return ExitCode::FAILURE;
+        }
     }
     eprintln!("# executing on {ip} ...");
     match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
@@ -1288,27 +1307,137 @@ fn cmd_apply(
     }
 }
 
-fn build_profile(
-    profile: ProfileChoice,
-    download_kbps: Option<u32>,
-    upload_kbps: Option<u32>,
-    interface: &str,
-    provider: Option<String>,
-    listen_port: Option<u16>,
-) -> Result<Profile, String> {
-    match profile {
-        ProfileChoice::Sqm => match (download_kbps, upload_kbps) {
+fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
+    match args.profile {
+        ProfileChoice::Sqm => match (args.download_kbps, args.upload_kbps) {
             (Some(download_kbps), Some(upload_kbps)) => Ok(Profile::Sqm(SqmProfile {
                 download_kbps,
                 upload_kbps,
-                interface: interface.into(),
+                interface: args.interface.clone(),
                 ..default_sqm()
             })),
             _ => Err("--download-kbps and --upload-kbps are required for sqm".into()),
         },
         ProfileChoice::Doh => Ok(Profile::Doh(DohProfile {
-            provider: provider.unwrap_or_else(|| "cloudflare".into()),
-            listen_port: listen_port.unwrap_or(5053),
+            provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
+            listen_port: args.listen_port.unwrap_or(5053),
+        })),
+        ProfileChoice::SshHardening => Ok(Profile::SshHardening(SshHardeningProfile {
+            disable_password_auth: !args.password_auth,
+            idle_timeout: args.idle_timeout.unwrap_or(300),
+            max_auth_tries: args.max_auth_tries.unwrap_or(3),
+            port: args.listen_port.unwrap_or(22),
+            ..SshHardeningProfile::default()
+        })),
+        ProfileChoice::Adguard => Ok(Profile::Adguard(AdguardProfile {
+            listen_ip: args.listen_ip.clone().unwrap_or_else(|| "0.0.0.0".into()),
+            web_port: args.web_port.unwrap_or(3000),
+            dns_port: args.dns_port.unwrap_or(5353),
+        })),
+        ProfileChoice::RescueWatchdog => Ok(Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: args
+                .target
+                .clone()
+                .unwrap_or_else(|| "192.168.1.254".into()),
+        })),
+        ProfileChoice::WireguardClient => {
+            // required-param gates live in WireguardClientProfile::validate,
+            // enforced at plan time with the 1.x error shapes
+            Ok(Profile::WireguardClient(WireguardClientProfile {
+                peer_public_key: args.peer_public_key.clone().unwrap_or_default(),
+                endpoint_host: args.endpoint_host.clone().unwrap_or_default(),
+                endpoint_port: args.endpoint_port.unwrap_or(51820),
+                peer_psk: args.peer_psk.clone().unwrap_or_default(),
+                address: args
+                    .address
+                    .clone()
+                    .unwrap_or_else(|| "10.67.0.2/32".into()),
+                dns: args.dns.clone().unwrap_or_default(),
+                // 1.x default is ON; --no-kill-switch is the explicit opt-out
+                kill_switch: !args.no_kill_switch,
+                allowed_ips: args
+                    .allowed_ips
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0.0/0, ::/0".into()),
+                ..WireguardClientProfile::default()
+            }))
+        }
+        ProfileChoice::WireguardServer => Ok(Profile::WireguardServer(WireguardServerProfile {
+            listen_port: args.listen_port.unwrap_or(51820),
+            subnet: args.subnet.clone().unwrap_or_else(|| "10.1.99.1/24".into()),
+            peer1_public_key: args.peer1_public_key.clone().unwrap_or_default(),
+            peer1_allowed_ips: args
+                .peer1_allowed_ips
+                .clone()
+                .unwrap_or_else(|| "10.1.99.2/32".into()),
+            peer1_psk: args.peer1_psk.clone().unwrap_or_default(),
+            ..WireguardServerProfile::default()
+        })),
+        ProfileChoice::GuestWifi => {
+            // 1.x validate_ssid + WIFI_* choice gates fire at plan time;
+            // the omitted-flag defaults are the valid 1.x defaults.
+            // Refuse the psk/sae-without-key foot-gun up front (1.x
+            // renders it and hostapd then refuses to start the AP).
+            let encryption = args.ap_encryption.clone().unwrap_or_else(|| "psk2".into());
+            let key = args.ap_key.clone().unwrap_or_default();
+            if key.is_empty() && encryption != "none" && encryption != "owe" {
+                return Err(format!(
+                    "--ap-encryption {encryption} needs --ap-key \
+                     (or pass --ap-encryption none for an open network)"
+                ));
+            }
+            Ok(Profile::GuestWifi(GuestWifiProfile {
+                ssid: args.ap_ssid.clone().unwrap_or_else(|| "Guest".into()),
+                key,
+                encryption,
+                band: args.ap_band.clone().unwrap_or_else(|| "2.4ghz".into()),
+                isolation: !args.ap_no_isolation,
+                ..GuestWifiProfile::default()
+            }))
+        }
+        ProfileChoice::Travelmate => Ok(Profile::Travelmate(TravelmateProfile {
+            radio: args.trm_radio.clone().unwrap_or_else(|| "radio0".into()),
+            timeout: args.trm_timeout.unwrap_or(60),
+            retry: args.trm_retry.unwrap_or(5),
+            captive: !args.trm_no_captive,
+            ..TravelmateProfile::default()
+        })),
+        ProfileChoice::Pbr => Ok(Profile::Pbr(PbrProfile {
+            wan_interface: args.pbr_wan.clone().unwrap_or_else(|| "wan".into()),
+            lan_interface: args.pbr_lan.clone().unwrap_or_else(|| "lan".into()),
+            ..PbrProfile::default()
+        })),
+        ProfileChoice::Mwan3 => Ok(Profile::Mwan3(Mwan3Profile {
+            primary: args.mwan3_primary.clone().unwrap_or_else(|| "wan".into()),
+            secondary: args
+                .mwan3_secondary
+                .clone()
+                .unwrap_or_else(|| "usbwan".into()),
+            policy: args
+                .mwan3_policy
+                .clone()
+                .unwrap_or_else(|| "failover".into()),
+            ..Mwan3Profile::default()
+        })),
+        ProfileChoice::Nodns => Ok(Profile::Nodns(NodnsProfile {
+            zone: args
+                .nodns_zone
+                .clone()
+                .unwrap_or_else(|| "nodns.shop".into()),
+            api_url: args
+                .nodns_api_url
+                .clone()
+                .unwrap_or_else(|| "https://nodns.shop".into()),
+            poll_interval: args.nodns_poll_interval.unwrap_or(300),
+        })),
+        ProfileChoice::AutoSqm => Ok(Profile::AutoSqm(AutoSqmProfile {
+            mode: args.autosqm_mode.clone().unwrap_or_else(|| "static".into()),
+            interface: args
+                .autosqm_interface
+                .clone()
+                .unwrap_or_else(|| "wan".into()),
+            target_percent: args.autosqm_target_percent.unwrap_or(90),
+            ..AutoSqmProfile::default()
         })),
     }
 }
@@ -1738,6 +1867,283 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
     }
 }
 
+fn cmd_cache(command: CacheCommand) -> ExitCode {
+    match command {
+        CacheCommand::List { images_root } => cache_list(&images_root),
+        CacheCommand::Clean {
+            model_id,
+            keep_latest,
+            yes,
+            images_root,
+        } => cache_clean(&model_id, keep_latest, yes, &images_root),
+    }
+}
+
+fn cache_list(images_root: &Path) -> ExitCode {
+    let Ok(model_dirs) = std::fs::read_dir(images_root) else {
+        eprintln!("No images/ directory found.");
+        return ExitCode::from(1);
+    };
+    let mut rows: Vec<(String, String, String, String, u64)> = Vec::new();
+    let mut model_dirs: Vec<_> = model_dirs.filter_map(|e| e.ok()).collect();
+    model_dirs.sort_by_key(|e| e.file_name());
+    for model_dir in model_dirs {
+        if !model_dir.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(hash_dirs) = std::fs::read_dir(model_dir.path()) else {
+            continue;
+        };
+        let mut hash_dirs: Vec<_> = hash_dirs.filter_map(|e| e.ok()).collect();
+        hash_dirs.sort_by_key(|e| e.file_name());
+        for hash_dir in hash_dirs {
+            if !hash_dir.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dir = hash_dir.path();
+            let mut version = "?".to_string();
+            let mut code = String::new();
+            let mut types: Vec<&str> = Vec::new();
+            let mut total = 0u64;
+            let Ok(files) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for file in files.filter_map(|e| e.ok()) {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let Ok(meta) = file.metadata() else {
+                    continue;
+                };
+                if name.ends_with(".metadata.json") {
+                    if let Ok(text) = std::fs::read_to_string(file.path()) {
+                        if let Ok(value) = serde_json_parse(&text) {
+                            version = value
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            code = value
+                                .get("version_code")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .chars()
+                                .take(20)
+                                .collect();
+                        }
+                    }
+                } else if name.ends_with(".bin") && meta.is_file() {
+                    total += meta.len();
+                    let kind = if name.contains("sysupgrade") {
+                        "sysupgrade"
+                    } else if name.contains("recovery") {
+                        "recovery"
+                    } else if name.contains("factory") {
+                        "factory"
+                    } else {
+                        "other"
+                    };
+                    types.push(kind);
+                }
+            }
+            if !code.is_empty() {
+                version.push_str(&format!(" ({code})"));
+            }
+            types.sort_unstable();
+            types.dedup();
+            rows.push((
+                model_dir.file_name().to_string_lossy().into_owned(),
+                hash_dir.file_name().to_string_lossy().into_owned(),
+                version,
+                if types.is_empty() {
+                    "none".to_string()
+                } else {
+                    types.join(", ")
+                },
+                total,
+            ));
+        }
+    }
+    if rows.is_empty() {
+        println!("No cached firmware images found.");
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "{:<30}  {:<14}  {:<35}  {:<30}  {:>8}",
+        "Model", "Hash", "Version", "Types", "Size"
+    );
+    println!("{}", "-".repeat(130));
+    for (model, hash, version, types, total) in &rows {
+        let hash: String = hash.chars().take(12).collect();
+        println!(
+            "{:<30}  {:<14}  {:<35}  {:<30}  {:>7.1} MB",
+            model,
+            hash,
+            version,
+            types,
+            *total as f64 / 1024.0 / 1024.0
+        );
+    }
+    println!("\nTotal: {} cached build(s)", rows.len());
+    ExitCode::SUCCESS
+}
+
+/// Minimal `serde_json::Value` parse without naming the crate at the
+/// call sites (conwrt-cli has no direct serde_json dependency).
+fn serde_json_parse(text: &str) -> Result<serde_json::Value, ()> {
+    serde_json::from_str(text).map_err(|_| ())
+}
+
+fn cache_clean(
+    model_id: &Option<String>,
+    keep_latest: bool,
+    yes: bool,
+    images_root: &Path,
+) -> ExitCode {
+    use conwrt_image::clean::{CleanOptions, clean_cache, plan_cache_clean};
+
+    let options = CleanOptions {
+        keep_latest,
+        profile: model_id.clone(),
+    };
+    let plan = match plan_cache_clean(images_root, &options) {
+        Ok(plan) => plan,
+        Err(e) => {
+            eprintln!("cache clean failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    if plan.removed.is_empty() {
+        match model_id {
+            Some(id) => println!("No cached images found for model '{id}'."),
+            None => println!("No cached images found."),
+        }
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "Would remove {} cached build(s) ({:.1} MB):",
+        plan.removed.len(),
+        plan.freed_bytes as f64 / 1024.0 / 1024.0
+    );
+    for dir in &plan.removed {
+        let model = dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hash: String = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().chars().take(12).collect())
+            .unwrap_or_default();
+        println!("  {model}/{hash}...");
+    }
+    if !yes {
+        println!("\n(dry run — re-run with --yes to remove)");
+        return ExitCode::SUCCESS;
+    }
+    match clean_cache(images_root, &options) {
+        Ok(report) => {
+            println!(
+                "Removed {} cached build(s), freed {:.1} MB",
+                report.removed.len(),
+                report.freed_bytes as f64 / 1024.0 / 1024.0
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("cache clean failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+struct SourceImageArgs<'a> {
+    model_id: &'a str,
+    release: Option<&'a str>,
+    image_suffix: Option<&'a str>,
+    images_root: &'a Path,
+    downloads_base: Option<&'a str>,
+    no_verify: bool,
+    force: bool,
+}
+
+fn cmd_source_image(args: &SourceImageArgs<'_>, dir: &Path) -> ExitCode {
+    use conwrt_image::downloads::{FetchOptions, ReqwestDownloadsClient, fetch_image};
+    use conwrt_image::vanilla::{ReleaseOverrides, SuffixOverrides, VanillaModel};
+
+    let (registry, _) = load_registry(dir);
+    let Some(model) = registry.models().iter().find(|m| m.id == args.model_id) else {
+        eprintln!("unknown model id {:?} (see `conwrt models`)", args.model_id);
+        return ExitCode::from(2);
+    };
+    let openwrt_str = |key: &str| {
+        model
+            .openwrt
+            .extras
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let vanilla_model = VanillaModel {
+        id: model.id.clone(),
+        target: model.openwrt.target.clone(),
+        profile: model.openwrt.profile.clone(),
+        release: openwrt_str("release"),
+        image_suffix: openwrt_str("image_suffix"),
+    };
+    let client = match args
+        .downloads_base
+        .map(ReqwestDownloadsClient::with_base)
+        .unwrap_or_else(ReqwestDownloadsClient::new)
+    {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("cannot start downloads client: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let env_release = std::env::var("CONWRT_OPENWRT_RELEASE").ok();
+    let env_suffix = std::env::var("CONWRT_IMAGE_SUFFIX").ok();
+    let options = FetchOptions {
+        release: ReleaseOverrides {
+            cli: args.release,
+            env: env_release.as_deref(),
+        },
+        suffix: SuffixOverrides {
+            cli: args.image_suffix,
+            env: env_suffix.as_deref(),
+        },
+        verify: !args.no_verify,
+        force: args.force,
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match runtime.block_on(fetch_image(
+        &client,
+        args.images_root,
+        &vanilla_model,
+        &options,
+    )) {
+        Ok(fetched) => {
+            println!("URL:     {}", fetched.url);
+            if fetched.already_cached {
+                println!("cached:  {}", fetched.path.display());
+            } else if let Some(sha) = &fetched.sha256 {
+                println!("SHA-256 verified: {sha}");
+            }
+            println!("Image ready: {}", fetched.path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("source-image failed: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn cmd_image(
     model_id: &str,
     release: Option<&str>,
@@ -1766,7 +2172,13 @@ fn cmd_image(
         Some(packages.to_vec())
     };
     let defaults_script = defaults.map(|p| {
-        std::fs::read_to_string(p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        let text = std::fs::read_to_string(p)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()));
+        if let Err(e) = conwrt_image::types::validate_defaults_script(&text) {
+            eprintln!("defaults rejected: {e}");
+            std::process::exit(2);
+        }
+        text
     });
     let mut request = BuildRequest::openwrt(
         version,
@@ -2012,12 +2424,176 @@ fn board_name_or_device(model: &conwrt_types::DeviceModel) -> &str {
 /// the DTS name where board.json uses a short board id).
 fn board_matches(model: &conwrt_types::DeviceModel, board: &str) -> bool {
     let modeled = board_name_or_device(model);
-    board == modeled || board == model.openwrt.device
+    board == modeled
+        || board == model.openwrt.device
+        || model
+            .openwrt
+            .board_names
+            .as_deref()
+            .is_some_and(|names| names.iter().any(|name| name == board))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile_args(profile: ProfileChoice) -> ProfileArgs {
+        ProfileArgs {
+            profile,
+            download_kbps: None,
+            upload_kbps: None,
+            interface: "wan".into(),
+            provider: None,
+            listen_port: None,
+            idle_timeout: None,
+            max_auth_tries: None,
+            password_auth: false,
+            listen_ip: None,
+            web_port: None,
+            dns_port: None,
+            target: None,
+            peer_public_key: None,
+            endpoint_host: None,
+            endpoint_port: None,
+            peer_psk: None,
+            address: None,
+            dns: None,
+            allowed_ips: None,
+            no_kill_switch: false,
+            subnet: None,
+            peer1_public_key: None,
+            peer1_allowed_ips: None,
+            peer1_psk: None,
+            ap_ssid: None,
+            ap_key: None,
+            ap_encryption: None,
+            ap_band: None,
+            ap_no_isolation: false,
+            pbr_wan: None,
+            pbr_lan: None,
+            mwan3_primary: None,
+            mwan3_secondary: None,
+            mwan3_policy: None,
+            nodns_zone: None,
+            nodns_api_url: None,
+            nodns_poll_interval: None,
+            autosqm_mode: None,
+            autosqm_interface: None,
+            autosqm_target_percent: None,
+            trm_radio: None,
+            trm_timeout: None,
+            trm_retry: None,
+            trm_no_captive: false,
+        }
+    }
+
+    #[test]
+    fn build_profile_new_arms_default_to_1x_shapes() {
+        let ssh = build_profile(&profile_args(ProfileChoice::SshHardening)).expect("ssh");
+        let Profile::SshHardening(sh) = &ssh else {
+            panic!("ssh profile");
+        };
+        assert!(sh.disable_password_auth);
+        assert_eq!((sh.idle_timeout, sh.max_auth_tries, sh.port), (300, 3, 22));
+
+        let ag = build_profile(&profile_args(ProfileChoice::Adguard)).expect("adguard");
+        let Profile::Adguard(ag) = &ag else {
+            panic!("adguard profile");
+        };
+        assert_eq!(
+            (ag.listen_ip.as_str(), ag.web_port, ag.dns_port),
+            ("0.0.0.0", 3000, 5353)
+        );
+
+        let wd = build_profile(&profile_args(ProfileChoice::RescueWatchdog)).expect("watchdog");
+        let Profile::RescueWatchdog(wd) = &wd else {
+            panic!("watchdog profile");
+        };
+        assert_eq!(wd.target, "192.168.1.254");
+
+        let mut wg_args = profile_args(ProfileChoice::WireguardClient);
+        wg_args.peer_public_key = Some("SERVERKEY".into());
+        wg_args.endpoint_host = Some("vpn.example.com".into());
+        let wg = build_profile(&wg_args).expect("wireguard");
+        let Profile::WireguardClient(wg) = &wg else {
+            panic!("wireguard profile");
+        };
+        assert_eq!(wg.peer_public_key, "SERVERKEY");
+        assert_eq!(wg.endpoint_host, "vpn.example.com");
+        assert_eq!(wg.endpoint_port, 51820);
+        // 1.x default holds without any flag (Codex #442 P1-1)
+        assert!(wg.kill_switch);
+        wg_args.no_kill_switch = true;
+        let Profile::WireguardClient(off) = &build_profile(&wg_args).expect("wireguard") else {
+            panic!("wireguard profile");
+        };
+        assert!(!off.kill_switch);
+        assert!(wg.validate().is_ok());
+
+        let wgs = build_profile(&profile_args(ProfileChoice::WireguardServer)).expect("wg-server");
+        let Profile::WireguardServer(wgs) = &wgs else {
+            panic!("wg-server profile");
+        };
+        assert_eq!(
+            (
+                wgs.listen_port,
+                wgs.subnet.as_str(),
+                wgs.peer1_allowed_ips.as_str()
+            ),
+            (51820, "10.1.99.1/24", "10.1.99.2/32")
+        );
+        assert!(wgs.peer1_public_key.is_empty());
+
+        let mut gw_args = profile_args(ProfileChoice::GuestWifi);
+        gw_args.ap_key = Some("guestpass".into());
+        let gw = build_profile(&gw_args).expect("guest-wifi");
+        let Profile::GuestWifi(gw) = &gw else {
+            panic!("guest-wifi profile");
+        };
+        assert_eq!(
+            (gw.ssid.as_str(), gw.encryption.as_str(), gw.band.as_str()),
+            ("Guest", "psk2", "2.4ghz")
+        );
+        assert!(gw.isolation);
+        // Codex #446 P1-2: encrypted AP without a key is refused, not rendered
+        let err = build_profile(&profile_args(ProfileChoice::GuestWifi))
+            .expect_err("must refuse psk2 without key");
+        assert!(err.contains("--ap-key"), "got: {err}");
+
+        let tm = build_profile(&profile_args(ProfileChoice::Travelmate)).expect("travelmate");
+        let Profile::Travelmate(tm) = &tm else {
+            panic!("travelmate profile");
+        };
+        assert_eq!(
+            (tm.radio.as_str(), tm.timeout, tm.retry, tm.captive),
+            ("radio0", 60, 5, true)
+        );
+    }
+
+    #[test]
+    fn guest_wifi_choice_gates_surface_at_plan_time() {
+        let mut args = profile_args(ProfileChoice::GuestWifi);
+        args.ap_key = Some("guestpass".into());
+        let gw = build_profile(&args).expect("built");
+        let model = model_with(None, "glinet,gl-ar150");
+        match plan_profile(&conwrt_core::state::DeviceState::OpenWrt, &model, &gw) {
+            Err(conwrt_core::plan::Unsupported::MissingCapability { capability, .. })
+                if capability == "wifi" => {}
+            other => panic!("expected wifi capability refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wireguard_client_required_gates_surface_at_plan_time() {
+        let wg = build_profile(&profile_args(ProfileChoice::WireguardClient)).expect("built");
+        let model = model_with(None, "glinet,gl-ar150");
+        match plan_profile(&conwrt_core::state::DeviceState::OpenWrt, &model, &wg) {
+            Err(conwrt_core::plan::Unsupported::InvalidParams(why)) => {
+                assert!(why.contains("peer_public_key"), "got: {why}");
+            }
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
+    }
 
     fn model_with(board_name: Option<&str>, device: &str) -> conwrt_types::DeviceModel {
         conwrt_types::DeviceModel {
@@ -2030,6 +2606,7 @@ mod tests {
                 profile: "x_y".into(),
                 version: "24".into(),
                 board_name: board_name.map(str::to_string),
+                board_names: None,
                 default_ip: None,
                 extras: Default::default(),
             },
@@ -2062,6 +2639,25 @@ mod tests {
         let model = model_with(None, "glinet,gl-ar150");
         assert!(board_matches(&model, "glinet,gl-ar150"));
         assert!(!board_matches(&model, "glinet,gl-ar300m"));
+    }
+
+    #[test]
+    fn board_names_list_matches_fixture_variants() {
+        // virtual-x86-64 shape: the QEMU fixture reports a long
+        // qemu-derived board_name that only the list knows
+        let mut model = model_with(Some("generic"), "generic");
+        model.openwrt.board_names = Some(vec![
+            "generic".into(),
+            "conwrt-conwrt-test-vm".into(),
+            "qemu-ubuntu-24-04-pc-v2-i440fx-piix-arch_caps-fix-1996".into(),
+        ]);
+        assert!(board_matches(&model, "generic"));
+        assert!(board_matches(&model, "conwrt-conwrt-test-vm"));
+        assert!(board_matches(
+            &model,
+            "qemu-ubuntu-24-04-pc-v2-i440fx-piix-arch_caps-fix-1996"
+        ));
+        assert!(!board_matches(&model, "some-other-board"));
     }
 
     #[test]

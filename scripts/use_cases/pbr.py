@@ -27,14 +27,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from shell_safe import interface_name
+
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
-    wan_interface = str(params.get("wan_interface", "wan"))
-    lan_interface = str(params.get("lan_interface", "lan"))
+    # Interface names interpolate UNQUOTED into the pbr uci lines below —
+    # gate them with the shell-safe charset (the mwan3/#448 fix; the Rust
+    # port applies the same gate, plan.rs PbrProfile::validate).
+    wan_interface = interface_name(
+        str(params.get("wan_interface", "wan")), "wan_interface"
+    )
+    lan_interface = interface_name(
+        str(params.get("lan_interface", "lan")), "lan_interface"
+    )
     strict = bool(params.get("strict_enforcement", True))
     return {
         "wan_interface": wan_interface,

@@ -40,14 +40,15 @@ use embassy_stm32::usart::{BufferedUart, BufferedUartTx, Config as UartConfig};
 use embassy_stm32::{Config as ChipConfig, Peripherals, bind_interrupts, peripherals, rcc, usart};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
+use embassy_sync::mutex::Mutex;
 use panic_probe as _;
 use static_cell::StaticCell;
 
 use conwrt_agent_io::{EventSource, agent_session_stream_events};
 use conwrt_agent_proto::dispatch::WireError;
-use conwrt_agent_proto::protocol::CapabilityInfo;
-use conwrt_agent_proto::server::{ServerCore, UartSink};
-use conwrt_executor::ExecutorTransfer;
+use conwrt_agent_proto::protocol::{CapabilityInfo, StreamAck, StreamChunk};
+use conwrt_agent_proto::server::{ServerCore, TransferSink, UartSink};
+use conwrt_executor::{ExecutorTransfer, PostPump, PumpStep, TcpHttpIo};
 
 bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler;
@@ -59,11 +60,65 @@ bind_interrupts!(struct Irqs {
 const AGENT_MAC: [u8; 6] = [0x02, 0x43, 0x57, 0x46, 0x37, 0x34];
 
 /// Bench DUT VLAN address. Species-level placeholder only: resolve the
-/// actual bay VLAN/address/gateway from the lab registry at build time and
-/// set them here before flashing (AGENTS.md: never hardcode bench IPs —
-/// the bench DUT-bay convention is VLAN 100N, 192.168.100N.0/24).
-const AGENT_IPV4: Ipv4Address = Ipv4Address::new(192, 168, 100, 2);
-const AGENT_GW: Ipv4Address = Ipv4Address::new(192, 168, 100, 1);
+/// actual bay VLAN/address/gateway from the lab registry and set them at
+/// BUILD TIME without editing source — `CONWRT_AGENT_IPV4` /
+/// `CONWRT_AGENT_GW` (`a.b.c.d`) — e.g. for the gs108t flat recovery
+/// segment: `CONWRT_AGENT_IPV4=192.168.0.2 CONWRT_AGENT_GW=192.168.0.1
+/// cargo build --release` (AGENTS.md: never hardcode bench IPs — the
+/// bench DUT-bay convention is VLAN 100N, 192.168.100N.0/24).
+const AGENT_IPV4_DEFAULT: &str = "192.168.100.2";
+const AGENT_GW_DEFAULT: &str = "192.168.100.1";
+
+fn agent_ipv4() -> Ipv4Address {
+    seat_ipv4(
+        "CONWRT_AGENT_IPV4",
+        option_env!("CONWRT_AGENT_IPV4"),
+        AGENT_IPV4_DEFAULT,
+    )
+}
+
+fn agent_gateway() -> Ipv4Address {
+    seat_ipv4(
+        "CONWRT_AGENT_GW",
+        option_env!("CONWRT_AGENT_GW"),
+        AGENT_GW_DEFAULT,
+    )
+}
+
+/// Parse `a.b.c.d`, falling back to the default with a defmt warning —
+/// a typo'd build-time seat override must warn, never brick the boot.
+fn seat_ipv4(env_name: &str, value: Option<&'static str>, default: &'static str) -> Ipv4Address {
+    let text = value.unwrap_or(default);
+    let mut octets = [0u8; 4];
+    let mut ok = true;
+    for (i, part) in text.split('.').enumerate() {
+        match (i < 4, part.parse::<u8>()) {
+            (true, Ok(o)) => octets[i] = o,
+            _ => {
+                ok = false;
+                break;
+            }
+        }
+    }
+    if !ok {
+        defmt::warn!(
+            "{=str}={=str} is not a.b.c.d; using {=str}",
+            env_name,
+            text,
+            default
+        );
+        return parse_default(default);
+    }
+    Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
+}
+
+fn parse_default(default: &'static str) -> Ipv4Address {
+    let mut octets = [0u8; 4];
+    for (i, part) in default.split('.').enumerate() {
+        octets[i] = part.parse().expect("compile-time default is a.b.c.d");
+    }
+    Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
+}
 
 /// The agent's TCP port (the HIL mock's conventional port).
 const AGENT_PORT: u16 = 8400;
@@ -74,6 +129,37 @@ const UART_BAUD: u32 = 115_200;
 /// Executor transfer window (undrained bytes) — the #226 firmware
 /// profile; heap-allocated at first chunk, so no static footprint.
 const EXECUTOR_WINDOW: usize = 8 * 1024;
+
+/// The recovery POST target — one router in U-Boot recovery on the
+/// agent's own segment. Species-level default (the D-Link recovery
+/// LAN); override at BUILD TIME per seat: `CONWRT_RECOVERY_TARGET`
+/// (`a.b.c.d`), same rules as the agent address above.
+const RECOVERY_TARGET_DEFAULT: &str = "192.168.0.1";
+const RECOVERY_ENDPOINT: &str = "/upload";
+const RECOVERY_PORT: u16 = 80;
+/// Any WebKit-shaped token is wire-equivalent (the server delimits, it
+/// does not parse); no cheap randomness on no_std, so it is fixed.
+const RECOVERY_BOUNDARY: &str = "----WebKitFormBoundary7460a1b2c3d4e5f6";
+
+fn recovery_target() -> Ipv4Address {
+    seat_ipv4(
+        "CONWRT_RECOVERY_TARGET",
+        option_env!("CONWRT_RECOVERY_TARGET"),
+        RECOVERY_TARGET_DEFAULT,
+    )
+}
+
+/// One shared executor window: the dispatch sink (sync, from the
+/// controller session) and the pump task (async) lock the same
+/// [`ExecutorTransfer`]. StaticCell because [`ExecutorTransfer::new`]
+/// is not const.
+static EXECUTOR: StaticCell<Mutex<CriticalSectionRawMutex, ExecutorTransfer>> = StaticCell::new();
+
+/// Pump socket buffers — 2 KiB each (+4 KiB bss over #237; the write
+/// side streams multipart chunks, the read side only carries the tiny
+/// verdict page, bounded at 8 KiB by `MAX_VERDICT_BYTES`).
+static PUMP_TX_BUF: StaticCell<[u8; 2048]> = StaticCell::new();
+static PUMP_RX_BUF: StaticCell<[u8; 2048]> = StaticCell::new();
 
 /// Heap size for the [`HEAP`] allocator (protocol Vec allocations), in
 /// internal SRAM — the DISCO's SDRAM (FMC) stays untouched.
@@ -135,8 +221,8 @@ async fn main(spawner: Spawner) {
         p.PC1,
     );
     let config = embassy_net::Config::ipv4_static(StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(AGENT_IPV4, 24),
-        gateway: Some(AGENT_GW),
+        address: embassy_net::Ipv4Cidr::new(agent_ipv4(), 24),
+        gateway: Some(agent_gateway()),
         dns_servers: heapless::Vec::new(),
     });
     let (stack, runner) = embassy_net::new(
@@ -150,15 +236,20 @@ async fn main(spawner: Spawner) {
     );
     spawner.spawn(net_task(runner).expect("spawn net"));
 
+    // One executor window, shared: the dispatch sink writes chunks
+    // (controller session task), the pump task drains them to the
+    // recovery POST (#226 wiring slice).
+    let executor = EXECUTOR.init(Mutex::new(ExecutorTransfer::new(EXECUTOR_WINDOW)));
+
     let server = ServerCore::with_uart(
-        "conwrt-stm32f746 0.4.0",
+        "conwrt-stm32f746 0.5.0",
         capabilities(),
         Box::new(Usart6Sink { tx: uart_tx }),
     )
-    // #226 slice 3: StreamChunk/StreamStatus land in the executor's
-    // bounded window (the recovery POST pump is a later, bench-gated
-    // slice — this wiring makes the stream endpoints live).
-    .attach_transfer(Box::new(ExecutorTransfer::new(EXECUTOR_WINDOW)))
+    // #226: StreamChunk/StreamStatus land in the shared executor
+    // window; the pump task below drains it into the recovery POST —
+    // one attempt per transfer id, bench-gated target profile.
+    .attach_transfer(Box::new(SharedWindow(executor)))
     // #215 slice 5: standalone detect mode — the router console RX
     // (already feeding UartData events) runs through the shared
     // probe-core milestone tracker; a controller arms it with
@@ -169,6 +260,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(
         agent_task(stack, server, ConsoleSource(CONSOLE_CH.receiver())).expect("spawn agent"),
     );
+    spawner.spawn(pump_task(stack, executor).expect("spawn pump"));
 }
 
 type EthDevice = embassy_stm32::eth::Ethernet<
@@ -204,6 +296,153 @@ async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: 
         agent_session_stream_events(&mut socket, &mut uart_rx, &mut server).await;
         defmt::info!("controller disconnected — leases expired");
         socket.abort();
+    }
+}
+
+/// Dispatch-side door into the shared [`ExecutorTransfer`] — the
+/// controller session's `ServerCore` calls these synchronously. The
+/// pump task holds the async lock only around one `step` at a time;
+/// a chunk arriving mid-step (wire backpressure) sees `window busy`
+/// — the same retryable Internal class as `window full`.
+struct SharedWindow(&'static Mutex<CriticalSectionRawMutex, ExecutorTransfer>);
+
+impl TransferSink for SharedWindow {
+    fn stream_chunk(&mut self, chunk: &StreamChunk) -> Result<StreamAck, WireError> {
+        self.0
+            .try_lock()
+            .ok()
+            .ok_or_else(|| WireError::Internal(String::from("window busy: pump mid-step")))
+            .and_then(|mut w| w.stream_chunk(chunk))
+    }
+    fn stream_status(&mut self, transfer_id: u64) -> Result<StreamAck, WireError> {
+        self.0
+            .try_lock()
+            .ok()
+            .ok_or_else(|| WireError::Internal(String::from("window busy: pump mid-step")))
+            .and_then(|mut w| w.stream_status(transfer_id))
+    }
+}
+
+/// The recovery POST task (#226 wiring slice): one wire attempt per
+/// transfer id. A fresh [`PostPump`] per connection; the verdict (or
+/// the failure) is logged to RTT — the controller observes the same
+/// outcome through the transfer's ack progression and can re-feed
+/// under a new id (the `WrongTransfer` reset) for a fresh attempt.
+#[task]
+async fn pump_task(
+    stack: Stack<'static>,
+    window: &'static Mutex<CriticalSectionRawMutex, ExecutorTransfer>,
+) {
+    let target = recovery_target();
+    let mut socket = TcpSocket::new(
+        stack,
+        PUMP_TX_BUF.uninit().write([0u8; 2048]),
+        PUMP_RX_BUF.uninit().write([0u8; 2048]),
+    );
+    // Bounded lock holds (#452 review rounds 2-3): pump.step awaits
+    // wire writes while holding the window mutex; without a timeout a
+    // dead peer with a full buffer would hold it FOREVER — every
+    // controller chunk would see 'window busy' with no recovery. 40 s
+    // covers the model-documented 30 s flash-response pause
+    // (dlink-covr-x1860-a1.json flash_response_delay_seconds — the
+    // server writes flash before answering) while still bounding every
+    // pump-side await (connect included) so 'window busy' stays
+    // transient.
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(40)));
+    // The id this task last spent a wire attempt on: a completed or
+    // failed POST is never retried for the same id (the one-request
+    // window is spent); a NEW id (fresh controller feed) re-arms.
+    let mut attempted: Option<u64> = None;
+    loop {
+        let bound = window.lock().await.transfer_id();
+        let Some(id) = bound else {
+            attempted = None;
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(200)).await;
+            continue;
+        };
+        if attempted == Some(id) {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(200)).await;
+            continue;
+        }
+        if socket.connect((target, RECOVERY_PORT)).await.is_err() {
+            socket.abort();
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+            continue;
+        }
+        defmt::info!("recovery: connected, pumping transfer {}", id);
+        let mut io = TcpHttpIo::new(socket);
+        let mut pump = PostPump::new("192.168.0.1", RECOVERY_ENDPOINT, RECOVERY_BOUNDARY);
+        loop {
+            match pump.step(&mut io, window.lock().await.window()).await {
+                Ok(PumpStep::Posted(outcome)) => {
+                    let verdict = match outcome.verdict {
+                        conwrt_executor::Verdict::Accepted => "accepted",
+                        conwrt_executor::Verdict::AcceptedHtml => "accepted-html",
+                        conwrt_executor::Verdict::Rejected { .. } => "rejected",
+                        conwrt_executor::Verdict::NoResponse => "no-response",
+                    };
+                    defmt::info!(
+                        "recovery verdict: {=str} ({} bytes uploaded)",
+                        verdict,
+                        outcome.uploaded
+                    );
+                    break;
+                }
+                Ok(PumpStep::Superseded) => {
+                    defmt::warn!("recovery: window superseded mid-POST — attempt spent");
+                    break;
+                }
+                Ok(PumpStep::Streaming { drained }) => {
+                    if drained == 0 {
+                        // window empty, more chunks expected — yield
+                        embassy_time::Timer::after(embassy_time::Duration::from_millis(20)).await;
+                    }
+                }
+                Ok(PumpStep::Idle) => {
+                    // window vanished between gate and step (reset):
+                    // re-evaluate on the next outer loop
+                    break;
+                }
+                Err(e) => {
+                    defmt::warn!("recovery pump failed: {}", pump_error_str(&e));
+                    break;
+                }
+            }
+        }
+        socket = io.into_inner();
+        socket.abort();
+        // Record the id the pump ACTUALLY served: the window may have
+        // re-targeted while the connection was pending — marking the
+        // stale pre-connect id would retry the freshly-posted one and
+        // burn a second recovery window (#452 review round 1).
+        let served = pump.bound_id().unwrap_or(id);
+        if served != id {
+            defmt::warn!(
+                "recovery: window re-targeted {} -> {} mid-connect",
+                id,
+                served
+            );
+        }
+        attempted = Some(served);
+    }
+}
+
+/// defmt needs its own format types — map [`PostError`] to a static
+/// string (the stage names carry the diagnostic; RTT is not a debugger).
+fn pump_error_str(e: &conwrt_executor::PostError) -> &'static str {
+    match e {
+        conwrt_executor::PostError::Write { op } => match *op {
+            "head" => "write:head",
+            "footer" => "write:footer",
+            _ => "write:body",
+        },
+        conwrt_executor::PostError::Read => "read",
+        conwrt_executor::PostError::Incomplete { .. } => "incomplete",
+        conwrt_executor::PostError::NoTotal => "no-total",
+        conwrt_executor::PostError::FramingOverflow => "framing-overflow",
+        conwrt_executor::PostError::AlreadyStarted => "already-started",
+        conwrt_executor::PostError::NotStarted => "not-started",
+        conwrt_executor::PostError::SizeMismatch { .. } => "size-mismatch",
     }
 }
 
@@ -285,9 +524,14 @@ fn capabilities() -> Vec<CapabilityInfo> {
                 (String::from("window_bytes"), String::from("8192")),
                 (
                     String::from("wire"),
-                    // the controller selects the target; the POST pump
-                    // itself is the bench-gated slice (#226)
-                    String::from("stream-only"),
+                    // #226 wiring slice: the pump task drains the
+                    // window into the recovery POST (one attempt per
+                    // transfer id; verdict on RTT). Target = build-time
+                    // CONWRT_RECOVERY_TARGET (default the D-Link
+                    // recovery LAN); the controller just streams. The
+                    // path is wired but NOT yet live-validated — the
+                    // bench leg (gated) is that validation.
+                    String::from("full-bench-pending"),
                 ),
             ]),
         },
@@ -295,7 +539,7 @@ fn capabilities() -> Vec<CapabilityInfo> {
             name: String::from("diag"),
             detail: Vec::from([
                 (String::from("chip"), String::from("stm32f746ng")),
-                (String::from("fw"), String::from("conwrt-stm32f746 0.4.0")),
+                (String::from("fw"), String::from("conwrt-stm32f746 0.5.0")),
                 (String::from("heap_bytes"), String::from("32768")),
                 (String::from("uid"), String::from(uid)),
             ]),

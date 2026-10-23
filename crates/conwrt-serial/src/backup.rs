@@ -1,196 +1,484 @@
-//! # Partition backup over serial (Rust port of `scripts/serial-backup.py`)
+//! Partition backup over serial — the Rust port of
+//! `scripts/serial-backup.py` (parity-matrix §5), for dumping flash
+//! partitions when SSH is unavailable. Factory/calibration dumps are
+//! IRREPLACEABLE: this path exists so they can be taken over a serial
+//! console before any flash operation (AGENTS.md).
 //!
-//! Dumps `/dev/mtdX` partitions over the serial console when SSH is
-//! unavailable: `cat /dev/mtdX | base64`, filter the base64 lines from
-//! the collected response, decode, size-verify (the 95% completeness
-//! rule), write the file.
+//! Python parity notes:
 //!
-//! Uses the [`crate::console`] driver (RC-marker collection) rather than
-//! the Python's timing loop, so dump completion is prompt-driven, not
-//! sleep-driven.
+//! * `cat /proc/mtd` parsing ([`parse_proc_mtd`]) is byte-faithful:
+//!   `mtd12: 00080000 00080000 "Factory"`
+//! * The dump rides the RC-marker collector (`cat /dev/mtdX | base64`
+//!   plus the `__RC0__` tail) instead of the Python "read until the
+//!   prompt looks like base64" heuristic — collection ends at the
+//!   device's own completion marker, then the base64 lines are decoded
+//!   per line (exactly what BusyBox `base64` emitted per line).
+//! * The Python size discipline is kept: an exact-size dump is clean;
+//!   below [`INCOMPLETE_FRACTION`] (95%) of the partition size is a
+//!   typed failure (the dump is useless); 95–100% is returned with
+//!   the mismatch recorded (Python printed ⚠ and kept the file).
+//! * Factory is the default target ("most critical", Python parity);
+//!   partition-name matching is case-insensitive.
 
-use std::io::Write;
-use std::path::Path;
-
-use base64::Engine as _;
-
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::console::SerialConsole;
+use base64::Engine as _;
+use thiserror::Error;
 
-/// Collection window for a dump (multi-MB over serial is minutes; the
-/// caller may need larger — expose at the CLI when wired).
-const DUMP_WINDOW: Duration = Duration::from_secs(900);
+use crate::collect::CmdOutcome;
+use crate::console::{PortOpener, SerialConsole, Sleeper};
+use crate::io::ConsoleError;
+
+/// Below this fraction of the partition size a dump is rejected as
+/// incomplete (Python's 0.95 threshold).
+pub const INCOMPLETE_FRACTION: f64 = 0.95;
+
+/// No-new-data window that ends a dump collection early (the Python
+/// read-until-prompt intent; a truncated stream stops at its silence).
+pub const QUIET_WINDOW: Duration = Duration::from_secs(5);
+
+/// BusyBox `base64` wraps at 76 chars ⇒ 57 raw bytes per line; the
+/// Python estimator used ~48 B/line at 50 ms/line — kept for the
+/// timeout budget only.
+const EST_BYTES_PER_LINE: f64 = 48.0;
+const EST_SECONDS_PER_LINE: f64 = 0.05;
 
 /// One `/proc/mtd` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Partition {
-    /// Device node name, e.g. `mtd0`.
+    /// Device node basename, e.g. `mtd12` (dumped as `/dev/mtd12`).
     pub device: String,
-    /// Size in bytes (hex in /proc/mtd).
+    /// Partition size in bytes (hex in `/proc/mtd`).
     pub size: u64,
-    /// Partition name, e.g. `Factory`.
+    /// Quoted partition name, e.g. `Factory`.
     pub name: String,
 }
 
-// field docs already present; silence is not an option here — see below
+/// Why a backup failed. Messages are operator-safe.
+#[derive(Debug, Error)]
+pub enum BackupError {
+    /// Transport failure.
+    #[error(transparent)]
+    Console(#[from] ConsoleError),
+    /// `cat /proc/mtd` did not complete with rc 0.
+    #[error("reading /proc/mtd failed (rc {rc}): {output}")]
+    ProcMtdFailed {
+        /// The collected rc.
+        rc: u8,
+        /// Collected console output.
+        output: String,
+    },
+    /// The reply parsed to zero partitions (wrong device? not Linux?).
+    #[error("could not parse /proc/mtd reply: {raw:?}")]
+    NoPartitions {
+        /// The raw collected output.
+        raw: String,
+    },
+    /// No partition matched the requested name.
+    #[error("partition {requested:?} not found in: {available}")]
+    PartitionNotFound {
+        /// The requested (case-insensitive) name.
+        requested: String,
+        /// The partition names that exist.
+        available: String,
+    },
+    /// No `Factory` partition exists and no explicit selection was
+    /// given (Python parity: the default target is Factory).
+    #[error("no Factory partition found — use an explicit partition or --all semantics")]
+    NoFactory,
+    /// The captured base64 stream did not decode (corrupt capture).
+    #[error("base64 decode of {device} dump failed: {source}")]
+    DecodeFailed {
+        /// The device being dumped.
+        device: String,
+        /// The decode error.
+        #[source]
+        source: base64::DecodeError,
+    },
+    /// Less than 95% of the partition size arrived — the dump is
+    /// incomplete and was NOT written.
+    #[error(
+        "dump of {device} incomplete: {got} of {expected} bytes ({pct:.1}%) — file NOT written"
+    )]
+    Incomplete {
+        /// The device being dumped.
+        device: String,
+        /// Bytes actually captured.
+        got: u64,
+        /// The partition size from `/proc/mtd`.
+        expected: u64,
+        /// The coverage percentage.
+        pct: f64,
+    },
+    /// The dump file could not be written on the host.
+    #[error("cannot write dump {path}: {source}")]
+    DumpFile {
+        /// The host path that failed.
+        path: PathBuf,
+        /// The underlying write error.
+        #[source]
+        source: std::io::Error,
+    },
+}
 
-/// Parse `/proc/mtd` output into partitions.
-/// Mirrors the Python regex `mtd(\d+): <hex> <hex> "name"`.
-pub fn parse_partitions(output: &str) -> Vec<Partition> {
+/// A completed partition dump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpOutcome {
+    /// The partition that was dumped.
+    pub partition: Partition,
+    /// Decoded bytes written.
+    pub bytes: u64,
+    /// `Some((expected, actual))` when the size did not match exactly
+    /// but stayed within the 95% threshold (Python's ⚠-and-keep).
+    pub size_mismatch: Option<(u64, u64)>,
+    /// Where the dump landed (`<output_dir>/<name>.bin`).
+    pub path: PathBuf,
+}
+
+/// Parse `/proc/mtd` output (`mtd12: 00080000 00080000 "Factory"`).
+/// Pure, no regex — the Python `re` match ported by hand. Quoted names
+/// may contain spaces (`"RedBoot config"`); the name is everything
+/// between the first and last double quote of the row's tail.
+#[must_use]
+pub fn parse_proc_mtd(output: &str) -> Vec<Partition> {
     let mut out = Vec::new();
     for line in output.lines() {
         let line = line.trim();
-        let Some((dev, rest)) = split_mtd_dev(line) else { continue };
-        let Some((size, rest)) = split_hex_field(rest) else { continue };
-        let Some(name) = parse_quoted_name(rest) else { continue };
-        out.push(Partition {
-            device: dev.to_string(),
-            size,
-            name: name.to_string(),
+        let Some(rest) = line.strip_prefix("mtd") else {
+            continue;
+        };
+        let Some(colon) = rest.find(':') else {
+            continue;
+        };
+        let device = format!("mtd{}", &rest[..colon]);
+        let tail = &rest[colon + 1..];
+        // two hex fields, then the quoted name (which may hold spaces)
+        let mut fields = tail.split_whitespace();
+        let (Some(size_hex), Some(_erase_hex)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let name = match (tail.find('"'), tail.rfind('"')) {
+            (Some(open), Some(close)) if open < close => &tail[open + 1..close],
+            _ => continue,
+        };
+        if let Ok(size) = u64::from_str_radix(size_hex, 16) {
+            out.push(Partition {
+                device,
+                size,
+                name: name.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// Which partitions to dump (the Python CLI flags).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackupSelection {
+    /// `--partition NAME` — case-insensitive name match.
+    ByName(String),
+    /// `--all`.
+    All,
+    /// Default: Factory only ("most critical", IRREPLACEABLE).
+    FactoryDefault,
+}
+
+/// Resolve the dump targets from a partition list. Pure.
+///
+/// # Errors
+/// [`BackupError::PartitionNotFound`] / [`BackupError::NoFactory`] per
+/// the Python CLI exits.
+pub fn select_targets(
+    partitions: &[Partition],
+    selection: &BackupSelection,
+) -> Result<Vec<Partition>, BackupError> {
+    match selection {
+        BackupSelection::ByName(name) => {
+            let targets: Vec<Partition> = partitions
+                .iter()
+                .filter(|p| p.name.eq_ignore_ascii_case(name))
+                .cloned()
+                .collect();
+            if targets.is_empty() {
+                return Err(BackupError::PartitionNotFound {
+                    requested: name.clone(),
+                    available: partitions
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
+            Ok(targets)
+        }
+        BackupSelection::All => Ok(partitions.to_vec()),
+        BackupSelection::FactoryDefault => partitions
+            .iter()
+            .filter(|p| p.name == "Factory")
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .next()
+            .map(|p| vec![p])
+            .ok_or(BackupError::NoFactory),
+    }
+}
+
+/// `cat /proc/mtd` and parse the partition table.
+///
+/// # Errors
+/// [`BackupError::ProcMtdFailed`] / [`BackupError::NoPartitions`] /
+/// [`BackupError::Console`].
+pub fn list_partitions<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    timeout: std::time::Duration,
+) -> Result<Vec<Partition>, BackupError> {
+    let out: CmdOutcome = console.run("cat /proc/mtd", timeout)?;
+    if out.rc != 0 {
+        return Err(BackupError::ProcMtdFailed {
+            rc: out.rc,
+            output: out.output,
         });
     }
-    out
-}
-
-fn split_mtd_dev(line: &str) -> Option<(&str, &str)> {
-    let idx = line.find(':')?;
-    let dev = &line[..idx];
-    if dev.starts_with("mtd") && dev[3..].chars().all(|c| c.is_ascii_digit()) {
-        Some((dev, &line[idx + 1..]))
-    } else {
-        None
+    let partitions = parse_proc_mtd(&out.output);
+    if partitions.is_empty() {
+        return Err(BackupError::NoPartitions { raw: out.output });
     }
+    Ok(partitions)
 }
 
-fn split_hex_field(rest: &str) -> Option<(u64, &str)> {
-    let rest = rest.trim_start();
-    let end = rest.find(char::is_whitespace)?;
-    let field = &rest[..end];
-    let size = u64::from_str_radix(field, 16).ok()?;
-    Some((size, &rest[end..]))
+/// Extract the pure base64 payload from a collected dump reply:
+/// keep only lines that are entirely base64 (the Python line filter —
+/// prompt lines, the command echo, and `__RC` markers drop out). Pure.
+#[must_use]
+pub fn extract_base64_lines(reply: &str) -> Vec<&str> {
+    reply
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("root@")
+                && !line.starts_with('#')
+                && !line.contains("cat ")
+                && line
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+        })
+        .collect()
 }
 
-fn parse_quoted_name(rest: &str) -> Option<&str> {
-    let open = rest.find('"')?;
-    let close = rest[open + 1..].find('"')? + open + 1;
-    Some(&rest[open + 1..close])
-}
-
-/// Filter collected console text down to pure base64 payload lines
-/// (drops the command echo, shell prompts, blank and non-base64 lines).
-pub fn extract_base64(collected: &str) -> String {
-    let mut out = String::new();
-    for line in collected.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with("root@") || line.starts_with('#') {
-            continue;
-        }
-        if line.contains("cat ") && line.contains("base64") {
-            continue;
-        }
-        if line.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=') {
-            out.push_str(line);
-        }
+/// Decode the captured BusyBox base64 dump: per-line decode (each line
+/// is an independent wrapped segment; only the last line carries
+/// padding), concatenated.
+///
+/// # Errors
+/// [`BackupError::DecodeFailed`] on the first malformed line.
+pub fn decode_dump_lines(device: &str, lines: &[&str]) -> Result<Vec<u8>, BackupError> {
+    let mut out = Vec::new();
+    for line in lines {
+        out.extend_from_slice(
+            &base64::engine::general_purpose::STANDARD
+                .decode(line.as_bytes())
+                .map_err(|source| BackupError::DecodeFailed {
+                    device: device.to_string(),
+                    source,
+                })?,
+        );
     }
-    out
+    Ok(out)
 }
 
-/// Outcome of one partition dump.
-#[derive(Debug, PartialEq, Eq)]
-pub enum DumpOutcome {
-    /// Written to the output path with the exact expected size.
-    Complete {
-        /// Bytes written.
-        bytes: u64,
-    },
-    /// Decoded bytes below 95% of the partition size — refused.
-    Incomplete {
-        /// Bytes actually decoded.
-        got: u64,
-        /// Partition size expected from /proc/mtd.
-        expected: u64,
-    },
-    /// The device returned no base64 at all.
-    NoData,
-    /// Base64 payload failed to decode.
-    DecodeError,
+/// Timeout budget for a partition dump (Python: `max(30, est × 3)`).
+#[must_use]
+pub fn dump_timeout(size: u64) -> std::time::Duration {
+    let est_lines = size as f64 / EST_BYTES_PER_LINE;
+    let est_seconds = est_lines * EST_SECONDS_PER_LINE;
+    let seconds = (est_seconds * 3.0).max(30.0);
+    std::time::Duration::from_secs(seconds as u64)
 }
 
-/// Dump one partition over the console into `output`.
-pub fn dump_partition(
-    console: &mut SerialConsole,
-    part: &Partition,
-    output: &Path,
-) -> std::io::Result<DumpOutcome> {
-    let cmd = format!("cat /dev/{} | base64", part.device);
-    // Collect until the prompt returns; generous for multi-MB dumps.
-    let outcome = console
-        .run(&cmd, DUMP_WINDOW)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let collected = outcome.output;
-
-    let b64 = extract_base64(&collected);
-    if b64.is_empty() {
-        return Ok(DumpOutcome::NoData);
-    }
-    let raw = match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
-        Ok(r) => r,
-        Err(_) => return Ok(DumpOutcome::DecodeError),
-    };
+/// Dump one partition over the console and write `<name>.bin` into
+/// `output_dir`. The dump command is collected MARKER-FREE
+/// ([`SerialConsole::run_raw_collect`] — Python `send_and_wait`
+/// parity): an echoing tty would hit the RC marker inside the echoed
+/// command tail and stop after one drain read, so collection instead
+/// runs until the decoded base64 reaches the partition size (or the
+/// `dump_timeout` deadline). `progress(decoded_bytes, total)` fires as
+/// the stream accumulates.
+///
+/// # Errors
+/// [`BackupError::DecodeFailed`] / [`BackupError::Incomplete`] /
+/// [`BackupError::DumpFile`] / [`BackupError::Console`].
+pub fn dump_partition<S: Sleeper, O: PortOpener>(
+    console: &mut SerialConsole<S, O>,
+    partition: &Partition,
+    output_dir: &Path,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<DumpOutcome, BackupError> {
+    let dev_path = format!("/dev/{}", partition.device);
+    let cmd = format!("cat {dev_path} | base64");
+    let expected = partition.size;
+    let mut notify_at = 0u64;
+    let reply = console
+        .run_raw_collect(
+            &cmd,
+            dump_timeout(expected),
+            QUIET_WINDOW,
+            &mut |collected| {
+                let got = base64_char_count(collected) * 3 / 4;
+                if got >= notify_at {
+                    progress(got.min(expected), expected);
+                    notify_at = got + 16 * 1024;
+                }
+                got >= expected
+            },
+        )
+        .map_err(BackupError::Console)?;
+    let lines = extract_base64_lines(&reply);
+    let raw = decode_dump_lines(&partition.device, &lines)?;
     let got = raw.len() as u64;
-    if got < part.size && (got as f64) < part.size as f64 * 0.95 {
-        return Ok(DumpOutcome::Incomplete { got, expected: part.size });
+    if got < expected {
+        let fraction = got as f64 / expected as f64;
+        if fraction < INCOMPLETE_FRACTION {
+            return Err(BackupError::Incomplete {
+                device: partition.device.clone(),
+                got,
+                expected,
+                pct: fraction * 100.0,
+            });
+        }
     }
-    if let Some(dir) = output.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut f = std::fs::File::create(output)?;
-    f.write_all(&raw)?;
-    Ok(DumpOutcome::Complete { bytes: got })
+
+    std::fs::create_dir_all(output_dir).map_err(|source| BackupError::DumpFile {
+        path: output_dir.to_path_buf(),
+        source,
+    })?;
+    let path = output_dir.join(format!("{}.bin", partition.name.to_lowercase()));
+    std::fs::write(&path, &raw).map_err(|source| BackupError::DumpFile {
+        path: path.clone(),
+        source,
+    })?;
+
+    Ok(DumpOutcome {
+        partition: partition.clone(),
+        bytes: got,
+        size_mismatch: if got == expected {
+            None
+        } else {
+            Some((expected, got))
+        },
+        path,
+    })
+}
+
+/// Decoded-size estimate: count alphabet characters (the collector's
+/// lossy text may carry `\r`, spaces, prompt and echo lines — none are
+/// alphabet bytes except the payload itself; `+/=` are alphabet too).
+fn base64_char_count(text: &str) -> u64 {
+    text.bytes()
+        .filter(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=')
+        .count() as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const MTD: &str = "dev: size erasesize name\n\
-        mtd0: 00080000 00010000 \"SPI-Boot loader\"\n\
-        mtd1: 00010000 00010000 \"NVRAM\"\n\
-        mtd5: 00ef0000 00010000 \"Factory\"\n";
+    const PROC_MTD: &str = "dev:    size   erasesize  name\n\
+                            mtd0: 00030000 00010000 \"u-boot\"\n\
+                            mtd1: 00030000 00010000 \"u-boot-env\"\n\
+                            mtd2: 00080000 00010000 \"Factory\"\n\
+                            mtd12: 00200000 00010000 \"firmware\"\n";
 
     #[test]
-    fn parses_proc_mtd() {
-        let parts = parse_partitions(MTD);
-        assert_eq!(parts.len(), 3);
-        assert_eq!(parts[0].device, "mtd0");
-        assert_eq!(parts[0].size, 0x80000);
-        assert_eq!(parts[0].name, "SPI-Boot loader");
-        assert_eq!(parts[2].name, "Factory");
-        assert_eq!(parts[2].size, 0xef0000);
+    fn parses_proc_mtd_rows() {
+        let parts = parse_proc_mtd(PROC_MTD);
+        assert_eq!(parts.len(), 4);
+        assert_eq!(
+            parts[2],
+            Partition {
+                device: "mtd2".to_string(),
+                size: 0x0008_0000,
+                name: "Factory".to_string()
+            }
+        );
+        assert_eq!(parts[3].size, 0x0020_0000);
     }
 
     #[test]
-    fn skips_non_partition_lines() {
-        let parts = parse_partitions("garbage\nmtdx: nope\n");
+    fn parse_ignores_header_and_noise() {
+        let parts = parse_proc_mtd("dev: size erasesize name\njunk line\nmtd9: bad row\n");
         assert!(parts.is_empty());
     }
 
     #[test]
-    fn base64_extraction_filters_noise() {
-        let payload = "QUJDREVGRw=="; // "ABCDEFG"
-        let collected = format!(
-            "cat /dev/mtd5 | base64\r\n{payload}\r\nroot@OpenWrt:/# \r\n# \r\nnoise!!\r\n"
-        );
-        assert_eq!(extract_base64(&collected), payload);
+    fn parse_preserves_quoted_names_with_spaces() {
+        // the Python regex captured "RedBoot config" whole; a
+        // whitespace-split would silently drop the row
+        let parts = parse_proc_mtd("mtd3: 00010000 00010000 \"RedBoot config\"\n");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].name, "RedBoot config");
+        assert_eq!(parts[0].device, "mtd3");
     }
 
     #[test]
-    fn base64_extraction_joins_lines() {
-        let collected = "QUJD\r\nREVG\r\n";
-        assert_eq!(extract_base64(collected), "QUJDREVG");
+    fn selection_by_name_is_case_insensitive() {
+        let parts = parse_proc_mtd(PROC_MTD);
+        let targets = select_targets(&parts, &BackupSelection::ByName("factory".into())).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "Factory");
+        let err = select_targets(&parts, &BackupSelection::ByName("nope".into())).unwrap_err();
+        assert!(err.to_string().contains("not found"), "{err}");
+    }
+
+    #[test]
+    fn selection_factory_default_and_all() {
+        let parts = parse_proc_mtd(PROC_MTD);
+        assert_eq!(
+            select_targets(&parts, &BackupSelection::FactoryDefault)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            select_targets(&parts, &BackupSelection::All).unwrap().len(),
+            4
+        );
+        let no_factory = parse_proc_mtd("mtd0: 00010000 00010000 \"boot\"\n");
+        assert!(matches!(
+            select_targets(&no_factory, &BackupSelection::FactoryDefault),
+            Err(BackupError::NoFactory)
+        ));
+    }
+
+    #[test]
+    fn extract_keeps_only_base64_lines() {
+        let reply = "cat /dev/mtd2 | base64\r\n\
+                     Qm9vdA==\r\n\
+                     cm93Mg==\r\n\
+                     root@OpenWrt:~# \r\n__RC0__\r\n";
+        assert_eq!(extract_base64_lines(reply), vec!["Qm9vdA==", "cm93Mg=="]);
+    }
+
+    #[test]
+    fn decode_per_line_concatenates() {
+        let decoded = decode_dump_lines("mtd2", &["Qm9vdA==", "cm93Mg=="]).unwrap();
+        assert_eq!(decoded, b"Bootrow2");
+    }
+
+    #[test]
+    fn decode_rejects_garbage_line() {
+        assert!(decode_dump_lines("mtd2", &["!!!not-base64!!!"]).is_err());
+    }
+
+    #[test]
+    fn timeout_floor_is_30s_and_scales() {
+        assert_eq!(dump_timeout(1024), std::time::Duration::from_secs(30));
+        // 48 MiB partition: 48*2^20/48 = 2^20 lines * 0.05s * 3
+        assert_eq!(
+            dump_timeout(48 * 1024 * 1024),
+            std::time::Duration::from_secs(157_286)
+        );
     }
 }

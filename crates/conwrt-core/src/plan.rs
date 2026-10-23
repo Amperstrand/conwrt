@@ -462,6 +462,235 @@ impl Default for TravelmateProfile {
     }
 }
 
+/// Network-wide ad blocking via AdGuard Home — port of the tested 1.x
+/// `adguard` preset (`scripts/use_cases/adguard.py`). The daemon owns
+/// its YAML config; this plan only shapes the uci wrapper (listen
+/// address, ports), enables + starts it, and points dnsmasq at the
+/// local AdGuard DNS instance (noresolv + server=127.0.0.1#port).
+/// Web-UI first-run setup (admin account) remains manual — 1.x marks
+/// the preset "post-flash setup". No 1.x validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdguardProfile {
+    /// Web UI listen address (1.x default `0.0.0.0`).
+    pub listen_ip: String,
+    /// Web UI port (1.x default 3000).
+    pub web_port: u16,
+    /// DNS listen port (1.x default 5353, off 53 to avoid the
+    /// dnsmasq conflict).
+    pub dns_port: u16,
+}
+
+impl Default for AdguardProfile {
+    fn default() -> Self {
+        Self {
+            listen_ip: "0.0.0.0".into(),
+            web_port: 3000,
+            dns_port: 5353,
+        }
+    }
+}
+
+/// Automated 802.11s mesh networking — port of the tested 1.x
+/// `mesh11sd` preset (`scripts/use_cases/mesh11sd.py`). The plan swaps
+/// wpad-basic for full wpad (verbatim 1.x shell, opkg-era commands
+/// kept for parity — they no-op on apk systems), then shapes the
+/// daemon's `setup` section. Option order matters for byte parity:
+/// `mesh_gate_key` lands BETWEEN `mesh_gate_encryption` and
+/// `auto_config` (1.x dict insertion order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mesh11sdProfile {
+    /// Unique mesh network ID, required — must match on all nodes
+    /// (1.x required-param gate).
+    pub mesh_id: String,
+    /// Base SSID for the mesh gate AP (1.x default `MeshNet`).
+    pub ssid: String,
+    /// Mesh gate encryption: `0`=none, `1`=wpa3, `2`=wpa2, `3`=mixed
+    /// (1.x default `1`; kept a string for parity).
+    pub encryption: String,
+    /// WiFi key for the mesh gate AP (empty = none).
+    pub key: String,
+    /// Auto-config mode: `0`=disabled, `1`=auto, `2`=auto+commit
+    /// (1.x default `0`).
+    pub auto_config: String,
+}
+
+impl Default for Mesh11sdProfile {
+    fn default() -> Self {
+        Self {
+            mesh_id: String::new(),
+            ssid: "MeshNet".into(),
+            encryption: "1".into(),
+            key: String::new(),
+            auto_config: "0".into(),
+        }
+    }
+}
+
+impl Mesh11sdProfile {
+    /// 1.x has exactly one gate: `mesh_id` is a required param.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.mesh_id.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "mesh_id is required (must match on all mesh nodes)".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Self-healing reboot for bench/lab devices — port of the 1.x
+/// `rescue-watchdog` preset (`scripts/use_cases/rescue_watchdog.py`,
+/// born from the 2026-10-08 x1860 wedges: kernel-level networking
+/// death that only a hands-on power cycle cured). The whole plan is
+/// ONE verbatim shell payload: procd init + watchdog loop heredocs,
+/// pinging the management target once a minute and force-rebooting
+/// after 3 consecutive failures (10-minute boot grace). 1.x marks it
+/// untested — verify grace/reboot on hardware before trusting
+/// unattended. No packages, no validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescueWatchdogProfile {
+    /// Management IP pinged once a minute (bench host LAN address;
+    /// 1.x default `192.168.1.254`).
+    pub target: String,
+}
+
+impl Default for RescueWatchdogProfile {
+    fn default() -> Self {
+        Self {
+            target: "192.168.1.254".into(),
+        }
+    }
+}
+
+/// Multi-WAN failover / load balancing — port of the tested 1.x
+/// `mwan3` preset (`scripts/use_cases/mwan3.py`, verified on 24.10.2
+/// with the iptables-nft compat layer in QEMU). Two tracked WAN
+/// interfaces, one member each (metric/weight per policy), a
+/// `<primary>_policy` using both members, and default_v4 + sticky-HTTPS
+/// rules. 1.x renders the track IPs as bare `list track_ip 'IP'`
+/// lines — broken shell that no-`set -e` 1.x silently ignored; this
+/// port renders real `uci add_list` ops (the golden comparator
+/// excludes track-ip wiring from both sides and the unit tests pin the
+/// corrected lines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mwan3Profile {
+    /// Primary WAN UCI interface name (1.x `interface_name` charset).
+    pub primary: String,
+    /// Secondary WAN UCI interface name (e.g. `usbwan` from tethering).
+    pub secondary: String,
+    /// `failover` (secondary metric 2) or `balanced` (equal metrics,
+    /// weight 2:1) — 1.x treats any other value as failover.
+    pub policy: String,
+    /// IPs pinged for connectivity tracking (1.x default: four public
+    /// resolvers).
+    pub track_ips: Vec<String>,
+}
+
+impl Default for Mwan3Profile {
+    fn default() -> Self {
+        Self {
+            primary: "wan".into(),
+            secondary: "usbwan".into(),
+            policy: "failover".into(),
+            track_ips: vec![
+                "1.0.0.1".into(),
+                "1.1.1.1".into(),
+                "8.8.8.8".into(),
+                "8.8.4.4".into(),
+            ],
+        }
+    }
+}
+
+impl Mwan3Profile {
+    /// 1.x `shell_safe::interface_name` parity: non-empty, `[A-Za-z0-9_.:-]+`.
+    /// `policy` additionally carries a shell-safe charset — it is the one
+    /// value this plan interpolates into a raw `echo` line, and 1.x never
+    /// validated it (the PlanOp::Shell contract requires gated values).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.primary) {
+            return Err(Unsupported::InvalidParams(
+                "primary contains unsafe characters".into(),
+            ));
+        }
+        if !iface_ok(&self.secondary) {
+            return Err(Unsupported::InvalidParams(
+                "secondary contains unsafe characters".into(),
+            ));
+        }
+        if !self
+            .policy
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(Unsupported::InvalidParams(
+                "policy contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// nftables-native policy-based routing — port of the tested 1.x `pbr`
+/// preset (`scripts/use_cases/pbr.py`, verified on OpenWrt 24.10.2 in
+/// QEMU/KVM). pbr is the fw4-native successor to mwan3's iptables
+/// marking: this plan enables the service with fw4 include-file mode,
+/// pins the default WAN interface for policy routing, and registers
+/// the LAN as a local interface. pbr does NOT do multi-WAN load
+/// balancing on its own (mwan4 integration arrives with mwan4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PbrProfile {
+    /// WAN UCI interface used for default routing (1.x default `wan`).
+    pub wan_interface: String,
+    /// LAN interface counted as local traffic (1.x default `lan`).
+    pub lan_interface: String,
+    /// Drop traffic that matches no policy (1.x default on).
+    pub strict_enforcement: bool,
+}
+
+impl Default for PbrProfile {
+    fn default() -> Self {
+        Self {
+            wan_interface: "wan".into(),
+            lan_interface: "lan".into(),
+            strict_enforcement: true,
+        }
+    }
+}
+
+impl PbrProfile {
+    /// 1.x interpolated `wan_interface`/`lan_interface` UNQUOTED into
+    /// two shell lines (`netifd_interface_default=`, `add_list …
+    /// netifd_interface_local=`) — a command-injection hole for
+    /// hostile param values. The port gates both with the 1.x
+    /// `shell_safe::interface_name` charset (`[A-Za-z0-9_.:-]+`); the
+    /// same gate landed Python-side with this port (mwan3/#448
+    /// precedent). Valid input renders byte-identically.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.wan_interface) {
+            return Err(Unsupported::InvalidParams(
+                "wan_interface contains unsafe characters".into(),
+            ));
+        }
+        if !iface_ok(&self.lan_interface) {
+            return Err(Unsupported::InvalidParams(
+                "lan_interface contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -598,6 +827,20 @@ pub enum Profile {
     SshHardening(SshHardeningProfile),
     /// Travel-router auto-connect for captive-portal WiFi upstreams.
     Travelmate(TravelmateProfile),
+    /// Network-wide ad blocking via AdGuard Home.
+    Adguard(AdguardProfile),
+    /// Automated 802.11s mesh networking.
+    Mesh11sd(Mesh11sdProfile),
+    /// Self-healing reboot when the management target goes unreachable.
+    RescueWatchdog(RescueWatchdogProfile),
+    /// Multi-WAN failover / load balancing.
+    Mwan3(Mwan3Profile),
+    /// nftables-native policy-based routing.
+    Pbr(PbrProfile),
+    /// Local DNS cache of nodns records via dnsmasq.
+    Nodns(NodnsProfile),
+    /// Auto-measured SQM (static or dynamic re-tune).
+    AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
 }
@@ -614,6 +857,13 @@ impl Profile {
             Profile::WireguardServer(_) => "wireguard-server",
             Profile::SshHardening(_) => "ssh-hardening",
             Profile::Travelmate(_) => "travelmate",
+            Profile::Adguard(_) => "adguard",
+            Profile::Mesh11sd(_) => "mesh11sd",
+            Profile::RescueWatchdog(_) => "rescue-watchdog",
+            Profile::Mwan3(_) => "mwan3",
+            Profile::Pbr(_) => "pbr",
+            Profile::Nodns(_) => "nodns",
+            Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
         }
     }
@@ -631,6 +881,13 @@ impl Profile {
             Profile::WireguardServer(_) => &[],
             Profile::SshHardening(_) => &[],
             Profile::Travelmate(_) => &["wifi"],
+            Profile::Adguard(_) => &[],
+            Profile::Mesh11sd(_) => &["wifi"],
+            Profile::RescueWatchdog(_) => &[],
+            Profile::Mwan3(_) => &[],
+            Profile::Pbr(_) => &[],
+            Profile::Nodns(_) => &[],
+            Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
         }
     }
@@ -643,6 +900,8 @@ pub enum ServiceAction {
     Enable,
     /// (Re)start now.
     Restart,
+    /// Start now (without restart semantics — 1.x `start`).
+    Start,
 }
 
 impl fmt::Display for ServiceAction {
@@ -650,6 +909,7 @@ impl fmt::Display for ServiceAction {
         match self {
             ServiceAction::Enable => write!(f, "enable"),
             ServiceAction::Restart => write!(f, "restart"),
+            ServiceAction::Start => write!(f, "start"),
         }
     }
 }
@@ -938,6 +1198,13 @@ pub fn plan_profile(
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
+        Profile::Adguard(ag) => plan_adguard(model, ag),
+        Profile::Mesh11sd(mesh) => plan_mesh11sd(model, mesh),
+        Profile::RescueWatchdog(wd) => plan_rescue_watchdog(model, wd),
+        Profile::Mwan3(mw) => plan_mwan3(model, mw),
+        Profile::Pbr(pbr) => plan_pbr(model, pbr),
+        Profile::Nodns(nd) => plan_nodns(model, nd),
+        Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
     }
 }
@@ -1305,6 +1572,9 @@ fn plan_wireguard_client(
     let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
         PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
             name: "wireguard-tools".into(),
         },
         PlanOp::EnsurePackage {
@@ -1461,6 +1731,9 @@ fn plan_wireguard_server(
 ) -> Result<Plan, Unsupported> {
     let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
         PlanOp::EnsurePackage {
             name: "wireguard-tools".into(),
         },
@@ -1816,6 +2089,1004 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
     ];
     Ok(Plan {
         profile_id: "travelmate".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_adguard(model: &DeviceModel, ag: &AdguardProfile) -> Result<Plan, Unsupported> {
+    let literal = |v: String| UciValue::Literal(v);
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "adguardhome".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-adguardhome".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "adguardhome".into(),
+            section: "adguardhome".into(),
+            section_type: "adguardhome".into(),
+            options: vec![
+                ("enabled".into(), literal("1".into())),
+                (
+                    "http_address".into(),
+                    literal(format!("{}:{}", ag.listen_ip, ag.web_port)),
+                ),
+                ("dns_port".into(), literal(ag.dns_port.to_string())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "adguardhome".into(),
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "adguardhome".into(),
+            action: ServiceAction::Start,
+        },
+        PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            options: vec![("noresolv".into(), literal("1".into()))],
+        },
+        PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: format!("127.0.0.1#{}", ag.dns_port),
+        },
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"AdGuard Home configured: DNS on port {}, web UI at {}:{}\"",
+                ag.dns_port, ag.listen_ip, ag.web_port
+            ),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "adguardhome enabled in uci".into(),
+            command: "uci -q get adguardhome.adguardhome.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "dnsmasq forwards to adguard".into(),
+            command: "uci -q get dhcp.@dnsmasq[0].server".into(),
+            expect_contains: format!("127.0.0.1#{}", ag.dns_port),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "adguard".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_mesh11sd(model: &DeviceModel, mesh: &Mesh11sdProfile) -> Result<Plan, Unsupported> {
+    mesh.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut setup_options = vec![
+        ("auto_mesh_id".into(), literal(mesh.mesh_id.clone())),
+        ("mesh_gate_base_ssid".into(), literal(mesh.ssid.clone())),
+        (
+            "mesh_gate_encryption".into(),
+            literal(mesh.encryption.clone()),
+        ),
+    ];
+    if !mesh.key.is_empty() {
+        setup_options.push(("mesh_gate_key".into(), literal(mesh.key.clone())));
+    }
+    setup_options.push(("auto_config".into(), literal(mesh.auto_config.clone())));
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "mesh11sd".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ip-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "kmod-nft-bridge".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "vxlan".into(),
+        },
+        PlanOp::Shell {
+            command: "opkg remove wpad-basic-mbedtls wpad-basic-wolfssl wpad-basic-openssl \
+                      wpad-basic 2>/dev/null || true"
+                .into(),
+        },
+        PlanOp::Shell {
+            command: "opkg install wpad-mbedtls 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: "service wpad restart 2>/dev/null || true".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "mesh11sd".into(),
+            section: "setup".into(),
+            options: setup_options,
+        },
+        PlanOp::CommitUci {
+            config: "mesh11sd".into(),
+        },
+        PlanOp::Shell {
+            command: "service mesh11sd restart 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"Mesh11sd configured: mesh_id={} ssid={}\"",
+                mesh.mesh_id, mesh.ssid
+            ),
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "mesh id persisted".into(),
+        command: "uci -q get mesh11sd.setup.auto_mesh_id".into(),
+        expect_contains: mesh.mesh_id.clone(),
+    }];
+    Ok(Plan {
+        profile_id: "mesh11sd".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+/// The 1.x watchdog payload, verbatim (`WATCHDOG_INIT` in
+/// `scripts/use_cases/rescue_watchdog.py`): procd init heredoc +
+/// watchdog loop heredoc, `__TARGET__` substituted at plan time.
+const RESCUE_WATCHDOG_INIT: &str = r#"cat > /etc/init.d/rescue-watchdog << 'WD_EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /bin/sh /usr/bin/rescue-watchdog-loop
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+WD_EOF
+chmod +x /etc/init.d/rescue-watchdog
+
+/usr/bin/rescue-watchdog-loop << 'WDL_EOF'
+#!/bin/sh
+TARGET="${WATCHDOG_TARGET:-__TARGET__}"
+GRACE=600
+FAILS=0
+while :; do
+    UPTIME=$(cut -d. -f1 /proc/uptime)
+    if [ "$UPTIME" -lt "$GRACE" ]; then
+        FAILS=0
+    elif ping -c1 -W3 "$TARGET" >/dev/null 2>&1; then
+        FAILS=0
+    else
+        FAILS=$((FAILS+1))
+        logger -t rescue-watchdog "target $TARGET unreachable ($FAILS/3)"
+        if [ "$FAILS" -ge 3 ]; then
+            logger -t rescue-watchdog "networking wedged - rebooting"
+            sync
+            reboot
+        fi
+    fi
+    sleep 60
+done
+WDL_EOF
+chmod +x /usr/bin/rescue-watchdog-loop
+
+/etc/init.d/rescue-watchdog enable
+/etc/init.d/rescue-watchdog restart
+"#;
+
+/// Local DNS cache of nodns records — port of the tested 1.x `nodns`
+/// preset (`scripts/use_cases/nodns.py`, verified on 24.10.2 QEMU). A
+/// procd service polls the nodns bot's BIND zone export every
+/// `poll_interval` and rewrites `/etc/dnsmasq.d/nodns.hosts`
+/// (addn-hosts), SIGHUPing dnsmasq. Zero packages: curl + sh only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodnsProfile {
+    /// DNS zone to cache (1.x default `nodns.shop`).
+    pub zone: String,
+    /// nodns bot API base URL (1.x default `https://nodns.shop`).
+    pub api_url: String,
+    /// Polling interval in seconds (1.x `int_range` 60–86400, default 300).
+    pub poll_interval: u32,
+}
+
+impl Default for NodnsProfile {
+    fn default() -> Self {
+        Self {
+            zone: "nodns.shop".into(),
+            api_url: "https://nodns.shop".into(),
+            poll_interval: 300,
+        }
+    }
+}
+
+impl NodnsProfile {
+    /// 1.x validators: `int_range(60, 86400)` for the interval, an
+    /// http(s):// prefix gate for the URL, and non-empty/no-whitespace
+    /// for the zone. All three string values are additionally checked
+    /// for shell metacharacters: they land inside the runtime script's
+    /// double-quoted assignments, where `$(...)`/backticks would
+    /// command-substitute when the poll script RUNS (1.x shares the
+    /// hole; the port refuses hostile input instead).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        const SHELL_META: &[char] = &['$', '`', '(', ')', ';', '&', '|', '<', '>', '"', '\''];
+        if !(60..=86_400).contains(&self.poll_interval) {
+            return Err(Unsupported::InvalidParams(
+                "poll_interval must be 60-86400 seconds".into(),
+            ));
+        }
+        for (field, value) in [("api_url", &self.api_url), ("zone", &self.zone)] {
+            if value.contains(SHELL_META) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} contains shell metacharacters"
+                )));
+            }
+        }
+        if !(self.api_url.starts_with("https://") || self.api_url.starts_with("http://")) {
+            return Err(Unsupported::InvalidParams(
+                "api_url must start with https:// or http://".into(),
+            ));
+        }
+        if self.zone.is_empty() || self.zone.chars().any(|c| c.is_whitespace()) {
+            return Err(Unsupported::InvalidParams(
+                "zone must not be empty or contain spaces".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+const NODNS_INITD_SCRIPT: &str = r####"#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /usr/bin/nodns-poll.sh
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+"####;
+
+const NODNS_POLL_SCRIPT_TEMPLATE: &str = r####"#!/bin/sh
+# nodns DNS bridge -- polls zone export API, updates dnsmasq addn-hosts cache.
+# Auto-generated by conwrt use_cases/nodns.
+ZONE="__ZONE__"
+API_URL="__URL__"
+POLL_INTERVAL=__POLL_INTERVAL__
+HOSTS_FILE="/etc/dnsmasq.d/nodns.hosts"
+TMP_FILE="/tmp/nodns-zone.txt"
+
+mkdir -p /etc/dnsmasq.d
+
+while true; do
+	# Fetch BIND zone file from the nodns bot API.
+	if curl -s --connect-timeout 10 --max-time 30 \
+		"${API_URL}/api/zone/${ZONE}/export" \
+		-o "$TMP_FILE" 2>/dev/null; then
+		# Parse: extract A/AAAA records -> "ip<TAB>fqdn" lines for addn-hosts.
+		awk -v z="$ZONE" '
+		BEGIN { OFS = "\t" }
+		{
+			rtype = toupper($3)
+			if (rtype != "A" && rtype != "AAAA") next
+			name = $1
+			ip = $NF
+			if (name == "@") name = z
+			else if (name ~ /\.$/) sub(/\.$/, "", name)
+			else name = name "." z
+			print ip, name
+		}' "$TMP_FILE" > "$HOSTS_FILE.new"
+		# Atomic swap only when we got valid data.
+		if [ -s "$HOSTS_FILE.new" ]; then
+			mv "$HOSTS_FILE.new" "$HOSTS_FILE"
+			killall -HUP dnsmasq 2>/dev/null
+		else
+			rm -f "$HOSTS_FILE.new"
+		fi
+	fi
+	sleep "$POLL_INTERVAL"
+done
+"####;
+
+/// Auto-measured SQM — port of the tested 1.x `auto-sqm` preset
+/// (`scripts/use_cases/auto_sqm.py`, verified on 24.10.2 QEMU). A
+/// runtime script (rendered byte-verbatim below) reads its whole
+/// configuration from `auto_sqm.config` uci at RUN time — static mode
+/// applies fixed speeds immediately, dynamic mode re-measures on a
+/// cron schedule; a hotplug hook re-tunes on WAN ifup. The plan only
+/// stages the config, the script, the hook, and (dynamic) the cron
+/// entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoSqmProfile {
+    /// `static` (fixed speeds) or `dynamic` (auto-measure + cron re-tune).
+    pub mode: String,
+    /// WAN UCI interface name (1.x `interface_name` charset).
+    pub interface: String,
+    /// Physical device for byte counters (same charset).
+    pub device: String,
+    /// Apply SQM at this % of measured speed (1.x default 90).
+    pub target_percent: u32,
+    /// Queue discipline: cake or fq_codel.
+    pub qdisc: String,
+    /// QoS script (1.x default `piece_of_cake.qos`).
+    pub script: String,
+    /// Measurement mode: wget or iperf3.
+    pub measurement_mode: String,
+    /// Static download Kbit/s (0 = measure on first trigger).
+    pub download_kbps: u32,
+    /// Static upload Kbit/s (0 = use the fallback).
+    pub upload_kbps: u32,
+    /// iperf3 server hostname (required for iperf3 mode).
+    pub iperf3_host: String,
+    /// iperf3 server port.
+    pub iperf3_port: u16,
+    /// wget test file URL for speed measurement.
+    pub test_url: String,
+    /// Fallback upload speed when unmeasurable (Kbit/s).
+    pub upload_fallback_kbps: u32,
+    /// Skip reconfiguration when the change is below this %.
+    pub hysteresis_percent: u32,
+    /// Re-tune interval in hours (dynamic mode).
+    pub dynamic_interval_hours: u32,
+}
+
+impl Default for AutoSqmProfile {
+    fn default() -> Self {
+        Self {
+            mode: "static".into(),
+            interface: "wan".into(),
+            device: "eth0".into(),
+            target_percent: 90,
+            qdisc: "cake".into(),
+            script: "piece_of_cake.qos".into(),
+            measurement_mode: "wget".into(),
+            download_kbps: 0,
+            upload_kbps: 0,
+            iperf3_host: String::new(),
+            iperf3_port: 5201,
+            test_url: "http://speedtest.tele2.net/10MB.zip".into(),
+            upload_fallback_kbps: 5000,
+            hysteresis_percent: 10,
+            dynamic_interval_hours: 4,
+        }
+    }
+}
+
+impl AutoSqmProfile {
+    /// 1.x validates exactly two fields (`interface_name` on interface
+    /// and device); everything else rides uci at run time.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.interface) {
+            return Err(Unsupported::InvalidParams(
+                "WAN interface contains unsafe characters".into(),
+            ));
+        }
+        if !iface_ok(&self.device) {
+            return Err(Unsupported::InvalidParams(
+                "SQM device contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+const AUTO_SQM_SCRIPT: &str = r####"#!/bin/sh
+# auto-sqm — measure WAN link speed and configure SQM
+
+MODE=$(uci -q get auto_sqm.config.mode || echo "static")
+INTERFACE=$(uci -q get auto_sqm.config.interface || echo "wan")
+DEVICE=$(uci -q get auto_sqm.config.device || echo "eth0")
+TARGET_PCT=$(uci -q get auto_sqm.config.target_percent || echo "90")
+QDISC=$(uci -q get auto_sqm.config.qdisc || echo "cake")
+QOS_SCRIPT=$(uci -q get auto_sqm.config.script || echo "piece_of_cake.qos")
+MEAS_MODE=$(uci -q get auto_sqm.config.measurement_mode || echo "wget")
+IPERF3_HOST=$(uci -q get auto_sqm.config.iperf3_host || echo "")
+IPERF3_PORT=$(uci -q get auto_sqm.config.iperf3_port || echo "5201")
+TEST_URL=$(uci -q get auto_sqm.config.test_url || echo "")
+UPLOAD_FALLBACK=$(uci -q get auto_sqm.config.upload_fallback_kbps || echo "5000")
+HYSTERESIS=$(uci -q get auto_sqm.config.hysteresis_percent || echo "10")
+
+DL_SPEED=0
+UL_SPEED=0
+
+measure_wget() {
+    [ -z "$DEVICE" ] && return 1
+    [ -z "$TEST_URL" ] && return 1
+    bytes_before=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
+    t1=$(date +%s)
+    wget -O /dev/null -T 30 "$TEST_URL" 2>/dev/null || return 1
+    t2=$(date +%s)
+    bytes_after=$(cat /sys/class/net/"$DEVICE"/statistics/rx_bytes 2>/dev/null) || return 1
+    elapsed=$((t2 - t1))
+    [ "$elapsed" -eq 0 ] && elapsed=1
+    speed_bps=$(( (bytes_after - bytes_before) * 8 / elapsed ))
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
+
+measure_iperf3() {
+    [ -z "$IPERF3_HOST" ] && return 1
+    command -v iperf3 >/dev/null 2>&1 || return 1
+    json_out=$(iperf3 -c "$IPERF3_HOST" -p "$IPERF3_PORT" -t 5 -J 2>/dev/null) || return 1
+    speed_bps=$(echo "$json_out" | jsonfilter -e "@.end.sum_received.bits_per_second" 2>/dev/null) || return 1
+    speed_bps=$(echo "$speed_bps" | cut -d. -f1)
+    DL_SPEED=$((speed_bps / 1000))
+    DL_SPEED=$((DL_SPEED * TARGET_PCT / 100))
+}
+
+apply_sqm() {
+    dl=$1
+    ul=$2
+    [ "$dl" -eq 0 ] && return 1
+
+    cur_dl=$(uci -q get sqm."$INTERFACE".download || echo "0")
+    cur_ul=$(uci -q get sqm."$INTERFACE".upload || echo "0")
+
+    if [ "$cur_dl" -gt 0 ] && [ "$cur_ul" -gt 0 ]; then
+        lo=$((100 - HYSTERESIS))
+        hi=$((100 + HYSTERESIS))
+        pct_dl=$((cur_dl * 100 / dl))
+        pct_ul=$((cur_ul * 100 / ul))
+        if [ "$pct_dl" -ge "$lo" ] && [ "$pct_dl" -le "$hi" ] && [ "$pct_ul" -ge "$lo" ] && [ "$pct_ul" -le "$hi" ]; then
+            echo "auto-sqm: change within hysteresis, skipping"
+            return 0
+        fi
+    fi
+
+    touch /etc/config/sqm
+
+    uci set sqm.$INTERFACE=queue
+    uci set sqm.$INTERFACE.interface="$INTERFACE"
+    uci set sqm.$INTERFACE.enabled='1'
+    uci set sqm.$INTERFACE.script="$QOS_SCRIPT"
+    uci set sqm.$INTERFACE.qdisc="$QDISC"
+    uci set sqm.$INTERFACE.linklayer='none'
+    uci set sqm.$INTERFACE.overhead='0'
+    uci set sqm.$INTERFACE.linklayer_adaptation_mechanism='default'
+    uci set sqm.$INTERFACE.debug_logging='0'
+    uci set sqm.$INTERFACE.verbosity='5'
+    uci set sqm.$INTERFACE.download="$dl"
+    uci set sqm.$INTERFACE.upload="$ul"
+    uci commit sqm
+
+    /etc/init.d/sqm enable
+    /etc/init.d/sqm restart 2>/dev/null || true
+
+    echo "auto-sqm: SQM applied ${dl}/${ul} kbit/s (${QDISC})"
+}
+
+STATIC_DL=$(uci -q get auto_sqm.config.download_kbps || echo "0")
+STATIC_UL=$(uci -q get auto_sqm.config.upload_kbps || echo "0")
+
+if [ "$MODE" = "static" ] && [ "$STATIC_DL" -gt 0 ]; then
+    DL_SPEED=$((STATIC_DL * TARGET_PCT / 100))
+    if [ "$STATIC_UL" -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+else
+    if [ "$MEAS_MODE" = "iperf3" ] && [ -n "$IPERF3_HOST" ]; then
+        measure_iperf3 || measure_wget
+    else
+        measure_wget || measure_iperf3
+    fi
+
+    if [ "$DL_SPEED" -eq 0 ]; then
+        echo "auto-sqm: measurement failed, will retry on next trigger" >&2
+        exit 1
+    fi
+
+    if [ "$STATIC_UL" -gt 0 ]; then
+        UL_SPEED=$((STATIC_UL * TARGET_PCT / 100))
+    else
+        UL_SPEED=$UPLOAD_FALLBACK
+    fi
+fi
+
+apply_sqm "$DL_SPEED" "$UL_SPEED"
+"####;
+
+fn plan_rescue_watchdog(
+    model: &DeviceModel,
+    wd: &RescueWatchdogProfile,
+) -> Result<Plan, Unsupported> {
+    let ops = vec![PlanOp::Shell {
+        command: RESCUE_WATCHDOG_INIT.replace("__TARGET__", &wd.target),
+    }];
+    let verification = vec![VerificationCheck {
+        description: "watchdog service enabled".into(),
+        command: "/etc/init.d/rescue-watchdog enabled && echo yes".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "rescue-watchdog".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_mwan3(model: &DeviceModel, mw: &Mwan3Profile) -> Result<Plan, Unsupported> {
+    mw.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let (primary_metric, primary_weight, secondary_metric, secondary_weight) =
+        if mw.policy == "balanced" {
+            ("1", "2", "1", "1")
+        } else {
+            ("1", "1", "2", "1")
+        };
+    let pm = format!("{}_m{primary_metric}_w{primary_weight}", mw.primary);
+    let sm = format!("{}_m{secondary_metric}_w{secondary_weight}", mw.secondary);
+    let pol_name = format!("{}_policy", mw.primary);
+    let probe_options = vec![
+        ("family".into(), literal("ipv4".into())),
+        ("reliability".into(), literal("1".into())),
+        ("count".into(), literal("1".into())),
+        ("timeout".into(), literal("2".into())),
+        ("interval".into(), literal("5".into())),
+        ("down".into(), literal("3".into())),
+        ("up".into(), literal("8".into())),
+    ];
+    let mut ops: Vec<PlanOp> = [
+        "mwan3",
+        "iptables-nft",
+        "ip6tables-nft",
+        "iptables-mod-conntrack-extra",
+    ]
+    .iter()
+    .map(|name| PlanOp::EnsurePackage {
+        name: (*name).into(),
+    })
+    .collect();
+    // mwan3 convention: the tracked interface section is named after the
+    // UCI network it tracks. 1.x hardcoded the section as `wan` while
+    // pointing the member at `primary` — broken for any primary ≠ "wan"
+    // (Codex #448 P1; default output renders identically, so golden
+    // parity is unaffected).
+    ops.push(PlanOp::ResetUciConfig {
+        config: "mwan3".into(),
+    });
+    for section in [&mw.primary, &mw.secondary] {
+        ops.push(PlanOp::SetUciSection {
+            config: "mwan3".into(),
+            section: section.clone(),
+            section_type: "interface".into(),
+            options: vec![("enabled".into(), literal("1".into()))],
+        });
+        for ip in &mw.track_ips {
+            // 1.x renders bare `list track_ip '<ip>'` lines here — broken
+            // shell (silently ignored without set -e, fatal with it); the
+            // port emits the intended uci add_list against THIS section
+            ops.push(PlanOp::UciAddList {
+                config: "mwan3".into(),
+                section: section.clone(),
+                option: "track_ip".into(),
+                value: ip.clone(),
+            });
+        }
+        ops.push(PlanOp::SetUciOptions {
+            config: "mwan3".into(),
+            section: section.clone(),
+            options: probe_options.clone(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: pm.clone(),
+        section_type: "member".into(),
+        options: vec![
+            ("interface".into(), literal(mw.primary.clone())),
+            ("metric".into(), literal(primary_metric.into())),
+            ("weight".into(), literal(primary_weight.into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: sm.clone(),
+        section_type: "member".into(),
+        options: vec![
+            ("interface".into(), literal(mw.secondary.clone())),
+            ("metric".into(), literal(secondary_metric.into())),
+            ("weight".into(), literal(secondary_weight.into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        section_type: "policy".into(),
+        options: vec![],
+    });
+    ops.push(PlanOp::UciAddList {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        option: "use_member".into(),
+        value: pm.clone(),
+    });
+    ops.push(PlanOp::UciAddList {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        option: "use_member".into(),
+        value: sm.clone(),
+    });
+    ops.push(PlanOp::SetUciOptions {
+        config: "mwan3".into(),
+        section: pol_name.clone(),
+        options: vec![("last_resort".into(), literal("default".into()))],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: "default_rule_v4".into(),
+        section_type: "rule".into(),
+        options: vec![
+            ("dest_ip".into(), literal("0.0.0.0/0".into())),
+            ("use_policy".into(), literal(pol_name.clone())),
+            ("family".into(), literal("ipv4".into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "mwan3".into(),
+        section: "https_rule".into(),
+        section_type: "rule".into(),
+        options: vec![
+            ("dest_port".into(), literal("443".into())),
+            ("proto".into(), literal("tcp".into())),
+            ("sticky".into(), literal("1".into())),
+            ("use_policy".into(), literal(pol_name.clone())),
+        ],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "mwan3".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "mwan3".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo \"mwan3 configured: {} (primary) + {} ({})\"",
+            mw.primary, mw.secondary, mw.policy
+        ),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "primary interface section exists".into(),
+            command: "uci -q get mwan3.wan.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "policy wired to both members".into(),
+            command: format!("uci -q get mwan3.{pol_name}.use_member"),
+            expect_contains: pm,
+        },
+    ];
+    Ok(Plan {
+        profile_id: "mwan3".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> {
+    pbr.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let strict = if pbr.strict_enforcement { "1" } else { "0" };
+    let ops = vec![
+        PlanOp::EnsurePackage { name: "pbr".into() },
+        PlanOp::EnsurePackage {
+            name: "luci-app-pbr".into(),
+        },
+        PlanOp::Shell {
+            command: "uci set pbr.config=pbr".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "pbr".into(),
+            section: "config".into(),
+            options: vec![
+                ("enabled".into(), literal("1".into())),
+                ("verbosity".into(), literal("2".into())),
+                ("strict_enforcement".into(), literal(strict.into())),
+                ("resolver_set".into(), literal("none".into())),
+                ("nft_file_helper".into(), literal("1".into())),
+            ],
+        },
+        // 1.x renders these two UNQUOTED (bare interface names); the
+        // validate() charset gate is what makes the verbatim render safe.
+        PlanOp::Shell {
+            command: format!(
+                "uci set pbr.config.netifd_interface_default={}",
+                pbr.wan_interface
+            ),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "uci add_list pbr.config.netifd_interface_local={}",
+                pbr.lan_interface
+            ),
+        },
+        PlanOp::CommitUci {
+            config: "pbr".into(),
+        },
+        PlanOp::Service {
+            name: "pbr".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "pbr".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: "echo \"pbr configured. Verify with: nft list table inet pbr 2>/dev/null\""
+                .into(),
+        },
+        PlanOp::Shell {
+            command: "echo \"Check status: /etc/init.d/pbr status\"".into(),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "pbr enabled in uci".into(),
+            command: "uci -q get pbr.config.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "default WAN interface persisted".into(),
+            command: "uci -q get pbr.config.netifd_interface_default".into(),
+            expect_contains: pbr.wan_interface.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/pbr enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "pbr".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_nodns(model: &DeviceModel, nd: &NodnsProfile) -> Result<Plan, Unsupported> {
+    nd.validate()?;
+    // curl is NOT in every base image (the preset's "no packages" claim
+    // holds only where curl ships in base) — EnsurePackage it; the
+    // golden comparator filters package lines, so parity is unaffected
+    let mut ops: Vec<PlanOp> = vec![PlanOp::EnsurePackage {
+        name: "curl".into(),
+    }];
+    let poll_script = NODNS_POLL_SCRIPT_TEMPLATE
+        .replace("__URL__", &nd.api_url)
+        .replace("__ZONE__", &nd.zone)
+        .replace("__POLL_INTERVAL__", &nd.poll_interval.to_string());
+    ops.extend([
+        PlanOp::Shell {
+            command: "mkdir -p /etc/dnsmasq.d".into(),
+        },
+        PlanOp::Shell {
+            command: "touch /etc/dnsmasq.d/nodns.hosts".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "cat > /etc/init.d/nodns-bridge << 'NODNS_INIT_EOF'\n{NODNS_INITD_SCRIPT}NODNS_INIT_EOF"
+            ),
+        },
+        PlanOp::Shell {
+            command: "chmod +x /etc/init.d/nodns-bridge".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "cat > /usr/bin/nodns-poll.sh << 'NODNS_POLL_EOF'\n{poll_script}NODNS_POLL_EOF"
+            ),
+        },
+        PlanOp::Shell {
+            command: "chmod +x /usr/bin/nodns-poll.sh".into(),
+        },
+        PlanOp::Shell {
+            command:
+                "uci -q del_list dhcp.@dnsmasq[0].addnhosts='/etc/dnsmasq.d/nodns.hosts'; true"
+                    .into(),
+        },
+        PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "addnhosts".into(),
+            value: "/etc/dnsmasq.d/nodns.hosts".into(),
+        },
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Service {
+            name: "nodns-bridge".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "nodns-bridge".into(),
+            action: ServiceAction::Start,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo \"nodns bridge configured: zone={} interval={}s url={}\"",
+                nd.zone, nd.poll_interval, nd.api_url
+            ),
+        },
+    ]);
+    let verification = vec![VerificationCheck {
+        description: "dnsmasq addnhosts registered".into(),
+        command: "uci -q get dhcp.@dnsmasq[0].addnhosts".into(),
+        expect_contains: "/etc/dnsmasq.d/nodns.hosts".into(),
+    }];
+    Ok(Plan {
+        profile_id: "nodns".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_auto_sqm(model: &DeviceModel, asq: &AutoSqmProfile) -> Result<Plan, Unsupported> {
+    asq.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops: Vec<PlanOp> = ["sqm-scripts", "luci-app-sqm", "jsonfilter", "iperf3"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    ops.push(PlanOp::Shell {
+        command: "touch /etc/config/auto_sqm".into(),
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "auto_sqm".into(),
+        section: "config".into(),
+        section_type: "auto_sqm".into(),
+        options: vec![
+            ("mode".into(), literal(asq.mode.clone())),
+            ("interface".into(), literal(asq.interface.clone())),
+            ("device".into(), literal(asq.device.clone())),
+            (
+                "target_percent".into(),
+                literal(asq.target_percent.to_string()),
+            ),
+            ("qdisc".into(), literal(asq.qdisc.clone())),
+            ("script".into(), literal(asq.script.clone())),
+            (
+                "measurement_mode".into(),
+                literal(asq.measurement_mode.clone()),
+            ),
+            ("iperf3_host".into(), literal(asq.iperf3_host.clone())),
+            ("iperf3_port".into(), literal(asq.iperf3_port.to_string())),
+            ("test_url".into(), literal(asq.test_url.clone())),
+            (
+                "download_kbps".into(),
+                literal(asq.download_kbps.to_string()),
+            ),
+            ("upload_kbps".into(), literal(asq.upload_kbps.to_string())),
+            (
+                "upload_fallback_kbps".into(),
+                literal(asq.upload_fallback_kbps.to_string()),
+            ),
+            (
+                "hysteresis_percent".into(),
+                literal(asq.hysteresis_percent.to_string()),
+            ),
+            (
+                "dynamic_interval_hours".into(),
+                literal(asq.dynamic_interval_hours.to_string()),
+            ),
+        ],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "auto_sqm".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm".into(),
+    });
+    // 1.x emits one Shell op per script line INCLUDING blanks — the
+    // heredoc body must stay byte-faithful on-device (shell_lines
+    // drops empties; that helper is for non-heredoc surfaces)
+    for line in AUTO_SQM_SCRIPT.lines() {
+        ops.push(PlanOp::Shell {
+            command: line.into(),
+        });
+    }
+    ops.push(PlanOp::Shell {
+        command: "AUTO_SQM_EOF".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "chmod +x /usr/sbin/auto-sqm".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "mkdir -p /etc/hotplug.d/iface".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "#!/bin/sh".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "[ \"$ACTION\" = \"ifup\" ] && [ \"$INTERFACE\" = \"{}\" ] && /usr/sbin/auto-sqm &",
+            asq.interface
+        ),
+    });
+    ops.push(PlanOp::Shell {
+        command: "HOTPLUG_EOF".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "chmod +x /etc/hotplug.d/iface/10-sqm-autotune".into(),
+    });
+    if asq.mode == "dynamic" {
+        ops.push(PlanOp::Shell {
+            // idempotent re-apply: drop any previous auto-sqm entry before
+            // appending (plain append accumulates duplicate jobs — the
+            // 1.x shape; comparator filters both line forms, unit-pinned)
+            command: format!(
+                "sed -i '/auto-sqm/d' /etc/crontabs/root 2>/dev/null; \
+                 echo '0 */{} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root",
+                asq.dynamic_interval_hours
+            ),
+        });
+        ops.push(PlanOp::Service {
+            name: "cron".into(),
+            action: ServiceAction::Enable,
+        });
+        ops.push(PlanOp::Service {
+            name: "cron".into(),
+            action: ServiceAction::Restart,
+        });
+    }
+    if asq.mode == "static" && asq.download_kbps > 0 {
+        ops.push(PlanOp::Shell {
+            command: "/usr/sbin/auto-sqm".into(),
+        });
+    } else {
+        ops.push(PlanOp::Shell {
+            command: "echo 'auto-sqm: will measure and configure on WAN ifup'".into(),
+        });
+    }
+    ops.push(PlanOp::Shell {
+        command: "echo 'Auto-SQM configured'".into(),
+    });
+    let verification = vec![VerificationCheck {
+        description: "auto_sqm config persisted".into(),
+        command: "uci -q get auto_sqm.config.mode".into(),
+        expect_contains: asq.mode.clone(),
+    }];
+    Ok(Plan {
+        profile_id: "auto-sqm".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -2250,6 +3521,7 @@ pub fn render_shell(plan: &Plan) -> String {
                 let action = match action {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
+                    ServiceAction::Start => "start",
                 };
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",
@@ -2300,7 +3572,7 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         // phy1-sta0 on WiFi STA) — the 1.x `wan` lesson, 1.x shape.
         PlanOp::Shell {
             command: format!(
-                "_sqm_dev=$(uci get network.{iface}.device 2>/dev/null); \
+                "_sqm_dev=$(uci get network.{iface}.device 2>/dev/null || true); \
                  if [ -z \"$_sqm_dev\" ] || ! ip addr show \"$_sqm_dev\" 2>/dev/null | grep -q \"inet \"; then \
                  _sqm_dev=$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{{print $5}}' | head -1); fi; \
                  if [ -z \"$_sqm_dev\" ]; then _sqm_dev={iface}; fi"
@@ -2493,9 +3765,10 @@ mod tests {
             "for _s in $(uci -q show sqm 2>/dev/null | grep '=queue' | cut -d. -f2 | cut -d= -f1); do uci -q delete sqm.$_s; done; true"
         ));
         // device resolution is the 1.x one-line `_sqm_dev` idiom (not the
-        // typed multi-line `_conwrt_dev_*` block)
+        // typed multi-line `_conwrt_dev_*` block), with the 2.x-only
+        // `|| true` set -e guard
         assert!(script.contains(
-            "_sqm_dev=$(uci get network.wan.device 2>/dev/null); if [ -z \"$_sqm_dev\" ]"
+            "_sqm_dev=$(uci get network.wan.device 2>/dev/null || true); if [ -z \"$_sqm_dev\" ]"
         ));
         assert!(script.contains("uci set sqm.wan.interface=\"$_sqm_dev\""));
         // 1.x option order: interface directly after section creation,
@@ -2979,6 +4252,7 @@ mod tests {
                 profile: "t_d".into(),
                 version: "24".into(),
                 board_name: None,
+                board_names: None,
                 default_ip: None,
                 extras: Default::default(),
             },
@@ -3071,6 +4345,345 @@ mod tests {
         assert!(!script.contains("trm_iface"));
         assert!(!script.contains("wifi-iface"));
         assert!(!script.contains("trm_wwan"));
+    }
+
+    #[test]
+    fn sqm_resolve_survives_set_e_when_wan_device_is_absent() {
+        // the 2.x preamble is `set -e` (1.x runs bare); an unguarded
+        // `var=$(uci get ...)` kills the whole script under `sh -c`
+        // exec when the option is missing — found live via
+        // `conwrt apply --execute` on a fixture VM without wan.device.
+        let script = render_shell(&plan_for(Profile::Sqm(test_sqm_defaults())));
+        assert!(
+            script.contains("_sqm_dev=$(uci get network.wan.device 2>/dev/null || true)"),
+            "resolve substitution must be set -e safe"
+        );
+    }
+
+    #[test]
+    fn adguard_default_and_custom_render_match_1x_shape() {
+        let script = render_shell(&plan_for(Profile::Adguard(AdguardProfile::default())));
+        assert!(script.contains("uci set adguardhome.adguardhome=adguardhome"));
+        assert!(script.contains("uci set adguardhome.adguardhome.enabled='1'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.http_address='0.0.0.0:3000'"));
+        assert!(script.contains("uci set adguardhome.adguardhome.dns_port='5353'"));
+        assert!(script.contains("uci commit adguardhome"));
+        assert!(script.contains("/etc/init.d/adguardhome enable"));
+        assert!(script.contains("/etc/init.d/adguardhome start"));
+        assert!(script.contains("uci set dhcp.@dnsmasq[0].noresolv='1'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'"));
+        assert!(script.contains("uci commit dhcp"));
+        assert!(script.contains("/etc/init.d/dnsmasq restart"));
+        assert!(script.contains(
+            "echo \"AdGuard Home configured: DNS on port 5353, web UI at 0.0.0.0:3000\""
+        ));
+
+        let custom = render_shell(&plan_for(Profile::Adguard(AdguardProfile {
+            listen_ip: "192.168.1.1".into(),
+            web_port: 8080,
+            dns_port: 5333,
+        })));
+        assert!(custom.contains("uci set adguardhome.adguardhome.http_address='192.168.1.1:8080'"));
+        assert!(custom.contains("uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'"));
+        assert!(custom.contains("web UI at 192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn mesh11sd_key_branch_order_and_required_gate_match_1x() {
+        let no_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "testmesh".into(),
+            ..Mesh11sdProfile::default()
+        })));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_mesh_id='testmesh'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_base_ssid='MeshNet'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.mesh_gate_encryption='1'"));
+        assert!(no_key.contains("uci set mesh11sd.setup.auto_config='0'"));
+        assert!(!no_key.contains("mesh_gate_key"));
+        assert!(no_key.contains("uci commit mesh11sd"));
+        assert!(no_key.contains("service mesh11sd restart 2>/dev/null || true"));
+        assert!(no_key.contains("echo \"Mesh11sd configured: mesh_id=testmesh ssid=MeshNet\""));
+
+        let with_key = render_shell(&plan_for(Profile::Mesh11sd(Mesh11sdProfile {
+            mesh_id: "m2".into(),
+            ssid: "Backhaul".into(),
+            encryption: "3".into(),
+            key: "mesh pass".into(),
+            auto_config: "2".into(),
+        })));
+        // 1.x dict insertion order: key BETWEEN encryption and auto_config
+        let enc = with_key.find("mesh_gate_encryption='3'").expect("enc");
+        let key = with_key.find("mesh_gate_key='mesh pass'").expect("key");
+        let auto = with_key.find("auto_config='2'").expect("auto");
+        assert!(enc < key && key < auto, "1.x option order must hold");
+
+        // required-param gate
+        assert!(matches!(
+            Mesh11sdProfile::default().validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn rescue_watchdog_payload_is_verbatim_with_target_substituted() {
+        let script = render_shell(&plan_for(Profile::RescueWatchdog(RescueWatchdogProfile {
+            target: "192.168.105.10".into(),
+        })));
+        assert!(script.contains("cat > /etc/init.d/rescue-watchdog << 'WD_EOF'"));
+        assert!(script.contains("procd_set_param respawn 3600 5 0"));
+        assert!(script.contains("TARGET=\"${WATCHDOG_TARGET:-192.168.105.10}\""));
+        assert!(script.contains("[ \"$FAILS\" -ge 3 ]"));
+        assert!(script.contains("/etc/init.d/rescue-watchdog enable"));
+        // no unsubstituted placeholder survives
+        assert!(!script.contains("__TARGET__"));
+    }
+
+    #[test]
+    fn mwan3_shape_members_policy_rules_and_track_ip_fix() {
+        let script = render_shell(&plan_for(Profile::Mwan3(Mwan3Profile::default())));
+        assert!(script.contains("uci -q delete mwan3 >/dev/null 2>&1 || true"));
+        assert!(script.contains("uci set mwan3.wan=interface"));
+        assert!(script.contains("uci set mwan3.wan.enabled='1'"));
+        // the 1.x `list track_ip` defect is FIXED: real add_list ops per section
+        assert!(script.contains("uci add_list mwan3.wan.track_ip='1.0.0.1'"));
+        assert!(script.contains("uci add_list mwan3.usbwan.track_ip='8.8.4.4'"));
+        assert!(!script.contains("list track_ip"));
+        assert!(script.contains("uci set mwan3.wan.family='ipv4'"));
+        assert!(script.contains("uci set mwan3.usbwan=interface"));
+        // failover metrics: primary m1w1, secondary m2w1
+        assert!(script.contains("uci set mwan3.wan_m1_w1=member"));
+        assert!(script.contains("uci set mwan3.usbwan_m2_w1=member"));
+        assert!(script.contains("uci set mwan3.wan_policy=policy"));
+        assert!(script.contains("uci add_list mwan3.wan_policy.use_member='wan_m1_w1'"));
+        assert!(script.contains("uci add_list mwan3.wan_policy.use_member='usbwan_m2_w1'"));
+        assert!(script.contains("uci set mwan3.wan_policy.last_resort='default'"));
+        assert!(script.contains("uci set mwan3.default_rule_v4=rule"));
+        assert!(
+            script.contains(
+                "uci set mwan3.https_rule.rule"
+                    .replace(".rule", "=rule")
+                    .as_str()
+            )
+        );
+        assert!(script.contains("uci commit mwan3"));
+        assert!(script.contains("/etc/init.d/mwan3 restart"));
+        assert!(script.contains("echo \"mwan3 configured: wan (primary) + usbwan (failover)\""));
+
+        // balanced flips the metrics/weights; non-default primary gets its
+        // own tracked section (1.x hardcoded `wan` — Codex #448 P1)
+        let balanced = render_shell(&plan_for(Profile::Mwan3(Mwan3Profile {
+            primary: "wwan2".into(),
+            secondary: "wwan".into(),
+            policy: "balanced".into(),
+            track_ips: vec!["9.9.9.9".into()],
+        })));
+        assert!(balanced.contains("uci set mwan3.wwan2=interface"));
+        assert!(balanced.contains("uci set mwan3.wwan2_m1_w2=member"));
+        assert!(balanced.contains("uci set mwan3.wwan_m1_w1=member"));
+        assert!(balanced.contains("uci add_list mwan3.wwan.track_ip='9.9.9.9'"));
+
+        // interface_name charset gate
+        assert!(matches!(
+            Mwan3Profile {
+                primary: "wan; rm".into(),
+                ..Mwan3Profile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        // policy is interpolated into the echo line — hostile values refused
+        assert!(matches!(
+            Mwan3Profile {
+                policy: "x'; rm -rf /; '".into(),
+                ..Mwan3Profile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn pbr_shape_gates_and_strict_branch_match_1x() {
+        let script = render_shell(&plan_for(Profile::Pbr(PbrProfile::default())));
+        assert!(script.contains("uci set pbr.config=pbr"));
+        assert!(script.contains("uci set pbr.config.enabled='1'"));
+        assert!(script.contains("uci set pbr.config.verbosity='2'"));
+        assert!(script.contains("uci set pbr.config.strict_enforcement='1'"));
+        assert!(script.contains("uci set pbr.config.resolver_set='none'"));
+        assert!(script.contains("uci set pbr.config.nft_file_helper='1'"));
+        // 1.x renders the interface wiring UNQUOTED (byte parity); the
+        // validate() charset gate is the safety story for these bytes
+        assert!(script.contains("uci set pbr.config.netifd_interface_default=wan"));
+        assert!(script.contains("uci add_list pbr.config.netifd_interface_local=lan"));
+        assert!(script.contains("uci commit pbr"));
+        assert!(script.contains("/etc/init.d/pbr enable"));
+        assert!(script.contains("/etc/init.d/pbr restart"));
+        assert!(
+            script.contains(
+                "echo \"pbr configured. Verify with: nft list table inet pbr 2>/dev/null\""
+            )
+        );
+        assert!(script.contains("echo \"Check status: /etc/init.d/pbr status\""));
+
+        // strict off flips the enforcement bit; custom interfaces ride
+        // the same unquoted lines
+        let lenient = render_shell(&plan_for(Profile::Pbr(PbrProfile {
+            wan_interface: "wwan".into(),
+            lan_interface: "guest".into(),
+            strict_enforcement: false,
+        })));
+        assert!(lenient.contains("uci set pbr.config.strict_enforcement='0'"));
+        assert!(lenient.contains("uci set pbr.config.netifd_interface_default=wwan"));
+        assert!(lenient.contains("uci add_list pbr.config.netifd_interface_local=guest"));
+
+        // interface_name charset gate (both directions of the wiring)
+        assert!(matches!(
+            PbrProfile {
+                wan_interface: "wan; rm -rf /".into(),
+                ..PbrProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            PbrProfile {
+                lan_interface: "$(reboot)".into(),
+                ..PbrProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn nodns_payloads_substitution_and_validator_gates() {
+        let script = render_shell(&plan_for(Profile::Nodns(NodnsProfile::default())));
+        assert!(script.contains("cat > /etc/init.d/nodns-bridge << 'NODNS_INIT_EOF'"));
+        assert!(script.contains("procd_set_param command /usr/bin/nodns-poll.sh"));
+        assert!(script.contains("cat > /usr/bin/nodns-poll.sh << 'NODNS_POLL_EOF'"));
+        // substituted values land inside the poll script, no placeholders leak
+        assert!(script.contains("ZONE=\"nodns.shop\""));
+        assert!(script.contains("API_URL=\"https://nodns.shop\""));
+        assert!(script.contains("POLL_INTERVAL=300"));
+        assert!(!script.contains("__ZONE__"));
+        assert!(!script.contains("__URL__"));
+        assert!(!script.contains("__POLL_INTERVAL__"));
+        // the awk zone parser rides along verbatim
+        assert!(script.contains("if (name == \"@\") name = z"));
+        assert!(
+            script.contains("uci add_list dhcp.@dnsmasq[0].addnhosts='/etc/dnsmasq.d/nodns.hosts'")
+        );
+        assert!(script.contains("uci commit dhcp"));
+        assert!(script.contains("/etc/init.d/nodns-bridge enable"));
+        assert!(script.contains("/etc/init.d/nodns-bridge start"));
+        assert!(script.contains(
+            "echo \"nodns bridge configured: zone=nodns.shop interval=300s url=https://nodns.shop\""
+        ));
+
+        let flipped = render_shell(&plan_for(Profile::Nodns(NodnsProfile {
+            zone: "example.net".into(),
+            api_url: "http://localhost:8080".into(),
+            poll_interval: 60,
+        })));
+        assert!(flipped.contains("ZONE=\"example.net\""));
+        assert!(flipped.contains("API_URL=\"http://localhost:8080\""));
+        assert!(flipped.contains("POLL_INTERVAL=60"));
+
+        // 1.x validators: interval range, URL scheme, zone whitespace
+        assert!(matches!(
+            NodnsProfile {
+                poll_interval: 59,
+                ..NodnsProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            NodnsProfile {
+                api_url: "ftp://x".into(),
+                ..NodnsProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            NodnsProfile {
+                zone: "bad zone".into(),
+                ..NodnsProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        // shell metacharacters refuse (values interpolate into the
+        // runtime script's double-quoted assignments)
+        assert!(matches!(
+            NodnsProfile {
+                api_url: "https://x/$(reboot)".into(),
+                ..NodnsProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            NodnsProfile {
+                zone: "a;reboot".into(),
+                ..NodnsProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn auto_sqm_script_hook_branches_and_gates() {
+        let script = render_shell(&plan_for(Profile::AutoSqm(AutoSqmProfile {
+            download_kbps: 20_000,
+            ..AutoSqmProfile::default()
+        })));
+        assert!(script.contains("uci set auto_sqm.config=auto_sqm"));
+        assert!(script.contains("uci set auto_sqm.config.mode='static'"));
+        assert!(script.contains("uci set auto_sqm.config.download_kbps='20000'"));
+        assert!(script.contains("uci commit auto_sqm"));
+        assert!(script.contains("cat <<'AUTO_SQM_EOF' > /usr/sbin/auto-sqm"));
+        // the runtime script body rides along verbatim
+        assert!(script.contains("measure_wget() {"));
+        assert!(script.contains("apply_sqm \"$DL_SPEED\" \"$UL_SPEED\""));
+        assert!(script.contains("cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune"));
+        assert!(script.contains(
+            "[ \"$ACTION\" = \"ifup\" ] && [ \"$INTERFACE\" = \"wan\" ] && /usr/sbin/auto-sqm &"
+        ));
+        // static + known speeds: run immediately
+        assert!(script.contains("/usr/sbin/auto-sqm\n"));
+        assert!(!script.contains("crontabs/root"));
+
+        // dynamic: cron entry + cron enable/restart, no immediate run
+        let dynamic = render_shell(&plan_for(Profile::AutoSqm(AutoSqmProfile {
+            mode: "dynamic".into(),
+            dynamic_interval_hours: 6,
+            ..AutoSqmProfile::default()
+        })));
+        assert!(dynamic.contains("sed -i '/auto-sqm/d' /etc/crontabs/root"));
+        assert!(dynamic.contains("echo '0 */6 * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root"));
+        assert!(dynamic.contains("/etc/init.d/cron enable"));
+        assert!(dynamic.contains("/etc/init.d/cron restart"));
+        assert!(dynamic.contains("echo 'auto-sqm: will measure and configure on WAN ifup'"));
+
+        // interface_name charset gates (both fields)
+        assert!(matches!(
+            AutoSqmProfile {
+                interface: "wan; rm".into(),
+                ..AutoSqmProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            AutoSqmProfile {
+                device: "eth0 x".into(),
+                ..AutoSqmProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
     }
 
     #[test]
@@ -3182,6 +4795,29 @@ mod tests {
             .position(|l| *l == "HOTPLUG_EOF")
             .expect("heredoc terminator");
         assert!(lines[..eof_at].iter().any(|l| l.contains(") &")));
+    }
+
+    #[test]
+    fn wireguard_profiles_ensure_kernel_module_for_runtime_applies() {
+        // Runtime applies on vanilla apk/opkg-era images need the kernel
+        // module — the historical package set (wireguard-tools,
+        // luci-proto-wireguard) only worked because ASU bakes resolved
+        // kmod dependencies at image build time (x1860 25.12.6 hardware
+        // finding, lane wanapk).
+        let client = plan_for(Profile::WireguardClient(WireguardClientProfile {
+            peer_public_key: "dGhpcyBpcyBhIHRlc3Qga2V5IGZvciB3aXJlZ3VhcmQ=".into(),
+            endpoint_host: "vpn.example.com".into(),
+            ..WireguardClientProfile::default()
+        }));
+        let server = plan_for(Profile::WireguardServer(WireguardServerProfile::default()));
+        for plan in [client, server] {
+            assert!(
+                plan.ops.iter().any(
+                    |op| matches!(op, PlanOp::EnsurePackage { name } if name == "kmod-wireguard")
+                ),
+                "wireguard plans must ensure kmod-wireguard for runtime applies"
+            );
+        }
     }
 
     #[test]
