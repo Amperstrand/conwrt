@@ -2694,10 +2694,20 @@ apply_sqm() {
         fi
     fi
 
+    # clean baseline first: /tmp/.uci staging debris from an aborted
+    # earlier run must not merge into this commit (#470, AGENTS uci rule)
+    uci revert sqm 2>/dev/null || true
     touch /etc/config/sqm
 
     uci set sqm.$INTERFACE=queue
-    uci set sqm.$INTERFACE.interface="$INTERFACE"
+    # SQM must bind the actual device, not the UCI network name (#470 —
+    # the wan lesson: names break on WiFi-STA/alias setups where
+    # device != name). Resolve via the network section, then the
+    # configured DEVICE, then fall back to the name.
+    _sqm_dev=$(uci -q get network."$INTERFACE".device 2>/dev/null)
+    [ -z "$_sqm_dev" ] && _sqm_dev="$DEVICE"
+    [ -z "$_sqm_dev" ] && _sqm_dev="$INTERFACE"
+    uci set sqm.$INTERFACE.interface="$_sqm_dev"
     uci set sqm.$INTERFACE.enabled='1'
     uci set sqm.$INTERFACE.script="$QOS_SCRIPT"
     uci set sqm.$INTERFACE.qdisc="$QDISC"
