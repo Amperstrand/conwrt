@@ -167,3 +167,56 @@ class TestResolveAsuVersion:
         for version in ["24", "25", "snapshot", "2022-02-16"]:
             resolved = fm.resolve_asu_version(version)
             assert resolved == "SNAPSHOT" or len(resolved.split("-")[0].split(".")) >= 3 or resolved == version
+
+
+class TestAsuProfileFromRegistry:
+    """#487: ASU expects the image-builder profile name — a per-device fact
+    (openwrt.profile, ultimately from the target's profiles.json), NOT
+    derivable by separator-swapping the model id: the id is
+    dlink-covr-x1860-a1, the profile dlink_covr-x1860-a1. Whatever
+    spelling the caller passes, the outbound request must carry the
+    registry's canonical name."""
+
+    def _request_body_for(self, monkeypatch, tmp_path, profile_arg):
+        import argparse
+        import urllib.error
+
+        captured = {}
+
+        def fake_post(url, body, timeout=30):
+            captured.update(body)
+            raise urllib.error.HTTPError(url, 400, "stopped-by-test", None, None)
+
+        monkeypatch.setattr(fm, "_http_post_json", fake_post)
+        monkeypatch.setattr(fm, "IMAGES_DIR", tmp_path / "images")
+        monkeypatch.setenv("CONWRT_CONFIG", str(tmp_path / "no-such-config.toml"))
+
+        ns = argparse.Namespace(
+            profile=profile_arg, version="24", target=None, packages=None,
+            ssh_key=None, password=None, wan_ssh=False, tofb=False,
+            dry_run=False,
+        )
+        rc = fm.cmd_request(ns)
+        assert rc == 1, "the stubbed 400 must stop the request path"
+        return captured
+
+    def test_mangled_underscore_spelling_gets_registry_profile(self, monkeypatch, tmp_path):
+        body = self._request_body_for(monkeypatch, tmp_path, "dlink_covr_x1860_a1")
+        assert body["profile"] == "dlink_covr-x1860-a1"
+        assert body["target"] == "ramips/mt7621"
+
+    def test_canonical_mixed_spelling_unchanged(self, monkeypatch, tmp_path):
+        body = self._request_body_for(monkeypatch, tmp_path, "dlink_covr-x1860-a1")
+        assert body["profile"] == "dlink_covr-x1860-a1"
+
+    def test_every_model_json_carries_an_asu_profile(self):
+        """The registry is now the ASU naming authority — every model
+        must carry openwrt.profile or the request falls back to the
+        caller's spelling (the #487 hole)."""
+        models_dir = ROOT / "models"
+        missing = []
+        for path in sorted(models_dir.glob("*.json")):
+            model = json.loads(path.read_text())
+            if not model.get("openwrt", {}).get("profile"):
+                missing.append(path.stem)
+        assert not missing, f"models missing openwrt.profile: {missing}"

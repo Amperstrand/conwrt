@@ -248,6 +248,18 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("could not resolve target for profile '%s'", profile)
         return 1
 
+    # ASU expects the image-builder profile name — a per-device fact
+    # (openwrt.profile in the model registry, ultimately from the
+    # target's profiles.json), NOT derivable by separator-swapping the
+    # model id: 'dlink-covr-x1860-a1' the id, 'dlink_covr-x1860-a1' the
+    # profile. Callers may pass either spelling; the registry wins (#487).
+    # The cache stays keyed on the passed profile for layout compat.
+    asu_profile: str = profile
+    if model_data is not None:
+        asu_profile = model_data["openwrt"].get("profile") or profile
+        if asu_profile != profile:
+            logger.info("ASU profile '%s' (registry; arg was '%s')", asu_profile, profile)
+
     plan = build_plan(
         cfg,
         mode="asu_build",
@@ -279,7 +291,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             "distro": "openwrt",
             "version": version,
             "target": target,
-            "profile": profile,
+            "profile": asu_profile,
             "packages": packages_to_send or None,
             "defaults_lines": len(defaults_script.splitlines()) if defaults_script else 0,
         }, indent=2))
@@ -331,7 +343,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         "distro": "openwrt",
         "version": version,
         "target": target,
-        "profile": profile,
+        "profile": asu_profile,
     }
     if packages_to_send:
         build_request["packages"] = packages_to_send

@@ -249,6 +249,15 @@ VERIFY_PROBES = {
 _IMAGE_CACHE: dict[str, str] = {}
 
 
+def _asu_profile() -> str:
+    """Image-builder profile from the model registry — the ASU name is a
+    per-device fact (openwrt.profile), never id-mangled: the bench model
+    is dlink-covr-x1860-a1 but its profile is dlink_covr-x1860-a1 (#487)."""
+    model_id = os.environ.get("CONWRT_BENCH_MODEL", "dlink-covr-x1860-a1")
+    model = json.loads((REPO / "models" / f"{model_id}.json").read_text())
+    return model["openwrt"]["profile"]
+
+
 def _request_image(scenario: Scenario) -> str:
     """Request (and cache) the ASU image for a scenario; returns its path."""
     if scenario.name in _IMAGE_CACHE:
@@ -258,7 +267,7 @@ def _request_image(scenario: Scenario) -> str:
     try:
         r = subprocess.run(
             ["python3", "scripts/firmware-manager.py", "request",
-             "--profile", "dlink_covr_x1860_a1"],
+             "--profile", _asu_profile()],
             cwd=str(REPO), capture_output=True, text=True, env=env,
             timeout=900, check=False,
         )
