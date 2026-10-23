@@ -123,6 +123,18 @@ pub fn reboot_wedged(
     boot_marker: &[u8],
     timeout: Duration,
 ) -> Result<RecoveryOutcome, RecoveryError> {
+    reboot_wedged_any(io, &[boot_marker], timeout)
+}
+
+/// [`reboot_wedged`] with multiple accepted markers — the boot is
+/// confirmed when ANY of them appears (different images hand off at
+/// different lines; field run 2026-10-23 needed `procd: - init` where
+/// the default `Starting kernel` never came).
+pub fn reboot_wedged_any(
+    io: &mut dyn BreakIo,
+    boot_markers: &[&[u8]],
+    timeout: Duration,
+) -> Result<RecoveryOutcome, RecoveryError> {
     send_sysrq(io, SysrqKey::Reboot)?;
     let deadline = Instant::now() + timeout;
     let mut seen = Vec::with_capacity(4096);
@@ -133,10 +145,13 @@ pub fn reboot_wedged(
             .map_err(|e| RecoveryError::Io(e.to_string()))?;
         if n > 0 {
             seen.extend_from_slice(&chunk[..n]);
-            if contains_subslice(&seen, boot_marker) {
+            if boot_markers.iter().any(|m| contains_subslice(&seen, m)) {
                 // keep the reader attached through boot: congested console
                 // output with no consumer can deepen degraded states.
-                drain_until_quiet(io, Duration::from_secs(30))?;
+                // Bounded by the caller's deadline (+30 s grace so a marker
+                // seen at the wire still drains) — never the old 300 s.
+                let drain_until = deadline + Duration::from_secs(30);
+                drain_until_quiet(io, Duration::from_secs(30), drain_until)?;
                 return Ok(RecoveryOutcome::Rebooting);
             }
         }
@@ -146,12 +161,15 @@ pub fn reboot_wedged(
     })
 }
 
-/// Keep reading until `quiet` passes with no bytes (bounded).
-fn drain_until_quiet(io: &mut dyn ConsoleIo, quiet: Duration) -> Result<(), RecoveryError> {
-    let deadline = Instant::now() + Duration::from_secs(300);
+/// Keep reading until `quiet` passes with no bytes, never past `until`.
+///
+/// Field bug (2026-10-23): the drain used a hardcoded 300 s cap and blew
+/// the caller's `--timeout` by minutes after an early boot marker —
+/// `serial-recover` must never spend longer than its own budget.
+fn drain_until_quiet(io: &mut dyn ConsoleIo, quiet: Duration, until: Instant) -> Result<(), RecoveryError> {
     let mut last = Instant::now();
     let mut chunk = [0u8; 4096];
-    while Instant::now() < deadline {
+    while Instant::now() < until {
         let n = io
             .read(&mut chunk)
             .map_err(|e| RecoveryError::Io(e.to_string()))?;
