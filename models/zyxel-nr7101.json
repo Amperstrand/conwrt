@@ -234,7 +234,7 @@
       },
       "imei": {
         "cmd": "AT+GSN",
-        "example": "35435111XXXXXXX"
+        "example": "35435111XXXXXXX (IMEI — never publish a real one)"
       },
       "sim_status": {
         "cmd": "AT+QSIMDET?",
