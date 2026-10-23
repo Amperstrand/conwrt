@@ -42,6 +42,62 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// List or dump /dev/mtd partitions over serial (Rust port of
+    /// scripts/serial-backup.py).
+    SerialBackup {
+        /// Serial port spec (/dev path or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Baud rate.
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// List partitions only (no dump).
+        #[arg(long)]
+        list: bool,
+        /// Dump this partition by name (e.g. Factory).
+        #[arg(long)]
+        partition: Option<String>,
+        /// Output directory (default: backups/<port-basename>).
+        #[arg(long)]
+        out_dir: Option<std::path::PathBuf>,
+    },
+    /// Detect the likely baud rate of a serial console: opens the port at
+    /// each candidate rate, scores received data (ComScope/baudowl
+    /// scoring; Rust port of scripts/serial_baud.py).
+    SerialBaud {
+        /// Serial port spec (local /dev only).
+        #[arg(long)]
+        port: String,
+        /// Seconds to listen per candidate rate.
+        #[arg(long, default_value_t = 3)]
+        listen_secs: u32,
+    },
+    /// First-contact configuration over serial (Rust port of
+    /// scripts/serial-configure.py): show state, set LAN IP, toggle
+    /// password auth, install an SSH key.
+    SerialConfigure {
+        /// Serial port spec (/dev path or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Baud rate.
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Show firmware + network + dropbear state.
+        #[arg(long)]
+        show: bool,
+        /// Set the LAN IP.
+        #[arg(long)]
+        set_ip: Option<String>,
+        /// Enable dropbear password auth.
+        #[arg(long)]
+        enable_password: bool,
+        /// Disable dropbear password auth (key-only).
+        #[arg(long)]
+        disable_password: bool,
+        /// Install an SSH authorized key from a file.
+        #[arg(long)]
+        install_key: Option<std::path::PathBuf>,
+    },
     /// Serial console monitor: dual logging (raw + timestamped), boot-stage
     /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
     /// (Rust port of scripts/serial-console.py --monitor).
@@ -438,6 +494,143 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::SerialBackup {
+            port,
+            baud,
+            list,
+            partition,
+            out_dir,
+        } => {
+            use conwrt_serial::backup::{dump_partition, parse_partitions};
+            use conwrt_serial::console::SerialConsole;
+            use std::time::Duration;
+
+            let mut console = match SerialConsole::with_baud(
+                &port, baud, Duration::from_secs(1)) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("conwrt: open/activate {port}: {e}"); return ExitCode::from(2); }
+            };
+            let mtd = match console
+                .run("cat /proc/mtd", Duration::from_secs(10)) {
+                Ok(o) => o,
+                Err(e) => { eprintln!("conwrt: /proc/mtd: {e}"); return ExitCode::from(3); }
+            };
+            let parts = parse_partitions(&mtd.output);
+            println!("{:<8} {:>10}  name", "dev", "size");
+            for p in &parts {
+                println!("{:<8} {:>10}  {}", p.device, p.size, p.name);
+            }
+            if list {
+                return ExitCode::SUCCESS;
+            }
+            let Some(name) = partition else { return ExitCode::SUCCESS };
+            let Some(p) = parts.iter().find(|p| p.name == name) else {
+                eprintln!("conwrt: no partition named {name}");
+                return ExitCode::from(4);
+            };
+            let dir = out_dir.unwrap_or_else(|| {
+                std::path::PathBuf::from("backups").join(
+                    port.rsplit('/').next().unwrap_or("port"))
+            });
+            let out = dir.join(format!("{}.bin", p.device));
+            println!("dumping {} ({} bytes) -> {}", p.name, p.size, out.display());
+            match dump_partition(&mut console, p, &out) {
+                Ok(conwrt_serial::backup::DumpOutcome::Complete { bytes }) => {
+                    println!("done: {bytes} bytes -> {}", out.display());
+                    ExitCode::SUCCESS
+                }
+                Ok(other) => { eprintln!("conwrt: dump failed: {other:?}"); ExitCode::from(5) }
+                Err(e) => { eprintln!("conwrt: dump error: {e}"); ExitCode::from(5) }
+            }
+        }
+        Command::SerialBaud {
+            port,
+            listen_secs,
+        } => {
+            use conwrt_serial::baud::{score_baud_data, COMMON_BAUDS};
+            use conwrt_serial::io::open_port;
+            use std::time::Duration;
+
+            // Wake the console (askfirst) and listen at each rate.
+            let mut best: Option<(u32, u32)> = None;
+            for &rate in COMMON_BAUDS {
+                let Ok(mut io) = open_port(&port, rate, Duration::from_millis(500)) else {
+                    continue;
+                };
+                let _ = io.write_all_bytes(b"\r");
+                let mut buf = vec![0u8; 8192];
+                let mut sample = Vec::new();
+                let deadline = std::time::Instant::now() +
+                    std::time::Duration::from_secs(listen_secs as u64);
+                while std::time::Instant::now() < deadline {
+                    if let Ok(n) = io.read(&mut buf) {
+                        if n > 0 { sample.extend_from_slice(&buf[..n]); }
+                    }
+                }
+                let (score, reason) = score_baud_data(&sample);
+                println!("{rate:>7}: {score:>4}  ({reason})");
+                if best.is_none_or(|(bs, _)| score > bs) {
+                    best = Some((rate, score));
+                }
+            }
+            match best {
+                Some((rate, score)) if score > 0 => {
+                    println!("best guess: {rate} (score {score})");
+                    ExitCode::SUCCESS
+                }
+                _ => { eprintln!("conwrt: no console data at any candidate rate"); ExitCode::from(4) }
+            }
+        }
+        Command::SerialConfigure {
+            port,
+            baud,
+            show,
+            set_ip,
+            enable_password,
+            disable_password,
+            install_key,
+        } => {
+            use conwrt_serial::configure::{
+                install_key_plan, password_auth_plan, run_plan, set_ip_plan, show_plan,
+            };
+            use conwrt_serial::console::SerialConsole;
+            use std::time::Duration;
+
+            if !show && set_ip.is_none() && !enable_password && !disable_password
+                && install_key.is_none() {
+                eprintln!("conwrt: nothing to do — pass --show, --set-ip, --enable-password, --disable-password or --install-key");
+                return ExitCode::from(1);
+            }
+            let mut console = match SerialConsole::with_baud(
+                &port, baud, Duration::from_secs(1)) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("conwrt: open/activate {port}: {e}"); return ExitCode::from(2); }
+            };
+            let mut plans = Vec::new();
+            if show { plans.extend(show_plan()); }
+            if let Some(ip) = &set_ip { plans.extend(set_ip_plan(ip)); }
+            if enable_password { plans.extend(password_auth_plan(true)); }
+            if disable_password { plans.extend(password_auth_plan(false)); }
+            if let Some(kf) = &install_key {
+                match std::fs::read_to_string(kf) {
+                    Ok(k) => plans.extend(install_key_plan(&k)),
+                    Err(e) => { eprintln!("conwrt: read {}: {e}", kf.display()); return ExitCode::from(2); }
+                }
+            }
+            for step in &plans { println!("== {}:", step.what); }
+            match run_plan(&mut console, &plans) {
+                Ok(results) => {
+                    for r in results {
+                        println!("-- {} [rc={}]", r.what, r.rc);
+                        if !r.output.trim().is_empty() {
+                            println!("{}", r.output.trim_end());
+                        }
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => { eprintln!("conwrt: plan failed: {e}"); ExitCode::from(3) }
+            }
+        }
         Command::SerialConsole {
             port,
             baud,
