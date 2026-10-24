@@ -98,6 +98,42 @@ enum Command {
         #[arg(long, default_value_t = true)]
         boot: bool,
     },
+    /// One-command rescue: the whole bench-proven RTL838x ladder —
+    /// watch for the boot signature, spaces into U-Boot, bundled
+    /// TFTP server + gated tftpboot of the initramfs, bootm, then
+    /// fetch the sysupgrade image over the same wire, on-box sha
+    /// gate, self-firing sysupgrade -n. No recipe file needed.
+    FlashRescue {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Sysupgrade image path, SERVED over http :8022 from --serve-dir
+        /// (file name only is used in the on-box wget).
+        #[arg(long)]
+        sysupgrade: String,
+        /// sha256 of the sysupgrade image (the on-box gate).
+        #[arg(long)]
+        sha256: String,
+        /// Initramfs image file name inside --serve-dir (tftpboot target).
+        #[arg(long)]
+        initramfs: String,
+        /// Directory served by the bundled TFTP (:69) and expected on
+        /// http :8022 (external server; bundled http is future work).
+        #[arg(long)]
+        serve_dir: String,
+        /// Host IP the box reaches (serverip + wget host).
+        #[arg(long)]
+        server_ip: String,
+        /// Switch IP (ipaddr).
+        #[arg(long, default_value = "192.168.1.1")]
+        client_ip: String,
+        /// RAM load address for tftpboot.
+        #[arg(long, default_value = "0x84f00000")]
+        addr: String,
+        /// Transcript file.
+        #[arg(long, default_value = "/tmp/conwrt-flash-rescue.transcript")]
+        transcript: String,
+    },
     /// Event-driven serial supervisor: watch the console for a boot
     /// signature and fire a staged recovery recipe the instant it
     /// matches — in-process, no subprocess latency (the bootdelay
@@ -918,6 +954,60 @@ fn main() -> ExitCode {
                 Err(e) => {
                     eprintln!("conwrt: uboot-loady FAILED: {e}");
                     eprintln!("conwrt: gates held — nothing was booted from a bad load");
+                    ExitCode::from(5)
+                }
+            }
+        }
+        Command::FlashRescue {
+            port,
+            sysupgrade,
+            sha256,
+            initramfs,
+            serve_dir,
+            server_ip,
+            client_ip,
+            addr,
+            transcript,
+        } => {
+            let fname = std::path::Path::new(&sysupgrade)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| sysupgrade.clone());
+            if !std::path::Path::new(&format!("{serve_dir}/{fname}")).exists() {
+                eprintln!("conwrt: {serve_dir}/{fname} missing (serve both images from serve_dir)");
+                std::process::exit(2);
+            }
+            let recipe = conwrt_serial::watch::flash_rescue_recipe(
+                &fname,
+                &sha256,
+                &initramfs,
+                &server_ip,
+                &format!("{server_ip}:69"),
+                &serve_dir,
+                &client_ip,
+                &addr,
+            );
+            println!(
+                "conwrt: flash-rescue {} via {initramfs} from {server_ip}",
+                recipe.model
+            );
+            match conwrt_serial::watch::run_watch(
+                &port,
+                115200,
+                &recipe,
+                std::path::Path::new(&transcript),
+                1.0,
+            ) {
+                Ok(out) if out.success => {
+                    println!("conwrt: flash-rescue complete: {}", out.detail);
+                    ExitCode::SUCCESS
+                }
+                Ok(out) => {
+                    eprintln!("conwrt: flash-rescue failed: {}", out.detail);
+                    ExitCode::from(6)
+                }
+                Err(e) => {
+                    eprintln!("conwrt: flash-rescue io error: {e}");
                     ExitCode::from(5)
                 }
             }

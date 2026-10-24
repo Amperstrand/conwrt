@@ -300,6 +300,82 @@ fn default_probe_interval() -> f64 {
     30.0
 }
 
+/// Assemble the canonical RTL838x rescue ladder as one recipe — the
+/// whole 2026-10-24 bench-proven chain (TFTP for bytes, serial for
+/// steering, on-box gates, self-firing sysupgrade). `conwrt
+/// flash-rescue` runs this via run_watch; no recipe file needed.
+pub fn flash_rescue_recipe(
+    sysupgrade_path: &str,
+    sysupgrade_sha256: &str,
+    initramfs_name: &str,
+    server_ip: &str,
+    bind: &str,
+    serve_dir: &str,
+    client_ip: &str,
+    addr: &str,
+) -> Recipe {
+    Recipe {
+        model: format!("flash-rescue {initramfs_name} -> {sysupgrade_path}"),
+        boot_trigger: [
+            "Copied Preloader".to_string(),
+            "DRAM is set".to_string(),
+            "U-Boot 2011".to_string(),
+        ]
+        .to_vec(),
+        probe_line: Some(String::new()),
+        probe_interval_secs: 30.0,
+        actions: vec![
+            Action::Spaces {
+                secs: 90.0,
+                until: "RTL838x#".to_string(),
+            },
+            Action::SendLine {
+                line: "setsys bootpartition 0".to_string(),
+                settle_secs: 2.0,
+            },
+            Action::SendLine {
+                line: "savesys".to_string(),
+                settle_secs: 3.0,
+            },
+            Action::TftpBoot {
+                addr: addr.to_string(),
+                bind: bind.to_string(),
+                serve_dir: serve_dir.to_string(),
+                file: initramfs_name.to_string(),
+                client_ip: client_ip.to_string(),
+                server_ip: server_ip.to_string(),
+                timeout_secs: 120.0,
+            },
+            Action::Expect {
+                pattern: "root@OpenWrt".to_string(),
+                timeout_secs: 200.0,
+            },
+            Action::SendLine {
+                line: "/etc/init.d/network restart".to_string(),
+                settle_secs: 15.0,
+            },
+            Action::SendLine {
+                line: format!("wget -O /tmp/fw.bin http://{server_ip}:8022/{sysupgrade_path}"),
+                settle_secs: 30.0,
+            },
+            Action::SendLine {
+                line: "sha256sum /tmp/fw.bin".to_string(),
+                settle_secs: 25.0,
+            },
+            Action::Expect {
+                pattern: sysupgrade_sha256.to_string(),
+                timeout_secs: 60.0,
+            },
+            Action::SendLine {
+                line: "sysupgrade -n /tmp/fw.bin".to_string(),
+                settle_secs: 10.0,
+            },
+        ],
+        cooldown_secs: 600,
+        max_fires: 1,
+    }
+}
+
 // ---- execution ------------------------------------------------------
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1090,6 +1166,35 @@ mod tests {
         if let Action::Stream { sha256, .. } = &r.actions[4] {
             assert_eq!(sha256.len(), 64);
         }
+    }
+
+    #[test]
+    fn flash_rescue_recipe_shape() {
+        let r = flash_rescue_recipe(
+            "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+            "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+            "owrt-25.12.6-initramfs-kernel.bin",
+            "192.168.1.10",
+            "192.168.1.10:69",
+            "/srv/tftp-gs1900",
+            "192.168.1.1",
+            "0x84f00000",
+        );
+        assert_eq!(r.boot_trigger.len(), 3);
+        assert!(matches!(r.actions[0], Action::Spaces { .. }));
+        assert!(matches!(r.actions[3], Action::TftpBoot { .. }));
+        assert!(matches!(r.actions[8], Action::Expect { .. }));
+        let sysupgrade_line = r
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                Action::SendLine { line, .. } if line.contains("sysupgrade -n") => {
+                    Some(line.clone())
+                }
+                _ => None,
+            })
+            .expect("sysupgrade action present");
+        assert!(sysupgrade_line.contains("/tmp/fw.bin"));
     }
 
     #[test]
