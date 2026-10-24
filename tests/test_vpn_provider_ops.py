@@ -763,7 +763,9 @@ class TestAllowedIpsPassthrough:
             "'$K'", "'10.5.0.2/32'", "'$PK'", "'$EP'", "'51820'",
             allowed_ips="10.0.0.0/8, ::/0",
         )
-        assert "allowed_ips='10.0.0.0/8, ::/0'" in stanza
+        assert "allowed_ips='10.0.0.0/8'" in stanza
+        assert "allowed_ips='::/0'" in stanza
+        assert "," not in stanza  # one add_list per CIDR (netifd whitespace-splits)
         assert "0.0.0.0/0" not in stanza
 
     def test_config_allowed_ips_flows_to_stanza(self, tmp_path):
@@ -781,7 +783,8 @@ class TestAllowedIpsPassthrough:
 
         ops = build_configure_ops(dict(NORDVPN_PARAMS, config_file=str(conf)))
         rendered = "\n".join(getattr(op, "command", "") for op in ops)
-        assert "allowed_ips='10.10.0.0/16, fd00::/8'" in rendered
+        assert "allowed_ips='10.10.0.0/16'" in rendered
+        assert "allowed_ips='fd00::/8'" in rendered
         assert "allowed_ips='0.0.0.0/0'" not in rendered
 
     def test_helper_rejects_shell_hostile_allowed_ips(self):

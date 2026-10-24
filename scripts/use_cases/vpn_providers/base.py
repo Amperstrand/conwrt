@@ -124,8 +124,15 @@ def wg0_uci_sh(
         f"uci set network.@wireguard_wg0[0].public_key={peer_key}\n"
         f"uci set network.@wireguard_wg0[0].endpoint_host={endpoint_host}\n"
         f"uci set network.@wireguard_wg0[0].endpoint_port={endpoint_port}\n"
-        f"uci add_list network.@wireguard_wg0[0].allowed_ips='{allowed_ips}'\n"
-        f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
+        # netifd's wireguard handler iterates `for allowed_ip in ${allowed_ips}`
+        # (whitespace split) — a comma inside ONE list entry yields a malformed
+        # prefix (e.g. `16,`) and the route is silently skipped (#528 review).
+        # One uci add_list per CIDR is the correct shape.
+        + "".join(
+            f"uci add_list network.@wireguard_wg0[0].allowed_ips='{cidr}'\n"
+            for cidr in (c.strip() for c in allowed_ips.split(","))
+        )
+        + f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
         f"uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'\n"
     )
 
