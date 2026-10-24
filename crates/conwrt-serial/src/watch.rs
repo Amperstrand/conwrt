@@ -24,8 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::io::open_break_port;
-use crate::recovery::BreakIo;
+use crate::io::{ConsoleIo, open_port};
 use crate::uboot::loady_stage_on;
 
 // ---- telnet framing (ser2net telnet-mode accepters) ----------------
@@ -202,7 +201,7 @@ pub struct WatchOutcome {
 }
 
 struct Supervisor<'a> {
-    io: Box<dyn BreakIo>,
+    io: Box<dyn ConsoleIo>,
     is_telnet: bool,
     window: Vec<u8>,
     transcript: &'a mut std::fs::File,
@@ -538,7 +537,7 @@ pub fn run_watch(
         .append(true)
         .open(transcript_path)?;
     let is_telnet = port_spec.starts_with("tcp://");
-    let io = open_break_port(port_spec, baud, Duration::from_millis(200))
+    let io = open_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| std::io::Error::other(format!("open {port_spec}: {e}")))?;
     let mut s = Supervisor {
         io,

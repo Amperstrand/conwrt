@@ -16,6 +16,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::io::ConsoleIo;
 use crate::io::open_break_port;
 use crate::recovery::{BreakIo, SysrqKey, send_sysrq};
 
@@ -70,7 +71,7 @@ impl std::fmt::Display for UbootError {
 }
 impl std::error::Error for UbootError {}
 
-fn read_for(io: &mut dyn BreakIo, secs: f64, sink: &mut Vec<u8>) -> usize {
+fn read_for(io: &mut dyn ConsoleIo, secs: f64, sink: &mut Vec<u8>) -> usize {
     let deadline = Instant::now() + Duration::from_secs_f64(secs.max(0.05));
     let mut n = 0;
     let mut buf = [0u8; 4096];
@@ -88,7 +89,7 @@ fn read_for(io: &mut dyn BreakIo, secs: f64, sink: &mut Vec<u8>) -> usize {
     n
 }
 
-fn write_line(io: &mut dyn BreakIo, line: &str) -> Result<(), UbootError> {
+fn write_line(io: &mut dyn ConsoleIo, line: &str) -> Result<(), UbootError> {
     io.write_all_bytes(format!("{line}\n").as_bytes())
         .map_err(|e| UbootError::Io(e.to_string()))
 }
@@ -96,25 +97,31 @@ fn write_line(io: &mut dyn BreakIo, line: &str) -> Result<(), UbootError> {
 /// BREAK+sysrq-b reboot, then press SPACE through the bootdelay (and the
 /// slow warm-reboot DRAM phase) until the `RTL838x#` prompt appears.
 pub fn break_to_prompt(io: &mut dyn BreakIo, ladder_secs: f64) -> Result<(), UbootError> {
-    // plain probe first (box may already sit at the prompt)
-    let _ = io.write_all_bytes(b"\r");
-    let mut sink = Vec::new();
-    read_for(io, 2.0, &mut sink);
-    if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
-        return Ok(());
+    // sysrq needs the BREAK-capable view; the probing helpers only need
+    // ConsoleIo — re-coerce per phase so the borrows never overlap.
+    {
+        let cio: &mut dyn ConsoleIo = io as &mut dyn ConsoleIo;
+        // plain probe first (box may already sit at the prompt)
+        let _ = cio.write_all_bytes(b"\r");
+        let mut sink = Vec::new();
+        read_for(cio, 2.0, &mut sink);
+        if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
+            return Ok(());
+        }
     }
     send_sysrq(io, SysrqKey::Reboot).map_err(|e| UbootError::Io(format!("sysrq: {e}")))?;
     let deadline = Instant::now() + Duration::from_secs_f64(ladder_secs.max(10.0));
     while Instant::now() < deadline {
-        let _ = io.write_all_bytes(b"  ");
+        let cio: &mut dyn ConsoleIo = io as &mut dyn ConsoleIo;
+        let _ = cio.write_all_bytes(b"  ");
         let mut sink = Vec::new();
-        read_for(io, 0.8, &mut sink);
+        read_for(cio, 0.8, &mut sink);
         if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
             // settle, then draw a clean prompt
             std::thread::sleep(Duration::from_millis(400));
-            let _ = io.write_all_bytes(b"\r");
+            let _ = cio.write_all_bytes(b"\r");
             let mut t = Vec::new();
-            read_for(io, 1.5, &mut t);
+            read_for(cio, 1.5, &mut t);
             return Ok(());
         }
     }
@@ -168,7 +175,7 @@ pub fn build_frame(blkno: u8, payload: &[u8], use_1k: bool) -> Vec<u8> {
     frame
 }
 
-fn read_byte(io: &mut dyn BreakIo, timeout: f64) -> Option<u8> {
+fn read_byte(io: &mut dyn ConsoleIo, timeout: f64) -> Option<u8> {
     let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.1));
     let mut b = [0u8; 1];
     while Instant::now() < deadline {
@@ -180,7 +187,7 @@ fn read_byte(io: &mut dyn BreakIo, timeout: f64) -> Option<u8> {
     None
 }
 
-fn send_frame(io: &mut dyn BreakIo, frame: &[u8], tries: u8) -> Result<(), UbootError> {
+fn send_frame(io: &mut dyn ConsoleIo, frame: &[u8], tries: u8) -> Result<(), UbootError> {
     let mut attempt = 0;
     while attempt < tries {
         io.write_all_bytes(frame)
@@ -200,7 +207,7 @@ fn send_frame(io: &mut dyn BreakIo, frame: &[u8], tries: u8) -> Result<(), Uboot
 /// Drive `loady <addr>` and YMODEM-send `image` named `name`.
 /// Returns after the loader's end-of-batch handshake.
 pub fn loady_ymodem(
-    io: &mut dyn BreakIo,
+    io: &mut dyn ConsoleIo,
     addr: &str,
     name: &str,
     image: &[u8],
@@ -292,7 +299,7 @@ pub fn parse_total_size(loader_output: &[u8]) -> Option<u64> {
 ///
 /// RAM-only by construction; see the module docs for the safety model.
 pub fn loady_stage_on(
-    io: &mut dyn BreakIo,
+    io: &mut dyn ConsoleIo,
     addr: &str,
     name: &str,
     image: &[u8],
