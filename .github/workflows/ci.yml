@@ -19,12 +19,43 @@ jobs:
         with:
           filters: |
             code:
-              - '**'
-              # negation order matters (last matching pattern wins, as in
-              # gitignore): '!docs/**' must precede '!**/*.md' or it would
-              # re-include docs/*.md that the markdown negation excluded
-              - '!docs/**'
-              - '!**/*.md'
+              # positive-only: dorny negations do NOT rescind a broad
+              # '**' positive (empirically confirmed on PRs #553/#556 —
+              # a docs-only diff still matched), so enumerate code
+              # paths/types instead of trying to exclude docs
+              - 'Makefile'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'go.mod'
+              - 'go.sum'
+              - 'pyproject.toml'
+              - 'requirements.txt'
+              - '*.py'
+              - '*.sh'
+              - '*.toml'
+              - '**/*.go'
+              - '**/*.py'
+              - '**/*.rs'
+              - '**/*.sh'
+              - '**/*.toml'
+              - '**/*.yml'
+              - '**/*.yaml'
+              - '.github/**'
+              - 'ansible/**'
+              - 'apps/**'
+              - 'cmd/**'
+              - 'crates/**'
+              - 'examples/**'
+              - 'firmware/**'
+              - 'labgrid/**'
+              - 'models/**'
+              - 'patches/**'
+              - 'providers/**'
+              - 'recipes/**'
+              - 'roles/**'
+              - 'scripts/**'
+              - 'spikes/**'
+              - 'tests/**'
   test:
     needs: changes
     # Job-level gate, deliberately NOT a workflow-level `paths:` filter:
