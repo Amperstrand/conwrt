@@ -20,10 +20,47 @@ improvements that landed since and are still pending hardware re-validation.
         │  activation code (SMDP host + matching ID)
         ▼
     lpac (host) ── SGP.22 ──► pcscd ──► libifd_modemifd.so (ifd-modemifd)
-        │                                       │  TCP :7002
-        ▼                                       ▼
-    9eSIM (ECP3 eUICC) ◄──── AT+CSIM ◄──── procd AT bridge (socat)
+        │                                       │  ssh:// (dropbear exec) — chosen
+        ▼                                       │  legacy: TCP :7002 + socat bridge
+    9eSIM (ECP3 eUICC) ◄──── AT+CSIM ◄──── modem AT tty (/dev/ttyUSBx)
     seated in the NR7101 modem              OpenWrt (built by conwrt)
+
+## Transport decision — SSH now, on-device Rust later
+
+**Chosen (2026-10-24): `ssh://` exec transport** (ifd-modemifd v3.5, PR #22,
+`a02d669`). The driver opens a BatchMode, host-key-pinned dropbear session
+and execs a busybox relay (`stty -F <tty> raw -echo; exec 3<><tty>;
+cat <&3 & exec cat >&3`) that owns the modem AT tty directly.
+
+Why this beats the alternatives:
+
+| Option | Verdict | Why |
+|---|---|---|
+| Plaintext TCP + socat listener (old) | **retired** | Unauthenticated raw AT console on the network; security depends entirely on firewall discipline; the service dies with every reflash/config churn (exactly the 2026-10-24 outage) |
+| Local TCP over WireGuard only | rejected middle step | Re-adds a listener without adding authentication — if we have a tunnel, we can have SSH through it |
+| **SSH exec (chosen)** | **now** | Zero listeners; zero router-side software (dropbear is base image, already key-only); encrypted + host-key-pinned; topology-independent (LAN/VLAN/WG); remote side is busybox ash + cat, nothing to cross-compile |
+| On-device pcscd + direct tty | destination | No network in the card path at all — see below |
+
+SSH's known limits, accepted deliberately: one session per reader (no
+multiplexing — keep exactly one reader open); a new SSH handshake per
+reconnect (fine at pcscd cadence); the pinned `/dev/ttyUSBx` can go stale
+when the modem shuffles ports (re-pin or probe after modem resets — the
+port-shuffle finding is in ifd-modemifd's README).
+
+**The destination: run it all on the router.** The end state is pcscd +
+ifd-modemifd on the NR7101 itself, opening `/dev/ttyUSBx` directly — no
+network in the card path; clients reach it via a WG/SSH-forwarded pcscd
+socket or a small API. Why we lean **more heavily into Rust** for that
+future: the driver is already std-only Rust with zero external crates
+(trivially cross-compiles for the router's target), lpac ships OpenWrt
+packages, and v3.5's `ModemLink` trait is deliberately the on-ramp —
+`tcp://` (legacy) → `ssh://` (now) → direct `tty` (on-device) are three
+implementations of one interface, same AT engine, same tests (the fake
+relay already speaks stdio, which *is* the on-device shape). The two
+frictions to plan for: `/overlay` on the bench unit has only **~3.8 MB
+free** (packages must be lean; kmod-usb-serial already resident) and
+direct tty needs termios, i.e. adding `libc` for the unix target when
+that third impl is built.
 
 ## Tested state — "I tested this at commit X, Y, Z" (2026-10-23)
 
@@ -44,16 +81,24 @@ sacrificial SIM for anything soak/fault-injection shaped.
 1. **OpenWrt on the NR7101** — use conwrt's own flow:
    `recipes/zyxel/nr7101/` + `docs/NR7101-FLEET.md` (flash, network, modem
    AT cookbook). Build the image conwrt currently targets; don't hand-roll.
-2. **AT bridge up** — the procd `modem-at-bridge` service (from the
-   retired C-spike heritage; the driver was removed upstream, the *service*
-   pattern lives on). It auto-detects the modem AT ttyUSB (the port shuffles
-   across resets — never hardcode). If the service is missing after reflash/config
-   churn, restore it first; **nothing works without it**.
+2. **Transport up** — **preferred: none needed.** v3.5's `ssh://`
+   transport requires zero router-side services: dropbear (base image,
+   key-only) is the whole story. Ensure the host's SSH key is in the
+   router's `authorized_keys` and IP reachability exists (LAN/VLAN/WG).
+   *Legacy fallback*: the socat TCP bridge — if anyone restores it, pin
+   it: `socat TCP-LISTEN:7002,fork,reuseaddr,range=<bench-host-ip>/32 …`
+   plus a uci rule limiting 7002 to the bench/VPN source only; never
+   expose it to the wan zone (the historical whole-wan rule was the
+   finding that retired this path).
 3. **Driver** — build ifd-modemifd and install:
    `cargo build --release` → `target/release/libifd_modemifd.so` →
-   `/usr/local/lib/`, reader.conf.d entry with the router `ip:7002` (see its
-   README). Use **`3a475eb`** for bit-identical-to-tested behavior, or master
-   tip with the caveats in "Improvements" below.
+   `/usr/local/lib/`. reader.conf.d entry:
+   `DEVICENAME ssh://root@192.168.1.1/dev/ttyUSB2` (v3.5, recommended —
+   see "Transport decision") or `DEVICENAME 192.168.1.1:7002` (legacy
+   bridge). Optional: `IFD_MODMIFD_SSH_KEY=/path/to/id` for a dedicated
+   identity. Use **`3a475eb`** for the bit-identical hardware-proven
+   build, master tip for v3.4+ hardening and the SSH transport
+   (software-tested; first live validation pending).
 4. **Validate before anything one-shot** — `tests/hardware/validate.sh` in
    ifd-modemifd (phased, read-only gate: channel behavior, PIN state without
    retry consumption, APDU shapes). Do not skip this on a fresh bench.
@@ -74,9 +119,13 @@ sacrificial SIM for anything soak/fault-injection shaped.
 
 ## Improvements since the tested commits (software-verified, hardware-pending)
 
-Landed on ifd-modemifd master *after* `3a475eb`, all mock-tested (17/17),
-**not yet re-validated on the NR7101** — PR Amperstrand/ifd-modemifd#2:
+Landed on ifd-modemifd master *after* `3a475eb`, all mock-tested, **not
+yet re-validated on the NR7101**:
 
+- `a02d669` (PR #22) **v3.5 — `ssh://` exec transport**: encrypted,
+  key-authenticated modem access with zero router-side software; the
+  socat bridge becomes unnecessary (see "Transport decision"). Suite
+  33/33 green incl. an end-to-end exchange through the pipe link.
 - `fa42259` **v3.4 — no-resend transport semantics + strict CSIM framing**:
   an AT+CSIM whose line was fully written is never silently re-sent
   (duplicate-APDU elimination for GP/eSIM/PIN flows); declared-length
