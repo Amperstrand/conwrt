@@ -49,6 +49,11 @@
 //! _nv._fetch_credentials = lambda b: {"nordlynx_private_key": "STUBPRIVKEYbase64filledfortestonly0000="}
 //! _nv._resolve_endpoint = lambda v, t, tech="wireguard_udp": ("de500.nordvpn.com", "51820", "STUBPUBKEYbase64filledfortestonly0000=")
 //! _nv._route_target = lambda e, t: "193.29.107.10"
+//! from use_cases.vpn_providers.pia import _build_pia_ops
+//! print(render_shell(_build_pia_ops({
+//!     "username": "p1234567", "password": "testpass",
+//!     "region": "czech", "upstream_gateway": "192.168.1.1", "upstream_iface": "wwan",
+//! })))
 //! import use_cases.vpn_providers.nordvpn as _nvo
 //! _nvo._fetch_credentials = lambda b: {"username": "svcuser1234", "password": "svcpass5678abcd"}
 //! _nvo._resolve_server = lambda s, t, tech: {"station": "193.29.107.10", "hostname": "de500.nordvpn.com"}
@@ -79,8 +84,8 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
     NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -328,6 +333,20 @@ fn ssl_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Ssl(SslProfile::default()),
         include_str!("goldens/ssl.sh"),
+    );
+}
+
+#[test]
+fn vpn_pia_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnPia(VpnPiaProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            region: "czech".into(),
+            upstream_gateway: "192.168.1.1".into(),
+            ..VpnPiaProfile::default()
+        }),
+        include_str!("goldens/vpn-pia.sh"),
     );
 }
 

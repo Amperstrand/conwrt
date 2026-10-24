@@ -1239,6 +1239,235 @@ impl VpnNordvpnOpenvpnProfile {
     }
 }
 
+/// Private Internet Access via WireGuard — port of the tested 1.x
+/// `vpn-pia` preset (`scripts/use_cases/vpn_providers/pia.py`,
+/// hardware-tested 24.10.4 MediaTek Filogic, Czechia region). Unlike
+/// the nordvpn family this is a RUNTIME-API script: the device
+/// generates its own WireGuard keypair, exchanges the PIA auth token,
+/// registers the key with the regional server, and configures wg0
+/// from the response — all in one payload. The host carries only the
+/// account credentials and routing pins. PIA tokens expire ~7 days:
+/// reboot persistence relies on the wg0 uci (re-authenticated on
+/// ifup) — the 1.x autostart init note applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnPiaProfile {
+    /// PIA account username (the p-number). Rides sh-quoted into
+    /// `curl -u` — validate() rejects control characters (1.x sh_quote
+    /// raised on newlines; the port closes the wider charset hole).
+    pub username: String,
+    /// PIA account password (same gate).
+    pub password: String,
+    /// PIA region slug (netherlands/czech/…): a hostname label in the
+    /// addKey URL — alphanumeric gate.
+    pub region: String,
+    /// Upstream gateway IP: pins the server route so tunnel traffic
+    /// never routes via wg0 itself (circular routing guard).
+    pub upstream_gateway: String,
+    /// Upstream interface name for the pin (1.x default wwan).
+    pub upstream_iface: String,
+    /// Block all non-VPN traffic if the tunnel drops (1.x default on;
+    /// the 30s handshake tail auto-removes it when auth or addKey
+    /// fails, restoring WAN).
+    pub kill_switch: bool,
+    /// Accept SSH/LuCI from the VPN zone (1.x passes the default on).
+    pub allow_management: bool,
+}
+
+impl Default for VpnPiaProfile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            region: "netherlands".into(),
+            upstream_gateway: String::new(),
+            upstream_iface: "wwan".into(),
+            kill_switch: true,
+            allow_management: true,
+        }
+    }
+}
+
+impl VpnPiaProfile {
+    /// 1.x validates via sh_quote raising on control chars (newline
+    /// tested in test_vpn_provider_transport); everything else was
+    /// ungated. The port gates the full mwan3/#448 class: creds
+    /// non-empty + no control chars, region alphanumeric (hostname
+    /// label in a double-quoted URL), gateway IPv4, iface charset.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ctrl = |v: &str| v.chars().any(|c| c.is_ascii_control());
+        for (field, value) in [("username", &self.username), ("password", &self.password)] {
+            if value.is_empty() {
+                return Err(Unsupported::InvalidParams(format!("{field} is required")));
+            }
+            if ctrl(value) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must not contain control characters"
+                )));
+            }
+        }
+        if self.region.is_empty() || !self.region.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(Unsupported::InvalidParams(
+                "region must be an alphanumeric PIA region slug".into(),
+            ));
+        }
+        let ipv4 = |v: &str| {
+            let o: Vec<&str> = v.split('.').collect();
+            o.len() == 4
+                && o.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars().all(|c| c.is_ascii_digit())
+                        && p.parse::<u8>().is_ok()
+                })
+        };
+        if !ipv4(&self.upstream_gateway) {
+            return Err(Unsupported::InvalidParams(
+                "upstream_gateway must be an IPv4 address".into(),
+            ));
+        }
+        if !self
+            .upstream_iface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "upstream_iface contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+const PIA_WG_BODY_SH: &str = concat!(
+    "\n",
+    "# Generate WireGuard keypair\n",
+    "wg genkey > /tmp/vpn_private.key\n",
+    "wg pubkey < /tmp/vpn_private.key > /tmp/vpn_public.key\n",
+    "chmod 600 /tmp/vpn_private.key\n",
+    "\n",
+    "\n",
+    "# Authenticate with PIA — get auth token\n",
+    "curl -fs -m 15 -u __CREDS__ \\\n",
+    "    \"https://www.privateinternetaccess.com/gtoken/generateToken\" \\\n",
+    "    -o /tmp/vpn_token.json\n",
+    "PIA_TOKEN=$(cat /tmp/vpn_token.json | json_get token)\n",
+    "[ -n \"$PIA_TOKEN\" ] || { echo 'PIA: auth failed — no token in API response'; exit 1; }\n",
+    "\n",
+    "# URL-encode token: PIA tokens contain +, /, = that break curl\n",
+    "ENC_TOKEN=$(echo \"$PIA_TOKEN\" | sed 's/+/%2B/g; s/=/%3D/g; s|/|%2F|g')\n",
+    "\n",
+    "WG_PUB=$(cat /tmp/vpn_public.key)\n",
+    "\n",
+    "# Register WG key with regional server\n",
+    "curl -fs -m 15 -k \\\n",
+    "    \"https://__REGION__.privacy.network:1337/addKey?pt=${ENC_TOKEN}&pubkey=${WG_PUB}\" \\\n",
+    "    -o /tmp/vpn_addkey.json\n",
+    "\n",
+    "# Parse server response\n",
+    "SERVER_KEY=$(cat /tmp/vpn_addkey.json | json_get server_key)\n",
+    "SERVER_IP=$(cat /tmp/vpn_addkey.json | json_get server_ip)\n",
+    "SERVER_PORT=$(cat /tmp/vpn_addkey.json | json_get server_port)\n",
+    "PEER_IP=$(cat /tmp/vpn_addkey.json | json_get peer_ip)\n",
+    "# Abort BEFORE the destructive wg0 cleanup unless the response is complete\n",
+    "[ -n \"$SERVER_KEY\" ] && [ -n \"$SERVER_IP\" ] && [ -n \"$SERVER_PORT\" ] && [ -n \"$PEER_IP\" ] \\\n",
+    "    || { echo 'PIA: addKey response incomplete — aborting before wg0 cleanup'; exit 1; }\n",
+    "\n",
+    "# Clean up old WireGuard interface + peers\n",
+    "uci -q delete network.wg0\n",
+    "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+    "    uci delete network.@wireguard_wg0[0]\n",
+    "done\n",
+    "\n",
+    "\n",
+    "PIA_PRIV=$(cat /tmp/vpn_private.key)\n",
+    "\n",
+    "uci set network.wg0=interface\n",
+    "uci set network.wg0.proto='wireguard'\n",
+    "uci set network.wg0.private_key=\"$PIA_PRIV\"\n",
+    "uci set network.wg0.listen_port='51820'\n",
+    "uci add_list network.wg0.addresses=\"${PEER_IP}/32\"\n",
+    "uci set network.wg0.mtu='1280'\n",
+    "uci set network.wg0.auto='1'\n",
+    "\n",
+    "uci add network wireguard_wg0\n",
+    "uci set network.@wireguard_wg0[0].public_key=\"$SERVER_KEY\"\n",
+    "uci set network.@wireguard_wg0[0].endpoint_host=\"$SERVER_IP\"\n",
+    "uci set network.@wireguard_wg0[0].endpoint_port=\"$SERVER_PORT\"\n",
+    "uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n",
+    "uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n",
+    "uci set network.@wireguard_wg0[0].persistent_keepalive='25'\n",
+    "\n",
+    "# Static route: prevent circular routing through VPN tunnel\n",
+    "uci -q delete network.pia_server_route\n",
+    "uci set network.pia_server_route=route\n",
+    "uci set network.pia_server_route.interface='__IFACE__'\n",
+    "uci set network.pia_server_route.target=\"${SERVER_IP}\"\n",
+    "uci set network.pia_server_route.netmask='255.255.255.255'\n",
+    "uci set network.pia_server_route.gateway='__GATEWAY__'\n",
+);
+fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<Plan, Unsupported> {
+    pia.validate()?;
+    // creds ride sh-quoted into `curl -u` (1.x sh_quote parity — the
+    // same escaping render_shell uses for uci literals); the body is
+    // the verbatim 1.x script with sentinel tokens for the four
+    // interpolations (validate()'s gates make them payload-safe)
+    let creds = shell_quote(&format!("{}:{}", pia.username, pia.password));
+    let body = format!(
+        "{}{}",
+        VPN_JSON_HELPER_SH,
+        PIA_WG_BODY_SH
+            .replace("__CREDS__", &creds)
+            .replace("__REGION__", &pia.region)
+            .replace("__IFACE__", &pia.upstream_iface)
+            .replace("__GATEWAY__", &pia.upstream_gateway),
+    );
+    let payload = format!(
+        "cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/vpn_setup.sh",
+        body.trim_end()
+    );
+    let mut ops = vec![
+        // runtime-API script needs wg tooling + kmod on vanilla images
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        PlanOp::Shell { command: payload },
+    ];
+    // shared composition + the 30s wg handshake verify TAIL; PIA DNS
+    // pair in the 1.x order (243 first)
+    push_vpn_shared_ops(
+        &mut ops,
+        "wg0",
+        &["10.0.0.243", "10.0.0.242"],
+        pia.kill_switch,
+        pia.allow_management,
+        "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+    );
+    let verification = vec![
+        VerificationCheck {
+            description: "wg0 interface configured".into(),
+            command: "uci -q get network.wg0.proto".into(),
+            expect_contains: "wireguard".into(),
+        },
+        VerificationCheck {
+            description: "wg0 handshake observed (tunnel actually up)".into(),
+            command: "wg show wg0 2>/dev/null | grep -q 'latest handshake' && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-pia".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -1404,6 +1633,8 @@ pub enum Profile {
     VpnNordvpn(VpnNordvpnProfile),
     /// NordVPN via OpenVPN (service-credential statics carried).
     VpnNordvpnOpenvpn(VpnNordvpnOpenvpnProfile),
+    /// Private Internet Access via WireGuard (runtime-API script).
+    VpnPia(VpnPiaProfile),
 }
 
 impl Profile {
@@ -1431,6 +1662,7 @@ impl Profile {
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
             Profile::VpnNordvpn(_) => "vpn-nordvpn",
             Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
+            Profile::VpnPia(_) => "vpn-pia",
         }
     }
 
@@ -1460,6 +1692,7 @@ impl Profile {
             Profile::VpnPiaOpenvpn(_) => &[],
             Profile::VpnNordvpn(_) => &[],
             Profile::VpnNordvpnOpenvpn(_) => &[],
+            Profile::VpnPia(_) => &[],
         }
     }
 }
@@ -1782,6 +2015,7 @@ pub fn plan_profile(
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
         Profile::VpnNordvpn(nv) => plan_vpn_nordvpn(model, nv),
         Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
+        Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
     }
 }
 
@@ -3896,7 +4130,7 @@ fn plan_vpn_pia_openvpn(
     })
 }
 
-const NORD_JSON_HELPER_SH: &str = concat!(
+const VPN_JSON_HELPER_SH: &str = concat!(
     "# JSON parsing: try jq, install via apk (OpenWrt >=25.x) or opkg (<=24.x)\n",
     "if ! command -v jq >/dev/null 2>&1; then\n",
     "    apk add jq >/dev/null 2>&1 || { opkg update >/dev/null 2>&1 && opkg install jq >/dev/null 2>&1; }\n",
@@ -4002,7 +4236,7 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
             "uci -q delete network.nordvpn_server_route\n",
             "{ROUTE}",
         ),
-        JSON_HELPER = NORD_JSON_HELPER_SH,
+        JSON_HELPER = VPN_JSON_HELPER_SH,
         PRIV = nv.private_key,
         PUB = nv.server_public_key,
         HOST = nv.endpoint_host,
@@ -6262,6 +6496,68 @@ mod tests {
                 }
                 .validate()
                 .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_pia_shape_gates_and_branches_match_1x() {
+        let base = VpnPiaProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            region: "czech".into(),
+            upstream_gateway: "192.168.1.1".into(),
+            ..VpnPiaProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnPia(base.clone())));
+        // one heredoc runtime-API payload: keypair on device, token
+        // exchange, addKey, abort-before-cleanup gates
+        assert!(script.contains("cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("wg genkey > /tmp/vpn_private.key"));
+        assert!(script.contains("curl -fs -m 15 -u 'p1234567:testpass'"));
+        assert!(script.contains("https://czech.privacy.network:1337/addKey"));
+        assert!(script.contains("aborting before wg0 cleanup"));
+        // creds with a single quote survive sh-quoted (1.x parity)
+        let quoted = render_shell(&plan_for(Profile::VpnPia(VpnPiaProfile {
+            password: "p$a\"b'c".into(),
+            ..base.clone()
+        })));
+        assert!(
+            quoted.contains("-u 'p1234567:p$a\"b'\\''c'"),
+            "sh_quote parity"
+        );
+
+        // gates: creds required + no control chars, region alnum,
+        // gateway IPv4, iface charset
+        for hostile in [
+            VpnPiaProfile {
+                username: String::new(),
+                ..base.clone()
+            },
+            VpnPiaProfile {
+                password: "l1\nl2".into(),
+                ..base.clone()
+            },
+            VpnPiaProfile {
+                region: "czech; poweroff".into(),
+                ..base.clone()
+            },
+            VpnPiaProfile {
+                region: "prague-1".into(),
+                ..base.clone()
+            },
+            VpnPiaProfile {
+                upstream_gateway: "not-an-ip".into(),
+                ..base.clone()
+            },
+            VpnPiaProfile {
+                upstream_iface: "wwan; x".into(),
+                ..base
+            },
+        ] {
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "gate must reject {hostile:?}"
             );
         }
     }
