@@ -30,6 +30,7 @@ use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 
 mod watch;
+mod zycast;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
@@ -235,6 +236,37 @@ enum Command {
         /// Directory containing `*.json` model files.
         #[arg(long, default_value = "models")]
         dir: PathBuf,
+    },
+    /// ZyXEL Multiboot multicast flash sender (Rust port of cmd/zycast;
+    /// framing golden-pinned to the Go reference). Bounded loops by
+    /// design — the bootloader listens on EVERY boot, so never leave a
+    /// sender running.
+    Zycast {
+        /// Firmware image to multicast.
+        image: PathBuf,
+        /// Egress interface (SO_BINDTODEVICE).
+        #[arg(long, short = 'i')]
+        interface: String,
+        /// Image type: bootbase|rom|ras|romd|backup.
+        #[arg(long, short = 't', default_value = "ras")]
+        image_type: String,
+        /// Send loops before stopping.
+        #[arg(long, default_value_t = conwrt_zycast::DEFAULT_LOOPS)]
+        loops: u32,
+        /// Inter-packet delay in milliseconds.
+        #[arg(long, default_value_t = conwrt_zycast::DEFAULT_DELAY_MS)]
+        delay_ms: u64,
+        /// Multicast group.
+        #[arg(long, short = 'g', default_value = conwrt_zycast::DEFAULT_GROUP)]
+        group: String,
+        /// Multicast port.
+        #[arg(long, short = 'p', default_value_t = conwrt_zycast::DEFAULT_PORT)]
+        port: u16,
+        /// Attest that the target specimen is verified (MAC/serial gate)
+        /// and sibling units are isolated. Required: the multicast hits
+        /// every ZyXEL bootloader in its listen window on the segment.
+        #[arg(long)]
+        confirm_specimen: bool,
     },
     /// Dark-watch: watch a dark/flapping target over time and classify WHY
     /// it is dark (boot loop with cycle period / hung after boot / silent /
@@ -849,6 +881,25 @@ fn main() -> ExitCode {
             dir,
         } => cmd_diagnose(ip, interface, http_port, ssh_port, key, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::Zycast {
+            image,
+            interface,
+            image_type,
+            loops,
+            delay_ms,
+            group,
+            port,
+            confirm_specimen,
+        } => zycast::run(zycast::ZycastArgs {
+            image,
+            interface,
+            image_type,
+            loops,
+            delay_ms,
+            group,
+            port,
+            confirm_specimen,
+        }),
         Command::DarkWatch {
             ip,
             interface,

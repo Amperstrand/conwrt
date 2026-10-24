@@ -51,6 +51,13 @@ fn label(k: EventKind) -> &'static str {
     }
 }
 
+fn local_mac(interface: &str) -> String {
+    std::fs::read_to_string(format!("/sys/class/net/{interface}/address"))
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+}
+
 pub fn run(args: WatchArgs) -> std::process::ExitCode {
     let code = watch(args);
     std::process::ExitCode::from(code)
@@ -78,7 +85,10 @@ fn watch(args: WatchArgs) -> u8 {
             control_child.clone(),
         );
         thread::spawn(move || {
-            let filter = format!("not host {ip}");
+            // Foreign traffic we actually RECEIVE: addressed to this host,
+            // not involving the target. `not host` alone would match this
+            // watcher's own outbound broadcasts and "prove" a dead path.
+            let filter = format!("ether dst host {} and not host {ip}", local_mac(&iface));
             if let Some(mut c) = spawn_tcpdump(&iface, &filter) {
                 if let Some(out) = c.stdout.take() {
                     *child.lock().unwrap() = Some(c);
@@ -99,7 +109,10 @@ fn watch(args: WatchArgs) -> u8 {
             passive_child.clone(),
         );
         thread::spawn(move || {
-            let filter = format!("host {ip}");
+            // Only packets FROM the target: `host {ip}` would also capture
+            // this watcher's own SYNs/ARPs toward the target and register
+            // them as target life on a dead segment.
+            let filter = format!("src host {ip}");
             let t0 = Instant::now();
             if let Some(mut c) = spawn_tcpdump(&iface, &filter) {
                 if let Some(out) = c.stdout.take() {
