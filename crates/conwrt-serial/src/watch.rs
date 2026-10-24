@@ -248,6 +248,13 @@ impl<'a> Supervisor<'a> {
         let _ = self.io.write_all_bytes(&wire);
     }
 
+    /// Bytes appended since `before`, drain-safe: if the rolling
+    /// window drained past `before`, return what still exists (never
+    /// panic — the tick-flood lesson: 65411 > 32849 after a drain).
+    fn recent_since(&self, before: usize) -> &[u8] {
+        &self.window[before.min(self.window.len())..]
+    }
+
     fn expect(&mut self, pattern: &str, timeout_secs: f64) -> Result<(), String> {
         let needle = pattern.as_bytes();
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.1));
@@ -289,10 +296,7 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 let needle = until.as_bytes();
                 while Instant::now() < deadline {
                     s.send_raw(b"  ");
-                    let before = s.window.len();
                     s.read_secs(0.8);
-                    let recent = &s.window[before.saturating_sub(0)..];
-                    let _ = recent;
                     if contains(&s.window, needle) {
                         break;
                     }
@@ -347,7 +351,7 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                         .as_bytes(),
                     );
                     s.read_secs(4.0);
-                    if contains(&s.window[before..], b"WATCH-BUILD-OK") {
+                    if contains(s.recent_since(before), b"WATCH-BUILD-OK") {
                         ok = true;
                         break;
                     }
@@ -406,12 +410,12 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 while Instant::now() < deadline {
                     let before = s.window.len();
                     s.read_secs(2.0);
-                    let recent = &s.window[before..];
-                    if contains(recent, fail_marker.as_bytes()) {
+                    let recent = s.recent_since(before).to_vec();
+                    if contains(&recent, fail_marker.as_bytes()) {
                         verdict = Some(false);
                         break;
                     }
-                    if contains(recent, done_marker.as_bytes()) {
+                    if contains(&recent, done_marker.as_bytes()) {
                         verdict = Some(true);
                         break;
                     }
@@ -573,7 +577,7 @@ pub fn run_watch(
         }
         let before = s.window.len();
         s.read_secs(idle_poll_secs);
-        let recent = s.window[before..].to_vec();
+        let recent = s.recent_since(before).to_vec();
         if triggers.iter().any(|t| contains(&recent, t)) {
             if let Some(t) = last_fire {
                 if t.elapsed().as_secs() < recipe.cooldown_secs {
