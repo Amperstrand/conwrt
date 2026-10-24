@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn frame_layout_128() {
-        let f = build_frame(0, b"img.bin\06529354\0", false);
+        let f = build_frame(0, b"img.bin\x006529354\x00", false);
         assert_eq!(f.len(), 133); // SOH + seq + comp + 128 + crc16
         assert_eq!(f[0], SOH);
         assert_eq!(f[1], 0);
