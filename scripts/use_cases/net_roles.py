@@ -325,7 +325,7 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
                 f"&& [ \"$w\" != \"{u['iface']}sta\" ] && uci set wireless.$w.disabled=1; done; true"
             )))
 
-    if not r["serve_wifi"] and not any(u["type"] == "wifi" for u in uplinks):
+    if not r["serve_wifi"]:
         ops.append(Comment(text="--- net-roles: serving disabled — take all AP vifs off the air ---"))
         ops.append(ShellCommand(command=(
             "for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do "

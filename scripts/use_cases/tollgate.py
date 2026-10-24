@@ -566,10 +566,11 @@ register(UseCase(
             description="Client identification method: 'mac', 'token', or 'ip'",
             choices=("mac", "token", "ip")),
         "allow_lan_ssh": ParamDef(type=bool, default=False,
-            description="Expose SSH (tcp 22) to gated LAN clients via nodogsplash users_to_router. "
-                        "The tollgate itself exposes no network API (CLI is a local-only Unix socket), "
-                        "so SSH is the management door. Stack ssh-hardening (key-only auth) — password "
-                        "SSH on the gated LAN is a bad idea."),
+            description="Expose SSH (tcp 22) to associated LAN/WiFi clients via nodogsplash "
+                        "users_to_router (applies pre-auth too). The tollgate itself exposes no "
+                        "network API (CLI is a local-only Unix socket), so SSH is the management "
+                        "door. Stack ssh-hardening (key-only auth) — password SSH on the gated "
+                        "LAN is a bad idea."),
         "install_hotplug": ParamDef(type=bool, default=True,
             description="Install hotplug script to restart tollgate when WiFi STA comes up"),
         "hotplug_interface": ParamDef(type=str, default="wwan",
