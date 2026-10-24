@@ -79,3 +79,22 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
       - name: Run non-hardware CI
         run: make ci
+  # Single always-run aggregate for branch protection to require. The
+  # skipped matrix never emits per-coordinate `test (3.x)` checks, so
+  # those names sit "expected" forever on docs-only PRs and block merges
+  # (observed on #553). Require THIS job instead: it runs always and is
+  # green when the matrix passed OR was correctly skipped for docs-only.
+  ci-ok:
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate verdict
+        run: |
+          echo "changes.code=${{ needs.changes.outputs.code }} test=${{ needs.test.result }}"
+          if [ "${{ needs.changes.outputs.code }}" != "true" ]; then
+            echo "docs-only change: matrix correctly skipped"; exit 0
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "matrix did not succeed"; exit 1
+          fi
