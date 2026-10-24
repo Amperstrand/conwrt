@@ -144,8 +144,13 @@ fn start_lease_holder(addr: &str, controller: &str) -> (LeaseHolder, String) {
 
 /// Attempt a conflicting exclusive lease as a DIFFERENT controller and
 /// return the full denial surface (exit code, stderr).
+/// Attempt a conflicting exclusive lease as a DIFFERENT controller and
+/// return the denial surface (exit code, stderr). BOUNDED: if
+/// exclusivity is broken the rival is GRANTED and enters its heartbeat
+/// loop forever — that must surface as a test FAILURE, not a hang
+/// (kill + reap, then panic naming the regression).
 fn attempt_conflict(addr: &str, controller: &str) -> (i32, String) {
-    let out = Command::new(cli_bin())
+    let mut child = Command::new(cli_bin())
         .args([
             "agent",
             "lease",
@@ -156,8 +161,28 @@ fn attempt_conflict(addr: &str, controller: &str) -> (i32, String) {
             "--controller",
             controller,
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("failed to run lease CLI");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match child.try_wait().expect("try_wait rival") {
+            Some(_) => break,
+            None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "rival {controller}@{addr} was GRANTED the exclusive lease \
+                     (still alive after 20s) — CROSS-CONTROLLER EXCLUSIVITY IS BROKEN"
+                );
+            }
+        }
+    }
+    let out = child.wait_with_output().expect("reap rival");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),
