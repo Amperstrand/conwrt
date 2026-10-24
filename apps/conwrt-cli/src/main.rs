@@ -816,6 +816,12 @@ enum AgentCommand {
         /// Shared (non-exclusive) lease.
         #[arg(long)]
         shared: bool,
+        /// Controller identity presented at handshake (default
+        /// `conwrt-cli`). Distinct identities prove CROSS-controller
+        /// exclusivity — same-id reacquisition is a different code path
+        /// (#463).
+        #[arg(long)]
+        controller: Option<String>,
     },
     /// Query a stream transfer's status (the resume token).
     Status {
@@ -2656,15 +2662,17 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             addr,
             resource,
             shared,
+            controller,
         } => {
             // #378: the lease is held for the process lifetime — a
             // heartbeat loop keeps it alive and Ctrl-C releases it. An
             // acquired-then-abandoned lease pins the resource until
             // agent restart.
+            let controller_id = controller.unwrap_or_else(|| "conwrt-cli".to_string());
             let result: Result<conwrt_agent_proto::protocol::LeaseResponse, _> =
                 rt.block_on(async {
                 let mut client = AgentClient::connect(&addr).await?;
-                client.handshake("conwrt-cli").await?;
+                client.handshake(&controller_id).await?;
                 let resp = client
                     .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
                         resource,
