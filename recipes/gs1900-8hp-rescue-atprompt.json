@@ -1,0 +1,51 @@
+{
+  "model": "zyxel_gs1900-8hp rescue-to-25.12.6 (at-prompt variant: box already at RTL838x#, fires on attach)",
+  "boot_trigger": ["RTL838x#"],
+  "actions": [
+    {
+      "type": "send_line",
+      "line": "",
+      "settle_secs": 2,
+      "_comment": "draw a clean prompt before the loady leg"
+    },
+    {
+      "type": "loady",
+      "addr": "0x84f00000",
+      "name": "initramfs.bin",
+      "image_path": "/srv/tftp-gs1900/owrt-25.12.6-initramfs-kernel.bin",
+      "pre": ["setsys bootpartition 0", "savesys"],
+      "boot": true
+    },
+    {
+      "type": "expect",
+      "pattern": "root@OpenWrt",
+      "timeout_secs": 200
+    },
+    {
+      "type": "arm_script",
+      "script_path": "/tmp/cw-rescue.sh",
+      "lines": [
+        "#!/bin/sh",
+        "busybox stty raw -echo",
+        "head -c 6554382 > /tmp/base.bin",
+        "busybox stty sane",
+        "S=$(sha256sum /tmp/base.bin | cut -d\" \" -f1)",
+        "test \"$S\" = \"9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f\" && echo CW-GATE-PASS || echo CW-GATE-FAIL",
+        "test \"$S\" = \"9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f\" && sysupgrade -n /tmp/base.bin"
+      ],
+      "run": true
+    },
+    {
+      "type": "stream",
+      "file": "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "sha256": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "pace_bytes": 512,
+      "pace_ms": 80,
+      "done_marker": "CW-GATE-PASS",
+      "fail_marker": "CW-GATE-FAIL",
+      "verdict_timeout_secs": 600
+    }
+  ],
+  "cooldown_secs": 300,
+  "max_fires": 1
+}

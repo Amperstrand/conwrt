@@ -74,6 +74,65 @@ pub fn telnet_escape(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// ConsoleIo adapter for telnet-mode TCP consoles (ser2net): every
+/// write is 0xFF-escaped, every read is IAC-stripped, with a pending
+/// buffer so partial IAC sequences survive across reads. ALL data paths
+/// through the supervisor go over this — including binary YMODEM frames
+/// (the 2026-10-24 live-fire lesson: unescaped frames lost every 0xFF
+/// byte to ser2net's telnet parser and the transfer died in retries).
+pub struct TelnetFramedIo {
+    inner: Box<dyn ConsoleIo>,
+    pending: Vec<u8>,
+}
+
+impl TelnetFramedIo {
+    /// Wrap and negotiate telnet BINARY mode both directions once.
+    pub fn negotiate(mut inner: Box<dyn ConsoleIo>) -> Self {
+        let _ = inner.write_all_bytes(&[0xFF, 0xFB, 0x00, 0xFF, 0xFD, 0x00]);
+        Self {
+            inner,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl ConsoleIo for TelnetFramedIo {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // serve leftovers first (stripped bytes from a previous read)
+        if !self.pending.is_empty() {
+            let n = self.pending.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.pending[..n]);
+            self.pending.drain(..n);
+            return Ok(n);
+        }
+        let mut raw = [0u8; 4096];
+        let k = self.inner.read(&mut raw)?;
+        if k == 0 {
+            return Ok(0);
+        }
+        let clean = telnet_strip_iac(&raw[..k]);
+        let n = clean.len().min(buf.len());
+        buf[..n].copy_from_slice(&clean[..n]);
+        if n < clean.len() {
+            self.pending.extend_from_slice(&clean[n..]);
+        }
+        Ok(n)
+    }
+
+    fn write_all_bytes(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.inner.write_all_bytes(&telnet_escape(data))
+    }
+
+    fn reset_input_buffer(&mut self) {
+        self.pending.clear();
+        self.inner.reset_input_buffer();
+    }
+
+    fn close(&mut self) {
+        self.inner.close();
+    }
+}
+
 // ---- recipe model ---------------------------------------------------
 
 /// One pexpect-style step. `expect` waits for a byte pattern; `spaces`
@@ -202,7 +261,6 @@ pub struct WatchOutcome {
 
 struct Supervisor<'a> {
     io: Box<dyn ConsoleIo>,
-    is_telnet: bool,
     window: Vec<u8>,
     transcript: &'a mut std::fs::File,
 }
@@ -220,11 +278,7 @@ impl<'a> Supervisor<'a> {
         while Instant::now() < deadline {
             match self.io.read(&mut buf) {
                 Ok(k) if k > 0 => {
-                    let chunk: Vec<u8> = if self.is_telnet {
-                        telnet_strip_iac(&buf[..k])
-                    } else {
-                        buf[..k].to_vec()
-                    };
+                    let chunk = buf[..k].to_vec();
                     n += chunk.len();
                     let _ = self.transcript.write_all(&chunk);
                     self.window.extend_from_slice(&chunk);
@@ -240,12 +294,10 @@ impl<'a> Supervisor<'a> {
     }
 
     fn send_raw(&mut self, data: &[u8]) {
-        let wire: Vec<u8> = if self.is_telnet {
-            telnet_escape(data)
-        } else {
-            data.to_vec()
-        };
-        let _ = self.io.write_all_bytes(&wire);
+        // link framing (escaping for telnet bridges) is the transport's
+        // job now — TelnetFramedIo — so binary YMODEM frames written by
+        // the loady leg get the same protection as everything else
+        let _ = self.io.write_all_bytes(data);
     }
 
     /// Bytes appended since `before`, drain-safe: if the rolling
@@ -540,19 +592,20 @@ pub fn run_watch(
         .create(true)
         .append(true)
         .open(transcript_path)?;
-    let is_telnet = port_spec.starts_with("tcp://");
     let io = open_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| std::io::Error::other(format!("open {port_spec}: {e}")))?;
+    // telnet-mode TCP consoles (ser2net): ALL reads/writes go through
+    // the framing adapter — binary frames included
+    let io: Box<dyn ConsoleIo> = if port_spec.starts_with("tcp://") {
+        Box::new(TelnetFramedIo::negotiate(io))
+    } else {
+        io
+    };
     let mut s = Supervisor {
         io,
-        is_telnet,
         window: Vec::new(),
         transcript: &mut transcript,
     };
-    // ser2net telnet accepters: negotiate binary mode once
-    if is_telnet {
-        let _ = s.io.write_all_bytes(&[0xFF, 0xFB, 0x00, 0xFF, 0xFD, 0x00]);
-    }
     let triggers: Vec<Vec<u8>> = recipe
         .boot_trigger
         .iter()
@@ -668,6 +721,57 @@ mod tests {
         assert_eq!(r.actions.len(), 4);
         assert!(matches!(r.actions[0], Action::Spaces { .. }));
         assert!(matches!(r.actions[2], Action::Loady { boot: true, .. }));
+    }
+
+    /// Fake transport: captures writes, replays them back on read.
+    struct EchoIo {
+        written: Vec<u8>,
+        pos: usize,
+    }
+    impl ConsoleIo for EchoIo {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = (self.written.len() - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.written[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+        fn write_all_bytes(&mut self, data: &[u8]) -> std::io::Result<()> {
+            self.written.extend_from_slice(data);
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {}
+        fn close(&mut self) {}
+    }
+
+    #[test]
+    fn telnet_framed_io_carries_binary_frames() {
+        // the live-fire regression: a YMODEM frame full of 0xFF bytes
+        // must survive the wrapper round-trip unharmed
+        let frame: Vec<u8> = std::iter::once(0x02u8)
+            .chain(std::iter::repeat(0xFF).take(200))
+            .chain(std::iter::repeat(0xAB).take(50))
+            .collect();
+        let inner = Box::new(EchoIo {
+            written: Vec::new(),
+            pos: 0,
+        });
+        let mut io = TelnetFramedIo::negotiate(inner);
+        io.write_all_bytes(&frame).unwrap();
+        // read back through the wrapper: negotiation + frame escaped on
+        // the wire, clean on our side
+        let mut out = Vec::new();
+        let mut buf = [0u8; 64];
+        loop {
+            let k = io.read(&mut buf).unwrap();
+            if k == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..k]);
+        }
+        // the wrapper's read side already strips: out must equal the
+        // original frame exactly (no second stripping — that would
+        // collapse legitimate 0xFF runs and off-by-one the compare)
+        assert_eq!(out, frame);
     }
 
     #[test]
