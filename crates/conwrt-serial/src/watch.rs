@@ -888,6 +888,7 @@ pub fn run_watch(
         }
     }
     let mut fires = 0u32;
+    let mut last_probe: Option<Instant> = None;
     loop {
         if fires >= recipe.max_fires {
             return Ok(WatchOutcome {
