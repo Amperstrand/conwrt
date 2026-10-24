@@ -848,6 +848,13 @@ Worktrees are the unit of cleanup.
    image builds, or any multi-GB step: `df -h /` and
    `scripts/dev-session.sh sweep` (dry-run). Free space proactively —
    `rm -rf <idle-worktree>/target` is always safe for a lane you own.
+   **Under disk pressure (free space below ~10G): run
+   `scripts/dev-session.sh sweep --pressure`** — it reaps the `target/`
+   of every idle-PR lane immediately (a resumed lane pays a rebuild,
+   nothing more). This is the 2026-10-23 runbook: six ENOSPC events in
+   one day, each costing a lane mid-build, before this existed. Check
+   `df -h /` again after; if still critical, report with reclaimables
+   per rule 5 — do not thrash.
 5. **ENOSPC discipline.** If commands start failing with "No space left
    on device", STOP writing immediately — even `rm` through agent tooling
    may fail to run. Report the blocker with your reclaimable artifacts;

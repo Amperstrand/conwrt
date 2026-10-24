@@ -174,11 +174,12 @@ EOF
     # Worktree reaper (AGENTS.md "Worktree lifecycle and disk reaping"):
     # retire merged lanes, reclaim target/ from idle ones, never touch
     # dirty or unpushed work. Dry-run by default; --apply acts.
-    apply=0; idle_days=4; filter=()
+    apply=0; idle_days=4; pressure=0; filter=()
     while [ $# -gt 0 ]; do
       case "$1" in
         --apply) apply=1 ;;
         --days) idle_days="${2:?--days needs a number}"; shift ;;
+        --pressure) apply=1; idle_days=0; pressure=1 ;;
         -*) echo "unknown option: $1" >&2; exit 1 ;;
         *) filter+=("$1") ;;
       esac
@@ -300,6 +301,9 @@ for pr in json.load(sys.stdin):
       done
     if [ "$apply" = 0 ]; then
         echo "(dry-run — pass --apply to act; --days N sets the idle threshold, default 4)"
+    fi
+    if [ "$pressure" = 1 ]; then
+      echo "pressure mode: reaped target/ of every idle-PR lane (a resumed lane pays a rebuild, nothing more — the 2026-10-23 ENOSPC x6 runbook)"
     fi
     ;;
   *)
