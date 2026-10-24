@@ -445,7 +445,7 @@ primary, **we set cfg_group ourselves**.
 
 **Bluetooth**: BLE (AR3012 chip) confirmed working on OpenWrt Lyra:
 - bluez 5.72 installed, `hci0` UP and RUNNING
-- BD Address: `2C:FD:A1:12:F4:9D`
+- BD Address: `2c:fd:a1:xx:xx:xx`
 - Classic BT + BLE capable
 - No public documentation of ASUS BLE GATT UUIDs or pairing protocol
 - BLE likely used only for initial phone app discovery, not the actual onboarding
@@ -571,10 +571,10 @@ productid=MAP-AC2200
 firmver=3.0.0.4
 buildinfo=Wed May 12 12:24:37 UTC 2021 Qca@3e43ad7
 lan_ipaddr=192.168.72.1
-lan_hwaddr=2C:FD:A1:12:F2:CB
-et0macaddr=2C:FD:A1:12:F2:C9
-wl0_hwaddr=2C:FD:A1:12:F2:C8
-wl1_hwaddr=2C:FD:A1:12:F2:CA
+lan_hwaddr=2c:fd:a1:xx:xx:xx
+et0macaddr=2c:fd:a1:xx:xx:xx
+wl0_hwaddr=2c:fd:a1:xx:xx:xx
+wl1_hwaddr=2c:fd:a1:xx:xx:xx
 computer_name=Lyra-F2C8
 sw_mode=1
 sshd_enable=0  (changed to 1 via httpd API)
@@ -593,12 +593,12 @@ wl1_ssid=ASUS_C8_AMAPS
 
 | Interface | MAC | Notes |
 |-----------|-----|-------|
-| WiFi ath0 | 2C:FD:A1:12:F2:C8 | 2.4GHz (BSSID) |
-| WiFi ath1 | 2C:FD:A1:12:F2:CA | 5GHz low |
-| WiFi ath2 | 2C:FD:A1:12:F2:CC | 5GHz high (QCA9886) |
-| eth0 | 2C:FD:A1:12:F2:C9 | WAN port (left, furthest from power) |
-| eth1 | 2C:FD:A1:12:F2:CB | LAN port (next to power) |
-| br0 | 2C:FD:A1:12:F2:CB | Bridge (uses eth1/LAN MAC) |
+| WiFi ath0 | 2c:fd:a1:xx:xx:xx | 2.4GHz (BSSID) |
+| WiFi ath1 | 2c:fd:a1:xx:xx:xx | 5GHz low |
+| WiFi ath2 | 2c:fd:a1:xx:xx:xx | 5GHz high (QCA9886) |
+| eth0 | 2c:fd:a1:xx:xx:xx | WAN port (left, furthest from power) |
+| eth1 | 2c:fd:a1:xx:xx:xx | LAN port (next to power) |
+| br0 | 2c:fd:a1:xx:xx:xx | Bridge (uses eth1/LAN MAC) |
 
 ### Port Scan Results (WAN port = eth0)
 
@@ -839,7 +839,7 @@ obd_eth handles the full ethernet onboarding lifecycle:
 
 ### Research Device Status
 
-Stock device at `192.168.72.1` (MAC `2C:FD:A1:12:F2:CB`):
+Stock device at `192.168.72.1` (MAC `2c:fd:a1:xx:xx:xx`):
 - SSH enabled via httpd API (sshd_enable=1)
 - Login: admin/admin (Dropbear 2019.78)
 - cfg_group: DA47DB63FBBB5C2C4E0FC57DC955B71C
@@ -857,7 +857,7 @@ Built a Python AiMesh cfg_server (`/tmp/aimesh_cfg_server_v2.py`) that successfu
 1. **REQ_KU (opcode 0x1)**: Client requests RSA public key → Server sends 2048-bit RSA PEM
 2. **REQ_NC (opcode 0x3)**: Client sends RSA-encrypted payload containing AES-256 master key + 8-byte client nonce → Server decrypts, generates 32-byte server nonce, wraps in TLV header (banner+len+crc), AES-encrypts and returns
 3. **REP_OK (opcode 0x5)**: Client confirms → Server responds 0x00000006 (SUCCESS)
-4. **REQ_JOIN (opcode 0xF)**: Client sends AES-encrypted `{"mac":"2C:FD:A1:12:F2:CB"}` using derived session key → Server decrypts and accepts
+4. **REQ_JOIN (opcode 0xF)**: Client sends AES-encrypted `{"mac":"2c:fd:a1:xx:xx:xx"}` using derived session key → Server decrypts and accepts
 
 **Session key derivation**: `SHA256(cfg_group + server_nonce + client_nonce).hexdigest()` — both sides derive identical key `c45c5c85e2c0a06f...`
 
@@ -870,12 +870,12 @@ Full packet format captured from stock device's infosvr:
 | 0 | ServiceType | 0x0C |
 | 1 | OpCode | 0x15 (probe) / 0x16 (device info) |
 | 2 | Info | 0x1F |
-| 4-9 | MAC | 00:e0:4c:68:00:00 |
+| 4-9 | MAC | 00:e0:4c:xx:xx:xx |
 | 44-57 | Model ID | ASUS_C8_AMAPS |
 | 71-84 | Subnet mask | 255.255.255.0 |
 | 100-104 | Product name | Lyra |
 | 125-136 | Firmware | 3.0.0.4.384 |
-| 142-147 | Full MAC | 2c:fd:a1:12:f2:cb |
+| 142-147 | Full MAC | 2c:fd:a1:xx:xx:xx |
 | 168-175 | Config flags | 0x82 0x80 0x58 0x00 0x00 0x02 0x1f 0x92 |
 | 210-211 | HTTPS port | 0x01bb (443) |
 | 254-255 | Flags | 0x01 0x02 |
@@ -884,7 +884,7 @@ Two packet types: opcode 0x15 (empty discovery probe) and 0x16 (full device info
 
 ### Discovery Responder
 
-Scapy-based responder (`/tmp/aimesh_responder.py`) successfully responds to infosvr broadcasts on en6. After responding, `cfg_device_list` was updated to `<Lyra>192.168.72.1>2C:FD:A1:12:F2:CB>0`. However, our response is not yet recognized as a valid AiMesh master — likely needs correct sw_mode=1 (router) and cfg_master flags in the response.
+Scapy-based responder (`/tmp/aimesh_responder.py`) successfully responds to infosvr broadcasts on en6. After responding, `cfg_device_list` was updated to `<Lyra>192.168.72.1>2c:fd:a1:xx:xx:xx>0`. However, our response is not yet recognized as a valid AiMesh master — likely needs correct sw_mode=1 (router) and cfg_master flags in the response.
 
 ### cfg_client State Issues
 
