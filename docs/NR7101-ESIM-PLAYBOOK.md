@@ -57,10 +57,10 @@ packages, and v3.5's `ModemLink` trait is deliberately the on-ramp —
 `tcp://` (legacy) → `ssh://` (now) → direct `tty` (on-device) are three
 implementations of one interface, same AT engine, same tests (the fake
 relay already speaks stdio, which *is* the on-device shape). The two
-frictions to plan for: `/overlay` on the bench unit has only **~3.8 MB
-free** (packages must be lean; kmod-usb-serial already resident) and
-direct tty needs termios, i.e. adding `libc` for the unix target when
-that third impl is built.
+frictions to plan for: `/overlay` headroom on this species is a few MB
+(packages must be lean; kmod-usb-serial already resident) and direct tty
+needs termios, i.e. adding `libc` for the unix target when that third
+impl is built.
 
 ## Tested state — "I tested this at commit X, Y, Z" (2026-10-23)
 
@@ -69,7 +69,7 @@ that third impl is built.
 | OpenWrt image, flash flow, AT bridge scripts | Amperstrand/conwrt | `fe4a66f` (HEAD at the time) | NR7101 running the conwrt image; modem AT port bridged to TCP 7002 (procd `modem-at-bridge`, ttyUSB auto-detect) |
 | pcscd IFD driver (the reader) | Amperstrand/ifd-modemifd | **`3a475eb` (v4.0)** | **Full SGP.22 profile download + enable + notification through the modem reader, one-shot, ~60 s, zero transport errors** (nadanada → 9eSIM). Plus: pySim-shell full-card soak (~60 EFs), 300/300 small-APDU, 150/150 BPP-shaped STORE DATA. See its README "Status" evidence table |
 | silent.link checkout/payment automation | Amperstrand/silentlink-lib | `acddfc1` | BTC-LN checkout flow (stock→fee→trocador→discount→checkout→BTCPay status polling) + `parse_order.sh` (activation code) + `provision_order.sh`. **First hardware run pending** (audit: `docs/BENCH-GAP-REPORT.md` in that repo once merged) |
-| The card | — | 9eSIM (ECP3 eUICC) | nadanada profile enabled, 1 GB roaming, registered and passing live traffic through the modem |
+| The card | — | 9eSIM (ECP3 eUICC) | a paid nadanada profile downloaded + enabled through the modem reader, registered and passing live traffic (the physical card's current profile/allowance state is unit-level — track it in the operator's private registry, not here) |
 
 The card-safety doctrine that governed that run (and must govern yours):
 Amperstrand/ccid-firmware-rs `AGENTS.md` §"Card-Handling Doctrine" — never
@@ -85,11 +85,19 @@ sacrificial SIM for anything soak/fault-injection shaped.
    transport requires zero router-side services: dropbear (base image,
    key-only) is the whole story. Ensure the host's SSH key is in the
    router's `authorized_keys` and IP reachability exists (LAN/VLAN/WG).
-   *Legacy fallback*: the socat TCP bridge — if anyone restores it, pin
-   it: `socat TCP-LISTEN:7002,fork,reuseaddr,range=<bench-host-ip>/32 …`
-   plus a uci rule limiting 7002 to the bench/VPN source only; never
-   expose it to the wan zone (the historical whole-wan rule was the
-   finding that retired this path).
+   *Legacy fallback* (only if ssh:// is unavailable): a socat TCP
+   bridge the operator must build and pin — there is NO shipped service:
+   install `socat` on the router, expose the modem AT port, and lock the
+   listener to the bench host:
+   ```
+   opkg/apk: socat
+   socat TCP-LISTEN:7002,fork,reuseaddr,range=<bench-host-ip>/32      FILE:/dev/ttyUSB2,raw,echo=0,b115200     # tty via the auto-detect probe below
+   ```
+   plus a uci firewall rule allowing 7002 from the bench/VPN source
+   ONLY — never the wan zone (the historical whole-wan exposure was the
+   finding that retired this path; the 2026-09-27 spike writeup in
+   AGENTS.md documents the full bridge shape, including the procd
+   wrapper that auto-detects the AT tty).
 3. **Driver** — build ifd-modemifd and install:
    `cargo build --release` → `target/release/libifd_modemifd.so` →
    `/usr/local/lib/`. reader.conf.d entry:
