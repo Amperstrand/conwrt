@@ -30,6 +30,25 @@ REPO = Path(__file__).resolve().parent.parent
 NEGATIVES = REPO / "tests" / "fixtures" / "schema-negative"
 
 
+def problem_text_only(output: str) -> str:
+    """The validator's PROBLEM lines with fixture-path noise stripped.
+
+    The CLI prints `  <fixture-path>: <problems>` — and the fixture DIR
+    NAMES carry the expected substrings themselves (baud-too-high et
+    al.), so attribution against raw output matches the path, not the
+    reason (#497 post-merge finding). Keep only what follows the
+    path+colon separator on problem lines.
+    """
+    kept: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "schema-negative" in stripped and ": " in stripped:
+            kept.append(stripped.split(": ", 1)[1])
+        elif stripped and not stripped.startswith(("invalid models",)):
+            kept.append(stripped)
+    return "\n".join(kept)
+
+
 def main() -> int:
     manifest = json.loads((NEGATIVES / "manifest.json").read_text())["fixtures"]
     dirs = sorted(p.name for p in NEGATIVES.iterdir() if p.is_dir())
@@ -52,9 +71,10 @@ def main() -> int:
             cwd=REPO, capture_output=True, text=True, timeout=300,
         )
         output = proc.stdout + proc.stderr
+        attribution = problem_text_only(output)
         if proc.returncode == 0:
             failures.append(f"{stem}: Rust ACCEPTED a schema-negative fixture")
-        elif expect not in output:
+        elif expect not in attribution:
             failures.append(
                 f"{stem}: rejected, but not for the intended reason — "
                 f"expected a problem mentioning {expect!r}, got:\n{output.strip()}"
