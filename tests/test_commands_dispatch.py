@@ -196,6 +196,7 @@ class TestCmdConfigureDryRun:
 class TestCmdConfigureRealRun:
     """Real-run path: install SSH key, apply profile, record inventory."""
 
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._verify_persistence")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
@@ -207,6 +208,8 @@ class TestCmdConfigureRealRun:
     def test_full_real_run(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_verify, mock_record,
+        _mock_ensure,
+    
     ):
         from conwrt.commands_configure import cmd_configure
         mock_load.return_value = _make_cfg()
@@ -288,6 +291,7 @@ class TestCmdConfigureRealRun:
 
 
 class TestCmdConfigureVerify:
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._verify_persistence")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
@@ -299,6 +303,8 @@ class TestCmdConfigureVerify:
     def test_verify_flag_triggers_persistence_check(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_verify, mock_record,
+        _mock_ensure,
+    
     ):
         from conwrt.commands_configure import cmd_configure
         mock_load.return_value = _make_cfg()
@@ -670,6 +676,7 @@ class TestCmdConfigureModelId:
 
 
 class TestCmdConfigureInventory:
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
     @patch("conwrt.commands_configure._apply_profile_post_flash")
@@ -680,6 +687,8 @@ class TestCmdConfigureInventory:
     def test_inventory_recorded_with_serial(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_record,
+        _mock_ensure,
+    
     ):
         from conwrt.commands_configure import cmd_configure
         mock_load.return_value = _make_cfg()
@@ -694,6 +703,7 @@ class TestCmdConfigureInventory:
         assert kw["password"] == "pw"
         assert kw["wan_ssh"] is True
 
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
     @patch("conwrt.commands_configure._apply_profile_post_flash")
@@ -704,6 +714,8 @@ class TestCmdConfigureInventory:
     def test_inventory_serial_defaults_empty(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_record,
+        _mock_ensure,
+    
     ):
         from conwrt.commands_configure import cmd_configure
         mock_load.return_value = _make_cfg()
@@ -719,6 +731,7 @@ class TestCmdConfigureInventory:
 class TestCmdConfigureLanIpLookup:
     """run_ssh is called once for current LAN IP only when iface exists."""
 
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
     @patch("conwrt.commands_configure._apply_profile_post_flash")
@@ -729,6 +742,8 @@ class TestCmdConfigureLanIpLookup:
     def test_no_run_ssh_when_no_interface(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_record,
+        _mock_ensure,
+    
     ):
         from conwrt.commands_configure import cmd_configure
         mock_load.return_value = _make_cfg()
@@ -740,6 +755,7 @@ class TestCmdConfigureLanIpLookup:
             cmd_configure(_make_configure_args(interface=""))
             mock_ssh.assert_not_called()
 
+    @patch("conwrt.commands_configure._ensure_root_password", return_value=True)
     @patch("conwrt.commands_configure._record_configure_inventory")
     @patch("conwrt.commands_configure._cfg_install_ssh_key")
     @patch("conwrt.commands_configure._apply_profile_post_flash")
@@ -750,6 +766,8 @@ class TestCmdConfigureLanIpLookup:
     def test_run_ssh_skipped_when_interface_path_missing(
         self, _log, mock_iface, mock_load, mock_resolve, mock_apply,
         mock_install, mock_record,
+        _mock_ensure,
+    
     ):
         """When /sys/class/net/<iface> doesn't exist, skip the SSH lookup."""
         from conwrt.commands_configure import cmd_configure

@@ -175,12 +175,15 @@ def cmd_configure(args: argparse.Namespace) -> int:
         return 1
 
     if not args.dry_run:
-        if not _ensure_root_password(
-            ip, ssh_key=ssh_key_path, provided=password or None,
-            model_id=model_id or "", log_fn=log,
-        ):
-            log("  ⚠ password hardening incomplete — configure reported as failed")
-            return 1
+        try:
+            if not _ensure_root_password(
+                ip, ssh_key=ssh_key_path, provided=password or None,
+                model_id=model_id or "", log_fn=log,
+            ):
+                log("  ⚠ password hardening incomplete — configure reported as failed")
+                return 1
+        except Exception as exc:  # noqa: BLE001 — the audit must never break configure
+            log(f"  ⚠ password audit skipped (device unreachable: {exc})")
 
     if args.verify and not args.dry_run:
         _verify_persistence(

@@ -115,7 +115,9 @@ class TestBuildIpk(unittest.TestCase):
     def test_ipk_size_reasonable(self) -> None:
         ipk_path = _build_ipk(self.output_dir)
         size_kb = os.path.getsize(ipk_path) // 1024
-        self.assertLess(size_kb, 500, f"ipk too large: {size_kb}KB")
+        # 600KB budget: crossed 500 with the security credentials module (2026-10-24);
+        # re-tighten if the router ipk regains headroom.
+        self.assertLess(size_kb, 600, f"ipk too large: {size_kb}KB")
         self.assertGreater(size_kb, 50, f"ipk suspiciously small: {size_kb}KB")
 
     def test_postinst_exists(self) -> None:
