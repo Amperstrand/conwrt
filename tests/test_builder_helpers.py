@@ -106,10 +106,11 @@ class TestSshKeyFirstboot:
 class TestSshKeyOps:
     def test_single_key_returns_shell_prefix_ops(self):
         ops = _ssh_key_ops(["key1"])
-        # mkdir, chmod 700, printf, chmod 600, chown, verify-gate, readback
+        # mkdir, chmod 700, printf, chmod 600, chown, ownership-verify (#464),
+        # key-gate, staged-changes persistence gate (#464), readback
         # (ShellCommand) + key-only UciSet + commit (#155) + restart (#229)
         shells = [op for op in ops if isinstance(op, ShellCommand)]
-        assert len(shells) == 7
+        assert len(shells) == 9
 
     def test_ops_bake_key_only_auth(self):
         # #155: ops carry the same key-only dropbear config as firstboot.
@@ -125,14 +126,15 @@ class TestSshKeyOps:
         assert "printf" in ops[2].command and "'key1'" in ops[2].command
         assert "chmod 600" in ops[3].command
         assert "chown 0:0" in ops[4].command
-        assert "grep -qF 'key1'" in ops[5].command
-        assert "|| exit 1" in ops[5].command
+        assert "stat -c '%u %a'" in ops[5].command  # ownership gate (#464)
+        assert "grep -qF 'key1'" in ops[6].command
+        assert "|| exit 1" in ops[6].command
 
-    def test_two_keys_returns_eleven_ops(self):
+    def test_two_keys_returns_thirteen_ops(self):
         ops = _ssh_key_ops(["key1", "key2"])
-        # mkdir, chmod 700, printf x2, chmod 600, chown, gate, readback,
-        # UciSet, commit, restart
-        assert len(ops) == 11
+        # mkdir, chmod 700, printf x2, chmod 600, chown, ownership gate,
+        # key gate, UciSet, commit, persistence gate, readback, restart
+        assert len(ops) == 13
         assert ">" in ops[2].command and ">>" not in ops[2].command
         assert ">>" in ops[3].command
 
@@ -152,9 +154,16 @@ class TestSshKeyOps:
         from profile.ops import UciCommit, ServiceAction
         for op in ops:
             if isinstance(op, ShellCommand):
-                if "grep -qF" in op.command or "uci get dropbear" in op.command:
+                if ("grep -qF" in op.command or "uci get dropbear" in op.command
+                        or "uci changes dropbear" in op.command):
                     # gate + readback: fb uses the verbose { echo; exit 1; }
                     # forms for both, so compare by keyword, not verbatim
+                    if "uci changes dropbear" in op.command:
+                        # ops gate on staged leftovers; firstboot's counterpart
+                        # is the propagated `uci commit dropbear ||` form (#464)
+                        assert "uci commit dropbear ||" in fb
+                        assert "exit 1" in op.command and "exit 1" in fb
+                        continue
                     keyword = "grep -qF" if "grep -qF" in op.command else "uci get dropbear"
                     assert keyword in op.command and keyword in fb
                     assert "exit 1" in fb
@@ -707,6 +716,7 @@ class TestSshKey229LockoutSafety:
         dry = "\n".join(
             "true # " + line
             if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            or line.startswith('[ "$(stat')
             else line
             for line in dry.splitlines()
         )
@@ -744,6 +754,7 @@ class TestSshKey229LockoutSafety:
         dry = "\n".join(
             "true # " + line
             if line.startswith("uci ") or line.startswith('[ "$(uci get')
+            or line.startswith('[ "$(stat')
             else line
             for line in dry.splitlines()
         )
@@ -880,3 +891,48 @@ class TestSshDefaultsSandbox229:
         second = _run_defaults_in_sandbox(script, dropbear_is_file=False)
         assert first[0] == second[0] == 0
         assert second[3] == first[3]  # same key content (overwrite, not append)
+
+
+class TestSshKeyGateHardening:
+    """#464 — the ssh-key firstboot gate must fail closed on ownership
+    repairs and on commit failure (a stale matching key file must never
+    enable the password-auth disable while dropbear would refuse it)."""
+
+    def test_firstboot_gates_on_ownership_repair(self):
+        from profile.builder import _ssh_key_firstboot
+
+        script = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
+        assert "stat -c '%u %a'" in script
+        assert (
+            "conwrt-ssh: key ownership/mode verify failed" in script
+        ), "ownership verify must fail the script (retained for retry)"
+        # the verify must sit BEFORE the password-auth disable
+        assert script.index("stat -c") < script.index("PasswordAuth='off'")
+
+    def test_firstboot_propagates_commit_failure(self):
+        from profile.builder import _ssh_key_firstboot
+
+        script = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
+        assert "uci commit dropbear ||" in script
+        assert "commit failed" in script
+        # commit failure must precede the readback (staged /tmp/.uci values)
+        assert script.index("uci commit dropbear ||") < script.index("uci get")
+
+    def test_ops_mirror_the_gates(self):
+        from profile.builder import _ssh_key_ops
+
+        rendered = "\n".join(
+            op.command for op in _ssh_key_ops(["ssh-ed25519 AAAA"])
+            if hasattr(op, "command")
+        )
+        assert "stat -c '%u %a'" in rendered
+        # typed UciCommit cannot carry `||`; the ops-side persistence gate
+        # bites because a failed commit leaves STAGED changes behind
+        assert 'uci changes dropbear' in rendered
+        # the persistence gate must follow the typed UciCommit in the op sequence
+        from profile.ops import UciCommit
+        seq = list(_ssh_key_ops(["ssh-ed25519 AAAA"]))
+        commit_idx = next(i for i, op in enumerate(seq) if isinstance(op, UciCommit))
+        gate_idx = next(i for i, op in enumerate(seq)
+                        if getattr(op, "command", "").startswith('[ -z "$(uci changes'))
+        assert gate_idx > commit_idx

@@ -45,6 +45,16 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     # file) is non-root-owned — a preserved-overlay incident left it
     # 1000:1000 in the field, and chmod alone would not fix that.
     lines.append(f"chown 0:0 {dropbear_dir} {DROPBEAR_AUTH_KEYS_PATH}")
+    # P1 (#464): the repairs above are unchecked ops — a failed repair with
+    # a stale matching authorized_keys must NOT reach the password-auth
+    # disable (dropbear would refuse the file and the box is locked out).
+    # Verify ownership/mode EXPLICITLY, before any auth change.
+    lines.append(
+        f"[ \"$(stat -c '%u %a' {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null)\" = '0 600' ]"
+        f" && [ \"$(stat -c '%u' {dropbear_dir} 2>/dev/null)\" = '0' ]"
+        " || { echo 'conwrt-ssh: key ownership/mode verify failed;"
+        " keeping password auth, will retry next boot' >&2; exit 1; }"
+    )
     lines.append(
         f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null"
         " || { echo 'conwrt-ssh: authorized_keys not applied;"
@@ -55,7 +65,11 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     lines += [
         "uci set dropbear.@dropbear[0].PasswordAuth='off'",
         "uci set dropbear.@dropbear[0].RootPasswordAuth='off'",
-        "uci commit dropbear",
+        # P1 (#464): uci get reads the STAGED /tmp/.uci value — a failed
+        # commit would pass the readback without persistence. Propagate the
+        # commit status first (AGENTS uci-commit rule).
+        "uci commit dropbear || { echo 'conwrt-ssh: dropbear commit failed;"
+        " keeping script for retry' >&2; exit 1; }",
         # P2 (#253 review): gate on a VALUE READBACK, not the uci exit codes
         # — a failed commit must fail the script so uci_apply_defaults
         # retains it for retry instead of consuming a half-applied boot.
@@ -92,6 +106,14 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
     )
     ops.append(
         ShellCommand(
+            f"[ \"$(stat -c '%u %a' {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null)\" = '0 600' ]"
+            f" && [ \"$(stat -c '%u' {dropbear_dir} 2>/dev/null)\" = '0' ]"
+            " || { echo 'conwrt-ssh: key ownership/mode verify failed;"
+            " keeping password auth, will retry next boot' >&2; exit 1; }"
+        )
+    )
+    ops.append(
+        ShellCommand(
             f"grep -qF {sh_quote(keys[0])} {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null || exit 1"
         )
     )
@@ -101,6 +123,14 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
             "RootPasswordAuth": "off",
         }),
         UciCommit(config="dropbear"),
+        # typed UciCommit cannot carry `||`; a FAILED commit leaves the
+        # deltas staged in /tmp/.uci, so an empty `uci changes dropbear`
+        # is the persistence proof (#464)
+        ShellCommand(
+            "[ -z \"$(uci changes dropbear 2>/dev/null)\" ]"
+            " || { echo 'conwrt-ssh: dropbear commit failed;"
+            " keeping script for retry' >&2; exit 1; }"
+        ),
         ShellCommand(
             "[ \"$(uci get dropbear.@dropbear[0].PasswordAuth 2>/dev/null)\" = 'off' ]"
             " || exit 1"
