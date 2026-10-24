@@ -77,6 +77,7 @@ pub mod boot_capture;
 pub mod collect;
 pub mod configure;
 pub mod console;
+pub mod detect;
 pub mod flash;
 pub mod io;
 pub mod lint;

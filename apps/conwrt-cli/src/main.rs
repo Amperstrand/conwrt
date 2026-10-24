@@ -98,6 +98,18 @@ enum Command {
         #[arg(long, default_value_t = true)]
         boot: bool,
     },
+    /// Read-only device detection: classify the console (U-Boot / Linux
+    /// shell / booting / silent) and, when a prompt answers, collect the
+    /// device card — banner, env, kernel, release, MTD layout — as JSON.
+    SerialDetect {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        #[arg(long, default_value_t = 4.0)]
+        probe_secs: f64,
+    },
     /// One-command rescue: the whole bench-proven RTL838x ladder —
     /// watch for the boot signature, spaces into U-Boot, bundled
     /// TFTP server + gated tftpboot of the initramfs, bootm, then
@@ -958,6 +970,23 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::SerialDetect {
+            port,
+            baud,
+            probe_secs,
+        } => match conwrt_serial::detect::detect(&port, baud, probe_secs) {
+            Ok(card) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&card).unwrap_or_default()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("conwrt: serial-detect error: {e}");
+                ExitCode::from(5)
+            }
+        },
         Command::FlashRescue {
             port,
             sysupgrade,
