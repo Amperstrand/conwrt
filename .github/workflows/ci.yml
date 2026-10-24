@@ -20,8 +20,11 @@ jobs:
           filters: |
             code:
               - '**'
-              - '!**/*.md'
+              # negation order matters (last matching pattern wins, as in
+              # gitignore): '!docs/**' must precede '!**/*.md' or it would
+              # re-include docs/*.md that the markdown negation excluded
               - '!docs/**'
+              - '!**/*.md'
   test:
     needs: changes
     # Job-level gate, deliberately NOT a workflow-level `paths:` filter:
