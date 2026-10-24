@@ -82,3 +82,36 @@ def test_wan_ssh_step_opens_firewall_port_22():
     assert "firewall.wan_ssh" in script
     assert "firewall.wan_ssh.dest_port='22'" in script
     assert "/etc/init.d/firewall restart" in script
+
+
+class TestInstallStepFailureSemantics:
+    """#466 — install failures must fail the recipe; the host-side sha256
+    verify must run on stock macOS (no GNU sha256sum)."""
+
+    def test_repo_install_propagates_failure(self):
+        flow = Flow(name="x", description="", steps=[
+            Step(kind="install_repo_package", title="portal", package="nodogsplash"),
+        ])
+        script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+        assert "opkg install nodogsplash || {" in script or "apk add nodogsplash || {" in script
+        # the old shape erased everything with a trailing `|| true`
+        assert "start || true" not in script
+        # no init script (library package) must NOT fail the recipe…
+        assert "[ ! -f /etc/init.d/nodogsplash ] ||" in script
+        # …but a present init that fails to start must
+        assert "/etc/init.d/nodogsplash start || {" in script
+
+    def test_artifact_verify_is_host_portable(self):
+        digest = "a" * 64
+        flow = Flow(name="x", description="", steps=[
+            Step(kind="install_package", title="pkg",
+                 package="foo", artifact_url=f"https://b.example/{digest}.ipk"),
+        ])
+        script = render_flow_shell(flow, load_model("dlink-covr-x1860-a1"), {}, version="24.10.7")
+        assert "command -v sha256sum" in script
+        assert "shasum -a 256 -c" in script
+        # no unconditional GNU-only invocation remains
+        import re
+
+        assert not re.search(r"sha256sum -c - \|\|", script)
+        assert "refusing to flash" in script
