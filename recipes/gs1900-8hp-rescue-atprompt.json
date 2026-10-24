@@ -1,6 +1,8 @@
 {
   "model": "zyxel_gs1900-8hp rescue-to-25.12.6 (at-prompt variant: box already at RTL838x#, fires on attach)",
-  "boot_trigger": ["RTL838x#"],
+  "boot_trigger": [
+    "RTL838x#"
+  ],
   "actions": [
     {
       "type": "send_line",
@@ -13,7 +15,10 @@
       "addr": "0x84f00000",
       "name": "initramfs.bin",
       "image_path": "/srv/tftp-gs1900/owrt-25.12.6-initramfs-kernel.bin",
-      "pre": ["setsys bootpartition 0", "savesys"],
+      "pre": [
+        "setsys bootpartition 0",
+        "savesys"
+      ],
       "boot": true
     },
     {
@@ -47,5 +52,7 @@
     }
   ],
   "cooldown_secs": 300,
-  "max_fires": 1
+  "max_fires": 1,
+  "probe_line": "",
+  "probe_interval_secs": 5
 }

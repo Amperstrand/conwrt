@@ -231,6 +231,15 @@ pub struct Recipe {
     /// Stop after N successful fires (1 = one-shot rescue).
     #[serde(default = "default_one")]
     pub max_fires: u32,
+    /// Optional line to send periodically while idle — a quiescent
+    /// console (e.g. a box already sitting at a U-Boot prompt) emits
+    /// nothing, so triggers never see it. A lone newline makes the box
+    /// print its prompt. Empty string = bare newline.
+    #[serde(default)]
+    pub probe_line: Option<String>,
+    /// How often to send the probe (seconds).
+    #[serde(default = "default_probe_interval")]
+    pub probe_interval_secs: f64,
 }
 
 fn default_cooldown() -> u64 {
@@ -238,6 +247,10 @@ fn default_cooldown() -> u64 {
 }
 fn default_one() -> u32 {
     1
+}
+
+fn default_probe_interval() -> f64 {
+    30.0
 }
 
 // ---- execution ------------------------------------------------------
@@ -620,6 +633,7 @@ pub fn run_watch(
     ));
     let mut fires = 0u32;
     let mut last_fire: Option<Instant> = None;
+    let mut last_probe: Option<Instant> = None;
     loop {
         if fires >= recipe.max_fires {
             return Ok(WatchOutcome {
@@ -627,6 +641,21 @@ pub fn run_watch(
                 success: true,
                 detail: "max_fires reached".into(),
             });
+        }
+        // quiescent-console probe: poke so the box reveals its state
+        if let Some(probe) = &recipe.probe_line {
+            let due = last_probe
+                .map(|t| t.elapsed().as_secs_f64() >= recipe.probe_interval_secs)
+                .unwrap_or(true);
+            if due {
+                let line = if probe.is_empty() {
+                    "\n".to_string()
+                } else {
+                    format!("{probe}\n")
+                };
+                s.send_raw(line.as_bytes());
+                last_probe = Some(Instant::now());
+            }
         }
         let before = s.window.len();
         s.read_secs(idle_poll_secs);

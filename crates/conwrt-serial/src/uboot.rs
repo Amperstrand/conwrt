@@ -82,11 +82,24 @@ fn read_for(io: &mut dyn ConsoleIo, secs: f64, sink: &mut Vec<u8>) -> usize {
                 sink.extend_from_slice(&buf[..k]);
                 n += k;
             }
+            Err(e) if is_idle(&e) => {}
+            // idle timeouts are "no data yet", NOT transport death —
+            // breaking on them truncated the post-bootm silence window
+            // and false-negatived the boot-liveness gate (2026-10-24:
+            // "bootm produced no kernel output" while the box sat at a
+            // live shell)
             Err(_) => break,
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     n
+}
+
+fn is_idle(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn write_line(io: &mut dyn ConsoleIo, line: &str) -> Result<(), UbootError> {
@@ -179,8 +192,11 @@ fn read_byte(io: &mut dyn ConsoleIo, timeout: f64) -> Option<u8> {
     let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.1));
     let mut b = [0u8; 1];
     while Instant::now() < deadline {
-        if let Ok(1) = io.read(&mut b) {
-            return Some(b[0]);
+        match io.read(&mut b) {
+            Ok(1) => return Some(b[0]),
+            Err(e) if is_idle(&e) => {}
+            Err(_) => return None,
+            _ => {}
         }
         std::thread::sleep(Duration::from_millis(10));
     }
