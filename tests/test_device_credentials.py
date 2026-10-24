@@ -79,6 +79,7 @@ def test_ensure_sets_records_and_verifies(monkeypatch, tmp_path):
     calls = []
     replies = [
         _Resp(""),            # initial blank probe
+        _Resp("2\n"),        # authorized_keys count (key present -> safe to harden)
         _Resp("password changed"),  # passwd set
         _Resp("$6$hash"),     # post-set verification (non-blank)
         _Resp("aa:bb:cc:00:11:22\n"),  # mac probe
@@ -126,13 +127,43 @@ def test_ensure_records_explicit_password_when_set(monkeypatch, tmp_path):
     assert entry["source"] == "configure-explicit"
 
 
-def test_ensure_warns_when_set_fails(monkeypatch, tmp_path, capsys=None):
+def test_ensure_warns_when_set_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("CONWRT_CREDENTIALS_FILE", str(tmp_path / "c.jsonl"))
     import conwrt.commands_configure as cc
 
-    monkeypatch.setattr(cc, "run_ssh", lambda ip, cmd, key=None: _Resp(""))
+    replies = [_Resp(""), _Resp("2\n"), _Resp(""), _Resp("")]
+    monkeypatch.setattr(cc, "run_ssh", lambda ip, cmd, key=None: replies.pop(0))
     logs = []
-    cc._ensure_root_password("1.2.3.4", ssh_key=None, provided=None,
-                             model_id="m", log_fn=logs.append)
+    ok = cc._ensure_root_password("1.2.3.4", ssh_key=None, provided=None,
+                                  model_id="m", log_fn=logs.append)
+    assert not ok
     assert any("failed to set" in l for l in logs)
     assert not (tmp_path / "c.jsonl").exists()
+
+
+def test_ensure_refuses_without_any_key(monkeypatch, tmp_path):
+    """Bench pre-adoption state: blank password is the only door -> refuse to harden."""
+    monkeypatch.setenv("CONWRT_CREDENTIALS_FILE", str(tmp_path / "c.jsonl"))
+    import conwrt.commands_configure as cc
+
+    replies = [_Resp(""), _Resp("0\n")]  # blank password, zero keys installed
+    monkeypatch.setattr(cc, "run_ssh", lambda ip, cmd, key=None: replies.pop(0))
+    logs = []
+    ok = cc._ensure_root_password("1.2.3.4", ssh_key=None, provided=None,
+                                  model_id="m", log_fn=logs.append)
+    assert not ok
+    assert any("pre-adoption" in l for l in logs)
+    assert not (tmp_path / "c.jsonl").exists()
+
+
+def test_ensure_proceeds_when_connected_with_key(monkeypatch, tmp_path):
+    """Key in use (even with zero keys installed) -> safe to harden."""
+    monkeypatch.setenv("CONWRT_CREDENTIALS_FILE", str(tmp_path / "c.jsonl"))
+    import conwrt.commands_configure as cc
+
+    replies = [_Resp(""), _Resp("0\n"), _Resp("ok"), _Resp("$6$h"), _Resp("aa:bb\n")]
+    monkeypatch.setattr(cc, "run_ssh", lambda ip, cmd, key=None: replies.pop(0))
+    ok = cc._ensure_root_password("1.2.3.4", ssh_key="/k", provided=None,
+                                  model_id="m", log_fn=lambda *_: None)
+    assert ok
+    assert (tmp_path / "c.jsonl").exists()

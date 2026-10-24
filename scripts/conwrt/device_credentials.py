@@ -47,7 +47,6 @@ def record(
 ) -> Path:
     target = path or credentials_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    new_file = not target.exists()
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mac": mac,
@@ -56,15 +55,15 @@ def record(
         "source": source,
         "root_password": password,
     }
-    handle: IO[str]
-    with open(target, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
-    if new_file:
+    line = json.dumps(entry, sort_keys=True) + "\n"
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, line.encode())
+    finally:
+        os.close(fd)
+    mode = target.stat().st_mode & 0o777
+    if mode & 0o077:
         target.chmod(0o600)
-    else:
-        mode = target.stat().st_mode & 0o777
-        if mode & 0o077:
-            target.chmod(0o600)
     return target
 
 
