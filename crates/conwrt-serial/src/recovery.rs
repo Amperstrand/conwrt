@@ -182,7 +182,11 @@ pub fn reboot_wedged_bounded(
 /// Field bug (2026-10-23): the drain used a hardcoded 300 s cap and blew
 /// the caller's `--timeout` by minutes after an early boot marker —
 /// `serial-recover` must never spend longer than its own budget.
-fn drain_until_quiet(io: &mut dyn ConsoleIo, quiet: Duration, until: Instant) -> Result<(), RecoveryError> {
+fn drain_until_quiet(
+    io: &mut dyn ConsoleIo,
+    quiet: Duration,
+    until: Instant,
+) -> Result<(), RecoveryError> {
     let mut last = Instant::now();
     let mut chunk = [0u8; 4096];
     while Instant::now() < until {
@@ -271,7 +275,6 @@ mod tests {
         assert!(!contains_subslice(b"booting", b"Starting kernel"));
     }
 }
-
 
 #[cfg(test)]
 mod drain_bound_tests {
