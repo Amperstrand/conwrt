@@ -862,9 +862,32 @@ pub fn run_watch(
         recipe.actions.len(),
         recipe.max_fires
     ));
-    let mut fires = 0u32;
+    // cross-process fire state: a prior watcher's fire (or a dead
+    // process's cooldown) must still suppress triggers — stale text
+    // replayed from a draining backlog once fired a bogus second run
+    // (2026-10-24, chunked-proof run 2). State lives next to the
+    // transcript: <transcript>.fired holds the unix-seconds timestamp.
+    let fired_marker = transcript_path.with_extension("fired");
     let mut last_fire: Option<Instant> = None;
-    let mut last_probe: Option<Instant> = None;
+    if let Ok(text) = std::fs::read_to_string(&fired_marker) {
+        if let Ok(secs) = text.trim().parse::<u64>() {
+            let elapsed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if elapsed.saturating_sub(secs) < recipe.cooldown_secs as u64 {
+                let wait = recipe.cooldown_secs as u64 - (elapsed - secs);
+                return Ok(WatchOutcome {
+                    fires: 0,
+                    success: true,
+                    detail: format!(
+                        "prior fire marker {secs} inside cooldown — refusing to re-fire ({wait}s left)"
+                    ),
+                });
+            }
+        }
+    }
+    let mut fires = 0u32;
     loop {
         if fires >= recipe.max_fires {
             return Ok(WatchOutcome {
@@ -900,6 +923,13 @@ pub fn run_watch(
             }
             s.log("BOOT SIGNATURE DETECTED — firing recipe");
             last_fire = Some(Instant::now());
+            let _ = std::fs::write(
+                &fired_marker,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs().to_string())
+                    .unwrap_or_default(),
+            );
             match run_actions(&mut s, &recipe.actions) {
                 Ok(()) => {
                     fires += 1;
