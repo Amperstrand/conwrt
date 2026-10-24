@@ -390,6 +390,95 @@ impl Default for WireguardServerProfile {
     }
 }
 
+/// Cashu VPN client — port of the 1.x `cashu-vpn-client` preset
+/// (`scripts/use_cases/cashu_vpn_client.py`, experimental in 1.x): a
+/// full-tunnel WireGuard client for the vps-on-demand Cashu VPN exit.
+/// The operator pays the peer service out-of-band (Cashu token in the
+/// `X-Cashu` header of `POST /peer`) and receives
+/// `{peer_ip, public_key, endpoint, allowed_ips}` — those values are
+/// pasted into this profile. Only the router side is configured here;
+/// no tokens or private keys are baked into firmware (1.x contract).
+///
+/// Documented deviations from 1.x:
+/// - `server_host` has **no default** (1.x defaulted to a since-dead
+///   endpoint IP; the empty default + validator forces an explicit host).
+/// - `wireguard-kmod` (not a real OpenWrt package name) is corrected to
+///   `kmod-wireguard`, matching the wireguard-client port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CashuVpnClientProfile {
+    /// WireGuard private key, or `generate` (1.x default) to
+    /// auto-generate per device on first boot.
+    pub private_key: String,
+    /// VPN exit public key (from `POST /peer` `public_key`).
+    pub peer_public_key: String,
+    /// Tunnel IP assigned by the VPN exit, with CIDR (from `POST /peer`
+    /// `peer_ip`) — lands on the interface's `addresses`.
+    pub peer_ip: String,
+    /// VPN exit hostname or IPv4 (from `POST /peer` `endpoint`).
+    pub server_host: String,
+    /// VPN exit UDP port (1.x default 51820).
+    pub server_port: u16,
+    /// IPs routed through the tunnel (1.x default `0.0.0.0/0` = full
+    /// v4 tunnel).
+    pub allowed_ips: String,
+    /// Comma-separated DNS servers through the tunnel (1.x default
+    /// `1.1.1.1`; empty = use the peer's).
+    pub dns: String,
+    /// Fail closed: reject LAN→WAN forwarding unless the tunnel
+    /// handshakes (1.x default on). The post-apply guard removes the
+    /// rule when no handshake appears within 30 s (fail-open, 1.x).
+    pub kill_switch: bool,
+}
+
+impl Default for CashuVpnClientProfile {
+    fn default() -> Self {
+        Self {
+            private_key: "generate".into(),
+            peer_public_key: String::new(),
+            peer_ip: String::new(),
+            server_host: String::new(),
+            server_port: 51820,
+            allowed_ips: "0.0.0.0/0".into(),
+            dns: "1.1.1.1".into(),
+            kill_switch: true,
+        }
+    }
+}
+
+impl CashuVpnClientProfile {
+    /// 1.x required-param gates (`peer_public_key`, `peer_ip`) plus the
+    /// `shell_safe::validate_host`/`validate_port` parity used by the
+    /// sibling wireguard-client port.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.peer_public_key.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "peer_public_key is required (VPN exit public key from POST /peer)".into(),
+            ));
+        }
+        if self.peer_ip.is_empty() || !self.peer_ip.contains('/') {
+            return Err(Unsupported::InvalidParams(
+                "peer_ip is required with a CIDR (e.g. `10.66.42.2/32`, from POST /peer)".into(),
+            ));
+        }
+        if !valid_host(&self.server_host) {
+            return Err(Unsupported::InvalidParams(
+                "server_host must be a valid hostname or IPv4 address".into(),
+            ));
+        }
+        if self.server_port == 0 {
+            return Err(Unsupported::InvalidParams(
+                "server_port must be 1-65535".into(),
+            ));
+        }
+        if self.allowed_ips.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "allowed_ips must be a non-empty comma-separated CIDR list".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Dropbear SSH hardening — port of the tested 1.x `ssh-hardening`
 /// preset (`scripts/use_cases/ssh_hardening.py`): key-only auth, idle
 /// disconnect timeout, auth-try limit, alternate port, GatewayPorts
@@ -1120,6 +1209,9 @@ pub enum Profile {
     /// Private Internet Access via OpenVPN (validated static recipe;
     /// tun0, remote-random endpoint pool, kill switch).
     VpnPiaOpenvpn(VpnPiaOpenvpnProfile),
+    /// Full-tunnel WireGuard client for the vps-on-demand Cashu VPN
+    /// exit (params come from the paid `POST /peer` response).
+    CashuVpnClient(CashuVpnClientProfile),
 }
 
 impl Profile {
@@ -1145,6 +1237,7 @@ impl Profile {
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
+            Profile::CashuVpnClient(_) => "cashu-vpn-client",
         }
     }
 
@@ -1172,6 +1265,7 @@ impl Profile {
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
+            Profile::CashuVpnClient(_) => &["ethernet"],
         }
     }
 }
@@ -1479,6 +1573,7 @@ pub fn plan_profile(
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
+        Profile::CashuVpnClient(wg) => plan_cashu_vpn_client(model, wg),
         Profile::SshHardening(sh) => plan_ssh_hardening(model, sh),
         Profile::Travelmate(tm) => plan_travelmate(model, tm),
         Profile::Adguard(ag) => plan_adguard(model, ag),
@@ -1780,6 +1875,16 @@ if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then \
 echo 'WG kill-switch: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; \
 echo 'WG kill-switch: tunnel failed \u{2014} removing kill switch to restore WAN'; \
 uci delete firewall.wg_client_killswitch; uci commit firewall; fw4 restart";
+
+/// Cashu VPN kill-switch guard — 1.x `cashu_vpn_client.py` post-apply
+/// loop: wait up to 30 s for a handshake, else remove the kill switch so
+/// the site regains WAN (fail-open by design, like the wireguard-client
+/// guard above).
+const CASHU_VPN_KILLSWITCH_VERIFY: &str = "i=0; while [ $i -lt 30 ]; do \
+if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then \
+echo 'Cashu VPN kill-switch: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; \
+echo 'Cashu VPN kill-switch: tunnel failed \u{2014} removing kill switch to restore WAN'; \
+uci delete firewall.cashu_vpn_killswitch; uci commit firewall; fw4 restart";
 
 fn plan_tether(model: &DeviceModel, tether: &TetherProfile) -> Result<Plan, Unsupported> {
     tether.validate()?;
@@ -2162,6 +2267,155 @@ fn plan_wireguard_server(
     ];
     Ok(Plan {
         profile_id: "wireguard-server".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_cashu_vpn_client(
+    model: &DeviceModel,
+    wg: &CashuVpnClientProfile,
+) -> Result<Plan, Unsupported> {
+    wg.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "network".into(),
+            section: "wg0".into(),
+            section_type: "interface".into(),
+            options: vec![
+                ("proto".into(), literal("wireguard".into())),
+                ("private_key".into(), literal(wg.private_key.clone())),
+                ("addresses".into(), literal(wg.peer_ip.clone())),
+            ],
+        },
+    ];
+    for token in wg.dns.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        ops.push(PlanOp::UciAddList {
+            config: "network".into(),
+            section: "wg0".into(),
+            option: "dns".into(),
+            value: token.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "network".into(),
+        section: "wg0_peer".into(),
+        section_type: "wireguard_wg0".into(),
+        options: vec![
+            ("public_key".into(), literal(wg.peer_public_key.clone())),
+            ("endpoint_host".into(), literal(wg.server_host.clone())),
+            ("endpoint_port".into(), literal(wg.server_port.to_string())),
+            ("allowed_ips".into(), literal(wg.allowed_ips.clone())),
+            ("route_allowed_ips".into(), literal("1".into())),
+            ("persistent_keepalive".into(), literal("25".into())),
+        ],
+    });
+    ops.extend([
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "dest='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "cashu_vpn_zone".into(),
+            section_type: "zone".into(),
+            options: vec![
+                ("name".into(), literal("vpn".into())),
+                ("input".into(), literal("REJECT".into())),
+                ("output".into(), literal("ACCEPT".into())),
+                ("forward".into(), literal("REJECT".into())),
+                ("masq".into(), literal("1".into())),
+                ("mtu_fix".into(), literal("1".into())),
+                ("network".into(), literal("wg0".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "cashu_vpn_fwd".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("vpn".into())),
+            ],
+        },
+    ]);
+    if wg.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "cashu_vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    ops.extend([
+        PlanOp::CommitUci {
+            config: "network".into(),
+        },
+        PlanOp::CommitUci {
+            config: "firewall".into(),
+        },
+        PlanOp::Service {
+            name: "network".into(),
+            action: ServiceAction::Restart,
+        },
+        PlanOp::Shell {
+            command: format!(
+                "echo 'Cashu VPN client configured: {}:{} (peer_ip={})'",
+                wg.server_host, wg.server_port, wg.peer_ip
+            ),
+        },
+    ]);
+    if wg.kill_switch {
+        ops.push(PlanOp::Shell {
+            command: CASHU_VPN_KILLSWITCH_VERIFY.into(),
+        });
+    }
+    // The kill-switch rule is intentionally NOT verified post-apply: the
+    // guard loop removes it when no handshake appears (fail-open).
+    let verification = vec![
+        VerificationCheck {
+            description: "wg0 interface persisted".into(),
+            command: "uci -q get network.wg0.proto".into(),
+            expect_contains: "wireguard".into(),
+        },
+        VerificationCheck {
+            description: "peer endpoint persisted".into(),
+            command: "uci -q get network.wg0_peer.endpoint_host".into(),
+            expect_contains: wg.server_host.clone(),
+        },
+        VerificationCheck {
+            description: "peer public key persisted".into(),
+            command: "uci -q get network.wg0_peer.public_key".into(),
+            expect_contains: wg.peer_public_key.clone(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "cashu-vpn-client".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -4913,6 +5167,140 @@ mod tests {
         assert!(script.contains("uci set firewall.wg_client_vpn.name='vpn'"));
         assert!(script.contains("uci set firewall.wg_client_fwd.dest='vpn'"));
         assert!(script.contains("echo 'WireGuard client configured: vpn.example.com:51820'"));
+    }
+
+    // ---- cashu-vpn-client port (1.x `cashu_vpn_client.py`, experimental) ----
+
+    fn cashu_vpn() -> CashuVpnClientProfile {
+        CashuVpnClientProfile {
+            peer_public_key: "EXITKEY".into(),
+            peer_ip: "10.66.42.2/32".into(),
+            server_host: "vpn.example.com".into(),
+            ..CashuVpnClientProfile::default()
+        }
+    }
+
+    #[test]
+    fn cashu_vpn_param_bounds_match_1x_required_gates() {
+        assert!(cashu_vpn().validate().is_ok());
+        assert!(matches!(
+            CashuVpnClientProfile {
+                peer_public_key: String::new(),
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            CashuVpnClientProfile {
+                peer_ip: "10.66.42.2".into(),
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            CashuVpnClientProfile {
+                peer_ip: String::new(),
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            CashuVpnClientProfile {
+                server_host: String::new(),
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            CashuVpnClientProfile {
+                server_host: "vpn; rm -rf /".into(),
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            CashuVpnClientProfile {
+                server_port: 0,
+                ..cashu_vpn()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn cashu_vpn_requires_ethernet_capability() {
+        let missing = model_with_capabilities(Some(vec!["wifi".into()]));
+        let refusal = plan_profile(
+            &DeviceState::OpenWrt,
+            &missing,
+            &Profile::CashuVpnClient(cashu_vpn()),
+        );
+        assert!(matches!(
+            refusal,
+            Err(Unsupported::MissingCapability { .. })
+        ));
+        let plan = plan_for(Profile::CashuVpnClient(cashu_vpn()));
+        assert_eq!(plan.profile_id, "cashu-vpn-client");
+    }
+
+    #[test]
+    fn cashu_vpn_render_matches_1x_shape() {
+        let script = render_shell(&plan_for(Profile::CashuVpnClient(cashu_vpn())));
+        assert!(script.contains("kmod-wireguard"));
+        assert!(script.contains("wireguard-tools"));
+        assert!(script.contains("uci set network.wg0.addresses='10.66.42.2/32'"));
+        assert!(script.contains("uci add_list network.wg0.dns='1.1.1.1'"));
+        assert!(script.contains("uci set network.wg0_peer.public_key='EXITKEY'"));
+        assert!(script.contains("uci set network.wg0_peer.endpoint_host='vpn.example.com'"));
+        assert!(script.contains("uci set firewall.cashu_vpn_zone.name='vpn'"));
+        assert!(script.contains("uci set firewall.cashu_vpn_fwd.dest='vpn'"));
+        assert!(script.contains("cashu_vpn_killswitch.name='KillSwitch-Reject-NonVPN'"));
+        assert!(script.contains("uci delete firewall.cashu_vpn_killswitch"));
+        assert!(script.contains(
+            "echo 'Cashu VPN client configured: vpn.example.com:51820 (peer_ip=10.66.42.2/32)'"
+        ));
+    }
+
+    #[test]
+    fn cashu_vpn_kill_switch_and_dns_branches() {
+        let off = render_shell(&plan_for(Profile::CashuVpnClient(CashuVpnClientProfile {
+            kill_switch: false,
+            ..cashu_vpn()
+        })));
+        assert!(!off.contains("cashu_vpn_killswitch"));
+        assert!(!off.contains("wg show wg0"));
+
+        let multi_dns = render_shell(&plan_for(Profile::CashuVpnClient(CashuVpnClientProfile {
+            dns: "1.1.1.1, 9.9.9.9".into(),
+            ..cashu_vpn()
+        })));
+        assert!(multi_dns.contains("uci add_list network.wg0.dns='1.1.1.1'"));
+        assert!(multi_dns.contains("uci add_list network.wg0.dns='9.9.9.9'"));
+
+        let no_dns = render_shell(&plan_for(Profile::CashuVpnClient(CashuVpnClientProfile {
+            dns: String::new(),
+            ..cashu_vpn()
+        })));
+        assert!(!no_dns.contains("uci add_list"));
+    }
+
+    #[test]
+    fn cashu_vpn_unconfirmed_state_refused() {
+        let model = model_with_capabilities(Some(vec!["ethernet".into()]));
+        assert_eq!(
+            plan_profile(
+                &DeviceState::SshOnly,
+                &model,
+                &Profile::CashuVpnClient(cashu_vpn())
+            ),
+            Err(Unsupported::UnconfirmedDeviceState(DeviceState::SshOnly))
+        );
     }
 
     #[test]

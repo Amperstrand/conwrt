@@ -20,10 +20,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
-    OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
+    Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -374,6 +374,7 @@ enum ProfileChoice {
     /// 1.x spelling: hyphenated multi-word profile name.
     #[value(name = "vpn-pia-openvpn")]
     VpnPiaOpenvpn,
+    CashuVpnClient,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -430,6 +431,10 @@ struct ProfileArgs {
     /// wireguard-client: VPN server UDP port.
     #[arg(long)]
     endpoint_port: Option<u16>,
+    /// cashu-vpn-client: tunnel IP assigned by the VPN exit, with CIDR
+    /// (from the paid `POST /peer` response; required).
+    #[arg(long)]
+    peer_ip: Option<String>,
     /// wireguard-client: pre-shared key (optional).
     #[arg(long)]
     peer_psk: Option<String>,
@@ -1569,6 +1574,35 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 ..VpnPiaOpenvpnProfile::default()
             }))
         }
+        ProfileChoice::CashuVpnClient => {
+            let (peer_public_key, peer_ip, server_host) = match (
+                args.peer_public_key.clone(),
+                args.peer_ip.clone(),
+                args.endpoint_host.clone(),
+            ) {
+                (Some(k), Some(ip), Some(h)) => (k, ip, h),
+                _ => {
+                    return Err(
+                        "--peer-public-key, --endpoint-host and --peer-ip are required for \
+                         cashu-vpn-client"
+                            .into(),
+                    );
+                }
+            };
+            Ok(Profile::CashuVpnClient(CashuVpnClientProfile {
+                peer_public_key,
+                peer_ip,
+                server_host,
+                server_port: args.endpoint_port.unwrap_or(51820),
+                allowed_ips: args
+                    .allowed_ips
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0.0/0".into()),
+                dns: args.dns.clone().unwrap_or_else(|| "1.1.1.1".into()),
+                kill_switch: !args.no_kill_switch,
+                ..CashuVpnClientProfile::default()
+            }))
+        }
     }
 }
 
@@ -2585,6 +2619,7 @@ mod tests {
             peer_public_key: None,
             endpoint_host: None,
             endpoint_port: None,
+            peer_ip: None,
             peer_psk: None,
             address: None,
             dns: None,
@@ -2638,6 +2673,26 @@ mod tests {
         };
         assert!(sh.disable_password_auth);
         assert_eq!((sh.idle_timeout, sh.max_auth_tries, sh.port), (300, 3, 22));
+
+        let mut cashu_args = profile_args(ProfileChoice::CashuVpnClient);
+        cashu_args.peer_public_key = Some("EXITKEY".into());
+        cashu_args.peer_ip = Some("10.66.42.2/32".into());
+        cashu_args.endpoint_host = Some("vpn.example.com".into());
+        let cashu = build_profile(&cashu_args).expect("cashu-vpn-client");
+        let Profile::CashuVpnClient(c) = &cashu else {
+            panic!("cashu-vpn-client profile");
+        };
+        assert_eq!(c.peer_ip, "10.66.42.2/32");
+        assert_eq!(
+            (c.server_host.as_str(), c.server_port),
+            ("vpn.example.com", 51820)
+        );
+        assert_eq!(c.allowed_ips, "0.0.0.0/0");
+        assert_eq!(c.dns, "1.1.1.1");
+        assert!(c.kill_switch);
+
+        let missing = build_profile(&profile_args(ProfileChoice::CashuVpnClient));
+        assert!(missing.is_err(), "required params must be enforced");
 
         let ag = build_profile(&profile_args(ProfileChoice::Adguard)).expect("adguard");
         let Profile::Adguard(ag) = &ag else {

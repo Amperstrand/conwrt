@@ -4,7 +4,8 @@
 
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    DohProfile, PlanOp, Profile, ServiceAction, SqmProfile, UciValue, Unsupported, render_shell,
+    CashuVpnClientProfile, DohProfile, PlanOp, Profile, ServiceAction, SqmProfile, UciValue,
+    Unsupported, render_shell,
 };
 use conwrt_core::{DeviceState, diagnose, plan_profile};
 use core::net::IpAddr;
@@ -257,6 +258,37 @@ fn doh_unconfirmed_state_refused_like_sqm() {
     let model = model();
     assert_eq!(
         plan_profile(&DeviceState::SshOnly, &model, &Profile::Doh(doh())),
+        Err(Unsupported::UnconfirmedDeviceState(DeviceState::SshOnly))
+    );
+}
+
+#[test]
+fn cashu_vpn_client_composes_with_diagnose_and_stays_pure() {
+    let model = model();
+    let profile = Profile::CashuVpnClient(CashuVpnClientProfile {
+        peer_public_key: "EXITKEY".into(),
+        peer_ip: "10.66.42.2/32".into(),
+        server_host: "vpn.example.com".into(),
+        ..CashuVpnClientProfile::default()
+    });
+
+    let target = target();
+    let mut prober = MockProber::responding(target, NamedScenario::OpenWrt);
+    let models = vec![model.clone()];
+    let diagnosis = pollster::block_on(diagnose(&mut prober, target, &models)).unwrap();
+    let calls_before_planning = prober.calls().len();
+
+    let plan = plan_profile(&diagnosis.state, &model, &profile).expect("plans");
+    assert_eq!(prober.calls().len(), calls_before_planning);
+    assert_eq!(plan.profile_id, "cashu-vpn-client");
+    assert!(
+        plan.verification
+            .iter()
+            .any(|c| c.expect_contains == "vpn.example.com")
+    );
+
+    assert_eq!(
+        plan_profile(&DeviceState::SshOnly, &model, &profile),
         Err(Unsupported::UnconfirmedDeviceState(DeviceState::SshOnly))
     );
 }
