@@ -28,15 +28,25 @@ pub enum ConsoleClass {
 /// Collected identity + flash layout of the attached device.
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
 pub struct DeviceCard {
+    /// What the console showed at attach.
     pub class: Option<ConsoleClass>,
+    /// U-Boot version banner, when at the U-Boot prompt.
     pub uboot_banner: Option<String>,
+    /// Vendor board model from the U-Boot env.
     pub board_model: Option<String>,
+    /// Kernel release, when at a Linux shell.
     pub kernel: Option<String>,
+    /// DISTRIB_DESCRIPTION, when at a Linux shell.
     pub openwrt_release: Option<String>,
+    /// /proc/mtd lines — the flash layout to verify images against.
     pub mtd_layout: Vec<String>,
+    /// U-Boot bootcmd (how the box boots).
     pub bootcmd: Option<String>,
+    /// U-Boot console baud rate.
     pub baudrate: Option<String>,
+    /// U-Boot client IP.
     pub ipaddr: Option<String>,
+    /// U-Boot TFTP server IP.
     pub serverip: Option<String>,
     /// Raw transcript of the probe commands (evidence).
     pub probe_transcript: String,
@@ -93,6 +103,7 @@ pub fn classify(window: &[u8]) -> ConsoleClass {
         return ConsoleClass::Silent;
     }
     if text.contains("Starting kernel")
+        || text.contains("Linux version")
         || text.contains("init:")
         || text.contains("Calibrating delay loop")
         || text.contains("U-Boot 2011")
