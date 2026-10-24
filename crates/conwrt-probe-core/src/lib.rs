@@ -56,4 +56,9 @@ pub mod banner;
 pub mod milestones;
 pub mod schedule;
 pub mod state;
+
 pub mod vocab;
+// The watcher is a host-side diagnostic (ping/TCP probes, alloc): MCU
+// firmware builds --no-default-features and must not see it (ADR-0002 tiering).
+#[cfg(feature = "std")]
+pub mod watch;
