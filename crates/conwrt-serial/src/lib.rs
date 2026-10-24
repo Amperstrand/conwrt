@@ -83,6 +83,7 @@ pub mod lint;
 pub mod monitor;
 pub mod recovery;
 pub mod uboot;
+pub mod watch;
 
 pub use backup::{
     BackupError, BackupSelection, DumpOutcome, Partition, decode_dump_lines, dump_partition,

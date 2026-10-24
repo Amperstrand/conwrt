@@ -291,6 +291,68 @@ pub fn parse_total_size(loader_output: &[u8]) -> Option<u64> {
 /// -> size gate -> iminfo gate -> (optionally) bootm <addr>.
 ///
 /// RAM-only by construction; see the module docs for the safety model.
+pub fn loady_stage_on(
+    io: &mut dyn BreakIo,
+    addr: &str,
+    name: &str,
+    image: &[u8],
+    prologue: &[String],
+    boot: bool,
+) -> Result<(), UbootError> {
+    let mut early = Vec::new();
+    for cmd in prologue {
+        write_line(io, cmd)?;
+        read_for(io, 2.5, &mut early);
+    }
+
+    let mut transcript = early;
+    loady_ymodem(io, addr, name, image, |s, t| {
+        if s % (128 * 1024) == 0 || s == t {
+            eprintln!("ymodem {s}/{t}");
+        }
+    })?;
+    read_for(io, 4.0, &mut transcript);
+
+    // Settle + fresh line before ANY post-transfer command (bench lesson
+    // 2026-10-23, twice): the YMODEM end-batch padding echoes back into
+    // the next command line ("Unknown command '\x1a..iminfo'", and a
+    // bare bootm at the stock address). Drain, then a lone newline to
+    // draw a clean prompt, before iminfo/bootm.
+    std::thread::sleep(Duration::from_millis(500));
+    io.write_all_bytes(b"\n")
+        .map_err(|e| UbootError::Io(e.to_string()))?;
+    read_for(io, 1.5, &mut transcript);
+
+    let want = image.len() as u64;
+    match parse_total_size(&transcript) {
+        Some(got) if got == want => {}
+        other => return Err(UbootError::SizeGate { got: other, want }),
+    }
+
+    write_line(io, &format!("iminfo {addr}"))?;
+    let mut info = Vec::new();
+    read_for(io, 4.0, &mut info);
+    if !info.windows(2).any(|w| w == b"OK") {
+        return Err(UbootError::IminfoBad);
+    }
+
+    if boot {
+        // A bare `bootm` uses the stock boot address — always pass ours.
+        write_line(io, &format!("bootm {addr}"))?;
+        let mut boot_out = Vec::new();
+        read_for(io, 150.0, &mut boot_out);
+        let alive = boot_out.windows(6).any(|w| w == b"OpenWrt")
+            || boot_out.windows(6).any(|w| w == b"BusyBox")
+            || boot_out.windows(5).any(|w| w == b"login");
+        if !alive {
+            return Err(UbootError::BootFailed);
+        }
+    }
+    Ok(())
+}
+
+/// Port-opening convenience wrapper (the CLI entry): open the port,
+/// BREAK-ladder to the prompt, run the gated loady stage on it.
 pub fn flash_stage_loady(
     port_spec: &str,
     baud: u32,
@@ -303,57 +365,7 @@ pub fn flash_stage_loady(
     let mut io = open_break_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| UbootError::Io(e.to_string()))?;
     break_to_prompt(io.as_mut(), 90.0)?;
-
-    let mut early = Vec::new();
-    for cmd in prologue {
-        write_line(io.as_mut(), cmd)?;
-        read_for(io.as_mut(), 2.5, &mut early);
-    }
-
-    let mut transcript = early;
-    loady_ymodem(io.as_mut(), addr, name, image, |s, t| {
-        if s % (128 * 1024) == 0 || s == t {
-            eprintln!("ymodem {s}/{t}");
-        }
-    })?;
-    read_for(io.as_mut(), 4.0, &mut transcript);
-
-    // Settle + fresh line before ANY post-transfer command (bench lesson
-    // 2026-10-23, twice): the YMODEM end-batch padding echoes back into
-    // the next command line ("Unknown command '\x1a..iminfo'", and a
-    // bare bootm at the stock address). Drain, then a lone newline to
-    // draw a clean prompt, before iminfo/bootm.
-    std::thread::sleep(Duration::from_millis(500));
-    io.write_all_bytes(b"\n")
-        .map_err(|e| UbootError::Io(e.to_string()))?;
-    read_for(io.as_mut(), 1.5, &mut transcript);
-
-    let want = image.len() as u64;
-    match parse_total_size(&transcript) {
-        Some(got) if got == want => {}
-        other => return Err(UbootError::SizeGate { got: other, want }),
-    }
-
-    write_line(io.as_mut(), &format!("iminfo {addr}"))?;
-    let mut info = Vec::new();
-    read_for(io.as_mut(), 4.0, &mut info);
-    if !info.windows(2).any(|w| w == b"OK") {
-        return Err(UbootError::IminfoBad);
-    }
-
-    if boot {
-        // A bare `bootm` uses the stock boot address — always pass ours.
-        write_line(io.as_mut(), &format!("bootm {addr}"))?;
-        let mut boot_out = Vec::new();
-        read_for(io.as_mut(), 150.0, &mut boot_out);
-        let alive = boot_out.windows(6).any(|w| w == b"OpenWrt")
-            || boot_out.windows(6).any(|w| w == b"BusyBox")
-            || boot_out.windows(5).any(|w| w == b"login");
-        if !alive {
-            return Err(UbootError::BootFailed);
-        }
-    }
-    Ok(())
+    loady_stage_on(io.as_mut(), addr, name, image, prologue, boot)
 }
 
 #[cfg(test)]

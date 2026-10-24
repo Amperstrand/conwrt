@@ -98,6 +98,27 @@ enum Command {
         #[arg(long, default_value_t = true)]
         boot: bool,
     },
+    /// Event-driven serial supervisor: watch the console for a boot
+    /// signature and fire a staged recovery recipe the instant it
+    /// matches — in-process, no subprocess latency (the bootdelay
+    /// lesson: the window is ~1 s). Recipes are JSON (see recipes/).
+    SerialWatch {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT for ser2net).
+        #[arg(long)]
+        port: String,
+        /// Baud (ignored for tcp://).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Recipe JSON path (triggers + actions).
+        #[arg(long)]
+        recipe: String,
+        /// Transcript file (console capture + watch log, appended).
+        #[arg(long, default_value = "/tmp/conwrt-serial-watch.transcript")]
+        transcript: String,
+        /// Idle poll interval in seconds.
+        #[arg(long, default_value_t = 0.5)]
+        poll_secs: f64,
+    },
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -897,6 +918,52 @@ fn main() -> ExitCode {
                 Err(e) => {
                     eprintln!("conwrt: uboot-loady FAILED: {e}");
                     eprintln!("conwrt: gates held — nothing was booted from a bad load");
+                    ExitCode::from(5)
+                }
+            }
+        }
+        Command::SerialWatch {
+            port,
+            baud,
+            recipe,
+            transcript,
+            poll_secs,
+        } => {
+            let text = std::fs::read_to_string(&recipe).unwrap_or_else(|e| {
+                eprintln!("conwrt: cannot read recipe {recipe}: {e}");
+                std::process::exit(2);
+            });
+            let r: conwrt_serial::watch::Recipe = serde_json::from_str(&text).unwrap_or_else(|e| {
+                eprintln!("conwrt: recipe {recipe} does not parse: {e}");
+                std::process::exit(2);
+            });
+            println!(
+                "conwrt: serial-watch {} (model {:?}, {} action(s), max_fires {})",
+                port,
+                r.model,
+                r.actions.len(),
+                r.max_fires
+            );
+            match conwrt_serial::watch::run_watch(
+                &port,
+                baud,
+                &r,
+                std::path::Path::new(&transcript),
+                poll_secs,
+            ) {
+                Ok(out) => {
+                    println!(
+                        "conwrt: serial-watch done: fires={} success={} {}",
+                        out.fires, out.success, out.detail
+                    );
+                    if out.success {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(6)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("conwrt: serial-watch io error: {e}");
                     ExitCode::from(5)
                 }
             }
