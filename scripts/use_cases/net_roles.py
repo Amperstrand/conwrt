@@ -148,6 +148,184 @@ _MODE_BUTTON = """\
 exit 0
 """
 
+_CONN_NOOP = r"""#!/bin/sh
+# udhcpc event script that applies NOTHING. conn-adapter records the
+# offered lease fields (incl. DHCP option 54, the server identifier) so
+# the probe stays side-effect-free — the same trick dnsmasq's own
+# dhcp_check has used since r39152.
+case "$1" in
+    bound|renew)
+        {
+            echo "serverid=$serverid"
+            echo "ip=$ip"
+            echo "mask=$subnet"
+            echo "router=${router%% *}"
+        } > "$PROBEINFO"
+        ;;
+esac
+exit 0
+"""
+
+_CONN_ADAPTER = r"""#!/bin/sh
+# conn-adapter: client-first connectivity adapter.
+# Per-interface role ladder with zero-side-effect probing:
+#   PROBE  — udhcpc with a no-op script; the server identifier (opt 54)
+#            discriminates OUR dhcp server from a FOREIGN one
+#   CLIENT — a verified foreign network is adopted as an uplink via
+#            netifd (metric per conf) after a pinned-/32 round-trip test
+#   SERVER — when greenfield is confirmed, DHCP serving may be armed
+#   YIELD  — a foreign DHCP server on the serving bridge strips our
+#            dhcp authority immediately and sticky-prevents re-arming
+# Never probes away the default route: verification uses host + /32
+# routes only, and adoption goes through the normal netifd path.
+CONF=${CONN_ADAPTER_CONF:-/etc/tollgate/conn-adapter.conf}
+STATE=${CONN_ADAPTER_STATE:-/tmp/conn-adapter.state}
+NOOP=${CONN_ADAPTER_NOOP:-/usr/share/conn-adapter/probe-noop.sh}
+PROBEINFO=${CONN_ADAPTER_PROBEINFO:-/tmp/conn-adapter.probe}
+log() { ${CONN_ADAPTER_LOGGER:-logger} -t conn-adapter "$@"; }
+
+get_opt() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1; }
+
+PROBE_KIND=""; PROBE_SID=""
+probe() {
+    rm -f "$PROBEINFO"
+    PROBEINFO="$PROBEINFO" udhcpc -n -q -s "$NOOP" -T 3 -t 4 -i "$1" >/dev/null 2>&1
+    PROBE_SID=$(sed -n 's/^serverid=//p' "$PROBEINFO" 2>/dev/null | head -1)
+    [ -n "$PROBE_SID" ] || return 1
+    if ip -4 addr show 2>/dev/null | grep -q "inet $PROBE_SID/"; then
+        PROBE_KIND=OURS
+    else
+        PROBE_KIND=FOREIGN
+    fi
+    return 0
+}
+
+verify() {
+    IP=$(sed -n 's/^ip=//p' "$PROBEINFO" | head -1)
+    MASK=$(sed -n 's/^mask=//p' "$PROBEINFO" | head -1)
+    GW=$(sed -n 's/^router=//p' "$PROBEINFO" | head -1)
+    DEV=$(sed -n 's/^dev=//p' "$PROBEINFO" | head -1)
+    [ -n "$IP" ] && [ -n "$GW" ] && [ -n "$DEV" ] || return 1
+    ip addr add "$IP/$MASK" dev "$DEV" 2>/dev/null
+    ip route add "$GW" dev "$DEV" 2>/dev/null
+    ip route add 1.1.1.1/32 via "$GW" dev "$DEV" 2>/dev/null
+    ping -I "$DEV" -c 1 -W 2 1.1.1.1 >/dev/null 2>&1
+    RC=$?
+    ip route del 1.1.1.1/32 dev "$DEV" 2>/dev/null
+    ip route del "$GW" dev "$DEV" 2>/dev/null
+    ip addr del "$IP/$MASK" dev "$DEV" 2>/dev/null
+    return $RC
+}
+
+adopt() {
+    WANIF=$(get_opt wan_iface); [ -n "$WANIF" ] || WANIF=waneth
+    METRIC=$(get_opt wan_metric); [ -n "$METRIC" ] || METRIC=100
+    DEV="eth0.$1"
+    uci set network.$WANIF=interface
+    uci set network.$WANIF.proto='dhcp'
+    uci set network.$WANIF.device="$DEV"
+    uci set network.$WANIF.metric="$METRIC"
+    for z in $(uci -q show firewall | sed -n 's/^firewall\.\([^.]*\)=zone$/\1/p'); do
+        if [ "$(uci -q get firewall.$z.name)" = "wan" ]; then
+            uci -q get firewall.$z.network 2>/dev/null | tr ' ' '\n' | grep -qxF "$WANIF" \
+                || uci add_list firewall.$z.network="$WANIF"
+        fi
+    done
+    [ "$(uci -q get network.$WANIF.device)" = "$DEV" ] || { log "adopt readback FAILED"; return 1; }
+    uci commit network
+    uci commit firewall
+    ifup "$WANIF"
+    echo "$DEV" > "$STATE.adopted"
+    log "adopted $DEV as $WANIF (metric $METRIC) after verified round-trip"
+}
+
+uplink_alive() {
+    WANIF=$(get_opt wan_iface); [ -n "$WANIF" ] || WANIF=waneth
+    [ -f "$STATE.adopted" ] || return 1
+    ubus call network.interface."$WANIF" status 2>/dev/null | grep -q '"up":[ ]*true'
+}
+
+probe_vlans() {
+    uplink_alive && return 0
+    for v in $(get_opt probe_vlans | tr ',' ' '); do
+        [ -n "$v" ] || continue
+        DEV="eth0.$v"
+        ip link set "$DEV" up 2>/dev/null || true
+        if probe "$DEV"; then
+            [ "$PROBE_KIND" = FOREIGN ] || continue
+            echo "dev=$DEV" >> "$PROBEINFO"
+            if verify; then
+                adopt "$v"
+                return 0
+            fi
+            log "vlan $v: foreign DHCP ($PROBE_SID) but no traffic — not adopted"
+        fi
+    done
+}
+
+serve_watch() {
+    IFACE=$(get_opt serve_iface)
+    [ -n "$IFACE" ] || return 0
+    if probe "$IFACE"; then
+        if [ "$PROBE_KIND" = FOREIGN ]; then
+            log "CRITICAL: foreign DHCP server $PROBE_SID on $IFACE — yielding DHCP authority"
+            uci set dhcp.lan.ignore='1'
+            uci commit dhcp
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1
+            touch "$STATE.yielded"
+        else
+            rm -f "$STATE.silent"
+        fi
+        return 0
+    fi
+    [ "$(get_opt serve_when_greenfield)" = "1" ] || return 0
+    if [ -f "$STATE.yielded" ]; then
+        log "greenfield but sticky-yielded — re-arm manually: rm $STATE.yielded"
+        return 0
+    fi
+    C=$(cat "$STATE.silent" 2>/dev/null || echo 0)
+    C=$((C + 1))
+    echo $C > "$STATE.silent"
+    if [ "$C" -ge 3 ]; then
+        uci set dhcp.lan.ignore='0'
+        uci commit dhcp
+        /etc/init.d/dnsmasq restart >/dev/null 2>&1
+        rm -f "$STATE.silent"
+        log "greenfield confirmed x3 — armed DHCP serving on $IFACE"
+    fi
+}
+
+case "$1" in
+    --watch)
+        INT=$(get_opt interval); [ -n "$INT" ] || INT=30
+        while true; do
+            serve_watch
+            probe_vlans
+            sleep "$INT"
+        done
+        ;;
+    --status)
+        echo "conf: $(cat "$CONF" 2>/dev/null | tr '\n' ' ')"
+        echo "adopted: $(cat "$STATE.adopted" 2>/dev/null || echo none)"
+        echo "yielded: $([ -f "$STATE.yielded" ] && echo yes || echo no)"
+        echo "silent-rounds: $(cat "$STATE.silent" 2>/dev/null || echo 0)"
+        ;;
+    *) serve_watch; probe_vlans ;;
+esac
+"""
+
+_CONN_INIT = """\
+#!/bin/sh /etc/rc.common
+START=98
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/conn-adapter --watch
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}
+"""
+
 
 def _stage_file_ops(ops: list[Op], path: str, content: str, mode: str) -> None:
     escaped = content.replace("'", "'\\''")
@@ -236,6 +414,19 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("net-roles: wifi_shared_radio requires a wifi uplink")
     if not (5 <= switch_interval <= 120):
         raise ValueError("net-roles: switch_interval must be in 5..120 seconds")
+    adaptive_vlans = [v for v in (params.get("adaptive_vlans") or [])]
+    for i, v in enumerate(adaptive_vlans):
+        if isinstance(v, bool) or not isinstance(v, int) or not 2 <= v <= 4094:
+            raise ValueError(f"net-roles: adaptive_vlans[{i}] must be an int in 2..4094")
+    adaptive_serve_dhcp = bool(params.get("adaptive_serve_dhcp", False))
+    adaptive_interval = int(params.get("adaptive_interval", 30))
+    if not 5 <= adaptive_interval <= 300:
+        raise ValueError("net-roles: adaptive_interval must be in 5..300 seconds")
+    if adaptive_vlans and any(u["type"] == "ethernet" for u in uplinks):
+        raise ValueError(
+            "net-roles: adaptive_vlans cannot be combined with a static ethernet uplink "
+            "(the adapter owns ethernet uplink discovery)"
+        )
     return {
         "uplinks": uplinks,
         "serve_ethernet": serve_ethernet,
@@ -247,6 +438,9 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "switch_interval": switch_interval,
         "wifi_shared_radio": wifi_shared_radio,
         "prices": prices,
+        "adaptive_vlans": adaptive_vlans,
+        "adaptive_serve_dhcp": adaptive_serve_dhcp,
+        "adaptive_interval": adaptive_interval,
     }
 
 
@@ -416,6 +610,31 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
             '[ -x /usr/bin/tollgate-mode ] && [ -f /etc/tollgate/mode.conf ] '
             '|| { echo "net-roles: tollgate-mode staging FAILED"; exit 1; }'
         )))
+
+    if r["adaptive_vlans"] or r["adaptive_serve_dhcp"]:
+        ops.append(BlankLine())
+        ops.append(Comment(text=(
+            f"--- net-roles: conn-adapter (client-first ladder: probe/discriminate/adopt/yield; "
+            f"vlans={r['adaptive_vlans'] or 'none'} serve_when_greenfield={int(r['adaptive_serve_dhcp'])}) ---"
+        )))
+        conf_lines = [
+            f"probe_vlans={','.join(str(v) for v in r['adaptive_vlans'])}",
+            f"serve_when_greenfield={int(r['adaptive_serve_dhcp'])}",
+            "serve_iface=br-lan",
+            "wan_iface=waneth",
+            "interval=" + str(r["adaptive_interval"]),
+        ]
+        _stage_file_ops(ops, "/usr/share/conn-adapter/probe-noop.sh", _CONN_NOOP, "755")
+        _stage_file_ops(ops, "/usr/bin/conn-adapter", _CONN_ADAPTER, "755")
+        _stage_file_ops(ops, "/etc/tollgate/conn-adapter.conf", "\n".join(conf_lines) + "\n", "600")
+        _stage_file_ops(ops, "/etc/init.d/conn-adapter", _CONN_INIT, "755")
+        ops.append(ShellCommand(command="rm -f /tmp/conn-adapter.state.adopted /tmp/conn-adapter.state.yielded /tmp/conn-adapter.state.silent"))
+        ops.append(ServiceAction(name="conn-adapter", action="enable"))
+        ops.append(ServiceAction(name="conn-adapter", action="restart"))
+        ops.append(ShellCommand(command=(
+            '[ -x /usr/bin/conn-adapter ] && [ -f /etc/tollgate/conn-adapter.conf ] '
+            '|| { echo "net-roles: conn-adapter staging FAILED"; exit 1; }'
+        )))
     return ops
 
 
@@ -462,6 +681,16 @@ register(UseCase(
             description="Keep serving APs up alongside the wifi STA on the same radio "
                         "(channel-locked to the STA's BSS, roughly half throughput, AP dies with the STA — "
                         "travelmate-class repeater caveat)"),
+        "adaptive_vlans": ParamDef(type=list, default=[],
+            description="VLAN ids the conn-adapter probes for a foreign DHCP uplink (side-effect-free "
+                        "probe, /32-verified, adopted via netifd with metric per conf). First verified "
+                        "answer wins; cannot be combined with a static ethernet uplink"),
+        "adaptive_serve_dhcp": ParamDef(type=bool, default=False,
+            description="Arm the client-first DHCP ladder on the serving bridge: greenfield confirmed "
+                        "x3 probes arms DHCP serving; any FOREIGN dhcp server yields authority instantly "
+                        "(sticky until manual re-arm) — automates the rogue-DHCP discipline"),
+        "adaptive_interval": ParamDef(type=int, default=30, min_value=5, max_value=300,
+            description="conn-adapter watch interval in seconds"),
     },
     test_status="experimental",
     tested_notes="renders validated (multi-mode sh -n); hardware run pending next TollGate build",
