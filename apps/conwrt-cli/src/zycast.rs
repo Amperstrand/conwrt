@@ -27,6 +27,11 @@ pub struct ZycastArgs {
     pub group: String,
     /// Multicast port.
     pub port: u16,
+    /// Operator attestation: target specimen verified (MAC/serial gate)
+    /// and sibling units isolated. The multicast hits EVERY ZyXEL
+    /// bootloader in its listen window on the segment — without this flag
+    /// the command refuses to send.
+    pub confirm_specimen: bool,
 }
 
 /// CLI entry point.
@@ -41,6 +46,15 @@ pub fn run(a: ZycastArgs) -> ExitCode {
 }
 
 fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
+    if !a.confirm_specimen {
+        return Err(
+            "refusing to send: multicast flashes EVERY ZyXEL bootloader in its listen \
+             window on this segment. Verify the target specimen (MAC/serial gate, AGENTS \
+             \"Verify the SPECIMEN\") and isolate sibling units, then re-run with \
+             --confirm-specimen."
+                .into(),
+        );
+    }
     let ty: ImageType = a.image_type.parse()?;
     let group: Ipv4Addr = a
         .group

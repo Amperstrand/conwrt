@@ -101,8 +101,14 @@ fn median(v: &mut [f64]) -> f64 {
 }
 
 /// Classify a watch timeline. `control_ok` says whether the observation path
-/// itself was proven (any foreign traffic seen, or any probe ever answered).
+/// itself was proven (foreign traffic RECEIVED, or any probe ever answered).
+/// Events may arrive out of order (passive capture vs probe rounds); the
+/// timeline is sorted before clustering, so callers cannot corrupt the
+/// window analysis by appending late.
 pub fn classify(events: &[WatchEvent], watch_s: f64, control_ok: bool) -> WatchVerdict {
+    let mut sorted: Vec<WatchEvent> = events.to_vec();
+    sorted.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    let events = &sorted[..];
     if events.is_empty() {
         return if control_ok {
             WatchVerdict::Silent
@@ -191,6 +197,30 @@ mod tests {
         ];
         match classify(&evs, 300.0, true) {
             WatchVerdict::HungAfterBoot { silence_s } => assert!((silence_s - 293.0).abs() < 1.0),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn unsorted_timelines_classify_as_if_sorted() {
+        // The recurring_windows fixture, scrambled: passive arrival times
+        // interleave with round-start timestamps of active probes, so the
+        // append order from the CLI is NOT chronological.
+        let mut evs = Vec::new();
+        for w in 0..5 {
+            evs.push(ev(w as f64 * 90.0, EventKind::Passive));
+            evs.push(ev(w as f64 * 90.0 + 4.0, EventKind::TcpRefused));
+        }
+        let mut scrambled = evs.clone();
+        scrambled.reverse();
+        scrambled.swap(0, 3);
+        scrambled.push(scrambled[1]);
+        assert_ne!(scrambled, evs, "fixture must actually be unsorted");
+        match classify(&scrambled, 500.0, true) {
+            WatchVerdict::BootLoop { period_s, windows } => {
+                assert_eq!(windows, 5);
+                assert!((period_s - 90.0).abs() < 1.0);
+            }
             other => panic!("{other:?}"),
         }
     }

@@ -30,6 +30,7 @@ pub struct SendConfig {
 }
 
 /// Result of a completed send.
+#[derive(Debug, Clone, Copy)]
 pub struct SendStats {
     /// Loops completed.
     pub loops: u32,
@@ -40,6 +41,16 @@ pub struct SendStats {
 }
 
 fn pinned_socket(interface: &str) -> io::Result<UdpSocket> {
+    // An empty name would make SO_BINDTODEVICE "succeed" while leaving the
+    // socket unbound — flash packets would follow the default multicast
+    // route onto whatever segment it points at. Fail closed instead.
+    if interface.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "interface name must not be empty (an unset --interface would send the \
+             multicast stream out the default route — toward unintended listeners)",
+        ));
+    }
     let sock = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
@@ -98,6 +109,38 @@ pub fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_interface_name_is_rejected_fail_closed() {
+        let err = send(
+            &[0u8; 10],
+            ImageType::Ras,
+            &SendConfig {
+                group: Ipv4Addr::new(225, 0, 0, 0),
+                port: 5631,
+                interface: String::new(),
+                loops: 1,
+                delay: Duration::from_millis(1),
+            },
+            &mut |_| {},
+        )
+        .expect_err("empty interface must fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        let err_ws = send(
+            &[0u8; 10],
+            ImageType::Ras,
+            &SendConfig {
+                group: Ipv4Addr::new(225, 0, 0, 0),
+                port: 5631,
+                interface: "   ".into(),
+                loops: 1,
+                delay: Duration::from_millis(1),
+            },
+            &mut |_| {},
+        )
+        .expect_err("whitespace interface must fail");
+        assert_eq!(err_ws.kind(), io::ErrorKind::InvalidInput);
+    }
 
     /// Loopback round-trip: a receiver joined on lo must collect every
     /// chunk byte-identically. Ignored by default — it needs multicast

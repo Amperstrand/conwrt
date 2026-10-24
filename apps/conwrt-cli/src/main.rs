@@ -258,6 +258,11 @@ enum Command {
         /// Multicast port.
         #[arg(long, short = 'p', default_value_t = conwrt_zycast::DEFAULT_PORT)]
         port: u16,
+        /// Attest that the target specimen is verified (MAC/serial gate)
+        /// and sibling units are isolated. Required: the multicast hits
+        /// every ZyXEL bootloader in its listen window on the segment.
+        #[arg(long)]
+        confirm_specimen: bool,
     },
     /// Dark-watch: watch a dark/flapping target over time and classify WHY
     /// it is dark (boot loop with cycle period / hung after boot / silent /
@@ -879,6 +884,7 @@ fn main() -> ExitCode {
             delay_ms,
             group,
             port,
+            confirm_specimen,
         } => zycast::run(zycast::ZycastArgs {
             image,
             interface,
@@ -887,6 +893,7 @@ fn main() -> ExitCode {
             delay_ms,
             group,
             port,
+            confirm_specimen,
         }),
         Command::DarkWatch {
             ip,
