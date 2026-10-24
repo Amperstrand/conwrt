@@ -22,8 +22,8 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TravelmateProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    SslProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -438,6 +438,9 @@ enum ProfileChoice {
     VpnPiaOpenvpn,
     /// 1.x preset name (one word, kebab by default).
     VpnNordvpn,
+    /// 1.x spelling.
+    #[value(name = "vpn-nordvpn-openvpn")]
+    VpnNordvpnOpenvpn,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -634,6 +637,30 @@ struct ProfileArgs {
     /// vpn-nordvpn: opt OUT of SSH/LuCI access from the VPN zone.
     #[arg(long)]
     nord_no_management: bool,
+    /// vpn-nordvpn-openvpn: resolved service username (required).
+    #[arg(long)]
+    nordovpn_username: Option<String>,
+    /// vpn-nordvpn-openvpn: resolved service password (required).
+    #[arg(long)]
+    nordovpn_password: Option<String>,
+    /// vpn-nordvpn-openvpn: server station IP (required).
+    #[arg(long)]
+    nordovpn_station: Option<String>,
+    /// vpn-nordvpn-openvpn: server hostname for the x509 pin (required).
+    #[arg(long)]
+    nordovpn_hostname: Option<String>,
+    /// vpn-nordvpn-openvpn: udp or tcp (default udp).
+    #[arg(long)]
+    nordovpn_proto: Option<String>,
+    /// vpn-nordvpn-openvpn: OpenVPN cipher (default AES-256-CBC).
+    #[arg(long)]
+    nordovpn_cipher: Option<String>,
+    /// vpn-nordvpn-openvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    nordovpn_no_kill_switch: bool,
+    /// vpn-nordvpn-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    nordovpn_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1686,6 +1713,37 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnNordvpnOpenvpn => {
+            let (username, password, station, hostname) = match (
+                args.nordovpn_username.clone(),
+                args.nordovpn_password.clone(),
+                args.nordovpn_station.clone(),
+                args.nordovpn_hostname.clone(),
+            ) {
+                (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                _ => {
+                    return Err(
+                        "--nordovpn-username, --nordovpn-password, --nordovpn-station and \
+                         --nordovpn-hostname are required for vpn-nordvpn-openvpn (resolve them \
+                         on the host with 1.x `python3 scripts/nordvpn.py config --token TOKEN`)"
+                            .into(),
+                    );
+                }
+            };
+            Ok(Profile::VpnNordvpnOpenvpn(VpnNordvpnOpenvpnProfile {
+                username,
+                password,
+                station,
+                hostname,
+                proto: args.nordovpn_proto.clone().unwrap_or_else(|| "udp".into()),
+                cipher: args
+                    .nordovpn_cipher
+                    .clone()
+                    .unwrap_or_else(|| "AES-256-CBC".into()),
+                kill_switch: !args.nordovpn_no_kill_switch,
+                allow_management: !args.nordovpn_no_management,
+            }))
+        }
         ProfileChoice::VpnNordvpn => {
             let (private_key, server_public_key, endpoint_host, route_target) =
                 match (
@@ -2790,6 +2848,14 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            nordovpn_username: None,
+            nordovpn_password: None,
+            nordovpn_station: None,
+            nordovpn_hostname: None,
+            nordovpn_proto: None,
+            nordovpn_cipher: None,
+            nordovpn_no_kill_switch: false,
+            nordovpn_no_management: false,
             nord_private_key: None,
             nord_server_public_key: None,
             nord_endpoint_host: None,
