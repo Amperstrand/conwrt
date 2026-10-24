@@ -101,15 +101,24 @@ class TestNordvpnBuildTimeResolution:
         priv = creds["nordlynx_private_key"]
         assert priv and "=" in priv or len(priv) >= 40, f"unexpected key shape: {priv!r}"
 
-        host, port, pub = nv._resolve_endpoint("DE", NORD_TOKEN)
+        # pin the resolution the builder will use: the recommendations
+        # API may return a DIFFERENT server on each call (Codex #529),
+        # so resolve once and freeze it for the build via monkeypatching
+        resolved = nv._resolve_endpoint("DE", NORD_TOKEN)
+        host, port, pub = resolved
         assert host and port and pub, f"endpoint resolution failed: {host} {port} {pub!r}"
 
-        script = registry()["vpn-nordvpn"].build_configure({
-            "access_token": NORD_TOKEN, "server": "DE",
-        })
+        original = nv._resolve_endpoint
+        nv._resolve_endpoint = lambda *a, **k: resolved
+        try:
+            script = registry()["vpn-nordvpn"].build_configure({
+                "access_token": NORD_TOKEN, "server": "DE",
+            })
+        finally:
+            nv._resolve_endpoint = original
         _assert_deployable(script, "vpn-nordvpn(nordlynx)")
         # the resolved values actually landed in the payload
-        assert priv in script and pub in script
+        assert priv in script and pub in script and host in script
 
     def test_resolved_statics_feed_the_rust_planner(self):
         """The §4 boundary: resolved values → `conwrt plan` renders a plan.
