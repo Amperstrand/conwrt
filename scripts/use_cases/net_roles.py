@@ -405,18 +405,41 @@ arm() {
     M=$(get_opt metered_iface); [ -n "$M" ] || M=wan
     DEV=$(ubus call network.interface."$M" status 2>/dev/null \
         | grep -o '"device":[ ]*"[^"]*"' | head -1 | cut -d'"' -f4)
-    [ -n "$DEV" ] && M="$DEV"
-    $NFT add table inet metered_guard 2>/dev/null
-    $NFT add set inet metered_guard allowed '{ type ipv4_addr; flags interval; }' 2>/dev/null
-    $NFT add chain inet metered_guard mg_fwd '{ type filter hook forward priority -1; policy accept; }' 2>/dev/null
-    $NFT flush set inet metered_guard allowed 2>/dev/null
-    for ip in $(auth_ips); do
-        $NFT add element inet metered_guard allowed "{ $ip }" 2>/dev/null
-    done
-    $NFT add rule inet metered_guard mg_fwd oifname "$M" ip saddr != @allowed counter reject 2>/dev/null
-    $NFT add rule inet metered_guard mg_fwd oifname "$M" meta nfproto ipv6 counter reject 2>/dev/null
-    ARMED=1
-    log "ARMED: free uplink up — non-client traffic to $M now rejected (counter on rule)"
+    if [ -z "$DEV" ]; then
+        log "metered iface $M not ready (no device yet) — retrying next loop"
+        return 1
+    fi
+    M="$DEV"
+    BATCH=/tmp/metered-guard.arm.$$
+    {
+        echo "add table inet metered_guard"
+        echo "add set inet metered_guard allowed '{ type ipv4_addr; flags interval; }'"
+        echo "add chain inet metered_guard mg_fwd '{ type filter hook forward priority -1; policy accept; }'"
+        for ip in $(auth_ips); do
+            echo "add element inet metered_guard allowed { $ip }"
+        done
+        echo "add rule inet metered_guard mg_fwd oifname \"$M\" ip saddr != @allowed counter reject"
+        echo "add rule inet metered_guard mg_fwd oifname \"$M\" meta nfproto ipv6 counter reject"
+    } > "$BATCH"
+    if $NFT -f "$BATCH" >/dev/null 2>&1; then
+        ARMED=1
+        log "ARMED: free uplink up — non-client traffic to $M now rejected (counter on rule)"
+    else
+        log "arm batch failed — retrying next loop"
+    fi
+    rm -f "$BATCH"
+}
+
+sync_allowed() {
+    BATCH=/tmp/metered-guard.sync.$$
+    {
+        echo "flush set inet metered_guard allowed"
+        for ip in $(auth_ips); do
+            echo "add element inet metered_guard allowed { $ip }"
+        done
+    } > "$BATCH"
+    $NFT -f "$BATCH" >/dev/null 2>&1
+    rm -f "$BATCH"
 }
 
 disarm() {
@@ -458,6 +481,10 @@ _GUARD_INIT = """\
 #!/bin/sh /etc/rc.common
 START=96
 USE_PROCD=1
+stop_service() {
+    nft delete table inet metered_guard 2>/dev/null
+    logger -t metered-guard "stopped — guard table removed"
+}
 start_service() {
     procd_open_instance
     procd_set_param command /usr/bin/metered-guard --watch
