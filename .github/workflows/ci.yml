@@ -6,7 +6,58 @@ on:
     branches: [master]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              # positive-only: dorny negations do NOT rescind a broad
+              # '**' positive (empirically confirmed on PRs #553/#556 —
+              # a docs-only diff still matched), so enumerate code
+              # paths/types instead of trying to exclude docs
+              - 'Makefile'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'go.mod'
+              - 'go.sum'
+              - 'pyproject.toml'
+              - 'requirements.txt'
+              - '*.py'
+              - '*.sh'
+              - '*.toml'
+              - '**/*.go'
+              - '**/*.py'
+              - '**/*.rs'
+              - '**/*.sh'
+              - '**/*.toml'
+              - '**/*.yml'
+              - '**/*.yaml'
+              - '.github/**'
+              - 'ansible/**'
+              - 'apps/**'
+              - 'cmd/**'
+              - 'crates/**'
+              - 'examples/**'
+              - 'firmware/**'
+              - 'labgrid/**'
+              - 'models/**'
+              - 'patches/**'
+              - 'providers/**'
+              - 'recipes/**'
+              - 'roles/**'
+              - 'scripts/**'
+              - 'spikes/**'
+              - 'tests/**'
   test:
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -18,24 +69,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install OS tools
         run: sudo apt-get update && sudo apt-get install -y jq
-      # The parity fixture builds conwrt-plan-render with the runner's
-      # bare cargo; without this step rustup auto-installs the pinned
-      # toolchain MID-TEST and its component install can conflict
-      # (2026-10-22: clippy-preview 'bin/cargo-clippy' conflict rolled
-      # back the install — PRs #439/#443 both hit it). Provision first,
-      # exactly like the Rust workflow; a plain toolchain is enough for
-      # `cargo build`.
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.99.0"
-          # Mirrors the Rust workflow: the repo pin (rust-toolchain.toml)
-          # demands these components, and a pin-triggered mid-build
-          # `rustup component add` conflicts on the runner (the
-          # rustfmt-preview/cargo-fmt hardlink clash, 2026-10-22
-          # #439/#443). Provisioning them with the toolchain satisfies
-          # the pin before any cargo run.
-          components: "rustfmt, clippy"
       - name: Install dev dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
       - name: Run non-hardware CI
+        # STEP-level gate (the #558 job-level gate collapsed the matrix
+        # to a single skipped check named `test`, while branch protection
+        # requires the four leg contexts `test (3.10..3.13)` — docs-only
+        # PRs stayed blocked). Legs must always RUN so each reports;
+        # docs-only changes make every leg a fast success.
+        if: needs.changes.outputs.code == 'true'
         run: make ci
+      - name: Docs-only fast path
+        if: needs.changes.outputs.code != 'true'
+        run: echo "docs-only diff — test matrix skipped by the changes filter (legs report success)"

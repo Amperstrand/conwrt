@@ -360,6 +360,139 @@ start_service() {
 }
 """
 
+_GUARD_DAEMON = r"""#!/bin/sh
+# metered-guard: no non-revenue traffic on the metered uplink while a
+# free uplink is alive. Arms an nftables reject (with counter) for
+# forwarded traffic leaving the metered interface UNLESS the source IP
+# belongs to a nodogsplash-authenticated (paying) client. The whole
+# table exists only while armed — disarm removes it, restoring the
+# ungated baseline exactly.
+CONF=${GUARD_CONF:-/etc/tollgate/metered-guard.conf}
+NFT=${GUARD_NFT:-nft}
+NDSCTL=${GUARD_NDSCTL:-ndsctl}
+log() { ${GUARD_LOGGER:-logger} -t metered-guard "$@"; }
+get_opt() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1; }
+
+ARMED=0
+
+iface_up() {
+    ubus call network.interface."$1" status 2>/dev/null | grep -q '"up":[ ]*true'
+}
+
+free_up() {
+    for f in $(get_opt free_ifaces | tr ',' ' '); do
+        [ -n "$f" ] || continue
+        iface_up "$f" && return 0
+    done
+    return 1
+}
+
+auth_ips() {
+    $NDSCTL json 2>/dev/null | awk '
+        match($0, /"ip"[ ]*:[ ]*"[0-9.]+"/) {
+            t = substr($0, RSTART, RLENGTH)
+            gsub(/[^0-9.]/, "", t)
+            ip = t
+        }
+        match($0, /"state"[ ]*:[ ]*"[A-Za-z]+"/) {
+            t = substr($0, RSTART, RLENGTH)
+            if (t ~ /uthenticated/ && ip != "") print ip
+            ip = ""
+        }'
+}
+
+arm() {
+    M=$(get_opt metered_iface); [ -n "$M" ] || M=wan
+    DEV=$(ubus call network.interface."$M" status 2>/dev/null \
+        | grep -o '"device":[ ]*"[^"]*"' | head -1 | cut -d'"' -f4)
+    if [ -z "$DEV" ]; then
+        log "metered iface $M not ready (no device yet) — retrying next loop"
+        return 1
+    fi
+    M="$DEV"
+    BATCH=/tmp/metered-guard.arm.$$
+    {
+        echo "add table inet metered_guard"
+        echo "add set inet metered_guard allowed '{ type ipv4_addr; flags interval; }'"
+        echo "add chain inet metered_guard mg_fwd '{ type filter hook forward priority -1; policy accept; }'"
+        for ip in $(auth_ips); do
+            echo "add element inet metered_guard allowed { $ip }"
+        done
+        echo "add rule inet metered_guard mg_fwd oifname \"$M\" ip saddr != @allowed counter reject"
+        echo "add rule inet metered_guard mg_fwd oifname \"$M\" meta nfproto ipv6 counter reject"
+    } > "$BATCH"
+    if $NFT -f "$BATCH" >/dev/null 2>&1; then
+        ARMED=1
+        log "ARMED: free uplink up — non-client traffic to $M now rejected (counter on rule)"
+    else
+        log "arm batch failed — retrying next loop"
+    fi
+    rm -f "$BATCH"
+}
+
+sync_allowed() {
+    BATCH=/tmp/metered-guard.sync.$$
+    {
+        echo "flush set inet metered_guard allowed"
+        for ip in $(auth_ips); do
+            echo "add element inet metered_guard allowed { $ip }"
+        done
+    } > "$BATCH"
+    $NFT -f "$BATCH" >/dev/null 2>&1
+    rm -f "$BATCH"
+}
+
+disarm() {
+    $NFT delete table inet metered_guard 2>/dev/null
+    ARMED=0
+    log "DISARMED: no free uplink — metered iface back to normal routing"
+}
+
+sync_allowed() {
+    $NFT flush set inet metered_guard allowed 2>/dev/null
+    for ip in $(auth_ips); do
+        $NFT add element inet metered_guard allowed "{ $ip }" 2>/dev/null
+    done
+}
+
+case "$1" in
+    --status)
+        $NFT list table inet metered_guard >/dev/null 2>&1 && echo "armed" || echo "disarmed"
+        $NFT list table inet metered_guard 2>/dev/null | grep -E 'reject|elements'
+        ;;
+    --once) free_up && { [ "$ARMED" = 1 ] || arm; sync_allowed; } || disarm ;;
+    --watch)
+        $NFT list table inet metered_guard >/dev/null 2>&1 && ARMED=1
+        INT=$(get_opt interval); [ -n "$INT" ] || INT=15
+        while true; do
+            if free_up; then
+                [ "$ARMED" = 1 ] || arm
+                sync_allowed
+            else
+                [ "$ARMED" = 0 ] || disarm
+            fi
+            sleep "$INT"
+        done
+        ;;
+esac
+"""
+
+_GUARD_INIT = """\
+#!/bin/sh /etc/rc.common
+START=96
+USE_PROCD=1
+stop_service() {
+    nft delete table inet metered_guard 2>/dev/null
+    logger -t metered-guard "stopped — guard table removed"
+}
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/metered-guard --watch
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}
+"""
+
 
 def _stage_file_ops(ops: list[Op], path: str, content: str, mode: str) -> None:
     escaped = content.replace("'", "'\\''")
@@ -457,6 +590,9 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     adaptive_base_port = str(params.get("adaptive_base_port", "eth0"))
     if not adaptive_base_port.replace(".", "").replace("_", "").isalnum():
         raise ValueError("net-roles: adaptive_base_port must be a plain interface name")
+    metered_guard = bool(params.get("metered_guard", False))
+    if metered_guard and not uplinks:
+        raise ValueError("net-roles: metered_guard requires uplinks (free/metered derive from them)")
     if not 5 <= adaptive_interval <= 300:
         raise ValueError("net-roles: adaptive_interval must be in 5..300 seconds")
     if adaptive_vlans and any(u["type"] == "ethernet" for u in uplinks):
@@ -479,6 +615,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "adaptive_serve_dhcp": adaptive_serve_dhcp,
         "adaptive_interval": adaptive_interval,
         "adaptive_base_port": adaptive_base_port,
+        "metered_guard": metered_guard,
     }
 
 
@@ -681,6 +818,31 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
             '[ -x /usr/bin/conn-adapter ] && [ -f /etc/tollgate/conn-adapter.conf ] '
             '|| { echo "net-roles: conn-adapter staging FAILED"; exit 1; }'
         )))
+
+    if r["metered_guard"]:
+        metered_iface = next((u["iface"] for u in uplinks if u["type"] == "sim"), "wan")
+        free_ifaces = [u["iface"] for u in uplinks if u["type"] != "sim"]
+        if r["adaptive_vlans"] and "waneth" not in free_ifaces:
+            free_ifaces.append("waneth")
+        ops.append(BlankLine())
+        ops.append(Comment(text=(
+            f"--- net-roles: metered-guard ({metered_iface} metered; "
+            f"{','.join(free_ifaces) or 'none'} free — non-client forwarding rejected while free is up) ---"
+        )))
+        guard_conf = "\n".join([
+            f"metered_iface={metered_iface}",
+            f"free_ifaces={','.join(free_ifaces)}",
+            f"interval={r['adaptive_interval']}",
+        ]) + "\n"
+        _stage_file_ops(ops, "/usr/bin/metered-guard", _GUARD_DAEMON, "755")
+        _stage_file_ops(ops, "/etc/tollgate/metered-guard.conf", guard_conf, "600")
+        _stage_file_ops(ops, "/etc/init.d/metered-guard", _GUARD_INIT, "755")
+        ops.append(ServiceAction(name="metered-guard", action="enable"))
+        ops.append(ServiceAction(name="metered-guard", action="restart"))
+        ops.append(ShellCommand(command=(
+            '[ -x /usr/bin/metered-guard ] && [ -f /etc/tollgate/metered-guard.conf ] '
+            '|| { echo "net-roles: metered-guard staging FAILED"; exit 1; }'
+        )))
     return ops
 
 
@@ -740,6 +902,10 @@ register(UseCase(
         "adaptive_base_port": ParamDef(type=str, default="eth0",
             description="Base port for adaptive VLAN candidates (DSA devices use their port name, "
                         "e.g. 'lan' on the NR7101)"),
+        "metered_guard": ParamDef(type=bool, default=False,
+            description="Reject non-customer forwarding out the metered (sim) uplink while any free "
+                        "uplink is up — paying (nodogsplash-authenticated) clients keep flowing; "
+                        "disarms to plain routing when the metered link is the only one"),
     },
     test_status="experimental",
     tested_notes="renders validated (multi-mode sh -n); hardware run pending next TollGate build",
