@@ -199,12 +199,13 @@ impl LinkProbe for LocalProber {
             let table = tokio::fs::read_to_string("/proc/net/arp")
                 .await
                 .map_err(|e| ProbeError::Unavailable(format!("/proc/net/arp: {e}")))?;
-            Ok(lookup_arp_table(&table, ip))
+            Ok(lookup_arp_table(&table, ip, self.interface.as_deref()))
         }
         #[cfg(not(target_os = "linux"))]
         {
             let ip = ip.to_string();
-            let output = run_command("arp", ["-n".as_ref(), ip.as_str()]).await?;
+            let args = arp_command_args(&ip, self.interface.as_deref());
+            let output = run_command("arp", args).await?;
             Ok(parse_arp_command_output(&output.stdout, ip.as_str()))
         }
     }
@@ -296,13 +297,17 @@ fn extract_title(body: &str) -> Option<&str> {
     Some(body[after_open..end].trim())
 }
 
-/// Look up an IP in Linux `/proc/net/arp` content.
+/// Look up an IP in Linux `/proc/net/arp` content, optionally scoped to
+/// a device (the 6th column) — overlapping subnets on multiple adapters
+/// must not report another adapter's MAC (#471).
 #[must_use]
-pub fn lookup_arp_table(table: &str, ip: IpAddr) -> Option<MacAddress> {
+pub fn lookup_arp_table(table: &str, ip: IpAddr, device: Option<&str>) -> Option<MacAddress> {
     let ip = ip.to_string();
     for line in table.lines().skip(1) {
         let mut columns = line.split_whitespace();
-        let (Some(entry_ip), Some(_hw_type), Some(flags), Some(mac)) = (
+        let (Some(entry_ip), Some(_hw_type), Some(flags), Some(mac), Some(_mask), entry_device) = (
+            columns.next(),
+            columns.next(),
             columns.next(),
             columns.next(),
             columns.next(),
@@ -311,11 +316,48 @@ pub fn lookup_arp_table(table: &str, ip: IpAddr) -> Option<MacAddress> {
             continue;
         };
         // 0x2 = ATF_COM (complete entry)
-        if entry_ip == ip && flags.contains('2') {
-            return MacAddress::parse(mac).ok();
+        if entry_ip != ip || !flags.contains('2') {
+            continue;
         }
+        if let Some(want) = device {
+            if entry_device != Some(want) {
+                continue;
+            }
+        }
+        return MacAddress::parse(mac).ok();
     }
     None
+}
+
+/// `arp` argv for the BSD/macOS lookup, scoped to the selected
+/// interface when the prober has one (`arp -n -i iface <ip>`) — an
+/// unscoped lookup can report another adapter's entry for the same IP
+/// on overlapping bench subnets (#471).
+#[must_use]
+pub fn arp_command_args<'a>(ip: &'a str, interface: Option<&'a str>) -> Vec<&'a str> {
+    match interface {
+        Some(iface) => vec!["-n", "-i", iface, ip],
+        None => vec!["-n", ip],
+    }
+}
+
+/// Zero-pad BSD/macOS `%x`-formatted MAC octets (`0:55:7b:...` →
+/// `00:55:7b:...`) before `MacAddress::parse`, which requires two hex
+/// digits per octet (#471).
+#[must_use]
+fn normalize_mac_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split(':').collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let mut octets = Vec::with_capacity(6);
+    for part in parts {
+        if part.is_empty() || part.len() > 2 || !part.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        octets.push(format!("{part:0>2}"));
+    }
+    Some(octets.join(":"))
 }
 
 /// Parse `arp -n <ip>` output (BSD/macOS shape: `... (ip) at mac on if`).
@@ -326,8 +368,10 @@ pub fn parse_arp_command_output(output: &str, ip: &str) -> Option<MacAddress> {
         .find(|line| line.contains(ip) && line.contains(" at "))
         .and_then(|line| {
             line.split_whitespace()
-                .find(|token| token.contains(':') && token.len() == 17)
-                .and_then(|mac| MacAddress::parse(mac).ok())
+                .filter(|token| token.contains(':'))
+                .find_map(|token| {
+                    normalize_mac_token(token).and_then(|mac| MacAddress::parse(&mac).ok())
+                })
         })
 }
 
@@ -391,15 +435,46 @@ mod tests {
         let table = "IP address       HW type     Flags       HW address            Mask     Device\n\
                      192.168.1.1      0x1         0x2         e0:63:da:12:34:56     *        enp5s0\n\
                      192.168.1.2      0x1         0x0         00:00:00:00:00:00     *        enp5s0\n";
-        let found = lookup_arp_table(table, IpAddr::from([192, 168, 1, 1]));
+        let found = lookup_arp_table(table, IpAddr::from([192, 168, 1, 1]), None);
         assert_eq!(
             found.map(|m| m.to_string()),
             Some("e0:63:da:12:34:56".into())
         );
         // Incomplete entry (flags 0x0) is not returned.
-        assert!(lookup_arp_table(table, IpAddr::from([192, 168, 1, 2])).is_none());
+        assert!(lookup_arp_table(table, IpAddr::from([192, 168, 1, 2]), None).is_none());
         // Absent IP.
-        assert!(lookup_arp_table(table, IpAddr::from([10, 0, 0, 9])).is_none());
+        assert!(lookup_arp_table(table, IpAddr::from([10, 0, 0, 9]), None).is_none());
+    }
+
+    #[test]
+    fn arp_table_scopes_to_the_selected_device() {
+        // Overlapping bench subnets: same IP seen on two adapters — the
+        // unscoped lookup must not report the other adapter's MAC (#471).
+        let table = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                     192.168.1.1      0x1         0x2         aa:aa:aa:aa:aa:aa     *        enp5s0\n\
+                     192.168.1.1      0x1         0x2         bb:bb:bb:bb:bb:bb     *        en7\n";
+        let ip = IpAddr::from([192, 168, 1, 1]);
+        assert_eq!(
+            lookup_arp_table(table, ip, Some("en7")).map(|m| m.to_string()),
+            Some("bb:bb:bb:bb:bb:bb".into())
+        );
+        assert_eq!(
+            lookup_arp_table(table, ip, Some("enp5s0")).map(|m| m.to_string()),
+            Some("aa:aa:aa:aa:aa:aa".into())
+        );
+        assert!(lookup_arp_table(table, ip, Some("wlan0")).is_none());
+    }
+
+    #[test]
+    fn arp_command_args_scope_to_interface() {
+        assert_eq!(
+            arp_command_args("192.168.1.1", Some("en7")),
+            vec!["-n", "-i", "en7", "192.168.1.1"]
+        );
+        assert_eq!(
+            arp_command_args("192.168.1.1", None),
+            vec!["-n", "192.168.1.1"]
+        );
     }
 
     #[test]
@@ -411,5 +486,23 @@ mod tests {
             Some("e0:63:da:12:34:56".into())
         );
         assert!(parse_arp_command_output(output, "10.1.2.3").is_none());
+    }
+
+    #[test]
+    fn arp_command_output_accepts_unpadded_macos_macs() {
+        // Apple's print_lladdr formats octets with %x — single-digit
+        // octets must still resolve (#471).
+        let output = "? (192.168.1.1) at 0:55:7b:b5:7d:f7 on en0 ifscope [ethernet]";
+        let found = parse_arp_command_output(output, "192.168.1.1");
+        assert_eq!(
+            found.map(|m| m.to_string()),
+            Some("00:55:7b:b5:7d:f7".into())
+        );
+    }
+
+    #[test]
+    fn arp_command_output_rejects_non_mac_tokens() {
+        let output = "? (192.168.1.1) at 0:55:7b:b5:7d on en0 ifscope [ethernet]";
+        assert!(parse_arp_command_output(output, "192.168.1.1").is_none());
     }
 }

@@ -955,7 +955,7 @@ Research across OpenWrt forums (thread #155683), GitHub PR #20439, and Zyxel com
 
 ### Current Switch State (2026-05-25)
 
-- Switch responds to ARP at 192.168.1.1 (MAC `4c:9e:ff:77:5c:91`) but has zero TCP services (no HTTP, FTP, or telnet)
+- Switch responds to ARP at 192.168.1.1 (MAC `4c:9e:ff:xx:xx:xx`) but has zero TCP services (no HTTP, FTP, or telnet)
 - Likely in a state where services were disabled or the switch needs a factory reset
 - **Factory reset procedure**: hold physical reset button (GPIO1 pin 32) during power-on for ~10 seconds
 - After factory reset: IP should return to 192.168.1.1, HTTP on port 80, credentials admin/1234
@@ -1037,7 +1037,7 @@ We spent significant effort attempting to flash OpenWrt onto the GS1920-24 witho
    - BootBase fell back to stock but stock services were broken
    - ARP cache staleness
 
-6. **Definitive diagnosis** (2026-05-25): User power-cycled the switch. We ran a 90-second packet capture during the full boot sequence. **Only LLDP packets were observed** — three LLDP frames at 30-second intervals from MAC `4c:9e:ff:77:5c:93` (port 2), chassis MAC `4c:9e:ff:77:5c:91`. Zero IPv4, zero ARP, zero DHCP, zero TCP/UDP.
+6. **Definitive diagnosis** (2026-05-25): User power-cycled the switch. We ran a 90-second packet capture during the full boot sequence. **Only LLDP packets were observed** — three LLDP frames at 30-second intervals from MAC `4c:9e:ff:xx:xx:xx` (port 2), chassis MAC `4c:9e:ff:xx:xx:xx`. Zero IPv4, zero ARP, zero DHCP, zero TCP/UDP.
 
 ### How We Know It's Stock ZyNOS (Not OpenWrt)
 

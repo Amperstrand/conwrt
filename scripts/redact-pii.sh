@@ -44,11 +44,34 @@ SEDEXPR=(
   -e 's/macbooks-MBP/REDACTED_HOST/g'
   -e 's/id_ed25519_gitlab/REDACTED_KEY/g'
   -e 's/Q\/7PTDaaakgRBt+eTV5jgNX0UuZfbZb53Ipb+FHyMRk/REDACTED_FINGERPRINT/g'
+
 )
+
+# Private rules: raw identifier values must NOT live in this tracked
+# script (they would re-publish what they scrub). Each .sh file in the
+# rules dir appends entries:  SEDEXPR+=( -e 's/<raw>/<redacted>/g' )
+# The rules dir MUST live OUTSIDE any git worktree: filter-branch's
+# tree-filter runs `git clean -d -q -f -x` per commit, which deletes
+# gitignored (untracked) files — in-tree rules would be wiped before
+# they ever apply. Default: ~/.config/conwrt/redact-pii-rules/ (create
+# from the canonical copies in the private lab project, conwrt-bench
+# docs/redact-pii-rules/). Override: REDACT_PII_RULES_DIR=<dir>.
+_rules_dir="${REDACT_PII_RULES_DIR:-$HOME/.config/conwrt/redact-pii-rules}"
+if [ -d "$_rules_dir" ]; then
+  for _rules in "$_rules_dir"/*.sh; do
+    [ -e "$_rules" ] || continue
+    # shellcheck disable=SC1090
+    source "$_rules"
+  done
+fi
 
 # List of files that contain PII (from audit)
 PII_FILES=(
   AGENTS.md
+  docs/NETWORK-SEGMENTATION.md
+  docs/NR7101-FLEET.md
+  docs/device-recovery-status.md
+  docs/process.md
   models/dlink-covr-x1860-a1.json
   models/extreme-networks-ws-ap3915i.json
   models/ubnt-edgerouter-6p.json
@@ -58,6 +81,9 @@ PII_FILES=(
   models/zyxel-gs1920-24.json
   models/zyxel-nr7101.json
   recipes/dlink/covr-x1860/notes.md
+  recipes/extreme-networks/ws-ap3915i/RECOVERY-2026-09-22-lan7-lan8.md
+  recipes/extreme-networks/ws-ap3915i/SERIAL-RESCUE-2026-09.md
+  recipes/zyxel/gs1920-24/notes.md
   recipes/extreme-networks/ws-ap3915i/REVIEW-UNIT2-FLASH-PLAN.md
   recipes/extreme-networks/ws-ap3915i/SESSION-WRITEUP.md
   recipes/extreme-networks/ws-ap3915i/UNIT2-AP3915i-ROW.md

@@ -337,6 +337,27 @@ impl SshSession {
         Ok(output)
     }
 
+    /// Run `shell` (e.g. `sh -s`) with `input` fed over the channel's
+    /// stdin. Dropbear caps the exec COMMAND length, so any sizable
+    /// script must ride stdin instead — the same lesson as the 1.x
+    /// transport (apply.py's `sh -s` payloads). Found by the pia
+    /// ring-2 test: a 9.2KB plan died channel-level (no exit status,
+    /// empty stderr) as an exec command while running clean via
+    /// `ssh host sh < script`.
+    pub async fn exec_stdin(&self, shell: &str, input: &str) -> Result<ExecOutput, SshError> {
+        let channel = self.exec_channel(shell).await?;
+        channel
+            .data(input.as_bytes())
+            .await
+            .map_err(|e| SshError::Transport(format!("stdin data: {e}")))?;
+        channel
+            .eof()
+            .await
+            .map_err(|e| SshError::Transport(format!("stdin eof: {e}")))?;
+        let output = collect_exec_output(channel).await?;
+        Ok(output)
+    }
+
     /// Upload `data` to `remote_path` via the scp sink protocol
     /// (`scp -t`). Works against Dropbear without sftp-server.
     pub async fn scp_upload(&self, data: &[u8], remote_path: &str) -> Result<(), SshError> {

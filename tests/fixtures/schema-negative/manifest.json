@@ -1,0 +1,10 @@
+{
+  "fixtures": {
+    "baud-too-high": { "expect": "baud" },
+    "baud-too-low": { "expect": "baud" },
+    "default-ip-empty": { "expect": "default_ip" },
+    "serial-console-missing-device": { "expect": "console_device" },
+    "warnings-empty-entry": { "expect": "warnings" },
+    "warnings-not-array": { "expect": "warnings" }
+  }
+}

@@ -45,6 +45,11 @@
 //! print(r["guest-wifi"].build_configure({}))
 //! print(r["openclash"].build_configure({}))
 //! print(r["ssl"].build_configure({}))
+//! print(r["vpn-pia-openvpn"].build_configure({
+//!     "username": "p1234567",
+//!     "password": "testpass",
+//!     "upstream_gateway": "192.168.8.1",
+//! }))
 //! EOF
 //! ```
 //!
@@ -59,7 +64,8 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
     NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
-    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
+    render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -307,6 +313,19 @@ fn ssl_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Ssl(SslProfile::default()),
         include_str!("goldens/ssl.sh"),
+    );
+}
+
+#[test]
+fn vpn_pia_openvpn_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        }),
+        include_str!("goldens/vpn-pia-openvpn.sh"),
     );
 }
 
