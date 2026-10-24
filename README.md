@@ -556,6 +556,7 @@ any specimen via env pins (`CONWRT_HW_TARGET/KEY/EXPECT_MAC`).
 | `guest-wifi` | Isolated guest WiFi with separate subnet, DHCP, and firewall zone | No |
 | `doh` | DNS-over-HTTPS via https-dns-proxy for encrypted DNS | No |
 | `mwan3` | Multi-WAN failover or load balancing | No |
+| `net-roles` | Interface role assignment for constrained devices (NR7101 class): ordered sim/wifi/ethernet uplinks as failover metrics, tagged-VLAN uplink/mgmt doors, optional tollgate-mode engine (uplink-aware pricing + WPS-button override) | No |
 | `travelmate` | Auto-connect to captive portal WiFi | No |
 | `tollgate` | Bitcoin/Lightning payment gateway (ipk from GitHub CI) | Yes (ipk deploy) |
 | `wireguard-client` | VPN tunnel (auto-generates keys per device) | Auto (registration) |

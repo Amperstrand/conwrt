@@ -739,6 +739,7 @@ dependencies = [
  "conwrt-probe-core",
  "conwrt-serial",
  "conwrt-types",
+ "conwrt-zycast",
  "httpmock",
  "pollster",
  "serde_json",
@@ -826,6 +827,7 @@ version = "0.1.0"
 dependencies = [
  "crc16",
  "embedded-io-async 0.7.0",
+ "socket2 0.6.5",
  "xmodem",
 ]
 
@@ -849,6 +851,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "conwrt-zycast"
+version = "0.1.0"
+dependencies = [
+ "conwrt-protocols",
+ "socket2 0.6.5",
 ]
 
 [[package]]

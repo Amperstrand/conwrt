@@ -123,6 +123,34 @@ pub fn reboot_wedged(
     boot_marker: &[u8],
     timeout: Duration,
 ) -> Result<RecoveryOutcome, RecoveryError> {
+    reboot_wedged_any(io, &[boot_marker], timeout)
+}
+
+/// [`reboot_wedged`] with multiple accepted markers — the boot is
+/// confirmed when ANY of them appears (different images hand off at
+/// different lines; field run 2026-10-23 needed `procd: - init` where
+/// the default `Starting kernel` never came).
+pub fn reboot_wedged_any(
+    io: &mut dyn BreakIo,
+    boot_markers: &[&[u8]],
+    timeout: Duration,
+) -> Result<RecoveryOutcome, RecoveryError> {
+    reboot_wedged_bounded(io, boot_markers, timeout, DRAIN_GRACE)
+}
+
+/// Drain grace: how long past the deadline the post-marker drain may run
+/// (congested consoles need the reader attached through boot).
+pub const DRAIN_GRACE: Duration = Duration::from_secs(30);
+
+/// [`reboot_wedged_any`] with an explicit drain grace — the regression
+/// seam for the 2026-10-23 timeout-overrun bug (the drain used a
+/// hardcoded 300 s cap and blew the caller's budget by minutes).
+pub fn reboot_wedged_bounded(
+    io: &mut dyn BreakIo,
+    boot_markers: &[&[u8]],
+    timeout: Duration,
+    drain_grace: Duration,
+) -> Result<RecoveryOutcome, RecoveryError> {
     send_sysrq(io, SysrqKey::Reboot)?;
     let deadline = Instant::now() + timeout;
     let mut seen = Vec::with_capacity(4096);
@@ -133,10 +161,13 @@ pub fn reboot_wedged(
             .map_err(|e| RecoveryError::Io(e.to_string()))?;
         if n > 0 {
             seen.extend_from_slice(&chunk[..n]);
-            if contains_subslice(&seen, boot_marker) {
+            if boot_markers.iter().any(|m| contains_subslice(&seen, m)) {
                 // keep the reader attached through boot: congested console
                 // output with no consumer can deepen degraded states.
-                drain_until_quiet(io, Duration::from_secs(30))?;
+                // Bounded by the caller's deadline (+30 s grace so a marker
+                // seen at the wire still drains) — never the old 300 s.
+                let drain_until = deadline + drain_grace;
+                drain_until_quiet(io, Duration::from_secs(30), drain_until)?;
                 return Ok(RecoveryOutcome::Rebooting);
             }
         }
@@ -146,12 +177,19 @@ pub fn reboot_wedged(
     })
 }
 
-/// Keep reading until `quiet` passes with no bytes (bounded).
-fn drain_until_quiet(io: &mut dyn ConsoleIo, quiet: Duration) -> Result<(), RecoveryError> {
-    let deadline = Instant::now() + Duration::from_secs(300);
+/// Keep reading until `quiet` passes with no bytes, never past `until`.
+///
+/// Field bug (2026-10-23): the drain used a hardcoded 300 s cap and blew
+/// the caller's `--timeout` by minutes after an early boot marker —
+/// `serial-recover` must never spend longer than its own budget.
+fn drain_until_quiet(
+    io: &mut dyn ConsoleIo,
+    quiet: Duration,
+    until: Instant,
+) -> Result<(), RecoveryError> {
     let mut last = Instant::now();
     let mut chunk = [0u8; 4096];
-    while Instant::now() < deadline {
+    while Instant::now() < until {
         let n = io
             .read(&mut chunk)
             .map_err(|e| RecoveryError::Io(e.to_string()))?;
@@ -235,5 +273,80 @@ mod tests {
             b"Starting kernel"
         ));
         assert!(!contains_subslice(b"booting", b"Starting kernel"));
+    }
+}
+
+#[cfg(test)]
+mod drain_bound_tests {
+    use super::*;
+    use std::io;
+
+    /// Port that accepts the break, yields the marker once, then streams
+    /// endless bytes forever (the congested-boot case that used to hold
+    /// the drain for a hardcoded 300 s).
+    struct EndlessMarker {
+        sent: bool,
+    }
+
+    impl ConsoleIo for EndlessMarker {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.sent {
+                self.sent = true;
+                let data = b"Starting kernel\r\n";
+                buf[..data.len()].copy_from_slice(data);
+                return Ok(data.len());
+            }
+            // endless stream: fill with console noise
+            for b in buf.iter_mut() {
+                *b = b'x';
+            }
+            Ok(buf.len())
+        }
+        fn write_all_bytes(&mut self, _data: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {}
+        fn close(&mut self) {}
+    }
+
+    impl BreakIo for EndlessMarker {
+        fn send_break_for(&mut self, _dur: Duration) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn drain_respects_caller_budget_under_endless_stream() {
+        let mut io = EndlessMarker { sent: false };
+        let t0 = Instant::now();
+        let out = reboot_wedged_bounded(
+            &mut io,
+            &[b"Starting kernel"],
+            Duration::from_millis(100),
+            Duration::from_millis(300),
+        )
+        .expect("marker was sent");
+        assert_eq!(out, RecoveryOutcome::Rebooting);
+        let elapsed = t0.elapsed();
+        // deadline 100 ms + grace 300 ms = hard ceiling 400 ms; the old
+        // code would have drained 30 s+. Allow generous CI slop.
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "drain overran the budget: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn multi_marker_any_match() {
+        let mut io = EndlessMarker { sent: false };
+        // second marker is the one that appears
+        let out = reboot_wedged_bounded(
+            &mut io,
+            &[b"never-appears", b"Starting kernel"],
+            Duration::from_millis(100),
+            Duration::from_millis(200),
+        )
+        .expect("second marker matched");
+        assert_eq!(out, RecoveryOutcome::Rebooting);
     }
 }

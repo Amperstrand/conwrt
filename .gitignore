@@ -99,3 +99,4 @@ config.toml
 .env*
 # pi_image break-glass password files (mode 0600, never commit)
 *.credentials.txt
+tests/integration/.openwrt.img.sha256

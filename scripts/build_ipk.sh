@@ -97,9 +97,11 @@ chmod 755 "$DATA_DIR/usr/bin/conwrt"
 
 # ── Strip files not needed on router ─────────────────────────────────
 # Remove dev/test/helper scripts that aren't core runtime
+# (zycast_wire_check.py: host-only netns proof — needs sudo/tcpdump/qemu,
 for skip in validate_models.py generate_matrix.py dlink_sge_sign.py \
             gs1920-repack-firmware.py gs1920-validate-zynos-openwrt.py \
-            extreme_ap391x_analyze.py configure-stock-switch.py; do
+            extreme_ap391x_analyze.py configure-stock-switch.py \
+            zycast_wire_check.py; do  # host-only, meaningless on a router
     rm -f "$DATA_DIR/usr/share/conwrt/$skip"
 done
 

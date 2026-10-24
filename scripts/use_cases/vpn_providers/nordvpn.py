@@ -431,7 +431,7 @@ uci -q delete openvpn.nordvpn
 /etc/init.d/openvpn stop >/dev/null 2>&1 || true
 
 # WireGuard tunnel (NordLynx)
-{wg0_uci_sh('"$WG_PRIV"', address_lit, '"$SERVER_KEY"', '"$SERVER_IP"', port_lit, mtu=mtu, keepalive=keepalive, listen_port=False)}
+{wg0_uci_sh('"$WG_PRIV"', address_lit, '"$SERVER_KEY"', '"$SERVER_IP"', port_lit, mtu=mtu, keepalive=keepalive, listen_port=False, allowed_ips=allowed_ips)}
 
 uci -q delete network.nordvpn_server_route
 {route_block}

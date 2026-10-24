@@ -156,7 +156,7 @@ Size: 8.2MB, SHA-256 verified.
 
 ### KU-003: What is the real factory MAC address?
 
-**Why it matters**: eth0 shows `d4:1a:d1:ec:41:d8` — NOT a ZyXEL OUI (`4C:C5:3E`). This might be a random MAC assigned by the initramfs, or the device's real MAC might be from a different OUI block. The Factory partition (mtd2) has the real MAC.
+**Why it matters**: eth0 shows `d4:1a:d1:xx:xx:xx` — NOT a ZyXEL OUI (`4C:C5:3E`). This might be a random MAC assigned by the initramfs, or the device's real MAC might be from a different OUI block. The Factory partition (mtd2) has the real MAC.
 **How to answer**: `hexdump -C /dev/mtd2 | head -20` or `cat /sys/class/net/eth0/address` vs factory data.
 
 ### KU-004: Is PCIe hang reproducible?

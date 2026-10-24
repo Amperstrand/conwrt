@@ -38,6 +38,27 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
 
     ops.append(BlankLine())
 
+    # Radio discovery + HARD GATE before any section is written (#454):
+    # a band the device lacks must abort with ZERO partial config — the
+    # old shape committed network/dhcp/firewall first and only then
+    # probed radios (a missing radio aborted under set -e mid-recipe,
+    # or skipped the VAP silently without it). The loop's uci get is
+    # set -e-safe (missing radios fail their get).
+    ops.append(ShellCommand(
+        command=
+            f'_radio=""; '
+            f'for _r in radio0 radio1 radio2 radio3; do '
+            f'_b=$(uci get wireless.${{_r}}.band 2>/dev/null || true); '
+            f'if [ "$_b" = "{band_short}" ]; then _radio=$_r; break; fi; '
+            f'done; '
+            f'if [ -z "$_radio" ]; then '
+            f'echo \'guest-wifi: no {band_short} radio found — aborting before any config changes\' >&2; '
+            f'exit 1; '
+            f'fi',
+    ))
+
+    ops.append(BlankLine())
+
     ops.append(ShellCommand(command=f"uci set network.{net}=interface"))
     ops.append(ShellCommand(command=f'uci set network.{net}.ipaddr="$_guest_prefix.1"'))
     ops.append(UciSet(config="network", section=net, values={
@@ -96,16 +117,11 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(BlankLine())
 
     # Named WiFi VAP section (idempotent — overwrites on reconfigure).
-    # Cleanup old anonymous sections from previous versions.
+    # Cleanup old anonymous sections from previous versions. $_radio is
+    # guaranteed by the hard gate above (#454).
     ops.append(uci_cleanup_sections("wireless", f"network='{net}'"))
     ops.append(ShellCommand(
         command=
-            f'_radio=""; '
-            f'for _r in radio0 radio1 radio2 radio3; do '
-            f'_b=$(uci get wireless.${{_r}}.band 2>/dev/null); '
-            f'if [ "$_b" = "{band_short}" ]; then _radio=$_r; break; fi; '
-            f'done; '
-            f'if [ -n "$_radio" ]; then '
             f'uci set wireless.guest_ap=wifi-iface; '
             f'uci set wireless.guest_ap.device=$_radio; '
             f'uci set wireless.guest_ap.mode=ap; '
@@ -113,8 +129,7 @@ def _build_guest_wifi_ops(params: dict[str, Any]) -> list[Op]:
             f'uci set wireless.guest_ap.encryption={encryption}; '
             + (f'uci set wireless.guest_ap.key={key}; ' if key else "") +
             f'uci set wireless.guest_ap.network={net}; '
-            f'uci set wireless.guest_ap.isolate={isolated}; '
-            f'fi',
+            f'uci set wireless.guest_ap.isolate={isolated}',
     ))
     ops.append(UciCommit(config="wireless"))
 

@@ -11,6 +11,7 @@ members = [
     "crates/conwrt-agent-io",
     "crates/conwrt-executor",
     "crates/conwrt-probe-core",
+    "crates/conwrt-zycast",
     "providers/conwrt-local-std",
     "apps/conwrt-cli",
     "apps/conwrt-agent",

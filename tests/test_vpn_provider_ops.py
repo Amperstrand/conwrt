@@ -6,6 +6,8 @@ UCI commands, firewall rules, DNS config, and provider-specific markers.
 """
 from unittest.mock import patch
 
+import pytest
+
 from profile.ops import render_shell
 from use_cases import registry
 from use_cases.vpn_providers.pia import _build_pia_ops, _build_pia_openvpn_ops
@@ -741,3 +743,53 @@ class TestSurfsharkEndpointDnsParse:
             input=out, capture_output=True, text=True, check=True,
         )
         assert r.stdout.strip() == ""
+
+
+class TestAllowedIpsPassthrough:
+    """#468 — a config's AllowedIPs must reach the WG stanza verbatim;
+    the helper must not silently rewrite split-tunnel/IPv6 profiles
+    into an IPv4 full-tunnel."""
+
+    def test_helper_defaults_to_full_tunnel(self):
+        from use_cases.vpn_providers.base import wg0_uci_sh
+
+        stanza = wg0_uci_sh("'$K'", "'10.5.0.2/32'", "'$PK'", "'$EP'", "'51820'")
+        assert "allowed_ips='0.0.0.0/0'" in stanza
+
+    def test_helper_accepts_explicit_allowed_ips(self):
+        from use_cases.vpn_providers.base import wg0_uci_sh
+
+        stanza = wg0_uci_sh(
+            "'$K'", "'10.5.0.2/32'", "'$PK'", "'$EP'", "'51820'",
+            allowed_ips="10.0.0.0/8, ::/0",
+        )
+        assert "allowed_ips='10.0.0.0/8'" in stanza
+        assert "allowed_ips='::/0'" in stanza
+        assert "," not in stanza  # one add_list per CIDR (netifd whitespace-splits)
+        assert "0.0.0.0/0" not in stanza
+
+    def test_config_allowed_ips_flows_to_stanza(self, tmp_path):
+        conf = tmp_path / "split.conf"
+        conf.write_text(
+            "[Interface]\n"
+            "PrivateKey = cz0RJohr4gsPsIREjDaKW3jI1MwTcRYCXx5LhJI7mQs=\n"
+            "Address = 10.5.0.2/16\n"
+            "[Peer]\n"
+            "PublicKey = qJb7+jCxGN8MAcSTKcDvDE81XobRBv1mu+phcB3zOGw=\n"
+            "AllowedIPs = 10.10.0.0/16, fd00::/8\n"
+            "Endpoint = hamburg.de.wg.nordhold.net:51820\n"
+        )
+        from use_cases.vpn_providers.nordvpn import _build_nordvpn_ops as build_configure_ops
+
+        ops = build_configure_ops(dict(NORDVPN_PARAMS, config_file=str(conf)))
+        rendered = "\n".join(getattr(op, "command", "") for op in ops)
+        assert "allowed_ips='10.10.0.0/16'" in rendered
+        assert "allowed_ips='fd00::/8'" in rendered
+        assert "allowed_ips='0.0.0.0/0'" not in rendered
+
+    def test_helper_rejects_shell_hostile_allowed_ips(self):
+        from use_cases.vpn_providers.base import wg0_uci_sh
+
+        with pytest.raises(ValueError, match="allowed_ips"):
+            wg0_uci_sh("'$K'", "'10.5.0.2/32'", "'$PK'", "'$EP'", "'51820'",
+                       allowed_ips="0.0.0.0/0'; reboot; '")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 from typing import Any, Callable
@@ -373,6 +374,39 @@ def deploy_tollgate_post_flash(
     return True
 
 
+def _fetch_fx_sats_per_usd() -> int:
+    from urllib.request import urlopen
+
+    with urlopen("https://mempool.space/api/v1/prices", timeout=10) as resp:
+        rates = json.load(resp)
+    usd = rates.get("USD")
+    if not isinstance(usd, (int, float)) or usd <= 0:
+        raise ValueError(f"mempool.space returned no usable USD rate: {rates!r}")
+    return round(100_000_000 / usd)
+
+
+def _derive_price_sats_per_mib(
+    price_sats_per_mib: int,
+    upstream_usd_per_gb: float,
+    markup: float,
+    fx_sats_per_usd: int,
+) -> tuple[int, str] | None:
+    if price_sats_per_mib > 0:
+        return price_sats_per_mib, "explicit price_sats_per_mib"
+    if upstream_usd_per_gb <= 0:
+        return None
+    if markup <= 0:
+        raise ValueError("tollgate: markup must be > 0")
+    if fx_sats_per_usd <= 0:
+        fx_sats_per_usd = _fetch_fx_sats_per_usd()
+    price = upstream_usd_per_gb / 1024 * fx_sats_per_usd * markup
+    derivation = (
+        f"${upstream_usd_per_gb}/GB / 1024 x {fx_sats_per_usd} sats/$ x {markup} markup "
+        f"= {price:.2f} -> ceil"
+    )
+    return max(1, math.ceil(price)), derivation
+
+
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "mint_url": str(params.get("mint_url", "")),
@@ -381,8 +415,13 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "gateway_name": str(params.get("gateway_name", "")),
         "gateway_domain": str(params.get("gateway_domain", "")),
         "clientid": str(params.get("clientid", "mac")),
+        "allow_lan_ssh": bool(params.get("allow_lan_ssh", False)),
         "install_hotplug": params.get("install_hotplug", True),
         "hotplug_interface": str(params.get("hotplug_interface", "wwan")),
+        "price_sats_per_mib": int(params.get("price_sats_per_mib", 0)),
+        "upstream_usd_per_gb": float(params.get("upstream_usd_per_gb", 0.0)),
+        "markup": float(params.get("markup", 2.0)),
+        "fx_sats_per_usd": int(params.get("fx_sats_per_usd", 0)),
     }
 
 
@@ -403,6 +442,7 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     gateway_name = r["gateway_name"]
     gateway_domain = r["gateway_domain"]
     clientid = r["clientid"]
+    allow_lan_ssh = r["allow_lan_ssh"]
     install_hotplug = r["install_hotplug"]
     hotplug_iface = r["hotplug_interface"]
 
@@ -425,6 +465,9 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
                           option="users_to_router", value="allow tcp port 2121"))
     ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
                           option="users_to_router", value="allow tcp port 2050"))
+    if allow_lan_ssh:
+        ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
+                              option="users_to_router", value="allow tcp port 22"))
     ops.append(UciCommit(config="nodogsplash"))
     ops.append(ServiceAction(name="nodogsplash", action="enable"))
     ops.append(ServiceAction(name="nodogsplash", action="restart"))
@@ -453,6 +496,25 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
             values["price_per_minute"] = str(price_per_minute)
         ops.append(UciAdd(config="tollgate", type="tollgate", values=values))
         ops.append(UciCommit(config="tollgate"))
+
+    pricing = _derive_price_sats_per_mib(
+        r["price_sats_per_mib"], r["upstream_usd_per_gb"], r["markup"], r["fx_sats_per_usd"],
+    )
+    if pricing is not None:
+        price, derivation = pricing
+        ops.append(BlankLine())
+        ops.append(Comment(text=f"--- TollGate: byte pricing ({derivation} = {price} sat/MiB) ---"))
+        ops.append(ShellCommand(
+            command=f'if [ -f /etc/tollgate/config.json ]; then '
+                    f'SS=$(sed -n \'s/.*"step_size":[ ]*\\([0-9][0-9]*\\).*/\\1/p\' /etc/tollgate/config.json | head -1); '
+                    f'[ -n "$SS" ] || SS=1048576; '
+                    f'P=$(( ( {price} * SS + 1048575 ) / 1048576 )); '
+                    f'sed -i \'s/"price_per_step":[ ]*[0-9]*/"price_per_step": \'"$P"\'/g\' /etc/tollgate/config.json '
+                    f'&& /etc/init.d/tollgate-wrt restart 2>/dev/null '
+                    f'&& echo "tollgate: price_per_step=$P applied (step_size=$SS bytes; {price} sat/MiB)" '
+                    f'|| echo "tollgate: price patch FAILED on existing config.json"; '
+                    f'else echo "tollgate: /etc/tollgate/config.json absent (ipk not installed yet) — re-run configure after deploy_tollgate_post_flash"; fi'
+        ))
 
     ops.append(BlankLine())
     ops.append(Comment(text="--- TollGate: ipk installed separately via deploy_tollgate_post_flash() ---"))
@@ -503,10 +565,25 @@ register(UseCase(
         "clientid": ParamDef(type=str, default="mac",
             description="Client identification method: 'mac', 'token', or 'ip'",
             choices=("mac", "token", "ip")),
+        "allow_lan_ssh": ParamDef(type=bool, default=False,
+            description="Expose SSH (tcp 22) to associated LAN/WiFi clients via nodogsplash "
+                        "users_to_router (applies pre-auth too). The tollgate itself exposes no "
+                        "network API (CLI is a local-only Unix socket), so SSH is the management "
+                        "door. Stack ssh-hardening (key-only auth) — password SSH on the gated "
+                        "LAN is a bad idea."),
         "install_hotplug": ParamDef(type=bool, default=True,
             description="Install hotplug script to restart tollgate when WiFi STA comes up"),
         "hotplug_interface": ParamDef(type=str, default="wwan",
             description="Network interface name that triggers tollgate restart (default: wwan)"),
+        "price_sats_per_mib": ParamDef(type=int, default=0, min_value=0,
+            description="Direct byte price in sats per MiB step (overrides derivation; 0 = derive)"),
+        "upstream_usd_per_gb": ParamDef(type=float, default=0.0,
+            description="Upstream data cost in USD per GB — derive price_per_step from it "
+                        "(e.g. 0.83 for silent.link PAYG EU, ~0.5 for bulk eSIM bundles; wifi/eth uplinks = 0 = free)"),
+        "markup": ParamDef(type=float, default=2.0,
+            description="Cost multiplier applied to upstream_usd_per_gb (2.0 = 100% markup)"),
+        "fx_sats_per_usd": ParamDef(type=int, default=0, min_value=0,
+            description="Sats per USD for the derivation (0 = auto-fetch from mempool.space at build time)"),
     },
     build_configure=lambda p: render_shell(_build_tollgate_ops(p)),
     build_configure_ops=_build_tollgate_ops,

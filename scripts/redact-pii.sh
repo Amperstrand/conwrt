@@ -5,47 +5,8 @@
 set -euo pipefail
 
 # Build sed expression once — applied to all PII files
-SEDEXPR=(
-  -e 's/DC:B8:08:6C:EA:7F/DC:B8:08:XX:XX:XX/g'
-  -e 's/DC:B8:08:38:70:70/DC:B8:08:XX:XX:XX/g'
-  -e 's/DC:B8:08:38:70:60/DC:B8:08:XX:XX:XX/g'
-  -e 's/E8:37:7A:9E:F6:86/E8:37:7A:XX:XX:XX/g'
-  -e 's/E8:37:7A:9E:F6:8E/E8:37:7A:XX:XX:XX/g'
-  -e 's/5C:F4:AB:C8:EE:EC/5C:F4:AB:XX:XX:XX/g'
-  -e 's/4C:9E:FF:F5:AC:D2/4C:9E:FF:XX:XX:XX/g'
-  -e 's/4c:9e:ff:77:5c:91/4c:9e:ff:xx:xx:xx/g'
-  -e 's/74:83:c2:75:08:90/74:83:c2:XX:XX:XX/g'
-  -e 's/74:4d:28:72:f6:9f/74:4d:28:XX:XX:XX/g'
-  -e 's/a8:63:7d:91:f8:94/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:dc:51:64/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:dc:51:67/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:dc:51:5d/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:dc:51:60/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:8f:61:a8/a8:63:7d:xx:xx:xx/g'
-  -e 's/a8:63:7d:8f:61:ab/a8:63:7d:xx:xx:xx/g'
-  -e 's/3e:0d:ac:e5:a1:3c/3e:0d:ac:xx:xx:xx/g'
-  -e 's/3e:85:be:87:55:42/3e:85:be:xx:xx:xx/g'
-  -e 's/00:e0:4c:68:14:06/00:e0:4c:xx:xx:xx/g'
-  -e 's/fe80::764d:28ff:fe72:f69f/fe80::xxxx:xxff:fexx:xxxx/g'
-  -e 's/S150H29001559/XXXXX-XXXXXXXXX/g'
-  -e 's/192\.168\.1\.100/192.168.1.X/g'
-  -e 's/192\.168\.1\.147/192.168.1.X/g'
-  -e 's/192\.168\.1\.158/192.168.1.X/g'
-  -e 's/192\.168\.1\.111/192.168.1.X/g'
-  -e 's/192\.168\.1\.66/192.168.1.X/g'
-  -e 's/192\.168\.13\.103/192.168.X.X/g'
-  -e 's/192\.168\.13\.218/192.168.X.X/g'
-  -e 's/109\.247\.114\.4/XXX\.XXX\.XXX\.X/g'
-  -e 's/92\.220\.228\.70/XXX\.XXX\.XXX\.X/g'
-  -e 's/eduroam/REDACTED_SSID_1/g'
-  -e 's/ForskerNett/REDACTED_SSID_2/g'
-  -e 's/Intern-OUS/REDACTED_SSID_3/g'
-  -e 's/SIKTv2/REDACTED_SSID_4/g'
-  -e 's/macbooks-MBP/REDACTED_HOST/g'
-  -e 's/id_ed25519_gitlab/REDACTED_KEY/g'
-  -e 's/Q\/7PTDaaakgRBt+eTV5jgNX0UuZfbZb53Ipb+FHyMRk/REDACTED_FINGERPRINT/g'
+SEDEXPR=()
 
-)
 
 # Private rules: raw identifier values must NOT live in this tracked
 # script (they would re-publish what they scrub). Each .sh file in the
@@ -81,6 +42,9 @@ PII_FILES=(
   models/zyxel-gs1920-24.json
   models/zyxel-nr7101.json
   recipes/dlink/covr-x1860/notes.md
+  recipes/asus/lyra-map-ac2200/NOTES.md
+  recipes/zyxel/nr7101/open-issues.md
+  recipes/zyxel/nr7101/serial-recovery-session-2026-06-28.md
   recipes/extreme-networks/ws-ap3915i/RECOVERY-2026-09-22-lan7-lan8.md
   recipes/extreme-networks/ws-ap3915i/SERIAL-RESCUE-2026-09.md
   recipes/zyxel/gs1920-24/notes.md

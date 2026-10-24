@@ -22,14 +22,16 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
     Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    SshHardeningProfile, SslProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile,
+    VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 
 mod watch;
+mod zycast;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
 use core::net::IpAddr;
@@ -71,6 +73,32 @@ enum Command {
     /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
     /// (Rust port of scripts/serial-console.py --monitor).
 
+    /// U-Boot serial flash stage (RAM-only): BREAK-reboot ladder,
+    /// loady + YMODEM the image, size + iminfo gates, explicit-address
+    /// bootm. Bench-proven on the GS1900-8HP/RTL8382M 2026-10-23.
+    UbootLoady {
+        /// Serial port spec, e.g. /dev/serial/by-id/usb-FTDI_...-port0.
+        #[arg(long)]
+        port: String,
+        /// Baud rate (GS1900 console: 115200).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// RAM load address for loady (GS1900: 0x84f00000).
+        #[arg(long, default_value = "0x84f00000")]
+        addr: String,
+        /// Image file to YMODEM (initramfs-kernel.bin for a boot test).
+        #[arg(long)]
+        image: String,
+        /// Remote file name advertised in the YMODEM header.
+        #[arg(long, default_value = "openwrt-initramfs.bin")]
+        name: String,
+        /// Extra U-Boot commands to run BEFORE loady (e.g. "setsys bootpartition 0").
+        #[arg(long = "pre")]
+        pre: Vec<String>,
+        /// Boot the image after the gates pass (bootm <addr>).
+        #[arg(long, default_value_t = true)]
+        boot: bool,
+    },
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -80,9 +108,13 @@ enum Command {
         /// Baud rate (GS1900 console: 115200).
         #[arg(long, default_value_t = 115200)]
         baud: u32,
-        /// Boot marker to wait for after the reboot (default: the OpenWrt
-        /// kernel handoff line).
-        #[arg(long, default_value = "Starting kernel")]
+        /// Boot marker(s) to wait for after the reboot; comma-separated
+        /// matches ANY (default: the standard boot-start set — kernel
+        /// handoff, bootloader banner, procd init).
+        #[arg(
+            long,
+            default_value = "Starting kernel,U-Boot,procd: - init,init: - preinit"
+        )]
         marker: String,
         /// Overall timeout in seconds.
         #[arg(long, default_value_t = 240)]
@@ -232,6 +264,37 @@ enum Command {
         #[arg(long, default_value = "models")]
         dir: PathBuf,
     },
+    /// ZyXEL Multiboot multicast flash sender (Rust port of cmd/zycast;
+    /// framing golden-pinned to the Go reference). Bounded loops by
+    /// design — the bootloader listens on EVERY boot, so never leave a
+    /// sender running.
+    Zycast {
+        /// Firmware image to multicast.
+        image: PathBuf,
+        /// Egress interface (SO_BINDTODEVICE).
+        #[arg(long, short = 'i')]
+        interface: String,
+        /// Image type: bootbase|rom|ras|romd|backup.
+        #[arg(long, short = 't', default_value = "ras")]
+        image_type: String,
+        /// Send loops before stopping.
+        #[arg(long, default_value_t = conwrt_zycast::DEFAULT_LOOPS)]
+        loops: u32,
+        /// Inter-packet delay in milliseconds.
+        #[arg(long, default_value_t = conwrt_zycast::DEFAULT_DELAY_MS)]
+        delay_ms: u64,
+        /// Multicast group.
+        #[arg(long, short = 'g', default_value = conwrt_zycast::DEFAULT_GROUP)]
+        group: String,
+        /// Multicast port.
+        #[arg(long, short = 'p', default_value_t = conwrt_zycast::DEFAULT_PORT)]
+        port: u16,
+        /// Attest that the target specimen is verified (MAC/serial gate)
+        /// and sibling units are isolated. Required: the multicast hits
+        /// every ZyXEL bootloader in its listen window on the segment.
+        #[arg(long)]
+        confirm_specimen: bool,
+    },
     /// Dark-watch: watch a dark/flapping target over time and classify WHY
     /// it is dark (boot loop with cycle period / hung after boot / silent /
     /// inconclusive). The dark-device doctrine is built in: silence only
@@ -375,6 +438,13 @@ enum ProfileChoice {
     #[value(name = "vpn-pia-openvpn")]
     VpnPiaOpenvpn,
     CashuVpnClient,
+    /// 1.x preset name (one word, kebab by default).
+    VpnNordvpn,
+    /// 1.x spelling.
+    #[value(name = "vpn-nordvpn-openvpn")]
+    VpnNordvpnOpenvpn,
+    /// 1.x preset name (kebab by default).
+    VpnPia,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -548,6 +618,78 @@ struct ProfileArgs {
     /// vpn-pia-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
     #[arg(long)]
     pia_ovpn_no_management: bool,
+    /// vpn-nordvpn: resolved NordLynx private key (required).
+    #[arg(long)]
+    nord_private_key: Option<String>,
+    /// vpn-nordvpn: server WireGuard public key (required).
+    #[arg(long)]
+    nord_server_public_key: Option<String>,
+    /// vpn-nordvpn: endpoint IP or hostname (required).
+    #[arg(long)]
+    nord_endpoint_host: Option<String>,
+    /// vpn-nordvpn: resolved route-target IP for the endpoint pin (required).
+    #[arg(long)]
+    nord_route_target: Option<String>,
+    /// vpn-nordvpn: endpoint UDP port (default 51820).
+    #[arg(long)]
+    nord_endpoint_port: Option<String>,
+    /// vpn-nordvpn: upstream gateway IP (empty = runtime discovery).
+    #[arg(long)]
+    nord_gateway: Option<String>,
+    /// vpn-nordvpn: upstream interface (default wwan).
+    #[arg(long)]
+    nord_iface: Option<String>,
+    /// vpn-nordvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    nord_no_kill_switch: bool,
+    /// vpn-nordvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    nord_no_management: bool,
+    /// vpn-nordvpn-openvpn: resolved service username (required).
+    #[arg(long)]
+    nordovpn_username: Option<String>,
+    /// vpn-nordvpn-openvpn: resolved service password (required).
+    #[arg(long)]
+    nordovpn_password: Option<String>,
+    /// vpn-nordvpn-openvpn: server station IP (required).
+    #[arg(long)]
+    nordovpn_station: Option<String>,
+    /// vpn-nordvpn-openvpn: server hostname for the x509 pin (required).
+    #[arg(long)]
+    nordovpn_hostname: Option<String>,
+    /// vpn-nordvpn-openvpn: udp or tcp (default udp).
+    #[arg(long)]
+    nordovpn_proto: Option<String>,
+    /// vpn-nordvpn-openvpn: OpenVPN cipher (default AES-256-CBC).
+    #[arg(long)]
+    nordovpn_cipher: Option<String>,
+    /// vpn-nordvpn-openvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    nordovpn_no_kill_switch: bool,
+    /// vpn-nordvpn-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    nordovpn_no_management: bool,
+    /// vpn-pia: PIA username (the p-number; required).
+    #[arg(long)]
+    pia_username: Option<String>,
+    /// vpn-pia: PIA password (required).
+    #[arg(long)]
+    pia_password: Option<String>,
+    /// vpn-pia: PIA region slug (default netherlands).
+    #[arg(long)]
+    pia_region: Option<String>,
+    /// vpn-pia: upstream gateway IP pinning the server route (required).
+    #[arg(long)]
+    pia_gateway: Option<String>,
+    /// vpn-pia: upstream interface (default wwan).
+    #[arg(long)]
+    pia_iface: Option<String>,
+    /// vpn-pia: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    pia_no_kill_switch: bool,
+    /// vpn-pia: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    pia_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -703,6 +845,12 @@ enum AgentCommand {
         /// Shared (non-exclusive) lease.
         #[arg(long)]
         shared: bool,
+        /// Controller identity presented at handshake (default
+        /// `conwrt-cli`). Distinct identities prove CROSS-controller
+        /// exclusivity — same-id reacquisition is a different code path
+        /// (#463).
+        #[arg(long)]
+        controller: Option<String>,
     },
     /// Query a stream transfer's status (the resume token).
     Status {
@@ -757,6 +905,37 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::UbootLoady {
+            port,
+            baud,
+            addr,
+            image,
+            name,
+            pre,
+            boot,
+        } => {
+            let data = std::fs::read(&image).unwrap_or_else(|e| {
+                eprintln!("conwrt: cannot read {image}: {e}");
+                std::process::exit(2);
+            });
+            println!(
+                "conwrt: uboot-loady {image} ({} bytes) -> {addr}, boot={boot}",
+                data.len()
+            );
+            match conwrt_serial::uboot::flash_stage_loady(
+                &port, baud, &addr, &name, &data, &pre, boot,
+            ) {
+                Ok(()) => {
+                    println!("conwrt: uboot-loady stage complete (RAM-only; flash untouched)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("conwrt: uboot-loady FAILED: {e}");
+                    eprintln!("conwrt: gates held — nothing was booted from a bad load");
+                    ExitCode::from(5)
+                }
+            }
+        }
         Command::SerialRecover {
             port,
             baud,
@@ -764,7 +943,7 @@ fn main() -> ExitCode {
             timeout,
         } => {
             use conwrt_serial::io::open_break_port;
-            use conwrt_serial::recovery::reboot_wedged;
+            use conwrt_serial::recovery::reboot_wedged_any;
             use std::time::Duration;
 
             let mut io = match open_break_port(&port, baud, Duration::from_secs(1)) {
@@ -775,11 +954,12 @@ fn main() -> ExitCode {
                 }
             };
             println!("BREAK + sysrq-b on {port} ...");
-            match reboot_wedged(
-                io.as_mut(),
-                marker.as_bytes(),
-                Duration::from_secs(timeout as u64),
-            ) {
+            let markers: Vec<&[u8]> = marker
+                .split(',')
+                .map(|m| m.trim().as_bytes())
+                .filter(|m| !m.is_empty())
+                .collect();
+            match reboot_wedged_any(io.as_mut(), &markers, Duration::from_secs(timeout as u64)) {
                 Ok(out) => {
                     println!(
                         "{out:?} - keep this console reader attached until the device is stable."
@@ -849,6 +1029,25 @@ fn main() -> ExitCode {
             dir,
         } => cmd_diagnose(ip, interface, http_port, ssh_port, key, &dir),
         Command::Probe { ip, scenario, dir } => cmd_probe(ip, scenario, &dir),
+        Command::Zycast {
+            image,
+            interface,
+            image_type,
+            loops,
+            delay_ms,
+            group,
+            port,
+            confirm_specimen,
+        } => zycast::run(zycast::ZycastArgs {
+            image,
+            interface,
+            image_type,
+            loops,
+            delay_ms,
+            group,
+            port,
+            confirm_specimen,
+        }),
         Command::DarkWatch {
             ip,
             interface,
@@ -1549,6 +1748,96 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnPia => {
+            let (username, password) = match (args.pia_username.clone(), args.pia_password.clone())
+            {
+                (Some(u), Some(p)) => (u, p),
+                _ => {
+                    return Err("--pia-username and --pia-password are required for vpn-pia".into());
+                }
+            };
+            let gateway = args.pia_gateway.clone().unwrap_or_default();
+            if gateway.is_empty() {
+                return Err(
+                    "--pia-gateway is required for vpn-pia (the circular-routing pin)".into(),
+                );
+            }
+            Ok(Profile::VpnPia(VpnPiaProfile {
+                username,
+                password,
+                region: args
+                    .pia_region
+                    .clone()
+                    .unwrap_or_else(|| "netherlands".into()),
+                upstream_gateway: gateway,
+                upstream_iface: args.pia_iface.clone().unwrap_or_else(|| "wwan".into()),
+                kill_switch: !args.pia_no_kill_switch,
+                allow_management: !args.pia_no_management,
+            }))
+        }
+        ProfileChoice::VpnNordvpnOpenvpn => {
+            let (username, password, station, hostname) = match (
+                args.nordovpn_username.clone(),
+                args.nordovpn_password.clone(),
+                args.nordovpn_station.clone(),
+                args.nordovpn_hostname.clone(),
+            ) {
+                (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                _ => {
+                    return Err(
+                        "--nordovpn-username, --nordovpn-password, --nordovpn-station and \
+                         --nordovpn-hostname are required for vpn-nordvpn-openvpn (resolve them \
+                         on the host with 1.x `python3 scripts/nordvpn.py config --token TOKEN`)"
+                            .into(),
+                    );
+                }
+            };
+            Ok(Profile::VpnNordvpnOpenvpn(VpnNordvpnOpenvpnProfile {
+                username,
+                password,
+                station,
+                hostname,
+                proto: args.nordovpn_proto.clone().unwrap_or_else(|| "udp".into()),
+                cipher: args
+                    .nordovpn_cipher
+                    .clone()
+                    .unwrap_or_else(|| "AES-256-CBC".into()),
+                kill_switch: !args.nordovpn_no_kill_switch,
+                allow_management: !args.nordovpn_no_management,
+            }))
+        }
+        ProfileChoice::VpnNordvpn => {
+            let (private_key, server_public_key, endpoint_host, route_target) =
+                match (
+                    args.nord_private_key.clone(),
+                    args.nord_server_public_key.clone(),
+                    args.nord_endpoint_host.clone(),
+                    args.nord_route_target.clone(),
+                ) {
+                    (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                    _ => return Err(
+                        "--nord-private-key, --nord-server-public-key, --nord-endpoint-host and \
+                         --nord-route-target are required for vpn-nordvpn (resolve them on the \
+                         host with 1.x `python3 scripts/nordvpn.py config --token TOKEN`)"
+                            .into(),
+                    ),
+                };
+            Ok(Profile::VpnNordvpn(VpnNordvpnProfile {
+                private_key,
+                server_public_key,
+                endpoint_host,
+                route_target,
+                endpoint_port: args
+                    .nord_endpoint_port
+                    .clone()
+                    .unwrap_or_else(|| "51820".into()),
+                upstream_gateway: args.nord_gateway.clone().unwrap_or_default(),
+                upstream_iface: args.nord_iface.clone().unwrap_or_else(|| "wwan".into()),
+                kill_switch: !args.nord_no_kill_switch,
+                allow_management: !args.nord_no_management,
+                ..VpnNordvpnProfile::default()
+            }))
+        }
         ProfileChoice::VpnPiaOpenvpn => {
             let (username, password) = match (
                 args.pia_ovpn_username.clone(),
@@ -2458,15 +2747,17 @@ fn cmd_agent(command: AgentCommand) -> ExitCode {
             addr,
             resource,
             shared,
+            controller,
         } => {
             // #378: the lease is held for the process lifetime — a
             // heartbeat loop keeps it alive and Ctrl-C releases it. An
             // acquired-then-abandoned lease pins the resource until
             // agent restart.
+            let controller_id = controller.unwrap_or_else(|| "conwrt-cli".to_string());
             let result: Result<conwrt_agent_proto::protocol::LeaseResponse, _> =
                 rt.block_on(async {
                 let mut client = AgentClient::connect(&addr).await?;
-                client.handshake("conwrt-cli").await?;
+                client.handshake(&controller_id).await?;
                 let resp = client
                     .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
                         resource,
@@ -2651,6 +2942,30 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            pia_username: None,
+            pia_password: None,
+            pia_region: None,
+            pia_gateway: None,
+            pia_iface: None,
+            pia_no_kill_switch: false,
+            pia_no_management: false,
+            nordovpn_username: None,
+            nordovpn_password: None,
+            nordovpn_station: None,
+            nordovpn_hostname: None,
+            nordovpn_proto: None,
+            nordovpn_cipher: None,
+            nordovpn_no_kill_switch: false,
+            nordovpn_no_management: false,
+            nord_private_key: None,
+            nord_server_public_key: None,
+            nord_endpoint_host: None,
+            nord_route_target: None,
+            nord_endpoint_port: None,
+            nord_gateway: None,
+            nord_iface: None,
+            nord_no_kill_switch: false,
+            nord_no_management: false,
             pia_ovpn_username: None,
             pia_ovpn_password: None,
             pia_ovpn_port: None,
