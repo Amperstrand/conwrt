@@ -126,7 +126,7 @@ class TestSshKeyOps:
         assert "printf" in ops[2].command and "'key1'" in ops[2].command
         assert "chmod 600" in ops[3].command
         assert "chown 0:0" in ops[4].command
-        assert "stat -c '%u %a'" in ops[5].command  # ownership gate (#464)
+        assert "[ -O " in ops[5].command and "-perm 600" in ops[5].command  # BusyBox-safe gate (#464)
         assert "grep -qF 'key1'" in ops[6].command
         assert "|| exit 1" in ops[6].command
 
@@ -716,7 +716,7 @@ class TestSshKey229LockoutSafety:
         dry = "\n".join(
             "true # " + line
             if line.startswith("uci ") or line.startswith('[ "$(uci get')
-            or line.startswith('[ "$(stat')
+            or line.startswith('[ -O ')
             else line
             for line in dry.splitlines()
         )
@@ -754,7 +754,7 @@ class TestSshKey229LockoutSafety:
         dry = "\n".join(
             "true # " + line
             if line.startswith("uci ") or line.startswith('[ "$(uci get')
-            or line.startswith('[ "$(stat')
+            or line.startswith('[ -O ')
             else line
             for line in dry.splitlines()
         )
@@ -902,12 +902,12 @@ class TestSshKeyGateHardening:
         from profile.builder import _ssh_key_firstboot
 
         script = _ssh_key_firstboot(["ssh-ed25519 AAAA"])
-        assert "stat -c '%u %a'" in script
+        assert "[ -O " in script and "find " in script and "-perm 600" in script
         assert (
             "conwrt-ssh: key ownership/mode verify failed" in script
         ), "ownership verify must fail the script (retained for retry)"
         # the verify must sit BEFORE the password-auth disable
-        assert script.index("stat -c") < script.index("PasswordAuth='off'")
+        assert script.index("[ -O ") < script.index("PasswordAuth='off'")
 
     def test_firstboot_propagates_commit_failure(self):
         from profile.builder import _ssh_key_firstboot
@@ -925,7 +925,7 @@ class TestSshKeyGateHardening:
             op.command for op in _ssh_key_ops(["ssh-ed25519 AAAA"])
             if hasattr(op, "command")
         )
-        assert "stat -c '%u %a'" in rendered
+        assert "[ -O " in rendered and "-perm 600" in rendered
         # typed UciCommit cannot carry `||`; the ops-side persistence gate
         # bites because a failed commit leaves STAGED changes behind
         assert 'uci changes dropbear' in rendered

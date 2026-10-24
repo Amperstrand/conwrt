@@ -48,10 +48,12 @@ def _ssh_key_firstboot(keys: list[str]) -> str:
     # P1 (#464): the repairs above are unchecked ops — a failed repair with
     # a stale matching authorized_keys must NOT reach the password-auth
     # disable (dropbear would refuse the file and the box is locked out).
-    # Verify ownership/mode EXPLICITLY, before any auth change.
+    # Verify ownership/mode EXPLICITLY, before any auth change, using
+# only default-image BusyBox primitives (stat is compiled out of
+# stock OpenWrt: BUSYBOX_DEFAULT_STAT=n — test -O + find -perm are y).
     lines.append(
-        f"[ \"$(stat -c '%u %a' {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null)\" = '0 600' ]"
-        f" && [ \"$(stat -c '%u' {dropbear_dir} 2>/dev/null)\" = '0' ]"
+        f"[ -O {DROPBEAR_AUTH_KEYS_PATH} ] && [ -O {dropbear_dir} ]"
+        f" && [ -n \"$(find {DROPBEAR_AUTH_KEYS_PATH} -maxdepth 0 -perm 600 2>/dev/null)\" ]"
         " || { echo 'conwrt-ssh: key ownership/mode verify failed;"
         " keeping password auth, will retry next boot' >&2; exit 1; }"
     )
@@ -106,8 +108,8 @@ def _ssh_key_ops(keys: list[str]) -> list[Op]:
     )
     ops.append(
         ShellCommand(
-            f"[ \"$(stat -c '%u %a' {DROPBEAR_AUTH_KEYS_PATH} 2>/dev/null)\" = '0 600' ]"
-            f" && [ \"$(stat -c '%u' {dropbear_dir} 2>/dev/null)\" = '0' ]"
+            f"[ -O {DROPBEAR_AUTH_KEYS_PATH} ] && [ -O {dropbear_dir} ]"
+            f" && [ -n \"$(find {DROPBEAR_AUTH_KEYS_PATH} -maxdepth 0 -perm 600 2>/dev/null)\" ]"
             " || { echo 'conwrt-ssh: key ownership/mode verify failed;"
             " keeping password auth, will retry next boot' >&2; exit 1; }"
         )
