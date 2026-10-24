@@ -1,10 +1,11 @@
-# golden: conwrt 1.x output of scripts/use_cases/<plugin>.py build_configure — regenerate with the command in tests/use_case_goldens.rs
 # --- Guest WiFi: 'Guest' ---
 _lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo '192.168.1.1')
 _guest_o3=$(echo "$_lan_ip" | cut -d. -f3)
 _guest_o3=$((_guest_o3 + 1))
 [ "$_guest_o3" -gt 255 ] && _guest_o3=0
 _guest_prefix=$(echo "$_lan_ip" | cut -d. -f1-2).$_guest_o3
+
+_radio=""; for _r in radio0 radio1 radio2 radio3; do _b=$(uci get wireless.${_r}.band 2>/dev/null || true); if [ "$_b" = "2g" ]; then _radio=$_r; break; fi; done; if [ -z "$_radio" ]; then echo 'guest-wifi: no 2g radio found — aborting before any config changes' >&2; exit 1; fi
 
 uci set network.guest=interface
 uci set network.guest.ipaddr="$_guest_prefix.1"
@@ -43,7 +44,7 @@ uci set firewall.guest_dhcp.target='ACCEPT'
 uci commit firewall
 
 while uci show wireless 2>/dev/null | grep -q "network='guest'"; do _s=$(uci show wireless 2>/dev/null | grep "network='guest'" | head -1 | cut -d. -f2 | cut -d= -f1); uci delete "wireless.$_s" 2>/dev/null; done; true
-_radio=""; for _r in radio0 radio1 radio2 radio3; do _b=$(uci get wireless.${_r}.band 2>/dev/null); if [ "$_b" = "2g" ]; then _radio=$_r; break; fi; done; if [ -n "$_radio" ]; then uci set wireless.guest_ap=wifi-iface; uci set wireless.guest_ap.device=$_radio; uci set wireless.guest_ap.mode=ap; uci set wireless.guest_ap.ssid='Guest'; uci set wireless.guest_ap.encryption=psk2; uci set wireless.guest_ap.network=guest; uci set wireless.guest_ap.isolate=1; fi
+uci set wireless.guest_ap=wifi-iface; uci set wireless.guest_ap.device=$_radio; uci set wireless.guest_ap.mode=ap; uci set wireless.guest_ap.ssid='Guest'; uci set wireless.guest_ap.encryption=psk2; uci set wireless.guest_ap.network=guest; uci set wireless.guest_ap.isolate=1
 uci commit wireless
 
 /etc/init.d/network restart

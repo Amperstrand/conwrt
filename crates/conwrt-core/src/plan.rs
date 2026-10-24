@@ -4622,6 +4622,21 @@ fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, U
         PlanOp::Shell {
             command: "_guest_prefix=$(echo \"$_lan_ip\" | cut -d. -f1-2).$_guest_o3".into(),
         },
+        // Radio discovery + HARD GATE before any section is written
+        // (#454): a band the device lacks aborts with ZERO partial
+        // config. The loop's uci get is set -e-safe (missing radios
+        // fail their get) — the old shape committed network/dhcp/
+        // firewall first and only then probed.
+        PlanOp::Shell {
+            command: format!(
+                "_radio=\"\"; for _r in radio0 radio1 radio2 radio3; do \
+                 _b=$(uci get wireless.${{_r}}.band 2>/dev/null || true); \
+                 if [ \"$_b\" = \"{band_short}\" ]; then _radio=$_r; break; fi; done; \
+                 if [ -z \"$_radio\" ]; then \
+                 echo 'guest-wifi: no {band_short} radio found — aborting before any config changes' >&2; \
+                 exit 1; fi"
+            ),
+        },
         section("network", net, "interface", vec![]),
         PlanOp::Shell {
             command: format!("uci set network.{net}.ipaddr=\"$_guest_prefix.1\""),
@@ -4702,17 +4717,11 @@ fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, U
         },
     ];
     // Radio discovery by band (1.x `_radio` loop) + named VAP section
-    // (idempotent — overwrites on reconfigure). NOTE (1.x parity): an
-    // unguarded `uci get` for a missing radio fails the line; on the
-    // 1.x apply path this script runs without `set -e` member-joins —
-    // apply targets are wifi hardware where the loop terminates before
-    // missing radios.
+    // (idempotent — overwrites on reconfigure). $_radio is guaranteed by
+    // the hard gate before the first commit (#454) — the VAP sets are
+    // unconditional; the loop itself now lives up front with the gate.
     let mut radio_line = format!(
-        "_radio=\"\"; for _r in radio0 radio1 radio2 radio3; do \
-         _b=$(uci get wireless.${{_r}}.band 2>/dev/null); \
-         if [ \"$_b\" = \"{band_short}\" ]; then _radio=$_r; break; fi; done; \
-         if [ -n \"$_radio\" ]; then \
-         uci set wireless.guest_ap=wifi-iface; \
+        "uci set wireless.guest_ap=wifi-iface; \
          uci set wireless.guest_ap.device=$_radio; \
          uci set wireless.guest_ap.mode=ap; \
          uci set wireless.guest_ap.ssid={ssid_q}; \
@@ -4725,7 +4734,7 @@ fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, U
     }
     radio_line.push_str(&format!(
         "uci set wireless.guest_ap.network={net}; \
-         uci set wireless.guest_ap.isolate={isolated}; fi"
+         uci set wireless.guest_ap.isolate={isolated}"
     ));
     ops.push(PlanOp::Shell {
         command: radio_line,
