@@ -15,7 +15,7 @@
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
-    "wifi": "none (5G/NR modem only, no WiFi radio)",
+    "wifi": "1x 2.4GHz 802.11n HT20 (single mt76/mac80211 radio, radio0); NO 5GHz radio",
     "modem": {
       "model": "Quectel RG502Q-EA",
       "usb_vendor_id": "2c7c",
@@ -300,6 +300,11 @@
       "latency_ms": 43,
       "signal_rsrp_dbm": -74,
       "notes": "uci set network.wan.apn=ice.net && uqmi ifup wan. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Only APN change needed. Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+    },
+    "wifi_ap": {
+      "tested": true,
+      "date": "2026-10-24",
+      "notes": "3 AP vifs beaconing on radio0 (2g ch1 HT20 country=DE) on the ice+ bench unit; TollGate E2E served over WiFi (moto g client, -56 dBm). Concurrent STA+AP on the single radio untested — treat as exclusive."
     }
   },
   "cellular": {
@@ -332,7 +337,8 @@
   "capabilities": [
     "ethernet",
     "cellular",
-    "serial"
+    "serial",
+    "wifi"
   ],
   "serial_configuration": {
     "verified": true,
