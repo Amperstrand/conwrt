@@ -11,6 +11,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from conwrt.device_inventory import auto_detect_interface
+from conwrt.device_credentials import (
+    blank_password_probe,
+    generate as generate_password,
+    is_blank,
+    mac_probe,
+    record as record_password,
+    set_password_cmd,
+)
 from conwrt.postflash import (
     _apply_profile_post_flash,
     _cfg_install_ssh_key,
@@ -43,6 +51,40 @@ def _sta_config_from_args(args: argparse.Namespace, cfg) -> "WifiSTAConfig | Non
                     or (existing.encryption if existing else "psk2")),
         key=getattr(args, "sta_key", None) or (existing.key if existing else ""),
     )
+
+
+def _ensure_root_password(
+    ip: str,
+    ssh_key: str | None,
+    provided: str | None,
+    model_id: str,
+    log_fn=log,
+) -> None:
+    """No device left with a blank root password after a conwrt configure.
+
+    A blank root password is the bench recovery primitive, but with
+    system-auth services (uhttpd/LuCI) listening it is a remote-root hole
+    on any shared or mesh interface. Setting a password only ADDS an auth
+    method — installed SSH keys keep working, so this cannot lock us out.
+    Every issued password lands in the gitignored credential file keyed
+    by MAC for recovery.
+    """
+    probe = run_ssh(ip, blank_password_probe(), key=ssh_key)
+    if not is_blank(probe.stdout):
+        if provided:
+            record_password(provided, mac=run_ssh(ip, mac_probe(), key=ssh_key).stdout.strip(),
+                            model=model_id, ip=ip, source="configure-explicit")
+            log_fn("  root password already set (provided password recorded for recovery)")
+        return
+    password = provided or generate_password()
+    run_ssh(ip, set_password_cmd(password), key=ssh_key)
+    after = run_ssh(ip, blank_password_probe(), key=ssh_key)
+    if is_blank(after.stdout):
+        log_fn("  ⚠ failed to set root password (still blank) — check device state")
+        return
+    mac = run_ssh(ip, mac_probe(), key=ssh_key).stdout.strip()
+    path = record_password(password, mac=mac, model=model_id, ip=ip, source="configure")
+    log_fn(f"  root password was BLANK — random password set and recorded to {path} (mac={mac})")
 
 
 def cmd_configure(args: argparse.Namespace) -> int:
@@ -120,6 +162,12 @@ def cmd_configure(args: argparse.Namespace) -> int:
     if not ip and not args.dry_run:
         log("  ⚠ Profile application failed (no IP). Aborting configure.")
         return 1
+
+    if not args.dry_run:
+        _ensure_root_password(
+            ip, ssh_key=ssh_key_path, provided=password or None,
+            model_id=model_id or "", log_fn=log,
+        )
 
     if args.verify and not args.dry_run:
         _verify_persistence(
