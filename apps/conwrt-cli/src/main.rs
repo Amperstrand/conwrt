@@ -72,6 +72,32 @@ enum Command {
     /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
     /// (Rust port of scripts/serial-console.py --monitor).
 
+    /// U-Boot serial flash stage (RAM-only): BREAK-reboot ladder,
+    /// loady + YMODEM the image, size + iminfo gates, explicit-address
+    /// bootm. Bench-proven on the GS1900-8HP/RTL8382M 2026-10-23.
+    UbootLoady {
+        /// Serial port spec, e.g. /dev/serial/by-id/usb-FTDI_...-port0.
+        #[arg(long)]
+        port: String,
+        /// Baud rate (GS1900 console: 115200).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// RAM load address for loady (GS1900: 0x84f00000).
+        #[arg(long, default_value = "0x84f00000")]
+        addr: String,
+        /// Image file to YMODEM (initramfs-kernel.bin for a boot test).
+        #[arg(long)]
+        image: String,
+        /// Remote file name advertised in the YMODEM header.
+        #[arg(long, default_value = "openwrt-initramfs.bin")]
+        name: String,
+        /// Extra U-Boot commands to run BEFORE loady (e.g. "setsys bootpartition 0").
+        #[arg(long = "pre")]
+        pre: Vec<String>,
+        /// Boot the image after the gates pass (bootm <addr>).
+        #[arg(long, default_value_t = true)]
+        boot: bool,
+    },
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -785,6 +811,37 @@ fn main() -> ExitCode {
                 _ => {
                     eprintln!("conwrt: no console data at any candidate rate");
                     ExitCode::from(4)
+                }
+            }
+        }
+        Command::UbootLoady {
+            port,
+            baud,
+            addr,
+            image,
+            name,
+            pre,
+            boot,
+        } => {
+            let data = std::fs::read(&image).unwrap_or_else(|e| {
+                eprintln!("conwrt: cannot read {image}: {e}");
+                std::process::exit(2);
+            });
+            println!(
+                "conwrt: uboot-loady {image} ({} bytes) -> {addr}, boot={boot}",
+                data.len()
+            );
+            match conwrt_serial::uboot::flash_stage_loady(
+                &port, baud, &addr, &name, &data, &pre, boot,
+            ) {
+                Ok(()) => {
+                    println!("conwrt: uboot-loady stage complete (RAM-only; flash untouched)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("conwrt: uboot-loady FAILED: {e}");
+                    eprintln!("conwrt: gates held — nothing was booted from a bad load");
+                    ExitCode::from(5)
                 }
             }
         }
