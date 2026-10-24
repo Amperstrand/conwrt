@@ -83,7 +83,10 @@ enum Command {
         /// Boot marker(s) to wait for after the reboot; comma-separated
         /// matches ANY (default: the standard boot-start set — kernel
         /// handoff, bootloader banner, procd init).
-        #[arg(long, default_value = "Starting kernel,U-Boot,procd: - init,init: - preinit")]
+        #[arg(
+            long,
+            default_value = "Starting kernel,U-Boot,procd: - init,init: - preinit"
+        )]
         marker: String,
         /// Overall timeout in seconds.
         #[arg(long, default_value_t = 240)]
@@ -776,11 +779,7 @@ fn main() -> ExitCode {
                 .map(|m| m.trim().as_bytes())
                 .filter(|m| !m.is_empty())
                 .collect();
-            match reboot_wedged_any(
-                io.as_mut(),
-                &markers,
-                Duration::from_secs(timeout as u64),
-            ) {
+            match reboot_wedged_any(io.as_mut(), &markers, Duration::from_secs(timeout as u64)) {
                 Ok(out) => {
                     println!(
                         "{out:?} - keep this console reader attached until the device is stable."
