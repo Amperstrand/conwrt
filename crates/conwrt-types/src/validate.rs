@@ -78,6 +78,9 @@ pub fn validate_model(model: &DeviceModel, filename_stem: Option<&str>) -> Vec<S
     if model.openwrt.version.is_empty() {
         problems.push("openwrt.version: must not be empty".to_string());
     }
+    if model.openwrt.default_ip.as_deref() == Some("") {
+        problems.push("openwrt.default_ip: must not be empty".to_string());
+    }
 
     // capabilities: required, enum, uniqueItems
     match &model.capabilities {
@@ -224,6 +227,21 @@ mod tests {
             warnings: None,
             extras: crate::ordered_map::OrderedMap::new(),
         }
+    }
+
+    #[test]
+    fn default_ip_empty_is_rejected_like_the_schema() {
+        // schemas/model.schema.json enforces minLength 1 on
+        // openwrt.default_ip; the Rust validator must agree (#473).
+        let mut m = base_model();
+        assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
+        m.openwrt.default_ip = Some("192.168.8.1".into());
+        assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
+        m.openwrt.default_ip = Some(String::new());
+        assert_eq!(
+            validate_model(&m, Some("vendor-model-1")),
+            vec!["openwrt.default_ip: must not be empty".to_string()]
+        );
     }
 
     #[test]

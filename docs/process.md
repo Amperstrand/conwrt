@@ -154,7 +154,7 @@ The 4 discovery steps are **read-only by design**. Once discovery is complete an
    ```bash
    python3 scripts/inventory.py --add \
      --model "COMFAST CF-WR632AX" \
-     --mac "40:a5:ef:9c:eb:67" \
+     --mac "<mac>" \
      --serial "<serial>" \
      --firmware "OpenWrt 25.12.2" \
      --notes "LAN IP: 192.168.x.x"

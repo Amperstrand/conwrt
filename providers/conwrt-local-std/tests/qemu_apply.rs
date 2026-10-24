@@ -9,16 +9,29 @@
 //!
 //! Coverage: `sqm` (prebaked packages), `wireguard-client` (packages
 //! prebaked in the fixture image — full plan applies, kill-switch verify
-//! loop runs its real 30 s failure tail), and `tether` (shell surface
+//! loop runs its real 30 s failure tail), `tether` (shell surface
 //! only: the USB kmods are NOT prebakeable into the fixture image and
 //! the VM has no USB device, so `EnsurePackage` ops are stripped and the
 //! hardware-gated parts — USB detection actually finding a device,
 //! `network.usbwan` coming up — are marked and not asserted; what IS
 //! asserted is the script applying cleanly and the ADB hotplug hook
-//! installing, the parts a VM can prove).
+//! installing, the parts a VM can prove), `openclash` + `ssl` (§4
+//! ports of PR #486: config surface only — package delivery is stripped
+//! like tether's (luci-app-openclash is third-party, not prebakeable;
+//! the ssl TLS-backend guard is package-manager territory), a stub
+//! rc.common service + the package's default uci section stand in for
+//! the package, and ssl is proven in BOTH the cert-less negative
+//! (skips loudly, verification fails by name) and the cert-present
+//! positive (host-minted self-signed certs, full verify)), and
+//! `nodns` + `pbr` (§4 ring-2 leg: nodns carries zero fixture-foreign
+//! dependencies so the FULL plan — initd + poll-script heredocs,
+//! dnsmasq addn-hosts wiring, service enable — applies verbatim; pbr
+//! follows the openclash strip+stub pattern for its non-prebaked
+//! packages, with the unquoted interface lines applied and read back).
 
 use conwrt_core::plan::{
-    PlanOp, Profile, SqmProfile, TetherProfile, WireguardClientProfile, WireguardServerProfile,
+    NodnsProfile, OpenClashProfile, PbrProfile, PlanOp, Profile, SqmProfile, SslProfile,
+    TetherProfile, VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
     plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
@@ -336,6 +349,137 @@ async fn wireguard_server_plan_applies_and_verifies_on_real_openwrt() {
         .await;
 }
 
+#[tokio::test]
+async fn nodns_full_plan_applies_and_verifies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // FULL plan, nothing stripped: the preset's whole footprint is
+    // shell + curl + dnsmasq addn-hosts wiring — all in the fixture
+    // base image. The initd + poll-script heredocs, the dnsmasq
+    // addn-hosts list, and the service enable all run for real.
+    let plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Nodns(NodnsProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let readback = session
+        .exec(
+            "uci -q get dhcp.@dnsmasq[0].addnhosts; \
+             test -x /usr/bin/nodns-poll.sh && echo poll-ok; \
+             test -f /etc/init.d/nodns-bridge && echo initd-ok; \
+             grep -q 'API_URL=\"https://nodns.shop\"' /usr/bin/nodns-poll.sh && echo url-ok",
+        )
+        .await
+        .expect("nodns readback");
+    let readback = String::from_utf8_lossy(&readback.stdout);
+    assert!(
+        readback.contains("/etc/dnsmasq.d/nodns.hosts"),
+        "got: {readback}"
+    );
+    assert!(readback.contains("poll-ok"), "got: {readback}");
+    assert!(readback.contains("initd-ok"), "got: {readback}");
+    assert!(readback.contains("url-ok"), "got: {readback}");
+
+    // rollback so repeated runs stay clean (stop first — respawn would
+    // relaunch the poll loop against the live URL)
+    let _ = session
+        .exec(
+            "/etc/init.d/nodns-bridge stop 2>/dev/null; \
+             /etc/init.d/nodns-bridge disable 2>/dev/null; \
+             rm -f /etc/init.d/nodns-bridge /usr/bin/nodns-poll.sh /etc/rc.d/S99nodns-bridge; \
+             uci -q del_list dhcp.@dnsmasq[0].addnhosts='/etc/dnsmasq.d/nodns.hosts'; \
+             uci commit dhcp; rm -rf /etc/dnsmasq.d; true",
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn pbr_config_surface_applies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebaked packages (openclash pattern): the
+    // pbr package ships /etc/config/pbr and an init script the plan's
+    // enable/restart + enabled-verification target.
+    let _ = session
+        .exec(
+            "touch /etc/config/pbr; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nUSE_PROCD=1\\nstart() { :; }\\n' > /etc/init.d/pbr; \
+             chmod +x /etc/init.d/pbr; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Pbr(PbrProfile {
+            wan_interface: "wwan".into(),
+            lan_interface: "guest".into(),
+            strict_enforcement: false,
+        }),
+    )
+    .expect("plan for confirmed VM");
+    plan.ops
+        .retain(|op| !matches!(op, PlanOp::EnsurePackage { .. }));
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    // the UNQUOTED interface lines are the byte-parity risk this port
+    // gates with its charset validator — read them back on a real uci
+    let uci = session
+        .exec("uci -q show pbr.config")
+        .await
+        .expect("pbr readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("enabled='1'"), "got: {uci}");
+    assert!(uci.contains("strict_enforcement='0'"), "got: {uci}");
+    assert!(
+        uci.contains("netifd_interface_default='wwan'"),
+        "got: {uci}"
+    );
+    assert!(uci.contains("netifd_interface_local='guest'"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec("rm -f /etc/init.d/pbr /etc/rc.d/S99pbr; rm -f /etc/config/pbr; true")
+        .await;
+}
+
 fn sqm_defaults() -> SqmProfile {
     SqmProfile {
         download_kbps: 10_000,
@@ -346,4 +490,314 @@ fn sqm_defaults() -> SqmProfile {
         link_layer: "none".into(),
         overhead: 0,
     }
+}
+
+/// Strip the package-delivery ops a VM cannot honor: luci-app-openclash
+/// is third-party (vernesong feed — not prebakeable into the fixture
+/// image), the dnsmasq→dnsmasq-full swap is opkg/apk territory, and the
+/// ssl TLS-backend guard may attempt a package install on a backend-less
+/// fixture (the VM has no package feeds). On real hardware the full
+/// plan applies unchanged (tether precedent).
+fn strip_package_ops(plan: &mut conwrt_core::plan::Plan) {
+    plan.ops.retain(|op| match op {
+        PlanOp::EnsurePackage { .. } => false,
+        PlanOp::Shell { command } => {
+            // both guards open by probing the installed-package state
+            !command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")
+                && !command.starts_with("if ! (opkg list-installed")
+        }
+        _ => true,
+    });
+}
+
+#[tokio::test]
+async fn vpn_pia_openvpn_applies_and_proves_the_honest_failure_path() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebaked openvpn-openssl package: uci needs
+    // the config file to exist, and the payload's restart-||-start tail
+    // needs the init script (openclash stub pattern).
+    let _ = session
+        .exec(
+            "touch /etc/config/openvpn; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nstart() { :; }\\nrestart() { :; }\\n' > /etc/init.d/openvpn; \
+             chmod +x /etc/init.d/openvpn; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "ring2-testpass".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        }),
+    )
+    .expect("plan for confirmed VM");
+    plan.ops
+        .retain(|op| !matches!(op, PlanOp::EnsurePackage { .. }));
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 (the failure TAIL restores WAN by design):\n{}\nstderr:\n{}",
+        outcome.script, outcome.stderr
+    );
+
+    // The honest-failure contract (#514 round-1 review): with no real
+    // tunnel the tun0 verification check FAILS BY NAME instead of the
+    // apply reading as success.
+    assert!(
+        !outcome.fully_verified(),
+        "a tunnel-less VM must NOT verify as applied"
+    );
+    let failed: Vec<&str> = outcome
+        .verification
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.description.as_str())
+        .collect();
+    assert!(
+        failed.iter().any(|d| d.contains("tun0 has an address")),
+        "the tun0 readiness check must be the named failure, got: {failed:?}"
+    );
+
+    // Everything a VM CAN prove read back on real uci: the openvpn
+    // instance, the vpn zone migration (wg0 → tun0), the kill switch
+    // REMOVED by the failure tail, and the tunnel DNS.
+    let uci = session
+        .exec(
+            "uci -q get openvpn.pia.enabled; \
+             uci -q get firewall.vpn_zone.network; \
+             uci -q get firewall.vpn_killswitch.target || echo killswitch-gone; \
+             uci -q get dhcp.@dnsmasq[0].server | tr '\\n' ' '; \
+             uci -q get dhcp.@dnsmasq[0].noresolv",
+        )
+        .await
+        .expect("pia readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("1"), "openvpn.pia.enabled: {uci}");
+    assert!(uci.contains("tun0"), "vpn_zone.network: {uci}");
+    assert!(
+        uci.contains("killswitch-gone"),
+        "the failure tail must have removed the kill switch: {uci}"
+    );
+    assert!(uci.contains("10.0.0.243"), "tunnel DNS: {uci}");
+    // the noresolv readback prints the bare value `1` (trailing newline)
+    assert!(
+        uci.trim_end().ends_with('1'),
+        "noresolv must read back 1: {uci}"
+    );
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            r#"rm -f /etc/init.d/openvpn /etc/rc.d/S99openvpn /etc/config/openvpn \
+                   /tmp/pia_openvpn_setup.sh /etc/openvpn/pia-ca.rsa.4096.crt /etc/openvpn/pia.auth; \
+             rmdir /etc/openvpn 2>/dev/null; \
+             while uci -q show firewall 2>/dev/null | grep -q "name='vpn'"; do _s=$(uci -q show firewall | grep "name='vpn'" | head -1 | cut -d. -f2 | cut -d= -f1); uci -q delete "firewall.$_s"; done; \
+             uci -q delete firewall.vpn_fwd; uci -q delete firewall.vpn_mgmt; \
+             for d in 10.0.0.241 10.0.0.242 10.0.0.243; do uci -q del_list dhcp.@dnsmasq[0].server="$d"; done; \
+             uci -q delete dhcp.@dnsmasq[0].noresolv; \
+             uci commit firewall; uci commit dhcp; true"#,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn openclash_config_surface_applies_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Stand-ins for the not-prebakeable package: the package ships
+    // /etc/config/openclash with a named `config` section (the plan's
+    // SetUciOptions targets it) and an rc.common init script (the
+    // plan's Service enable + enabled verification target it).
+    let _ = session
+        .exec(
+            "touch /etc/config/openclash; uci set openclash.config=openclash; uci commit openclash; \
+             printf '#!/bin/sh /etc/rc.common\\nSTART=99\\nstart() { :; }\\n' > /etc/init.d/openclash; \
+             chmod +x /etc/init.d/openclash; true",
+        )
+        .await;
+
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::OpenClash(OpenClashProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+    strip_package_ops(&mut plan);
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 on the VM:\n{}",
+        outcome.script
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let uci = session
+        .exec("uci -q show openclash.config")
+        .await
+        .expect("openclash readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("enable='1'"), "got: {uci}");
+    assert!(uci.contains("core_type='Meta'"), "got: {uci}");
+    assert!(uci.contains("proxy_type='ss'"), "got: {uci}");
+    assert!(uci.contains("operation_mode='redir-host'"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "rm -f /etc/init.d/openclash /etc/rc.d/S99openclash; \
+             rm -rf /etc/openclash /etc/config/openclash; true",
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn ssl_certless_negative_and_cert_present_positive_on_real_openwrt() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // Phase A — cert-less negative: the runtime guard must skip the
+    // uhttpd wiring loudly and the apply must FAIL verification by
+    // name instead of reporting `applied` for a no-op (the #486
+    // round-3 contract).
+    let mut plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::Ssl(SslProfile::default()),
+    )
+    .expect("plan for confirmed VM");
+    strip_package_ops(&mut plan);
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "cert-less script must still exit 0 (guard skips, nds absent skips):\n{}",
+        outcome.script
+    );
+    assert!(
+        !outcome.fully_verified(),
+        "cert-less apply must NOT verify as applied"
+    );
+    let failed: Vec<&str> = outcome
+        .verification
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.description.as_str())
+        .collect();
+    assert!(
+        failed.iter().any(|d| d.contains("certs deployed")),
+        "the certs-present check must be the named failure, got: {failed:?}"
+    );
+
+    // Phase B — cert-present positive: host-minted self-signed certs
+    // written to the VM, then the same plan wires uhttpd end-to-end
+    // and fully verifies (certs-present, cert path, listen_https).
+    let dir = std::env::temp_dir().join("conwrt-ring2-ssl");
+    std::fs::create_dir_all(&dir).expect("cert scratch dir");
+    let (crt, key) = (dir.join("server.crt"), dir.join("server.key"));
+    let openssl = std::process::Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            key.to_str().unwrap(),
+            "-out",
+            crt.to_str().unwrap(),
+            "-days",
+            "2",
+            "-subj",
+            "/CN=ring2-vm.local",
+        ])
+        .output()
+        .expect("host openssl");
+    assert!(openssl.status.success(), "openssl must mint a test cert");
+
+    let write_pem = |path: &std::path::Path, remote: &str| {
+        let body = std::fs::read_to_string(path).expect("pem read");
+        let mut args = String::from("mkdir -p /etc/tollgate/ssl; printf '%s\\n' ");
+        for line in body.lines() {
+            args.push('\'');
+            args.push_str(line);
+            args.push_str("' ");
+        }
+        args.push_str(&format!("> {remote}; true"));
+        args
+    };
+    let _ = session
+        .exec(&write_pem(&crt, "/etc/tollgate/ssl/server.crt"))
+        .await;
+    let _ = session
+        .exec(&write_pem(&key, "/etc/tollgate/ssl/server.key"))
+        .await;
+    let staged = session
+        .exec("ls /etc/tollgate/ssl/server.crt /etc/tollgate/ssl/server.key >/dev/null 2>&1 && echo staged || echo missing")
+        .await
+        .expect("cert staging check");
+    assert_eq!(
+        String::from_utf8_lossy(&staged.stdout).trim(),
+        "staged",
+        "certs must be on the VM before the positive phase"
+    );
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "cert-present script must exit 0 on the VM:\n{}\nstderr:\n{}",
+        outcome.script, outcome.stderr
+    );
+    assert!(
+        outcome.fully_verified(),
+        "verification failed: {:?}",
+        outcome.verification
+    );
+
+    let uci = session
+        .exec("uci -q get uhttpd.main.listen_https")
+        .await
+        .expect("listen_https readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("0.0.0.0:443"), "got: {uci}");
+    assert!(uci.contains("[::]:443"), "got: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            "uci -q delete uhttpd.main.cert; uci -q delete uhttpd.main.key; \
+             uci -q delete uhttpd.main.listen_https; \
+             uci add_list uhttpd.main.listen_https='0.0.0.0:443'; \
+             uci add_list uhttpd.main.listen_https='[::]:443'; \
+             uci commit uhttpd; rm -rf /etc/tollgate/ssl; true",
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
 }

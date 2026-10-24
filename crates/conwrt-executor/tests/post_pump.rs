@@ -115,10 +115,17 @@ async fn step_without_a_window_is_idle() {
     );
     assert!(!pump.committed());
 
-    // the connection we opened and never used does not burn anything
+    // the pump sent nothing: while the connection stays open the mock
+    // is deterministically blocked in its header read with zero bytes,
+    // so nothing is recorded. (Asserting AFTER a drop raced the mock
+    // thread's close-handling — which records a Violation burn for an
+    // empty connection per the one-request contract — and lost under
+    // parallel workspace load.)
+    {
+        let rec = shared.lock().expect("mock lock");
+        assert!(rec.requests.is_empty() && !rec.burned);
+    }
     drop(io);
-    let rec = shared.lock().expect("mock lock");
-    assert!(rec.requests.is_empty() && !rec.burned);
 }
 
 #[tokio::test]

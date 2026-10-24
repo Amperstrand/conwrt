@@ -691,6 +691,274 @@ impl PbrProfile {
     }
 }
 
+/// Transparent proxy via Clash/Mihomo — port of the 1.x `openclash`
+/// preset (`scripts/use_cases/openclash.py`, ops characterization +
+/// transport parity). The plan types ONLY the flash-time config: the
+/// package set, the config dir, the `openclash.config` uci section
+/// (proxy/core/dashboard/DNS mode), and service enable. The proxy
+/// cannot run without a subscription config, which is a POST-FLASH
+/// step via the LuCI web UI — this plan stops at the same boundary
+/// line as 1.x (its closing echo). Package-delivery boundary:
+/// `luci-app-openclash` ships from the third-party vernesong feed,
+/// NOT official OpenWrt packages (1.x shares this gap — its
+/// `packages_via="auto"` list fails to resolve on stock devices and
+/// the public ASU alike). The intended delivery is a baked image or a
+/// preinstalled device, where the leading `EnsurePackage`
+/// short-circuits on `opkg list-installed`; on a stock device the
+/// apply aborts loudly at the FIRST op — before any configuration is
+/// touched — rather than leaving dangling config for absent software.
+/// An acquisition phase (feed setup / release-IPK download) is M7
+/// image-pipeline work, not a plan op. The 1.x `packages_remove:
+/// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build
+/// directive, but rides the plan as a guarded removal because this
+/// plan installs packages at apply time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenClashProfile {
+    /// Default proxy protocol (1.x default `ss`; vmess/trojan/vless…).
+    pub proxy_type: String,
+    /// Clash core (1.x default `Meta` = Mihomo; also Dev, Tun).
+    pub core_type: String,
+    /// DNS mode (1.x default `redir-host`; also fake-ip).
+    pub dns_mode: String,
+}
+
+impl Default for OpenClashProfile {
+    fn default() -> Self {
+        Self {
+            proxy_type: "ss".into(),
+            core_type: "Meta".into(),
+            dns_mode: "redir-host".into(),
+        }
+    }
+}
+
+impl OpenClashProfile {
+    /// 1.x interpolated `core_type`/`proxy_type` into a DOUBLE-quoted
+    /// `echo` line (the uci values ride safe single-quoting, the echo
+    /// does not) — a `"`/`$()`/backtick value was a command-injection
+    /// hole (the mwan3/#448 class, found by this port). The port
+    /// gates all three params with the `[A-Za-z0-9._-]+` token
+    /// charset; the same gate landed Python-side (`_token` in
+    /// openclash.py `_resolve_params`). Valid input renders
+    /// byte-identically.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        for (field, value) in [
+            ("proxy_type", &self.proxy_type),
+            ("core_type", &self.core_type),
+            ("dns_mode", &self.dns_mode),
+        ] {
+            let ok = !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if !ok {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} contains unsafe characters"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Trusted HTTPS certificates for LAN services — port of the tested
+/// 1.x `ssl` preset (`scripts/use_cases/ssl.py`, verified on
+/// COVR-X1860: cert download + uhttpd config, lancert/qip providers).
+/// The flash-time plan types the uhttpd HTTPS wiring (cert/key paths
+/// and `listen_https` on :443) and the optional nodogsplash 443
+/// pass-through. The certificates themselves are NOT flash-time
+/// material: 1.x downloads them HOST-side (lancert.dev / qip.sh) and
+/// SCPs them post-flash (`deploy_ssl_post_flash`) — the plan guards
+/// the uhttpd wiring on both cert files existing at runtime, so a
+/// cert-less router skips it with a loud message instead of pointing
+/// uhttpd at missing files (certs expire in 90 days; re-deploy and
+/// re-run to renew).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SslProfile {
+    /// Cert provider — the 1.x ParamDef choice set
+    /// (`lancert` per-IP, `qip` wildcard-per-subnet, `manual`
+    /// host-supplied files). Labels the config only; the uhttpd /
+    /// nodogsplash wiring is provider-independent.
+    pub provider: String,
+    /// Configure uhttpd to serve HTTPS on port 443 (1.x default on).
+    pub enable_uhttpd_https: bool,
+    /// Allow unauthenticated clients to reach port 443 through
+    /// nodogsplash (1.x default on).
+    pub open_port_443_nds: bool,
+}
+
+impl Default for SslProfile {
+    fn default() -> Self {
+        Self {
+            provider: "lancert".into(),
+            enable_uhttpd_https: true,
+            open_port_443_nds: true,
+        }
+    }
+}
+
+impl SslProfile {
+    /// 1.x declared `choices=("lancert", "qip", "manual")` on the
+    /// provider ParamDef but `_resolve_params` never enforced it —
+    /// and the value was interpolated into a rendered comment line,
+    /// where a newline injected live shell (mwan3/#448 class, found
+    /// by this port). The port enforces the declared choice set; the
+    /// same gate landed Python-side (`require_choice` in ssl.py
+    /// `_resolve_params`).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(self.provider.as_str(), "lancert" | "qip" | "manual") {
+            return Err(Unsupported::InvalidParams(
+                "provider must be one of: lancert, manual, qip".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Private Internet Access via OpenVPN (tun0) — port of the 1.x
+/// `vpn-pia-openvpn` preset (`scripts/use_cases/vpn_providers/pia.py`,
+/// the validated static recipe: RSA-4096 CA, UDP 8080 pool +
+/// remote-random, IPv6 pull-filters, NO persist-tun). Everything is
+/// resolved at BUILD time: the device receives static files (CA +
+/// credentials + endpoint pool) and makes no PIA API calls. The
+/// WireGuard variant (vpn-pia) is torn down first so the two
+/// technologies never fight over the vpn zone. 1.x marks the
+/// op-path untested-on-hardware (the recipe itself was validated
+/// manually on GL-MT3000 / 25.12.5) — same evidence bar here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnPiaOpenvpnProfile {
+    /// PIA account username (the p-number). Required: the Rust surface
+    /// refuses to plan an unconfigured VPN (1.x image-bakes a comment
+    /// stub; `apply` needs real intent).
+    pub username: String,
+    /// PIA account password. Lands as a literal line inside the
+    /// quoted auth heredoc — validate() rejects control characters
+    /// (a newline would inject script lines: the mwan3/#448 class).
+    pub password: String,
+    /// OpenVPN server port (PIA modern default 8080; kept a string
+    /// for 1.x parity).
+    pub port: String,
+    /// Upstream gateway IP; pins the endpoint pool's /32 routes to
+    /// the upstream so tunnel traffic never routes via tun (empty =
+    /// no route pinning — 1.x parity).
+    pub upstream_gateway: String,
+    /// Upstream interface name for the route pins (1.x default `wan`).
+    pub upstream_iface: String,
+    /// Block all non-VPN traffic if the tunnel drops (1.x default on;
+    /// the verify loop auto-removes it when the tunnel never comes up
+    /// so a bad config cannot blackhole the LAN).
+    pub kill_switch: bool,
+    /// Accept SSH/LuCI (22/80/443) from the VPN zone to the router
+    /// (1.x default on — remote management through the exit).
+    pub allow_management: bool,
+    /// Endpoint pool (default: the validated 10-host US pool).
+    pub remotes: Vec<String>,
+}
+
+impl Default for VpnPiaOpenvpnProfile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            port: "8080".into(),
+            upstream_gateway: String::new(),
+            upstream_iface: "wan".into(),
+            kill_switch: true,
+            allow_management: true,
+            remotes: [
+                "151.241.122.99",
+                "37.19.197.168",
+                "151.241.119.192",
+                "37.19.220.37",
+                "181.41.206.48",
+                "102.129.153.205",
+                "145.79.182.176",
+                "193.56.117.160",
+                "191.96.106.197",
+                "173.239.198.91",
+            ]
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
+        }
+    }
+}
+
+impl VpnPiaOpenvpnProfile {
+    /// 1.x had no validators on this preset (only non-empty ParamDefs).
+    /// The port adds the gates the rendered payload needs: username and
+    /// password must be non-empty and free of control characters — they
+    /// land as literal lines inside single-quoted heredocs, so a
+    /// newline injects script lines (mwan3/#448 class); each remote and
+    /// the optional gateway must be dotted-quad IPv4 (they interpolate
+    /// into an unquoted `for` token list and an `ip route replace`
+    /// line); the interface name rides the 1.x `interface_name`
+    /// charset.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ctrl = |v: &str| v.chars().any(|c| c.is_ascii_control());
+        if self.username.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "username is required (the PIA p-number)".into(),
+            ));
+        }
+        if ctrl(&self.username) || ctrl(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "username/password must not contain control characters".into(),
+            ));
+        }
+        // a credential that EXACTLY equals a heredoc delimiter would
+        // terminate its heredoc early and run as shell (Codex #514 P1:
+        // termination requires the line to equal the delimiter alone)
+        for field in [&self.username, &self.password] {
+            if matches!(
+                field.as_str(),
+                "VPN_SETUP_EOF" | "PIA_CA_EOF" | "PIA_AUTH_EOF"
+            ) {
+                return Err(Unsupported::InvalidParams(
+                    "username/password must not equal a heredoc delimiter".into(),
+                ));
+            }
+        }
+        if self.password.is_empty() {
+            return Err(Unsupported::InvalidParams("password is required".into()));
+        }
+        if self.port.is_empty() || !self.port.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Unsupported::InvalidParams("port must be numeric".into()));
+        }
+        let ipv4 = |v: &str| {
+            let o: Vec<&str> = v.split('.').collect();
+            o.len() == 4
+                && o.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars().all(|c| c.is_ascii_digit())
+                        && p.parse::<u8>().is_ok()
+                })
+        };
+        if !self.upstream_gateway.is_empty() && !ipv4(&self.upstream_gateway) {
+            return Err(Unsupported::InvalidParams(
+                "upstream_gateway must be an IPv4 address".into(),
+            ));
+        }
+        if !self
+            .upstream_iface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "upstream_iface contains unsafe characters".into(),
+            ));
+        }
+        for r in &self.remotes {
+            if !ipv4(r) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "remotes entry {r:?} must be an IPv4 address"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -843,6 +1111,15 @@ pub enum Profile {
     AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
+    /// Transparent proxy via Clash/Mihomo (flash-time config only —
+    /// subscription import is post-flash via the LuCI web UI).
+    OpenClash(OpenClashProfile),
+    /// Trusted HTTPS certificates for LAN services (flash-time uhttpd
+    /// wiring; cert download/SCP is a host-side post-flash step).
+    Ssl(SslProfile),
+    /// Private Internet Access via OpenVPN (validated static recipe;
+    /// tun0, remote-random endpoint pool, kill switch).
+    VpnPiaOpenvpn(VpnPiaOpenvpnProfile),
 }
 
 impl Profile {
@@ -865,6 +1142,9 @@ impl Profile {
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
+            Profile::OpenClash(_) => "openclash",
+            Profile::Ssl(_) => "ssl",
+            Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
         }
     }
 
@@ -889,6 +1169,9 @@ impl Profile {
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
+            Profile::OpenClash(_) => &[],
+            Profile::Ssl(_) => &[],
+            Profile::VpnPiaOpenvpn(_) => &[],
         }
     }
 }
@@ -1206,6 +1489,9 @@ pub fn plan_profile(
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
+        Profile::OpenClash(oc) => plan_openclash(model, oc),
+        Profile::Ssl(ssl) => plan_ssl(model, ssl),
+        Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
     }
 }
 
@@ -2558,10 +2844,20 @@ apply_sqm() {
         fi
     fi
 
+    # clean baseline first: /tmp/.uci staging debris from an aborted
+    # earlier run must not merge into this commit (#470, AGENTS uci rule)
+    uci revert sqm 2>/dev/null || true
     touch /etc/config/sqm
 
     uci set sqm.$INTERFACE=queue
-    uci set sqm.$INTERFACE.interface="$INTERFACE"
+    # SQM must bind the actual device, not the UCI network name (#470 —
+    # the wan lesson: names break on WiFi-STA/alias setups where
+    # device != name). Resolve via the network section, then the
+    # configured DEVICE, then fall back to the name.
+    _sqm_dev=$(uci -q get network."$INTERFACE".device 2>/dev/null)
+    [ -z "$_sqm_dev" ] && _sqm_dev="$DEVICE"
+    [ -z "$_sqm_dev" ] && _sqm_dev="$INTERFACE"
+    uci set sqm.$INTERFACE.interface="$_sqm_dev"
     uci set sqm.$INTERFACE.enabled='1'
     uci set sqm.$INTERFACE.script="$QOS_SCRIPT"
     uci set sqm.$INTERFACE.qdisc="$QDISC"
@@ -2868,6 +3164,544 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
     ];
     Ok(Plan {
         profile_id: "pbr".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Unsupported> {
+    oc.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // Package order and swap safety are load-bearing at apply time
+    // (Codex #486 rounds 1+4+6): dnsmasq and dnsmasq-full conflict
+    // (both provide dnsmasq), luci-app-openclash DEPENDS on
+    // dnsmasq-full, and the removal must never run before the
+    // replacement is provably installable — a dead feed after a bare
+    // removal would leave the router with NO dnsmasq (DNS+DHCP outage
+    // class). The swap therefore: runs only when dnsmasq is installed
+    // AND dnsmasq-full is not; downloads the dnsmasq-full ipk to /tmp
+    // FIRST (proving feed + package availability); and only then
+    // removes and installs from the local file (offline-safe). 1.x
+    // carries the swap as an image-build `packages_remove` directive
+    // where none of this applies. No-op on apk systems (opkg absent;
+    // apk replaces the provider without a conflict) and where
+    // dnsmasq-full is already installed.
+    let mut ops: Vec<PlanOp> = vec![
+        PlanOp::Shell {
+            command: concat!(
+                "if [ -n \"$(opkg list-installed dnsmasq 2>/dev/null)\" ] ",
+                "&& [ -z \"$(opkg list-installed dnsmasq-full 2>/dev/null)\" ]; then ",
+                "(cd /tmp && opkg update && opkg download dnsmasq-full) ",
+                "&& opkg remove dnsmasq && opkg install /tmp/dnsmasq-full_*.ipk; fi",
+            )
+            .into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "dnsmasq-full".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-app-openclash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "coreutils-nohup".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "bash".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "iptables".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-certificates".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "logd".into(),
+        },
+    ];
+    ops.extend([
+        PlanOp::Shell {
+            command: "mkdir -p /etc/openclash/config".into(),
+        },
+        // AGENTS.md staging-debris rule: an aborted earlier session may
+        // have left uncommitted /tmp/.uci changes for openclash — the
+        // later `uci commit openclash` would make them permanent.
+        // Start every apply from the persisted baseline.
+        PlanOp::RevertUci {
+            config: "openclash".into(),
+        },
+        PlanOp::SetUciOptions {
+            config: "openclash".into(),
+            section: "config".into(),
+            options: vec![
+                ("enable".into(), literal("1".into())),
+                (
+                    "config_path".into(),
+                    literal("/etc/openclash/config/config.yaml".into()),
+                ),
+                ("proxy_type".into(), literal(oc.proxy_type.clone())),
+                ("core_type".into(), literal(oc.core_type.clone())),
+                ("dashboard_type".into(), literal("Official".into())),
+                ("dns_mode".into(), literal(oc.dns_mode.clone())),
+                ("operation_mode".into(), literal(oc.dns_mode.clone())),
+            ],
+        },
+        PlanOp::CommitUci {
+            config: "openclash".into(),
+        },
+        PlanOp::Service {
+            name: "openclash".into(),
+            action: ServiceAction::Enable,
+        },
+        // core_type/proxy_type interpolate into a DOUBLE-quoted echo;
+        // validate()'s token gate is what makes the verbatim render safe
+        PlanOp::Shell {
+            command: format!(
+                "echo \"OpenClash configured: {} core, {} proxy\"",
+                oc.core_type, oc.proxy_type
+            ),
+        },
+        // post-flash boundary, byte-identical to 1.x: the subscription
+        // config is imported via the LuCI web UI AFTER flash — this
+        // plan stops here
+        PlanOp::Shell {
+            command: "echo \"Post-flash: import your subscription config via the LuCI web UI\""
+                .into(),
+        },
+    ]);
+    let verification = vec![
+        VerificationCheck {
+            description: "openclash enabled in uci".into(),
+            command: "uci -q get openclash.config.enable".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "clash core persisted".into(),
+            command: "uci -q get openclash.config.core_type".into(),
+            expect_contains: oc.core_type.clone(),
+        },
+        VerificationCheck {
+            description: "service enabled at boot".into(),
+            command: "/etc/init.d/openclash enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "openclash".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+const PIA_OPENVPN_CA: &str = concat!(
+    "-----BEGIN CERTIFICATE-----\n",
+    "MIIHqzCCBZOgAwIBAgIJAJ0u+vODZJntMA0GCSqGSIb3DQEBDQUAMIHoMQswCQYD\n",
+    "VQQGEwJVUzELMAkGA1UECBMCQ0ExEzARBgNVBAcTCkxvc0FuZ2VsZXMxIDAeBgNV\n",
+    "BAoTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMSAwHgYDVQQLExdQcml2YXRlIElu\n",
+    "dGVybmV0IEFjY2VzczEgMB4GA1UEAxMXUHJpdmF0ZSBJbnRlcm5ldCBBY2Nlc3Mx\n",
+    "IDAeBgNVBCkTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMS8wLQYJKoZIhvcNAQkB\n",
+    "FiBzZWN1cmVAcHJpdmF0ZWludGVybmV0YWNjZXNzLmNvbTAeFw0xNDA0MTcxNzQw\n",
+    "MzNaFw0zNDA0MTIxNzQwMzNaMIHoMQswCQYDVQQGEwJVUzELMAkGA1UECBMCQ0Ex\n",
+    "EzARBgNVBAcTCkxvc0FuZ2VsZXMxIDAeBgNVBAoTF1ByaXZhdGUgSW50ZXJuZXQg\n",
+    "QWNjZXNzMSAwHgYDVQQLExdQcml2YXRlIEludGVybmV0IEFjY2VzczEgMB4GA1UE\n",
+    "AxMXUHJpdmF0ZSBJbnRlcm5ldCBBY2Nlc3MxIDAeBgNVBCkTF1ByaXZhdGUgSW50\n",
+    "ZXJuZXQgQWNjZXNzMS8wLQYJKoZIhvcNAQkBFiBzZWN1cmVAcHJpdmF0ZWludGVy\n",
+    "bmV0YWNjZXNzLmNvbTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBALVk\n",
+    "hjumaqBbL8aSgj6xbX1QPTfTd1qHsAZd2B97m8Vw31c/2yQgZNf5qZY0+jOIHULN\n",
+    "De4R9TIvyBEbvnAg/OkPw8n/+ScgYOeH876VUXzjLDBnDb8DLr/+w9oVsuDeFJ9K\n",
+    "V2UFM1OYX0SnkHnrYAN2QLF98ESK4NCSU01h5zkcgmQ+qKSfA9Ny0/UpsKPBFqsQ\n",
+    "25NvjDWFhCpeqCHKUJ4Be27CDbSl7lAkBuHMPHJs8f8xPgAbHRXZOxVCpayZ2SND\n",
+    "fCwsnGWpWFoMGvdMbygngCn6jA/W1VSFOlRlfLuuGe7QFfDwA0jaLCxuWt/BgZyl\n",
+    "p7tAzYKR8lnWmtUCPm4+BtjyVDYtDCiGBD9Z4P13RFWvJHw5aapx/5W/CuvVyI7p\n",
+    "Kwvc2IT+KPxCUhH1XI8ca5RN3C9NoPJJf6qpg4g0rJH3aaWkoMRrYvQ+5PXXYUzj\n",
+    "tRHImghRGd/ydERYoAZXuGSbPkm9Y/p2X8unLcW+F0xpJD98+ZI+tzSsI99Zs5wi\n",
+    "jSUGYr9/j18KHFTMQ8n+1jauc5bCCegN27dPeKXNSZ5riXFL2XX6BkY68y58UaNz\n",
+    "meGMiUL9BOV1iV+PMb7B7PYs7oFLjAhh0EdyvfHkrh/ZV9BEhtFa7yXp8XR0J6vz\n",
+    "1YV9R6DYJmLjOEbhU8N0gc3tZm4Qz39lIIG6w3FDAgMBAAGjggFUMIIBUDAdBgNV\n",
+    "HQ4EFgQUrsRtyWJftjpdRM0+925Y6Cl08SUwggEfBgNVHSMEggEWMIIBEoAUrsRt\n",
+    "yWJftjpdRM0+925Y6Cl08SWhge6kgeswgegxCzAJBgNVBAYTAlVTMQswCQYDVQQI\n",
+    "EwJDQTETMBEGA1UEBxMKTG9zQW5nZWxlczEgMB4GA1UEChMXUHJpdmF0ZSBJbnRl\n",
+    "cm5ldCBBY2Nlc3MxIDAeBgNVBAsTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMSAw\n",
+    "HgYDVQQDExdQcml2YXRlIEludGVybmV0IEFjY2VzczEgMB4GA1UEKRMXUHJpdmF0\n",
+    "ZSBJbnRlcm5ldCBBY2Nlc3MxLzAtBgkqhkiG9w0BCQEWIHNlY3VyZUBwcml2YXRl\n",
+    "aW50ZXJuZXRhY2Nlc3MuY29tggkAnS7684Nkme0wDAYDVR0TBAUwAwEB/zANBgkq\n",
+    "hkiG9w0BAQ0FAAOCAgEAJsfhsPk3r8kLXLxY+v+vHzbr4ufNtqnL9/1Uuf8NrsCt\n",
+    "pXAoyZ0YqfbkWx3NHTZ7OE9ZRhdMP/RqHQE1p4N4Sa1nZKhTKasV6KhHDqSCt/dv\n",
+    "Em89xWm2MVA7nyzQxVlHa9AkcBaemcXEiyT19XdpiXOP4Vhs+J1R5m8zQOxZlV1G\n",
+    "tF9vsXmJqWZpOVPmZ8f35BCsYPvv4yMewnrtAC8PFEK/bOPeYcKN50bol22QYaZu\n",
+    "LfpkHfNiFTnfMh8sl/ablPyNY7DUNiP5DRcMdIwmfGQxR5WEQoHL3yPJ42LkB5zs\n",
+    "6jIm26DGNXfwura/mi105+ENH1CaROtRYwkiHb08U6qLXXJz80mWJkT90nr8Asj3\n",
+    "5xN2cUppg74nG3YVav/38P48T56hG1NHbYF5uOCske19F6wi9maUoto/3vEr0rnX\n",
+    "JUp2KODmKdvBI7co245lHBABWikk8VfejQSlCtDBXn644ZMtAdoxKNfR2WTFVEwJ\n",
+    "iyd1Fzx0yujuiXDROLhISLQDRjVVAvawrAtLZWYK31bY7KlezPlQnl/D9Asxe85l\n",
+    "8jO5+0LdJ6VyOs/Hd4w52alDW/MFySDZSfQHMTIc30hLBJ8OnCEIvluVQQ2UQvoW\n",
+    "+no177N9L2Y+M9TcTA62ZyMXShHQGeh20rb4kK8f+iFX8NxtdHVSkxMEFSfDDyQ=\n",
+    "-----END CERTIFICATE-----\n",
+);
+
+fn plan_vpn_pia_openvpn(
+    model: &DeviceModel,
+    pia: &VpnPiaOpenvpnProfile,
+) -> Result<Plan, Unsupported> {
+    pia.validate()?;
+    let remote_lines = pia
+        .remotes
+        .iter()
+        .map(|host| {
+            format!(
+                "uci add_list openvpn.pia.remote='{host} {port}'",
+                port = pia.port
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let route_block = if pia.upstream_gateway.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "# pin the endpoint pool's route to the upstream (no v4 route via tun)\nfor _pia_ep in {}; do\n    ip route replace $_pia_ep/32 via {} dev {} 2>/dev/null || true\ndone\n",
+            pia.remotes.join(" "),
+            pia.upstream_gateway,
+            pia.upstream_iface
+        )
+    };
+    // the whole setup rides ONE heredoc payload (1.x transport_sh):
+    // single-quoted delimiter keeps variables literal at write time and
+    // the body runs verbatim via sh. username/password land as literal
+    // auth lines — validate()'s control-character gate makes that safe.
+    let body = format!(
+        concat!(
+            "# Clean up old WireGuard interface + peers\n",
+            "uci -q delete network.wg0\n",
+            "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+            "    uci delete network.@wireguard_wg0[0]\n",
+            "done\n",
+            "\n\n",
+            "# Tear down any previous OpenVPN instance\n",
+            "uci -q delete openvpn.pia\n",
+            "\n",
+            "mkdir -p /etc/openvpn\n",
+            "cat > /etc/openvpn/pia-ca.rsa.4096.crt << 'PIA_CA_EOF'\n",
+            "{CA}\n",
+            "PIA_CA_EOF\n",
+            "cat > /etc/openvpn/pia.auth << 'PIA_AUTH_EOF'\n",
+            "{USERNAME}\n",
+            "{PASSWORD}\n",
+            "PIA_AUTH_EOF\n",
+            "chmod 600 /etc/openvpn/pia.auth\n",
+            "\n",
+            "uci set openvpn.pia=openvpn\n",
+            "uci set openvpn.pia.enabled='1'\n",
+            "uci set openvpn.pia.client='1'\n",
+            "uci set openvpn.pia.dev='tun'\n",
+            "uci set openvpn.pia.proto='udp'\n",
+            "{REMOTE_LINES}\n",
+            "uci set openvpn.pia.remote_random='1'\n",
+            "uci set openvpn.pia.resolv_retry='infinite'\n",
+            "uci set openvpn.pia.nobind='1'\n",
+            "uci set openvpn.pia.persist_key='1'\n",
+            "# NO persist_tun (validated lesson): a dead tunnel must tear its routes\n",
+            "# down, not blackhole the LAN behind stale routes.\n",
+            "uci set openvpn.pia.ca='/etc/openvpn/pia-ca.rsa.4096.crt'\n",
+            "uci set openvpn.pia.auth_user_pass='/etc/openvpn/pia.auth'\n",
+            "uci set openvpn.pia.auth_nocache='1'\n",
+            "uci set openvpn.pia.remote_cert_tls='server'\n",
+            "uci set openvpn.pia.data_ciphers='AES-256-GCM:AES-128-GCM:AES-256-CBC'\n",
+            "uci set openvpn.pia.data_ciphers_fallback='AES-256-CBC'\n",
+            "uci set openvpn.pia.auth='sha256'\n",
+            "uci set openvpn.pia.reneg_sec='0'\n",
+            "uci set openvpn.pia.disable_occ='1'\n",
+            "uci set openvpn.pia.mssfix='1420'\n",
+            "uci set openvpn.pia.verb='3'\n",
+            "uci set openvpn.pia.pull='1'\n",
+            "# PIA has no IPv6: it pushes route-ipv6/ifconfig-ipv6 anyway, which\n",
+            "# blackholes v6 on the v4-only tun0 (broke Signal on the validated box).\n",
+            "uci add_list openvpn.pia.pull_filter='ignore \"route-ipv6\"'\n",
+            "uci add_list openvpn.pia.pull_filter='ignore \"ifconfig-ipv6\"'\n",
+            "uci commit openvpn\n",
+            "\n",
+            "{ROUTE_BLOCK}",
+            "# tun0 joins the vpn zone (wg0 was removed by the cleanup above)\n",
+            "uci -q del_list firewall.vpn_zone.network='wg0'\n",
+            "uci -q add_list firewall.vpn_zone.network='tun0'\n",
+            "/etc/init.d/openvpn restart || /etc/init.d/openvpn start\n",
+        ),
+        CA = PIA_OPENVPN_CA,
+        USERNAME = pia.username,
+        PASSWORD = pia.password,
+        REMOTE_LINES = remote_lines,
+        ROUTE_BLOCK = route_block,
+    );
+    let payload = format!(
+        "cat > /tmp/pia_openvpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/pia_openvpn_setup.sh",
+        body.trim_end()
+    );
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "openvpn-openssl".into(),
+        },
+        PlanOp::Shell { command: payload },
+        // stale-section cleanup keeps re-runs idempotent (1.x
+        // uci_cleanup_sections; the shared vpn-zone family name lets a
+        // technology switch — wg → openvpn — retire the old rules)
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "dest='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='Allow-VPN-Management'".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_zone".into(),
+            section_type: "zone".into(),
+            options: vec![
+                ("name".into(), literal("vpn".into())),
+                ("input".into(), literal("REJECT".into())),
+                ("output".into(), literal("ACCEPT".into())),
+                ("forward".into(), literal("REJECT".into())),
+                ("masq".into(), literal("1".into())),
+                ("mtu_fix".into(), literal("1".into())),
+                ("network".into(), literal("tun0".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_fwd".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("vpn".into())),
+            ],
+        },
+    ];
+    if pia.allow_management {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_mgmt".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-VPN-Management".into())),
+                ("src".into(), literal("vpn".into())),
+                ("proto".into(), literal("tcp".into())),
+                ("dest_port".into(), literal("22 80 443".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        });
+    }
+    if pia.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    for dns in ["10.0.0.241", "10.0.0.242", "10.0.0.243"] {
+        ops.push(PlanOp::Shell {
+            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: dns.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "dhcp".into(),
+        section: "@dnsmasq[0]".into(),
+        options: vec![("noresolv".into(), literal("1".into()))],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "dhcp".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "dnsmasq".into(),
+        action: ServiceAction::Restart,
+    });
+    if pia.kill_switch {
+        // failure TAIL, not verification: a tunnel that never comes up
+        // gets its kill switch REMOVED so a bad config cannot blackhole
+        // the LAN (validated lesson)
+        ops.push(PlanOp::Shell {
+            command: "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
+        });
+    }
+    // the 45s tail restores WAN on failure and exits 0 by design —
+    // this check is what makes the apply HONEST about the outcome:
+    // verified requires tun0 to actually hold an address (Codex #514
+    // P2: auth failure / dead endpoints must not read as success)
+    let verification = vec![
+        VerificationCheck {
+            description: "openvpn instance enabled".into(),
+            command: "uci -q get openvpn.pia.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "tun0 has an address (tunnel actually up)".into(),
+            command: "ip -4 addr show dev tun0 2>/dev/null | grep -q inet && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-pia-openvpn".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
+    ssl.validate()?;
+    // libustream-{wolfssl,mbedtls,openssl} all own libustream-ssl.so —
+    // installing wolfssl next to an existing backend is a file-clash
+    // abort under `set -e` (Codex #486 round 5). ANY backend serves
+    // uhttpd TLS, so the plan installs wolfssl only when NO
+    // libustream provider is present and preserves the installed one
+    // otherwise (1.x's hardcoded wolfssl list entry stays an
+    // image-build choice, where a fresh image has no clash).
+    let mut ops = vec![
+        PlanOp::Shell {
+            command: concat!(
+                "if ! (opkg list-installed 2>/dev/null || apk info 2>/dev/null) ",
+                "| grep -q '^libustream-'; then ",
+                // manager-scoped install with the renderer's own
+                // fresh-index self-heal (apk update && apk add) — the
+                // retry never crosses into the other package manager
+                "if command -v apk >/dev/null 2>&1; then ",
+                "apk add libustream-wolfssl || { apk update && apk add libustream-wolfssl; }; ",
+                "else opkg update && opkg install libustream-wolfssl; fi; fi",
+            )
+            .into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "ca-bundle".into(),
+        },
+    ];
+    // Both branches are runtime-conditional payloads kept as SINGLE
+    // `;`-joined lines: the 1.x transport (apply.py::_run_step_script)
+    // routes any line-start `if` through a ` && ` line-join that would
+    // mangle a multi-line block into invalid shell (`then && uci …`)
+    // — a one-line conditional survives the join untouched. The
+    // uhttpd wiring is guarded on the post-flash certs existing:
+    // pointed at missing cert files uhttpd drops the HTTPS listener
+    // or exits, so a cert-less router must not take the wiring yet
+    // (Codex #486 P1 round 2). Each guard reverts its config's staged
+    // /tmp/.uci debris first (AGENTS.md staging rule), the
+    // listen_https reset stays idempotent (round-1 fix), and the
+    // nodogsplash body uses del_list-before-add_list with no trailing
+    // `|| true` (rounds 2+4 fixes: failures abort instead of masking
+    // as success). The skip path must NOT read as success: with the
+    // uhttpd branch enabled, verification requires the certs to exist
+    // AND the uci readbacks to show the wiring — a cert-less device
+    // fails the apply loudly instead of reporting `applied` for a
+    // no-op (Codex #486 P1 round 3). The nds-only configuration keeps
+    // no post-hoc checks: its outcome is genuinely runtime-conditional
+    // on nodogsplash being installed.
+    if ssl.enable_uhttpd_https {
+        ops.push(PlanOp::Shell {
+            command: concat!(
+                "if [ -f /etc/tollgate/ssl/server.crt ] && ",
+                "[ -f /etc/tollgate/ssl/server.key ]; then ",
+                // &&-chained fail-fast body (the 1.x transport runs
+                // control-flow scripts WITHOUT set -e — a `;` chain
+                // would let a failed uci set ride a trailing echo to a
+                // fake success). Best-effort steps (revert, delete)
+                // are isolated in groups so `|| true` cannot swallow a
+                // neighboring hard failure; the post-commit readback
+                // gates the success echo.
+                "(uci -q revert uhttpd 2>/dev/null || true) && ",
+                "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt' && ",
+                "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key' && ",
+                "(uci -q delete uhttpd.main.listen_https || true) && ",
+                "uci add_list uhttpd.main.listen_https='0.0.0.0:443' && ",
+                "uci add_list uhttpd.main.listen_https='[::]:443' && ",
+                "uci commit uhttpd && ",
+                "uci -q get uhttpd.main.listen_https | grep -q '0.0.0.0:443' && ",
+                "/etc/init.d/uhttpd restart && ",
+                "echo 'ssl: uhttpd HTTPS wired on :443'; ",
+                "else ",
+                "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2; ",
+                "fi",
+            )
+            .into(),
+        });
+    }
+    if ssl.open_port_443_nds {
+        ops.push(PlanOp::Shell {
+            command: concat!(
+                "if uci -q show nodogsplash >/dev/null 2>&1; then ",
+                "(uci -q revert nodogsplash 2>/dev/null || true) && ",
+                "(uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true) && ",
+                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' && ",
+                "uci commit nodogsplash && ",
+                "uci -q get nodogsplash.@nodogsplash[0].users_to_router | grep -q 'allow tcp port 443' && ",
+                "/etc/init.d/nodogsplash restart && ",
+                "echo 'ssl: nodogsplash allows tcp/443 to the router'; ",
+                "fi",
+            )
+            .into(),
+        });
+    }
+    let mut verification = Vec::new();
+    if ssl.enable_uhttpd_https {
+        verification.extend([
+            VerificationCheck {
+                description: "certs deployed for uhttpd HTTPS (host-side post-flash step)".into(),
+                command: "[ -f /etc/tollgate/ssl/server.crt ] && \
+                          [ -f /etc/tollgate/ssl/server.key ] && echo present"
+                    .into(),
+                expect_contains: "present".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd cert path persisted".into(),
+                command: "uci -q get uhttpd.main.cert".into(),
+                expect_contains: "/etc/tollgate/ssl/server.crt".into(),
+            },
+            VerificationCheck {
+                description: "uhttpd listens on 443".into(),
+                command: "uci -q get uhttpd.main.listen_https".into(),
+                expect_contains: "0.0.0.0:443".into(),
+            },
+        ]);
+    }
+    Ok(Plan {
+        profile_id: "ssl".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -4552,6 +5386,315 @@ mod tests {
             .validate(),
             Err(Unsupported::InvalidParams(_))
         ));
+    }
+
+    #[test]
+    fn openclash_shape_gates_and_branches_match_1x() {
+        let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
+        let script = render_shell(&plan);
+        // dnsmasq→dnsmasq-full swap rides the plan AND LEADS the
+        // package installs (Codex #486 rounds 1+4): luci-app-openclash
+        // depends on dnsmasq-full, so on an opkg device with default
+        // dnsmasq the swap must complete before the dependent resolves.
+        // Download-first (round 6): a dead feed aborts BEFORE the
+        // removal, never leaving the router without dnsmasq.
+        let swap = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::Shell { command } if command.starts_with("if [ -n \"$(opkg list-installed dnsmasq")))
+            .expect("swap op present");
+        let full = plan
+            .ops
+            .iter()
+            .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "dnsmasq-full"))
+            .expect("dnsmasq-full install present");
+        let luci = plan
+            .ops
+            .iter()
+            .position(
+                |op| matches!(op, PlanOp::EnsurePackage { name } if name == "luci-app-openclash"),
+            )
+            .expect("luci-app-openclash install present");
+        assert!(
+            swap < full && full < luci,
+            "swap must precede dnsmasq-full, which must precede luci-app-openclash"
+        );
+        assert!(script.contains("opkg download dnsmasq-full) && opkg remove dnsmasq"));
+        // staged /tmp/.uci debris reverted before the first mutation
+        assert!(script.contains("uci -q revert openclash 2>/dev/null || true"));
+        assert!(script.contains("mkdir -p /etc/openclash/config"));
+        assert!(script.contains("uci set openclash.config.enable='1'"));
+        assert!(
+            script.contains(
+                "uci set openclash.config.config_path='/etc/openclash/config/config.yaml'"
+            )
+        );
+        assert!(script.contains("uci set openclash.config.proxy_type='ss'"));
+        assert!(script.contains("uci set openclash.config.core_type='Meta'"));
+        assert!(script.contains("uci set openclash.config.dashboard_type='Official'"));
+        assert!(script.contains("uci set openclash.config.dns_mode='redir-host'"));
+        assert!(script.contains("uci set openclash.config.operation_mode='redir-host'"));
+        assert!(script.contains("uci commit openclash"));
+        assert!(script.contains("/etc/init.d/openclash enable"));
+        assert!(script.contains("echo \"OpenClash configured: Meta core, ss proxy\""));
+        assert!(
+            script.contains(
+                "echo \"Post-flash: import your subscription config via the LuCI web UI\""
+            )
+        );
+
+        // custom params ride the same lines; operation_mode mirrors dns_mode
+        let custom = render_shell(&plan_for(Profile::OpenClash(OpenClashProfile {
+            proxy_type: "trojan".into(),
+            core_type: "Tun".into(),
+            dns_mode: "fake-ip".into(),
+        })));
+        assert!(custom.contains("uci set openclash.config.proxy_type='trojan'"));
+        assert!(custom.contains("uci set openclash.config.core_type='Tun'"));
+        assert!(custom.contains("uci set openclash.config.dns_mode='fake-ip'"));
+        assert!(custom.contains("uci set openclash.config.operation_mode='fake-ip'"));
+        assert!(custom.contains("echo \"OpenClash configured: Tun core, trojan proxy\""));
+
+        // token charset gate on every interpolated param (the
+        // double-quoted echo is the hole this closes — mwan3/#448 class)
+        for (field, hostile_value) in [
+            ("proxy_type", "ss\"; reboot; echo \""),
+            ("core_type", "$(poweroff)"),
+            ("dns_mode", "redir-host\nreboot"),
+            ("proxy_type", ""),
+        ] {
+            let mut hostile = OpenClashProfile::default();
+            match field {
+                "proxy_type" => hostile.proxy_type = hostile_value.into(),
+                "core_type" => hostile.core_type = hostile_value.into(),
+                _ => hostile.dns_mode = hostile_value.into(),
+            }
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "{field} gate must reject {hostile_value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssl_shape_branches_and_provider_gate_match_1x() {
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let script = render_shell(&plan);
+        // TLS-backend guard (Codex #486 round 5): the libustream
+        // variants own the same libustream-ssl.so, so wolfssl installs
+        // ONLY when no backend is present — an existing
+        // mbedtls/openssl backend is preserved, never clashed
+        assert!(script.contains("| grep -q '^libustream-'"));
+        assert!(script.contains("opkg install libustream-wolfssl"));
+        assert!(!plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "libustream-wolfssl"
+        )));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            PlanOp::EnsurePackage { name } if name == "ca-bundle"
+        )));
+        // cert-presence guard wraps the whole uhttpd block (Codex #486
+        // P1 round 2): a cert-less router skips the wiring loudly
+        // instead of pointing uhttpd at missing files
+        assert!(script.contains(
+            "if [ -f /etc/tollgate/ssl/server.crt ] && [ -f /etc/tollgate/ssl/server.key ]; then"
+        ));
+        assert!(script.contains("uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'"));
+        assert!(script.contains("uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'"));
+        // idempotent listen_https reset (round-1 fix): the delete is
+        // guarded so an HTTP-only config still gets both listeners
+        assert!(script.contains("uci -q delete uhttpd.main.listen_https || true"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='0.0.0.0:443'"));
+        assert!(script.contains("uci add_list uhttpd.main.listen_https='[::]:443'"));
+        assert!(!script.contains("listen_https &&"));
+        assert!(script.contains("uci commit uhttpd"));
+        assert!(script.contains("/etc/init.d/uhttpd restart"));
+        assert!(script.contains("echo 'ssl: uhttpd HTTPS wired on :443'"));
+        // staged /tmp/.uci debris reverted inside each guard before
+        // the first mutation (AGENTS.md staging rule)
+        assert!(script.contains("uci -q revert uhttpd 2>/dev/null || true"));
+        assert!(script.contains("uci -q revert nodogsplash 2>/dev/null || true"));
+        assert!(script.contains(
+            "echo 'ssl: /etc/tollgate/ssl certs not present yet — skipping uhttpd HTTPS wiring (deploy certs, then re-run)' >&2"
+        ));
+        // explicit nodogsplash existence guard with a propagating body
+        // (Codex #486 P2 round 2): failures abort instead of riding a
+        // trailing `|| true` to a fake success
+        assert!(script.contains("if uci -q show nodogsplash >/dev/null 2>&1; then"));
+        // del_list-before-add_list keeps re-runs idempotent (Codex #486
+        // round 4): uci lists are append-only
+        assert!(script.contains(
+            "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443' || true"
+        ));
+        assert!(script.contains(
+            "uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'"
+        ));
+        assert!(!script.contains("nodogsplash restart || true"));
+        assert!(script.contains("echo 'ssl: nodogsplash allows tcp/443 to the router'"));
+
+        // cert-less skip must FAIL the apply, not report `applied` for
+        // a no-op (Codex #486 round 3): outcome verification gates on
+        // certs existing plus the uci readbacks
+        let plan = plan_for(Profile::Ssl(SslProfile::default()));
+        let descriptions: Vec<&str> = plan
+            .verification
+            .iter()
+            .map(|c| c.description.as_str())
+            .collect();
+        assert!(
+            descriptions.contains(&"certs deployed for uhttpd HTTPS (host-side post-flash step)")
+        );
+        assert!(descriptions.contains(&"uhttpd cert path persisted"));
+        assert!(descriptions.contains(&"uhttpd listens on 443"));
+        // nds-only shape keeps no post-hoc checks (runtime-conditional
+        // outcome when nodogsplash is absent)
+        let nds_only = plan_for(Profile::Ssl(SslProfile {
+            enable_uhttpd_https: false,
+            ..SslProfile::default()
+        }));
+        assert!(nds_only.verification.is_empty());
+
+        // uhttpd off drops the whole HTTPS block, keeps the nds line
+        let no_uhttpd = render_shell(&plan_for(Profile::Ssl(SslProfile {
+            enable_uhttpd_https: false,
+            ..SslProfile::default()
+        })));
+        assert!(!no_uhttpd.contains("uhttpd"));
+        assert!(no_uhttpd.contains("nodogsplash"));
+
+        // nds off drops only the nodogsplash line
+        let no_nds = render_shell(&plan_for(Profile::Ssl(SslProfile {
+            open_port_443_nds: false,
+            ..SslProfile::default()
+        })));
+        assert!(no_nds.contains("uci commit uhttpd"));
+        assert!(!no_nds.contains("nodogsplash"));
+
+        // provider choice gate — 1.x declared the choices but never
+        // enforced them in _resolve_params (newline injection into the
+        // comment line was live shell)
+        assert!(matches!(
+            SslProfile {
+                provider: "lancert\nreboot".into(),
+                ..SslProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            SslProfile {
+                provider: "evil".into(),
+                ..SslProfile::default()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        for ok in ["lancert", "qip", "manual"] {
+            assert!(
+                SslProfile {
+                    provider: ok.into(),
+                    ..SslProfile::default()
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_pia_openvpn_shape_gates_and_branches_match_1x() {
+        let plan = plan_for(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        }));
+        let script = render_shell(&plan);
+        // one heredoc payload, run verbatim via sh (1.x transport_sh)
+        assert!(script.contains("cat > /tmp/pia_openvpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("sh /tmp/pia_openvpn_setup.sh"));
+        // credentials ride the quoted auth heredoc; the CA rides its own
+        assert!(
+            script.contains("cat > /etc/openvpn/pia.auth << 'PIA_AUTH_EOF'\np1234567\ntestpass")
+        );
+        assert!(script.contains("chmod 600 /etc/openvpn/pia.auth"));
+        // endpoint pool + remote-random + the validated no-persist-tun
+        assert!(script.contains("uci add_list openvpn.pia.remote='151.241.122.99 8080'"));
+        assert!(script.contains("uci set openvpn.pia.remote_random='1'"));
+        assert!(!script.contains("uci set openvpn.pia.persist_tun"));
+        // kill switch + management rules + tunnel DNS
+        assert!(script.contains("uci set firewall.vpn_killswitch.target='REJECT'"));
+        assert!(script.contains("uci set firewall.vpn_mgmt.name='Allow-VPN-Management'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='10.0.0.243'"));
+        // the failure TAIL removes the kill switch when tun0 never comes up
+        assert!(script.contains("removing kill switch to restore WAN"));
+
+        // branches: kill switch off drops the rule AND the tail; mgmt off
+        // drops the rule; empty gateway drops the route pin block
+        let no_kill = render_shell(&plan_for(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+            username: "p1234567".into(),
+            password: "testpass".into(),
+            kill_switch: false,
+            allow_management: false,
+            ..VpnPiaOpenvpnProfile::default()
+        })));
+        assert!(!no_kill.contains("vpn_killswitch"));
+        assert!(!no_kill.contains("vpn_mgmt"));
+        assert!(!no_kill.contains("ip route replace"));
+        assert!(no_kill.contains("vpn_zone"));
+
+        // gates: required creds, control chars (heredoc line injection),
+        // IPv4 remotes/gateway, numeric port, iface charset
+        assert!(matches!(
+            VpnPiaOpenvpnProfile::default().validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        let base = VpnPiaOpenvpnProfile {
+            username: "p1".into(),
+            password: "pw".into(),
+            ..VpnPiaOpenvpnProfile::default()
+        };
+        assert!(base.validate().is_ok());
+        for hostile in [
+            VpnPiaOpenvpnProfile {
+                password: "line1\nline2".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                password: "PIA_AUTH_EOF".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                username: "VPN_SETUP_EOF".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                username: "p1\nroot".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                port: "8080; reboot".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                upstream_gateway: "not-an-ip".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                upstream_iface: "wan; poweroff".into(),
+                ..base.clone()
+            },
+            VpnPiaOpenvpnProfile {
+                remotes: vec!["$(reboot)".into()],
+                ..base
+            },
+        ] {
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "gate must reject {hostile:?}"
+            );
+        }
     }
 
     #[test]

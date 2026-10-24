@@ -2,8 +2,12 @@
 
 Everything is env-driven so the same suite runs on any bench router:
 
-  CONWRT_BENCH_ROUTER   router IP (default 192.168.1.1) — unset skips the suite
-  CONWRT_BENCH_MODEL    conwrt model id (default: auto-detect via board.json)
+  CONWRT_BENCH_ROUTER   router IP — REQUIRED; unset skips the suite
+                       (the tier is opt-in: a bare `pytest tests/` must
+                       never light up hardware or the live ASU API)
+  CONWRT_BENCH_MODEL    conwrt model id (default dlink-covr-x1860-a1; the
+                       ASU profile is resolved from its openwrt.profile —
+                       never hardcoded, #487)
   CONWRT_BENCH_IFACE    host ethernet interface (default enp5s0)
   CONWRT_BENCH_TOKEN    NordVPN access token (default: read from CONWRT_CONFIG)
   CONWRT_BENCH_SERVER   iperf3 server (default inr2.cashu.exchange)
@@ -39,7 +43,8 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tests"))
 from venues import Venue, venues_from_env  # noqa: E402
 
-ROUTER = os.environ.get("CONWRT_BENCH_ROUTER", "192.168.1.1")
+ROUTER = os.environ.get("CONWRT_BENCH_ROUTER", "")
+BENCH_MODEL_ID = os.environ.get("CONWRT_BENCH_MODEL", "dlink-covr-x1860-a1")
 IFACE = os.environ.get("CONWRT_BENCH_IFACE", "enp5s0")
 IPERF_SERVER = os.environ.get("CONWRT_BENCH_SERVER", "inr2.cashu.exchange")
 IPERF_SECONDS = int(os.environ.get("CONWRT_BENCH_SECONDS", "10"))
@@ -104,6 +109,22 @@ def bench_venue(venues: list[Venue] | None = None) -> tuple[str | None, str]:
 
 
 def pytest_collection_modifyitems(config, items):
+    venue_ip = ""
+    if os.environ.get("CONWRT_VENUES"):
+        try:
+            venue_ip, _ = bench_venue()
+        except ValueError:
+            venue_ip = ""  # a bad venue axis fails loudly at fixture time
+    if not ROUTER and not venue_ip:
+        # Opt-in gate (#487): no router configured → the bench tier skips
+        # BEFORE any reachability probe — a reachable 192.168.1.1 on the
+        # host must not auto-run hardware benchmarks or live ASU builds.
+        skip = pytest.mark.skip(
+            reason="CONWRT_BENCH_ROUTER unset — bench tier is opt-in")
+        for item in items:
+            if "router" in item.fixturenames or "apply_scenario" in item.fixturenames:
+                item.add_marker(skip)
+        return
     if _router_alive():
         return
     skip = pytest.mark.skip(reason=f"router {ROUTER} not reachable")
@@ -249,6 +270,19 @@ VERIFY_PROBES = {
 _IMAGE_CACHE: dict[str, str] = {}
 
 
+def _bench_asu_profile() -> str:
+    """ASU profile from the bench model's openwrt.profile — never a
+    hardcode: the all-underscore spelling was rejected by live ASU with
+    HTTP 400 while the model carries the correct dash form (#487)."""
+    model_path = REPO / "models" / f"{BENCH_MODEL_ID}.json"
+    model = json.loads(model_path.read_text())
+    profile = model.get("openwrt", {}).get("profile", "")
+    if not profile:
+        raise ValueError(
+            f"{BENCH_MODEL_ID}: openwrt.profile missing — cannot request ASU images")
+    return profile
+
+
 def _request_image(scenario: Scenario) -> str:
     """Request (and cache) the ASU image for a scenario; returns its path."""
     if scenario.name in _IMAGE_CACHE:
@@ -258,7 +292,7 @@ def _request_image(scenario: Scenario) -> str:
     try:
         r = subprocess.run(
             ["python3", "scripts/firmware-manager.py", "request",
-             "--profile", "dlink_covr_x1860_a1"],
+             "--profile", _bench_asu_profile()],
             cwd=str(REPO), capture_output=True, text=True, env=env,
             timeout=900, check=False,
         )

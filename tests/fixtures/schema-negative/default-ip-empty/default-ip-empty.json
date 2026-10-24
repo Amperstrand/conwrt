@@ -1,0 +1,20 @@
+{
+  "id": "default-ip-empty",
+  "vendor": "Test Vendor",
+  "description": "Minimal valid model for parity fixtures",
+  "openwrt": {
+    "target": "test/test",
+    "device": "test,dev",
+    "profile": "test_dev",
+    "version": "24.10.2",
+    "default_ip": ""
+  },
+  "capabilities": [
+    "ethernet"
+  ],
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade"
+    }
+  }
+}

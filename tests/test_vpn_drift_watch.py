@@ -79,3 +79,47 @@ class TestEscalates:
     def test_api_and_endpoint_words_escalate(self):
         assert escalates("- IVPN: api response shape") is True
         assert escalates("- PIA: endpoint port change") is True
+
+
+class TestScanFailureSemantics:
+    """#476: a failed scan must not be indistinguishable from a clean one."""
+
+    def test_scan_failure_returns_scan_failed_exit(self, monkeypatch, capsys):
+        import urllib.error
+
+        monkeypatch.setattr(sys, "argv", ["vpn-drift-watch.py", "--skip-tests"])
+
+        def boom(_since):
+            raise urllib.error.URLError("transient DNS failure")
+
+        monkeypatch.setattr(vdw, "fetch_gluetun_releases", boom)
+        rc = vdw.main()
+        out = capsys.readouterr().out
+        assert rc == 2, "scan failure must exit nonzero (2), not report OK"
+        assert "SCAN-FAILED" in out
+        assert "RESULT: OK" not in out
+
+    def test_successful_scan_empty_window_still_ok(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["vpn-drift-watch.py", "--skip-tests"])
+        monkeypatch.setattr(vdw, "fetch_gluetun_releases", lambda _since: [])
+        rc = vdw.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "no releases in window" in out
+        assert "RESULT: OK" in out
+
+    def test_scan_failure_dominates_live_failure(self, monkeypatch, capsys):
+        import urllib.error
+
+        monkeypatch.setattr(sys, "argv", ["vpn-drift-watch.py"])
+        monkeypatch.setattr(vdw, "run_live_tests", lambda: 1)
+
+        def boom(_since):
+            raise OSError("rate limited")
+
+        monkeypatch.setattr(vdw, "fetch_gluetun_releases", boom)
+        rc = vdw.main()
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "RESULT: FAIL" in out  # live failure still reported
+        assert "SCAN-FAILED" in out

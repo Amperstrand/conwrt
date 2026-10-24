@@ -22,10 +22,10 @@ Detailed notes are in `recipes/<vendor>/<model>/`.
 
 **What happened:** Attempted to flash OpenWrt via FTP/web without serial cable. ZyNOS firmware handler rejected all non-stock images (6 attempts). During Playwright automation, all management services (HTTP, FTP, Telnet) were left disabled. Switch is running stock ZyNOS V4.50 from slot 2 with L2 fabric alive but zero management access.
 
-**How we know:** 90-second packet capture showed only LLDP frames every 30s from MAC `4c:9e:ff:77:5c:93`. Zero DHCP, zero TCP, zero ARP requests. Our OpenWrt build doesn't include LLDP — stock ZyNOS does.
+**How we know:** 90-second packet capture showed only LLDP frames every 30s from MAC `4c:9e:ff:xx:xx:xx`. Zero DHCP, zero TCP, zero ARP requests. Our OpenWrt build doesn't include LLDP — stock ZyNOS does.
 
 **Switch identity:**
-- MAC: `4c:9e:ff:77:5c:91` (chassis), port 2: `4c:9e:ff:77:5c:93`
+- MAC: `4c:9e:ff:xx:xx:xx` (chassis), port 2: `4c:9e:ff:xx:xx:xx`
 - Default IP: 192.168.1.1
 - Default login: admin/1234
 - OUI: `4C:9E:FF` (Zyxel)

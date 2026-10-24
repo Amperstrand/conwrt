@@ -179,7 +179,7 @@ mtd9: reserve      (512K)   — Reserved
 
 ## Zycast (multicast flash)
 
-**TESTED and confirmed working** on 2026-05-26. Flashed NR7101 Telenor unit (MAC `78:c5:7d:13:91:9c`) from stock firmware to OpenWrt SNAPSHOT r34578-d51fa9b28e using a Go zycast binary running on a Zyxel GS1900-8HP switch.
+**TESTED and confirmed working** on 2026-05-26. Flashed NR7101 Telenor unit (MAC `<unit MAC: ex-Telenor>`) from stock firmware to OpenWrt SNAPSHOT r34578-d51fa9b28e using a Go zycast binary running on a Zyxel GS1900-8HP switch.
 
 ### Flash procedure
 

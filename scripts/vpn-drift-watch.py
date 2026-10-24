@@ -12,8 +12,10 @@ Two signals, one report:
    research only (AGENTS.md external-repo etiquette); it is NOT a
    dependency.
 
-Exit code 1 = live contract failure OR provider-relevant gluetun change —
-the scheduled workflow turns that into a maintainer notification.
+Exit codes: 0 = clean · 1 = live contract failure OR provider-relevant
+gluetun change (the scheduled workflow turns that into a maintainer
+notification) · 2 = gluetun scan failed — the window is UNCHECKED, not
+clean; never treat a scan failure as an all-clear (#476).
 
 Usage:
   python3 scripts/vpn-drift-watch.py [--skip-tests] [--days N]
@@ -137,12 +139,14 @@ def main() -> int:
 
     print(f"\n== gluetun releases (last {args.days} days) ==")
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    scan_failed = False
     try:
         releases = fetch_gluetun_releases(since)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        print(f"  gluetun scan failed (not fatal): {exc}")
+        scan_failed = True
+        print(f"  gluetun scan failed: {exc}")
         releases = []
-    if not releases:
+    if not releases and not scan_failed:
         print("  no releases in window")
 
     escalated = False
@@ -158,6 +162,11 @@ def main() -> int:
 
     if live_rc != 0:
         print("\nRESULT: FAIL — live API contract tests failed (provider drift?)")
+    if scan_failed:
+        print("RESULT: SCAN-FAILED — gluetun scan did not complete (network/API "
+              "error); the window is UNCHECKED, not clean (#476)")
+        return 2
+    if live_rc != 0:
         return 1
     if escalated:
         print("\nRESULT: FAIL — provider-relevant changes upstream in gluetun; "

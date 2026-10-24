@@ -18,10 +18,10 @@ unit, then batch the rest. Prepared 2026-09-21; all remote diagnosis already don
 
 | Port | MAC | PoE idle | Boot-window behavior | Working hypothesis |
 |------|-----|----------|---------------------|--------------------|
-| lan5 | dc:b8:08:6c:ea:7f | 96-98 mA | IPv6 RA immediately | **Healthy** — OpenWrt 24.10.2 at 192.168.1.1 (VLAN 1005). Reference unit. Do not touch. |
+| lan5 | dc:b8:08:xx:xx:xx | 96-98 mA | IPv6 RA immediately | **Healthy** — OpenWrt 24.10.2 at 192.168.1.1 (VLAN 1005). Reference unit. Do not touch. |
 | lan6 | (unknown) | 66 mA flat | **Zero frames ever**, even at fresh boot | True unknown: U-Boot stuck, or kernel panic before net init. Most diagnostic value. |
-| lan7 | b4:2d:56:25:47:a2 | 98 mA flat | Kernel IPv6 DAD for ULA `fda1:c616:883d::1`, MLD — then dark | OpenWrt boots, network config broken (interfaces fail post-init) |
-| lan8 | b4:2d:56:25:86:bd | 100 mA flat | Kernel IPv6 + brief IPv4 `192.168.1.1` + UDP:4919 broadcast — then dark | OpenWrt boots, network config broken. **Recommended pilot unit** (most alive). |
+| lan7 | b4:2d:56:xx:xx:xx | 98 mA flat | Kernel IPv6 DAD for ULA `fda1:c616:883d::1`, MLD — then dark | OpenWrt boots, network config broken (interfaces fail post-init) |
+| lan8 | b4:2d:56:xx:xx:xx | 100 mA flat | Kernel IPv6 + brief IPv4 `192.168.1.1` + UDP:4919 broadcast — then dark | OpenWrt boots, network config broken. **Recommended pilot unit** (most alive). |
 
 Ruled out by experiment: TFTP-boot rescue (bootloaders boot kernel from flash,
 never touch network — verified with live bait server across power cycles);

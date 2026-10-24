@@ -104,7 +104,11 @@ pub fn render_apply_script(plan: &Plan) -> String {
 /// verification check is **data**, not an error — inspect the outcome.
 pub async fn apply_plan(session: &SshSession, plan: &Plan) -> Result<ApplyOutcome, SshError> {
     let script = render_apply_script(plan);
-    let output = session.exec(&script).await?;
+    // stdin transport, not exec-command: Dropbear caps the command
+    // length and large plans (pia: 9.2KB) die channel-level — see
+    // SshSession::exec_stdin. `sh -s` reads the script from stdin;
+    // the script's own `set -e` keeps fail-fast semantics identical.
+    let output = session.exec_stdin("sh -s", &script).await?;
     let applied = output.exit_code.unwrap_or(1) == 0;
 
     let mut verification = Vec::new();
