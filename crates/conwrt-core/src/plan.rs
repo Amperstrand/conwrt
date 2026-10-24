@@ -3776,8 +3776,8 @@ const NORD_GATEWAY_DISCOVER_SH: &str = concat!(
     "# ifup; this is a fallback for paths where it does not. Capped short because\n",
     "# uci-defaults block the boot sequence (dropbear starts only after).\n",
     "while [ $_i -lt 20 ]; do\n",
-    "    VPN_GW=$(ip -4 route show default dev {iface} 2>/dev/null | head -n1 | sed -n 's/.*via \\\\([0-9.]\\\\+\\\\).*/\\\\1/p')\n",
-    "    [ -z \"$VPN_GW\" ] && VPN_GW=$(ip -4 route show default 2>/dev/null | head -n1 | sed -n 's/.*via \\\\([0-9.]\\\\+\\\\).*/\\\\1/p')\n",
+    "    VPN_GW=$(ip -4 route show default dev {iface} 2>/dev/null | head -n1 | sed -n 's/.*via \\([0-9.]\\+\\).*/\\1/p')\n",
+    "    [ -z \"$VPN_GW\" ] && VPN_GW=$(ip -4 route show default 2>/dev/null | head -n1 | sed -n 's/.*via \\([0-9.]\\+\\).*/\\1/p')\n",
     "    [ -n \"$VPN_GW\" ] && break\n",
     "    sleep 2; _i=$((_i+2))\n",
     "done\n",
@@ -6062,6 +6062,11 @@ mod tests {
         })));
         assert!(discover.contains("VPN_GW=$(ip -4 route show default dev wwan"));
         assert!(!discover.contains("gateway='192.168.8.1'"));
+        // the sed captures need SINGLE backslashes at render time —
+        // doubled ones match nothing and the discovery always times
+        // out (Codex #526 P2; the source template's \\ must not leak)
+        assert!(discover.contains("sed -n 's/.*via \\([0-9.]\\+\\).*/\\1/p'"));
+        assert!(!discover.contains("\\\\("));
 
         // gates: base64 keys, resolved-IP route target, numeric fields,
         // CIDR address, host-or-ip endpoint, iface charset
