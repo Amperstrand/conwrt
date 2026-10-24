@@ -1,5 +1,12 @@
 # modemifd — pcscd IFD driver for modem SIM slots (spike, 2026-09-27)
 
+> **RETIRED (2026-10-23).** This C spike was the proof of concept; it is
+> superseded by the Rust driver at **Amperstrand/ifd-modemifd** (v4.0+),
+> which carried a full SGP.22 eSIM provisioning end-to-end through the
+> NR7101 modem reader. Start at `docs/NR7101-ESIM-PLAYBOOK.md` in this
+> repo. The procd AT-bridge *service* heritage here is still referenced;
+> the driver itself is not maintained.
+
 Implements Amperstrand/conwrt-bench #21: exposes the NR7101 (Quectel
 RG502Q-EA) SIM slot as a PC/SC reader via a TCP bridge to the modem AT port.
 
