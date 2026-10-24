@@ -560,16 +560,38 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 );
                 s.send_raw(format!("rm -f {remote_path}\n").as_bytes());
                 s.read_secs(1.5);
+                // Live-fire lesson 2026-10-24 (chunked-proof run 1): a
+                // blind 1s wait let data hit the CANONICAL tty before
+                // `stty raw` armed — SIGINT/SIGQUIT bytes killed the
+                // receiver and `stty sane` re-enabled echo mid-queue,
+                // whose echo-storm killed the box. Now: the receiver
+                // prints RDY after raw-noecho arms; we stream only
+                // after RDY; echo stays OFF for the whole transfer
+                // (no per-chunk sane — markers print fine in raw).
                 let total_chunks = data.len().div_ceil(*chunk_bytes);
                 for (i, chunk) in data.chunks(*chunk_bytes).enumerate() {
                     let ck = format!("CK-{i}");
                     let line = format!(
-                        "sh -c 'busybox stty raw -echo; head -c {} >> {remote_path}; busybox stty sane; echo {ck}'\n",
+                        "sh -c 'busybox stty raw -echo; echo RDY; head -c {} >> {remote_path}; echo {ck}'\n",
                         chunk.len()
                     );
-                    let before = s.window.len();
                     s.send_raw(line.as_bytes());
-                    s.read_secs(1.0);
+                    // verified handshake: wait for RDY before any data
+                    let rdy_deadline = Instant::now() + Duration::from_secs(30);
+                    let mut rdy = false;
+                    while Instant::now() < rdy_deadline {
+                        let b2 = s.window.len();
+                        s.read_secs(1.0);
+                        if contains(s.recent_since(b2), b"RDY") {
+                            rdy = true;
+                            break;
+                        }
+                    }
+                    if !rdy {
+                        return Err(format!(
+                            "stream_chunks: receiver never armed (RDY) for chunk {i}"
+                        ));
+                    }
                     let t0 = Instant::now();
                     let mut sent = 0usize;
                     while sent < chunk.len() {
@@ -603,6 +625,10 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     }
                     std::thread::sleep(Duration::from_millis(*pause_ms));
                 }
+                // restore the tty once, after all chunks (echo was
+                // deliberately off for the whole transfer)
+                s.send_raw(b"busybox stty sane\n");
+                s.read_secs(2.0);
                 // final on-box gate
                 let before = s.window.len();
                 s.send_raw(format!("{arm}\n").as_bytes());
