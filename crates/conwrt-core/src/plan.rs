@@ -460,6 +460,18 @@ impl CashuVpnClientProfile {
                 "peer_ip is required with a CIDR (e.g. `10.66.42.2/32`, from POST /peer)".into(),
             ));
         }
+        // The status line interpolates peer_ip into a single-quoted shell
+        // string — a quote-bearing value passed the old contains('/')
+        // gate (Codex P1, #524): gate the CIDR charset outright.
+        if !self
+            .peer_ip
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '/'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "peer_ip must be a CIDR address (hex digits, ':', '.', '/' only)".into(),
+            ));
+        }
         if !valid_host(&self.server_host) {
             return Err(Unsupported::InvalidParams(
                 "server_host must be a valid hostname or IPv4 address".into(),
@@ -2107,6 +2119,14 @@ fn plan_wireguard_client(
             command: "uci -q get network.wg0_peer.public_key".into(),
             expect_contains: wg.peer_public_key.clone(),
         },
+        // Same read-back class as the #524 P1 (caught in cashu-vpn,
+        // fixed here too): the committed address must be read back.
+        // green with an unnumbered interface.
+        VerificationCheck {
+            description: "tunnel address persisted".into(),
+            command: "uci -q get network.wg0.addresses".into(),
+            expect_contains: wg.address.clone(),
+        },
     ];
     Ok(Plan {
         profile_id: "wireguard-client".into(),
@@ -2412,6 +2432,14 @@ fn plan_cashu_vpn_client(
             description: "peer public key persisted".into(),
             command: "uci -q get network.wg0_peer.public_key".into(),
             expect_contains: wg.peer_public_key.clone(),
+        },
+        // Codex P1 (#524): the tunnel address was committed but never
+        // read back — a failed/typo'd addresses value left the plan
+        // green with an unnumbered interface.
+        VerificationCheck {
+            description: "tunnel address persisted".into(),
+            command: "uci -q get network.wg0.addresses".into(),
+            expect_contains: wg.peer_ip.clone(),
         },
     ];
     Ok(Plan {
