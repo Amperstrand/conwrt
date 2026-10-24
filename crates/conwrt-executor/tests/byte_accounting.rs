@@ -13,10 +13,8 @@
 //! out. The HIL mock's byte-at-a-time `read_head` is immune by
 //! construction.)
 
-mod common;
-
-use common::framing;
 use conwrt_agent_proto::protocol::StreamChunk;
+use conwrt_executor::multipart::{Multipart, UPLOAD_FIELD};
 use conwrt_executor::transfer::TransferState;
 use conwrt_executor::{HttpIo, RecoveryPost};
 
@@ -39,7 +37,12 @@ impl HttpIo for CountIo {
 async fn body_bytes_equal_content_len_across_sizes() {
     for size in [4096usize, 8192, 16384, 32768, 65536, 131072] {
         let image: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
-        let (mp, _) = framing(size);
+        let mp = Multipart {
+            boundary: "----WebKitFormBoundarye3b0c44298fc1c14",
+            field: UPLOAD_FIELD,
+            filename: "recovery.bin",
+            image_len: size as u64,
+        };
         let expected_len = mp.content_len().expect("sane size");
         let header = mp.header();
         let footer = mp.footer();
