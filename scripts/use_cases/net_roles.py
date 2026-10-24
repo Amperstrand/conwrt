@@ -178,6 +178,17 @@ _CONN_ADAPTER = r"""#!/bin/sh
 #            dhcp authority immediately and sticky-prevents re-arming
 # Never probes away the default route: verification uses host + /32
 # routes only, and adoption goes through the normal netifd path.
+#
+# PLATFORM CAVEAT (verified live on NR7101 / mt7621 DSA / 25.12):
+# raw AF_PACKET DHCP discovers (BusyBox udhcpc) do NOT egress a bridged
+# DSA port — neither via the bridge master nor a slave (wire-verified
+# with tcpdump: zero frames). UDP-socket broadcasts DO egress (the
+# device's own dnsmasq answers foreign clients in ~2ms). On such
+# platforms the probe is structurally silent: yield detection and VLAN
+# adoption stay inert-but-harmless (timeouts count as SILENT; with
+# serve_when_greenfield=0 nothing fires). A UDP-socket prober (tiny
+# compiled helper or python3-light) is the tracked follow-up that
+# re-enables live detection on DSA devices.
 CONF=${CONN_ADAPTER_CONF:-/etc/tollgate/conn-adapter.conf}
 STATE=${CONN_ADAPTER_STATE:-/tmp/conn-adapter.state}
 NOOP=${CONN_ADAPTER_NOOP:-/usr/share/conn-adapter/probe-noop.sh}
@@ -266,18 +277,31 @@ probe_vlans() {
 serve_watch() {
     IFACE=$(get_opt serve_iface)
     [ -n "$IFACE" ] || return 0
-    if probe "$IFACE"; then
+    # Probe bridge MEMBERS, not the bridge: a raw self-sent DHCP discover
+    # on a bridge master never loops back into the local receive path, so
+    # the serving dnsmasq would never see it (verified live on NR7101).
+    BRIF=${CONN_ADAPTER_BRIF:-/sys/class/net/$IFACE/brif}
+    FOUND=0
+    for m in "$BRIF"/*; do
+        [ -e "$m" ] || break
+        m=${m##*/}
+        [ "$(cat "${CONN_ADAPTER_NETSYS:-/sys/class/net}/$m/operstate" 2>/dev/null)" = "up" ] || continue
+        FOUND=1
+        probe "$m" || continue
         if [ "$PROBE_KIND" = FOREIGN ]; then
-            log "CRITICAL: foreign DHCP server $PROBE_SID on $IFACE — yielding DHCP authority"
-            uci set dhcp.lan.ignore='1'
-            uci commit dhcp
-            /etc/init.d/dnsmasq restart >/dev/null 2>&1
+            log "CRITICAL: foreign DHCP server $PROBE_SID on $IFACE ($m) — yielding DHCP authority"
+            if [ "$(uci -q get dhcp.lan.ignore)" != "1" ]; then
+                uci set dhcp.lan.ignore='1'
+                uci commit dhcp
+                /etc/init.d/dnsmasq restart >/dev/null 2>&1
+            fi
             touch "$STATE.yielded"
-        else
-            rm -f "$STATE.silent"
+            return 0
         fi
+        rm -f "$STATE.silent"
         return 0
-    fi
+    done
+    [ "$FOUND" = 1 ] || { log "serve: no probeable member up on $IFACE — holding"; return 0; }
     [ "$(get_opt serve_when_greenfield)" = "1" ] || return 0
     if [ -f "$STATE.yielded" ]; then
         log "greenfield but sticky-yielded — re-arm manually: rm $STATE.yielded"
@@ -287,11 +311,15 @@ serve_watch() {
     C=$((C + 1))
     echo $C > "$STATE.silent"
     if [ "$C" -ge 3 ]; then
-        uci set dhcp.lan.ignore='0'
-        uci commit dhcp
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1
         rm -f "$STATE.silent"
-        log "greenfield confirmed x3 — armed DHCP serving on $IFACE"
+        if [ "$(uci -q get dhcp.lan.ignore)" = "1" ]; then
+            uci set dhcp.lan.ignore='0'
+            uci commit dhcp
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1
+            log "greenfield confirmed x3 — armed DHCP serving on $IFACE"
+        else
+            log "greenfield x3; already serving on $IFACE — no change"
+        fi
     fi
 }
 
