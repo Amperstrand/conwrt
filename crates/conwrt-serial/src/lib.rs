@@ -82,6 +82,7 @@ pub mod io;
 pub mod lint;
 pub mod monitor;
 pub mod recovery;
+pub mod tftp;
 pub mod uboot;
 pub mod watch;
 

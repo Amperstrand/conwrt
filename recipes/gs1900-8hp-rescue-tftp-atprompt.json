@@ -1,0 +1,32 @@
+{
+  "model": "zyxel_gs1900-8hp rescue-to-25.12.6 via U-Boot TFTP (at-prompt: box parked at RTL838x# after a tftp timeout)",
+  "boot_trigger": ["RTL838x#"],
+  "probe_line": "",
+  "probe_interval_secs": 5,
+  "actions": [
+    { "type": "send_line", "line": "", "settle_secs": 2 },
+    { "type": "send_line", "line": "setenv ipaddr 192.168.1.1", "settle_secs": 1.5 },
+    { "type": "send_line", "line": "setenv serverip 192.168.1.10", "settle_secs": 1.5 },
+    { "type": "send_line", "line": "rtk network on", "settle_secs": 8 },
+    { "type": "expect", "pattern": "Enable network", "timeout_secs": 20 },
+    {
+      "type": "send_line",
+      "line": "tftpboot 0x84f00000 owrt-25.12.6-initramfs-kernel.bin",
+      "settle_secs": 15,
+      "_comment": "direct wire lan1<->enp2s0 must be up; alias homed automatically"
+    },
+    { "type": "expect", "pattern": "Bytes transferred = 5289055", "timeout_secs": 120 },
+    { "type": "send_line", "line": "iminfo 0x84f00000", "settle_secs": 5 },
+    { "type": "expect", "pattern": "OK", "timeout_secs": 15 },
+    { "type": "send_line", "line": "bootm 0x84f00000", "settle_secs": 5 },
+    { "type": "expect", "pattern": "root@OpenWrt", "timeout_secs": 200 },
+    { "type": "send_line", "line": "/etc/init.d/network restart", "settle_secs": 15 },
+    { "type": "send_line", "line": "wget -O /tmp/base.bin http://192.168.1.10:8022/owrt-25.12.6-squashfs-sysupgrade.bin", "settle_secs": 30 },
+    { "type": "expect", "pattern": "root@OpenWrt", "timeout_secs": 90 },
+    { "type": "send_line", "line": "sha256sum /tmp/base.bin", "settle_secs": 25 },
+    { "type": "expect", "pattern": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f", "timeout_secs": 60 },
+    { "type": "send_line", "line": "sysupgrade -n /tmp/base.bin", "settle_secs": 10 }
+  ],
+  "cooldown_secs": 300,
+  "max_fires": 1
+}

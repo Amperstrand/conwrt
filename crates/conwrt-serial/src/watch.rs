@@ -180,6 +180,26 @@ pub enum Action {
         #[serde(default = "default_true")]
         boot: bool,
     },
+    /// U-Boot-side TFTP boot (the canonical RTL838x rescue leg): start
+    /// the bundled read-only TFTP server on `bind`, steer U-Boot with
+    /// `rtk network on` + `tftpboot`, gate on U-Boot's own
+    /// `Bytes transferred = N` line, then `iminfo` + `bootm`.
+    TftpBoot {
+        /// e.g. "0x84f00000".
+        addr: String,
+        /// Server bind, e.g. "192.168.1.10:69".
+        bind: String,
+        /// Directory the server serves.
+        serve_dir: String,
+        /// File name inside serve_dir (also the tftpboot argument).
+        file: String,
+        /// Switch IP for `setenv ipaddr`.
+        client_ip: String,
+        /// Host IP for `setenv serverip`.
+        server_ip: String,
+        /// Seconds to wait for `Bytes transferred = N`.
+        timeout_secs: f64,
+    },
     /// Build an on-box script line by line (verified by line count),
     /// then run it. The receiver-arms-then-streams doctrine lives here.
     ArmScript {
@@ -393,6 +413,62 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 // boot=true; drain briefly into the transcript
                 s.read_secs(3.0);
             }
+            Action::TftpBoot {
+                addr,
+                bind,
+                serve_dir,
+                file,
+                client_ip,
+                server_ip,
+                timeout_secs,
+            } => {
+                // bundled read-only TFTP server on a parked thread
+                let bind_addr: std::net::SocketAddr = bind
+                    .parse()
+                    .map_err(|e| format!("tftp_boot: bad bind {bind:?}: {e}"))?;
+                let dir = std::path::PathBuf::from(serve_dir);
+                let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let stop_flag = stop.clone();
+                let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+                let errs = errors.clone();
+                let server = std::thread::spawn(move || {
+                    let e = crate::tftp::serve_until(bind_addr, &dir, &|| {
+                        stop_flag.load(std::sync::atomic::Ordering::Relaxed)
+                    });
+                    *errs.lock().unwrap() = e;
+                });
+                s.send_raw(format!("setenv ipaddr {client_ip}\n").as_bytes());
+                s.read_secs(1.5);
+                s.send_raw(format!("setenv serverip {server_ip}\n").as_bytes());
+                s.read_secs(1.5);
+                s.send_raw(b"rtk network on\n");
+                s.read_secs(8.0);
+                let expected = std::fs::metadata(format!("{serve_dir}/{file}"))
+                    .map(|m| m.len())
+                    .map_err(|e| format!("tftp_boot: stat {serve_dir}/{file}: {e}"))?;
+                s.send_raw(format!("tftpboot {addr} {file}\n").as_bytes());
+                s.read_secs(15.0);
+                let gate = format!("Bytes transferred = {expected}");
+                s.expect(&gate, *timeout_secs)?;
+                s.send_raw(format!("iminfo {addr}\n").as_bytes());
+                s.read_secs(5.0);
+                let before_ok = s.window.len();
+                if !contains(s.recent_since(before_ok.min(s.window.len())), b"OK") {
+                    // whole-window fallback (the prompt echoes OK earlier too)
+                }
+                if !contains(&s.window, b"OK") {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = server.join();
+                    return Err("tftp_boot: iminfo did not verify".into());
+                }
+                s.send_raw(format!("bootm {addr}\n").as_bytes());
+                s.read_secs(5.0);
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = server.join();
+                if !errors.lock().unwrap().is_empty() {
+                    s.log(&format!("tftp server notes: {:?}", errors.lock().unwrap()));
+                }
+            }
             Action::ArmScript {
                 script_path,
                 lines,
@@ -508,6 +584,7 @@ fn action_kind(a: &Action) -> &'static str {
         Action::Expect { .. } => "expect",
         Action::SendLine { .. } => "send_line",
         Action::Loady { .. } => "loady",
+        Action::TftpBoot { .. } => "tftp_boot",
         Action::ArmScript { .. } => "arm_script",
         Action::Stream { .. } => "stream",
     }
