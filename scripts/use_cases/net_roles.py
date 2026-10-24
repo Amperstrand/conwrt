@@ -141,16 +141,19 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         device = f"eth0.{u['vlan']}" if u["vlan"] else "eth0"
         if u["vlan"]:
             ops.append(Comment(text=f"--- net-roles: ethernet uplink {u['iface']} on tagged {device} ---"))
+            ops.append(ShellCommand(command=f"uci set network.dev_{u['iface']}=device"))
             ops.append(UciSet(config="network", section=f"dev_{u['iface']}", values={
                 "type": "8021q", "name": device, "ifname": "eth0", "vid": str(u["vlan"]),
             }))
         else:
             ops.append(Comment(text=f"--- net-roles: ethernet uplink {u['iface']} on the untagged port ---"))
+        if not r["serve_ethernet"] and not u["vlan"]:
             ops.append(ShellCommand(command=(
                 "for s in $(uci -q show network | sed -n 's/^network\\.\\([^.]*\\)=device$/\\1/p'); do "
                 "[ \"$(uci -q get network.$s.name)\" = \"br-lan\" ] "
                 "&& uci -q del_list network.$s.ports='eth0'; done; true"
             )))
+        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
         ops.append(ShellCommand(command=f"uci -q revert network.{u['iface']} || true"))
         ops.append(UciSet(config="network", section=u["iface"], values={"proto": "dhcp", "device": device}))
         ops.append(ShellCommand(command=_zone_add(u["iface"], "wan")))
@@ -159,6 +162,7 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         if u["type"] != "wifi":
             continue
         ops.append(Comment(text=f"--- net-roles: wifi uplink {u['iface']} (STA on {u['radio']}) ---"))
+        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
         ops.append(ShellCommand(command=f"uci -q revert network.{u['iface']} || true"))
         ops.append(UciSet(config="network", section=u["iface"], values={"proto": "dhcp"}))
         sta_values: dict[str, str] = {
@@ -167,6 +171,7 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         }
         if u["encryption"] != "none":
             sta_values["key"] = u["key"]
+        ops.append(ShellCommand(command=f"uci set wireless.{u['iface']}sta=wifi-iface"))
         ops.append(ShellCommand(command=f"uci -q revert wireless.{u['iface']}sta || true"))
         ops.append(UciSet(config="wireless", section=f"{u['iface']}sta", values=sta_values))
         ops.append(UciSet(config="wireless", section=u["radio"], values={"disabled": "0"}))
@@ -177,11 +182,29 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
             f"&& [ \"$w\" != \"{u['iface']}sta\" ] && uci set wireless.$w.disabled=1; done; true"
         )))
 
+    if not r["serve_wifi"] and not any(u["type"] == "wifi" for u in uplinks):
+        ops.append(Comment(text="--- net-roles: serving disabled — take all AP vifs off the air ---"))
+        ops.append(ShellCommand(command=(
+            "for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do "
+            "[ \"$(uci -q get wireless.$w.mode)\" = \"ap\" ] && uci set wireless.$w.disabled=1; done; true"
+        )))
+
+    untagged_eth_uplink = any(u["type"] == "ethernet" and not u["vlan"] for u in uplinks)
+    if not r["serve_ethernet"] and not untagged_eth_uplink:
+        ops.append(Comment(text="--- net-roles: serving disabled — eth0 leaves the serving bridge ---"))
+        ops.append(ShellCommand(command=(
+            "for s in $(uci -q show network | sed -n 's/^network\\.\\([^.]*\\)=device$/\\1/p'); do "
+            "[ \"$(uci -q get network.$s.name)\" = \"br-lan\" ] "
+            "&& uci -q del_list network.$s.ports='eth0'; done; true"
+        )))
+
     if mgmt_vlan:
         ops.append(Comment(text=f"--- net-roles: mgmt door eth0.{mgmt_vlan} (static, lan zone) ---"))
+        ops.append(ShellCommand(command="uci set network.mgmtdev=device"))
         ops.append(UciSet(config="network", section="mgmtdev", values={
             "type": "8021q", "name": f"eth0.{mgmt_vlan}", "ifname": "eth0", "vid": str(mgmt_vlan),
         }))
+        ops.append(ShellCommand(command="uci set network.mgmt=interface"))
         ops.append(ShellCommand(command="uci -q revert network.mgmt || true"))
         ops.append(UciSet(config="network", section="mgmt", values={
             "proto": "static", "device": f"eth0.{mgmt_vlan}",
@@ -194,12 +217,7 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         for u in uplinks:
             ops.append(UciSet(config="network", section=u["iface"], values={"metric": str(u["metric"])}))
 
-    ops.append(UciCommit(config="network"))
-    if any(u["type"] == "wifi" for u in uplinks):
-        ops.append(UciCommit(config="wireless"))
-    ops.append(UciCommit(config="firewall"))
-
-    ops.append(Comment(text="--- net-roles: readbacks ---"))
+    ops.append(Comment(text="--- net-roles: readbacks (gate the commits — staged values are visible to uci get) ---"))
     for u in uplinks:
         if u["type"] == "ethernet":
             device = f"eth0.{u['vlan']}" if u["vlan"] else "eth0"
@@ -217,6 +235,11 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
             f'[ "$(uci -q get network.mgmt.ipaddr)" = "{r["mgmt_ip"]}" ] '
             f'|| {{ echo "net-roles: mgmt readback FAILED"; exit 1; }}'
         )))
+
+    ops.append(UciCommit(config="network"))
+    if any(u["type"] == "wifi" for u in uplinks) or not r["serve_wifi"]:
+        ops.append(UciCommit(config="wireless"))
+    ops.append(UciCommit(config="firewall"))
 
     ops.append(BlankLine())
     if any(u["type"] == "wifi" for u in uplinks):

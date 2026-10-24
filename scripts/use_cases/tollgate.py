@@ -498,12 +498,15 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     if pricing is not None:
         price, derivation = pricing
         ops.append(BlankLine())
-        ops.append(Comment(text=f"--- TollGate: byte pricing ({derivation}) ---"))
+        ops.append(Comment(text=f"--- TollGate: byte pricing ({derivation} = {price} sat/MiB) ---"))
         ops.append(ShellCommand(
             command=f'if [ -f /etc/tollgate/config.json ]; then '
-                    f'sed -i \'s/"price_per_step": [0-9]*/"price_per_step": {price}/\' /etc/tollgate/config.json '
+                    f'SS=$(sed -n \'s/.*"step_size": \\([0-9][0-9]*\\).*/\\1/p\' /etc/tollgate/config.json | head -1); '
+                    f'[ -n "$SS" ] || SS=1048576; '
+                    f'P=$(( ( {price} * SS + 1048575 ) / 1048576 )); '
+                    f'sed -i \'s/"price_per_step": [0-9]*/"price_per_step": \'"$P"\'/g\' /etc/tollgate/config.json '
                     f'&& /etc/init.d/tollgate-wrt restart 2>/dev/null '
-                    f'&& echo "tollgate: price_per_step={price} sat applied to all mints" '
+                    f'&& echo "tollgate: price_per_step=$P applied (step_size=$SS bytes; {price} sat/MiB)" '
                     f'|| echo "tollgate: price patch FAILED on existing config.json"; '
                     f'else echo "tollgate: /etc/tollgate/config.json absent (ipk not installed yet) — re-run configure after deploy_tollgate_post_flash"; fi'
         ))
