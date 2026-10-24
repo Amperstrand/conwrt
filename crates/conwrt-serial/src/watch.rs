@@ -210,6 +210,33 @@ pub enum Action {
         /// Execute the script after a verified build.
         run: bool,
     },
+    /// Chunked raw send (the serial fallback that survives): each
+    /// chunk gets its own canonical-mode receiver line
+    /// (`sh -c 'stty raw -echo; head -c N >> f; stty sane; echo CK-i'`),
+    /// so no continuous RX burst exceeds one chunk and the console
+    /// never computes under saturation. Per-chunk markers verified;
+    /// final on-box sha gate + optional sysupgrade in `final_command`.
+    StreamChunks {
+        /// Local file to send.
+        file: String,
+        /// Expected sha256 of the whole file (host-side pre-gate).
+        sha256: String,
+        /// On-box path the receiver appends to.
+        remote_path: String,
+        /// Bytes per chunk (e.g. 819200 for ~3 min bursts at 4 KiB/s).
+        chunk_bytes: usize,
+        /// Pause between chunks (milliseconds) — console recovery time.
+        pause_ms: u64,
+        /// Pace inside a chunk (bytes per write).
+        pace_bytes: usize,
+        /// Milliseconds between paced writes.
+        pace_ms: u64,
+        /// Command executed on-box when the final sha gate passes
+        /// (e.g. "sysupgrade -n /tmp/base.bin"); empty = verify only.
+        final_command: String,
+        /// Seconds to wait for the final sha line.
+        verdict_timeout_secs: f64,
+    },
     /// Paced raw send of `file` to the armed receiver; waits for
     /// `done_marker` / `fail_marker` from the on-box gate.
     Stream {
@@ -508,6 +535,100 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     s.read_secs(3.0);
                 }
             }
+            Action::StreamChunks {
+                file,
+                sha256,
+                remote_path,
+                chunk_bytes,
+                pause_ms,
+                pace_bytes,
+                pace_ms,
+                final_command,
+                verdict_timeout_secs,
+            } => {
+                let data = std::fs::read(file)
+                    .map_err(|e| format!("stream_chunks: cannot read {file}: {e}"))?;
+                let want = sha256.to_ascii_lowercase();
+                let got = crate::tftp::sha256_hex_pub(&data);
+                if got != want {
+                    return Err(format!("stream_chunks: host sha mismatch {got} != {want}"));
+                }
+                // arm the final gate: sha over the assembled file, then
+                // the caller's command only on match (self-firing)
+                let arm = format!(
+                    "S=$(sha256sum {remote_path} | cut -d' ' -f1); test \"$S\" = \"{want}\" && echo CW-GATE-PASS || echo CW-GATE-FAIL"
+                );
+                s.send_raw(format!("rm -f {remote_path}\n").as_bytes());
+                s.read_secs(1.5);
+                let total_chunks = data.len().div_ceil(*chunk_bytes);
+                for (i, chunk) in data.chunks(*chunk_bytes).enumerate() {
+                    let ck = format!("CK-{i}");
+                    let line = format!(
+                        "sh -c 'busybox stty raw -echo; head -c {} >> {remote_path}; busybox stty sane; echo {ck}'\n",
+                        chunk.len()
+                    );
+                    let before = s.window.len();
+                    s.send_raw(line.as_bytes());
+                    s.read_secs(1.0);
+                    let t0 = Instant::now();
+                    let mut sent = 0usize;
+                    while sent < chunk.len() {
+                        let end = (sent + pace_bytes).min(chunk.len());
+                        s.send_raw(&chunk[sent..end]);
+                        sent = end;
+                        std::thread::sleep(Duration::from_millis(*pace_ms));
+                    }
+                    s.log(&format!(
+                        "chunk {}/{} sent ({} B, {:.1}s)",
+                        i + 1,
+                        total_chunks,
+                        chunk.len(),
+                        t0.elapsed().as_secs_f64()
+                    ));
+                    // wait for the chunk marker (head consumed exactly N)
+                    let deadline = Instant::now() + Duration::from_secs(120);
+                    let mut ok = false;
+                    while Instant::now() < deadline {
+                        let b2 = s.window.len();
+                        s.read_secs(1.0);
+                        if contains(s.recent_since(b2), ck.as_bytes()) {
+                            ok = true;
+                            break;
+                        }
+                    }
+                    if !ok {
+                        return Err(format!(
+                            "stream_chunks: {ck} never echoed — box unresponsive after chunk {i}"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(*pause_ms));
+                }
+                // final on-box gate
+                let before = s.window.len();
+                s.send_raw(format!("{arm}\n").as_bytes());
+                let deadline =
+                    Instant::now() + Duration::from_secs_f64((*verdict_timeout_secs).max(1.0));
+                let mut pass = false;
+                while Instant::now() < deadline {
+                    let b2 = s.window.len();
+                    s.read_secs(2.0);
+                    if contains(s.recent_since(b2), b"CW-GATE-PASS") {
+                        pass = true;
+                        break;
+                    }
+                    if contains(s.recent_since(b2), b"CW-GATE-FAIL") {
+                        return Err("stream_chunks: on-box sha gate FAILED".into());
+                    }
+                }
+                if !pass {
+                    return Err("stream_chunks: no gate verdict".into());
+                }
+                s.log("ON-BOX GATE PASSED (chunked)");
+                if !final_command.is_empty() {
+                    s.send_raw(format!("{final_command}\n").as_bytes());
+                    s.read_secs(5.0);
+                }
+            }
             Action::Stream {
                 file,
                 sha256,
@@ -585,9 +706,16 @@ fn action_kind(a: &Action) -> &'static str {
         Action::SendLine { .. } => "send_line",
         Action::Loady { .. } => "loady",
         Action::TftpBoot { .. } => "tftp_boot",
+        Action::StreamChunks { .. } => "stream_chunks",
         Action::ArmScript { .. } => "arm_script",
         Action::Stream { .. } => "stream",
     }
+}
+
+/// Public shim: the same SHA-256 used by gate checks, callable from
+/// sibling modules (tftp.rs re-exports it).
+pub fn sha256_hex_for_gate(data: &[u8]) -> String {
+    sha256_hex(data)
 }
 
 fn sha256_hex(data: &[u8]) -> String {
