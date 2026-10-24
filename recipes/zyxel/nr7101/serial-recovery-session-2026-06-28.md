@@ -96,7 +96,7 @@ mtd9: 00080000 "reserve"        (512KB)
 
 ## MAC Address
 
-- **eth0 MAC**: `d4:1a:d1:ec:41:d8` (observed in initramfs — may differ from factory MAC)
+- **eth0 MAC**: `d4:1a:d1:xx:xx:xx` (observed in initramfs — may differ from factory MAC)
 - **Expected OUI**: `4C:C5:3E` (ZyXEL) — not observed on this unit
 - **Factory partition** (mtd2, irreplaceable): NOT backed up. Contains real MAC, serial number, calibration data
 
