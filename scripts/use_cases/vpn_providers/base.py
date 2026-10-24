@@ -91,6 +91,7 @@ def wg0_uci_sh(
     mtu: str = "1280",
     keepalive: str = "25",
     listen_port: bool = True,
+    allowed_ips: str = "0.0.0.0/0",
 ) -> str:
     """The shared WireGuard interface + peer uci stanza.
 
@@ -100,6 +101,16 @@ def wg0_uci_sh(
     the stanza itself is defined once.
     """
     listen = "uci set network.wg0.listen_port='51820'\n" if listen_port else ""
+    # allowed_ips comes from a parsed provider config file (trust boundary):
+    # it lands inside a single-quoted uci value in generated shell, so only
+    # CIDR-list characters may pass — a quote or metachar would break out.
+    import re as _re
+
+    if not _re.fullmatch(r"[0-9A-Fa-f:. ,/]+", allowed_ips.strip()):
+        raise ValueError(
+            f"allowed_ips must be a CIDR list, got {allowed_ips!r} (#468)"
+        )
+    allowed_ips = allowed_ips.strip()
     return (
         f"uci set network.wg0=interface\n"
         f"uci set network.wg0.proto='wireguard'\n"
@@ -113,8 +124,15 @@ def wg0_uci_sh(
         f"uci set network.@wireguard_wg0[0].public_key={peer_key}\n"
         f"uci set network.@wireguard_wg0[0].endpoint_host={endpoint_host}\n"
         f"uci set network.@wireguard_wg0[0].endpoint_port={endpoint_port}\n"
-        f"uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n"
-        f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
+        # netifd's wireguard handler iterates `for allowed_ip in ${allowed_ips}`
+        # (whitespace split) — a comma inside ONE list entry yields a malformed
+        # prefix (e.g. `16,`) and the route is silently skipped (#528 review).
+        # One uci add_list per CIDR is the correct shape.
+        + "".join(
+            f"uci add_list network.@wireguard_wg0[0].allowed_ips='{cidr}'\n"
+            for cidr in (c.strip() for c in allowed_ips.split(","))
+        )
+        + f"uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n"
         f"uci set network.@wireguard_wg0[0].persistent_keepalive='{keepalive}'\n"
     )
 
