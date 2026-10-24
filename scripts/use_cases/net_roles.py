@@ -231,7 +231,8 @@ verify() {
 adopt() {
     WANIF=$(get_opt wan_iface); [ -n "$WANIF" ] || WANIF=waneth
     METRIC=$(get_opt wan_metric); [ -n "$METRIC" ] || METRIC=100
-    DEV="eth0.$1"
+    BASE=$(get_opt base_port); [ -n "$BASE" ] || BASE=eth0
+    DEV="$BASE.$1"
     uci set network.$WANIF=interface
     uci set network.$WANIF.proto='dhcp'
     uci set network.$WANIF.device="$DEV"
@@ -258,9 +259,11 @@ uplink_alive() {
 
 probe_vlans() {
     uplink_alive && return 0
+    BASE=$(get_opt base_port); [ -n "$BASE" ] || BASE=eth0
     for v in $(get_opt probe_vlans | tr ',' ' '); do
         [ -n "$v" ] || continue
-        DEV="eth0.$v"
+        DEV="$BASE.$v"
+        ip link show "$DEV" >/dev/null 2>&1 || ip link add "$DEV" type vlan id "$v" 2>/dev/null || true
         ip link set "$DEV" up 2>/dev/null || true
         if probe "$DEV"; then
             [ "$PROBE_KIND" = FOREIGN ] || continue
@@ -292,8 +295,11 @@ serve_watch() {
             log "CRITICAL: foreign DHCP server $PROBE_SID on $IFACE ($m) — yielding DHCP authority"
             if [ "$(uci -q get dhcp.lan.ignore)" != "1" ]; then
                 uci set dhcp.lan.ignore='1'
+                uci set dhcp.lan.ra='disabled'
+                uci set dhcp.lan.dhcpv6='disabled'
                 uci commit dhcp
                 /etc/init.d/dnsmasq restart >/dev/null 2>&1
+                /etc/init.d/odhcpd restart >/dev/null 2>&1
             fi
             touch "$STATE.yielded"
             return 0
@@ -448,6 +454,9 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"net-roles: adaptive_vlans[{i}] must be an int in 2..4094")
     adaptive_serve_dhcp = bool(params.get("adaptive_serve_dhcp", False))
     adaptive_interval = int(params.get("adaptive_interval", 30))
+    adaptive_base_port = str(params.get("adaptive_base_port", "eth0"))
+    if not adaptive_base_port.replace(".", "").replace("_", "").isalnum():
+        raise ValueError("net-roles: adaptive_base_port must be a plain interface name")
     if not 5 <= adaptive_interval <= 300:
         raise ValueError("net-roles: adaptive_interval must be in 5..300 seconds")
     if adaptive_vlans and any(u["type"] == "ethernet" for u in uplinks):
@@ -469,6 +478,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "adaptive_vlans": adaptive_vlans,
         "adaptive_serve_dhcp": adaptive_serve_dhcp,
         "adaptive_interval": adaptive_interval,
+        "adaptive_base_port": adaptive_base_port,
     }
 
 
@@ -624,6 +634,13 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         for u in uplinks:
             price = r["prices"][u["type"]]
             mode_conf_lines.append(f"{u['iface']} {u['metric']} {price if price > 0 else '-'}")
+        if r["adaptive_vlans"] and r["auto_switch"]:
+            slot = uplinks[-1]["metric"] if uplinks else 0
+            ad_metric = _METRICS[min(len(uplinks), len(_METRICS) - 1)]
+            if ad_metric <= slot:
+                ad_metric = slot + 100
+            ad_price = r["prices"]["ethernet"]
+            mode_conf_lines.append(f"waneth {ad_metric} {ad_price if ad_price > 0 else '-'}")
         mode_conf = "\n".join(mode_conf_lines) + "\n"
         _stage_file_ops(ops, "/etc/tollgate/mode.conf", mode_conf, "600")
         _stage_file_ops(ops, "/usr/bin/tollgate-mode", _MODE_DAEMON, "755")
@@ -650,6 +667,7 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
             f"serve_when_greenfield={int(r['adaptive_serve_dhcp'])}",
             "serve_iface=br-lan",
             "wan_iface=waneth",
+            f"base_port={r['adaptive_base_port']}",
             "interval=" + str(r["adaptive_interval"]),
         ]
         _stage_file_ops(ops, "/usr/share/conn-adapter/probe-noop.sh", _CONN_NOOP, "755")
@@ -719,6 +737,9 @@ register(UseCase(
                         "(sticky until manual re-arm) — automates the rogue-DHCP discipline"),
         "adaptive_interval": ParamDef(type=int, default=30, min_value=5, max_value=300,
             description="conn-adapter watch interval in seconds"),
+        "adaptive_base_port": ParamDef(type=str, default="eth0",
+            description="Base port for adaptive VLAN candidates (DSA devices use their port name, "
+                        "e.g. 'lan' on the NR7101)"),
     },
     test_status="experimental",
     tested_notes="renders validated (multi-mode sh -n); hardware run pending next TollGate build",
