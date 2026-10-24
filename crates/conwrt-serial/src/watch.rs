@@ -748,8 +748,8 @@ mod tests {
         // the live-fire regression: a YMODEM frame full of 0xFF bytes
         // must survive the wrapper round-trip unharmed
         let frame: Vec<u8> = std::iter::once(0x02u8)
-            .chain(std::iter::repeat(0xFF).take(200))
-            .chain(std::iter::repeat(0xAB).take(50))
+            .chain(std::iter::repeat_n(0xFF, 200))
+            .chain(std::iter::repeat_n(0xAB, 50))
             .collect();
         let inner = Box::new(EchoIo {
             written: Vec::new(),
