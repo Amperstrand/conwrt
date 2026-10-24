@@ -959,6 +959,168 @@ impl VpnPiaOpenvpnProfile {
     }
 }
 
+/// NordVPN via NordLynx (WireGuard) — port of the tested 1.x
+/// `vpn-nordvpn` preset (`scripts/use_cases/vpn_providers/nordvpn.py`,
+/// hardware-verified 2026-10-08 on x1860/25.12.5). 1.x resolves
+/// EVERYTHING at build time on the host (the NordLynx private key from
+/// the token-gated credentials endpoint, the server from the
+/// recommendations API) and the device receives a fully static config.
+/// The host-side API resolution stays 1.x (M7 pipeline work); this
+/// profile carries the RESOLVED statics — the same contract as a
+/// dashboard-exported .conf, without secrets in git (goldens use
+/// stubbed resolution).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnNordvpnProfile {
+    /// Resolved NordLynx private key (base64). Rides a double-quoted
+    /// assignment in the payload — validate() enforces the base64
+    /// charset (the mwan3/#448 injection class).
+    pub private_key: String,
+    /// Server WireGuard public key (base64, same gate).
+    pub server_public_key: String,
+    /// Endpoint: IP or hostname (NordVPN per-server hostnames).
+    pub endpoint_host: String,
+    /// Resolved ROUTE TARGET for the endpoint /32 pin: when the
+    /// endpoint is a hostname, 1.x resolves it to an IP at build time
+    /// (the route option needs the IP); equal to endpoint_host when
+    /// that is already an IPv4.
+    pub route_target: String,
+    /// Endpoint UDP port (string for 1.x parity; default 51820).
+    pub endpoint_port: String,
+    /// Tunnel address (1.x static 10.5.0.2/32).
+    pub address: String,
+    /// Tunnel MTU (1.x default 1420).
+    pub mtu: String,
+    /// Persistent keepalive (1.x default 25).
+    pub keepalive: String,
+    /// Upstream gateway IP; pins the endpoint /32 route (empty = the
+    /// payload's bounded gateway discovery, 1.x parity).
+    pub upstream_gateway: String,
+    /// Upstream interface name (1.x default wwan).
+    pub upstream_iface: String,
+    /// Block all non-VPN traffic if the tunnel drops (default on; the
+    /// 30s handshake verify loop auto-removes it on failure).
+    pub kill_switch: bool,
+    /// Accept SSH/LuCI from the VPN zone (default on).
+    pub allow_management: bool,
+}
+
+impl Default for VpnNordvpnProfile {
+    fn default() -> Self {
+        Self {
+            private_key: String::new(),
+            server_public_key: String::new(),
+            endpoint_host: String::new(),
+            route_target: String::new(),
+            endpoint_port: "51820".into(),
+            address: "10.5.0.2/32".into(),
+            mtu: "1420".into(),
+            keepalive: "25".into(),
+            upstream_gateway: String::new(),
+            upstream_iface: "wwan".into(),
+            kill_switch: true,
+            allow_management: true,
+        }
+    }
+}
+
+impl VpnNordvpnProfile {
+    /// 1.x validates nothing on the resolved statics (they came from
+    /// its own API calls). This plan interpolates them into a payload
+    /// whose assignments are double-quoted, so the port gates: keys
+    /// must be base64, the endpoint an IPv4 or a hostname, port/mtu/
+    /// keepalive numeric, the address a CIDR, the iface on the 1.x
+    /// charset (mwan3/#448 class).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let b64 = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        };
+        if !b64(&self.private_key) {
+            return Err(Unsupported::InvalidParams(
+                "private_key must be base64".into(),
+            ));
+        }
+        if !b64(&self.server_public_key) {
+            return Err(Unsupported::InvalidParams(
+                "server_public_key must be base64".into(),
+            ));
+        }
+        let ipv4 = |v: &str| {
+            let o: Vec<&str> = v.split('.').collect();
+            o.len() == 4
+                && o.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars().all(|c| c.is_ascii_digit())
+                        && p.parse::<u8>().is_ok()
+                })
+        };
+        let host_ok = |v: &str| {
+            ipv4(v)
+                || (!v.is_empty()
+                    && v.len() <= 253
+                    && v.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                    && !v.starts_with('-')
+                    && !v.ends_with('-'))
+        };
+        if !host_ok(&self.endpoint_host) {
+            return Err(Unsupported::InvalidParams(
+                "endpoint_host must be an IPv4 or hostname".into(),
+            ));
+        }
+        if self.route_target.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "route_target is required (the resolved endpoint IP)".into(),
+            ));
+        }
+        if !ipv4(&self.route_target) {
+            return Err(Unsupported::InvalidParams(
+                "route_target must be an IPv4 address".into(),
+            ));
+        }
+        for (field, value) in [
+            ("endpoint_port", &self.endpoint_port),
+            ("mtu", &self.mtu),
+            ("keepalive", &self.keepalive),
+        ] {
+            if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must be numeric"
+                )));
+            }
+        }
+        let addr_ok = |v: &str| match v.rsplit_once('/') {
+            Some((ip, prefix)) => {
+                ipv4(ip)
+                    && prefix.chars().all(|c| c.is_ascii_digit())
+                    && prefix.parse::<u8>().is_ok_and(|p| p <= 32)
+            }
+            None => false,
+        };
+        if !addr_ok(&self.address) {
+            return Err(Unsupported::InvalidParams(
+                "address must be an IPv4 CIDR".into(),
+            ));
+        }
+        if !self.upstream_gateway.is_empty() && !ipv4(&self.upstream_gateway) {
+            return Err(Unsupported::InvalidParams(
+                "upstream_gateway must be an IPv4 address".into(),
+            ));
+        }
+        if !self
+            .upstream_iface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "upstream_iface contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -1120,6 +1282,8 @@ pub enum Profile {
     /// Private Internet Access via OpenVPN (validated static recipe;
     /// tun0, remote-random endpoint pool, kill switch).
     VpnPiaOpenvpn(VpnPiaOpenvpnProfile),
+    /// NordVPN via NordLynx (WireGuard; resolved statics carried).
+    VpnNordvpn(VpnNordvpnProfile),
 }
 
 impl Profile {
@@ -1145,6 +1309,7 @@ impl Profile {
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
+            Profile::VpnNordvpn(_) => "vpn-nordvpn",
         }
     }
 
@@ -1172,6 +1337,7 @@ impl Profile {
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
+            Profile::VpnNordvpn(_) => &[],
         }
     }
 }
@@ -1492,6 +1658,7 @@ pub fn plan_profile(
         Profile::OpenClash(oc) => plan_openclash(model, oc),
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
+        Profile::VpnNordvpn(nv) => plan_vpn_nordvpn(model, nv),
     }
 }
 
@@ -3586,6 +3753,269 @@ fn plan_vpn_pia_openvpn(
     })
 }
 
+const NORD_JSON_HELPER_SH: &str = concat!(
+    "# JSON parsing: try jq, install via apk (OpenWrt >=25.x) or opkg (<=24.x)\n",
+    "if ! command -v jq >/dev/null 2>&1; then\n",
+    "    apk add jq >/dev/null 2>&1 || { opkg update >/dev/null 2>&1 && opkg install jq >/dev/null 2>&1; }\n",
+    "fi\n",
+    "json_get() {\n",
+    "    # $1 = key name; reads JSON from stdin; returns first string value\n",
+    "    if command -v jq >/dev/null 2>&1; then\n",
+    "        jq -r \".$1 // empty\"\n",
+    "    else\n",
+    "        tr -d '\\n' | sed \"s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*//\" | sed 's/[,\"].*//' | tr -d '\"'\n",
+    "    fi\n",
+    "}\n",
+    "\n",
+);
+const NORD_GATEWAY_DISCOVER_SH: &str = concat!(
+    "\n",
+    "VPN_GW=\"\"\n",
+    "_i=0\n",
+    "# netifd's wireguard proto normally installs the endpoint /32 route itself on\n",
+    "# ifup; this is a fallback for paths where it does not. Capped short because\n",
+    "# uci-defaults block the boot sequence (dropbear starts only after).\n",
+    "while [ $_i -lt 20 ]; do\n",
+    "    VPN_GW=$(ip -4 route show default dev {iface} 2>/dev/null | head -n1 | sed -n 's/.*via \\\\([0-9.]\\\\+\\\\).*/\\\\1/p')\n",
+    "    [ -z \"$VPN_GW\" ] && VPN_GW=$(ip -4 route show default 2>/dev/null | head -n1 | sed -n 's/.*via \\\\([0-9.]\\\\+\\\\).*/\\\\1/p')\n",
+    "    [ -n \"$VPN_GW\" ] && break\n",
+    "    sleep 2; _i=$((_i+2))\n",
+    "done\n",
+    "if [ -n \"$VPN_GW\" ]; then\n",
+    "    uci -q delete network.nordvpn_server_route\n",
+    "    uci set network.nordvpn_server_route=route\n",
+    "    uci set network.nordvpn_server_route.interface='{iface}'\n",
+    "    uci set network.nordvpn_server_route.target='{route_ip}'\n",
+    "    uci set network.nordvpn_server_route.netmask='255.255.255.255'\n",
+    "    uci set network.nordvpn_server_route.gateway=\"$VPN_GW\"\n",
+    "    uci commit network\n",
+    "    /etc/init.d/network reload >/dev/null 2>&1 || true\n",
+    "    echo \"VPN: endpoint route {route_ip}/32 via $VPN_GW on {iface}\"\n",
+    "else\n",
+    "    echo \"VPN: WARNING no upstream gateway found — endpoint route skipped\"\n",
+    "fi\n",
+    "\n",
+);
+
+fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan, Unsupported> {
+    nv.validate()?;
+    let route_ip = nv.route_target.clone();
+    // gateway set → static /32 route; empty → the bounded discovery
+    // block (1.x _GATEWAY_DISCOVER_SH) that finds the default-route
+    // gateway at apply time
+    let route_block = if nv.upstream_gateway.is_empty() {
+        NORD_GATEWAY_DISCOVER_SH
+            .replace("{iface}", &nv.upstream_iface)
+            .replace("{route_ip}", &route_ip)
+    } else {
+        format!(
+            "uci set network.nordvpn_server_route=route\n\
+             uci set network.nordvpn_server_route.interface='{iface}'\n\
+             uci set network.nordvpn_server_route.target='{target}'\n\
+             uci set network.nordvpn_server_route.netmask='255.255.255.255'\n\
+             uci set network.nordvpn_server_route.gateway='{gateway}'\n",
+            iface = nv.upstream_iface,
+            target = route_ip,
+            gateway = nv.upstream_gateway,
+        )
+    };
+    // the payload rides ONE heredoc (1.x transport_sh): assignments are
+    // double-quoted — validate()'s charsets are what make the verbatim
+    // render safe
+    let body = format!(
+        concat!(
+            "{JSON_HELPER}\n",
+            "WG_PRIV=\"{PRIV}\"\n",
+            "SERVER_KEY=\"{PUB}\"\n",
+            "SERVER_IP=\"{HOST}\"\n",
+            "\n",
+            "# Clean up old WireGuard interface + peers\n",
+            "uci -q delete network.wg0\n",
+            "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+            "    uci delete network.@wireguard_wg0[0]\n",
+            "done\n",
+            "\n",
+            "\n",
+            "uci -q delete openvpn.nordvpn\n",
+            "/etc/init.d/openvpn stop >/dev/null 2>&1 || true\n",
+            "\n",
+            "# WireGuard tunnel (NordLynx)\n",
+            "uci set network.wg0=interface\n",
+            "uci set network.wg0.proto='wireguard'\n",
+            "uci set network.wg0.private_key=\"$WG_PRIV\"\n",
+            "uci add_list network.wg0.addresses='{ADDR}'\n",
+            "uci set network.wg0.mtu='{MTU}'\n",
+            "uci set network.wg0.auto='1'\n",
+            "\n",
+            "uci add network wireguard_wg0\n",
+            "uci set network.@wireguard_wg0[0].public_key=\"$SERVER_KEY\"\n",
+            "uci set network.@wireguard_wg0[0].endpoint_host=\"$SERVER_IP\"\n",
+            "uci set network.@wireguard_wg0[0].endpoint_port='{PORT}'\n",
+            "uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n",
+            "uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n",
+            "uci set network.@wireguard_wg0[0].persistent_keepalive='{KEEP}'\n",
+            "\n",
+            "\n",
+            "uci -q delete network.nordvpn_server_route\n",
+            "{ROUTE}",
+        ),
+        JSON_HELPER = NORD_JSON_HELPER_SH,
+        PRIV = nv.private_key,
+        PUB = nv.server_public_key,
+        HOST = nv.endpoint_host,
+        ADDR = nv.address,
+        MTU = nv.mtu,
+        PORT = nv.endpoint_port,
+        KEEP = nv.keepalive,
+        ROUTE = route_block,
+    );
+    let payload = format!(
+        "cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/vpn_setup.sh",
+        body.trim_end()
+    );
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        PlanOp::Shell { command: payload },
+        // shared vpn composition (byte-identical to the pia plan): the
+        // family zone name lets technology switches retire old rules
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "dest='vpn'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
+        },
+        PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: "name='Allow-VPN-Management'".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_zone".into(),
+            section_type: "zone".into(),
+            options: vec![
+                ("name".into(), literal("vpn".into())),
+                ("input".into(), literal("REJECT".into())),
+                ("output".into(), literal("ACCEPT".into())),
+                ("forward".into(), literal("REJECT".into())),
+                ("masq".into(), literal("1".into())),
+                ("mtu_fix".into(), literal("1".into())),
+                ("network".into(), literal("wg0".into())),
+            ],
+        },
+        PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_fwd".into(),
+            section_type: "forwarding".into(),
+            options: vec![
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("vpn".into())),
+            ],
+        },
+    ];
+    if nv.allow_management {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_mgmt".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-VPN-Management".into())),
+                ("src".into(), literal("vpn".into())),
+                ("proto".into(), literal("tcp".into())),
+                ("dest_port".into(), literal("22 80 443".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        });
+    }
+    if nv.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    for dns in ["103.86.96.100", "103.86.99.100"] {
+        ops.push(PlanOp::Shell {
+            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: dns.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "dhcp".into(),
+        section: "@dnsmasq[0]".into(),
+        options: vec![("noresolv".into(), literal("1".into()))],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "dhcp".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "dnsmasq".into(),
+        action: ServiceAction::Restart,
+    });
+    if nv.kill_switch {
+        // wg verify tail (30s handshake): failure REMOVES the kill
+        // switch so a bad config cannot blackhole the LAN
+        ops.push(PlanOp::Shell {
+            command: "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
+        });
+    }
+    // honest outcome (the #514/#520 pattern): verified requires the
+    // tunnel to actually hold a handshake — config-applied-but-dead
+    // reports incomplete
+    let verification = vec![
+        VerificationCheck {
+            description: "wg0 interface configured".into(),
+            command: "uci -q get network.wg0.proto".into(),
+            expect_contains: "wireguard".into(),
+        },
+        VerificationCheck {
+            description: "wg0 handshake observed (tunnel actually up)".into(),
+            command: "wg show wg0 2>/dev/null | grep -q 'latest handshake' && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-nordvpn".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
     ssl.validate()?;
     // libustream-{wolfssl,mbedtls,openssl} all own libustream-ssl.so —
@@ -5598,6 +6028,80 @@ mod tests {
                 }
                 .validate()
                 .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_nordvpn_shape_gates_and_branches_match_1x() {
+        let base = VpnNordvpnProfile {
+            private_key: "STUBPRIVKEYbase64filledfortestonly0000=".into(),
+            server_public_key: "STUBPUBKEYbase64filledfortestonly0000=".into(),
+            endpoint_host: "de500.nordvpn.com".into(),
+            route_target: "193.29.107.10".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnNordvpnProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnNordvpn(base.clone())));
+        // heredoc payload + the resolved statics riding double-quoted
+        // assignments (validate()'s charsets gate them)
+        assert!(script.contains("cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("WG_PRIV=\"STUBPRIVKEYbase64filledfortestonly0000=\""));
+        // the endpoint /32 pin uses the RESOLVED route target, not the hostname
+        assert!(script.contains("nordvpn_server_route.target='193.29.107.10'"));
+        // wg tunnel + 30s handshake verify tail
+        assert!(script.contains("uci set network.wg0.proto='wireguard'"));
+        assert!(script.contains("wg show wg0 2>/dev/null | grep -q 'latest handshake'"));
+        // NordVPN DNS pair
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='103.86.99.100'"));
+
+        // empty gateway swaps the static pin for the bounded discovery block
+        let discover = render_shell(&plan_for(Profile::VpnNordvpn(VpnNordvpnProfile {
+            upstream_gateway: String::new(),
+            ..base.clone()
+        })));
+        assert!(discover.contains("VPN_GW=$(ip -4 route show default dev wwan"));
+        assert!(!discover.contains("gateway='192.168.8.1'"));
+
+        // gates: base64 keys, resolved-IP route target, numeric fields,
+        // CIDR address, host-or-ip endpoint, iface charset
+        for hostile in [
+            VpnNordvpnProfile {
+                private_key: "line1\nline2".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                server_public_key: "$(reboot)".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                route_target: String::new(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                route_target: "not-an-ip".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                endpoint_host: "de; poweroff".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                endpoint_port: "51820; reboot".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                address: "10.5.0.2".into(),
+                ..base.clone()
+            },
+            VpnNordvpnProfile {
+                upstream_iface: "wwan; x".into(),
+                ..base
+            },
+        ] {
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "gate must reject {hostile:?}"
             );
         }
     }
