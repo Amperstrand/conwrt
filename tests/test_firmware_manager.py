@@ -167,3 +167,63 @@ class TestResolveAsuVersion:
         for version in ["24", "25", "snapshot", "2022-02-16"]:
             resolved = fm.resolve_asu_version(version)
             assert resolved == "SNAPSHOT" or len(resolved.split("-")[0].split(".")) >= 3 or resolved == version
+
+
+class TestAsuProfileFromRegistry:
+    """The ASU profile name is a per-device FACT (openwrt.profile), never
+    derivable by separator-swapping the model id — and the swap is NOT
+    invertible ('glinet-mt3000' id vs 'glinet_gl-mt3000' profile).
+    Whatever spelling the caller passes, the outbound request carries
+    the registry's canonical name (#487/#506 lineage)."""
+
+    def _request_body_for(self, monkeypatch, tmp_path, profile_arg, target=None):
+        import argparse
+        import urllib.error
+
+        captured = {}
+
+        def fake_post(url, body, timeout=30):
+            captured.update(body)
+            raise urllib.error.HTTPError(url, 400, "stopped-by-test", None, None)
+
+        monkeypatch.setattr(fm, "_http_post_json", fake_post)
+        monkeypatch.setattr(fm, "IMAGES_DIR", tmp_path / "images")
+        monkeypatch.setenv("CONWRT_CONFIG", str(tmp_path / "no-such-config.toml"))
+
+        ns = argparse.Namespace(
+            profile=profile_arg, version="24", target=target, packages=None,
+            ssh_key=None, password=None, wan_ssh=False, tofb=False,
+            dry_run=False,
+        )
+        rc = fm.cmd_request(ns)
+        assert rc == 1, "the stubbed 400 must stop the request path"
+        return captured
+
+    def test_mangled_underscore_spelling_gets_registry_profile(self, monkeypatch, tmp_path):
+        body = self._request_body_for(monkeypatch, tmp_path, "dlink_covr_x1860_a1")
+        assert body["profile"] == "dlink_covr-x1860-a1"
+        assert body["target"] == "ramips/mt7621"
+
+    def test_explicit_target_still_gets_registry_profile(self, monkeypatch, tmp_path):
+        body = self._request_body_for(
+            monkeypatch, tmp_path, "dlink_covr_x1860_a1", target="ramips/mt7621")
+        assert body["profile"] == "dlink_covr-x1860-a1"
+
+    def test_plain_model_id_and_profile_form_both_resolve(self, monkeypatch, tmp_path):
+        """The swap is NOT invertible: the registry must accept the id,
+        the underscored id, and the profile form itself."""
+        for arg in ("glinet-mt3000", "glinet_mt3000", "glinet_gl-mt3000"):
+            body = self._request_body_for(monkeypatch, tmp_path, arg)
+            assert body["profile"] == "glinet_gl-mt3000", f"arg {arg}: {body}"
+            assert body["target"] == "mediatek/filogic", f"arg {arg}: {body}"
+
+    def test_every_model_json_carries_an_asu_profile(self):
+        """The registry is the ASU naming authority — every model must
+        carry openwrt.profile or the request falls back to the caller's
+        spelling (the #487 hole)."""
+        models_dir = ROOT / "models"
+        missing = [
+            p.stem for p in sorted(models_dir.glob("*.json"))
+            if not json.loads(p.read_text()).get("openwrt", {}).get("profile")
+        ]
+        assert not missing, f"models missing openwrt.profile: {missing}"
