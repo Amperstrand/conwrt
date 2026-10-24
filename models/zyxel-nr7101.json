@@ -234,7 +234,7 @@
       },
       "imei": {
         "cmd": "AT+GSN",
-        "example": "35435111XXXXXXX"
+        "example": "35435111XXXXXXX (IMEI — never publish a real one)"
       },
       "sim_status": {
         "cmd": "AT+QSIMDET?",
@@ -278,7 +278,7 @@
       "tested": true,
       "date": "2026-05-26",
       "verified_with": "Go zycast binary on MIPS OpenWrt switch, NR7101 Telenor (MAC 78:c5:7d:xx:xx:xx — OUI kept, unit redacted #290), PoE power cycle, initramfs-recovery image",
-      "notes": "Flashed via Go zycast binary cross-compiled for MIPS. Sent on switch.1002 (VLAN 1002, lan2 untagged) to multicast 225.0.0.0:5631. PoE power cycle with 7-10s off delay. Device boots OpenWrt at 192.168.1.1 after ~20s. Header format verified byte-for-byte against C zycast.c reference. Overwrites BOTH Kernel and Kernel2 partitions — stock firmware gone. IMPORTANT: monitor BOTH the old stock IP (192.168.2.1) and the OpenWrt IP (192.168.1.1) after flashing — the IP changes and if 192.168.1.0/24 conflicts with your local network, you must SSH through the switch."
+      "notes": "Flashed via Go zycast binary cross-compiled for MIPS. Sent on switch.1002 (VLAN 1002, lan2 untagged) to multicast 225.0.0.0:5631. PoE power cycle with 7-10s off delay. Device boots OpenWrt at 192.168.1.1 after ~20s. Header format verified byte-for-byte against C zycast.c reference. Overwrites BOTH Kernel and Kernel2 partitions — stock firmware gone. IMPORTANT: monitor BOTH the old stock IP (<last-known IP>) and the OpenWrt IP (192.168.1.1) after flashing — the IP changes and if 192.168.1.0/24 conflicts with your local network, you must SSH through the switch."
     },
     "modem_inventory": {
       "tested": true,
