@@ -31,6 +31,9 @@ use embassy_futures::select::{Either, select};
 
 /// Full-speed USB bulk max packet size (the common CDC case).
 pub const CDC_FS_PACKET: usize = 64;
+/// USB high-speed bulk max packet — the ceiling for `max_packet` in
+/// [`agent_session`]'s bounded stack buffer (#475).
+pub const CDC_HS_PACKET: usize = 512;
 
 /// A packet-shaped byte pipe: one call moves at most one USB bulk packet.
 ///
@@ -63,10 +66,19 @@ pub trait PacketIo {
 /// errors (host unplug, port close) — the caller owns reconnection and
 /// session reset (connection lifecycle drives lease lifecycle, #110).
 pub async fn agent_session<T: PacketIo>(io: &mut T, server: &mut ServerCore, max_packet: usize) {
-    let mut buf = [0u8; CDC_FS_PACKET];
+    // #475: the receive buffer must match the caller's packet size — a
+    // high-speed CDC session (max_packet up to 512) with a fixed 64-byte
+    // buffer truncates packet reads. Bounded stack storage (no_std, no
+    // alloc at runtime) sliced to max_packet; 512 is the USB HS bulk max.
+    debug_assert!(
+        (1..=CDC_HS_PACKET).contains(&max_packet),
+        "max_packet must be 1..={CDC_HS_PACKET}"
+    );
+    let mut storage = [0u8; CDC_HS_PACKET];
+    let (buf, _) = storage.split_at_mut(max_packet.min(CDC_HS_PACKET));
     let mut pump = CobsPump::new();
     loop {
-        let Ok(n) = io.read_packet(&mut buf).await else {
+        let Ok(n) = io.read_packet(buf).await else {
             return;
         };
         pump.feed(&buf[..n]);
@@ -485,5 +497,27 @@ mod tests {
         let mut core = server();
         agent_session(&mut pipe, &mut core, CDC_FS_PACKET).await;
         assert_eq!(decode_replies(&pipe.writes).len(), 1);
+    }
+    #[tokio::test]
+    async fn session_receive_buffer_matches_max_packet() {
+        // #475: max_packet > 64 (high-speed CDC) must yield a receive
+        // buffer of that size — not the fixed CDC_FS_PACKET 64.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEEN_LEN: AtomicUsize = AtomicUsize::new(0);
+        struct LenProbe;
+        impl PacketIo for LenProbe {
+            type Error = &'static str;
+            async fn read_packet(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+                SEEN_LEN.store(buf.len(), Ordering::SeqCst);
+                Err("disconnected")
+            }
+            async fn write_packet(&mut self, _data: &[u8]) -> Result<(), Self::Error> {
+                Err("disconnected")
+            }
+        }
+        let mut io = LenProbe;
+        let mut core = server();
+        agent_session(&mut io, &mut core, 256).await;
+        assert_eq!(SEEN_LEN.load(Ordering::SeqCst), 256);
     }
 }
