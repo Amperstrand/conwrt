@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from model_loader import load_model
+from model_loader import resolve_model_any as _resolve_registry_model
 from config import load_config as _load_config
 from flash.context import sha256_file
 from profile.builder import build_plan
@@ -225,28 +226,41 @@ def cmd_request(args: argparse.Namespace) -> int:
     model_capabilities: Optional[list[str]] = getattr(args, "model_capabilities", None)
 
     if not target:
-        model_id = profile.replace("_", "-")
-
-        try:
-            model_data = load_model(model_id)
-            target = model_data["openwrt"]["target"]
-            model_capabilities = model_data.get("capabilities", [])
-            logger.info(
-                "resolved target=%s from model %s",
-                target,
-                model_data.get("vendor", model_id),
-            )
-        except FileNotFoundError as exc:
+        model_data = _resolve_registry_model(profile)
+        if model_data is None:
             logger.error(
-                "unknown profile '%s': %s",
-                profile,
-                exc,
+                "unknown profile '%s': no models/*.json matches it as model id, "
+                "underscored id, or openwrt.profile", profile,
             )
             return 1
+        target = model_data["openwrt"]["target"]
+        model_capabilities = model_data.get("capabilities", [])
+        logger.info(
+            "resolved target=%s from model %s",
+            target,
+            model_data.get("vendor", model_data.get("id", profile)),
+        )
 
     if not target:
         logger.error("could not resolve target for profile '%s'", profile)
         return 1
+
+    # ASU expects the image-builder profile name — a per-device fact
+    # (openwrt.profile, ultimately from the target's profiles.json),
+    # NOT derivable by separator-swapping the model id, and the swap is
+    # NOT invertible ('glinet-mt3000' the id vs 'glinet_gl-mt3000' the
+    # profile). Callers may pass the model id, its underscored form, or
+    # the profile itself — with or without an explicit --target — and
+    # the registry wins whenever the profile maps to a known model.
+    # The cache is keyed by the SAME canonical name (matching the Rust
+    # conwrt-image layout), so a cache hit always identifies the actual
+    # ASU request (#487/#506 lineage).
+    asu_profile: str = profile
+    registry = model_data if model_data is not None else _resolve_registry_model(profile)
+    if registry is not None:
+        asu_profile = registry["openwrt"].get("profile") or profile
+        if asu_profile != profile:
+            logger.info("ASU profile '%s' (registry; arg was '%s')", asu_profile, profile)
 
     plan = build_plan(
         cfg,
@@ -279,7 +293,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             "distro": "openwrt",
             "version": version,
             "target": target,
-            "profile": profile,
+            "profile": asu_profile,
             "packages": packages_to_send or None,
             "defaults_lines": len(defaults_script.splitlines()) if defaults_script else 0,
         }, indent=2))
@@ -288,7 +302,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             print("--- defaults script ---")
             print(defaults_script)
         cache_key = _compute_cache_key(
-            "openwrt", version, target, profile, packages_to_send or None, defaults_script,
+            "openwrt", version, target, asu_profile, packages_to_send or None, defaults_script,
         )
         print(f"\ncache_key={cache_key}")
         return 0
@@ -316,12 +330,12 @@ def cmd_request(args: argparse.Namespace) -> int:
         "openwrt",
         version,
         target,
-        profile,
+        asu_profile,
         packages_to_send,
         defaults_script,
     )
 
-    cached = _find_cached_firmware(profile, cache_key)
+    cached = _find_cached_firmware(asu_profile, cache_key)
     if cached:
         logger.info("firmware already cached at %s (cache key=%s)", cached, cache_key[:12])
         print(str(cached))
@@ -331,7 +345,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         "distro": "openwrt",
         "version": version,
         "target": target,
-        "profile": profile,
+        "profile": asu_profile,
     }
     if packages_to_send:
         build_request["packages"] = packages_to_send
@@ -400,7 +414,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         logger.error("ASU response contains no images")
         return 1
 
-    hash_dir = IMAGES_DIR / profile / cache_key
+    hash_dir = IMAGES_DIR / asu_profile / cache_key
     hash_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded_images: list[dict[str, Any]] = []
@@ -471,7 +485,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         "version": status_data.get("version", version),
         "version_code": status_data.get("version_code", ""),
         "target": status_data.get("target", target),
-        "profile": status_data.get("profile", profile),
+        "profile": status_data.get("profile", asu_profile),
         "packages": packages_to_send or [],
         "packages_all": status_data.get("packages", {}),
         "defaults": defaults_script if defaults_script else None,
