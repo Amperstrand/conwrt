@@ -1,4 +1,3 @@
-# golden: conwrt 1.x output of scripts/use_cases/ssh_hardening.py build_configure — regenerate with the command in tests/use_case_goldens.rs
 # --- SSH hardening ---
 uci set dropbear.@dropbear[0].PasswordAuth='off'
 uci set dropbear.@dropbear[0].RootPasswordAuth='off'
