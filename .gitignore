@@ -1,101 +1,102 @@
-# OpenWrt build trees and image builders (multi-GB)
-openwrt-minimal/
-openwrt-imagebuilder-*/
 
-# Binary firmware images
+
+
+
+
+
+
+
+
+
+
+
+
+
+*~
+!apps/*/.cargo/config.toml
+backups/
 *.bin
-images/
-
-# Screenshots
-*.png
-
+# Binary firmware images
 # Build output / dist artifacts
-dist/
-runs/
-
-# Local test results — never published, may contain network details
-test-results/
-
-# Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
-data/inventory.jsonl
-data/active-sessions.jsonl
-scripts/data/
 captures/
-scripts/captures/
-*.pcap
-tests/integration/.serial.log
-tests/integration/.vm_ssh_key
-tests/integration/.vm_ssh_key.pub
-tests/integration/.openwrt-base.qcow2
-tests/integration/.openwrt-session.qcow2
-
-# OpenCode / Playwright internal
-.omo/
-.playwright-mcp/
-.sisyphus/
-.cursor/
-
-# Local-only operational artifacts — never publish (operator rule 2026-09-22)
-# Session records, inventory, backups, captures, running rig configs.
-data/*
-!data/.gitkeep
 captures/*
 !captures/.gitkeep
-backups/
+# .cargo/config.toml that scripts/dev-session.sh start writes — intended)
 config.toml
-labgrid/exporter.yaml
-serial/
+config.toml
+config.toml.bak
 conwrt.egg-info/
-__pycache__/
-
-# OS junk
-.DS_Store
-*~
-*.swp
-*.swo
 .coverage
-tests/integration/.openwrt-flash-session.qcow2
-tests/integration/.openwrt-flash-vm.pid
-tests/integration/.openwrt-flash-serial.log
-tests/integration/.flash-test-config.toml
-tests/integration/.venv-cashu/
-tests/integration/.tollgate/
-tests/integration/.openwrt.img
-tests/integration/.openwrt-flash-session.qcow2
-tests/integration/.venv-cashu/
-
-# Vendor firmware blobs — too big / licensing-unclear for git (keep local)
+*.credentials.txt
+.cursor/
+data/*
+data/active-sessions.jsonl
+!data/.gitkeep
+data/inventory.jsonl
+dist/
+.DS_Store
+*.egg-info/
+.env*
+# …except cargo's build config in firmware apps (linker scripts, [build]
 firmware/
+images/
+labgrid/console.yaml
+labgrid/exporter.yaml
+# Local env/credential files — never commit
+# Local-only operational artifacts — never publish (operator rule 2026-09-22)
+# local operator-profile backup (same rule as config.toml)
+# Local Python virtualenv (dev setup) — never commit
+# Local specimen inventory cache — private per AGENTS.md (MACs, serials, IPs)
+# Local test results — never published, may contain network details
+# never commit; tests inject their own via CONWRT_CONFIG
+.omo/
+# OpenCode / Playwright internal
+# OpenWrt build trees and image builders (multi-GB)
+openwrt-imagebuilder-*/
+openwrt-minimal/
+# Operator-private conwrt config (README: "config.toml is gitignored") —
+# OS junk
+*.pcap
+# pi_image break-glass password files (mode 0600, never commit)
+.playwright-mcp/
+*.png
+*.pyc
+__pycache__/
+__pycache__/
+# Python bytecode caches
+# Real labgrid console config carries live credentials (header rule: local-only)
+runs/
 # Runtime artifacts misplaced under scripts/ (tool path bug — top-level dirs are canonical)
+# Rust build artifacts
+# Screenshots
+scripts/captures/
 scripts/captures/
 scripts/data/
-# Real labgrid console config carries live credentials (header rule: local-only)
-labgrid/console.yaml
-
-# local operator-profile backup (same rule as config.toml)
-config.toml.bak
-# Python bytecode caches
-__pycache__/
-*.pyc
-
-# Rust build artifacts
+scripts/data/
+serial/
+# Session records, inventory, backups, captures, running rig configs.
+.sisyphus/
+*.swo
+*.swp
 target/
-*.egg-info/
-tests/integration/.openwrt.img.prepped-*
-
-# Operator-private conwrt config (README: "config.toml is gitignored") —
-# never commit; tests inject their own via CONWRT_CONFIG
-config.toml
-# …except cargo's build config in firmware apps (linker scripts, [build]
 # target) — required for the cortex-m link, must be committed
-!apps/*/.cargo/config.toml
+test-results/
+tests/integration/.flash-test-config.toml
+tests/integration/.openwrt-base.qcow2
+tests/integration/.openwrt-flash-serial.log
+tests/integration/.openwrt-flash-session.qcow2
+tests/integration/.openwrt-flash-session.qcow2
+tests/integration/.openwrt-flash-vm.pid
+tests/integration/.openwrt.img
+tests/integration/.openwrt.img.prepped-*
+tests/integration/.openwrt.img.sha256
+tests/integration/.openwrt-session.qcow2
+tests/integration/.serial.log
+tests/integration/.tollgate/
+tests/integration/.venv-cashu/
+tests/integration/.venv-cashu/
+tests/integration/.vm_ssh_key
+tests/integration/.vm_ssh_key.pub
 # (the bare `config.toml` pattern also covers the worktree-local
-# .cargo/config.toml that scripts/dev-session.sh start writes — intended)
-
-# Local Python virtualenv (dev setup) — never commit
+# Vendor firmware blobs — too big / licensing-unclear for git (keep local)
 .venv/
-
-# Local env/credential files — never commit
-.env*
-# pi_image break-glass password files (mode 0600, never commit)
-*.credentials.txt
