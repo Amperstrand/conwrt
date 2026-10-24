@@ -22,12 +22,14 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TravelmateProfile, WireguardClientProfile, WireguardServerProfile,
+    SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 
+mod watch;
 mod zycast;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
 use conwrt_local_std::trust::FileTrustStore;
@@ -257,6 +259,24 @@ enum Command {
         #[arg(long, short = 'p', default_value_t = conwrt_zycast::DEFAULT_PORT)]
         port: u16,
     },
+    /// Dark-watch: watch a dark/flapping target over time and classify WHY
+    /// it is dark (boot loop with cycle period / hung after boot / silent /
+    /// inconclusive). The dark-device doctrine is built in: silence only
+    /// counts when the capture path is proven by foreign traffic.
+    DarkWatch {
+        /// Target IPv4 address.
+        #[arg(long, default_value = "192.168.1.1")]
+        ip: String,
+        /// Interface for the passive stream and positive control.
+        #[arg(long)]
+        interface: String,
+        /// Watch duration in seconds.
+        #[arg(long, default_value_t = 180)]
+        duration: u64,
+        /// Seconds between active probes.
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+    },
     /// Apply a desired-state profile to a device over SSH. DRY-RUN by
     /// default: prints the exact script. Mutating execution requires
     /// --execute AND a fingerprint-confirmed OpenWrt identity.
@@ -378,6 +398,9 @@ enum ProfileChoice {
     #[value(name = "openclash")]
     OpenClash,
     Ssl,
+    /// 1.x spelling: hyphenated multi-word profile name.
+    #[value(name = "vpn-pia-openvpn")]
+    VpnPiaOpenvpn,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -526,6 +549,27 @@ struct ProfileArgs {
     /// ssl: opt OUT of the nodogsplash port-443 pass-through (default on).
     #[arg(long)]
     ssl_no_443_nds: bool,
+    /// vpn-pia-openvpn: PIA username (the p-number; required).
+    #[arg(long)]
+    pia_ovpn_username: Option<String>,
+    /// vpn-pia-openvpn: PIA password (required).
+    #[arg(long)]
+    pia_ovpn_password: Option<String>,
+    /// vpn-pia-openvpn: OpenVPN server port (default 8080).
+    #[arg(long)]
+    pia_ovpn_port: Option<String>,
+    /// vpn-pia-openvpn: upstream gateway IP pinning the endpoint routes.
+    #[arg(long)]
+    pia_ovpn_gateway: Option<String>,
+    /// vpn-pia-openvpn: upstream interface for the route pins (default wan).
+    #[arg(long)]
+    pia_ovpn_iface: Option<String>,
+    /// vpn-pia-openvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    pia_ovpn_no_kill_switch: bool,
+    /// vpn-pia-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    pia_ovpn_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -843,6 +887,17 @@ fn main() -> ExitCode {
             delay_ms,
             group,
             port,
+        }),
+        Command::DarkWatch {
+            ip,
+            interface,
+            duration,
+            interval,
+        } => watch::run(watch::WatchArgs {
+            ip,
+            interface,
+            duration_s: duration,
+            interval_s: interval,
         }),
         Command::Fingerprint {
             ip,
@@ -1533,6 +1588,31 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnPiaOpenvpn => {
+            let (username, password) = match (
+                args.pia_ovpn_username.clone(),
+                args.pia_ovpn_password.clone(),
+            ) {
+                (Some(u), Some(p)) => (u, p),
+                _ => {
+                    return Err(
+                        "--pia-ovpn-username and --pia-ovpn-password are required for \
+                         vpn-pia-openvpn"
+                            .into(),
+                    );
+                }
+            };
+            Ok(Profile::VpnPiaOpenvpn(VpnPiaOpenvpnProfile {
+                username,
+                password,
+                port: args.pia_ovpn_port.clone().unwrap_or_else(|| "8080".into()),
+                upstream_gateway: args.pia_ovpn_gateway.clone().unwrap_or_default(),
+                upstream_iface: args.pia_ovpn_iface.clone().unwrap_or_else(|| "wan".into()),
+                kill_switch: !args.pia_ovpn_no_kill_switch,
+                allow_management: !args.pia_ovpn_no_management,
+                ..VpnPiaOpenvpnProfile::default()
+            }))
+        }
     }
 }
 
@@ -2580,6 +2660,13 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            pia_ovpn_username: None,
+            pia_ovpn_password: None,
+            pia_ovpn_port: None,
+            pia_ovpn_gateway: None,
+            pia_ovpn_iface: None,
+            pia_ovpn_no_kill_switch: false,
+            pia_ovpn_no_management: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,

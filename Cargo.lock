@@ -736,6 +736,7 @@ dependencies = [
  "conwrt-image",
  "conwrt-local-std",
  "conwrt-maas",
+ "conwrt-probe-core",
  "conwrt-serial",
  "conwrt-types",
  "conwrt-zycast",
