@@ -1,0 +1,45 @@
+{
+  "model": "gs1900 serial-transfer PROOF from the initramfs (stty present there): tftp-boot initramfs, then chunked stream + on-box sha gate",
+  "boot_trigger": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+  "probe_line": "",
+  "probe_interval_secs": 30,
+  "actions": [
+    {
+      "type": "spaces",
+      "secs": 90,
+      "until": "RTL838x#",
+      "_comment": "fresh boot; spaces through bootdelay"
+    },
+    {
+      "type": "tftp_boot",
+      "addr": "0x84f00000",
+      "bind": "192.168.1.10:69",
+      "serve_dir": "/srv/tftp-gs1900",
+      "file": "owrt-25.12.6-initramfs-kernel.bin",
+      "client_ip": "192.168.1.1",
+      "server_ip": "192.168.1.10",
+      "timeout_secs": 120,
+      "_comment": "initramfs carries busybox WITH stty — the serial-transfer-capable environment"
+    },
+    {
+      "type": "expect",
+      "pattern": "root@OpenWrt",
+      "timeout_secs": 200
+    },
+    {
+      "type": "stream_chunks",
+      "file": "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "sha256": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "remote_path": "/tmp/chunk-test.bin",
+      "chunk_bytes": 819200,
+      "pause_ms": 5000,
+      "pace_bytes": 512,
+      "pace_ms": 80,
+      "final_command": "",
+      "verdict_timeout_secs": 600,
+      "_comment": "the actual serial proof, from the stty-capable environment; verify-only"
+    }
+  ],
+  "cooldown_secs": 3600,
+  "max_fires": 1
+}

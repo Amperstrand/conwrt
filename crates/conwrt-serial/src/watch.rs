@@ -647,25 +647,42 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 let total_chunks = data.len().div_ceil(*chunk_bytes);
                 for (i, chunk) in data.chunks(*chunk_bytes).enumerate() {
                     let ck = format!("CK-{i}");
+                    // The handshake must PROVE raw mode armed: the flashed
+                    // 25.12.6 busybox lacks the stty applet entirely
+                    // ("stty: applet not found", 2026-10-24 run 4) — RDY
+                    // alone was false confidence and 819KB hit a
+                    // canonical+echo tty (SIGINT bytes, echo storm, box
+                    // hard-locked). NOSTTY is fatal: binary cannot cross
+                    // a canonical line discipline. Serial binary
+                    // transfers must run from an environment with stty
+                    // (the initramfs does; see the doctrine doc).
                     let line = format!(
-                        "sh -c 'busybox stty raw -echo; echo RDY; head -c {} >> {remote_path}; echo {ck}'\n",
+                        "sh -c 'busybox stty raw -echo && echo RDY || echo NOSTTY; [ $? = 0 ] && {{ head -c {} >> {remote_path}; echo {ck}; }}'\n",
                         chunk.len()
                     );
                     s.send_raw(line.as_bytes());
-                    // verified handshake: wait for RDY before any data
+                    // verified handshake: wait for RDY (or die on NOSTTY)
+                    // before any data
                     let rdy_deadline = Instant::now() + Duration::from_secs(30);
                     let mut rdy = false;
+                    let mut nostty = false;
                     while Instant::now() < rdy_deadline {
                         let b2 = s.window.len();
                         s.read_secs(1.0);
-                        if contains(s.recent_since(b2), b"RDY") {
+                        let recent = s.recent_since(b2).to_vec();
+                        if contains(&recent, b"NOSTTY") {
+                            nostty = true;
+                            break;
+                        }
+                        if contains(&recent, b"RDY") {
                             rdy = true;
                             break;
                         }
                     }
-                    if !rdy {
+                    if nostty || !rdy {
                         return Err(format!(
-                            "stream_chunks: receiver never armed (RDY) for chunk {i}"
+                            "stream_chunks: receiver cannot arm for chunk {i}: {} — this environment lacks stty; run serial transfers from the initramfs",
+                            if nostty { "NOSTTY" } else { "no RDY" }
                         ));
                     }
                     let t0 = Instant::now();
