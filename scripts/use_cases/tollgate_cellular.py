@@ -49,7 +49,7 @@ MARKER=/etc/cellular-modem.done
   [ -z "${ATPORT:-}" ] && { logger -t cellular-setup "no AT port"; exit 1; }
   at() { f=/tmp/atcmd.$$;
          # watchdog-bounded read (L20/L21): never leak a reader, never block forever
-         ( stty -F $ATPORT 115200 raw -echo min 0 time 5 2>/dev/null;
+         ( stty -F $ATPORT 115200 raw -echo min 1 time 5 2>/dev/null;
            dd bs=1 count=400 <$ATPORT >$f 2>/dev/null ) & c=$!; sleep 1;
          printf '%s\r' "$1" > $ATPORT; sleep 4; kill $c 2>/dev/null; wait $c 2>/dev/null;
          grep -qE '^\+|^OK' $f 2>/dev/null; rc=$?; rm -f $f; return $rc; }
