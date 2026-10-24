@@ -23,7 +23,7 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
     SslProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -441,6 +441,8 @@ enum ProfileChoice {
     /// 1.x spelling.
     #[value(name = "vpn-nordvpn-openvpn")]
     VpnNordvpnOpenvpn,
+    /// 1.x preset name (kebab by default).
+    VpnPia,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -661,6 +663,27 @@ struct ProfileArgs {
     /// vpn-nordvpn-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
     #[arg(long)]
     nordovpn_no_management: bool,
+    /// vpn-pia: PIA username (the p-number; required).
+    #[arg(long)]
+    pia_username: Option<String>,
+    /// vpn-pia: PIA password (required).
+    #[arg(long)]
+    pia_password: Option<String>,
+    /// vpn-pia: PIA region slug (default netherlands).
+    #[arg(long)]
+    pia_region: Option<String>,
+    /// vpn-pia: upstream gateway IP pinning the server route (required).
+    #[arg(long)]
+    pia_gateway: Option<String>,
+    /// vpn-pia: upstream interface (default wwan).
+    #[arg(long)]
+    pia_iface: Option<String>,
+    /// vpn-pia: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    pia_no_kill_switch: bool,
+    /// vpn-pia: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    pia_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1713,6 +1736,33 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnPia => {
+            let (username, password) = match (args.pia_username.clone(), args.pia_password.clone())
+            {
+                (Some(u), Some(p)) => (u, p),
+                _ => {
+                    return Err("--pia-username and --pia-password are required for vpn-pia".into());
+                }
+            };
+            let gateway = args.pia_gateway.clone().unwrap_or_default();
+            if gateway.is_empty() {
+                return Err(
+                    "--pia-gateway is required for vpn-pia (the circular-routing pin)".into(),
+                );
+            }
+            Ok(Profile::VpnPia(VpnPiaProfile {
+                username,
+                password,
+                region: args
+                    .pia_region
+                    .clone()
+                    .unwrap_or_else(|| "netherlands".into()),
+                upstream_gateway: gateway,
+                upstream_iface: args.pia_iface.clone().unwrap_or_else(|| "wwan".into()),
+                kill_switch: !args.pia_no_kill_switch,
+                allow_management: !args.pia_no_management,
+            }))
+        }
         ProfileChoice::VpnNordvpnOpenvpn => {
             let (username, password, station, hostname) = match (
                 args.nordovpn_username.clone(),
@@ -2848,6 +2898,13 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            pia_username: None,
+            pia_password: None,
+            pia_region: None,
+            pia_gateway: None,
+            pia_iface: None,
+            pia_no_kill_switch: false,
+            pia_no_management: false,
             nordovpn_username: None,
             nordovpn_password: None,
             nordovpn_station: None,
