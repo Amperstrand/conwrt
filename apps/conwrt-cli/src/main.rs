@@ -99,6 +99,75 @@ enum Command {
         #[arg(long, default_value_t = true)]
         boot: bool,
     },
+    /// Read-only device detection: classify the console (U-Boot / Linux
+    /// shell / booting / silent) and, when a prompt answers, collect the
+    /// device card — banner, env, kernel, release, MTD layout — as JSON.
+    SerialDetect {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        #[arg(long, default_value_t = 4.0)]
+        probe_secs: f64,
+    },
+    /// One-command rescue: the whole bench-proven RTL838x ladder —
+    /// watch for the boot signature, spaces into U-Boot, bundled
+    /// TFTP server + gated tftpboot of the initramfs, bootm, then
+    /// fetch the sysupgrade image over the same wire, on-box sha
+    /// gate, self-firing sysupgrade -n. No recipe file needed.
+    FlashRescue {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Sysupgrade image path, SERVED over http :8022 from --serve-dir
+        /// (file name only is used in the on-box wget).
+        #[arg(long)]
+        sysupgrade: String,
+        /// sha256 of the sysupgrade image (the on-box gate).
+        #[arg(long)]
+        sha256: String,
+        /// Initramfs image file name inside --serve-dir (tftpboot target).
+        #[arg(long)]
+        initramfs: String,
+        /// Directory served by the bundled TFTP (:69) and expected on
+        /// http :8022 (external server; bundled http is future work).
+        #[arg(long)]
+        serve_dir: String,
+        /// Host IP the box reaches (serverip + wget host).
+        #[arg(long)]
+        server_ip: String,
+        /// Switch IP (ipaddr).
+        #[arg(long, default_value = "192.168.1.1")]
+        client_ip: String,
+        /// RAM load address for tftpboot.
+        #[arg(long, default_value = "0x84f00000")]
+        addr: String,
+        /// Transcript file.
+        #[arg(long, default_value = "/tmp/conwrt-flash-rescue.transcript")]
+        transcript: String,
+    },
+    /// Event-driven serial supervisor: watch the console for a boot
+    /// signature and fire a staged recovery recipe the instant it
+    /// matches — in-process, no subprocess latency (the bootdelay
+    /// lesson: the window is ~1 s). Recipes are JSON (see recipes/).
+    SerialWatch {
+        /// Serial port spec (/dev/... or tcp://HOST:PORT for ser2net).
+        #[arg(long)]
+        port: String,
+        /// Baud (ignored for tcp://).
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Recipe JSON path (triggers + actions).
+        #[arg(long)]
+        recipe: String,
+        /// Transcript file (console capture + watch log, appended).
+        #[arg(long, default_value = "/tmp/conwrt-serial-watch.transcript")]
+        transcript: String,
+        /// Idle poll interval in seconds.
+        #[arg(long, default_value_t = 0.5)]
+        poll_secs: f64,
+    },
     /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
     /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
@@ -932,6 +1001,123 @@ fn main() -> ExitCode {
                 Err(e) => {
                     eprintln!("conwrt: uboot-loady FAILED: {e}");
                     eprintln!("conwrt: gates held — nothing was booted from a bad load");
+                    ExitCode::from(5)
+                }
+            }
+        }
+        Command::SerialDetect {
+            port,
+            baud,
+            probe_secs,
+        } => match conwrt_serial::detect::detect(&port, baud, probe_secs) {
+            Ok(card) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&card).unwrap_or_default()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("conwrt: serial-detect error: {e}");
+                ExitCode::from(5)
+            }
+        },
+        Command::FlashRescue {
+            port,
+            sysupgrade,
+            sha256,
+            initramfs,
+            serve_dir,
+            server_ip,
+            client_ip,
+            addr,
+            transcript,
+        } => {
+            let fname = std::path::Path::new(&sysupgrade)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| sysupgrade.clone());
+            if !std::path::Path::new(&format!("{serve_dir}/{fname}")).exists() {
+                eprintln!("conwrt: {serve_dir}/{fname} missing (serve both images from serve_dir)");
+                std::process::exit(2);
+            }
+            let recipe = conwrt_serial::watch::flash_rescue_recipe(
+                &fname,
+                &sha256,
+                &initramfs,
+                &server_ip,
+                &format!("{server_ip}:69"),
+                &serve_dir,
+                &client_ip,
+                &addr,
+            );
+            println!(
+                "conwrt: flash-rescue {} via {initramfs} from {server_ip}",
+                recipe.model
+            );
+            match conwrt_serial::watch::run_watch(
+                &port,
+                115200,
+                &recipe,
+                std::path::Path::new(&transcript),
+                1.0,
+            ) {
+                Ok(out) if out.success => {
+                    println!("conwrt: flash-rescue complete: {}", out.detail);
+                    ExitCode::SUCCESS
+                }
+                Ok(out) => {
+                    eprintln!("conwrt: flash-rescue failed: {}", out.detail);
+                    ExitCode::from(6)
+                }
+                Err(e) => {
+                    eprintln!("conwrt: flash-rescue io error: {e}");
+                    ExitCode::from(5)
+                }
+            }
+        }
+        Command::SerialWatch {
+            port,
+            baud,
+            recipe,
+            transcript,
+            poll_secs,
+        } => {
+            let text = std::fs::read_to_string(&recipe).unwrap_or_else(|e| {
+                eprintln!("conwrt: cannot read recipe {recipe}: {e}");
+                std::process::exit(2);
+            });
+            let r: conwrt_serial::watch::Recipe = serde_json::from_str(&text).unwrap_or_else(|e| {
+                eprintln!("conwrt: recipe {recipe} does not parse: {e}");
+                std::process::exit(2);
+            });
+            println!(
+                "conwrt: serial-watch {} (model {:?}, {} action(s), max_fires {})",
+                port,
+                r.model,
+                r.actions.len(),
+                r.max_fires
+            );
+            match conwrt_serial::watch::run_watch(
+                &port,
+                baud,
+                &r,
+                std::path::Path::new(&transcript),
+                poll_secs,
+            ) {
+                Ok(out) => {
+                    println!(
+                        "conwrt: serial-watch done: fires={} success={} {}",
+                        out.fires, out.success, out.detail
+                    );
+                    if out.success {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(6)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("conwrt: serial-watch io error: {e}");
                     ExitCode::from(5)
                 }
             }
