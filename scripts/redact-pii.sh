@@ -81,6 +81,9 @@ PII_FILES=(
   models/zyxel-gs1920-24.json
   models/zyxel-nr7101.json
   recipes/dlink/covr-x1860/notes.md
+  recipes/asus/lyra-map-ac2200/NOTES.md
+  recipes/zyxel/nr7101/open-issues.md
+  recipes/zyxel/nr7101/serial-recovery-session-2026-06-28.md
   recipes/extreme-networks/ws-ap3915i/RECOVERY-2026-09-22-lan7-lan8.md
   recipes/extreme-networks/ws-ap3915i/SERIAL-RESCUE-2026-09.md
   recipes/zyxel/gs1920-24/notes.md
