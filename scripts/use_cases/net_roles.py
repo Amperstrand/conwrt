@@ -37,6 +37,123 @@ _UPLINK_TYPES = ("sim", "wifi", "ethernet")
 _METRICS = (5, 100, 200, 300, 400)
 _DEFAULT_IFACES = {"sim": "wan", "wifi": "wwan", "ethernet": "waneth"}
 _WIFI_ENCRYPTIONS = ("none", "psk2", "sae", "sae-mixed")
+_PRICE_PARAM_BY_TYPE = {"sim": "price_sim_sats_per_mib", "wifi": "price_wifi_sats_per_mib",
+                        "ethernet": "price_eth_sats_per_mib"}
+
+# tollgate-mode daemon. Paths are env-overridable purely for host-side
+# behavioral testing; on-device the defaults apply.
+_MODE_DAEMON = r"""#!/bin/sh
+# Watches the configured uplinks; when the active (lowest-metric live)
+# uplink changes, rewrites tollgate pricing for it. The WPS button
+# rotates a manual override (auto -> uplink1 -> uplink2 -> ... -> auto).
+# Network failover itself is netifd metrics — this adapts the TOLLGATE
+# to whichever uplink is winning, e.g. cheap/free eth primary with the
+# metered SIM priced higher once it takes over.
+CONF=${TOLLGATE_MODE_CONF:-/etc/tollgate/mode.conf}
+OVR=${TOLLGATE_MODE_OVERRIDE:-/etc/tollgate/mode.override}
+STATE=${TOLLGATE_MODE_STATE:-/tmp/tollgate-mode.state}
+TGJSON=${TOLLGATE_MODE_JSON:-/etc/tollgate/config.json}
+log() { ${TOLLGATE_MODE_LOGGER:-logger} -t tollgate-mode "$@"; }
+
+apply_price() {
+    [ "$1" = "-" ] && return 0
+    [ -f "$TGJSON" ] || return 0
+    CUR=$(sed -n 's/.*"price_per_step":[ ]*\([0-9][0-9]*\).*/\1/p' "$TGJSON" | head -1)
+    [ "$CUR" = "$1" ] && return 0
+    SS=$(sed -n 's/.*"step_size":[ ]*\([0-9][0-9]*\).*/\1/p' "$TGJSON" | head -1)
+    [ -n "$SS" ] || SS=1048576
+    P=$(( ( $1 * SS + 1048575 ) / 1048576 ))
+    sed -i "s/\"price_per_step\":[ ]*[0-9]*/\"price_per_step\": $P/g" "$TGJSON" \
+        && { /etc/init.d/tollgate-wrt restart >/dev/null 2>&1 || true; } \
+        && log "price -> $1 sat/MiB (step_size $SS -> $P)" \
+        || log "price patch FAILED"
+}
+
+iface_up() {
+    ubus call network.interface."$1" status 2>/dev/null | grep -q '"up":[ ]*true'
+}
+
+pick_active() {
+    OVRN=$(cat "$OVR" 2>/dev/null)
+    if [ -n "$OVRN" ] && [ "$OVRN" != "auto" ]; then
+        iface_up "$OVRN" && { echo "$OVRN"; return 0; }
+        log "override $OVRN is down — falling back to auto"
+    fi
+    sort -k2 -n "$CONF" | while read IF M PR; do
+        iface_up "$IF" && { echo "$IF"; return 0; }
+    done
+}
+
+evaluate() {
+    LAST=$(cat "$STATE" 2>/dev/null)
+    A=$(pick_active)
+    [ -n "$A" ] || { log "no live uplink — holding last state"; return 0; }
+    [ "$A" = "$LAST" ] && return 0
+    echo "$A" > "$STATE"
+    PR=$(awk -v i="$A" '$1 == i {print $3}' "$CONF")
+    [ -n "$PR" ] || PR=-
+    apply_price "$PR"
+    log "active uplink: $A (price $PR)"
+}
+
+rotate_button() {
+    CUR=$(cat "$OVR" 2>/dev/null)
+    [ -n "$CUR" ] || CUR=auto
+    N=auto
+    PREV=""
+    for i in auto $(awk '{printf "%s ", $1}' "$CONF"); do
+        if [ -n "$PREV" ] && [ "$PREV" = "$CUR" ]; then N=$i; break; fi
+        PREV=$i
+    done
+    echo "$N" > "$OVR"
+    log "button: override -> $N"
+    evaluate
+}
+
+case "$1" in
+    --button) rotate_button ;;
+    --watch)
+        while true; do
+            evaluate
+            sleep ${TOLLGATE_MODE_INTERVAL:-10}
+        done
+        ;;
+    *) evaluate ;;
+esac
+"""
+
+_MODE_INIT = """\
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/tollgate-mode --watch
+    procd_set_param env TOLLGATE_MODE_INTERVAL=__INTERVAL__
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}
+"""
+
+_MODE_HOTPLUG = """\
+#!/bin/sh
+[ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifdown" ] || exit 0
+/usr/bin/tollgate-mode >/dev/null 2>&1 &
+"""
+
+_MODE_BUTTON = """\
+#!/bin/sh
+[ "$BUTTON" = "wps" ] || exit 0
+/usr/bin/tollgate-mode --button >/dev/null 2>&1 &
+exit 0
+"""
+
+
+def _stage_file_ops(ops: list[Op], path: str, content: str, mode: str) -> None:
+    escaped = content.replace("'", "'\\''")
+    ops.append(ShellCommand(
+        command=f"mkdir -p \"$(dirname {path})\" && printf '%s' '{escaped}' > {path} && chmod {mode} {path}"
+    ))
 
 
 def _resolve_uplinks(raw: list[Any]) -> list[dict[str, Any]]:
@@ -103,6 +220,22 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("net-roles: mgmt_vlan requires mgmt_ip")
         if any(u["type"] == "ethernet" and u["vlan"] == mgmt_vlan for u in uplinks):
             raise ValueError("net-roles: mgmt_vlan must differ from the ethernet uplink vlan")
+    auto_switch = bool(params.get("auto_switch", False))
+    switch_interval = int(params.get("switch_interval", 10))
+    wifi_shared_radio = bool(params.get("wifi_shared_radio", False))
+    prices = {
+        t: int(params.get(_PRICE_PARAM_BY_TYPE[t], 0)) for t in _UPLINK_TYPES
+    }
+    if any(p < 0 for p in prices.values()):
+        raise ValueError("net-roles: price params must be >= 0")
+    if any(p > 0 for p in prices.values()) and not auto_switch:
+        raise ValueError("net-roles: price params require auto_switch=true")
+    if auto_switch and not uplinks:
+        raise ValueError("net-roles: auto_switch requires at least one uplink")
+    if wifi_shared_radio and not any(u["type"] == "wifi" for u in uplinks):
+        raise ValueError("net-roles: wifi_shared_radio requires a wifi uplink")
+    if not (5 <= switch_interval <= 120):
+        raise ValueError("net-roles: switch_interval must be in 5..120 seconds")
     return {
         "uplinks": uplinks,
         "serve_ethernet": serve_ethernet,
@@ -110,6 +243,10 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "mgmt_vlan": mgmt_vlan,
         "mgmt_ip": mgmt_ip,
         "mgmt_netmask": mgmt_netmask,
+        "auto_switch": auto_switch,
+        "switch_interval": switch_interval,
+        "wifi_shared_radio": wifi_shared_radio,
+        "prices": prices,
     }
 
 
@@ -176,13 +313,19 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(UciSet(config="wireless", section=f"{u['iface']}sta", values=sta_values))
         ops.append(UciSet(config="wireless", section=u["radio"], values={"disabled": "0"}))
         ops.append(ShellCommand(command=_zone_add(u["iface"], "wan")))
-        ops.append(ShellCommand(command=(
-            f"for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do "
-            f"[ \"$(uci -q get wireless.$w.device)\" = \"{u['radio']}\" ] "
-            f"&& [ \"$w\" != \"{u['iface']}sta\" ] && uci set wireless.$w.disabled=1; done; true"
-        )))
+        if r["wifi_shared_radio"]:
+            ops.append(Comment(text=(
+                f"--- net-roles: wifi_shared_radio — APs on {u['radio']} stay up alongside the STA "
+                "(same-channel locked, ~half throughput, AP follows STA association; travelmate-class caveat) ---"
+            )))
+        else:
+            ops.append(ShellCommand(command=(
+                f"for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do "
+                f"[ \"$(uci -q get wireless.$w.device)\" = \"{u['radio']}\" ] "
+                f"&& [ \"$w\" != \"{u['iface']}sta\" ] && uci set wireless.$w.disabled=1; done; true"
+            )))
 
-    if not r["serve_wifi"] and not any(u["type"] == "wifi" for u in uplinks):
+    if not r["serve_wifi"]:
         ops.append(Comment(text="--- net-roles: serving disabled — take all AP vifs off the air ---"))
         ops.append(ShellCommand(command=(
             "for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do "
@@ -251,6 +394,28 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         f'echo "net-roles applied: uplinks={len(uplinks)} '
         f'serve_eth={r["serve_ethernet"]} serve_wifi={r["serve_wifi"]} mgmt={mgmt_vlan or "lan"}"'
     )))
+
+    if r["auto_switch"]:
+        ops.append(BlankLine())
+        ops.append(Comment(text="--- net-roles: tollgate-mode engine (active-uplink price switch + WPS button override) ---"))
+        mode_conf_lines = []
+        for u in uplinks:
+            price = r["prices"][u["type"]]
+            mode_conf_lines.append(f"{u['iface']} {u['metric']} {price if price > 0 else '-'}")
+        mode_conf = "\n".join(mode_conf_lines) + "\n"
+        _stage_file_ops(ops, "/etc/tollgate/mode.conf", mode_conf, "600")
+        _stage_file_ops(ops, "/usr/bin/tollgate-mode", _MODE_DAEMON, "755")
+        _stage_file_ops(ops, "/etc/init.d/tollgate-mode",
+                        _MODE_INIT.replace("__INTERVAL__", str(r["switch_interval"])), "755")
+        _stage_file_ops(ops, "/etc/hotplug.d/iface/90-tollgate-mode", _MODE_HOTPLUG, "755")
+        _stage_file_ops(ops, "/etc/rc.button/wps", _MODE_BUTTON, "755")
+        ops.append(ShellCommand(command="rm -f /etc/tollgate/mode.override /tmp/tollgate-mode.state"))
+        ops.append(ServiceAction(name="tollgate-mode", action="enable"))
+        ops.append(ServiceAction(name="tollgate-mode", action="restart"))
+        ops.append(ShellCommand(command=(
+            '[ -x /usr/bin/tollgate-mode ] && [ -f /etc/tollgate/mode.conf ] '
+            '|| { echo "net-roles: tollgate-mode staging FAILED"; exit 1; }'
+        )))
     return ops
 
 
@@ -282,6 +447,21 @@ register(UseCase(
             description="Static IP for the mgmt VLAN interface (e.g. 192.168.50.1)"),
         "mgmt_netmask": ParamDef(type=str, default="255.255.255.0",
             description="Netmask for the mgmt VLAN interface"),
+        "auto_switch": ParamDef(type=bool, default=False,
+            description="Install the tollgate-mode engine: watches uplink liveness, rewrites tollgate "
+                        "pricing when the active uplink changes, WPS button rotates a manual override"),
+        "switch_interval": ParamDef(type=int, default=10, min_value=5, max_value=120,
+            description="tollgate-mode watch loop interval in seconds (hotplug events react instantly)"),
+        "price_sim_sats_per_mib": ParamDef(type=int, default=0, min_value=0,
+            description="Price applied while the sim uplink is active (sats/MiB; 0 = leave unchanged)"),
+        "price_wifi_sats_per_mib": ParamDef(type=int, default=0, min_value=0,
+            description="Price applied while the wifi uplink is active (sats/MiB; 0 = leave unchanged)"),
+        "price_eth_sats_per_mib": ParamDef(type=int, default=0, min_value=0,
+            description="Price applied while the ethernet uplink is active (sats/MiB; 0 = leave unchanged)"),
+        "wifi_shared_radio": ParamDef(type=bool, default=False,
+            description="Keep serving APs up alongside the wifi STA on the same radio "
+                        "(channel-locked to the STA's BSS, roughly half throughput, AP dies with the STA — "
+                        "travelmate-class repeater caveat)"),
     },
     test_status="experimental",
     tested_notes="renders validated (multi-mode sh -n); hardware run pending next TollGate build",

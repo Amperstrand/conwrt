@@ -415,6 +415,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "gateway_name": str(params.get("gateway_name", "")),
         "gateway_domain": str(params.get("gateway_domain", "")),
         "clientid": str(params.get("clientid", "mac")),
+        "allow_lan_ssh": bool(params.get("allow_lan_ssh", False)),
         "install_hotplug": params.get("install_hotplug", True),
         "hotplug_interface": str(params.get("hotplug_interface", "wwan")),
         "price_sats_per_mib": int(params.get("price_sats_per_mib", 0)),
@@ -441,6 +442,7 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     gateway_name = r["gateway_name"]
     gateway_domain = r["gateway_domain"]
     clientid = r["clientid"]
+    allow_lan_ssh = r["allow_lan_ssh"]
     install_hotplug = r["install_hotplug"]
     hotplug_iface = r["hotplug_interface"]
 
@@ -463,6 +465,9 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
                           option="users_to_router", value="allow tcp port 2121"))
     ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
                           option="users_to_router", value="allow tcp port 2050"))
+    if allow_lan_ssh:
+        ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
+                              option="users_to_router", value="allow tcp port 22"))
     ops.append(UciCommit(config="nodogsplash"))
     ops.append(ServiceAction(name="nodogsplash", action="enable"))
     ops.append(ServiceAction(name="nodogsplash", action="restart"))
@@ -501,10 +506,10 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(Comment(text=f"--- TollGate: byte pricing ({derivation} = {price} sat/MiB) ---"))
         ops.append(ShellCommand(
             command=f'if [ -f /etc/tollgate/config.json ]; then '
-                    f'SS=$(sed -n \'s/.*"step_size": \\([0-9][0-9]*\\).*/\\1/p\' /etc/tollgate/config.json | head -1); '
+                    f'SS=$(sed -n \'s/.*"step_size":[ ]*\\([0-9][0-9]*\\).*/\\1/p\' /etc/tollgate/config.json | head -1); '
                     f'[ -n "$SS" ] || SS=1048576; '
                     f'P=$(( ( {price} * SS + 1048575 ) / 1048576 )); '
-                    f'sed -i \'s/"price_per_step": [0-9]*/"price_per_step": \'"$P"\'/g\' /etc/tollgate/config.json '
+                    f'sed -i \'s/"price_per_step":[ ]*[0-9]*/"price_per_step": \'"$P"\'/g\' /etc/tollgate/config.json '
                     f'&& /etc/init.d/tollgate-wrt restart 2>/dev/null '
                     f'&& echo "tollgate: price_per_step=$P applied (step_size=$SS bytes; {price} sat/MiB)" '
                     f'|| echo "tollgate: price patch FAILED on existing config.json"; '
@@ -560,6 +565,12 @@ register(UseCase(
         "clientid": ParamDef(type=str, default="mac",
             description="Client identification method: 'mac', 'token', or 'ip'",
             choices=("mac", "token", "ip")),
+        "allow_lan_ssh": ParamDef(type=bool, default=False,
+            description="Expose SSH (tcp 22) to associated LAN/WiFi clients via nodogsplash "
+                        "users_to_router (applies pre-auth too). The tollgate itself exposes no "
+                        "network API (CLI is a local-only Unix socket), so SSH is the management "
+                        "door. Stack ssh-hardening (key-only auth) — password SSH on the gated "
+                        "LAN is a bad idea."),
         "install_hotplug": ParamDef(type=bool, default=True,
             description="Install hotplug script to restart tollgate when WiFi STA comes up"),
         "hotplug_interface": ParamDef(type=str, default="wwan",
