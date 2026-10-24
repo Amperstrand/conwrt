@@ -12,5 +12,6 @@
 
 pub mod serial_io;
 pub mod xmodem_transfer;
+pub mod zycast;
 
 pub use xmodem_transfer::{BlockLength, XmodemError, send_firmware};

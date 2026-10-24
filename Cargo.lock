@@ -827,6 +827,7 @@ version = "0.1.0"
 dependencies = [
  "crc16",
  "embedded-io-async 0.7.0",
+ "socket2 0.6.5",
  "xmodem",
 ]
 
@@ -856,6 +857,7 @@ dependencies = [
 name = "conwrt-zycast"
 version = "0.1.0"
 dependencies = [
+ "conwrt-protocols",
  "socket2 0.6.5",
 ]
 
