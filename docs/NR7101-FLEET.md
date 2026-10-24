@@ -155,6 +155,7 @@ house LAN (rogue-DHCP risk removed) onto an isolated LAB VLAN on the ERX.
 Concrete addresses and the tooling endpoints that follow them live in the
 private census dossier (#290); all tooling (modemifd reader, modem-at-bridge)
 was repointed at the resegmentation.
+- modemifd reader (now [Amperstrand/ifd-modemifd](https://github.com/Amperstrand/ifd-modemifd), Rust): reader.conf DEVICENAME follows the unit's current address; the retired C implementation was removed from this repo
 - pcscd: verified reader + ICCID + logical channel working
 
 The NR7101 is also the lpac host: /usr/bin/lpac (v2.3.0, MIPS) deployed
