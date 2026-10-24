@@ -38,6 +38,7 @@ def test_qemu_apply_openclash_and_ssl_on_fixture_vm(openwrt_vm):
             "nodns",
             "pbr",
             "vpn_pia_openvpn",
+            "vpn_nordvpn",
         ],
         capture_output=True,
         text=True,
@@ -58,6 +59,7 @@ def test_qemu_apply_openclash_and_ssl_on_fixture_vm(openwrt_vm):
         "nodns_full_plan_applies_and_verifies_on_real_openwrt",
         "pbr_config_surface_applies_on_real_openwrt",
         "vpn_pia_openvpn_applies_and_proves_the_honest_failure_path",
+        "vpn_nordvpn_applies_and_proves_the_honest_failure_path",
     ):
         assert f"test {needle} ... ok" in result.stdout, (
             f"{needle} did not run green; stdout tail: {result.stdout[-2000:]}"

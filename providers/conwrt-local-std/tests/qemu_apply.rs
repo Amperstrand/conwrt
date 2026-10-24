@@ -31,8 +31,8 @@
 
 use conwrt_core::plan::{
     NodnsProfile, OpenClashProfile, PbrProfile, PlanOp, Profile, SqmProfile, SslProfile,
-    TetherProfile, VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile,
+    TetherProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile,
 };
 use conwrt_core::ssh::{MemoryTrustStore, TrustMode};
 use conwrt_core::state::DeviceState;
@@ -508,6 +508,85 @@ fn strip_package_ops(plan: &mut conwrt_core::plan::Plan) {
         }
         _ => true,
     });
+}
+
+#[tokio::test]
+async fn vpn_nordvpn_applies_and_proves_the_honest_failure_path() {
+    if !vm_available() {
+        eprintln!("skipping: CONWRT_QEMU_VM=1 not set or VM unreachable");
+        return;
+    }
+    let _vm = vm_lock().await;
+
+    let (session, model) = connected_openwrt_session().await;
+
+    // wireguard-tools + kmod-wireguard are prebaked in the fixture
+    // image (the wg-client ring-2 test creates real wg0 keys) — the
+    // FULL plan applies with nothing stripped and no stubs.
+    let plan = plan_profile(
+        &DeviceState::OpenWrt,
+        &model,
+        &Profile::VpnNordvpn(VpnNordvpnProfile {
+            private_key: "STUBPRIVKEYbase64filledfortestonly0000=".into(),
+            server_public_key: "STUBPUBKEYbase64filledfortestonly0000=".into(),
+            endpoint_host: "de500.nordvpn.com".into(),
+            route_target: "193.29.107.10".into(),
+            upstream_gateway: String::new(), // exercise the discovery branch
+            ..VpnNordvpnProfile::default()
+        }),
+    )
+    .expect("plan for confirmed VM");
+
+    let outcome = apply_plan(&session, &plan).await.expect("apply over SSH");
+    assert!(
+        outcome.applied,
+        "script must exit 0 (the failure TAIL restores WAN by design):\n{}\nstderr:\n{}",
+        outcome.script, outcome.stderr
+    );
+
+    // honest-failure contract: with no reachable endpoint the handshake
+    // verification FAILS BY NAME instead of reading as success
+    assert!(
+        !outcome.fully_verified(),
+        "a tunnel-less VM must NOT verify as applied"
+    );
+    let failed: Vec<&str> = outcome
+        .verification
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.description.as_str())
+        .collect();
+    assert!(
+        failed.iter().any(|d| d.contains("handshake observed")),
+        "the handshake check must be the named failure, got: {failed:?}"
+    );
+
+    // what a VM CAN prove on real userspace: wg0 configured, the
+    // kill switch REMOVED by the failure tail, tunnel DNS, and the
+    // endpoint route absent (discovery timed out — VM has no upstream)
+    let uci = session
+        .exec(
+            "uci -q get network.wg0.proto; \
+             uci -q get firewall.vpn_killswitch.target || echo killswitch-gone; \
+             uci -q get dhcp.@dnsmasq[0].server | tr '\n' ' '; \
+             uci -q get network.nordvpn_server_route.target || echo route-absent",
+        )
+        .await
+        .expect("nord readback");
+    let uci = String::from_utf8_lossy(&uci.stdout);
+    assert!(uci.contains("wireguard"), "wg0 proto: {uci}");
+    assert!(
+        uci.contains("killswitch-gone"),
+        "the failure tail must have removed the kill switch: {uci}"
+    );
+    assert!(uci.contains("103.86.99.100"), "tunnel DNS: {uci}");
+
+    // rollback so repeated runs stay clean
+    let _ = session
+        .exec(
+            r#"rm -f /tmp/vpn_setup.sh;              uci -q delete network.wg0; uci -q delete network.nordvpn_server_route;              while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do uci delete network.@wireguard_wg0[0]; done;              while uci -q show firewall 2>/dev/null | grep -q "name='vpn'"; do _s=$(uci -q show firewall | grep "name='vpn'" | head -1 | cut -d. -f2 | cut -d= -f1); uci -q delete "firewall.$_s"; done;              uci -q delete firewall.vpn_fwd; uci -q delete firewall.vpn_mgmt;              for d in 103.86.96.100 103.86.99.100; do uci -q del_list dhcp.@dnsmasq[0].server="$d"; done;              uci -q delete dhcp.@dnsmasq[0].noresolv;              uci commit network; uci commit firewall; uci commit dhcp; true"#,
+        )
+        .await;
 }
 
 #[tokio::test]

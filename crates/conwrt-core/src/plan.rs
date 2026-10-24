@@ -3513,6 +3513,126 @@ const PIA_OPENVPN_CA: &str = concat!(
     "-----END CERTIFICATE-----\n",
 );
 
+/// The vpn-provider family's shared firewall-zone/DNS/verify tail —
+/// 1.x `vpn_providers/base.py::build_{firewall,dns,verify}_ops`, byte
+/// parity. Named sections + `CleanupUciSections` keep re-runs and
+/// technology switches (wg → openvpn) idempotent: the family zone name
+/// (`name='vpn'`) lets one technology's setup retire another's rules.
+/// `verify_line` is the kind-specific failure TAIL (wg handshake vs
+/// tun-address probe) that removes the kill switch when the tunnel
+/// never comes up.
+#[allow(clippy::too_many_arguments)]
+fn push_vpn_shared_ops(
+    ops: &mut Vec<PlanOp>,
+    iface: &str,
+    dns_servers: &[&str],
+    kill_switch: bool,
+    allow_management: bool,
+    verify_line: &str,
+) {
+    let literal = |v: String| UciValue::Literal(v);
+    for (config, pattern) in [
+        ("firewall", "name='vpn'"),
+        ("firewall", "dest='vpn'"),
+        ("firewall", "name='KillSwitch-Reject-NonVPN'"),
+        ("firewall", "name='Allow-VPN-Management'"),
+    ] {
+        ops.push(PlanOp::CleanupUciSections {
+            config: config.into(),
+            pattern: pattern.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_zone".into(),
+        section_type: "zone".into(),
+        options: vec![
+            ("name".into(), literal("vpn".into())),
+            ("input".into(), literal("REJECT".into())),
+            ("output".into(), literal("ACCEPT".into())),
+            ("forward".into(), literal("REJECT".into())),
+            ("masq".into(), literal("1".into())),
+            ("mtu_fix".into(), literal("1".into())),
+            ("network".into(), literal(iface.into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_fwd".into(),
+        section_type: "forwarding".into(),
+        options: vec![
+            ("src".into(), literal("lan".into())),
+            ("dest".into(), literal("vpn".into())),
+        ],
+    });
+    if allow_management {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_mgmt".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-VPN-Management".into())),
+                ("src".into(), literal("vpn".into())),
+                ("proto".into(), literal("tcp".into())),
+                ("dest_port".into(), literal("22 80 443".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        });
+    }
+    if kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    for dns in dns_servers {
+        ops.push(PlanOp::Shell {
+            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: (*dns).into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "dhcp".into(),
+        section: "@dnsmasq[0]".into(),
+        options: vec![("noresolv".into(), literal("1".into()))],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "dhcp".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "dnsmasq".into(),
+        action: ServiceAction::Restart,
+    });
+    if kill_switch {
+        ops.push(PlanOp::Shell {
+            command: verify_line.into(),
+        });
+    }
+}
+
 fn plan_vpn_pia_openvpn(
     model: &DeviceModel,
     pia: &VpnPiaOpenvpnProfile,
@@ -3610,124 +3730,24 @@ fn plan_vpn_pia_openvpn(
         "cat > /tmp/pia_openvpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/pia_openvpn_setup.sh",
         body.trim_end()
     );
-    let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
         PlanOp::EnsurePackage {
             name: "openvpn-openssl".into(),
         },
         PlanOp::Shell { command: payload },
-        // stale-section cleanup keeps re-runs idempotent (1.x
-        // uci_cleanup_sections; the shared vpn-zone family name lets a
-        // technology switch — wg → openvpn — retire the old rules)
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='vpn'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "dest='vpn'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='Allow-VPN-Management'".into(),
-        },
-        PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_zone".into(),
-            section_type: "zone".into(),
-            options: vec![
-                ("name".into(), literal("vpn".into())),
-                ("input".into(), literal("REJECT".into())),
-                ("output".into(), literal("ACCEPT".into())),
-                ("forward".into(), literal("REJECT".into())),
-                ("masq".into(), literal("1".into())),
-                ("mtu_fix".into(), literal("1".into())),
-                ("network".into(), literal("tun0".into())),
-            ],
-        },
-        PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_fwd".into(),
-            section_type: "forwarding".into(),
-            options: vec![
-                ("src".into(), literal("lan".into())),
-                ("dest".into(), literal("vpn".into())),
-            ],
-        },
     ];
-    if pia.allow_management {
-        ops.push(PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_mgmt".into(),
-            section_type: "rule".into(),
-            options: vec![
-                ("name".into(), literal("Allow-VPN-Management".into())),
-                ("src".into(), literal("vpn".into())),
-                ("proto".into(), literal("tcp".into())),
-                ("dest_port".into(), literal("22 80 443".into())),
-                ("target".into(), literal("ACCEPT".into())),
-            ],
-        });
-    }
-    if pia.kill_switch {
-        ops.push(PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_killswitch".into(),
-            section_type: "rule".into(),
-            options: vec![
-                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
-                ("src".into(), literal("lan".into())),
-                ("dest".into(), literal("wan".into())),
-                ("proto".into(), literal("all".into())),
-                ("target".into(), literal("REJECT".into())),
-            ],
-        });
-    }
-    for dns in ["10.0.0.241", "10.0.0.242", "10.0.0.243"] {
-        ops.push(PlanOp::Shell {
-            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
-        });
-        ops.push(PlanOp::UciAddList {
-            config: "dhcp".into(),
-            section: "@dnsmasq[0]".into(),
-            option: "server".into(),
-            value: dns.into(),
-        });
-    }
-    ops.push(PlanOp::SetUciOptions {
-        config: "dhcp".into(),
-        section: "@dnsmasq[0]".into(),
-        options: vec![("noresolv".into(), literal("1".into()))],
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "network".into(),
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "firewall".into(),
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "dhcp".into(),
-    });
-    ops.push(PlanOp::Service {
-        name: "network".into(),
-        action: ServiceAction::Restart,
-    });
-    ops.push(PlanOp::Service {
-        name: "dnsmasq".into(),
-        action: ServiceAction::Restart,
-    });
-    if pia.kill_switch {
-        // failure TAIL, not verification: a tunnel that never comes up
-        // gets its kill switch REMOVED so a bad config cannot blackhole
-        // the LAN (validated lesson)
-        ops.push(PlanOp::Shell {
-            command: "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
-        });
-    }
+    // shared vpn composition (byte-identical tail: cleanup, zone,
+    // forwarding, management/kill-switch, tunnel DNS, restarts, and
+    // the 45s tun-address verify TAIL that removes the kill switch
+    // when the tunnel never comes up)
+    push_vpn_shared_ops(
+        &mut ops,
+        "tun0",
+        &["10.0.0.241", "10.0.0.242", "10.0.0.243"],
+        pia.kill_switch,
+        pia.allow_management,
+        "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+    );
     // the 45s tail restores WAN on failure and exits 0 by design —
     // this check is what makes the apply HONEST about the outcome:
     // verified requires tun0 to actually hold an address (Codex #514
@@ -3873,8 +3893,10 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
         "cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/vpn_setup.sh",
         body.trim_end()
     );
-    let literal = |v: String| UciValue::Literal(v);
     let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
         PlanOp::EnsurePackage {
             name: "wireguard-tools".into(),
         },
@@ -3882,116 +3904,17 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
             name: "luci-proto-wireguard".into(),
         },
         PlanOp::Shell { command: payload },
-        // shared vpn composition (byte-identical to the pia plan): the
-        // family zone name lets technology switches retire old rules
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='vpn'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "dest='vpn'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='KillSwitch-Reject-NonVPN'".into(),
-        },
-        PlanOp::CleanupUciSections {
-            config: "firewall".into(),
-            pattern: "name='Allow-VPN-Management'".into(),
-        },
-        PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_zone".into(),
-            section_type: "zone".into(),
-            options: vec![
-                ("name".into(), literal("vpn".into())),
-                ("input".into(), literal("REJECT".into())),
-                ("output".into(), literal("ACCEPT".into())),
-                ("forward".into(), literal("REJECT".into())),
-                ("masq".into(), literal("1".into())),
-                ("mtu_fix".into(), literal("1".into())),
-                ("network".into(), literal("wg0".into())),
-            ],
-        },
-        PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_fwd".into(),
-            section_type: "forwarding".into(),
-            options: vec![
-                ("src".into(), literal("lan".into())),
-                ("dest".into(), literal("vpn".into())),
-            ],
-        },
     ];
-    if nv.allow_management {
-        ops.push(PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_mgmt".into(),
-            section_type: "rule".into(),
-            options: vec![
-                ("name".into(), literal("Allow-VPN-Management".into())),
-                ("src".into(), literal("vpn".into())),
-                ("proto".into(), literal("tcp".into())),
-                ("dest_port".into(), literal("22 80 443".into())),
-                ("target".into(), literal("ACCEPT".into())),
-            ],
-        });
-    }
-    if nv.kill_switch {
-        ops.push(PlanOp::SetUciSection {
-            config: "firewall".into(),
-            section: "vpn_killswitch".into(),
-            section_type: "rule".into(),
-            options: vec![
-                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
-                ("src".into(), literal("lan".into())),
-                ("dest".into(), literal("wan".into())),
-                ("proto".into(), literal("all".into())),
-                ("target".into(), literal("REJECT".into())),
-            ],
-        });
-    }
-    for dns in ["103.86.96.100", "103.86.99.100"] {
-        ops.push(PlanOp::Shell {
-            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
-        });
-        ops.push(PlanOp::UciAddList {
-            config: "dhcp".into(),
-            section: "@dnsmasq[0]".into(),
-            option: "server".into(),
-            value: dns.into(),
-        });
-    }
-    ops.push(PlanOp::SetUciOptions {
-        config: "dhcp".into(),
-        section: "@dnsmasq[0]".into(),
-        options: vec![("noresolv".into(), literal("1".into()))],
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "network".into(),
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "firewall".into(),
-    });
-    ops.push(PlanOp::CommitUci {
-        config: "dhcp".into(),
-    });
-    ops.push(PlanOp::Service {
-        name: "network".into(),
-        action: ServiceAction::Restart,
-    });
-    ops.push(PlanOp::Service {
-        name: "dnsmasq".into(),
-        action: ServiceAction::Restart,
-    });
-    if nv.kill_switch {
-        // wg verify tail (30s handshake): failure REMOVES the kill
-        // switch so a bad config cannot blackhole the LAN
-        ops.push(PlanOp::Shell {
-            command: "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart".into(),
-        });
-    }
+    // shared vpn composition (byte-identical tail) + the 30s wg
+    // handshake verify TAIL that removes the kill switch on failure
+    push_vpn_shared_ops(
+        &mut ops,
+        "wg0",
+        &["103.86.96.100", "103.86.99.100"],
+        nv.kill_switch,
+        nv.allow_management,
+        "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+    );
     // honest outcome (the #514/#520 pattern): verified requires the
     // tunnel to actually hold a handshake — config-applied-but-dead
     // reports incomplete
