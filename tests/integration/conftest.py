@@ -24,6 +24,29 @@ from vm_port import port_from_env, require_free  # noqa: E402
 VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
 VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
+# #460: digest of the PREPPED image, recorded at creation time. Reuse
+# requires this sidecar to exist AND match — a legacy .openwrt.img from
+# the direct-boot era (accumulated mutations, no record) is untrusted
+# and forces a from-scratch re-download + base rebuild.
+DIGEST_SIDECAR = VM_IMAGE.with_name(VM_IMAGE.name + ".sha256")
+
+
+def _image_digest() -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with VM_IMAGE.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _image_cache_valid() -> bool:
+    if not VM_IMAGE.exists():
+        return False
+    if not DIGEST_SIDECAR.exists():
+        return False
+    return DIGEST_SIDECAR.read_text().strip() == _image_digest()
 VM_PIDFILE = REPO_ROOT / "tests" / "integration" / ".openwrt-session-vm.pid"
 SSH_PORT = port_from_env("CONWRT_VM_SESSION_PORT", 2222)
 SSH_HOST = "127.0.0.1"
@@ -249,7 +272,15 @@ def openwrt_vm():
     if not _available("qemu-system-x86_64") or not _available("qemu-img"):
         pytest.skip("qemu-system-x86_64 / qemu-img not installed")
 
-    if not VM_IMAGE.exists():
+    if not _image_cache_valid():
+        # #460: an invalid cache (missing sidecar = legacy direct-boot era
+        # image with accumulated mutations; digest mismatch = corruption or
+        # tampering) must not leak into the one-time base — purge ALL
+        # derived state so nothing derived from the dirty image survives.
+        for stale in (VM_IMAGE, VM_IMAGE.with_suffix(".img.gz"),
+                      VM_IMAGE.with_name(VM_IMAGE.name + f".prepped-{OPENWRT_VERSION}"),
+                      VM_BASE, DIGEST_SIDECAR):
+            stale.unlink(missing_ok=True)
         print("Downloading OpenWrt x86_64 image...", flush=True)
         VM_IMAGE.parent.mkdir(parents=True, exist_ok=True)
         gz_path = VM_IMAGE.with_suffix(".img.gz")
@@ -267,6 +298,9 @@ def openwrt_vm():
         print(f"OpenWrt image ready: {VM_IMAGE} ({VM_IMAGE.stat().st_size} bytes)", flush=True)
         _download_prebake_packages()
         _prepare_image(VM_IMAGE)
+        # recorded AFTER prep (prep mutates the image in place): this is
+        # the digest the one-time base is built from (#460)
+        DIGEST_SIDECAR.write_text(_image_digest() + "\n")
 
     kvm_args = ["-enable-kvm", "-cpu", "host"] if os.path.exists("/dev/kvm") else []
 
