@@ -1121,6 +1121,124 @@ impl VpnNordvpnProfile {
     }
 }
 
+/// NordVPN via OpenVPN (tun0) — port of the tested 1.x
+/// `vpn-nordvpn-openvpn` preset (`scripts/use_cases/vpn_providers/
+/// nordvpn.py`, hardware-verified 2026-10-08 on COVR-X1860 @ 25.12.5).
+/// Template-faithful to the official per-server .ovpn configs: multi-port
+/// remotes, tls-auth with the NordVPN-wide static key, x509 CN pinning.
+/// 1.x resolves the SERVICE CREDENTIALS and the server at BUILD time
+/// from the access token; that resolution stays 1.x (M7) — this
+/// profile carries the resolved statics (same contract as the
+/// nordlynx profile; goldens use stubbed resolution, no real creds in
+/// git).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnNordvpnOpenvpnProfile {
+    /// Resolved service username (heredoc line — control-char and
+    /// delimiter gates in validate()).
+    pub username: String,
+    /// Resolved service password (same gates).
+    pub password: String,
+    /// Server station IP (the remotes target).
+    pub station: String,
+    /// Server hostname — must be from the SAME server object as the
+    /// station or the x509 CN pin rejects the TLS peer.
+    pub hostname: String,
+    /// `udp` or `tcp` (1.x technology openvpn-udp/openvpn-tcp).
+    pub proto: String,
+    /// OpenVPN cipher (1.x default AES-256-CBC; GCM negotiable).
+    pub cipher: String,
+    /// Upstream gateway for nothing here — kept for symmetry: this
+    /// preset uses no gateway pin (template-faithful).
+    pub kill_switch: bool,
+    /// Accept SSH/LuCI from the VPN zone (default on).
+    pub allow_management: bool,
+}
+
+impl Default for VpnNordvpnOpenvpnProfile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            station: String::new(),
+            hostname: String::new(),
+            proto: "udp".into(),
+            cipher: "AES-256-CBC".into(),
+            kill_switch: true,
+            allow_management: true,
+        }
+    }
+}
+
+impl VpnNordvpnOpenvpnProfile {
+    /// 1.x validates nothing (values came from its own API calls);
+    /// this payload interpolates them into quoted-heredoc lines and
+    /// uci values, so the port gates the mwan3/#448 class: no control
+    /// characters and no heredoc delimiters in the credentials,
+    /// station must be IPv4, hostname on the NordVPN hostname charset,
+    /// proto ∈ {udp, tcp}, cipher alnum+dash.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ctrl = |v: &str| v.chars().any(|c| c.is_ascii_control());
+        for (field, value) in [("username", &self.username), ("password", &self.password)] {
+            if value.is_empty() {
+                return Err(Unsupported::InvalidParams(format!("{field} is required")));
+            }
+            if ctrl(value) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must not contain control characters"
+                )));
+            }
+            if matches!(
+                value.as_str(),
+                "VPN_SETUP_EOF" | "NORD_CA_EOF" | "NORD_TA_EOF" | "NORD_AUTH_EOF"
+            ) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must not equal a heredoc delimiter"
+                )));
+            }
+        }
+        let ipv4 = |v: &str| {
+            let o: Vec<&str> = v.split('.').collect();
+            o.len() == 4
+                && o.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars().all(|c| c.is_ascii_digit())
+                        && p.parse::<u8>().is_ok()
+                })
+        };
+        if !ipv4(&self.station) {
+            return Err(Unsupported::InvalidParams(
+                "station must be an IPv4 address".into(),
+            ));
+        }
+        if self.hostname.is_empty()
+            || !self
+                .hostname
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "hostname must be a NordVPN server hostname".into(),
+            ));
+        }
+        if !matches!(self.proto.as_str(), "udp" | "tcp") {
+            return Err(Unsupported::InvalidParams(
+                "proto must be udp or tcp".into(),
+            ));
+        }
+        if self.cipher.is_empty()
+            || !self
+                .cipher
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(Unsupported::InvalidParams(
+                "cipher contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One upstream WiFi the deploying host already knows the credentials
 /// for — seeded onto the router so travelmate can join it onsite (the
 /// "flash and it just works" flow: the deploying host's saved networks
@@ -1284,6 +1402,8 @@ pub enum Profile {
     VpnPiaOpenvpn(VpnPiaOpenvpnProfile),
     /// NordVPN via NordLynx (WireGuard; resolved statics carried).
     VpnNordvpn(VpnNordvpnProfile),
+    /// NordVPN via OpenVPN (service-credential statics carried).
+    VpnNordvpnOpenvpn(VpnNordvpnOpenvpnProfile),
 }
 
 impl Profile {
@@ -1310,6 +1430,7 @@ impl Profile {
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
             Profile::VpnNordvpn(_) => "vpn-nordvpn",
+            Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
         }
     }
 
@@ -1338,6 +1459,7 @@ impl Profile {
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
             Profile::VpnNordvpn(_) => &[],
+            Profile::VpnNordvpnOpenvpn(_) => &[],
         }
     }
 }
@@ -1659,6 +1781,7 @@ pub fn plan_profile(
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
         Profile::VpnNordvpn(nv) => plan_vpn_nordvpn(model, nv),
+        Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
     }
 }
 
@@ -3939,6 +4062,185 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
     })
 }
 
+const NORDVPN_OPENVPN_CA: &str = concat!(
+    "-----BEGIN CERTIFICATE-----\n",
+    "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\n",
+    "-----END CERTIFICATE-----\n",
+);
+const NORDVPN_OPENVPN_TLS_AUTH: &str = concat!(
+    "#\n",
+    "# 2048 bit OpenVPN static key\n",
+    "#\n",
+    "-----BEGIN OpenVPN Static key V1-----\n",
+    "e685bdaf659a25a200e2b9e39e51ff03\n",
+    "0fc72cf1ce07232bd8b2be5e6c670143\n",
+    "f51e937e670eee09d4f2ea5a6e4e6996\n",
+    "5db852c275351b86fc4ca892d78ae002\n",
+    "d6f70d029bd79c4d1c26cf14e9588033\n",
+    "cf639f8a74809f29f72b9d58f9b8f5fe\n",
+    "fc7938eade40e9fed6cb92184abb2cc1\n",
+    "0eb1a296df243b251df0643d53724cdb\n",
+    "5a92a1d6cb817804c4a9319b57d53be5\n",
+    "80815bcfcb2df55018cc83fc43bc7ff8\n",
+    "2d51f9b88364776ee9d12fc85cc7ea5b\n",
+    "9741c4f598c485316db066d52db4540e\n",
+    "212e1518a9bd4828219e24b20d88f598\n",
+    "a196c9de96012090e333519ae18d3509\n",
+    "9427e7b372d348d352dc4c85e18cd4b9\n",
+    "3f8a56ddb2e64eb67adfc9b337157ff4\n",
+    "-----END OpenVPN Static key V1-----\n",
+);
+const NORDVPN_OPENVPN_PORTS: &str = "1231 1232 1233 1234";
+
+fn plan_vpn_nordvpn_openvpn(
+    model: &DeviceModel,
+    nv: &VpnNordvpnOpenvpnProfile,
+) -> Result<Plan, Unsupported> {
+    nv.validate()?;
+    let remotes = NORDVPN_OPENVPN_PORTS
+        .split_whitespace()
+        .map(|port| {
+            format!(
+                "uci add_list openvpn.nordvpn.remote='{} {port}'",
+                nv.station
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // whole setup rides ONE heredoc (1.x transport_sh): CA, tls-auth
+    // and credentials land as static files; validate()'s gates make
+    // the credential lines safe
+    let body = format!(
+        concat!(
+            "# Clean up old WireGuard interface + peers\n",
+            "uci -q delete network.wg0\n",
+            "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+            "    uci delete network.@wireguard_wg0[0]\n",
+            "done\n",
+            "\n",
+            "# Tear down any previous OpenVPN instance\n",
+            "uci -q delete openvpn.nordvpn\n",
+            "\n",
+            "mkdir -p /etc/openvpn\n",
+            "cat > /etc/openvpn/nordvpn.ca << 'NORD_CA_EOF'\n",
+            "{CA}NORD_CA_EOF\n",
+            "cat > /etc/openvpn/nordvpn.ta << 'NORD_TA_EOF'\n",
+            "{TA}NORD_TA_EOF\n",
+            "cat > /etc/openvpn/nordvpn.auth << 'NORD_AUTH_EOF'\n",
+            "{USERNAME}\n",
+            "{PASSWORD}\n",
+            "NORD_AUTH_EOF\n",
+            "chmod 600 /etc/openvpn/nordvpn.auth\n",
+            "\n",
+            "uci -q delete openvpn.nordvpn\n",
+            "uci set openvpn.nordvpn=openvpn\n",
+            "uci set openvpn.nordvpn.enabled='1'\n",
+            "uci set openvpn.nordvpn.client='1'\n",
+            "uci set openvpn.nordvpn.dev='tun'\n",
+            "uci set openvpn.nordvpn.proto='{PROTO}'\n",
+            "{REMOTES}\n",
+            "uci set openvpn.nordvpn.resolv_retry='infinite'\n",
+            "uci set openvpn.nordvpn.nobind='1'\n",
+            "uci set openvpn.nordvpn.persist_key='1'\n",
+            "uci set openvpn.nordvpn.persist_tun='1'\n",
+            "uci set openvpn.nordvpn.ca='/etc/openvpn/nordvpn.ca'\n",
+            "uci set openvpn.nordvpn.auth_user_pass='/etc/openvpn/nordvpn.auth'\n",
+            "uci set openvpn.nordvpn.tls_auth='/etc/openvpn/nordvpn.ta'\n",
+            "uci set openvpn.nordvpn.key_direction='1'\n",
+            "uci set openvpn.nordvpn.verify_x509_name='{HOSTNAME} name'\n",
+            "uci set openvpn.nordvpn.remote_cert_tls='server'\n",
+            "uci set openvpn.nordvpn.cipher='{CIPHER}'\n",
+            "uci set openvpn.nordvpn.data_ciphers='AES-256-GCM:AES-256-CBC'\n",
+            "uci set openvpn.nordvpn.auth='SHA512'\n",
+            "uci set openvpn.nordvpn.comp_lzo='no'\n",
+            "uci set openvpn.nordvpn.mssfix='1450'\n",
+            "uci set openvpn.nordvpn.ping='15'\n",
+            "uci set openvpn.nordvpn.ping_restart='0'\n",
+            "uci set openvpn.nordvpn.verb='3'\n",
+            "uci set openvpn.nordvpn.pull='1'\n",
+            "uci commit openvpn\n",
+            "\n",
+            "# Bring tun0 up and attach the vpn zone to it\n",
+            "uci -q del_list firewall.vpn_zone.network='wg0'\n",
+            "uci -q add_list firewall.vpn_zone.network='tun0'\n",
+            "/etc/init.d/openvpn restart || /etc/init.d/openvpn start\n",
+        ),
+        CA = NORDVPN_OPENVPN_CA,
+        TA = NORDVPN_OPENVPN_TLS_AUTH,
+        USERNAME = nv.username,
+        PASSWORD = nv.password,
+        PROTO = nv.proto,
+        REMOTES = remotes,
+        HOSTNAME = nv.hostname,
+        CIPHER = nv.cipher,
+    );
+    let payload = format!(
+        "cat > /tmp/nordvpn_openvpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/nordvpn_openvpn_setup.sh",
+        body.trim_end()
+    );
+    let mut ops = vec![
+        PlanOp::EnsurePackage {
+            name: "openvpn-openssl".into(),
+        },
+        PlanOp::Shell { command: payload },
+    ];
+    // shared vpn composition + the 45s tun-address verify TAIL
+    push_vpn_shared_ops(
+        &mut ops,
+        "tun0",
+        &["103.86.96.100", "103.86.99.100"],
+        nv.kill_switch,
+        nv.allow_management,
+        "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+    );
+    // honest outcome: verified requires tun0 to hold an address
+    let verification = vec![
+        VerificationCheck {
+            description: "openvpn instance enabled".into(),
+            command: "uci -q get openvpn.nordvpn.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "tun0 has an address (tunnel actually up)".into(),
+            command: "ip -4 addr show dev tun0 2>/dev/null | grep -q inet && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-nordvpn-openvpn".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> {
     ssl.validate()?;
     // libustream-{wolfssl,mbedtls,openssl} all own libustream-ssl.so —
@@ -5951,6 +6253,82 @@ mod tests {
                 }
                 .validate()
                 .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_nordvpn_openvpn_shape_gates_and_branches_match_1x() {
+        let base = VpnNordvpnOpenvpnProfile {
+            username: "svcuser1234".into(),
+            password: "svcpass5678abcd".into(),
+            station: "193.29.107.10".into(),
+            hostname: "de500.nordvpn.com".into(),
+            ..VpnNordvpnOpenvpnProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnNordvpnOpenvpn(base.clone())));
+        // one heredoc payload; CA + tls-auth + credentials as static files
+        assert!(script.contains("cat > /tmp/nordvpn_openvpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("cat > /etc/openvpn/nordvpn.ta << 'NORD_TA_EOF'"));
+        assert!(script.contains(
+            "cat > /etc/openvpn/nordvpn.auth << 'NORD_AUTH_EOF'\nsvcuser1234\nsvcpass5678abcd"
+        ));
+        assert!(script.contains("chmod 600 /etc/openvpn/nordvpn.auth"));
+        // template-faithful: multi-port remotes + x509 CN pin from the
+        // SAME server object + tls-auth direction
+        assert!(script.contains("uci add_list openvpn.nordvpn.remote='193.29.107.10 1234'"));
+        assert!(
+            script.contains("uci set openvpn.nordvpn.verify_x509_name='de500.nordvpn.com name'")
+        );
+        assert!(script.contains("uci set openvpn.nordvpn.tls_auth='/etc/openvpn/nordvpn.ta'"));
+        assert!(script.contains("uci set openvpn.nordvpn.key_direction='1'"));
+        assert!(script.contains("uci set openvpn.nordvpn.cipher='AES-256-CBC'"));
+        assert!(script.contains("uci set openvpn.nordvpn.proto='udp'"));
+
+        // tcp variant flips the proto only
+        let tcp = render_shell(&plan_for(Profile::VpnNordvpnOpenvpn(
+            VpnNordvpnOpenvpnProfile {
+                proto: "tcp".into(),
+                ..base.clone()
+            },
+        )));
+        assert!(tcp.contains("uci set openvpn.nordvpn.proto='tcp'"));
+
+        // gates: creds required + no control chars + no delimiters,
+        // station IPv4, hostname charset, proto choice, cipher charset
+        for hostile in [
+            VpnNordvpnOpenvpnProfile {
+                username: String::new(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                password: "l1\nl2".into(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                username: "NORD_AUTH_EOF".into(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                station: "de500.nordvpn.com".into(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                hostname: "host; poweroff".into(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                proto: "icmp".into(),
+                ..base.clone()
+            },
+            VpnNordvpnOpenvpnProfile {
+                cipher: "AES-256-CBC'; reboot".into(),
+                ..base
+            },
+        ] {
+            assert!(
+                matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
+                "gate must reject {hostile:?}"
             );
         }
     }

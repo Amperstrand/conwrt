@@ -150,14 +150,45 @@ class TestNordvpnBuildTimeResolution:
         # secrets never echo into the plan output header lines
         assert priv not in r.stdout.split("\n")[0]
 
-    @pytest.mark.skipif(not os.environ.get("CONWRT_LIVE_NORDVPN_OPENVPN"),
-                        reason="set CONWRT_LIVE_NORDVPN_OPENVPN=1 to also build the openvpn variant")
     def test_resolve_and_build_openvpn_variant(self):
-        script = registry()["vpn-nordvpn-openvpn"].build_configure({
-            "access_token": NORD_TOKEN, "server": "DE",
-        })
+        """Service credentials + server resolved for real, payload built,
+        and the SAME resolved statics feed the Rust planner CLI."""
+        import base64
+
+        basic = base64.b64encode(f"token:{NORD_TOKEN}".encode()).decode()
+        creds = nv._fetch_credentials(basic)
+        srv = nv._resolve_server("DE", NORD_TOKEN, nv.NORDVPN_TECH_IDS["openvpn-udp"])
+        user, pw = creds["username"], creds["password"]
+        station, hostname = srv["station"], srv["hostname"]
+        assert user and pw and station and hostname, "incomplete resolution"
+
+        original_srv, original_creds = nv._resolve_server, nv._fetch_credentials
+        nv._resolve_server = lambda *a, **k: srv
+        nv._fetch_credentials = lambda *a, **k: creds
+        try:
+            script = registry()["vpn-nordvpn-openvpn"].build_configure({
+                "access_token": NORD_TOKEN, "server": "DE",
+                "technology": "openvpn-udp",
+            })
+        finally:
+            nv._resolve_server, nv._fetch_credentials = original_srv, original_creds
         assert script.strip(), "openvpn variant produced no script"
         _assert_deployable(script, "vpn-nordvpn-openvpn")
+        assert user in script and station in script and hostname in script
+
+        r = subprocess.run(
+            ["cargo", "run", "--quiet", "-p", "conwrt-cli", "--", "plan",
+             "--profile", "vpn-nordvpn-openvpn",
+             "--model-id", "dlink-covr-x1860-a1",
+             "--nordovpn-username", user,
+             "--nordovpn-password", pw,
+             "--nordovpn-station", station,
+             "--nordovpn-hostname", hostname],
+            capture_output=True, text=True, timeout=600,
+            cwd=str(REPO_ROOT),
+        )
+        assert r.returncode == 0, f"rust planner refused real statics: {r.stderr[-400:]}"
+        assert "openvpn" in r.stdout
 
 
 # ------------------------------------------------------- Runtime-API tier
