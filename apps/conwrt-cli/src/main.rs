@@ -68,8 +68,6 @@ enum Command {
     /// detection, stdin line injection with ESCAPE/ENTER/CTRLC tokens
     /// (Rust port of scripts/serial-console.py --monitor).
 
-    /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
-    /// (RTL8382 field-proven 25+ times; works when console input is dead).
     /// U-Boot serial flash stage (RAM-only): BREAK-reboot ladder,
     /// loady + YMODEM the image, size + iminfo gates, explicit-address
     /// bootm. Bench-proven on the GS1900-8HP/RTL8382M 2026-10-23.
@@ -96,6 +94,8 @@ enum Command {
         #[arg(long, default_value_t = true)]
         boot: bool,
     },
+    /// Wedge recovery: reboot a livelocked device via UART BREAK + sysrq-b
+    /// (RTL8382 field-proven 25+ times; works when console input is dead).
     SerialRecover {
         /// Serial port spec, e.g. /dev/serial/by-id/usb-FTDI_...-port0.
         #[arg(long)]
