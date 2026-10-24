@@ -321,7 +321,11 @@ pub fn loady_stage_on(
     image: &[u8],
     prologue: &[String],
     boot: bool,
-) -> Result<(), UbootError> {
+) -> Result<Vec<u8>, UbootError> {
+    // Returns the full stage transcript (Codex P1 #3): the boot output
+    // consumed while waiting for liveness belongs to the caller — a
+    // supervisor's later `expect` needs the prompt that printed during
+    // this window.
     let mut early = Vec::new();
     for cmd in prologue {
         write_line(io, cmd)?;
@@ -359,10 +363,10 @@ pub fn loady_stage_on(
         return Err(UbootError::IminfoBad);
     }
 
+    let mut boot_out = Vec::new();
     if boot {
         // A bare `bootm` uses the stock boot address — always pass ours.
         write_line(io, &format!("bootm {addr}"))?;
-        let mut boot_out = Vec::new();
         read_for(io, 150.0, &mut boot_out);
         let alive = boot_out.windows(6).any(|w| w == b"OpenWrt")
             || boot_out.windows(6).any(|w| w == b"BusyBox")
@@ -370,8 +374,9 @@ pub fn loady_stage_on(
         if !alive {
             return Err(UbootError::BootFailed);
         }
+        transcript.extend_from_slice(&boot_out);
     }
-    Ok(())
+    Ok(transcript)
 }
 
 /// Port-opening convenience wrapper (the CLI entry): open the port,
@@ -388,7 +393,7 @@ pub fn flash_stage_loady(
     let mut io = open_break_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| UbootError::Io(e.to_string()))?;
     break_to_prompt(io.as_mut(), 90.0)?;
-    loady_stage_on(io.as_mut(), addr, name, image, prologue, boot)
+    loady_stage_on(io.as_mut(), addr, name, image, prologue, boot).map(|_| ())
 }
 
 #[cfg(test)]

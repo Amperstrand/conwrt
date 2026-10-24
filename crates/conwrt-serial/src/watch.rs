@@ -510,10 +510,13 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
             } => {
                 let image = std::fs::read(image_path)
                     .map_err(|e| format!("loady: cannot read {image_path}: {e}"))?;
-                loady_stage_on(s.io.as_mut(), addr, name, &image, pre, *boot)
+                let stage_out = loady_stage_on(s.io.as_mut(), addr, name, &image, pre, *boot)
                     .map_err(|e| format!("loady stage: {e}"))?;
-                // the stage leaves the stream mid-boot-output when
-                // boot=true; drain briefly into the transcript
+                // the stage transcript (incl. any boot output it
+                // consumed) belongs to the supervisor window — a later
+                // expect may need the prompt that printed inside the
+                // stage's private reads (Codex P1 #3)
+                s.window.extend_from_slice(&stage_out);
                 s.read_secs(3.0);
             }
             Action::TftpBoot {
@@ -631,8 +634,11 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 }
                 // arm the final gate: sha over the assembled file, then
                 // the caller's command only on match (self-firing)
+                // quote-split the verdict markers (Codex P1 #2): after
+                // `stty sane` the echo of this line would contain the
+                // literal CW-GATE-PASS and false-pass the gate
                 let arm = format!(
-                    "S=$(sha256sum {remote_path} | cut -d' ' -f1); test \"$S\" = \"{want}\" && echo CW-GATE-PASS || echo CW-GATE-FAIL"
+                    "S=$(sha256sum {remote_path} | cut -d' ' -f1); test \"$S\" = \"{want}\" && echo CW-GATE-P''''ASS' || echo CW-GATE-F''''AIL'"
                 );
                 s.send_raw(format!("rm -f {remote_path}\n").as_bytes());
                 s.read_secs(1.5);
@@ -656,9 +662,16 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     // a canonical line discipline. Serial binary
                     // transfers must run from an environment with stty
                     // (the initramfs does; see the doctrine doc).
+                    // quote-split markers (Codex P1 #1): on an echo-
+                    // enabled console the COMMAND ECHO contains the
+                    // literal marker text — "R""DY" in the command
+                    // echoes with quotes, prints clean; the literal
+                    // match can only ever hit real output.
+                    let ck_tail = ck.trim_start_matches("CK-").to_string();
                     let line = format!(
-                        "sh -c 'busybox stty raw -echo && echo RDY || echo NOSTTY; [ $? = 0 ] && {{ head -c {} >> {remote_path}; echo {ck}; }}'\n",
-                        chunk.len()
+                        "sh -c \"busybox stty raw -echo && echo 'R''DY' || echo 'NO''STTY'; head -c {} >> {remote_path}; echo 'C''{}\"\n",
+                        chunk.len(),
+                        ck_tail
                     );
                     s.send_raw(line.as_bytes());
                     // verified handshake: wait for RDY (or die on NOSTTY)
@@ -1212,6 +1225,31 @@ mod tests {
             })
             .expect("sysupgrade action present");
         assert!(sysupgrade_line.contains("/tmp/fw.bin"));
+    }
+
+    /// The receiver/verdict lines must NEVER contain the bare marker
+    /// literals — on an echo-enabled console the echoed command would
+    /// satisfy the match and false-pass the gate (Codex P1 #1/#2).
+    #[test]
+    fn marker_lines_defeat_command_echo() {
+        // chunk receiver line shape
+        let ck = "CK-0";
+        let ck_tail = ck.trim_start_matches("CK-");
+        let line = format!(
+            "sh -c \"busybox stty raw -echo && echo 'R''DY' || echo 'NO''STTY'; head -c 819200 >> /tmp/f; echo 'C''{}\"\n",
+            ck_tail
+        );
+        assert!(!line.contains("RDY"));
+        assert!(!line.contains("NOSTTY"));
+        assert!(!line.contains("CK-0"));
+        assert!(line.contains("'R''DY'")); // the quoted form IS there
+        // verdict arm shape
+        let want = "9".to_string() + &"1".repeat(63);
+        let arm = format!(
+            "S=$(sha256sum /tmp/f | cut -d' ' -f1); test \"$S\" = \"{want}\" && echo CW-GATE-P''''ASS' || echo CW-GATE-F''''AIL'"
+        );
+        assert!(!arm.contains("CW-GATE-PASS"));
+        assert!(!arm.contains("CW-GATE-FAIL"));
     }
 
     #[test]

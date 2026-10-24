@@ -36,3 +36,10 @@ console streams are a last resort.
   burst exceeds ~3 min and no heavy compute follows a saturated window.
 - The self-firing receiver doctrine (sha gate + sysupgrade armed ON BOX
   before the transfer) stays regardless of transport.
+
+## Recipe endpoints
+
+Shipped recipes use `192.168.1.100` as a PLACEHOLDER for the rescue
+host — substitute your host's address on the wire (or use `conwrt
+flash-rescue --server-ip`, which takes it as an argument). Bench-
+specific addresses never belong in the repo.

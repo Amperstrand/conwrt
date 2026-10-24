@@ -23,7 +23,7 @@
     },
     {
       "type": "send_line",
-      "line": "setenv serverip 192.168.1.10",
+      "line": "setenv serverip 192.168.1.100",
       "settle_secs": 1.5,
       "_comment": "bench-host alias on the trunk's native VLAN; tftpd serves /srv/tftp-gs1900 on :69"
     },
@@ -58,7 +58,7 @@
     },
     {
       "type": "send_line",
-      "line": "wget -O /tmp/base.bin http://192.168.1.10:8022/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "line": "wget -O /tmp/base.bin http://192.168.1.100:8022/owrt-25.12.6-squashfs-sysupgrade.bin",
       "settle_secs": 30,
       "_comment": "sysupgrade over the SAME L2 path TFTP proved; :8022 http.server on the bench host (8000 is docker-proxy)"
     },

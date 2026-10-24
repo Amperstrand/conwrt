@@ -13,11 +13,11 @@
     {
       "type": "tftp_boot",
       "addr": "0x84f00000",
-      "bind": "192.168.1.10:69",
+      "bind": "192.168.1.100:69",
       "serve_dir": "/srv/tftp-gs1900",
       "file": "owrt-25.12.6-initramfs-kernel.bin",
       "client_ip": "192.168.1.1",
-      "server_ip": "192.168.1.10",
+      "server_ip": "192.168.1.100",
       "timeout_secs": 120,
       "_comment": "initramfs carries busybox WITH stty — the serial-transfer-capable environment"
     },
