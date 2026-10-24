@@ -50,18 +50,24 @@ MARKER=/etc/cellular-modem.done
   at() { f=/tmp/atcmd.$$; cat $ATPORT > $f 2>/dev/null & c=$!; sleep 1;
          printf '%s\r' "$1" > $ATPORT; sleep 3; kill $c 2>/dev/null;
          grep -qE '^\+|^OK' $f 2>/dev/null; rc=$?; rm -f $f; return $rc; }
+  FAIL=0
   # ECM mode: auto-dial + DHCP inside the modem; persists in modem NVM.
-  at 'AT+QCFG="usbnet",1' || logger -t cellular-setup "usbnet set failed"
+  at 'AT+QCFG="usbnet",1' || { logger -t cellular-setup "usbnet set failed"; FAIL=1; }
   # SIM slot: dual-slot modems must point at the card with the profile.
-  [ -n "{SIMSLOT}" ] && at "AT+QUIMSLOT={SIMSLOT}"
+  if [ -n "{SIMSLOT}" ]; then at "AT+QUIMSLOT={SIMSLOT}" || { logger -t cellular-setup "slot set failed"; FAIL=1; }; fi
   # APN on cid 1 (matches the modem auto-dial in ECM mode).
-  at 'AT+CGDCONT=1,"IPV4V6","{APN}"' || logger -t cellular-setup "apn set failed"
+  at 'AT+CGDCONT=1,"IPV4V6","{APN}"' || { logger -t cellular-setup "apn set failed"; FAIL=1; }
   # Reset applies mode+slot; USB re-enumerates (~40s); registration <=135s.
-  at 'AT+CFUN=1,1'
+  at 'AT+CFUN=1,1' || { logger -t cellular-setup "cfun reset failed"; FAIL=1; }
   sleep 45
   ifup {WANIFACE} 2>/dev/null
-  touch "$MARKER"
-  logger -t cellular-setup "modem setup complete (at=$ATPORT)"
+  # Marker only on full success — a failed setup must retry on next boot.
+  if [ "$FAIL" = 0 ]; then
+    touch "$MARKER"
+    logger -t cellular-setup "modem setup complete (at=$ATPORT)"
+  else
+    logger -t cellular-setup "modem setup FAILED — will retry on next boot"
+  fi
 ) &
 exit 0
 """
@@ -104,8 +110,14 @@ def _build_ops(params: dict[str, Any]) -> list[Op]:
 
     ops: list[Op] = []
 
-    ops.append(Comment(text="--- cellular: WAN = modem ECM interface (dhcp from modem) ---"))
-    ops.append(UciSet(config="network", section="wan", values={
+    ops.append(Comment(text=f"--- cellular: WAN ({wan_iface}) = modem ECM interface (dhcp from modem) ---"))
+    # Section-scoped staging revert first (bench canon: never commit debris
+    # from aborted sessions; surgical scope avoids touching other presets'
+    # network staging in the same rendered script).
+    ops.append(ShellCommand(command=f"uci -q revert network.{wan_iface} || true"))
+    if setup_mgmt_ip:
+        ops.append(ShellCommand(command="uci -q revert network.lan || true"))
+    ops.append(UciSet(config="network", section=wan_iface, values={
         "proto": "dhcp",
         "device": usb_iface,
         "metric": "5",
@@ -116,6 +128,17 @@ def _build_ops(params: dict[str, Any]) -> list[Op]:
             "ipaddr": setup_mgmt_ip,
         }))
     ops.append(UciCommit(config="network"))
+    # Value readbacks (bench canon: gate on readback, never on set-shape).
+    ops.append(ShellCommand(
+        command=f'G1="$(uci -q get network.{wan_iface}.proto)"; G2="$(uci -q get network.{wan_iface}.device)"; '
+                f'[ "$G1" = dhcp ] && [ "$G2" = {usb_iface} ] '
+                f'|| {{ echo "cellular: readback FAILED (proto=$G1 device=$G2)"; exit 1; }}'
+    ))
+    if setup_mgmt_ip:
+        ops.append(ShellCommand(
+            command=f'G3="$(uci -q get network.lan.ipaddr)"; [ "$G3" = {setup_mgmt_ip} ] '
+                    f'|| {{ echo "cellular: lan readback FAILED ($G3)"; exit 1; }}'
+        ))
 
     ops.append(BlankLine())
     ops.append(Comment(text="--- cellular: modem one-shot (ECM + slot + APN; detached, idempotent) ---"))
