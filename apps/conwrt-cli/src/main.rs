@@ -80,9 +80,10 @@ enum Command {
         /// Baud rate (GS1900 console: 115200).
         #[arg(long, default_value_t = 115200)]
         baud: u32,
-        /// Boot marker to wait for after the reboot (default: the OpenWrt
-        /// kernel handoff line).
-        #[arg(long, default_value = "Starting kernel")]
+        /// Boot marker(s) to wait for after the reboot; comma-separated
+        /// matches ANY (default: the standard boot-start set — kernel
+        /// handoff, bootloader banner, procd init).
+        #[arg(long, default_value = "Starting kernel,U-Boot,procd: - init,init: - preinit")]
         marker: String,
         /// Overall timeout in seconds.
         #[arg(long, default_value_t = 240)]
@@ -759,7 +760,7 @@ fn main() -> ExitCode {
             timeout,
         } => {
             use conwrt_serial::io::open_break_port;
-            use conwrt_serial::recovery::reboot_wedged;
+            use conwrt_serial::recovery::reboot_wedged_any;
             use std::time::Duration;
 
             let mut io = match open_break_port(&port, baud, Duration::from_secs(1)) {
@@ -770,9 +771,14 @@ fn main() -> ExitCode {
                 }
             };
             println!("BREAK + sysrq-b on {port} ...");
-            match reboot_wedged(
+            let markers: Vec<&[u8]> = marker
+                .split(',')
+                .map(|m| m.trim().as_bytes())
+                .filter(|m| !m.is_empty())
+                .collect();
+            match reboot_wedged_any(
                 io.as_mut(),
-                marker.as_bytes(),
+                &markers,
                 Duration::from_secs(timeout as u64),
             ) {
                 Ok(out) => {
