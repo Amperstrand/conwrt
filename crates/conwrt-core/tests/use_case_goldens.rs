@@ -45,6 +45,14 @@
 //! print(r["guest-wifi"].build_configure({}))
 //! print(r["openclash"].build_configure({}))
 //! print(r["ssl"].build_configure({}))
+//! import use_cases.vpn_providers.nordvpn as _nv
+//! _nv._fetch_credentials = lambda b: {"nordlynx_private_key": "STUBPRIVKEYbase64filledfortestonly0000="}
+//! _nv._resolve_endpoint = lambda v, t, tech="wireguard_udp": ("de500.nordvpn.com", "51820", "STUBPUBKEYbase64filledfortestonly0000=")
+//! _nv._route_target = lambda e, t: "193.29.107.10"
+//! print(r["vpn-nordvpn"].build_configure({
+//!     "access_token": "stub-token", "server": "de500.nordvpn.com",
+//!     "upstream_gateway": "192.168.8.1", "upstream_iface": "wwan",
+//! }))
 //! print(r["vpn-pia-openvpn"].build_configure({
 //!     "username": "p1234567",
 //!     "password": "testpass",
@@ -64,8 +72,8 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
     NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
-    VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile, plan_profile,
-    render_shell,
+    VpnNordvpnProfile, VpnPiaOpenvpnProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -313,6 +321,26 @@ fn ssl_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::Ssl(SslProfile::default()),
         include_str!("goldens/ssl.sh"),
+    );
+}
+
+#[test]
+fn vpn_nordvpn_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnNordvpn(VpnNordvpnProfile {
+            private_key: "STUBPRIVKEYbase64filledfortestonly0000=".into(),
+            server_public_key: "STUBPUBKEYbase64filledfortestonly0000=".into(),
+            endpoint_host: "de500.nordvpn.com".into(),
+            route_target: "193.29.107.10".into(),
+            endpoint_port: "51820".into(),
+            address: "10.5.0.2/32".into(),
+            mtu: "1420".into(),
+            keepalive: "25".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            upstream_iface: "wwan".into(),
+            ..VpnNordvpnProfile::default()
+        }),
+        include_str!("goldens/vpn-nordvpn.sh"),
     );
 }
 

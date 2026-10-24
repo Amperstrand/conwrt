@@ -22,7 +22,7 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TravelmateProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
+    SslProfile, TravelmateProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, WireguardClientProfile,
     WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
@@ -436,6 +436,8 @@ enum ProfileChoice {
     /// 1.x spelling: hyphenated multi-word profile name.
     #[value(name = "vpn-pia-openvpn")]
     VpnPiaOpenvpn,
+    /// 1.x preset name (one word, kebab by default).
+    VpnNordvpn,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -605,6 +607,33 @@ struct ProfileArgs {
     /// vpn-pia-openvpn: opt OUT of SSH/LuCI access from the VPN zone.
     #[arg(long)]
     pia_ovpn_no_management: bool,
+    /// vpn-nordvpn: resolved NordLynx private key (required).
+    #[arg(long)]
+    nord_private_key: Option<String>,
+    /// vpn-nordvpn: server WireGuard public key (required).
+    #[arg(long)]
+    nord_server_public_key: Option<String>,
+    /// vpn-nordvpn: endpoint IP or hostname (required).
+    #[arg(long)]
+    nord_endpoint_host: Option<String>,
+    /// vpn-nordvpn: resolved route-target IP for the endpoint pin (required).
+    #[arg(long)]
+    nord_route_target: Option<String>,
+    /// vpn-nordvpn: endpoint UDP port (default 51820).
+    #[arg(long)]
+    nord_endpoint_port: Option<String>,
+    /// vpn-nordvpn: upstream gateway IP (empty = runtime discovery).
+    #[arg(long)]
+    nord_gateway: Option<String>,
+    /// vpn-nordvpn: upstream interface (default wwan).
+    #[arg(long)]
+    nord_iface: Option<String>,
+    /// vpn-nordvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    nord_no_kill_switch: bool,
+    /// vpn-nordvpn: opt OUT of SSH/LuCI access from the VPN zone.
+    #[arg(long)]
+    nord_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -1657,6 +1686,38 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             enable_uhttpd_https: !args.ssl_no_uhttpd_https,
             open_port_443_nds: !args.ssl_no_443_nds,
         })),
+        ProfileChoice::VpnNordvpn => {
+            let (private_key, server_public_key, endpoint_host, route_target) =
+                match (
+                    args.nord_private_key.clone(),
+                    args.nord_server_public_key.clone(),
+                    args.nord_endpoint_host.clone(),
+                    args.nord_route_target.clone(),
+                ) {
+                    (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                    _ => return Err(
+                        "--nord-private-key, --nord-server-public-key, --nord-endpoint-host and \
+                         --nord-route-target are required for vpn-nordvpn (resolve them on the \
+                         host with 1.x `python3 scripts/nordvpn.py config --token TOKEN`)"
+                            .into(),
+                    ),
+                };
+            Ok(Profile::VpnNordvpn(VpnNordvpnProfile {
+                private_key,
+                server_public_key,
+                endpoint_host,
+                route_target,
+                endpoint_port: args
+                    .nord_endpoint_port
+                    .clone()
+                    .unwrap_or_else(|| "51820".into()),
+                upstream_gateway: args.nord_gateway.clone().unwrap_or_default(),
+                upstream_iface: args.nord_iface.clone().unwrap_or_else(|| "wwan".into()),
+                kill_switch: !args.nord_no_kill_switch,
+                allow_management: !args.nord_no_management,
+                ..VpnNordvpnProfile::default()
+            }))
+        }
         ProfileChoice::VpnPiaOpenvpn => {
             let (username, password) = match (
                 args.pia_ovpn_username.clone(),
@@ -2729,6 +2790,15 @@ mod tests {
             ssl_provider: None,
             ssl_no_uhttpd_https: false,
             ssl_no_443_nds: false,
+            nord_private_key: None,
+            nord_server_public_key: None,
+            nord_endpoint_host: None,
+            nord_route_target: None,
+            nord_endpoint_port: None,
+            nord_gateway: None,
+            nord_iface: None,
+            nord_no_kill_switch: false,
+            nord_no_management: false,
             pia_ovpn_username: None,
             pia_ovpn_password: None,
             pia_ovpn_port: None,
