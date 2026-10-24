@@ -67,8 +67,19 @@ def _install_repo_package_ops(step: Step, target: dict[str, Any]) -> list[Op]:
     return [
         Comment(f"install {pkg} from {pm} repo"),
         ShellCommand(command=f"{update} >/dev/null 2>&1 || true"),
-        ShellCommand(command=install),
-        ShellCommand(command=f"[ -f /etc/init.d/{pkg} ] && /etc/init.d/{pkg} enable && /etc/init.d/{pkg} start || true"),
+        # #466: a swallowed install rc let the recipe continue through
+        # configuration + LAN move with the package absent — fail here.
+        ShellCommand(command=(
+            f"{install} || {{ echo 'ERROR: {pkg} install failed — aborting recipe' >&2 ; exit 1 ; }}"
+        )),
+        # enable/start ONLY when the package ships an init script (library
+        # packages legitimately have none); a present init that fails to
+        # start must abort — the old trailing `|| true` erased both.
+        ShellCommand(command=f"[ -f /etc/init.d/{pkg} ] && /etc/init.d/{pkg} enable || true"),
+        ShellCommand(command=(
+            f"[ ! -f /etc/init.d/{pkg} ] || /etc/init.d/{pkg} start || "
+            f"{{ echo 'ERROR: {pkg} failed to start — aborting recipe' >&2 ; exit 1 ; }}"
+        )),
     ]
 
 
@@ -95,8 +106,12 @@ def _install_package(step: Step, target: dict[str, Any]) -> tuple[list[str], lis
     import re as _re
     if _re.fullmatch(r"[0-9a-f]{64}", filename.rsplit(".", 1)[0]):
         expected = filename.rsplit(".", 1)[0]
+        # #466: stock macOS has no GNU sha256sum (documented supported
+        # host) — select at RUN time so the recipe runs wherever rendered.
         host.append(
-            f"echo {sh_quote(expected + '  ' + filename)} | sha256sum -c - || "
+            f"if command -v sha256sum >/dev/null 2>&1 ; then "
+            f"echo {sh_quote(expected + '  ' + filename)} | sha256sum -c - ; else "
+            f"echo {sh_quote(expected + '  ' + filename)} | shasum -a 256 -c - ; fi || "
             f"{{ echo 'ERROR: {filename} failed sha256 verification — refusing to flash' >&2 ; exit 1 ; }}")
     host.append(f"scp -O {sh_quote(filename)} root@$IP:{remote}")
     native_ext = ".apk" if pm == "apk" else ".ipk"
