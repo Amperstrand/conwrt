@@ -15,7 +15,7 @@
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
-    "wifi": "1x 2.4GHz 802.11n HT20 (single mt76/mac80211 radio, radio0); NO 5GHz radio",
+    "wifi": "none (5G/NR modem only, no WiFi radio)",
     "modem": {
       "model": "Quectel RG502Q-EA",
       "usb_vendor_id": "2c7c",
@@ -33,7 +33,8 @@
   },
   "mac_oui": [
     "4C:C5:3E",
-    "E8:9F:80"
+    "E8:9F:80",
+    "78:C5:7D"
   ],
   "stock_default_ip": "192.168.1.1",
   "flash_methods": {

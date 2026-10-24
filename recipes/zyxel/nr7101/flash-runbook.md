@@ -91,19 +91,28 @@ BOOT STAGE: unknown → zloader      ← Z-Loader banner detected
 [RX] Press any key to enter debug mode
 ```
 
-### 7. Interrupt Bootloader (send Escape)
+### 7. Bootloader auto-listens (serial NOT required)
 
-When "Press any key" appears, immediately send Escape:
+> **Correction (2026-10-22)**: step 7 below originally required sending Escape
+> over serial. Serial-verified 2026-06-27 (AGENTS.md): Z-Loader enters
+> "Multiboot Listening..." on EVERY boot — the ESC dance is only needed to get
+> a debug SHELL, not to arm the multicast receiver. Start the sender BEFORE
+> power-on (or a few seconds after, from chunk 0) and the bootloader picks the
+> stream up in its ~7 s listen window.
 
-```bash
-printf 'ESCAPE' > /tmp/conwrt-serial-cmd
+The serial monitor (if attached) should show:
+
 ```
-
-Z-Loader should enter multicast listen mode:
-
-```
+BOOT STAGE: unknown → zloader      ← Z-Loader banner detected
+[RX] Z-LOADER V1.30
 [RX] Multiboot Listening...
 ```
+
+For the hardened bench procedure (delivery/power telemetry gates, MAC-gated
+boot detection, the 192.168.1.1 self-answer trap, measured timings) see
+`conwrt-bench/docs/zycast-stock-switch-audit-2026-10-22.md`. The proven
+topology is the sender running ON an OpenWrt GS1900-8HP with the DUT on a bay
+VLAN (the `flash` subcommand automates cycle+send+detect).
 
 ### 8. Wait for Flash (~3 minutes)
 
