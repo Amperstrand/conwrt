@@ -681,6 +681,7 @@ pub struct RescueJournal {
 }
 
 impl RescueJournal {
+    /// Journal path for a given transcript (`<transcript>.rescue`).
     pub fn for_transcript(transcript: &std::path::Path) -> RescueJournal {
         let mut p = transcript.as_os_str().to_os_string();
         p.push(".rescue");
@@ -691,9 +692,10 @@ impl RescueJournal {
 
     /// Warn-level check at arm time: an unfinished rescue means the
     /// previous run died mid-ladder (power, crash) — surface it.
+    /// Last non-terminal phase, if the journal ends unfinished.
     pub fn unfinished_phase(&self) -> Option<String> {
         let text = std::fs::read_to_string(&self.path).ok()?;
-        let last = text.lines().filter(|l| !l.trim().is_empty()).last()?;
+        let last = text.lines().filter(|l| !l.trim().is_empty()).next_back()?;
         let v: serde_json::Value = serde_json::from_str(last).ok()?;
         let phase = v.get("phase")?.as_str()?.to_string();
         if phase == "rescue-complete" || phase == "rescue-refused" {
@@ -703,6 +705,7 @@ impl RescueJournal {
         }
     }
 
+    /// Append a phase transition line.
     pub fn record(&self, phase: &str, detail: &str) {
         use std::io::Write;
         let line = format!(
@@ -1388,7 +1391,7 @@ pub fn run_watch_with_profile(
         io
     };
     // P0 pre-flight: refuse bad recipes at ARM time, not fire time
-    if let Err(errs) = recipe.preflight(profile_hint.as_deref()) {
+    if let Err(errs) = recipe.preflight(profile_hint) {
         for e in &errs {
             eprintln!("conwrt: preflight: {e}");
         }
