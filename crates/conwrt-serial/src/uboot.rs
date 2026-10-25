@@ -16,6 +16,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::io::ConsoleIo;
 use crate::io::open_break_port;
 use crate::recovery::{BreakIo, SysrqKey, send_sysrq};
 
@@ -70,7 +71,7 @@ impl std::fmt::Display for UbootError {
 }
 impl std::error::Error for UbootError {}
 
-fn read_for(io: &mut dyn BreakIo, secs: f64, sink: &mut Vec<u8>) -> usize {
+fn read_for(io: &mut dyn ConsoleIo, secs: f64, sink: &mut Vec<u8>) -> usize {
     let deadline = Instant::now() + Duration::from_secs_f64(secs.max(0.05));
     let mut n = 0;
     let mut buf = [0u8; 4096];
@@ -81,6 +82,12 @@ fn read_for(io: &mut dyn BreakIo, secs: f64, sink: &mut Vec<u8>) -> usize {
                 sink.extend_from_slice(&buf[..k]);
                 n += k;
             }
+            Err(e) if is_idle(&e) => {}
+            // idle timeouts are "no data yet", NOT transport death —
+            // breaking on them truncated the post-bootm silence window
+            // and false-negatived the boot-liveness gate (2026-10-24:
+            // "bootm produced no kernel output" while the box sat at a
+            // live shell)
             Err(_) => break,
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -88,7 +95,14 @@ fn read_for(io: &mut dyn BreakIo, secs: f64, sink: &mut Vec<u8>) -> usize {
     n
 }
 
-fn write_line(io: &mut dyn BreakIo, line: &str) -> Result<(), UbootError> {
+fn is_idle(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+fn write_line(io: &mut dyn ConsoleIo, line: &str) -> Result<(), UbootError> {
     io.write_all_bytes(format!("{line}\n").as_bytes())
         .map_err(|e| UbootError::Io(e.to_string()))
 }
@@ -96,25 +110,31 @@ fn write_line(io: &mut dyn BreakIo, line: &str) -> Result<(), UbootError> {
 /// BREAK+sysrq-b reboot, then press SPACE through the bootdelay (and the
 /// slow warm-reboot DRAM phase) until the `RTL838x#` prompt appears.
 pub fn break_to_prompt(io: &mut dyn BreakIo, ladder_secs: f64) -> Result<(), UbootError> {
-    // plain probe first (box may already sit at the prompt)
-    let _ = io.write_all_bytes(b"\r");
-    let mut sink = Vec::new();
-    read_for(io, 2.0, &mut sink);
-    if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
-        return Ok(());
+    // sysrq needs the BREAK-capable view; the probing helpers only need
+    // ConsoleIo — re-coerce per phase so the borrows never overlap.
+    {
+        let cio: &mut dyn ConsoleIo = io as &mut dyn ConsoleIo;
+        // plain probe first (box may already sit at the prompt)
+        let _ = cio.write_all_bytes(b"\r");
+        let mut sink = Vec::new();
+        read_for(cio, 2.0, &mut sink);
+        if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
+            return Ok(());
+        }
     }
     send_sysrq(io, SysrqKey::Reboot).map_err(|e| UbootError::Io(format!("sysrq: {e}")))?;
     let deadline = Instant::now() + Duration::from_secs_f64(ladder_secs.max(10.0));
     while Instant::now() < deadline {
-        let _ = io.write_all_bytes(b"  ");
+        let cio: &mut dyn ConsoleIo = io as &mut dyn ConsoleIo;
+        let _ = cio.write_all_bytes(b"  ");
         let mut sink = Vec::new();
-        read_for(io, 0.8, &mut sink);
+        read_for(cio, 0.8, &mut sink);
         if sink.windows(UBOOT_PROMPT.len()).any(|w| w == UBOOT_PROMPT) {
             // settle, then draw a clean prompt
             std::thread::sleep(Duration::from_millis(400));
-            let _ = io.write_all_bytes(b"\r");
+            let _ = cio.write_all_bytes(b"\r");
             let mut t = Vec::new();
-            read_for(io, 1.5, &mut t);
+            read_for(cio, 1.5, &mut t);
             return Ok(());
         }
     }
@@ -168,19 +188,22 @@ pub fn build_frame(blkno: u8, payload: &[u8], use_1k: bool) -> Vec<u8> {
     frame
 }
 
-fn read_byte(io: &mut dyn BreakIo, timeout: f64) -> Option<u8> {
+fn read_byte(io: &mut dyn ConsoleIo, timeout: f64) -> Option<u8> {
     let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.1));
     let mut b = [0u8; 1];
     while Instant::now() < deadline {
-        if let Ok(1) = io.read(&mut b) {
-            return Some(b[0]);
+        match io.read(&mut b) {
+            Ok(1) => return Some(b[0]),
+            Err(e) if is_idle(&e) => {}
+            Err(_) => return None,
+            _ => {}
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     None
 }
 
-fn send_frame(io: &mut dyn BreakIo, frame: &[u8], tries: u8) -> Result<(), UbootError> {
+fn send_frame(io: &mut dyn ConsoleIo, frame: &[u8], tries: u8) -> Result<(), UbootError> {
     let mut attempt = 0;
     while attempt < tries {
         io.write_all_bytes(frame)
@@ -200,7 +223,7 @@ fn send_frame(io: &mut dyn BreakIo, frame: &[u8], tries: u8) -> Result<(), Uboot
 /// Drive `loady <addr>` and YMODEM-send `image` named `name`.
 /// Returns after the loader's end-of-batch handshake.
 pub fn loady_ymodem(
-    io: &mut dyn BreakIo,
+    io: &mut dyn ConsoleIo,
     addr: &str,
     name: &str,
     image: &[u8],
@@ -258,13 +281,28 @@ pub fn loady_ymodem(
         progress(sent, image.len() as u64);
     }
 
-    // EOT dance, then the terminating null block-0
+    // EOT dance (audit R7): the receiver ACKs EOT (some loaders NAK
+    // first, then ACK). Track whether the ACK ever arrived — silently
+    // proceeding to the null batch after 10 unacknowledged EOTs hides
+    // a dead receiver from the caller.
+    let mut eot_acked = false;
     for _ in 0..10 {
         io.write_all_bytes(&[EOT])
             .map_err(|e| UbootError::Io(e.to_string()))?;
-        if let Some(ACK) = read_byte(io, 10.0) {
-            break;
+        match read_byte(io, 10.0) {
+            Some(ACK) => {
+                eot_acked = true;
+                break;
+            }
+            Some(0x15) => continue, // NAK: retry EOT
+            Some(other) => eprintln!("ymodem eot handshake byte {other:#x}"),
+            None => continue,
         }
+    }
+    if !eot_acked {
+        return Err(UbootError::TransferFailed(
+            "end-of-transfer never ACKed (receiver dead or wedged)".into(),
+        ));
     }
     let _ = read_byte(io, 3.0);
     send_frame(io, &build_frame(0, b"", false), 5)
@@ -291,6 +329,73 @@ pub fn parse_total_size(loader_output: &[u8]) -> Option<u64> {
 /// -> size gate -> iminfo gate -> (optionally) bootm <addr>.
 ///
 /// RAM-only by construction; see the module docs for the safety model.
+pub fn loady_stage_on(
+    io: &mut dyn ConsoleIo,
+    addr: &str,
+    name: &str,
+    image: &[u8],
+    prologue: &[String],
+    boot: bool,
+) -> Result<Vec<u8>, UbootError> {
+    // Returns the full stage transcript (Codex P1 #3): the boot output
+    // consumed while waiting for liveness belongs to the caller — a
+    // supervisor's later `expect` needs the prompt that printed during
+    // this window.
+    let mut early = Vec::new();
+    for cmd in prologue {
+        write_line(io, cmd)?;
+        read_for(io, 2.5, &mut early);
+    }
+
+    let mut transcript = early;
+    loady_ymodem(io, addr, name, image, |s, t| {
+        if s % (128 * 1024) == 0 || s == t {
+            eprintln!("ymodem {s}/{t}");
+        }
+    })?;
+    read_for(io, 4.0, &mut transcript);
+
+    // Settle + fresh line before ANY post-transfer command (bench lesson
+    // 2026-10-23, twice): the YMODEM end-batch padding echoes back into
+    // the next command line ("Unknown command '\x1a..iminfo'", and a
+    // bare bootm at the stock address). Drain, then a lone newline to
+    // draw a clean prompt, before iminfo/bootm.
+    std::thread::sleep(Duration::from_millis(500));
+    io.write_all_bytes(b"\n")
+        .map_err(|e| UbootError::Io(e.to_string()))?;
+    read_for(io, 1.5, &mut transcript);
+
+    let want = image.len() as u64;
+    match parse_total_size(&transcript) {
+        Some(got) if got == want => {}
+        other => return Err(UbootError::SizeGate { got: other, want }),
+    }
+
+    write_line(io, &format!("iminfo {addr}"))?;
+    let mut info = Vec::new();
+    read_for(io, 4.0, &mut info);
+    if !info.windows(2).any(|w| w == b"OK") {
+        return Err(UbootError::IminfoBad);
+    }
+
+    let mut boot_out = Vec::new();
+    if boot {
+        // A bare `bootm` uses the stock boot address — always pass ours.
+        write_line(io, &format!("bootm {addr}"))?;
+        read_for(io, 150.0, &mut boot_out);
+        let alive = boot_out.windows(6).any(|w| w == b"OpenWrt")
+            || boot_out.windows(6).any(|w| w == b"BusyBox")
+            || boot_out.windows(5).any(|w| w == b"login");
+        if !alive {
+            return Err(UbootError::BootFailed);
+        }
+        transcript.extend_from_slice(&boot_out);
+    }
+    Ok(transcript)
+}
+
+/// Port-opening convenience wrapper (the CLI entry): open the port,
+/// BREAK-ladder to the prompt, run the gated loady stage on it.
 pub fn flash_stage_loady(
     port_spec: &str,
     baud: u32,
@@ -303,57 +408,7 @@ pub fn flash_stage_loady(
     let mut io = open_break_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| UbootError::Io(e.to_string()))?;
     break_to_prompt(io.as_mut(), 90.0)?;
-
-    let mut early = Vec::new();
-    for cmd in prologue {
-        write_line(io.as_mut(), cmd)?;
-        read_for(io.as_mut(), 2.5, &mut early);
-    }
-
-    let mut transcript = early;
-    loady_ymodem(io.as_mut(), addr, name, image, |s, t| {
-        if s % (128 * 1024) == 0 || s == t {
-            eprintln!("ymodem {s}/{t}");
-        }
-    })?;
-    read_for(io.as_mut(), 4.0, &mut transcript);
-
-    // Settle + fresh line before ANY post-transfer command (bench lesson
-    // 2026-10-23, twice): the YMODEM end-batch padding echoes back into
-    // the next command line ("Unknown command '\x1a..iminfo'", and a
-    // bare bootm at the stock address). Drain, then a lone newline to
-    // draw a clean prompt, before iminfo/bootm.
-    std::thread::sleep(Duration::from_millis(500));
-    io.write_all_bytes(b"\n")
-        .map_err(|e| UbootError::Io(e.to_string()))?;
-    read_for(io.as_mut(), 1.5, &mut transcript);
-
-    let want = image.len() as u64;
-    match parse_total_size(&transcript) {
-        Some(got) if got == want => {}
-        other => return Err(UbootError::SizeGate { got: other, want }),
-    }
-
-    write_line(io.as_mut(), &format!("iminfo {addr}"))?;
-    let mut info = Vec::new();
-    read_for(io.as_mut(), 4.0, &mut info);
-    if !info.windows(2).any(|w| w == b"OK") {
-        return Err(UbootError::IminfoBad);
-    }
-
-    if boot {
-        // A bare `bootm` uses the stock boot address — always pass ours.
-        write_line(io.as_mut(), &format!("bootm {addr}"))?;
-        let mut boot_out = Vec::new();
-        read_for(io.as_mut(), 150.0, &mut boot_out);
-        let alive = boot_out.windows(6).any(|w| w == b"OpenWrt")
-            || boot_out.windows(6).any(|w| w == b"BusyBox")
-            || boot_out.windows(5).any(|w| w == b"login");
-        if !alive {
-            return Err(UbootError::BootFailed);
-        }
-    }
-    Ok(())
+    loady_stage_on(io.as_mut(), addr, name, image, prologue, boot).map(|_| ())
 }
 
 #[cfg(test)]

@@ -1,0 +1,1 @@
+{"schema_version":1,"profile":"cycle/a","family":["test"],"inherits":["cycle/b"],"console":{"baud":115200,"uboot_prompt":"#","bootdelay_interrupt":"spaces","boot_signatures":["X"],"shell_prompt":"#"},"uboot":{"load_addr":"0","network_init":"","boot_cmd":"","verify_cmd":""},"flash":{"method":"","sysupgrade_cmd":""}}

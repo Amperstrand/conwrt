@@ -12,6 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "pytest-timeout>=2.3",
   "ruff>=0.6",
   "pyyaml>=6.0",
   "pyright>=1.1",

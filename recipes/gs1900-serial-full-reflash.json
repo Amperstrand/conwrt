@@ -1,0 +1,23 @@
+{
+  "model": "gs1900 FULL pure-serial reflash PROOF: chunked stream + on-box sha gate + sysupgrade -n, zero ethernet",
+  "boot_trigger": ["root@OpenWrt"],
+  "probe_line": "",
+  "probe_interval_secs": 5,
+  "actions": [
+    {
+      "type": "stream_chunks",
+      "file": "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "sha256": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "remote_path": "/tmp/serial-flash.bin",
+      "chunk_bytes": 819200,
+      "pause_ms": 5000,
+      "pace_bytes": 512,
+      "pace_ms": 80,
+      "final_command": "sysupgrade -n /tmp/serial-flash.bin",
+      "verdict_timeout_secs": 600,
+      "_comment": "test 3: if the gate passes, the box re-flashes itself over serial alone (the ultimate no-ethernet fallback)"
+    }
+  ],
+  "cooldown_secs": 3600,
+  "max_fires": 1
+}

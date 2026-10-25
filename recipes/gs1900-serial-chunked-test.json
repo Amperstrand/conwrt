@@ -1,0 +1,23 @@
+{
+  "model": "gs1900 pure-serial chunked transfer PROOF (verify-only, no flash): assemble 6.55MB over the console in bounded chunks, on-box sha gate must match",
+  "boot_trigger": ["root@OpenWrt"],
+  "probe_line": "",
+  "probe_interval_secs": 5,
+  "actions": [
+    {
+      "type": "stream_chunks",
+      "file": "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "sha256": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "remote_path": "/tmp/chunk-test.bin",
+      "chunk_bytes": 819200,
+      "pause_ms": 5000,
+      "pace_bytes": 512,
+      "pace_ms": 80,
+      "final_command": "",
+      "verdict_timeout_secs": 600,
+      "_comment": "8 chunks of 800KB = ~3.5 min bursts + 5s pauses; per-chunk CK markers; final on-box sha over the assembled file. If CW-GATE-PASS: serial transport fixed."
+    }
+  ],
+  "cooldown_secs": 1800,
+  "max_fires": 1
+}
