@@ -83,6 +83,160 @@ fn is_safe_name(name: &str) -> bool {
 /// Serve `root` on `bind` for a single client session (one RRQ), then
 /// return. `first_pkt`/`peer` come from the caller's recv loop; this is
 /// the unit-testable transfer engine.
+/// One step of a pure TFTP transfer state machine (sans-io, no_std-
+/// portable core — the audit's R6 / the STM32 precondition): feed the
+/// request packet in, then ACK packets and timeouts; send what it says.
+#[derive(Debug, PartialEq)]
+pub enum SessionStep {
+    /// Bytes to transmit to the peer now.
+    Send(Vec<u8>),
+    /// Transfer finished; total data bytes served.
+    Done(u64),
+    /// Fatal for this session, with reason.
+    Fail(String),
+}
+
+/// Pure read-only TFTP session over caller-owned file bytes.
+pub struct TftpSession {
+    blksize: u16,
+    negotiated: bool,
+    /// block number currently in flight (awaiting its ACK)
+    in_flight: u16,
+    /// bytes already ACKed
+    sent: u64,
+    /// the packet to (re)send on timeout
+    last_packet: Vec<u8>,
+    /// terminator pending: exact-multiple files need a final empty block
+    terminator_pending: bool,
+    finished: bool,
+}
+
+impl TftpSession {
+    /// Start a session from an RRQ/WRQ packet. Returns the first step
+    /// (OACK when options were requested, first DATA otherwise, error
+    /// replies included as Send+Fail).
+    pub fn start(pkt: &[u8], data: &[u8]) -> (SessionStep, Option<Self>) {
+        let parsed = match parse_request(pkt) {
+            Ok(p) => p,
+            Err(e) => return (SessionStep::Fail(e), None),
+        };
+        let (opcode, file, mode, opts) = parsed;
+        if opcode == 2 {
+            return (
+                SessionStep::Send(err_packet(ERROR_ILLEGAL_OP, "read-only server")),
+                None,
+            );
+        }
+        if mode != "octet" && mode != "netascii" {
+            return (SessionStep::Send(err_packet(0, "bad mode")), None);
+        }
+        if !is_safe_name(&file) {
+            return (SessionStep::Send(err_packet(0, "bad filename")), None);
+        }
+        let _ = data; // name validation only; the shell maps name->bytes
+        let mut blksize: u16 = 512;
+        for (n, v) in &opts {
+            if n == "blksize" {
+                match v.parse::<u16>() {
+                    Ok(b) => blksize = b.clamp(8, 65464),
+                    Err(_) => return (SessionStep::Send(err_packet(0, "bad blksize")), None),
+                }
+            }
+        }
+        if !opts.is_empty() {
+            // wait for the block-0 OACK before any data
+            let sess = TftpSession {
+                blksize,
+                negotiated: false,
+                in_flight: 0,
+                sent: 0,
+                last_packet: oack_blksize(blksize),
+                terminator_pending: false,
+                finished: false,
+            };
+            return (SessionStep::Send(oack_blksize(blksize)), Some(sess));
+        }
+        // no options: straight to block 1
+        let mut sess = TftpSession {
+            blksize,
+            negotiated: true,
+            in_flight: 0,
+            sent: 0,
+            last_packet: Vec::new(),
+            terminator_pending: false,
+            finished: false,
+        };
+        let step = sess.advance(data);
+        (step, Some(sess))
+    }
+
+    fn next_block_packet(&self, data: &[u8]) -> Vec<u8> {
+        let end = ((self.sent as usize) + self.blksize as usize).min(data.len());
+        let payload = &data[self.sent as usize..end];
+        data_packet(self.in_flight.wrapping_add(1), payload)
+    }
+
+    fn advance(&mut self, data: &[u8]) -> SessionStep {
+        if self.finished {
+            return SessionStep::Done(self.sent);
+        }
+        let end = ((self.sent as usize) + self.blksize as usize).min(data.len());
+        let payload_len = end - self.sent as usize;
+        let block = self.in_flight.wrapping_add(1);
+        let pkt = data_packet(block, &data[self.sent as usize..end]);
+        self.in_flight = block;
+        self.last_packet = pkt.clone();
+        // exact multiple: after the last full block we still owe a terminator
+        self.terminator_pending = payload_len == self.blksize as usize && end == data.len();
+        SessionStep::Send(pkt)
+    }
+
+    /// Feed a received packet (expected: ACKs).
+    pub fn on_packet(&mut self, pkt: &[u8], data: &[u8]) -> SessionStep {
+        if self.finished {
+            return SessionStep::Done(self.sent);
+        }
+        if pkt.len() >= 4 && pkt[0] == 0 && pkt[1] == 4 {
+            let n = u16::from_be_bytes([pkt[2], pkt[3]]);
+            if !self.negotiated && n == 0 {
+                // OACK ACKed — data may flow
+                self.negotiated = true;
+                return self.advance(data);
+            }
+            if n == self.in_flight && self.negotiated {
+                self.sent += self.last_packet.len().saturating_sub(4) as u64;
+                if self.terminator_pending {
+                    // send the zero-length terminator
+                    let block = self.in_flight.wrapping_add(1);
+                    let pkt = data_packet(block, b"");
+                    self.in_flight = block;
+                    self.last_packet = pkt.clone();
+                    self.terminator_pending = false;
+                    return SessionStep::Send(pkt);
+                }
+                let end = self.sent as usize;
+                if end >= data.len() {
+                    self.finished = true;
+                    return SessionStep::Done(self.sent);
+                }
+                return self.advance(data);
+            }
+        }
+        SessionStep::Fail(format!(
+            "unexpected packet in state (block {})",
+            self.in_flight
+        ))
+    }
+
+    /// Caller timer expired: retransmit the in-flight packet.
+    pub fn on_timeout(&mut self) -> SessionStep {
+        if self.finished {
+            return SessionStep::Done(self.sent);
+        }
+        SessionStep::Send(self.last_packet.clone())
+    }
+}
+
 pub fn serve_one(
     sock: &UdpSocket,
     root: &Path,
@@ -256,6 +410,80 @@ mod tests {
         assert_eq!(d, vec![0, 3, 0, 7, b'x', b'y']);
         let e = err_packet(ERROR_ILLEGAL_OP, "no");
         assert_eq!(&e[..4], &[0, 5, 0, 4]);
+    }
+
+    fn ack(n: u16) -> Vec<u8> {
+        vec![0, 4, (n >> 8) as u8, n as u8]
+    }
+
+    /// Golden packet sequences against the PURE session (no sockets):
+    /// (1) options path: OACK -> ACK0 -> data blocks -> Done;
+    /// (2) exact-multiple file emits the zero-length terminator;
+    /// (3) timeout re-sends the in-flight packet;
+    /// (4) WRQ refused.
+    #[test]
+    fn session_golden_sequences() {
+        let rrq_opts = {
+            let mut p = vec![0, 1];
+            p.extend_from_slice(b"f.bin\0octet\0blksize\01000\0");
+            p
+        };
+        let data: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect(); // 2.5 blocks @1000
+        let (step, sess) = TftpSession::start(&rrq_opts, &data);
+        let _ = &step;
+        let mut sess = sess.expect("session starts");
+        assert!(matches!(step, SessionStep::Send(_)));
+        // OACK ack
+        match sess.on_packet(&ack(0), &data) {
+            SessionStep::Send(p) => {
+                assert_eq!(&p[..4], &[0, 3, 0, 1]);
+                assert_eq!(p.len(), 4 + 1000);
+            }
+            other => panic!("block1: {other:?}"),
+        }
+        // ack block 1 -> block 2
+        match sess.on_packet(&ack(1), &data) {
+            SessionStep::Send(p) => assert_eq!(&p[..4], &[0, 3, 0, 2]),
+            other => panic!("block2: {other:?}"),
+        }
+        // timeout re-sends block 2 identically
+        match sess.on_timeout() {
+            SessionStep::Send(p) => assert_eq!(&p[..4], &[0, 3, 0, 2]),
+            other => panic!("timeout: {other:?}"),
+        }
+        // ack 2 -> final partial block (500 bytes < blksize)
+        match sess.on_packet(&ack(2), &data) {
+            SessionStep::Send(p) => {
+                assert_eq!(&p[..4], &[0, 3, 0, 3]);
+                assert_eq!(p.len(), 4 + 500);
+            }
+            other => panic!("block3: {other:?}"),
+        }
+        // ack 3 -> Done(2500)
+        assert_eq!(sess.on_packet(&ack(3), &data), SessionStep::Done(2500));
+
+        // exact multiple: 2000 bytes @1000 -> terminator after block 2
+        let data2: Vec<u8> = (0..2000u32).map(|i| (i % 253) as u8).collect();
+        let (step, s2) = TftpSession::start(&rrq_opts, &data2);
+        let _ = &step;
+        let mut s2 = s2.expect("session starts");
+        assert!(matches!(step, SessionStep::Send(_)));
+        s2.on_packet(&ack(0), &data2);
+        s2.on_packet(&ack(1), &data2);
+        match s2.on_packet(&ack(2), &data2) {
+            SessionStep::Send(p) => assert_eq!(p, data_packet(3, b""), "terminator"),
+            other => panic!("terminator: {other:?}"),
+        }
+        assert_eq!(s2.on_packet(&ack(3), &data2), SessionStep::Done(2000));
+
+        // WRQ refused
+        let wrq = vec![0, 2, b'x', 0, b'o', b'c', b't', b'e', b't', 0];
+        let (step, none) = TftpSession::start(&wrq, &data);
+        assert!(none.is_none());
+        match step {
+            SessionStep::Send(p) => assert_eq!(&p[..4], &[0, 5, 0, 4]),
+            other => panic!("wrq: {other:?}"),
+        }
     }
 
     #[test]
