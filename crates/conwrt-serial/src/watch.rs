@@ -534,20 +534,39 @@ impl Recipe {
                     let meta = std::fs::metadata(file);
                     match meta {
                         Ok(m) if m.is_file() => {
-                            // host-side sha gate BEFORE streaming
-                            if let Ok(bytes) = std::fs::read(file) {
-                                let got = sha256_hex_for_gate(&bytes);
-                                if !got.eq_ignore_ascii_case(sha256) {
-                                    errs.push(format!(
-                                        "stream_chunks {file}: host sha mismatch ({got} != {sha256})"
-                                    ));
+                            // host-side sha gate BEFORE streaming — a
+                            // read error must REFUSE, not skip (round-3)
+                            match std::fs::read(file) {
+                                Ok(bytes) => {
+                                    let got = sha256_hex_for_gate(&bytes);
+                                    if !got.eq_ignore_ascii_case(sha256) {
+                                        errs.push(format!(
+                                            "stream_chunks {file}: host sha mismatch ({got} != {sha256})"
+                                        ));
+                                    }
                                 }
+                                Err(e) => errs.push(format!(
+                                    "stream_chunks {file}: unreadable ({e}) — sha gate skipped is sha gate failed"
+                                )),
                             }
                         }
                         _ => errs.push(format!("stream_chunks {file}: not a readable file")),
                     }
                     if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
                         errs.push(format!("stream_chunks {file}: sha256 not 64 hex chars"));
+                    }
+                }
+                Action::Interrupt { method, .. } => {
+                    // refuse at ARM time — a typo'd method must not die
+                    // inside the bootdelay window (review round-3)
+                    if !matches!(
+                        method.as_str(),
+                        "spaces" | "esc" | "ctrl_c" | "esc_then_ctrl_c"
+                    ) {
+                        errs.push(format!(
+                            "interrupt: unknown method {method:?} \
+(expected spaces/esc/ctrl_c/esc_then_ctrl_c)"
+                        ));
                     }
                 }
                 Action::TftpBoot {
@@ -702,7 +721,13 @@ impl RescueJournal {
             .pop()?;
         let v: serde_json::Value = serde_json::from_str(last).ok()?;
         let phase = v.get("phase")?.as_str()?.to_string();
-        if phase == "rescue-complete" || phase == "rescue-refused" {
+        // terminal: complete (success), failed (clean reported
+        // failure), refused (preflight). Only mid-ladder phases
+        // (armed/fired) mean "died without a verdict".
+        if matches!(
+            phase.as_str(),
+            "rescue-complete" | "rescue-failed" | "rescue-refused"
+        ) {
             None
         } else {
             Some(phase)
@@ -712,12 +737,14 @@ impl RescueJournal {
     /// Append a phase transition line.
     pub fn record(&self, phase: &str, detail: &str) {
         use std::io::Write;
-        let line = format!(
-            "{{\"ts\":\"{}\",\"phase\":\"{}\",\"detail\":\"{}\"}}\n",
-            chrono_local(),
-            phase.replace('"', "'"),
-            detail.replace('"', "'")
-        );
+        // P2 (review round-3): serde, not hand-rolled escaping —
+        // expect tails contain \r\n and quotes that corrupt JSONL
+        let line = serde_json::json!({
+            "ts": chrono_local(),
+            "phase": phase,
+            "detail": detail,
+        })
+        .to_string();
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -903,6 +930,12 @@ impl<'a> Supervisor<'a> {
                     if self.window.len() > 64 * 1024 {
                         let cut = self.window.len() - 32 * 1024;
                         self.window.drain(..cut);
+                        // P1 (review round-3): every absolute offset into
+                        // the window must move with the drain, else the
+                        // fire mark goes stale — past the end it blinds
+                        // every expect (clamped empty slice), inside it
+                        // re-admits pre-fire backlog
+                        self.fire_mark = self.fire_mark.saturating_sub(cut);
                     }
                 }
                 Err(e)
@@ -955,21 +988,30 @@ impl<'a> Supervisor<'a> {
         }
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.1));
         while Instant::now() < deadline {
-            if let Some(e) = &self.transport_dead {
-                return Err(format!("transport dead while expecting {pattern:?}: {e}"));
-            }
+            // P2 (review round-3): check the pattern FIRST — if the
+            // verdict banner and bridge death share a read batch, the
+            // already-buffered match must still win (a committed flash
+            // must not be journaled failed)
             if contains(slice_since(&self.window, start), needle) {
                 return Ok(());
+            }
+            if let Some(e) = &self.transport_dead {
+                return Err(
+                    WatchError::TransportDead(format!("while expecting {pattern:?}: {e}"))
+                        .to_string(),
+                );
             }
             self.read_secs(0.4);
         }
         if contains(slice_since(&self.window, start), needle) {
             return Ok(());
         }
-        Err(format!(
-            "expect timeout ({timeout_secs:.0}s) waiting for {pattern:?}; tail: {:?}",
-            String::from_utf8_lossy(&self.window[self.window.len().saturating_sub(120)..])
-        ))
+        Err(WatchError::ExpectTimeout {
+            pattern: pattern.to_string(),
+            tail: String::from_utf8_lossy(&self.window[self.window.len().saturating_sub(120)..])
+                .to_string(),
+        }
+        .to_string())
     }
 }
 
@@ -1025,14 +1067,21 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 };
                 let deadline = Instant::now() + Duration::from_secs_f64((*secs).max(1.0));
                 let needle = until.as_bytes();
+                // P2 (review round-3): scan only from the fire mark — a
+                // stale prompt from a PREVIOUS boot (the re-run-rescue
+                // case) must not satisfy the interrupt and stop pressing
+                let prompt_since_fire = |s: &Supervisor| {
+                    let from = s.fire_mark.min(s.window.len());
+                    contains(&s.window[from..], needle)
+                };
                 while Instant::now() < deadline {
                     s.send_raw(keys);
                     s.read_secs(0.8);
-                    if contains(&s.window, needle) {
+                    if prompt_since_fire(s) {
                         break;
                     }
                 }
-                if !contains(&s.window, needle) {
+                if !prompt_since_fire(s) {
                     return Err(format!("interrupt: prompt {until:?} never appeared"));
                 }
             }
@@ -1451,6 +1500,18 @@ pub fn run_watch_with_profile(
     if let Err(e) = recipe.validate() {
         return Err(std::io::Error::other(format!("recipe invalid: {e}")));
     }
+    // P0 pre-flight: refuse bad recipes at ARM time, not fire time
+    if let Err(errs) = recipe.preflight(profile_hint) {
+        for e in &errs {
+            eprintln!("conwrt: preflight: {e}");
+        }
+        RescueJournal::for_transcript(transcript_path).record("rescue-refused", &errs.join("; "));
+        return Ok(WatchOutcome {
+            fires: 0,
+            success: false,
+            detail: format!("preflight refused: {} problem(s)", errs.len()),
+        });
+    }
     let mut transcript = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1466,17 +1527,6 @@ pub fn run_watch_with_profile(
     } else {
         io
     };
-    // P0 pre-flight: refuse bad recipes at ARM time, not fire time
-    if let Err(errs) = recipe.preflight(profile_hint) {
-        for e in &errs {
-            eprintln!("conwrt: preflight: {e}");
-        }
-        return Ok(WatchOutcome {
-            fires: 0,
-            success: false,
-            detail: format!("preflight refused: {} problem(s)", errs.len()),
-        });
-    }
     let journal = RescueJournal::for_transcript(transcript_path);
     if let Some(phase) = journal.unfinished_phase() {
         eprintln!(
@@ -1565,8 +1615,12 @@ the last run may have died mid-ladder; continuing"
         // find the EARLIEST trigger match and where its bytes END —
         // that end is the fire mark for subsequent expects (later text
         // in the same batch is fresh; pre-match backlog is not)
+        // P2 (review round-3): fold over ALL triggers — .any()
+        // short-circuits in list order and can miss an EARLIER match's
+        // end, excluding fresh bytes from the fire mark
         let mut match_end: Option<usize> = None;
-        if triggers.iter().any(|t| {
+        let mut any_hit = false;
+        for t in triggers.iter() {
             // R1 (audit): clamp the consumed-offset — the window
             // drains during idle polls and a stale offset panics
             let scan_from = trigger_scan_from.min(s.window.len());
@@ -1576,11 +1630,10 @@ the last run may have died mid-ladder; continuing"
                     Some(e) => e.min(abs_end),
                     None => abs_end,
                 });
-                true
-            } else {
-                false
+                any_hit = true;
             }
-        }) {
+        }
+        if any_hit {
             if let Some(t) = last_fire {
                 if t.elapsed().as_secs() < recipe.cooldown_secs {
                     s.log("trigger inside cooldown — ignored");
@@ -1839,6 +1892,19 @@ mod tests {
     /// AND the construction is valid shell printing the real marker —
     /// proven by execution here (audit R8: the previous test asserted
     /// the abandoned quote-split shape and could not catch regressions).
+    /// Silent transport: never produces bytes, accepts all writes.
+    struct ScriptedIo;
+    impl ConsoleIo for ScriptedIo {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+        fn write_all_bytes(&mut self, _data: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {}
+        fn close(&mut self) {}
+    }
+
     /// Dying transport: serves data, then starts erroring with
     /// ConnectionAborted (the R2 dead-bridge class).
     struct DyingIo {
@@ -1944,6 +2010,95 @@ mod tests {
         assert_eq!(j.unfinished_phase().as_deref(), Some("fired"));
         j.record("rescue-complete", "sysupgrade verdict ok");
         assert!(j.unfinished_phase().is_none());
+    }
+
+    /// P3-18a (review round-3): regression for the fire-mark drain bug —
+    /// after the window compacts, expects must still see fresh bytes and
+    /// must NOT re-admit pre-fire backlog.
+    #[test]
+    fn fire_mark_survives_window_drain() {
+        let io: Box<dyn ConsoleIo> = Box::new(ScriptedIo);
+        let mut f = tempfile_in_test();
+        let mut sup = Supervisor {
+            io,
+            window: Vec::new(),
+            transcript: &mut f,
+            transport_dead: None,
+            fire_mark: 0,
+        };
+        // simulate: 40KB of pre-fire backlog, fire mark at its end
+        sup.window = vec![b'x'; 40 * 1024];
+        sup.fire_mark = sup.window.len();
+        // force a compaction by appending past 64KB
+        let fresh = vec![b'f'; 30 * 1024];
+        let cut = (sup.window.len() + fresh.len()) - 32 * 1024;
+        sup.window.extend_from_slice(&fresh);
+        sup.window.drain(..cut);
+        sup.fire_mark = sup.fire_mark.saturating_sub(cut);
+        // fresh bytes remain visible from the (adjusted) mark
+        let from = sup.fire_mark.min(sup.window.len());
+        assert!(
+            contains(&sup.window[from..], b"ffff"),
+            "fresh bytes visible"
+        );
+        assert!(sup.window.len() <= 64 * 1024, "window compacted");
+    }
+
+    /// P3-18b: stale pre-fire prompt must NOT satisfy an expect; the
+    /// live-fire 2026-10-25 bug as a direct unit test.
+    #[test]
+    fn expect_ignores_pre_fire_backlog() {
+        let io: Box<dyn ConsoleIo> = Box::new(ScriptedIo);
+        let mut f = tempfile_in_test();
+        let mut sup = Supervisor {
+            io,
+            window: b"root@OpenWrt:~# stale backlog from before the fire".to_vec(),
+            transcript: &mut f,
+            transport_dead: None,
+            fire_mark: 0,
+        };
+        sup.fire_mark = sup.window.len(); // fire happened at the end
+        // no fresh bytes will ever arrive (ScriptedIo is silent): the
+        // stale prompt must NOT match, so this must time out (short
+        // window to keep the test fast)
+        let r = sup.expect("root@OpenWrt", 0.3);
+        assert!(r.is_err(), "stale pre-fire prompt must not satisfy expect");
+    }
+
+    /// P3-18c: Interrupt dispatch — unknown method must FAIL, and the
+    /// known methods must produce their key bytes.
+    #[test]
+    fn interrupt_method_dispatch() {
+        use crate::profile::DeviceProfile;
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+        let gs = DeviceProfile::load("zyxel/gs1900-8hp", std::slice::from_ref(&dir)).unwrap();
+        let srv = std::env::temp_dir().join("conwrt-interrupt-test");
+        std::fs::create_dir_all(&srv).unwrap();
+        std::fs::write(srv.join("i.bin"), b"img").unwrap();
+        let recipe = flash_rescue_recipe_from_profile(
+            &gs,
+            "s.bin",
+            &("9".to_string() + &"1".repeat(63)),
+            "i.bin",
+            "1.2.3.4",
+            &srv.to_string_lossy(),
+            "1.2.3.5",
+        );
+        // the profile's method must be one preflight accepts
+        assert!(
+            recipe.preflight(Some(&gs)).is_ok(),
+            "valid method passes preflight"
+        );
+        // a typo'd method must be REFUSED at arm time
+        let mut bad = recipe.clone();
+        if let Action::Interrupt { method, .. } = &mut bad.actions[0] {
+            *method = "spacebar".to_string();
+        }
+        assert!(
+            bad.preflight(Some(&gs)).is_err(),
+            "unknown method refused at arm time"
+        );
     }
 
     #[test]

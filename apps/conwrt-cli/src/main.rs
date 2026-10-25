@@ -48,6 +48,17 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+/// Device-profile search path: ./devices then ~/.config/conwrt/devices
+/// (first hit wins; one source of truth for CLI arms — review round-3).
+fn default_device_search_path() -> Vec<std::path::PathBuf> {
+    vec![
+        std::path::PathBuf::from("."),
+        std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".config/conwrt"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".config/conwrt")),
+    ]
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// List or dump /dev/mtd partitions over serial (Rust port of
@@ -986,13 +997,8 @@ fn main() -> ExitCode {
             probe_secs,
             devices,
         } => {
-            let search: Vec<std::path::PathBuf> = if devices {
-                vec![
-                    std::path::PathBuf::from("."),
-                    std::env::var_os("HOME")
-                        .map(|h| std::path::PathBuf::from(h).join(".config/conwrt"))
-                        .unwrap_or_else(|| std::path::PathBuf::from("/root/.config/conwrt")),
-                ]
+            let search = if devices {
+                default_device_search_path()
             } else {
                 Vec::new()
             };
@@ -1031,12 +1037,7 @@ fn main() -> ExitCode {
                 std::process::exit(2);
             }
             // profile search path: cwd, then user config
-            let search: Vec<std::path::PathBuf> = vec![
-                std::path::PathBuf::from("."),
-                std::env::var_os("HOME")
-                    .map(|h| std::path::PathBuf::from(h).join(".config/conwrt"))
-                    .unwrap_or_else(|| std::path::PathBuf::from("/root/.config/conwrt")),
-            ];
+            let search = default_device_search_path();
             let profile = conwrt_serial::profile::DeviceProfile::load(&device, &search)
                 .unwrap_or_else(|e| {
                     eprintln!("conwrt: device profile {device:?}: {e}");
@@ -1046,6 +1047,10 @@ fn main() -> ExitCode {
                 eprintln!(
                     "conwrt: --initramfs is required for the boot-watch ladder (or pass --at-shell)"
                 );
+                std::process::exit(2);
+            }
+            if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+                eprintln!("conwrt: --sha256 must be 64 hex chars (got {sha256:?})");
                 std::process::exit(2);
             }
             let recipe = if at_shell {
@@ -1063,7 +1068,7 @@ fn main() -> ExitCode {
             );
             match conwrt_serial::watch::run_watch_with_profile(
                 &port,
-                115200,
+                profile.console.baud,
                 &recipe,
                 std::path::Path::new(&transcript),
                 1.0,

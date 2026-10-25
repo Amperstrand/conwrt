@@ -71,6 +71,12 @@ pub struct FlashSection {
 }
 
 /// Known behavioral quirks (documented, load-bearing for strategy).
+///
+/// Merge semantics are deliberately MONOTONIC: boolean quirks OR
+/// across the inheritance chain, so a board can never clear a safety
+/// fact its family established (a variant whose serial console works
+/// still inherits `stty_absent` unless the family itself stops
+/// declaring it — refuse-by-default is the safe direction).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct QuirksSection {
@@ -274,7 +280,10 @@ fn walk_profiles(root: &Path, dir: &Path, depth: u32, out: &mut BTreeMap<String,
                     .collect::<Vec<_>>()
                     .join("/");
                 let name = name.trim_end_matches(".json").to_string();
-                out.insert(name, p);
+                // first hit wins — consistent with find_profile_file
+                // (review round-3: insert-overwrite made the LAST
+                // search dir win, contradicting load precedence)
+                out.entry(name).or_insert(p);
             }
         }
     }

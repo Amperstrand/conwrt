@@ -264,32 +264,32 @@ pub fn detect_with_profiles(
     }
     if !profile_search_path.is_empty() {
         let names = crate::profile::list_profiles(profile_search_path);
-        let boards: Vec<crate::profile::DeviceProfile> = names
-            .keys()
-            .filter_map(|n| {
-                // board profiles first (skip */-base family files)
-                if n.ends_with("-base") {
-                    return None;
-                }
-                crate::profile::DeviceProfile::load(n, profile_search_path).ok()
-            })
-            .collect();
+        let mut boards: Vec<crate::profile::DeviceProfile> = Vec::new();
+        for n in names.keys() {
+            // board profiles first (skip */-base family files)
+            if n.ends_with("-base") {
+                continue;
+            }
+            match crate::profile::DeviceProfile::load(n, profile_search_path) {
+                Ok(p) => boards.push(p),
+                Err(e) => eprintln!("conwrt: profile {n:?} failed to load: {e}"),
+            }
+        }
         if let Some(m) = match_profiles(&all, &boards) {
             card.matched_profile = Some(m);
         } else {
             // boards tie-rejected (e.g. a bare "root@OpenWrt" shell
             // prompt is shared across a family) — fall back to the
             // HONEST family-level match against the base profiles
-            let families: Vec<crate::profile::DeviceProfile> = names
-                .keys()
-                .filter_map(|n| {
-                    if n.ends_with("-base") {
-                        crate::profile::DeviceProfile::load(n, profile_search_path).ok()
-                    } else {
-                        None
+            let mut families: Vec<crate::profile::DeviceProfile> = Vec::new();
+            for n in names.keys() {
+                if n.ends_with("-base") {
+                    match crate::profile::DeviceProfile::load(n, profile_search_path) {
+                        Ok(p) => families.push(p),
+                        Err(e) => eprintln!("conwrt: profile {n:?} failed to load: {e}"),
                     }
-                })
-                .collect();
+                }
+            }
             card.matched_profile = match_profiles(&all, &families);
         }
     }
