@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "profile": "realtek/rtl838x-base",
+  "family": ["realtek-rtl838x"],
+  "console": {
+    "baud": 115200,
+    "uboot_prompt": "RTL838x#",
+    "bootdelay_interrupt": "spaces",
+    "boot_signatures": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+    "shell_prompt": "root@OpenWrt"
+  },
+  "uboot": {
+    "load_addr": "0x84f00000",
+    "network_init": "rtk network on",
+    "boot_cmd": "bootm {load_addr}",
+    "verify_cmd": "iminfo {load_addr}",
+    "partition_select_cmd": "setsys bootpartition 0",
+    "partition_save_cmd": "savesys"
+  },
+  "flash": {
+    "method": "openwrt-sysupgrade",
+    "sysupgrade_cmd": "sysupgrade -n {image}"
+  },
+  "quirks": {
+    "stty_absent": true,
+    "echo_storm_lethal": true,
+    "notes": [
+      "busybox multi-call dispatch refuses stty on official 24.10.2 and 25.12.6 images (verified on-box 2026-10-25): serial binary transfers require a custom rescue image with the stty applet",
+      "canonical-mode console echoes binary as caret notation — echo storms hard-lock the CPU (printk/8250 class, SUSE KB 7025302 family)",
+      "ethernet for bytes, serial for steering; ACK-paced YMODEM survives, raw streams do not"
+    ]
+  }
+}

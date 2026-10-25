@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "profile": "zyxel/gs1900-8hp",
+  "family": ["realtek-rtl838x", "zyxel-gs1900"],
+  "inherits": ["realtek/rtl838x-base"],
+  "console": {
+    "baud": 115200,
+    "uboot_prompt": "RTL838x#",
+    "bootdelay_interrupt": "spaces",
+    "boot_signatures": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+    "shell_prompt": "root@OpenWrt"
+  },
+  "uboot": {
+    "load_addr": "0x84f00000",
+    "network_init": "rtk network on",
+    "boot_cmd": "bootm {load_addr}",
+    "verify_cmd": "iminfo {load_addr}",
+    "partition_select_cmd": "setsys bootpartition 0",
+    "partition_save_cmd": "savesys"
+  },
+  "flash": {
+    "method": "openwrt-sysupgrade",
+    "sysupgrade_cmd": "sysupgrade -n {image}"
+  },
+  "quirks": {
+    "notes": [
+      "fully bench-tested 2026-10-23..25: tftp rescue end-to-end agentless (conwrt-bench #66, PR #545)",
+      "wired mgmt port: untagged VLAN1 on lan1/lan8 (lan3 carried the bench wire in the 2026-10-25 tests)"
+    ]
+  }
+}

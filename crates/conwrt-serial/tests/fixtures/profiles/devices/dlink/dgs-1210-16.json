@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profile": "dlink/dgs-1210-16",
+  "family": ["realtek-rtl838x", "dlink-dgs1210"],
+  "inherits": ["realtek/rtl838x-base"],
+  "console": {
+    "baud": 115200,
+    "uboot_prompt": "u-boot>#",
+    "bootdelay_interrupt": "esc_then_ctrl_c",
+    "boot_signatures": ["Hit Esc key to stop autoboot", "U-Boot 2011"],
+    "shell_prompt": "root@OpenWrt"
+  },
+  "uboot": {
+    "load_addr": "0x8f000000",
+    "network_init": "rtk network on",
+    "boot_cmd": "bootm {load_addr}",
+    "verify_cmd": "iminfo {load_addr}",
+    "partition_select_cmd": null,
+    "partition_save_cmd": null
+  },
+  "flash": {
+    "method": "openwrt-sysupgrade",
+    "sysupgrade_cmd": "sysupgrade -n {image}"
+  },
+  "quirks": {
+    "notes": [
+      "ESC then CTRL+C to reach the real U-Boot prompt (vendor CLI first) — the generality test for interrupt methods"
+    ]
+  }
+}
