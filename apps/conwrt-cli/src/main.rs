@@ -127,6 +127,11 @@ enum Command {
         /// ./devices/ then ~/.config/conwrt/devices/.
         #[arg(long, default_value = "zyxel/gs1900-8hp")]
         device: String,
+        /// Rescue from a LIVE shell (box already at root@OpenWrt):
+        /// wget + on-box sha gate + self-firing sysupgrade, instead of
+        /// the boot-watch ladder.
+        #[arg(long)]
+        at_shell: bool,
         /// Sysupgrade image path, SERVED over http :8022 from --serve-dir
         /// (file name only is used in the on-box wget).
         #[arg(long)]
@@ -1008,6 +1013,7 @@ fn main() -> ExitCode {
         Command::FlashRescue {
             port,
             device,
+            at_shell,
             sysupgrade,
             sha256,
             initramfs,
@@ -1036,9 +1042,13 @@ fn main() -> ExitCode {
                     eprintln!("conwrt: device profile {device:?}: {e}");
                     std::process::exit(2);
                 });
-            let recipe = conwrt_serial::watch::flash_rescue_recipe_from_profile(
-                &profile, &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip,
-            );
+            let recipe = if at_shell {
+                conwrt_serial::watch::flash_from_shell_recipe(&profile, &fname, &sha256, &server_ip)
+            } else {
+                conwrt_serial::watch::flash_rescue_recipe_from_profile(
+                    &profile, &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip,
+                )
+            };
             println!(
                 "conwrt: flash-rescue {} via {initramfs} from {server_ip}",
                 recipe.model

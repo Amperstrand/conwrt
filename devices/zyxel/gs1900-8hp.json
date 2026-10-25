@@ -1,13 +1,22 @@
 {
   "schema_version": 1,
   "profile": "zyxel/gs1900-8hp",
-  "family": ["realtek-rtl838x", "zyxel-gs1900"],
-  "inherits": ["realtek/rtl838x-base"],
+  "family": [
+    "realtek-rtl838x",
+    "zyxel-gs1900"
+  ],
+  "inherits": [
+    "realtek/rtl838x-base"
+  ],
   "console": {
     "baud": 115200,
     "uboot_prompt": "RTL838x#",
     "bootdelay_interrupt": "spaces",
-    "boot_signatures": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+    "boot_signatures": [
+      "Copied Preloader",
+      "DRAM is set",
+      "U-Boot 2011"
+    ],
     "shell_prompt": "root@OpenWrt"
   },
   "uboot": {
@@ -16,7 +25,8 @@
     "boot_cmd": "bootm {load_addr}",
     "verify_cmd": "iminfo {load_addr}",
     "partition_select_cmd": "setsys bootpartition 0",
-    "partition_save_cmd": "savesys"
+    "partition_save_cmd": "savesys",
+    "shell_net_setup": "ip link set eth0 up; ip addr add {client_ip}/24 dev eth0 2>/dev/null; echo CW-NET-$?"
   },
   "flash": {
     "method": "openwrt-sysupgrade",

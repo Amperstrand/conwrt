@@ -728,6 +728,77 @@ impl RescueJournal {
     }
 }
 
+/// Rescue-from-live-shell ladder (third entry point, after boot-watch
+/// and at-uboot-prompt): the box already sits at a shell — fetch the
+/// sysupgrade image over the wired network, sha-gate it on-box, then
+/// the self-firing `sysupgrade -n`. Profile-driven like the others.
+pub fn flash_from_shell_recipe(
+    profile: &crate::profile::DeviceProfile,
+    sysupgrade_name: &str,
+    sysupgrade_sha256: &str,
+    server_ip: &str,
+) -> Recipe {
+    // var-concat verdict markers (Codex round-2): echoed commands show
+    // variable names, never the literal verdict, so a stale echo can't
+    // false-match the gate
+    let sha_gate = format!(
+        "V=$(sha256sum /tmp/fw.bin | cut -d' ' -f1); test \"$V\" = \"{sysupgrade_sha256}\" && echo CW-SHA-$V-OK || echo CW-SHA-MISMATCH-$V"
+    );
+    Recipe {
+        model: format!(
+            "flash-from-shell {} -> {} (wget + on-box sha gate + sysupgrade -n)",
+            profile.profile, sysupgrade_name
+        ),
+        boot_trigger: vec![profile.console.shell_prompt.clone()],
+        probe_line: Some(String::new()),
+        probe_interval_secs: 30.0,
+        actions: {
+            let mut v = Vec::new();
+            if let Some(net) = &profile.uboot.shell_net_setup {
+                // initramfs shells have no U-Boot network: bring the
+                // rescue wire up before any wget
+                v.push(Action::SendLine {
+                    line: profile.render(net, "", "192.168.1.1", server_ip),
+                    settle_secs: 8.0,
+                });
+            }
+            v.push(Action::SendLine {
+                line: format!(
+                    "rm -f /tmp/fw.bin; wget -O /tmp/fw.bin http://{server_ip}:8022/{sysupgrade_name} && echo CW-WGET-DONE-$(wc -c < /tmp/fw.bin)"
+                ),
+                settle_secs: 45.0,
+            });
+            // verdict line: for the transcript/log only
+            v.push(Action::SendLine {
+                line: sha_gate,
+                settle_secs: 25.0,
+            });
+            // SELF-FIRING gate (bench doctrine): verify + flash in ONE
+            // line — a mismatched sha can never reach sysupgrade, and
+            // no host round-trip sits between verify and flash (three
+            // box deaths lived in exactly that gap, 2026-10-24)
+            v.push(Action::SendLine {
+                line: format!(
+                    "V=$(sha256sum /tmp/fw.bin | cut -d' ' -f1); test \"$V\" = \"{sysupgrade_sha256}\" && {} || echo CW-SHA-REFUSED-$V",
+                    profile.render(&profile.flash.sysupgrade_cmd, "/tmp/fw.bin", "", server_ip)
+                ),
+                settle_secs: 10.0,
+            });
+            // verdict: sysupgrade's own banner (right polarity —
+            // appears ONLY if the gate passed and the flash started;
+            // on refusal the timeout fails the recipe and the tail
+            // carries CW-SHA-REFUSED-<sha> naming why)
+            v.push(Action::Expect {
+                pattern: "Sending SIGTERM".to_string(),
+                timeout_secs: 60.0,
+            });
+            v
+        },
+        cooldown_secs: 3600,
+        max_fires: 1,
+    }
+}
+
 /// Typed failure taxonomy for the recipe engine (audit R2): callers
 /// can match on the class instead of parsing strings, and transport
 /// death is a FIRST-CLASS abort — never a timeout in disguise.

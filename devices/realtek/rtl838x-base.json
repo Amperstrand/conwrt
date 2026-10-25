@@ -1,12 +1,18 @@
 {
   "schema_version": 1,
   "profile": "realtek/rtl838x-base",
-  "family": ["realtek-rtl838x"],
+  "family": [
+    "realtek-rtl838x"
+  ],
   "console": {
     "baud": 115200,
     "uboot_prompt": "RTL838x#",
     "bootdelay_interrupt": "spaces",
-    "boot_signatures": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+    "boot_signatures": [
+      "Copied Preloader",
+      "DRAM is set",
+      "U-Boot 2011"
+    ],
     "shell_prompt": "root@OpenWrt"
   },
   "uboot": {
@@ -15,7 +21,8 @@
     "boot_cmd": "bootm {load_addr}",
     "verify_cmd": "iminfo {load_addr}",
     "partition_select_cmd": "setsys bootpartition 0",
-    "partition_save_cmd": "savesys"
+    "partition_save_cmd": "savesys",
+    "shell_net_setup": "ip link set eth0 up; ip addr add {client_ip}/24 dev eth0 2>/dev/null; echo CW-NET-$?"
   },
   "flash": {
     "method": "openwrt-sysupgrade",
@@ -26,7 +33,7 @@
     "echo_storm_lethal": true,
     "notes": [
       "busybox multi-call dispatch refuses stty on official 24.10.2 and 25.12.6 images (verified on-box 2026-10-25): serial binary transfers require a custom rescue image with the stty applet",
-      "canonical-mode console echoes binary as caret notation — echo storms hard-lock the CPU (printk/8250 class, SUSE KB 7025302 family)",
+      "canonical-mode console echoes binary as caret notation \u2014 echo storms hard-lock the CPU (printk/8250 class, SUSE KB 7025302 family)",
       "ethernet for bytes, serial for steering; ACK-paced YMODEM survives, raw streams do not"
     ]
   }

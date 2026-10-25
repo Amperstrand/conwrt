@@ -49,6 +49,9 @@ pub struct UbootSection {
     pub partition_select_cmd: Option<String>,
     /// Dual-partition persist command.
     pub partition_save_cmd: Option<String>,
+    /// Bring up networking from a RESCUED SHELL (initramfs): template
+    /// with {client_ip} — e.g. static addr on the direct wire.
+    pub shell_net_setup: Option<String>,
 }
 
 /// Flash-layer facts: how images land on this device.
