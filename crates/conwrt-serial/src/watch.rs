@@ -737,6 +737,7 @@ pub fn flash_from_shell_recipe(
     sysupgrade_name: &str,
     sysupgrade_sha256: &str,
     server_ip: &str,
+    client_ip: &str,
 ) -> Recipe {
     // var-concat verdict markers (Codex round-2): echoed commands show
     // variable names, never the literal verdict, so a stale echo can't
@@ -758,7 +759,7 @@ pub fn flash_from_shell_recipe(
                 // initramfs shells have no U-Boot network: bring the
                 // rescue wire up before any wget
                 v.push(Action::SendLine {
-                    line: profile.render(net, "", "192.168.1.1", server_ip),
+                    line: profile.render(net, "", client_ip, server_ip),
                     settle_secs: 8.0,
                 });
             }

@@ -1049,7 +1049,9 @@ fn main() -> ExitCode {
                 std::process::exit(2);
             }
             let recipe = if at_shell {
-                conwrt_serial::watch::flash_from_shell_recipe(&profile, &fname, &sha256, &server_ip)
+                conwrt_serial::watch::flash_from_shell_recipe(
+                    &profile, &fname, &sha256, &server_ip, &client_ip,
+                )
             } else {
                 conwrt_serial::watch::flash_rescue_recipe_from_profile(
                     &profile, &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip,
