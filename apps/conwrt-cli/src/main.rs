@@ -143,9 +143,6 @@ enum Command {
         /// Switch IP (ipaddr).
         #[arg(long, default_value = "192.168.1.1")]
         client_ip: String,
-        /// RAM load address for tftpboot.
-        #[arg(long, default_value = "0x84f00000")]
-        addr: String,
         /// Transcript file.
         #[arg(long, default_value = "/tmp/conwrt-flash-rescue.transcript")]
         transcript: String,
@@ -1000,7 +997,6 @@ fn main() -> ExitCode {
             serve_dir,
             server_ip,
             client_ip,
-            addr,
             transcript,
         } => {
             let fname = std::path::Path::new(&sysupgrade)
