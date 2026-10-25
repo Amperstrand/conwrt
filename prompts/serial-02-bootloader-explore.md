@@ -25,6 +25,33 @@ and inspect the device's internal state — all without modifying anything.
 
 ---
 
+---
+
+## Preferred path: the conwrt serial tools (2026-10-25, live-proven on gs1900-8hp)
+
+Manual keystroke work is the FALLBACK. The Rust tooling encodes the
+bench-proven doctrines (fire-mark expects, telnet-IAC framing,
+self-firing gates, fresh-boot spaces) — prefer it:
+
+    # classify the console + fingerprint against device profiles:
+    conwrt serial-detect --port telnet://HOST:7171 --devices
+    # (returns class, matched profile, kernel, release, MTD layout)
+
+    # watch for a boot signature and fire a declarative recipe:
+    conwrt serial-watch --port ... --recipe <json> --transcript <log>
+
+    # the whole rescue ladder, built from a device profile:
+    conwrt flash-rescue --port ... --device zyxel/gs1900-8hp       --sysupgrade img --sha256 <sha> --initramfs init       --serve-dir /srv/tftp --server-ip <ip>
+    # live shell variant: add --at-shell (wget + on-box sha gate +
+    # self-firing sysupgrade -n — no host round-trip)
+
+Device profiles live in devices/ (family base + board overlay,
+inheritable); docs/serial-rescue.md is the full story. If no profile
+exists for this device: capture the console with serial-detect, write
+the profile from observation (prompt, signatures, load address,
+interrupt method), THEN use flash-rescue. Do not hand-type flash
+sequences the engine can gate.
+
 ## Prerequisites
 
 - serial-01 completed: bootloader type, baud rate, and interrupt key identified
