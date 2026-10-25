@@ -116,9 +116,13 @@ enum Command {
     /// fetch the sysupgrade image over the same wire, on-box sha
     /// gate, self-firing sysupgrade -n. No recipe file needed.
     FlashRescue {
-        /// Serial port spec (/dev/... or tcp://HOST:PORT).
+        /// Serial port spec (/dev/... or tcp://HOST:PORT or telnet://).
         #[arg(long)]
         port: String,
+        /// Device profile name (e.g. zyxel/gs1900-8hp) — resolved from
+        /// ./devices/ then ~/.config/conwrt/devices/.
+        #[arg(long, default_value = "zyxel/gs1900-8hp")]
+        device: String,
         /// Sysupgrade image path, SERVED over http :8022 from --serve-dir
         /// (file name only is used in the on-box wget).
         #[arg(long)]
@@ -989,6 +993,7 @@ fn main() -> ExitCode {
         },
         Command::FlashRescue {
             port,
+            device,
             sysupgrade,
             sha256,
             initramfs,
@@ -1006,8 +1011,20 @@ fn main() -> ExitCode {
                 eprintln!("conwrt: {serve_dir}/{fname} missing (serve both images from serve_dir)");
                 std::process::exit(2);
             }
-            let recipe = conwrt_serial::watch::flash_rescue_recipe(
-                &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip, &addr,
+            // profile search path: cwd, then user config
+            let search: Vec<std::path::PathBuf> = vec![
+                std::path::PathBuf::from("."),
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".config/conwrt"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("/root/.config/conwrt")),
+            ];
+            let profile = conwrt_serial::profile::DeviceProfile::load(&device, &search)
+                .unwrap_or_else(|e| {
+                    eprintln!("conwrt: device profile {device:?}: {e}");
+                    std::process::exit(2);
+                });
+            let recipe = conwrt_serial::watch::flash_rescue_recipe_from_profile(
+                &profile, &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip,
             );
             println!(
                 "conwrt: flash-rescue {} via {initramfs} from {server_ip}",

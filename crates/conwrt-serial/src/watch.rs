@@ -237,6 +237,18 @@ pub enum Action {
         /// Prompt banner that ends the phase early (e.g. "RTL838x#").
         until: String,
     },
+    /// Interrupt autoboot, method-dispatched from the device profile:
+    /// "spaces" (Realtek default), "esc" / "esc_then_ctrl_c" (vendor-CLI
+    /// loaders), "ctrl_c". Presses through the bootdelay window until
+    /// the profile's U-Boot prompt appears.
+    Interrupt {
+        /// One of: spaces, esc, ctrl_c, esc_then_ctrl_c.
+        method: String,
+        /// How long to keep pressing.
+        secs: f64,
+        /// Prompt banner that ends the phase early.
+        until: String,
+    },
     /// Wait for a literal byte pattern (the pexpect `expect`).
     Expect {
         /// Literal byte pattern to wait for.
@@ -495,76 +507,86 @@ fn default_probe_interval() -> f64 {
     30.0
 }
 
-/// Assemble the canonical RTL838x rescue ladder as one recipe — the
-/// whole 2026-10-24 bench-proven chain (TFTP for bytes, serial for
-/// steering, on-box gates, self-firing sysupgrade). `conwrt
-/// flash-rescue` runs this via run_watch; no recipe file needed.
-pub fn flash_rescue_recipe(
-    sysupgrade_path: &str,
+/// Assemble the canonical rescue ladder FROM A DEVICE PROFILE — the
+/// generalization of the bench-proven gs1900 chain (owner directive
+/// 2026-10-25): profile templates + image facts build the action list,
+/// so new devices need a JSON profile, not new code.
+pub fn flash_rescue_recipe_from_profile(
+    profile: &crate::profile::DeviceProfile,
+    sysupgrade_name: &str,
     sysupgrade_sha256: &str,
     initramfs_name: &str,
     server_ip: &str,
     serve_dir: &str,
     client_ip: &str,
-    addr: &str,
 ) -> Recipe {
+    let addr = profile.uboot.load_addr.clone();
+    let mut actions = vec![Action::Interrupt {
+        method: profile.console.bootdelay_interrupt.clone(),
+        secs: 90.0,
+        until: profile.console.uboot_prompt.clone(),
+    }];
+    if let Some(sel) = &profile.uboot.partition_select_cmd {
+        actions.push(Action::SendLine {
+            line: sel.clone(),
+            settle_secs: 2.0,
+        });
+    }
+    if let Some(save) = &profile.uboot.partition_save_cmd {
+        actions.push(Action::SendLine {
+            line: save.clone(),
+            settle_secs: 3.0,
+        });
+    }
+    actions.extend([
+        Action::TftpBoot {
+            addr: addr.clone(),
+            bind: format!("{server_ip}:69"),
+            serve_dir: serve_dir.to_string(),
+            file: initramfs_name.to_string(),
+            client_ip: client_ip.to_string(),
+            server_ip: server_ip.to_string(),
+            timeout_secs: 120.0,
+        },
+        Action::Expect {
+            pattern: profile.console.shell_prompt.clone(),
+            timeout_secs: 250.0,
+        },
+        Action::SendLine {
+            line: "/etc/init.d/network restart".to_string(),
+            settle_secs: 15.0,
+        },
+        Action::SendLine {
+            line: format!("wget -O /tmp/fw.bin http://{server_ip}:8022/{sysupgrade_name}"),
+            settle_secs: 30.0,
+        },
+        Action::SendLine {
+            line: "sha256sum /tmp/fw.bin".to_string(),
+            settle_secs: 25.0,
+        },
+        Action::Expect {
+            pattern: sysupgrade_sha256.to_string(),
+            timeout_secs: 60.0,
+        },
+        Action::SendLine {
+            line: profile.render(
+                &profile.flash.sysupgrade_cmd,
+                "/tmp/fw.bin",
+                client_ip,
+                server_ip,
+            ),
+            settle_secs: 10.0,
+        },
+    ]);
     Recipe {
-        model: format!("flash-rescue {initramfs_name} -> {sysupgrade_path}"),
-        boot_trigger: [
-            "Copied Preloader".to_string(),
-            "DRAM is set".to_string(),
-            "U-Boot 2011".to_string(),
-        ]
-        .to_vec(),
+        model: format!(
+            "flash-rescue {} {initramfs_name} -> {sysupgrade_name}",
+            profile.profile
+        ),
+        boot_trigger: profile.console.boot_signatures.clone(),
         probe_line: Some(String::new()),
         probe_interval_secs: 30.0,
-        actions: vec![
-            Action::Spaces {
-                secs: 90.0,
-                until: "RTL838x#".to_string(),
-            },
-            Action::SendLine {
-                line: "setsys bootpartition 0".to_string(),
-                settle_secs: 2.0,
-            },
-            Action::SendLine {
-                line: "savesys".to_string(),
-                settle_secs: 3.0,
-            },
-            Action::TftpBoot {
-                addr: addr.to_string(),
-                bind: format!("{server_ip}:69"),
-                serve_dir: serve_dir.to_string(),
-                file: initramfs_name.to_string(),
-                client_ip: client_ip.to_string(),
-                server_ip: server_ip.to_string(),
-                timeout_secs: 120.0,
-            },
-            Action::Expect {
-                pattern: "root@OpenWrt".to_string(),
-                timeout_secs: 200.0,
-            },
-            Action::SendLine {
-                line: "/etc/init.d/network restart".to_string(),
-                settle_secs: 15.0,
-            },
-            Action::SendLine {
-                line: format!("wget -O /tmp/fw.bin http://{server_ip}:8022/{sysupgrade_path}"),
-                settle_secs: 30.0,
-            },
-            Action::SendLine {
-                line: "sha256sum /tmp/fw.bin".to_string(),
-                settle_secs: 25.0,
-            },
-            Action::Expect {
-                pattern: sysupgrade_sha256.to_string(),
-                timeout_secs: 60.0,
-            },
-            Action::SendLine {
-                line: "sysupgrade -n /tmp/fw.bin".to_string(),
-                settle_secs: 10.0,
-            },
-        ],
+        actions,
         cooldown_secs: 600,
         max_fires: 1,
     }
@@ -690,6 +712,35 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
             action_kind(action)
         ));
         match action {
+            Action::Interrupt {
+                method,
+                secs,
+                until,
+            } => {
+                let keys: &[u8] = match method.as_str() {
+                    "spaces" => b"  ",
+                    "esc" => b"\x1b",
+                    "ctrl_c" => b"\x03",
+                    "esc_then_ctrl_c" => b"\x1b\x03",
+                    other => {
+                        return Err(format!(
+                            "interrupt: unknown method {other:?} (expected spaces/esc/ctrl_c/esc_then_ctrl_c)"
+                        ));
+                    }
+                };
+                let deadline = Instant::now() + Duration::from_secs_f64((*secs).max(1.0));
+                let needle = until.as_bytes();
+                while Instant::now() < deadline {
+                    s.send_raw(keys);
+                    s.read_secs(0.8);
+                    if contains(&s.window, needle) {
+                        break;
+                    }
+                }
+                if !contains(&s.window, needle) {
+                    return Err(format!("interrupt: prompt {until:?} never appeared"));
+                }
+            }
             Action::Spaces { secs, until } => {
                 let deadline = Instant::now() + Duration::from_secs_f64((*secs).max(1.0));
                 let needle = until.as_bytes();
@@ -1058,6 +1109,7 @@ fn action_kind(a: &Action) -> &'static str {
         Action::SendLine { .. } => "send_line",
         Action::Loady { .. } => "loady",
         Action::TftpBoot { .. } => "tftp_boot",
+        Action::Interrupt { .. } => "interrupt",
         Action::StreamChunks { .. } => "stream_chunks",
         Action::ArmScript { .. } => "arm_script",
         Action::Stream { .. } => "stream",
@@ -1359,20 +1411,28 @@ mod tests {
     }
 
     #[test]
-    fn flash_rescue_recipe_shape() {
-        let r = flash_rescue_recipe(
-            "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
-            "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
-            "owrt-25.12.6-initramfs-kernel.bin",
-            "192.168.1.10",
-            "/srv/tftp-gs1900",
+    fn flash_rescue_recipe_shape_from_profile() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+        let profile =
+            crate::profile::DeviceProfile::load("zyxel/gs1900-8hp", std::slice::from_ref(&dir))
+                .unwrap();
+        let r = flash_rescue_recipe_from_profile(
+            &profile,
+            "sysup.bin",
+            &("9".to_string() + &"1".repeat(63)),
+            "initramfs.bin",
+            "192.168.1.100",
+            "/srv/tftp",
             "192.168.1.1",
-            "0x84f00000",
         );
         assert_eq!(r.boot_trigger.len(), 3);
-        assert!(matches!(r.actions[0], Action::Spaces { .. }));
-        assert!(matches!(r.actions[3], Action::TftpBoot { .. }));
-        assert!(matches!(r.actions[8], Action::Expect { .. }));
+        // profile-driven: interrupt method + dual-partition + tftp + gates
+        assert!(matches!(&r.actions[0], Action::Interrupt { method, .. } if method == "spaces"));
+        assert!(
+            matches!(&r.actions[1], Action::SendLine { line, .. } if line == "setsys bootpartition 0")
+        );
+        assert!(matches!(&r.actions[3], Action::TftpBoot { addr, .. } if addr == "0x84f00000"));
         let sysupgrade_line = r
             .actions
             .iter()
@@ -1384,6 +1444,35 @@ mod tests {
             })
             .expect("sysupgrade action present");
         assert!(sysupgrade_line.contains("/tmp/fw.bin"));
+        assert!(r.model.contains("zyxel/gs1900-8hp"));
+    }
+
+    #[test]
+    fn flash_rescue_recipe_generalizes_to_other_devices() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+        let profile =
+            crate::profile::DeviceProfile::load("dlink/dgs-1210-16", std::slice::from_ref(&dir))
+                .unwrap();
+        let r = flash_rescue_recipe_from_profile(
+            &profile,
+            "s.bin",
+            &("9".to_string() + &"1".repeat(63)),
+            "i.bin",
+            "10.0.0.2",
+            "/srv/tftp",
+            "10.0.0.1",
+        );
+        // the generality proof: different interrupt, no dual-partition,
+        // different load address — same engine
+        assert!(
+            matches!(&r.actions[0], Action::Interrupt { method, .. } if method == "esc_then_ctrl_c")
+        );
+        assert!(matches!(&r.actions[1], Action::TftpBoot { addr, .. } if addr == "0x8f000000"));
+        assert!(
+            r.boot_trigger
+                .contains(&"Hit Esc key to stop autoboot".to_string())
+        );
     }
 
     /// The generated marker lines can never satisfy a literal match on
