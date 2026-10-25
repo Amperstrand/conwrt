@@ -87,3 +87,5 @@ new JSON, no new code.
 - Live result: wedged 6.12.108 image -> OpenWrt 25.12.6 r33311, clean
   first boot, zero wedge ticks, all via
   `conwrt flash-rescue --at-shell --device zyxel/gs1900-8hp`.
+
+<!-- CI-hang investigation note: see conwrt issue for the flaky matrix hang; merge-blocking, not branch-blocking. -->
