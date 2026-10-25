@@ -75,12 +75,6 @@ fn read_secs(io: &mut dyn ConsoleIo, secs: f64, sink: &mut Vec<u8>) -> usize {
     n
 }
 
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty()
-        && hay.len() >= needle.len()
-        && hay.windows(needle.len()).any(|w| w == needle)
-}
-
 fn last_line_matching(text: &str, prefix: &str) -> Option<String> {
     text.lines()
         .rev()
