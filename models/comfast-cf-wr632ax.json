@@ -105,7 +105,7 @@
     "stock_webui_openwrt_25_12_5": {
       "tested": true,
       "date": "2026-10-25",
-      "notes": "Stock CF-WR632AX V2.6.1.2 WebUI at 192.168.0.1 (factory admin/admin). Installed the official OpenWrt 25.12.5 sysupgrade via POST /cgi-bin/login and multipart uploadfile to /cgi-bin/mbox-config?method=SET&section=system_upgrade_keep; then ran firstboot -y on the serial console to wipe the vendor overlay. Clean OpenWrt LAN 192.168.1.1; 2.5G WAN DHCP. On this unit the 1GbE LAN eth1 did not link; management used the 2.5G WAN. A reset-button press while powered did not wipe the stock config; power-cycle U-Boot recovery was not exercised. No MAC/serial/inventory retained."
+      "notes": "Stock CF-WR632AX V2.6.1.2 WebUI at 192.168.0.1 (factory admin/admin). Installed the official OpenWrt 25.12.5 sysupgrade via POST /cgi-bin/login and multipart uploadfile to /cgi-bin/mbox-config?method=SET&section=system_upgrade_keep; then ran firstboot -y on the serial console to wipe the vendor overlay. Clean OpenWrt LAN 192.168.1.1; 2.5G WAN DHCP. The stock UI initially showed the 1GbE LAN eth1 as down; after booting OpenWrt the LAN link came up at 1 Gbps, but management used the 2.5G WAN netdev wan. A reset-button press while powered did not wipe the stock config; power-cycle U-Boot recovery was not exercised. No MAC/serial/inventory retained."
     }
   },
   "notes": {
@@ -114,7 +114,7 @@
     "recovery_note": "Reset button timing matters: 5 green flashes = HTTP recovery, >7 flashes = U-Boot netconsole/TFTP",
     "stock_webui": "V2.6.1.2 stock UI is at http://192.168.0.1 (not 192.168.1.1); OpenWrt default is 192.168.1.1. Login POST /cgi-bin/login with JSON username/password. Flash an official sysupgrade via multipart uploadfile to /cgi-bin/mbox-config?method=SET&section=system_upgrade_keep; then run firstboot -y to wipe the vendor overlay.",
     "stock_vs_recovery_ip": "stock_default_ip is the vendor WebUI 192.168.0.1; U-Boot recovery is 192.168.1.1; OpenWrt LAN is 192.168.1.1.",
-    "lan_port": "Tested unit: 1GbE LAN eth1 did not link; 2.5G WAN eth0 DHCP worked, so WAN management was used. APs are the client path.",
+    "lan_port": "Stock UI reported the 1GbE LAN eth1 as down during initial access; after OpenWrt the LAN link came up at 1 Gbps. Management used the 2.5G WAN netdev wan. APs are the client path.",
     "reset_button": "A reset-button press while powered did not wipe the stock config on the tested unit. U-Boot recovery requires the power-cycle/reset timing in recovery-http and was not exercised here.",
     "uart_recovery": "Advanced recovery via mtk_uartboot with bl2 + fip files (see github.com/andros-ua/owrt-misc/tree/main/cf-wr632ax)"
   }
