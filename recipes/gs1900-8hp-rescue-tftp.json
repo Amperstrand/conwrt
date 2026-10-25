@@ -1,0 +1,90 @@
+{
+  "model": "zyxel_gs1900-8hp rescue-to-25.12.6 via U-Boot TFTP (canonical forum/device-tree recipe, agentless)",
+  "boot_trigger": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+  "probe_line": "",
+  "probe_interval_secs": 30,
+  "actions": [
+    {
+      "type": "spaces",
+      "secs": 90,
+      "until": "RTL838x#",
+      "_comment": "spaces into the 1s bootdelay during DRAM calibration"
+    },
+    {
+      "type": "send_line",
+      "line": "setsys bootpartition 0",
+      "settle_secs": 2
+    },
+    { "type": "send_line", "line": "savesys", "settle_secs": 3 },
+    {
+      "type": "send_line",
+      "line": "setenv ipaddr 192.168.1.1",
+      "settle_secs": 1.5
+    },
+    {
+      "type": "send_line",
+      "line": "setenv serverip 192.168.1.100",
+      "settle_secs": 1.5,
+      "_comment": "bench-host alias on the trunk's native VLAN; tftpd serves /srv/tftp-gs1900 on :69"
+    },
+    {
+      "type": "send_line",
+      "line": "rtk network on",
+      "settle_secs": 8,
+      "_comment": "U-Boot's own stack: forces the CPU port + PHY link up; independent of any OpenWrt/VLAN config"
+    },
+    { "type": "expect", "pattern": "Enable network", "timeout_secs": 15 },
+    {
+      "type": "send_line",
+      "line": "tftpboot 0x84f00000 owrt-25.12.6-initramfs-kernel.bin",
+      "settle_secs": 20,
+      "_comment": "seconds over 100M ethernet instead of 11 min YMODEM / 27 min raw stream"
+    },
+    {
+      "type": "expect",
+      "pattern": "Bytes transferred = 5289055",
+      "timeout_secs": 90,
+      "_comment": "U-Boot's own byte-count gate — the transfer leg's integrity check"
+    },
+    { "type": "send_line", "line": "iminfo 0x84f00000", "settle_secs": 5 },
+    { "type": "expect", "pattern": "OK", "timeout_secs": 15 },
+    { "type": "send_line", "line": "bootm 0x84f00000", "settle_secs": 5 },
+    { "type": "expect", "pattern": "root@OpenWrt", "timeout_secs": 200 },
+    {
+      "type": "send_line",
+      "line": "/etc/init.d/network restart",
+      "settle_secs": 15,
+      "_comment": "GS1900-16 device-note: may be needed on the initramfs default config"
+    },
+    {
+      "type": "send_line",
+      "line": "wget -O /tmp/base.bin http://192.168.1.100:8022/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "settle_secs": 30,
+      "_comment": "sysupgrade over the SAME L2 path TFTP proved; :8022 http.server on the bench host (8000 is docker-proxy)"
+    },
+    {
+      "type": "expect",
+      "pattern": "root@OpenWrt",
+      "timeout_secs": 60
+    },
+    {
+      "type": "send_line",
+      "line": "sha256sum /tmp/base.bin",
+      "settle_secs": 30,
+      "_comment": "on-box sha over the tiny wget'd file — no 27-min RX saturation before the compute (the stream-death pattern)"
+    },
+    {
+      "type": "expect",
+      "pattern": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "timeout_secs": 60
+    },
+    {
+      "type": "send_line",
+      "line": "sysupgrade -n /tmp/base.bin",
+      "settle_secs": 10,
+      "_comment": "flash; -n wipes the killer-alias config"
+    }
+  ],
+  "cooldown_secs": 600,
+  "max_fires": 1
+}

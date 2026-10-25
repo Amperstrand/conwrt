@@ -115,7 +115,10 @@ sta: ## Connect the router to an upstream WiFi AP as a client (SSID=, KEY=, opti
 ## Usage: make sta SSID=StarGate KEY=secret BAND=2.4ghz IP=192.168.1.1
 
 test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests, live API tests, and hardware bench runs
-	@pytest tests -m "not integration and not bench and not live"
+	# hard per-test cap (issue #563): a hung test (one spawns an ssh that
+	# never returns on CI runners) must fail RED with its NAME, not hang
+	# the job forever and block merges
+	@pytest tests -m "not integration and not bench and not live" --timeout=120 --timeout-method=signal
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
 	@if command -v bats >/dev/null 2>&1; then \

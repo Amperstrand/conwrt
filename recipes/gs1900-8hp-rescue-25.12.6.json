@@ -1,0 +1,54 @@
+{
+  "model": "zyxel_gs1900-8hp rescue-to-25.12.6 (self-firing, agentless)",
+  "boot_trigger": ["Copied Preloader", "DRAM is set", "U-Boot 2011"],
+  "actions": [
+    {
+      "type": "spaces",
+      "secs": 90,
+      "until": "RTL838x#",
+      "_comment": "spaces buffer into the 1s bootdelay while DRAM calibrates (>30s on warm reboot); the 2026-10-24 12:58 lesson — never probe a shell first"
+    },
+    {
+      "type": "loady",
+      "addr": "0x84f00000",
+      "name": "initramfs.bin",
+      "image_path": "/srv/tftp-gs1900/owrt-25.12.6-initramfs-kernel.bin",
+      "pre": ["setsys bootpartition 0", "savesys"],
+      "boot": true,
+      "_comment": "full gated leg: YMODEM, Total-Size gate, settle+fresh-line, iminfo gate, explicit-address bootm into the pristine initramfs (clean console)"
+    },
+    {
+      "type": "expect",
+      "pattern": "root@OpenWrt",
+      "timeout_secs": 200
+    },
+    {
+      "type": "arm_script",
+      "script_path": "/tmp/cw-rescue.sh",
+      "lines": [
+        "#!/bin/sh",
+        "busybox stty raw -echo",
+        "head -c 6554382 > /tmp/base.bin",
+        "busybox stty sane",
+        "S=$(sha256sum /tmp/base.bin | cut -d\" \" -f1)",
+        "test \"$S\" = \"9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f\" && echo CW-GATE-PASS || echo CW-GATE-FAIL",
+        "test \"$S\" = \"9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f\" && sysupgrade -n /tmp/base.bin"
+      ],
+      "run": true,
+      "_comment": "receiver arms ON BOX; sha gate + sysupgrade fire with NO host round-trip (three boxes died in that gap on 2026-10-23)"
+    },
+    {
+      "type": "stream",
+      "file": "/srv/tftp-gs1900/owrt-25.12.6-squashfs-sysupgrade.bin",
+      "sha256": "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
+      "pace_bytes": 512,
+      "pace_ms": 80,
+      "done_marker": "CW-GATE-PASS",
+      "fail_marker": "CW-GATE-FAIL",
+      "verdict_timeout_secs": 600,
+      "_comment": "paced raw pipe under the 11.5 KiB/s line drain; on-box gate decides; sysupgrade -n boots the flashed image (config wiped = killer alias gone)"
+    }
+  ],
+  "cooldown_secs": 600,
+  "max_fires": 1
+}

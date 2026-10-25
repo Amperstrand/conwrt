@@ -77,12 +77,16 @@ pub mod boot_capture;
 pub mod collect;
 pub mod configure;
 pub mod console;
+pub mod detect;
 pub mod flash;
 pub mod io;
 pub mod lint;
 pub mod monitor;
+pub mod profile;
 pub mod recovery;
+pub mod tftp;
 pub mod uboot;
+pub mod watch;
 
 pub use backup::{
     BackupError, BackupSelection, DumpOutcome, Partition, decode_dump_lines, dump_partition,
