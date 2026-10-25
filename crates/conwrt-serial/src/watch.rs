@@ -890,7 +890,7 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     // proves every generated line runs and prints the
                     // exact marker).
                     let line = format!(
-                        "sh -c \"A=R; B=DY; busybox stty raw -echo && echo \"$A\"$B || {{ C=N; D=OSTTY; echo \"$C\"$D; }}; head -c {} >> {remote_path}; E=C; F=K-{}; echo \"$E\"$F\"\n",
+                        "sh -c \"A=R; B=DY; busybox stty raw -echo && echo \"$A\"$B || {{ C=N; D=OSTTY; echo \"$C\"$D; exit 1; }}; head -c {} >> {remote_path}; E=C; F=K-{}; echo \"$E\"$F\"\n",
                         chunk.len(),
                         ck_number,
                     );
@@ -1555,7 +1555,7 @@ root@OpenWrt:~# \r\n";
     fn marker_lines_defeat_command_echo() {
         let ck_number = "0";
         let line = format!(
-            "sh -c \"A=R; B=DY; busybox stty raw -echo && echo \"$A\"$B || {{ C=N; D=OSTTY; echo \"$C\"$D; }}; head -c 819200 >> /tmp/f; E=C; F=K-{}; echo \"$E\"$F\"",
+            "sh -c \"A=R; B=DY; busybox stty raw -echo && echo \"$A\"$B || {{ C=N; D=OSTTY; echo \"$C\"$D; exit 1; }}; head -c 819200 >> /tmp/f; E=C; F=K-{}; echo \"$E\"$F\"",
             ck_number
         );
         assert!(!line.contains("RDY"));

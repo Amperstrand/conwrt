@@ -347,6 +347,39 @@ pub fn serve_one(
     Ok(sent)
 }
 
+/// Verbose variant (diagnostics): logs every packet exchange to stderr.
+pub fn serve_until_verbose(bind: SocketAddr, root: &Path, stop: &dyn Fn() -> bool) -> Vec<String> {
+    let sock = match UdpSocket::bind(bind) {
+        Ok(s) => s,
+        Err(e) => return vec![format!("bind {bind}: {e}")],
+    };
+    eprintln!("bound {bind}");
+    let mut errors = Vec::new();
+    sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    while !stop() {
+        let mut buf = [0u8; 2048];
+        match sock.recv_from(&mut buf) {
+            Ok((n, peer)) => {
+                let op = if n >= 2 {
+                    u16::from_be_bytes([buf[0], buf[1]])
+                } else {
+                    0
+                };
+                eprintln!("RX {n}B op={op} from {peer}");
+                match serve_one(&sock, root, &buf[..n], peer, 8) {
+                    Ok(sent) => eprintln!("session done: {sent} bytes to {peer}"),
+                    Err(e) => {
+                        eprintln!("session ERR: {e}");
+                        errors.push(e);
+                    }
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    errors
+}
+
 /// Run a read-only TFTP server until `stop` becomes true. Each RRQ is
 /// one `serve_one` session; errors are returned, not fatal.
 pub fn serve_until(bind: SocketAddr, root: &Path, stop: &dyn Fn() -> bool) -> Vec<String> {
