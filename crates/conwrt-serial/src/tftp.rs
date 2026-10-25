@@ -174,8 +174,20 @@ pub fn serve_one(
             break;
         }
         if sent >= data.len() as u64 {
-            // final zero-length note per RFC when the file is an exact
-            // multiple — U-Boot accepts either; send nothing more
+            // RFC 1350: a file that is an exact multiple of blksize
+            // needs a terminating ZERO-length block (Codex P2) — the
+            // last full block alone does not signal EOF
+            let term = data_packet(block, b"");
+            for _ in 0..max_retries {
+                sock.send_to(&term, peer).map_err(|e| e.to_string())?;
+                sock.set_read_timeout(Some(Duration::from_secs(1))).ok();
+                let mut b4 = [0u8; 4];
+                if let Ok((4, from)) = sock.recv_from(&mut b4) {
+                    if from == peer && u16::from_be_bytes([b4[2], b4[3]]) == block {
+                        break;
+                    }
+                }
+            }
             break;
         }
     }

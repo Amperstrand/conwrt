@@ -83,6 +83,10 @@ pub fn telnet_escape(data: &[u8]) -> Vec<u8> {
 pub struct TelnetFramedIo {
     inner: Box<dyn ConsoleIo>,
     pending: Vec<u8>,
+    /// Raw tail held back when a read ends mid-IAC-sequence (Codex P2):
+    /// an escaped 0xFF or a suboption split across reads must not be
+    /// decoded as two fragments.
+    raw_tail: Vec<u8>,
 }
 
 impl TelnetFramedIo {
@@ -92,8 +96,81 @@ impl TelnetFramedIo {
         Self {
             inner,
             pending: Vec::new(),
+            raw_tail: Vec::new(),
         }
     }
+
+    /// How many trailing bytes of `buf` form an incomplete IAC
+    /// sequence (0: complete; 1: lone IAC; 2: IAC+cmd-with-option;
+    /// inside a suboption: everything after the last IAC SB start).
+    fn incomplete_tail_len(buf: &[u8]) -> usize {
+        let n = buf.len();
+        if n == 0 {
+            return 0;
+        }
+        if buf[n - 1] == 0xFF {
+            return 1;
+        }
+        if n >= 2 && buf[n - 2] == 0xFF {
+            let cmd = buf[n - 1];
+            // commands carrying an option byte: WILL/WONT/DO/DONT (and
+            // anything outside the standalone range) need one more byte
+            if !(0xF1..=0xF6).contains(&cmd) {
+                return 2;
+            }
+        }
+        // suboption scanning: if we are inside an unterminated SB
+        let mut i = 0;
+        let mut in_sb = false;
+        while i < n {
+            if buf[i] == 0xFF && i + 1 < n {
+                match buf[i + 1] {
+                    0xFA => {
+                        in_sb = true;
+                        i += 2;
+                        continue;
+                    }
+                    0xF0 => {
+                        in_sb = false;
+                        i += 2;
+                        continue;
+                    }
+                    0xFF => {
+                        i += 2;
+                        continue;
+                    }
+                    _ => {
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+        if in_sb {
+            // hold back from the last SB start we can locate
+            if let Some(pos) = find_last_sb(buf) {
+                return n - pos;
+            }
+        }
+        0
+    }
+}
+
+fn find_last_sb(buf: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    let mut last = None;
+    while i + 1 < buf.len() {
+        if buf[i] == 0xFF && buf[i + 1] == 0xFA {
+            last = Some(i);
+            i += 2;
+        } else if buf[i] == 0xFF {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    last
 }
 
 impl ConsoleIo for TelnetFramedIo {
@@ -106,11 +183,20 @@ impl ConsoleIo for TelnetFramedIo {
             return Ok(n);
         }
         let mut raw = [0u8; 4096];
-        let k = self.inner.read(&mut raw)?;
-        if k == 0 {
+        let mut k = self.inner.read(&mut raw)?;
+        if k == 0 && self.raw_tail.is_empty() {
             return Ok(0);
         }
-        let clean = telnet_strip_iac(&raw[..k]);
+        // prepend any held-back partial sequence from the last read
+        let mut framed = std::mem::take(&mut self.raw_tail);
+        framed.extend_from_slice(&raw[..k]);
+        k = framed.len();
+        let hold = Self::incomplete_tail_len(&framed[..k]);
+        let decodable = &framed[..k - hold];
+        if hold > 0 {
+            self.raw_tail = framed[k - hold..].to_vec();
+        }
+        let clean = telnet_strip_iac(decodable);
         let n = clean.len().min(buf.len());
         buf[..n].copy_from_slice(&clean[..n]);
         if n < clean.len() {
@@ -591,9 +677,11 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     }
                     std::thread::sleep(Duration::from_millis(800));
                     let before = s.window.len();
+                    // var-concat build marker (Codex P1 round 2): the
+                    // echoed command cannot contain the literal
                     s.send_raw(
                         format!(
-                            "test $(wc -l < {script_path}) -eq {total} && echo WATCH-BUILD-OK\n"
+                            "W1=WATCH-BUILD-; W2=OK; test $(wc -l < {script_path}) -eq {total} && echo \"$W1\"$W2\n"
                         )
                         .as_bytes(),
                     );
@@ -637,8 +725,10 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 // quote-split the verdict markers (Codex P1 #2): after
                 // `stty sane` the echo of this line would contain the
                 // literal CW-GATE-PASS and false-pass the gate
+                // var-concat verdict markers (Codex P1): the echoed command shows
+                // variable names, never the literals
                 let arm = format!(
-                    "S=$(sha256sum {remote_path} | cut -d' ' -f1); test \"$S\" = \"{want}\" && echo CW-GATE-P''''ASS' || echo CW-GATE-F''''AIL'"
+                    "P=CW-GATE-P; Q=ASS; R=CW-GATE-F; S2=AIL; V=$(sha256sum {remote_path} | cut -d' ' -f1); test \"$V\" = \"{want}\" && echo \"$P\"$Q || echo \"$R\"$S2"
                 );
                 s.send_raw(format!("rm -f {remote_path}\n").as_bytes());
                 s.read_secs(1.5);
@@ -653,6 +743,7 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 let total_chunks = data.len().div_ceil(*chunk_bytes);
                 for (i, chunk) in data.chunks(*chunk_bytes).enumerate() {
                     let ck = format!("CK-{i}");
+                    let ck_number = i.to_string();
                     // The handshake must PROVE raw mode armed: the flashed
                     // 25.12.6 busybox lacks the stty applet entirely
                     // ("stty: applet not found", 2026-10-24 run 4) — RDY
@@ -667,11 +758,18 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                     // literal marker text — "R""DY" in the command
                     // echoes with quotes, prints clean; the literal
                     // match can only ever hit real output.
-                    let ck_tail = ck.trim_start_matches("CK-").to_string();
+                    // Echo-proof AND syntax-safe markers via variable concatenation
+                    // (Codex P1 round 2): 'V1=C; V2=K-0; echo "$V1$V2"'
+                    // echoes the VARIABLE NAMES, prints the resolved
+                    // marker — no literal to false-match, no quoting to
+                    // unbalance (the quote-split attempt had an
+                    // unterminated string; the exec-in-test below now
+                    // proves every generated line runs and prints the
+                    // exact marker).
                     let line = format!(
-                        "sh -c \"busybox stty raw -echo && echo 'R''DY' || echo 'NO''STTY'; head -c {} >> {remote_path}; echo 'C''{}\"\n",
+                        "sh -c \"A=R; B=DY; busybox stty raw -echo && echo \"$A\"$B || {{ C=N; D=OSTTY; echo \"$C\"$D; }}; head -c {} >> {remote_path}; E=C; F=K-{}; echo \"$E\"$F\"\n",
                         chunk.len(),
-                        ck_tail
+                        ck_number,
                     );
                     s.send_raw(line.as_bytes());
                     // verified handshake: wait for RDY (or die on NOSTTY)
@@ -944,9 +1042,11 @@ pub fn run_watch(
         .open(transcript_path)?;
     let io = open_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| std::io::Error::other(format!("open {port_spec}: {e}")))?;
-    // telnet-mode TCP consoles (ser2net): ALL reads/writes go through
-    // the framing adapter — binary frames included
-    let io: Box<dyn ConsoleIo> = if port_spec.starts_with("tcp://") {
+    // TCP framing is EXPLICIT (Codex P2 round 2): io.rs documents
+    // tcp:// as a RAW relay (and the project's own bridge forwards raw
+    // bytes), so wrapping every tcp:// endpoint would corrupt YMODEM
+    // over those. ser2net-style telnet accepters opt in with telnet://
+    let io: Box<dyn ConsoleIo> = if port_spec.starts_with("telnet://") {
         Box::new(TelnetFramedIo::negotiate(io))
     } else {
         io
@@ -995,6 +1095,7 @@ pub fn run_watch(
     }
     let mut fires = 0u32;
     let mut last_probe: Option<Instant> = None;
+    let mut trigger_scan_from: usize = 0;
     loop {
         if fires >= recipe.max_fires {
             return Ok(WatchOutcome {
@@ -1020,14 +1121,23 @@ pub fn run_watch(
         }
         let before = s.window.len();
         s.read_secs(idle_poll_secs);
-        let recent = s.recent_since(before).to_vec();
-        if triggers.iter().any(|t| contains(&recent, t)) {
+        let _ = before;
+        // Codex P2: a signature straddling two polls ("Copied Pre" |
+        // "loader") lives in the ACCUMULATED window, not in either
+        // per-poll slice — match the window, guarded by a processed
+        // offset so a signature only fires once.
+        if triggers
+            .iter()
+            .any(|t| contains(&s.window[trigger_scan_from..], t))
+        {
             if let Some(t) = last_fire {
                 if t.elapsed().as_secs() < recipe.cooldown_secs {
                     s.log("trigger inside cooldown — ignored");
                     continue;
                 }
             }
+            // consume the matched bytes so this signature cannot refire
+            trigger_scan_from = s.window.len();
             s.log("BOOT SIGNATURE DETECTED — firing recipe");
             last_fire = Some(Instant::now());
             let _ = std::fs::write(
