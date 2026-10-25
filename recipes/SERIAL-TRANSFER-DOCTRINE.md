@@ -43,3 +43,30 @@ Shipped recipes use `192.168.1.100` as a PLACEHOLDER for the rescue
 host — substitute your host's address on the wire (or use `conwrt
 flash-rescue --server-ip`, which takes it as an argument). Bench-
 specific addresses never belong in the repo.
+
+## 2026-10-25 definitive findings (on-box, 24.10.2 initramfs live shell)
+
+- **ISIG is OFF on the rescue console**: a mid-line 0x03 echoes as a
+  literal `^C` and does NOT signal the foreground process. Canonical
+  mode therefore does not kill `head` on control bytes — but:
+- **ECHO is ON and mangles binary**: 64 raw bytes came back as
+  caret-notation garbage (`^C^E^F^^\^]...`) — every binary transfer
+  over this tty is an echo storm, and echo storms hard-lock the CPU
+  (proven 4x this week). Combined with **NO stty on any official
+  image** (busybox multi-call dispatch refuses the applet — verified
+  on 24.10.2 AND 25.12.6), serial-chunk binary transfer is CLOSED on
+  official images. The enabler is a custom stty-enabled rescue image
+  (image builder / ASU, ~30-60 min) — or just use the ladder:
+  TFTP 8 s, YMODEM ~11 min.
+- **fw_setenv/fw_printenv are ABSENT in initramfs** (permanent install
+  has them): U-Boot-env transaction markers are not reachable from a
+  rescue shell; conwrt keeps the rescue journal host-side
+  (`<transcript>.rescue`) instead.
+- **25.12 sysupgrade prints `upgrade: Sending TERM to remaining
+  processes`** — not `Sending SIGTERM`. Commit banners are profile
+  data now (`flash.sysupgrade_banner`).
+- **From-shell rescue LIVE-PROVEN**: `conwrt flash-rescue --at-shell
+  --device zyxel/gs1900-8hp` -> profile shell_net_setup -> wget
+  6554382 B -> on-box sha verdict -> self-firing `sysupgrade -n` ->
+  clean 25.12.6 r33311 first boot, 0 wedge ticks. The 3-day arc
+  (wedge -> rescue) closed agentless.
