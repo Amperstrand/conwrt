@@ -695,7 +695,11 @@ impl RescueJournal {
     /// Last non-terminal phase, if the journal ends unfinished.
     pub fn unfinished_phase(&self) -> Option<String> {
         let text = std::fs::read_to_string(&self.path).ok()?;
-        let last = text.lines().filter(|l| !l.trim().is_empty()).next_back()?;
+        let last = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .pop()?;
         let v: serde_json::Value = serde_json::from_str(last).ok()?;
         let phase = v.get("phase")?.as_str()?.to_string();
         if phase == "rescue-complete" || phase == "rescue-refused" {
