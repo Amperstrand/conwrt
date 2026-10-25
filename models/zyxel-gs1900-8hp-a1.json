@@ -69,7 +69,8 @@
       ],
       "envelope": [
         "board-name-match"
-      ]
+      ],
+      "conwrt_from_shell": "conwrt flash-rescue --at-shell --device zyxel/gs1900-8hp: fires on the live root@OpenWrt prompt, profile shell_net_setup (ip addr add {client_ip}/24 dev eth0), wget, on-box sha verdict, SELF-FIRING gate 'test $V = <sha> && sysupgrade -n || echo CW-SHA-REFUSED-$V'. LIVE-PROVEN 2026-10-25: wedged 6.12.108 -> 25.12.6 r33311, clean first boot, 0 wedge ticks."
     },
     "mtd-write": {
       "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions.",
@@ -110,7 +111,7 @@
         "serverip": "192.168.1.2",
         "ipaddr": "192.168.1.1",
         "baudrate": "115200",
-        "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP."
+        "note": "bootdelay=1 set by OEM. Dual-partition device \u2014 use 'setsys bootpartition 0' and 'savesys' before TFTP."
       },
       "resources_required": [
         "power",
@@ -120,7 +121,11 @@
       ],
       "envelope": [
         "partition-backup"
-      ]
+      ],
+      "tested_hardware_note": "FULLY TESTED 2026-10-23..25 on bench (conwrt PR #545): serial-watch BREAK ladder + spaces interrupt, rtk network on, tftpboot 0x84f00000 (bundled Rust TFTP server), iminfo gate, bootm, initramfs shell, wget + on-box sha gate + self-firing 'sysupgrade -n'. Agentless one-command: conwrt flash-rescue.",
+      "conwrt_command": "conwrt flash-rescue --port telnet://HOST:7171 --device zyxel/gs1900-8hp --sysupgrade owrt-25.12.6-squashfs-sysupgrade.bin --sha256 <sha> --initramfs owrt-25.12.6-initramfs-kernel.bin --serve-dir /srv/tftp --server-ip 192.168.1.10",
+      "tested": true,
+      "test_date": "2026-10-25"
     }
   },
   "partition_layout": {
@@ -219,7 +224,7 @@
       "voltage": "3.3V",
       "header_location": "UART header (left side PCB)",
       "pinout": "VCC(3.3V), TX, RX, GND",
-      "fw_setenv_works": true
+      "fw_setenv_works": "true on PERMANENT install; ABSENT in initramfs (verified 2026-10-25: which fw_setenv -> not found). Rescue transaction markers therefore live host-side (conwrt <transcript>.rescue journal)."
     },
     "recovery_commands": {
       "boot_initramfs_via_tftp": [
@@ -311,13 +316,13 @@
     "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default.",
     "control_plane_wedge_class": {
       "observed": "2026-10-20, three occurrences in one session (25.12.x + realtek-poe fork r5-era)",
-      "attribution": "Root-caused 2026-10-20 to overlapping-L3/netdev configuration events (recipes/detection-and-recovery.md §7-8). The earlier \"PoE daemon activity bursts\" trigger theory is RETIRED: the PoE daemon is exonerated (healthy counters through the kill); every incident coincided with netdev/L3 config events.",
-      "trigger_pattern": "Overlapping subnet / netdev-L3 configuration events — adding a subnet that OVERLAPS an already-routed prefix wedges the network stack within seconds (openwrt/openwrt#26061). NOT PoE daemon activity.",
+      "attribution": "Root-caused 2026-10-20 to overlapping-L3/netdev configuration events (recipes/detection-and-recovery.md \u00a77-8). The earlier \"PoE daemon activity bursts\" trigger theory is RETIRED: the PoE daemon is exonerated (healthy counters through the kill); every incident coincided with netdev/L3 config events.",
+      "trigger_pattern": "Overlapping subnet / netdev-L3 configuration events \u2014 adding a subnet that OVERLAPS an already-routed prefix wedges the network stack within seconds (openwrt/openwrt#26061). NOT PoE daemon activity.",
       "symptoms": "CPU plane dies (ICMP/SSH/ubus unresponsive) while ASIC forwarding and PoE delivery KEEP WORKING \u2014 powered DUTs stay up through the outage",
       "recovery": "power cycle (mains); config survives; all PoE DUTs cold-cycle and self-recover",
       "detection": "a DUT behind the switch still answers while the switch's own mgmt IP does not = this class",
       "mitigations": [
-        "never re-use a routed subnet on a second SVI/alias — preflight any SVI add against a lab prefix inventory + live addr/route/neigh tables",
+        "never re-use a routed subnet on a second SVI/alias \u2014 preflight any SVI add against a lab prefix inventory + live addr/route/neigh tables",
         "keep the serial console attached and EXPORTED \u2014 it is the only diagnostic door when the CPU plane hangs (and console wiring needs TX, RX AND GND verified before you need it)",
         "the on-box wedge-guard timer cannot help when the whole CPU plane hangs \u2014 external liveness watch required"
       ],
@@ -349,8 +354,10 @@
       "notes": "SCP requires -O flag (legacy protocol) \u2014 OpenWrt initramfs lacks sftp-server. sysupgrade completed successfully, ~105s boot time. MTD layout merged from dual 6976K+6976K partitions to single 13824K firmware partition. JFFS2 overlay init takes ~30s during first boot. All 8 PoE ports enabled by default in /etc/config/poe."
     },
     "serial-tftp-openwrt": {
-      "tested": false,
-      "notes": "UNTESTED. U-Boot env verified (bootdelay=1, boardmodel=ZyXEL_GS1900_8HP). serverip=192.168.1.X (should update to 192.168.1.2). Serial commands documented from OpenWrt source."
+      "tested": true,
+      "date": "2026-10-25",
+      "verified_with": "conwrt flash-rescue (profile-driven, PR #545): BREAK ladder -> rtk network on -> bundled-TFTP tftpboot 5289055 B -> iminfo -> bootm -> initramfs shell -> wget 6554382 B -> on-box sha gate -> sysupgrade -n",
+      "notes": "Full agentless chain live-proven twice (TFTP ladder 2026-10-24/25; from-shell variant 2026-10-25). First boot from flash: OpenWrt 25.12.6 r33311, clean shell, 0 wedge ticks. YMODEM fallback (uboot loady) also proven: 5.29 MB byte-perfect @ ~10.4 KiB/s."
     }
   },
   "stock_firmware": {
@@ -565,5 +572,18 @@
         "No overlay tarball generation needed \u2014 simpler code path"
       ]
     }
+  },
+  "serial_rescue_doctrine": {
+    "source": "3-day live-fire arc 2026-10-23..25, all on this device (conwrt-bench #66, PRs #502/#545)",
+    "failure_depth_taxonomy": [
+      "config-wedge: BREAK + sysrq-b works (serial-recover)",
+      "echo-storm lockup: self-heals after backlog drains; DANGER: stale replay false-triggers watchers \u2014 fire-markers on disk + verify console liveness before acting",
+      "CPU hard-lock (printk/8250 class): BREAK returns 0 bytes \u2014 only power clears"
+    ],
+    "no_stty_quirk": "BOTH official initramfs images (24.10.2, 25.12.6) ship NO stty \u2014 busybox multi-call dispatch refuses the applet; raw-mode serial binary transfer impossible without a custom rescue image. Canonical-mode experiment 2026-10-25: ISIG is OFF (mid-line ^C echoes literally, no signal) and the tty echoes binary as caret notation \u2014 echo storms confirmed lethal => serial-chunks needs a custom stty-enabled image; tftp (8s) and YMODEM (~11min, ACK-paced) carry the load meanwhile.",
+    "telnet_iac": "ser2net telnet consoles eat every 0xFF as IAC \u2014 ALL bytes incl. binary YMODEM frames go through TelnetFramedIo (escape-on-write, IAC-strip-on-read, one-time BINARY negotiation). tcp:// = raw framing, telnet:// = framed.",
+    "self_firing_gates": "sha verify + sysupgrade -n in ONE shell line; NEVER a host round-trip between file arrival and flash \u2014 three box deaths lived in that gap.",
+    "fresh_boot": "spaces IMMEDIATELY on the boot signature (bootdelay is 1s; any shell probing burns it). Expect windows match only bytes from trigger-fire time onward (fire-mark).",
+    "device_profiles": "devices/zyxel/gs1900-8hp.json (inherits realtek/rtl838x-base): signatures, interrupt method, load addr, dual-partition cmds, shell_net_setup, sysupgrade_banner, quirks. New device = new JSON, not new code."
   }
 }
