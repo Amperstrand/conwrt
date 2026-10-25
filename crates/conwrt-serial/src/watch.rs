@@ -504,7 +504,6 @@ pub fn flash_rescue_recipe(
     sysupgrade_sha256: &str,
     initramfs_name: &str,
     server_ip: &str,
-    bind: &str,
     serve_dir: &str,
     client_ip: &str,
     addr: &str,
@@ -534,7 +533,7 @@ pub fn flash_rescue_recipe(
             },
             Action::TftpBoot {
                 addr: addr.to_string(),
-                bind: bind.to_string(),
+                bind: format!("{server_ip}:69"),
                 serve_dir: serve_dir.to_string(),
                 file: initramfs_name.to_string(),
                 client_ip: client_ip.to_string(),
@@ -958,7 +957,6 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 s.send_raw(b"busybox stty sane\n");
                 s.read_secs(2.0);
                 // final on-box gate
-                let before = s.window.len();
                 s.send_raw(format!("{arm}\n").as_bytes());
                 let deadline =
                     Instant::now() + Duration::from_secs_f64((*verdict_timeout_secs).max(1.0));
@@ -1131,8 +1129,8 @@ pub fn run_watch(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if elapsed.saturating_sub(secs) < recipe.cooldown_secs as u64 {
-                let wait = recipe.cooldown_secs as u64 - (elapsed - secs);
+            if elapsed.saturating_sub(secs) < recipe.cooldown_secs {
+                let wait = recipe.cooldown_secs - (elapsed - secs);
                 return Ok(WatchOutcome {
                     fires: 0,
                     success: true,
@@ -1367,7 +1365,6 @@ mod tests {
             "9111c296bbb4e6398002d9a3eb9e9d9ce16491286a624479955b9faee052155f",
             "owrt-25.12.6-initramfs-kernel.bin",
             "192.168.1.10",
-            "192.168.1.10:69",
             "/srv/tftp-gs1900",
             "192.168.1.1",
             "0x84f00000",

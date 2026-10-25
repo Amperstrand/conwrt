@@ -1007,14 +1007,7 @@ fn main() -> ExitCode {
                 std::process::exit(2);
             }
             let recipe = conwrt_serial::watch::flash_rescue_recipe(
-                &fname,
-                &sha256,
-                &initramfs,
-                &server_ip,
-                &format!("{server_ip}:69"),
-                &serve_dir,
-                &client_ip,
-                &addr,
+                &fname, &sha256, &initramfs, &server_ip, &serve_dir, &client_ip, &addr,
             );
             println!(
                 "conwrt: flash-rescue {} via {initramfs} from {server_ip}",

@@ -26,9 +26,12 @@ fn err_packet(code: u16, msg: &str) -> Vec<u8> {
     p
 }
 
+/// A parsed RRQ/WRQ: opcode, filename, mode, and request-ordered options.
+pub type Request = (u16, String, String, Vec<(String, String)>);
+
 /// Parse an RRQ/WRQ packet: (opcode, filename, mode, options).
 /// Options are returned in request order as (name, value) pairs.
-pub fn parse_request(pkt: &[u8]) -> Result<(u16, String, String, Vec<(String, String)>), String> {
+pub fn parse_request(pkt: &[u8]) -> Result<Request, String> {
     if pkt.len() < 4 {
         return Err("short packet".into());
     }
@@ -170,12 +173,6 @@ impl TftpSession {
         (step, Some(sess))
     }
 
-    fn next_block_packet(&self, data: &[u8]) -> Vec<u8> {
-        let end = ((self.sent as usize) + self.blksize as usize).min(data.len());
-        let payload = &data[self.sent as usize..end];
-        data_packet(self.in_flight.wrapping_add(1), payload)
-    }
-
     fn advance(&mut self, data: &[u8]) -> SessionStep {
         if self.finished {
             return SessionStep::Done(self.sent);
@@ -237,6 +234,8 @@ impl TftpSession {
     }
 }
 
+/// Serve a single client session over the std UDP shell (RRQ only;
+/// the block/OACK/retry logic is the pure [`TftpSession`]).
 pub fn serve_one(
     sock: &UdpSocket,
     root: &Path,
@@ -386,7 +385,8 @@ mod tests {
         let mut p = vec![0, 1];
         p.extend_from_slice(b"img.bin\0");
         p.extend_from_slice(b"octet\0");
-        p.extend_from_slice(b"blksize\01468\0");
+        p.extend_from_slice(b"blksize\0");
+        p.extend_from_slice(b"1468\0");
         let (op, file, mode, opts) = parse_request(&p).unwrap();
         assert_eq!((op, file.as_str(), mode.as_str()), (1, "img.bin", "octet"));
         assert_eq!(opts, vec![("blksize".to_string(), "1468".to_string())]);
@@ -425,7 +425,8 @@ mod tests {
     fn session_golden_sequences() {
         let rrq_opts = {
             let mut p = vec![0, 1];
-            p.extend_from_slice(b"f.bin\0octet\0blksize\01000\0");
+            p.extend_from_slice(b"f.bin\0octet\0blksize\0");
+            p.extend_from_slice(b"1000\0");
             p
         };
         let data: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect(); // 2.5 blocks @1000
@@ -508,7 +509,8 @@ mod tests {
         // client: RRQ with blksize, OACK, ACK loop
         let c = UdpSocket::bind("127.0.0.1:0").unwrap();
         let mut rrq = vec![0, 1];
-        rrq.extend_from_slice(b"hello.bin\0octet\0blksize\01024\0");
+        rrq.extend_from_slice(b"hello.bin\0octet\0blksize\0");
+        rrq.extend_from_slice(b"1024\0");
         c.send_to(&rrq, addr).unwrap();
         let mut buf = [0u8; 2048];
         let (n, _) = c.recv_from(&mut buf).unwrap();
