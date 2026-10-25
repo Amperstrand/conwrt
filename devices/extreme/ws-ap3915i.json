@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "profile": "extreme/ws-ap3915i",
+  "family": ["qualcomm-ipq40xx", "extreme-ws-ap3915i"],
+  "inherits": [],
+  "console": {
+    "baud": 115200,
+    "uboot_prompt": "",
+    "bootdelay_interrupt": "",
+    "boot_signatures": ["U-Boot 2012.07.19", "ttyMSM0"],
+    "shell_prompt": "root@OpenWrt"
+  },
+  "uboot": {
+    "load_addr": "0x88000000",
+    "network_init": "",
+    "boot_cmd": "run boot_openwrt",
+    "verify_cmd": "iminfo {load_addr}",
+    "partition_select_cmd": null,
+    "partition_save_cmd": null,
+    "shell_net_setup": "ip link set eth0 up; ip addr add {client_ip}/24 dev eth0 2>/dev/null; echo CW-NET-$?"
+  },
+  "flash": {
+    "method": "openwrt-sysupgrade",
+    "sysupgrade_cmd": "sysupgrade -n {image}",
+    "sysupgrade_banner": "upgrade: Sending TERM"
+  },
+  "quirks": {
+    "notes": [
+      "PARTIAL PROFILE — fields awaiting on-console confirmation: uboot_prompt, bootdelay_interrupt, network_init (run serial-detect against the splice console and fill from observation)",
+      "console is an RJ45 jack at RS-232 levels (Cisco-style pinout: pin3=TXD pin6=RXD pins4/5=GND) — NOT 3.3V TTL; use a Cisco USB console cable or the in-case 4-pin TTL header",
+      "fw_setenv does NOT work (device missing from uboot-envtools board list) — env writes go through stock rdwr_boot_cfg while stock SSH is alive; rescue markers stay host-side",
+      "NO reset button (no GPIO buttons in DTS) — OpenWrt failsafe unreachable; no LuCI in stock downloads image",
+      "verified on bench 2026-09: serial-bridge console capture (AP-to-AP 3-wire), rdwr_boot_cfg TFTP flash flow, sysupgrade",
+      "bootcmd variants: stock 'bootx', net rescue 'run boot_net' (TFTP vmlinux.gz.uImage.3912), flash 'run boot_openwrt' (sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000)"
+    ]
+  }
+}
