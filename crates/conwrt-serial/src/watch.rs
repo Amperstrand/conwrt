@@ -90,6 +90,16 @@ pub struct TelnetFramedIo {
 }
 
 impl TelnetFramedIo {
+    /// Wrap WITHOUT sending negotiation (test paths: the fake transport
+    /// would otherwise see the IAC bytes as payload).
+    pub fn negotiate_without_send(inner: Box<dyn ConsoleIo>) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+            raw_tail: Vec::new(),
+        }
+    }
+
     /// Wrap and negotiate telnet BINARY mode both directions once.
     pub fn negotiate(mut inner: Box<dyn ConsoleIo>) -> Self {
         let _ = inner.write_all_bytes(&[0xFF, 0xFB, 0x00, 0xFF, 0xFD, 0x00]);
@@ -100,77 +110,53 @@ impl TelnetFramedIo {
         }
     }
 
-    /// How many trailing bytes of `buf` form an incomplete IAC
-    /// sequence (0: complete; 1: lone IAC; 2: IAC+cmd-with-option;
-    /// inside a suboption: everything after the last IAC SB start).
+    /// Trailing incomplete-IAC length via a real parser scan (the
+    /// property test caught the tail-lookahead half-fix: a COMPLETE
+    /// escaped pair `FF FF` had its second byte held back forever).
+    /// Walk the buffer exactly as the stripper would; hold back only
+    /// what is genuinely unterminated: a lone IAC, an IAC+cmd missing
+    /// its option byte, or an unterminated suboption.
     fn incomplete_tail_len(buf: &[u8]) -> usize {
-        let n = buf.len();
-        if n == 0 {
-            return 0;
-        }
-        if buf[n - 1] == 0xFF {
-            return 1;
-        }
-        if n >= 2 && buf[n - 2] == 0xFF {
-            let cmd = buf[n - 1];
-            // commands carrying an option byte: WILL/WONT/DO/DONT (and
-            // anything outside the standalone range) need one more byte
-            if !(0xF1..=0xF6).contains(&cmd) {
-                return 2;
-            }
-        }
-        // suboption scanning: if we are inside an unterminated SB
         let mut i = 0;
-        let mut in_sb = false;
-        while i < n {
-            if buf[i] == 0xFF && i + 1 < n {
-                match buf[i + 1] {
-                    0xFA => {
-                        in_sb = true;
-                        i += 2;
-                        continue;
-                    }
-                    0xF0 => {
-                        in_sb = false;
-                        i += 2;
-                        continue;
-                    }
-                    0xFF => {
-                        i += 2;
-                        continue;
-                    }
-                    _ => {
-                        i += 3;
-                        continue;
+        while i < buf.len() {
+            if buf[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            if i + 1 >= buf.len() {
+                return buf.len() - i; // lone IAC
+            }
+            match buf[i + 1] {
+                0xFF => {
+                    i += 2; // complete escape pair
+                }
+                0xFA => {
+                    // suboption: hold everything until IAC SE arrives
+                    let mut j = i + 2;
+                    loop {
+                        if j >= buf.len() {
+                            return buf.len() - i;
+                        }
+                        if buf[j] == 0xF0 {
+                            i = j + 1;
+                            break;
+                        }
+                        j += 1;
                     }
                 }
-            }
-            i += 1;
-        }
-        if in_sb {
-            // hold back from the last SB start we can locate
-            if let Some(pos) = find_last_sb(buf) {
-                return n - pos;
+                c if (0xF1..=0xF6).contains(&c) => {
+                    i += 2; // complete standalone command
+                }
+                _ => {
+                    if i + 2 >= buf.len() {
+                        return buf.len() - i; // option byte still coming
+                    }
+                    i += 3;
+                }
             }
         }
         0
     }
-}
-
-fn find_last_sb(buf: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    let mut last = None;
-    while i + 1 < buf.len() {
-        if buf[i] == 0xFF && buf[i + 1] == 0xFA {
-            last = Some(i);
-            i += 2;
-        } else if buf[i] == 0xFF {
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
-    last
 }
 
 impl ConsoleIo for TelnetFramedIo {
@@ -182,27 +168,42 @@ impl ConsoleIo for TelnetFramedIo {
             self.pending.drain(..n);
             return Ok(n);
         }
-        let mut raw = [0u8; 4096];
-        let mut k = self.inner.read(&mut raw)?;
-        if k == 0 && self.raw_tail.is_empty() {
-            return Ok(0);
+        // Loop until at least one byte decodes (or true EOF): a read
+        // that only *holds back* a partial IAC sequence must never
+        // surface as Ok(0) — callers read that as transport EOF (the
+        // property test caught this: [FF] + [FF] split returned 0).
+        loop {
+            let mut raw = [0u8; 4096];
+            let k = self.inner.read(&mut raw)?;
+            let mut framed = std::mem::take(&mut self.raw_tail);
+            framed.extend_from_slice(&raw[..k]);
+            let kl = framed.len();
+            if kl == 0 {
+                return Ok(0); // true EOF (with nothing held)
+            }
+            let hold = Self::incomplete_tail_len(&framed);
+            let decodable = &framed[..kl - hold];
+            if hold > 0 {
+                self.raw_tail = framed[kl - hold..].to_vec();
+            }
+            let clean = telnet_strip_iac(decodable);
+            if clean.is_empty() {
+                if k == 0 {
+                    // transport idle while a partial sequence is held:
+                    // surface EOF rather than spin (the held bytes are
+                    // unusable without more input anyway)
+                    self.raw_tail.clear();
+                    return Ok(0);
+                }
+                continue; // everything decoded away / held — read more
+            }
+            let n = clean.len().min(buf.len());
+            buf[..n].copy_from_slice(&clean[..n]);
+            if n < clean.len() {
+                self.pending.extend_from_slice(&clean[n..]);
+            }
+            return Ok(n);
         }
-        // prepend any held-back partial sequence from the last read
-        let mut framed = std::mem::take(&mut self.raw_tail);
-        framed.extend_from_slice(&raw[..k]);
-        k = framed.len();
-        let hold = Self::incomplete_tail_len(&framed[..k]);
-        let decodable = &framed[..k - hold];
-        if hold > 0 {
-            self.raw_tail = framed[k - hold..].to_vec();
-        }
-        let clean = telnet_strip_iac(decodable);
-        let n = clean.len().min(buf.len());
-        buf[..n].copy_from_slice(&clean[..n]);
-        if n < clean.len() {
-            self.pending.extend_from_slice(&clean[n..]);
-        }
-        Ok(n)
     }
 
     fn write_all_bytes(&mut self, data: &[u8]) -> std::io::Result<()> {
@@ -373,6 +374,114 @@ pub struct Recipe {
     /// How often to send the probe (seconds).
     #[serde(default = "default_probe_interval")]
     pub probe_interval_secs: f64,
+}
+
+impl Recipe {
+    /// Load-time validation (audit R4): everything checkable BEFORE the
+    /// port opens — a config error must never cost the 1-second
+    /// bootdelay window (OpenOCD's declare-then-init doctrine).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.boot_trigger.is_empty() {
+            return Err("boot_trigger is empty — nothing can fire".into());
+        }
+        if self.actions.is_empty() {
+            return Err("no actions — nothing to run".into());
+        }
+        if self.max_fires == 0 {
+            return Err("max_fires 0 — the recipe can never fire".into());
+        }
+        let is_hex64 = |v: &str| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit());
+        for (i, a) in self.actions.iter().enumerate() {
+            match a {
+                Action::Loady { image_path, .. } => {
+                    if image_path.is_empty() {
+                        return Err(format!("action {i}: loady with empty image_path"));
+                    }
+                }
+                Action::TftpBoot {
+                    bind,
+                    serve_dir,
+                    file,
+                    timeout_secs,
+                    ..
+                } => {
+                    if bind.parse::<std::net::SocketAddr>().is_err() {
+                        return Err(format!(
+                            "action {i}: tftp_boot bind {bind:?} is not a socket address"
+                        ));
+                    }
+                    if serve_dir.is_empty() || file.is_empty() {
+                        return Err(format!("action {i}: tftp_boot needs serve_dir and file"));
+                    }
+                    if !std::path::Path::new(serve_dir).join(file).exists() {
+                        return Err(format!(
+                            "action {i}: tftp_boot image {serve_dir}/{file} does not exist"
+                        ));
+                    }
+                    if *timeout_secs <= 0.0 {
+                        return Err(format!("action {i}: tftp_boot timeout must be positive"));
+                    }
+                }
+                Action::Stream {
+                    file,
+                    sha256,
+                    pace_bytes,
+                    pace_ms,
+                    ..
+                } => {
+                    if !std::path::Path::new(file).exists() {
+                        return Err(format!("action {i}: stream file {file:?} missing"));
+                    }
+                    if !sha256.is_empty() && !is_hex64(sha256) {
+                        return Err(format!("action {i}: stream sha256 is not 64 hex chars"));
+                    }
+                    if *pace_bytes == 0 || *pace_ms == 0 {
+                        return Err(format!(
+                            "action {i}: stream pace_bytes/pace_ms must be non-zero"
+                        ));
+                    }
+                }
+                Action::StreamChunks {
+                    file,
+                    sha256,
+                    chunk_bytes,
+                    pause_ms,
+                    pace_bytes,
+                    pace_ms,
+                    ..
+                } => {
+                    if !std::path::Path::new(file).exists() {
+                        return Err(format!("action {i}: stream_chunks file {file:?} missing"));
+                    }
+                    if !is_hex64(sha256) {
+                        return Err(format!(
+                            "action {i}: stream_chunks sha256 must be 64 hex chars"
+                        ));
+                    }
+                    if *chunk_bytes == 0 || *pause_ms == 0 || *pace_bytes == 0 || *pace_ms == 0 {
+                        return Err(format!(
+                            "action {i}: stream_chunks chunk/pause/pace values must be non-zero"
+                        ));
+                    }
+                }
+                Action::Expect {
+                    pattern,
+                    timeout_secs,
+                } => {
+                    if pattern.is_empty() || *timeout_secs <= 0.0 {
+                        return Err(format!(
+                            "action {i}: expect needs a pattern and positive timeout"
+                        ));
+                    }
+                }
+                Action::Spaces { secs, .. } if *secs <= 0.0 => {
+                    return Err(format!("action {i}: spaces secs must be positive"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 fn default_cooldown() -> u64 {
@@ -957,6 +1066,11 @@ pub fn run_watch(
     transcript_path: &Path,
     idle_poll_secs: f64,
 ) -> std::io::Result<WatchOutcome> {
+    // validate-then-arm (R4): refuse BEFORE opening the port so a
+    // broken recipe never costs the bootdelay window
+    if let Err(e) = recipe.validate() {
+        return Err(std::io::Error::other(format!("recipe invalid: {e}")));
+    }
     let mut transcript = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1265,6 +1379,90 @@ mod tests {
     /// AND the construction is valid shell printing the real marker —
     /// proven by execution here (audit R8: the previous test asserted
     /// the abandoned quote-split shape and could not catch regressions).
+    /// Fragmenting transport: serves one fixed byte slice in
+    /// caller-chosen chunks, one chunk per read.
+    struct FragmentIo {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+    impl ConsoleIo for FragmentIo {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let end = (self.pos + self.chunk).min(self.data.len());
+            let n = (end - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+        fn write_all_bytes(&mut self, _data: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {
+            self.pos = self.data.len();
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Live-fire lesson 1 as an INVARIANT (audit T0-1): for arbitrary
+    /// binary payloads, escape->strip round-trips, AND the framing
+    /// adapter reconstructs the original no matter how the socket
+    /// splits the escaped stream.
+    #[test]
+    fn telnet_framing_survives_arbitrary_splits() {
+        use proptest::prelude::*;
+        proptest!(|(payload in proptest::collection::vec(any::<u8>(), 0..600))| {
+            // round-trip of the pure codecs
+            let wire = telnet_escape(&payload);
+            prop_assert_eq!(telnet_strip_iac(&wire), payload.clone());
+
+            // through the adapter at several fragment sizes (incl. 1)
+            for frag in [1usize, 2, 3, 7, 64, 4096] {
+                let inner = Box::new(FragmentIo {
+                    data: wire.clone(),
+                    pos: 0,
+                    chunk: frag,
+                });
+                let mut io = TelnetFramedIo::negotiate_without_send(inner);
+                let mut got = Vec::new();
+                let mut buf = [0u8; 53]; // awkward size on purpose
+                loop {
+                    let k = io.read(&mut buf).unwrap();
+                    if k == 0 {
+                        break;
+                    }
+                    got.extend_from_slice(&buf[..k]);
+                }
+                prop_assert_eq!(got, payload.clone());
+            }
+        });
+    }
+
+    #[test]
+    fn recipe_validation_rejects_and_accepts() {
+        let mut r: Recipe = serde_json::from_str(
+            r#"{"model":"t","boot_trigger":["X"],"actions":[{"type":"expect","pattern":"X","timeout_secs":1}]}"#,
+        )
+        .unwrap();
+        assert!(r.validate().is_ok());
+        r.boot_trigger.clear();
+        assert!(r.validate().is_err());
+        // bad sha
+        let bad: Recipe = serde_json::from_str(
+            r#"{"model":"t","boot_trigger":["X"],"actions":[{"type":"stream_chunks","file":"/etc/hostname","sha256":"nothex","remote_path":"/tmp/x","chunk_bytes":1,"pause_ms":1,"pace_bytes":1,"pace_ms":1,"final_command":"","verdict_timeout_secs":1}]}"#,
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
+        // missing file
+        let missing: Recipe = serde_json::from_str(
+            r#"{"model":"t","boot_trigger":["X"],"actions":[{"type":"stream","file":"/no/such/file","sha256":"","pace_bytes":1,"pace_ms":1,"done_marker":"D","fail_marker":"F","verdict_timeout_secs":1}]}"#,
+        )
+        .unwrap();
+        assert!(missing.validate().is_err());
+    }
+
     #[test]
     fn marker_lines_defeat_command_echo() {
         let ck_number = "0";
