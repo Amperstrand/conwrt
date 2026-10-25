@@ -281,13 +281,28 @@ pub fn loady_ymodem(
         progress(sent, image.len() as u64);
     }
 
-    // EOT dance, then the terminating null block-0
+    // EOT dance (audit R7): the receiver ACKs EOT (some loaders NAK
+    // first, then ACK). Track whether the ACK ever arrived — silently
+    // proceeding to the null batch after 10 unacknowledged EOTs hides
+    // a dead receiver from the caller.
+    let mut eot_acked = false;
     for _ in 0..10 {
         io.write_all_bytes(&[EOT])
             .map_err(|e| UbootError::Io(e.to_string()))?;
-        if let Some(ACK) = read_byte(io, 10.0) {
-            break;
+        match read_byte(io, 10.0) {
+            Some(ACK) => {
+                eot_acked = true;
+                break;
+            }
+            Some(0x15) => continue, // NAK: retry EOT
+            Some(other) => eprintln!("ymodem eot handshake byte {other:#x}"),
+            None => continue,
         }
+    }
+    if !eot_acked {
+        return Err(UbootError::TransferFailed(
+            "end-of-transfer never ACKed (receiver dead or wedged)".into(),
+        ));
     }
     let _ = read_byte(io, 3.0);
     send_frame(io, &build_frame(0, b"", false), 5)
