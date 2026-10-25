@@ -507,6 +507,69 @@ fn default_probe_interval() -> f64 {
     30.0
 }
 
+impl Recipe {
+    /// P0 pre-flight compat gates (roadmap 6394958869): refuse at ARM
+    /// time, not fire time. `profile` supplies device facts when known.
+    pub fn preflight(
+        &self,
+        profile: Option<&crate::profile::DeviceProfile>,
+    ) -> Result<(), Vec<String>> {
+        let mut errs = Vec::new();
+        for a in &self.actions {
+            match a {
+                Action::StreamChunks {
+                    file,
+                    sha256,
+                    remote_path,
+                    ..
+                } => {
+                    if let Some(p) = profile {
+                        if p.quirks.stty_absent {
+                            errs.push(format!(
+                                "stream_chunks to {remote_path}: device profile {} documents stty_absent —                                  serial binary transfer cannot arm (custom rescue image required)",
+                                p.profile
+                            ));
+                        }
+                    }
+                    let meta = std::fs::metadata(file);
+                    match meta {
+                        Ok(m) if m.is_file() => {
+                            // host-side sha gate BEFORE streaming
+                            if let Ok(bytes) = std::fs::read(file) {
+                                let got = sha256_hex_for_gate(&bytes);
+                                if !got.eq_ignore_ascii_case(sha256) {
+                                    errs.push(format!(
+                                        "stream_chunks {file}: host sha mismatch ({got} != {sha256})"
+                                    ));
+                                }
+                            }
+                        }
+                        _ => errs.push(format!("stream_chunks {file}: not a readable file")),
+                    }
+                    if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+                        errs.push(format!("stream_chunks {file}: sha256 not 64 hex chars"));
+                    }
+                }
+                Action::TftpBoot {
+                    file,
+                    serve_dir,
+                    bind,
+                    ..
+                } => {
+                    let path = std::path::Path::new(serve_dir).join(file);
+                    if !path.exists() {
+                        errs.push(format!(
+                            "tftp_boot {file}: missing from serve_dir {serve_dir} (bind {bind})"
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+
 /// Assemble the canonical rescue ladder FROM A DEVICE PROFILE — the
 /// generalization of the bench-proven gs1900 chain (owner directive
 /// 2026-10-25): profile templates + image facts build the action list,
@@ -606,6 +669,56 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         return false;
     }
     haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Host-side rescue transaction journal (P0, roadmap 6394958869):
+/// phase transitions append to `<transcript>.rescue` so a crash or
+/// re-arm KNOWS a rescue was in flight (fw_setenv is absent on
+/// official initramfs images, so the marker lives on the host — same
+/// cross-process doctrine as the fire-markers).
+pub struct RescueJournal {
+    path: std::path::PathBuf,
+}
+
+impl RescueJournal {
+    pub fn for_transcript(transcript: &std::path::Path) -> RescueJournal {
+        let mut p = transcript.as_os_str().to_os_string();
+        p.push(".rescue");
+        RescueJournal {
+            path: std::path::PathBuf::from(p),
+        }
+    }
+
+    /// Warn-level check at arm time: an unfinished rescue means the
+    /// previous run died mid-ladder (power, crash) — surface it.
+    pub fn unfinished_phase(&self) -> Option<String> {
+        let text = std::fs::read_to_string(&self.path).ok()?;
+        let last = text.lines().filter(|l| !l.trim().is_empty()).last()?;
+        let v: serde_json::Value = serde_json::from_str(last).ok()?;
+        let phase = v.get("phase")?.as_str()?.to_string();
+        if phase == "rescue-complete" || phase == "rescue-refused" {
+            None
+        } else {
+            Some(phase)
+        }
+    }
+
+    pub fn record(&self, phase: &str, detail: &str) {
+        use std::io::Write;
+        let line = format!(
+            "{{\"ts\":\"{}\",\"phase\":\"{}\",\"detail\":\"{}\"}}\n",
+            chrono_local(),
+            phase.replace('"', "'"),
+            detail.replace('"', "'")
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
 }
 
 /// Typed failure taxonomy for the recipe engine (audit R2): callers
@@ -1234,6 +1347,26 @@ pub fn run_watch(
     transcript_path: &Path,
     idle_poll_secs: f64,
 ) -> std::io::Result<WatchOutcome> {
+    run_watch_with_profile(
+        port_spec,
+        baud,
+        recipe,
+        transcript_path,
+        idle_poll_secs,
+        None,
+    )
+}
+
+/// run_watch + a device profile hint (enables the P0 pre-flight
+/// device-quirk gates, e.g. stream_chunks vs stty_absent).
+pub fn run_watch_with_profile(
+    port_spec: &str,
+    baud: u32,
+    recipe: &Recipe,
+    transcript_path: &Path,
+    idle_poll_secs: f64,
+    profile_hint: Option<&crate::profile::DeviceProfile>,
+) -> std::io::Result<WatchOutcome> {
     // validate-then-arm (R4): refuse BEFORE opening the port so a
     // broken recipe never costs the bootdelay window
     if let Err(e) = recipe.validate() {
@@ -1254,6 +1387,25 @@ pub fn run_watch(
     } else {
         io
     };
+    // P0 pre-flight: refuse bad recipes at ARM time, not fire time
+    if let Err(errs) = recipe.preflight(profile_hint.as_deref()) {
+        for e in &errs {
+            eprintln!("conwrt: preflight: {e}");
+        }
+        return Ok(WatchOutcome {
+            fires: 0,
+            success: false,
+            detail: format!("preflight refused: {} problem(s)", errs.len()),
+        });
+    }
+    let journal = RescueJournal::for_transcript(transcript_path);
+    if let Some(phase) = journal.unfinished_phase() {
+        eprintln!(
+            "conwrt: NOTE: a previous rescue journal ends in phase {phase:?} — \
+the last run may have died mid-ladder; continuing"
+        );
+    }
+    journal.record("armed", &recipe.model);
     let mut s = Supervisor {
         io,
         window: Vec::new(),
@@ -1366,6 +1518,7 @@ pub fn run_watch(
                 .map(|end| end.min(s.window.len()))
                 .unwrap_or(s.window.len());
             s.log("BOOT SIGNATURE DETECTED — firing recipe");
+            journal.record("fired", &recipe.model);
             last_fire = Some(Instant::now());
             let _ = std::fs::write(
                 &fired_marker,
@@ -1377,10 +1530,12 @@ pub fn run_watch(
             match run_actions(&mut s, &recipe.actions) {
                 Ok(()) => {
                     fires += 1;
+                    journal.record("rescue-complete", &recipe.model);
                     s.log(&format!("recipe run {fires}/{} COMPLETE", recipe.max_fires));
                 }
                 Err(e) => {
                     s.log(&format!("recipe FAILED: {e}"));
+                    journal.record("rescue-failed", &e);
                     if recipe.max_fires == 1 {
                         return Ok(WatchOutcome {
                             fires,
@@ -1624,6 +1779,92 @@ mod tests {
         }
         fn reset_input_buffer(&mut self) {}
         fn close(&mut self) {}
+    }
+
+    #[test]
+    fn preflight_refuses_stty_absent_and_missing_files() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+        let profile =
+            crate::profile::DeviceProfile::load("zyxel/gs1900-8hp", std::slice::from_ref(&dir))
+                .unwrap();
+        // stream_chunks + stty_absent profile -> refused, with the profile named
+        let r = Recipe {
+            model: "t".into(),
+            boot_trigger: vec!["x".into()],
+            probe_line: None,
+            probe_interval_secs: 30.0,
+            actions: vec![Action::StreamChunks {
+                file: "/nonexistent/image.bin".into(),
+                sha256: "z".repeat(64),
+                remote_path: "/tmp/f".into(),
+                chunk_bytes: 819200,
+                pause_ms: 5000,
+                pace_bytes: 512,
+                pace_ms: 80,
+                final_command: "true".into(),
+                verdict_timeout_secs: 600.0,
+            }],
+            cooldown_secs: 60,
+            max_fires: 1,
+        };
+        let errs = r.preflight(Some(&profile)).expect_err("must refuse");
+        assert!(
+            errs.iter().any(|e| e.contains("stty_absent")),
+            "stty gate: {errs:?}"
+        );
+        assert!(errs.iter().any(|e| e.contains("not a readable file")));
+        // tftp missing from serve_dir -> refused
+        let r2 = Recipe {
+            model: "t2".into(),
+            boot_trigger: vec!["x".into()],
+            probe_line: None,
+            probe_interval_secs: 30.0,
+            actions: vec![Action::TftpBoot {
+                addr: "0x84f00000".into(),
+                bind: "192.0.2.1:69".into(),
+                serve_dir: "/nonexistent".into(),
+                file: "initramfs.bin".into(),
+                client_ip: "192.0.2.2".into(),
+                server_ip: "192.0.2.1".into(),
+                timeout_secs: 60.0,
+            }],
+            cooldown_secs: 60,
+            max_fires: 1,
+        };
+        let errs2 = r2.preflight(None).expect_err("must refuse 2");
+        assert!(errs2.iter().any(|e| e.contains("missing from serve_dir")));
+        // a clean tftp action against a real dir passes
+        let tmp = std::env::temp_dir().join("conwrt-preflight-probe");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("ok.bin"), b"data").unwrap();
+        let r3 = Recipe {
+            actions: vec![Action::TftpBoot {
+                addr: "0x84f00000".into(),
+                bind: "192.0.2.1:69".into(),
+                serve_dir: tmp.to_string_lossy().into_owned(),
+                file: "ok.bin".into(),
+                client_ip: "192.0.2.2".into(),
+                server_ip: "192.0.2.1".into(),
+                timeout_secs: 60.0,
+            }],
+            ..r2.clone()
+        };
+        assert!(r3.preflight(None).is_ok(), "clean recipe must pass");
+    }
+
+    #[test]
+    fn rescue_journal_detects_unfinished() {
+        let tmp = std::env::temp_dir().join(format!("conwrt-journal-{}.log", std::process::id()));
+        let j = RescueJournal::for_transcript(&tmp);
+        let _ = std::fs::remove_file(&j.path);
+        assert!(j.unfinished_phase().is_none());
+        j.record("armed", "waiting for trigger");
+        assert_eq!(j.unfinished_phase().as_deref(), Some("armed"));
+        j.record("fired", "action 1/3");
+        assert_eq!(j.unfinished_phase().as_deref(), Some("fired"));
+        j.record("rescue-complete", "sysupgrade verdict ok");
+        assert!(j.unfinished_phase().is_none());
     }
 
     #[test]

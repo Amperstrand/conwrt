@@ -1043,12 +1043,13 @@ fn main() -> ExitCode {
                 "conwrt: flash-rescue {} via {initramfs} from {server_ip}",
                 recipe.model
             );
-            match conwrt_serial::watch::run_watch(
+            match conwrt_serial::watch::run_watch_with_profile(
                 &port,
                 115200,
                 &recipe,
                 std::path::Path::new(&transcript),
                 1.0,
+                Some(&profile),
             ) {
                 Ok(out) if out.success => {
                     println!("conwrt: flash-rescue complete: {}", out.detail);
