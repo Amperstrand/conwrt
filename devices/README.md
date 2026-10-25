@@ -71,3 +71,6 @@ and the from-shell variant — agentless, one command, live-proven to
 a clean 25.12.6 first boot. `realtek/rtl838x-base` carries the same
 family's proven quirks. Other profiles are structural (same engine,
 unit-tested construction) until fired on their hardware.
+`extreme/ws-ap3915i` is detect-to-fill: verified console/partition
+facts in, `uboot_prompt` + interrupt method await on-console
+confirmation via `serial-detect`.
