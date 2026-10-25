@@ -1440,6 +1440,44 @@ mod tests {
         });
     }
 
+    /// Tier-1 closed loop: a golden boot transcript replayed through the
+    /// REAL supervisor — trigger fires, expect-actions resolve, one fire,
+    /// then done. No hardware, no mocks of run_watch itself.
+    #[test]
+    fn golden_transcript_drives_the_real_supervisor() {
+        let dir = std::env::temp_dir().join("conwrt-replay-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("golden-boot.log");
+        let boot = b"Copied Preloader data from SPI flash\r\nDRAM is set\r\n\
+U-Boot 2011.12.39239\r\nRTL838x# \r\n\
+## Starting kernel ...\r\n[    0.000000] Linux version 6.12.112\r\n\
+root@OpenWrt:~# \r\n";
+        std::fs::write(&transcript, boot).unwrap();
+        let recipe: Recipe = serde_json::from_str(
+            r#"{"model":"golden","boot_trigger":["DRAM is set","U-Boot 2011"],
+                "actions":[
+                  {"type":"expect","pattern":"RTL838x#","timeout_secs":10},
+                  {"type":"expect","pattern":"root@OpenWrt","timeout_secs":10}
+                ],
+                "max_fires":1}"#,
+        )
+        .unwrap();
+        let tpath = dir.join("watch.transcript");
+        let _ = std::fs::remove_file(dir.join("watch.fired"));
+        let out = run_watch(
+            &format!("replay://{}", transcript.display()),
+            115200,
+            &recipe,
+            &tpath,
+            0.05,
+        )
+        .expect("watch runs");
+        assert!(out.success, "recipe should complete: {}", out.detail);
+        assert_eq!(out.fires, 1);
+        // the fire-marker landed (cross-process discipline holds)
+        assert!(dir.join("watch.fired").exists());
+    }
+
     #[test]
     fn recipe_validation_rejects_and_accepts() {
         let mut r: Recipe = serde_json::from_str(
