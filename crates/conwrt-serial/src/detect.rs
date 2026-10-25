@@ -119,8 +119,10 @@ pub fn classify(window: &[u8]) -> ConsoleClass {
 pub fn detect(port_spec: &str, baud: u32, probe_secs: f64) -> std::io::Result<DeviceCard> {
     let mut io = open_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| std::io::Error::other(format!("open {port_spec}: {e}")))?;
-    let is_telnet = port_spec.starts_with("tcp://");
-    if is_telnet {
+    // framing doctrine (audit R3): tcp:// is a RAW relay per io.rs;
+    // only telnet:// endpoints negotiate — injecting IAC bytes into a
+    // raw bridge is console garbage
+    if port_spec.starts_with("telnet://") {
         let _ = io.write_all_bytes(&[0xFF, 0xFB, 0x00, 0xFF, 0xFD, 0x00]);
     }
     let mut card = DeviceCard::default();

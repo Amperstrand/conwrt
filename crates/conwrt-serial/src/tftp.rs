@@ -220,7 +220,7 @@ pub fn serve_until(bind: SocketAddr, root: &Path, stop: &dyn Fn() -> bool) -> Ve
 /// Public re-export for sibling modules (watch uses it for host-side
 /// pre-gates; the implementation stays private-tested below).
 pub fn sha256_hex_pub(data: &[u8]) -> String {
-    crate::watch::sha256_hex_for_gate(data)
+    crate::flash::image_sha256(data)
 }
 
 #[cfg(test)]
