@@ -62,6 +62,12 @@ pub struct FlashSection {
     pub method: String,
     /// Flash command template ({image} substituted).
     pub sysupgrade_cmd: String,
+    /// Banner sysupgrade prints when it actually COMMITS (verdict
+    /// marker for from-shell rescues — 25.12 images say "Sending TERM
+    /// to remaining processes", older say "Sending SIGTERM"; live-fire
+    /// 2026-10-25 caught the mismatch).
+    #[serde(default = "default_sysupgrade_banner")]
+    pub sysupgrade_banner: String,
 }
 
 /// Known behavioral quirks (documented, load-bearing for strategy).
@@ -214,6 +220,10 @@ impl DeviceProfile {
             .replace("{client_ip}", client_ip)
             .replace("{server_ip}", server_ip)
     }
+}
+
+fn default_sysupgrade_banner() -> String {
+    "upgrade: Sending TERM".to_string()
 }
 
 fn find_profile_file(name: &str, search_path: &[PathBuf]) -> Option<PathBuf> {

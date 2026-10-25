@@ -140,7 +140,7 @@ enum Command {
         #[arg(long)]
         sha256: String,
         /// Initramfs image file name inside --serve-dir (tftpboot target).
-        #[arg(long)]
+        #[arg(long, default_value = "")]
         initramfs: String,
         /// Directory served by the bundled TFTP (:69) and expected on
         /// http :8022 (external server; bundled http is future work).
@@ -1042,6 +1042,12 @@ fn main() -> ExitCode {
                     eprintln!("conwrt: device profile {device:?}: {e}");
                     std::process::exit(2);
                 });
+            if !at_shell && initramfs.is_empty() {
+                eprintln!(
+                    "conwrt: --initramfs is required for the boot-watch ladder (or pass --at-shell)"
+                );
+                std::process::exit(2);
+            }
             let recipe = if at_shell {
                 conwrt_serial::watch::flash_from_shell_recipe(&profile, &fname, &sha256, &server_ip)
             } else {

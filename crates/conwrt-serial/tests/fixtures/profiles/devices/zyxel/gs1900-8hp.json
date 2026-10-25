@@ -30,7 +30,8 @@
   },
   "flash": {
     "method": "openwrt-sysupgrade",
-    "sysupgrade_cmd": "sysupgrade -n {image}"
+    "sysupgrade_cmd": "sysupgrade -n {image}",
+    "sysupgrade_banner": "upgrade: Sending TERM"
   },
   "quirks": {
     "notes": [

@@ -789,8 +789,8 @@ pub fn flash_from_shell_recipe(
             // on refusal the timeout fails the recipe and the tail
             // carries CW-SHA-REFUSED-<sha> naming why)
             v.push(Action::Expect {
-                pattern: "Sending SIGTERM".to_string(),
-                timeout_secs: 60.0,
+                pattern: profile.flash.sysupgrade_banner.clone(),
+                timeout_secs: 90.0,
             });
             v
         },
