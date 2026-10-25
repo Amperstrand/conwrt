@@ -29,6 +29,11 @@ use crate::lint::LintError;
 
 /// `tcp://` port-spec prefix.
 pub const TCP_PREFIX: &str = "tcp://";
+/// `telnet://HOST:PORT` — same TCP transport as [`TCP_PREFIX`]; the
+/// scheme signals a TELNET-mode accepter (ser2net) to callers that
+/// frame accordingly (see watch::TelnetFramedIo). The endpoint parser
+/// and opener treat both prefixes identically.
+pub const TELNET_PREFIX: &str = "telnet://";
 
 /// Everything that can go wrong on the console path, typed. Messages are
 /// safe to print to an operator (the Python module's rule: never a raw
@@ -112,7 +117,10 @@ pub enum ConsoleError {
 /// [`ConsoleError::InvalidEndpoint`] / [`InvalidPort`] /
 /// [`PortOutOfRange`] mirroring the Python messages.
 pub fn parse_tcp_endpoint(spec: &str) -> Result<(String, u16), ConsoleError> {
-    let endpoint = spec.strip_prefix(TCP_PREFIX).unwrap_or(spec);
+    let endpoint = spec
+        .strip_prefix(TCP_PREFIX)
+        .or_else(|| spec.strip_prefix(TELNET_PREFIX))
+        .unwrap_or(spec);
     let Some((host, port_str)) = endpoint.rsplit_once(':') else {
         return Err(ConsoleError::InvalidEndpoint {
             spec: spec.to_string(),
@@ -188,7 +196,7 @@ pub fn open_break_port(
     baud: u32,
     timeout: Duration,
 ) -> Result<Box<dyn crate::recovery::BreakIo>, ConsoleError> {
-    if spec.starts_with(TCP_PREFIX) {
+    if spec.starts_with(TCP_PREFIX) || spec.starts_with(TELNET_PREFIX) {
         return Err(ConsoleError::Connect {
             endpoint: spec.to_string(),
             port: 0,
@@ -207,7 +215,7 @@ pub fn open_port(
     baud: u32,
     timeout: Duration,
 ) -> Result<Box<dyn ConsoleIo>, ConsoleError> {
-    if spec.starts_with(TCP_PREFIX) {
+    if spec.starts_with(TCP_PREFIX) || spec.starts_with(TELNET_PREFIX) {
         let (host, port) = parse_tcp_endpoint(spec)?;
         Ok(Box::new(TcpIo::connect(
             &host,
