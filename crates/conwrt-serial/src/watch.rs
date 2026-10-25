@@ -255,6 +255,12 @@ pub enum Action {
         pattern: String,
         /// Give up after this many seconds.
         timeout_secs: f64,
+        /// Optional nudge sent every ~10s while waiting: askfirst
+        /// consoles (official OpenWrt initramfs) print no prompt until
+        /// Enter — live-fire 2026-10-25 stalled the ladder's shell
+        /// expect until a manual press.
+        #[serde(default)]
+        nudge: Option<String>,
     },
     /// Send one line and let it settle.
     SendLine {
@@ -479,6 +485,7 @@ impl Recipe {
                 Action::Expect {
                     pattern,
                     timeout_secs,
+                    nudge: _,
                 } => {
                     if pattern.is_empty() || *timeout_secs <= 0.0 {
                         return Err(format!(
@@ -633,6 +640,10 @@ pub fn flash_rescue_recipe_from_profile(
         Action::Expect {
             pattern: profile.console.shell_prompt.clone(),
             timeout_secs: 250.0,
+            // askfirst consoles (official OpenWrt initramfs) print no
+            // prompt until Enter — nudge while waiting (live-fire
+            // 2026-10-25: the ladder stalled here until a manual press)
+            nudge: Some("\r".to_string()),
         },
         Action::SendLine {
             line: "/etc/init.d/network restart".to_string(),
@@ -649,6 +660,7 @@ pub fn flash_rescue_recipe_from_profile(
         Action::Expect {
             pattern: sysupgrade_sha256.to_string(),
             timeout_secs: 60.0,
+            nudge: None,
         },
         Action::SendLine {
             line: profile.render(
@@ -819,6 +831,7 @@ pub fn flash_from_shell_recipe(
             v.push(Action::Expect {
                 pattern: profile.flash.sysupgrade_banner.clone(),
                 timeout_secs: 90.0,
+                nudge: None,
             });
             v
         },
@@ -976,6 +989,34 @@ impl<'a> Supervisor<'a> {
         &self.window[before.min(self.window.len())..]
     }
 
+    /// askfirst-aware expect: press `nudge` every `nudge_every` secs
+    /// while waiting (consoles that print no prompt until Enter).
+    fn expect_nudged(
+        &mut self,
+        pattern: &str,
+        timeout_secs: f64,
+        nudge: Option<&str>,
+        nudge_every: f64,
+    ) -> Result<(), String> {
+        let Some(nudge) = nudge else {
+            return self.expect(pattern, timeout_secs);
+        };
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.1));
+        let mut last = Instant::now() - Duration::from_secs_f64(nudge_every);
+        let mut err = String::new();
+        while Instant::now() < deadline {
+            if last.elapsed().as_secs_f64() >= nudge_every {
+                self.send_raw(nudge.as_bytes());
+                last = Instant::now();
+            }
+            match self.expect(pattern, 1.0) {
+                Ok(()) => return Ok(()),
+                Err(e) => err = e,
+            }
+        }
+        Err(err)
+    }
+
     fn expect(&mut self, pattern: &str, timeout_secs: f64) -> Result<(), String> {
         let needle = pattern.as_bytes();
         // Stale-window fix (live-fire 2026-10-25): match only bytes from
@@ -1102,7 +1143,11 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
             Action::Expect {
                 pattern,
                 timeout_secs,
-            } => s.expect(pattern, *timeout_secs)?,
+                nudge,
+            } => {
+                // askfirst-aware when nudge is set (see expect_nudged)
+                s.expect_nudged(pattern, *timeout_secs, nudge.as_deref(), 10.0)?
+            }
             Action::SendLine { line, settle_secs } => {
                 s.send_raw(format!("{line}\n").as_bytes());
                 s.read_secs(*settle_secs);
@@ -2099,6 +2144,52 @@ mod tests {
             bad.preflight(Some(&gs)).is_err(),
             "unknown method refused at arm time"
         );
+    }
+
+    /// Askfirst console: no prompt until Enter. The nudge expect must
+    /// activate it; the plain expect must time out (live-fire class
+    /// from the 2026-10-25 master round-trip).
+    struct AskfirstIo {
+        activated: bool,
+        emitted: bool,
+    }
+    impl ConsoleIo for AskfirstIo {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.activated && !self.emitted {
+                self.emitted = true;
+                let msg = b"\r\nroot@OpenWrt:~# ";
+                let n = msg.len().min(buf.len());
+                buf[..n].copy_from_slice(&msg[..n]);
+                return Ok(n);
+            }
+            Ok(0)
+        }
+        fn write_all_bytes(&mut self, data: &[u8]) -> std::io::Result<()> {
+            if data.contains(&b'\r') || data.contains(&b'\n') {
+                self.activated = true;
+            }
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {}
+        fn close(&mut self) {}
+    }
+
+    #[test]
+    fn askfirst_expect_nudge_activates_console() {
+        let io: Box<dyn ConsoleIo> = Box::new(AskfirstIo {
+            activated: false,
+            emitted: false,
+        });
+        let mut f = tempfile_in_test();
+        let mut sup = Supervisor {
+            io,
+            window: Vec::new(),
+            transcript: &mut f,
+            transport_dead: None,
+            fire_mark: 0,
+        };
+        let r = sup.expect_nudged("root@OpenWrt", 25.0, Some("\r"), 2.0);
+        assert!(r.is_ok(), "nudged expect must activate askfirst: {r:?}");
     }
 
     #[test]
