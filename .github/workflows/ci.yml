@@ -8,6 +8,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # hard job cap (issue #563): probabilistic runner-side hang (one
+    # leg of the same tree green while others hang in make ci) must
+    # fail RED at 15 min, never block merges forever. make ci needs
+    # ~5-6 min; per-test naming comes from pytest-timeout.
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
