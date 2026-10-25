@@ -148,6 +148,13 @@ pub fn match_profiles(
                 not_seen.push(format!("signature:{sig}"));
             }
         }
+        if !p.console.shell_prompt.is_empty() {
+            if text.contains(p.console.shell_prompt.as_str()) {
+                matched_on.push("shell_prompt".to_string());
+            } else {
+                not_seen.push("shell_prompt".to_string());
+            }
+        }
         if !matched_on.is_empty() {
             let score = matched_on.len();
             match &best {
@@ -257,17 +264,34 @@ pub fn detect_with_profiles(
     }
     if !profile_search_path.is_empty() {
         let names = crate::profile::list_profiles(profile_search_path);
-        let profiles: Vec<crate::profile::DeviceProfile> = names
+        let boards: Vec<crate::profile::DeviceProfile> = names
             .keys()
             .filter_map(|n| {
-                // board profiles only (skip */-base family files)
+                // board profiles first (skip */-base family files)
                 if n.ends_with("-base") {
                     return None;
                 }
                 crate::profile::DeviceProfile::load(n, profile_search_path).ok()
             })
             .collect();
-        card.matched_profile = match_profiles(&all, &profiles);
+        if let Some(m) = match_profiles(&all, &boards) {
+            card.matched_profile = Some(m);
+        } else {
+            // boards tie-rejected (e.g. a bare "root@OpenWrt" shell
+            // prompt is shared across a family) — fall back to the
+            // HONEST family-level match against the base profiles
+            let families: Vec<crate::profile::DeviceProfile> = names
+                .keys()
+                .filter_map(|n| {
+                    if n.ends_with("-base") {
+                        crate::profile::DeviceProfile::load(n, profile_search_path).ok()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            card.matched_profile = match_profiles(&all, &families);
+        }
     }
     Ok(card)
 }

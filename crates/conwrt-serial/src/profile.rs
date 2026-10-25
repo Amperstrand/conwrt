@@ -242,25 +242,42 @@ fn find_profile_file(name: &str, search_path: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-/// List every profile available on a search path (name = relative path
-/// under devices/, extension stripped) — for `conwrt devices` listings.
+/// List every profile available on a search path (name = relative
+/// path under devices/ with subdirs as `/` segments, extension
+/// stripped) — e.g. devices/zyxel/gs1900-8hp.json -> "zyxel/gs1900-8hp".
+/// Walks up to 3 levels so vendor dirs organize naturally.
 pub fn list_profiles(search_path: &[PathBuf]) -> BTreeMap<String, PathBuf> {
     let mut out = BTreeMap::new();
     for dir in search_path {
         let root = dir.join("devices");
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) == Some("json") {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    out.insert(stem.to_string(), p);
-                }
+        walk_profiles(&root, &root, 0, &mut out);
+    }
+    out
+}
+
+fn walk_profiles(root: &Path, dir: &Path, depth: u32, out: &mut BTreeMap<String, PathBuf>) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            walk_profiles(root, &p, depth + 1, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Ok(rel) = p.strip_prefix(root) {
+                let name = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let name = name.trim_end_matches(".json").to_string();
+                out.insert(name, p);
             }
         }
     }
-    out
 }
 
 #[cfg(test)]
