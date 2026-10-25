@@ -594,12 +594,77 @@ pub fn flash_rescue_recipe_from_profile(
 
 // ---- execution ------------------------------------------------------
 
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
         return false;
     }
     haystack.windows(needle.len()).any(|w| w == needle)
 }
+
+/// Typed failure taxonomy for the recipe engine (audit R2): callers
+/// can match on the class instead of parsing strings, and transport
+/// death is a FIRST-CLASS abort — never a timeout in disguise.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WatchError {
+    /// The console transport died (TCP reset, port pulled). Carries
+    /// the underlying error text. Aborts the recipe immediately.
+    TransportDead(String),
+    /// An expect did not see its pattern in time.
+    ExpectTimeout {
+        /// What we waited for.
+        pattern: String,
+        /// Console tail for the log.
+        tail: String,
+    },
+    /// An on-box gate explicitly refused (sha mismatch, NOSTTY...).
+    GateFailed(String),
+    /// A gate produced no verdict within its window.
+    GateNoVerdict,
+    /// Host-side sha pre-gate mismatch.
+    HostShaMismatch {
+        /// Computed hash.
+        got: String,
+        /// Expected hash.
+        want: String,
+    },
+    /// The chunk receiver could not arm (missing stty etc.).
+    ReceiverCannotArm {
+        /// Chunk index.
+        chunk: usize,
+        /// Why.
+        reason: String,
+    },
+    /// Any other action failure (marker never seen, prompt absent...).
+    ActionFailed(String),
+}
+
+impl std::fmt::Display for WatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WatchError::TransportDead(e) => write!(f, "transport dead: {e}"),
+            WatchError::ExpectTimeout { pattern, tail } => {
+                write!(f, "expect timeout waiting for {pattern:?}; tail: {tail:?}")
+            }
+            WatchError::GateFailed(e) => write!(f, "gate failed: {e}"),
+            WatchError::GateNoVerdict => write!(f, "gate produced no verdict"),
+            WatchError::HostShaMismatch { got, want } => {
+                write!(f, "host sha mismatch: {got} != {want}")
+            }
+            WatchError::ReceiverCannotArm { chunk, reason } => {
+                write!(f, "receiver cannot arm for chunk {chunk}: {reason}")
+            }
+            WatchError::ActionFailed(e) => write!(f, "action failed: {e}"),
+        }
+    }
+}
+impl std::error::Error for WatchError {}
 
 /// Final state of a `serial-watch` run (reported by the CLI).
 pub struct WatchOutcome {
@@ -615,6 +680,15 @@ struct Supervisor<'a> {
     io: Box<dyn ConsoleIo>,
     window: Vec<u8>,
     transcript: &'a mut std::fs::File,
+    /// Set on the first non-idle read error (R2): every wait checks it
+    /// and aborts immediately — a dead bridge must never burn timeout
+    /// windows pretending to be silence.
+    transport_dead: Option<String>,
+    /// Window offset captured when the recipe FIRED: expects match only
+    /// bytes from this point on (stale pre-trigger text — e.g. a
+    /// pre-reboot prompt echoed from a draining backlog — must never
+    /// satisfy an action; live-fire 2026-10-25).
+    fire_mark: usize,
 }
 
 impl<'a> Supervisor<'a> {
@@ -639,7 +713,25 @@ impl<'a> Supervisor<'a> {
                         self.window.drain(..cut);
                     }
                 }
-                _ => std::thread::sleep(Duration::from_millis(20)),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    // idle: no data yet
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => {
+                    // R2 (audit): non-idle errors are transport death —
+                    // flag once, stop reading; every wait aborts on it
+                    // instead of burning timeout windows as silence
+                    if self.transport_dead.is_none() {
+                        self.transport_dead = Some(e.to_string());
+                    }
+                    break;
+                }
+                Ok(_) => std::thread::sleep(Duration::from_millis(20)),
             }
         }
         n
@@ -661,14 +753,25 @@ impl<'a> Supervisor<'a> {
 
     fn expect(&mut self, pattern: &str, timeout_secs: f64) -> Result<(), String> {
         let needle = pattern.as_bytes();
+        // Stale-window fix (live-fire 2026-10-25): match only bytes from
+        // FIRE time onward — the trigger's own read batch legitimately
+        // contains the first markers, but pre-trigger backlog must not
+        // satisfy actions. R2: transport death aborts immediately.
+        let start = self.fire_mark;
+        fn slice_since(w: &[u8], start: usize) -> &[u8] {
+            &w[start.min(w.len())..]
+        }
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.1));
         while Instant::now() < deadline {
-            if contains(&self.window, needle) {
+            if let Some(e) = &self.transport_dead {
+                return Err(format!("transport dead while expecting {pattern:?}: {e}"));
+            }
+            if contains(slice_since(&self.window, start), needle) {
                 return Ok(());
             }
             self.read_secs(0.4);
         }
-        if contains(&self.window, needle) {
+        if contains(slice_since(&self.window, start), needle) {
             return Ok(());
         }
         Err(format!(
@@ -1155,6 +1258,8 @@ pub fn run_watch(
         io,
         window: Vec::new(),
         transcript: &mut transcript,
+        transport_dead: None,
+        fire_mark: 0,
     };
     let triggers: Vec<Vec<u8>> = recipe
         .boot_trigger
@@ -1226,11 +1331,24 @@ pub fn run_watch(
         // "loader") lives in the ACCUMULATED window, not in either
         // per-poll slice — match the window, guarded by a processed
         // offset so a signature only fires once.
+        // find the EARLIEST trigger match and where its bytes END —
+        // that end is the fire mark for subsequent expects (later text
+        // in the same batch is fresh; pre-match backlog is not)
+        let mut match_end: Option<usize> = None;
         if triggers.iter().any(|t| {
             // R1 (audit): clamp the consumed-offset — the window
             // drains during idle polls and a stale offset panics
             let scan_from = trigger_scan_from.min(s.window.len());
-            contains(&s.window[scan_from..], t)
+            if let Some(pos) = find_subslice(&s.window[scan_from..], t) {
+                let abs_end = scan_from + pos + t.len();
+                match_end = Some(match match_end {
+                    Some(e) => e.min(abs_end),
+                    None => abs_end,
+                });
+                true
+            } else {
+                false
+            }
         }) {
             if let Some(t) = last_fire {
                 if t.elapsed().as_secs() < recipe.cooldown_secs {
@@ -1238,8 +1356,15 @@ pub fn run_watch(
                     continue;
                 }
             }
-            // consume the matched bytes so this signature cannot refire
+            // consume the matched bytes so this signature cannot refire;
+            // and mark the fire point at the END of the matched trigger
+            // bytes — later text in the same batch is fresh (the prompt
+            // legitimately follows the signature), pre-match backlog is
+            // not (stale pre-reboot prompts must not satisfy actions)
             trigger_scan_from = s.window.len();
+            s.fire_mark = match_end
+                .map(|end| end.min(s.window.len()))
+                .unwrap_or(s.window.len());
             s.log("BOOT SIGNATURE DETECTED — firing recipe");
             last_fire = Some(Instant::now());
             let _ = std::fs::write(
@@ -1480,6 +1605,62 @@ mod tests {
     /// AND the construction is valid shell printing the real marker —
     /// proven by execution here (audit R8: the previous test asserted
     /// the abandoned quote-split shape and could not catch regressions).
+    /// Dying transport: serves data, then starts erroring with
+    /// ConnectionAborted (the R2 dead-bridge class).
+    struct DyingIo {
+        served: usize,
+    }
+    impl ConsoleIo for DyingIo {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.served > 0 {
+                self.served -= 1;
+                Ok(0)
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted))
+            }
+        }
+        fn write_all_bytes(&mut self, _data: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reset_input_buffer(&mut self) {}
+        fn close(&mut self) {}
+    }
+
+    #[test]
+    fn transport_death_aborts_expect_immediately() {
+        // replay:// gives no error injection yet, so drive the pieces:
+        // a Supervisor over DyingIo must flag death on first read and
+        // expect() must return the transport-dead error within one
+        // iteration instead of burning its whole timeout window.
+        let io: Box<dyn ConsoleIo> = Box::new(DyingIo { served: 0 });
+        let mut transcript_file = tempfile_in_test();
+        let mut sup = Supervisor {
+            io,
+            window: Vec::new(),
+            transcript: &mut transcript_file,
+            transport_dead: None,
+            fire_mark: 0,
+        };
+        let t0 = Instant::now();
+        let r = sup.expect("NEVER", 30.0);
+        let dt = t0.elapsed().as_secs_f64();
+        let err = r.expect_err("expect must fail");
+        assert!(
+            err.contains("transport dead"),
+            "error must name transport death: {err:?}"
+        );
+        assert!(dt < 5.0, "must abort fast, took {dt}s");
+    }
+
+    fn tempfile_in_test() -> std::fs::File {
+        let p = std::env::temp_dir().join(format!("conwrt-sup-{}.log", std::process::id()));
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .unwrap()
+    }
+
     /// Fragmenting transport: serves one fixed byte slice in
     /// caller-chosen chunks, one chunk per read.
     struct FragmentIo {
