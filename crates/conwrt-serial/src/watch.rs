@@ -665,6 +665,23 @@ fn chrono_local() -> String {
 }
 
 /// Run one armed recipe's actions on the open stream.
+/// Scoped TFTP server lifetime (audit R3): Drop stops the parked
+/// serve thread and joins it — early `?` exits can no longer strand
+/// the thread + UDP socket (the "address in use" on retry class).
+struct TftpServerGuard {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for TftpServerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
     for (i, action) in actions.iter().enumerate() {
         s.log(&format!(
@@ -732,12 +749,18 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 let stop_flag = stop.clone();
                 let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
                 let errs = errors.clone();
-                let server = std::thread::spawn(move || {
+                let handle = std::thread::spawn(move || {
                     let e = crate::tftp::serve_until(bind_addr, &dir, &|| {
                         stop_flag.load(std::sync::atomic::Ordering::Relaxed)
                     });
                     *errs.lock().unwrap() = e;
                 });
+                // scoped: EVERY exit path (including `?` failures below)
+                // stops and joins the server thread
+                let _server_guard = TftpServerGuard {
+                    stop,
+                    handle: Some(handle),
+                };
                 s.send_raw(format!("setenv ipaddr {client_ip}\n").as_bytes());
                 s.read_secs(1.5);
                 s.send_raw(format!("setenv serverip {server_ip}\n").as_bytes());
@@ -753,19 +776,11 @@ fn run_actions(s: &mut Supervisor, actions: &[Action]) -> Result<(), String> {
                 s.expect(&gate, *timeout_secs)?;
                 s.send_raw(format!("iminfo {addr}\n").as_bytes());
                 s.read_secs(5.0);
-                let before_ok = s.window.len();
-                if !contains(s.recent_since(before_ok.min(s.window.len())), b"OK") {
-                    // whole-window fallback (the prompt echoes OK earlier too)
-                }
                 if !contains(&s.window, b"OK") {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let _ = server.join();
                     return Err("tftp_boot: iminfo did not verify".into());
                 }
                 s.send_raw(format!("bootm {addr}\n").as_bytes());
                 s.read_secs(5.0);
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                let _ = server.join();
                 if !errors.lock().unwrap().is_empty() {
                     s.log(&format!("tftp server notes: {:?}", errors.lock().unwrap()));
                 }
@@ -1476,6 +1491,44 @@ root@OpenWrt:~# \r\n";
         assert_eq!(out.fires, 1);
         // the fire-marker landed (cross-process discipline holds)
         assert!(dir.join("watch.fired").exists());
+    }
+
+    /// Audit R3 regression: a FAILED tftp_boot action must not strand
+    /// the parked server thread/socket — the same port must rebind.
+    #[test]
+    fn failed_tftp_boot_releases_its_socket() {
+        let dir = std::env::temp_dir().join("conwrt-tftp-leak-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("img.bin"), b"payload").unwrap();
+        let transcript = dir.join("boot.log");
+        std::fs::write(&transcript, b"DRAM is set\r\nRTL838x# \r\n").unwrap();
+        // fixed port on loopback
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let recipe: Recipe = serde_json::from_str(&format!(
+            r#"{{"model":"leak","boot_trigger":["DRAM is set"],
+                "actions":[{{"type":"tftp_boot","addr":"0x84f00000","bind":"127.0.0.1:{port}",
+                  "serve_dir":"{}","file":"img.bin","client_ip":"192.168.1.1",
+                  "server_ip":"192.168.1.100","timeout_secs":2}}],
+                "max_fires":1}}"#,
+            dir.display().to_string().replace('\\', "/")
+        ))
+        .unwrap();
+        let tpath = dir.join("t.transcript");
+        let _ = std::fs::remove_file(dir.join("t.fired"));
+        let out = run_watch(
+            &format!("replay://{}", transcript.display()),
+            115200,
+            &recipe,
+            &tpath,
+            0.05,
+        )
+        .unwrap();
+        assert!(!out.success, "the gate should time out on a silent console");
+        // the port must be free again (guard joined + socket closed)
+        std::net::UdpSocket::bind(format!("127.0.0.1:{port}"))
+            .expect("tftp server socket leaked after failed action");
     }
 
     #[test]
