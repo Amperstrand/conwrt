@@ -25,6 +25,17 @@ pub enum ConsoleClass {
     Silent,
 }
 
+/// Profile fingerprint match result (SWUpdate compat-gate pattern).
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct ProfileMatch {
+    /// Profile name that matched, e.g. "zyxel/gs1900-8hp".
+    pub profile: String,
+    /// Which fingerprints hit: uboot_prompt / boot_signature / shell_prompt.
+    pub matched_on: Vec<String>,
+    /// Fingerprints checked but not seen in the probe window.
+    pub not_seen: Vec<String>,
+}
+
 /// Collected identity + flash layout of the attached device.
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
 pub struct DeviceCard {
@@ -50,6 +61,8 @@ pub struct DeviceCard {
     pub serverip: Option<String>,
     /// Raw transcript of the probe commands (evidence).
     pub probe_transcript: String,
+    /// Best profile match when profiles were supplied.
+    pub matched_profile: Option<ProfileMatch>,
 }
 
 fn read_secs(io: &mut dyn ConsoleIo, secs: f64, sink: &mut Vec<u8>) -> usize {
@@ -107,10 +120,75 @@ pub fn classify(window: &[u8]) -> ConsoleClass {
     ConsoleClass::Silent
 }
 
+/// Match a probe window against candidate profiles (pure — testable).
+/// Scores by which fingerprints appear in the window; the profile with
+/// the most hits wins; ties reject (ambiguous).
+pub fn match_profiles(
+    window: &[u8],
+    profiles: &[crate::profile::DeviceProfile],
+) -> Option<ProfileMatch> {
+    let text = String::from_utf8_lossy(window);
+    let mut best: Option<(usize, ProfileMatch)> = None;
+    let mut ambiguous = false;
+    for p in profiles {
+        let mut matched_on = Vec::new();
+        let mut not_seen = Vec::new();
+        let prompt = &p.console.uboot_prompt;
+        if !prompt.is_empty() {
+            if text.contains(prompt.as_str()) {
+                matched_on.push("uboot_prompt".to_string());
+            } else {
+                not_seen.push("uboot_prompt".to_string());
+            }
+        }
+        for sig in &p.console.boot_signatures {
+            if text.contains(sig.as_str()) {
+                matched_on.push(format!("signature:{sig}"));
+            } else {
+                not_seen.push(format!("signature:{sig}"));
+            }
+        }
+        if !matched_on.is_empty() {
+            let score = matched_on.len();
+            match &best {
+                Some((s, _)) if *s == score => ambiguous = true,
+                Some((s, _)) if *s > score => {}
+                _ => {
+                    best = Some((
+                        score,
+                        ProfileMatch {
+                            profile: p.profile.clone(),
+                            matched_on,
+                            not_seen,
+                        },
+                    ));
+                    ambiguous = false;
+                }
+            }
+        }
+    }
+    if ambiguous {
+        None
+    } else {
+        best.map(|(_, m)| m)
+    }
+}
+
 /// Probe the console and, when a prompt answers, collect the device
 /// card. Read-only: no state on the box changes (printenv/version/mtd
 /// listings only).
 pub fn detect(port_spec: &str, baud: u32, probe_secs: f64) -> std::io::Result<DeviceCard> {
+    detect_with_profiles(port_spec, baud, probe_secs, &[])
+}
+
+/// detect + profile fingerprint matching: the card carries the best
+/// profile match (or None when no candidate fits / ambiguous).
+pub fn detect_with_profiles(
+    port_spec: &str,
+    baud: u32,
+    probe_secs: f64,
+    profile_search_path: &[std::path::PathBuf],
+) -> std::io::Result<DeviceCard> {
     let mut io = open_port(port_spec, baud, Duration::from_millis(200))
         .map_err(|e| std::io::Error::other(format!("open {port_spec}: {e}")))?;
     // framing doctrine (audit R3): tcp:// is a RAW relay per io.rs;
@@ -177,6 +255,20 @@ pub fn detect(port_spec: &str, baud: u32, probe_secs: f64) -> std::io::Result<De
         }
         _ => {}
     }
+    if !profile_search_path.is_empty() {
+        let names = crate::profile::list_profiles(profile_search_path);
+        let profiles: Vec<crate::profile::DeviceProfile> = names
+            .keys()
+            .filter_map(|n| {
+                // board profiles only (skip */-base family files)
+                if n.ends_with("-base") {
+                    return None;
+                }
+                crate::profile::DeviceProfile::load(n, profile_search_path).ok()
+            })
+            .collect();
+        card.matched_profile = match_profiles(&all, &profiles);
+    }
     Ok(card)
 }
 
@@ -193,6 +285,27 @@ mod tests {
             classify(b"[    0.000000] Linux version 6.12.112...\r\n"),
             ConsoleClass::Booting
         );
+    }
+
+    #[test]
+    fn profile_matching_picks_the_right_board() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+        let gs =
+            crate::profile::DeviceProfile::load("zyxel/gs1900-8hp", std::slice::from_ref(&dir))
+                .unwrap();
+        let dl =
+            crate::profile::DeviceProfile::load("dlink/dgs-1210-16", std::slice::from_ref(&dir))
+                .unwrap();
+        // a Realtek-style boot window matches the gs1900 (its prompt)
+        let window = b"DRAM is set\r\nU-Boot 2011.12\r\nRTL838x# ";
+        let m = match_profiles(window, &[gs.clone(), dl.clone()]).expect("match");
+        assert_eq!(m.profile, "zyxel/gs1900-8hp");
+        assert!(m.matched_on.contains(&"uboot_prompt".to_string()));
+        // the D-Link window matches the dlink (ESC banner, its prompt)
+        let window2 = b"Hit Esc key to stop autoboot\r\nu-boot># ";
+        let m2 = match_profiles(window2, &[gs, dl]).expect("match2");
+        assert_eq!(m2.profile, "dlink/dgs-1210-16");
     }
 
     #[test]

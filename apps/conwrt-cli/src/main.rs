@@ -109,6 +109,10 @@ enum Command {
         baud: u32,
         #[arg(long, default_value_t = 4.0)]
         probe_secs: f64,
+        /// Enable profile fingerprint matching (./devices then
+        /// ~/.config/conwrt/devices).
+        #[arg(long)]
+        devices: bool,
     },
     /// One-command rescue: the whole bench-proven RTL838x ladder —
     /// watch for the boot signature, spaces into U-Boot, bundled
@@ -975,19 +979,32 @@ fn main() -> ExitCode {
             port,
             baud,
             probe_secs,
-        } => match conwrt_serial::detect::detect(&port, baud, probe_secs) {
-            Ok(card) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&card).unwrap_or_default()
-                );
-                ExitCode::SUCCESS
+            devices,
+        } => {
+            let search: Vec<std::path::PathBuf> = if devices {
+                vec![
+                    std::path::PathBuf::from("."),
+                    std::env::var_os("HOME")
+                        .map(|h| std::path::PathBuf::from(h).join(".config/conwrt"))
+                        .unwrap_or_else(|| std::path::PathBuf::from("/root/.config/conwrt")),
+                ]
+            } else {
+                Vec::new()
+            };
+            match conwrt_serial::detect::detect_with_profiles(&port, baud, probe_secs, &search) {
+                Ok(card) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&card).unwrap_or_default()
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("conwrt: serial-detect error: {e}");
+                    ExitCode::from(5)
+                }
             }
-            Err(e) => {
-                eprintln!("conwrt: serial-detect error: {e}");
-                ExitCode::from(5)
-            }
-        },
+        }
         Command::FlashRescue {
             port,
             device,
