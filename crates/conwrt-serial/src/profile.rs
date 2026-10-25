@@ -81,6 +81,7 @@ pub struct QuirksSection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceProfile {
+    /// Profile schema version (currently 1).
     pub schema_version: u32,
     /// Profile name, e.g. "zyxel/gs1900-8hp".
     pub profile: String,
@@ -89,9 +90,13 @@ pub struct DeviceProfile {
     /// Parent profiles merged before this one (chip base first).
     #[serde(default)]
     pub inherits: Vec<String>,
+    /// Console-layer facts.
     pub console: ConsoleSection,
+    /// U-Boot-layer facts.
     pub uboot: UbootSection,
+    /// Flash-layer facts.
     pub flash: FlashSection,
+    /// Behavioral quirks.
     #[serde(default)]
     pub quirks: QuirksSection,
 }
@@ -139,7 +144,7 @@ impl DeviceProfile {
             let parent = Self::load_inner(p, search_path, seen)?;
             merged.merge_from(&parent);
         }
-        let mut own: DeviceProfile =
+        let own: DeviceProfile =
             serde_json::from_value(raw).map_err(|e| format!("profile {name:?}: {e}"))?;
         own.merge_onto(&mut merged);
         merged.schema_version = own.schema_version;
@@ -256,7 +261,7 @@ mod tests {
     #[test]
     fn resolves_inheritance_with_child_override() {
         let dir = fixture_dir();
-        let p = DeviceProfile::load("zyxel/gs1900-8hp", &[dir.clone()]).expect("load");
+        let p = DeviceProfile::load("zyxel/gs1900-8hp", std::slice::from_ref(&dir)).expect("load");
         // family default from rtl838x-base
         assert_eq!(p.console.uboot_prompt, "RTL838x#");
         assert_eq!(p.uboot.network_init, "rtk network on");
@@ -284,7 +289,7 @@ mod tests {
     #[test]
     fn rejects_cycles_and_missing() {
         let dir = fixture_dir();
-        assert!(DeviceProfile::load("no/such-profile", &[dir.clone()]).is_err());
+        assert!(DeviceProfile::load("no/such-profile", std::slice::from_ref(&dir)).is_err());
         assert!(DeviceProfile::load("cycle/a", &[dir]).is_err());
     }
 
