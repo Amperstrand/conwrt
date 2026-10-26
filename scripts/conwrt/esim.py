@@ -248,6 +248,7 @@ def cmd_esim_provision(ip: str, key: str | None, smdp: str, matching_id: str,
     if wifi_ssid:
         print("[2/7] Setting up WiFi backup...")
         cmds = (
+            f"uci revert wireless 2>/dev/null; uci revert network 2>/dev/null; "
             f"uci set wireless.radio0.disabled='0'; "
             f"uci set wireless.wwansta=wifi-iface; "
             f"uci set wireless.wwansta.device='radio0'; "
@@ -355,9 +356,9 @@ def cmd_esim_provision(ip: str, key: str | None, smdp: str, matching_id: str,
         return 1
 
     time.sleep(60)
-    ping = _ssh(ip, "ping -c 2 -W 5 8.8.8.8 2>&1 | tail -1", key)
+    ping = _ssh(ip, "ping -I usb0 -c 2 -W 5 8.8.8.8 2>&1 | tail -1", key)
     if "time=" in ping or "round-trip" in ping:
-        print("  ✓ INTERNET WORKING through new profile")
+        print("  ✓ CELLULAR DATA WORKING (verified via usb0, not default route)")
     else:
         print(f"  ⚠ Ping test: {ping.strip()}")
 
