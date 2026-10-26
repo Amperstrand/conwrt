@@ -128,6 +128,20 @@ def _build_parser() -> argparse.ArgumentParser:
     uc_parser.add_argument("--model-id", default=None,
         help="Show compatibility for a specific model")
 
+    esim_parser = subparsers.add_parser("esim",
+        help="eSIM provisioning and management")
+    esim_sub = esim_parser.add_subparsers(dest="esim_command")
+    esim_sub.add_parser("status", help="Current serving cell, signal, band, operator")
+    esim_sub.add_parser("profiles", help="List eUICC profiles (requires MBIM mode)")
+    esim_prov = esim_sub.add_parser("provision", help="Full provisioning pipeline (interactive)")
+    esim_prov.add_argument("--smdp", required=True, help="SM-DP+ host")
+    esim_prov.add_argument("--matching-id", required=True, help="eSIM matching ID")
+    esim_prov.add_argument("--apn", default="internet", help="APN for the new profile")
+    esim_prov.add_argument("--wifi-ssid", default="", help="WiFi SSID for internet during provisioning")
+    esim_prov.add_argument("--wifi-password", default="", help="WiFi password")
+    esim_switch = esim_sub.add_parser("switch", help="Switch active profile")
+    esim_switch.add_argument("iccid", help="ICCID to switch to")
+
 
     mgmt_parser = subparsers.add_parser("setup-mgmt-wifi",
         help="Configure management WiFi on a running router")

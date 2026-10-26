@@ -101,6 +101,11 @@ class TestMBIMGate:
 
 @pytest.mark.power_cycle
 class TestSpeedtestCycle:
+    @pytest.fixture(autouse=True)
+    def restore_profile(self, device_ip):
+        yield
+        _lpac(device_ip, f"profile enable {SILENTLINK_ICCID}")
+
     def test_enable_speedtest_disables_others(self, device_ip):
         result = _lpac(device_ip, f"profile enable {SPEEDTEST_ICCID}")
         assert '"code":0' in result, f"enable failed: {result[:200]}"
@@ -110,11 +115,6 @@ class TestSpeedtestCycle:
         profiles = json.loads(result.split("\n")[-1])["payload"]["data"]
         speedtest = next(p for p in profiles if p["iccid"] == SPEEDTEST_ICCID)
         assert speedtest["profileState"] == "enabled", "Speedtest not enabled after enable"
-
-    def test_restore_original_profile(self, device_ip):
-        """Re-enable the original profile (auto-disables Speedtest)."""
-        result = _lpac(device_ip, f"profile enable {SILENTLINK_ICCID}")
-        assert '"code":0' in result, f"re-enable failed: {result[:200]}"
 
     def test_state_restored(self, device_ip):
         result = _lpac(device_ip, "profile list")

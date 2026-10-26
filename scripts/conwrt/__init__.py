@@ -20,6 +20,7 @@ Usage:
     conwrt cache clean --model-id dlink-covr-x1860-a1
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,9 +39,8 @@ def main() -> int:
         "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
+        "esim",
         "-h", "--help", "--version", "-V",
-        "probe", "flow", "lan-migrate", "-h", "--help", "--version", "-V",
-        "probe", "watch", "flow", "lan-migrate", "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
 
@@ -56,6 +56,28 @@ def main() -> int:
             return cmd_profile_plan(args)
         _build_parser().print_help(sys.stderr)
         return 1
+
+    # eSIM subcommand
+    if command == "esim":
+        esim_cmd = getattr(args, "esim_command", None)
+        ip = getattr(args, "ip", None) or "192.168.1.10"
+        key = getattr(args, "key", None) or os.environ.get("CONWRT_SSH_KEY")
+        from conwrt import esim as esim_mod
+        if esim_cmd == "status":
+            return esim_mod.cmd_esim_status(ip, key)
+        elif esim_cmd == "profiles":
+            return esim_mod.cmd_esim_profiles(ip, key)
+        elif esim_cmd == "provision":
+            return esim_mod.cmd_esim_provision(
+                ip, key,
+                smdp=args.smdp, matching_id=args.matching_id, apn=args.apn,
+                wifi_ssid=args.wifi_ssid, wifi_key=args.wifi_password,
+            )
+        elif esim_cmd == "switch":
+            return esim_mod.cmd_esim_switch(ip, key, args.iccid)
+        else:
+            _build_parser().print_help(sys.stderr)
+            return 1
 
     # Flash command (default) — heavy imports
     if command == "flash":
