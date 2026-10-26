@@ -25,6 +25,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The ORIGINAL tree the script was invoked from: the sweep's
+# protect-yourself guard compares against THIS, never the hub (review
+# round 1 on #579 — a worktree sweep must not be able to retire itself).
+INVOKE_ROOT="$REPO_ROOT"
 # #480: the ledger and the worktree sweep are MAIN-checkout (hub) state.
 # Invoked from a feature worktree, the script-dir fallback would target
 # the worktree's own data/ ledger — resolve the hub (git lists the main
@@ -199,7 +203,7 @@ EOF
         || echo "WARNING: fetch failed — MERGED classification uses the last-known origin/master"
     hub="$(git -C "$REPO_ROOT" worktree list --porcelain \
         | awk '$1=="worktree"{print substr($0,10); exit}')"
-    current="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+    current="$(git -C "$INVOKE_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
     # One lookup for all open PRs: "branch|updatedAt|number". gh failure
     # degrades to "unknown PR state" — sweep then never reaps.
     pr_map="$(gh pr list -R Amperstrand/conwrt --state open \
