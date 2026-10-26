@@ -8,6 +8,7 @@ glinet-gl-ar150                           GL.iNet       ath79/generic           
 glinet-gl-ar300m-lite                     GL.iNet       ath79/generic           [recovery-http, sysupgrade]  AR300M-Lite / AR300M16 / AR300M16-Ext (NOR only, no switch, no NAND)
 glinet-gl-ar300m-nand                     GL.iNet       ath79/nand              [recovery-http, sysupgrade]  AR300M / AR300M-Ext / AR300MD (NAND boot, switch LEFT)
 glinet-gl-ar300m-nor                      GL.iNet       ath79/nand              [recovery-http, sysupgrade]  AR300M / AR300M-Ext (NOR boot). NOT recommended for general use — NAND is 128MB vs NOR's 16MB. NOR is useful as automatic failsafe recovery partition. NOR boot via switch RIGHT (bootm 0x9f050000) or bootcount method (fw_setenv bootcount 3). Switch-based NOR boot may not work on all U-Boot versions.
+glinet-gl-e750                            GL.iNet       ath79/nand              [sysupgrade]  Mudi (GL-E750) portable 4G LTE router — QCA9533 2.4GHz + QCA9887 5GHz, battery powered
 glinet-mt3000                             GL.iNet       mediatek/filogic        [sysupgrade, uboot-http]  Beryl AX (GL-MT3000) WiFi 6 travel router
 glinet-mt6000                             GL.iNet       mediatek/filogic        [sysupgrade, uboot-http]  Flint 2 (GL-MT6000) WiFi 6 router
 linksys-mx4200-v1                         Linksys       qualcommax/ipq807x      [linksys-jnap-cve, sysupgrade]  Velop AX4200 WiFi 6 System V1 — CVE-2019-16340 auth bypass for initial flash
@@ -25,4 +26,4 @@ zyxel-gs1920-24                           Zyxel         realtek/rtl839x         
 zyxel-nr7101                              Zyxel         ramips/mt7621           [sysupgrade, zycast]  NR7101 — 5G/NR outdoor router, MediaTek MT7621
 zyxel-wx5600-t0                           Zyxel         mediatek/filogic        [serial-tftp-openwrt, serial-tftp-stock-restore, sysupgrade]  WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B
 
-24 model(s) valid in models
+25 model(s) valid in models
