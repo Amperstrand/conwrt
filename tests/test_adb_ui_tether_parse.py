@@ -18,51 +18,49 @@ from use_cases.usb_tether import _adb_hotplug_script
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-PIPELINE = r"""
-UI=$(cat "$1")
-USB_ROW=$(echo "$UI" | grep -oE 'USB.tethering[^>]*bounds="\[[0-9]+,[0-9]+' | grep -oE '[0-9]+,[0-9]+' | head -1)
-USB_Y=$(echo "$USB_ROW" | cut -d, -f2)
-if [ -n "$USB_Y" ]; then
-    USB_Y_CENTER=$((USB_Y + 28))
-    SWITCH=$(echo "$UI" | grep -oE "Switch[^>]*bounds=\"\[[0-9]+,${USB_Y_CENTER}" | grep -oE '\[[0-9]+,' | grep -oE '[0-9]+' | head -1)
-    if [ -n "$SWITCH" ]; then
-        SWITCH_CENTER=$((SWITCH + 65))
-        echo "$SWITCH_CENTER $USB_Y_CENTER"
-    else
-        echo "no-switch"
-    fi
-else
-    echo "no-row"
-fi
-"""
+def _shipped_pipeline() -> str:
+    """The UI-parse pipeline extracted FROM the generated hotplug script.
+
+    Structural lockstep (#474): every grep/guard/arithmetic line executes
+    verbatim from the shipped script, so an unlisted regression there
+    (wrong field, inverted guard, swapped tap args) fails HERE instead of
+    passing a substring whitelist. The only test-side substitution is the
+    sink: the ``adb shell input tap`` line becomes the reporting wrapper
+    below (no adb on the host).
+    """
+    src = _adb_hotplug_script()
+    try:
+        start = src.index('USB_ROW=$(echo "$UI"')
+        tap = src.index("adb shell input tap $SWITCH_CENTER $USB_Y_CENTER", start)
+    except ValueError as e:
+        raise AssertionError(
+            f"shipped hotplug script lost its UI-parse pipeline markers: {e}"
+        ) from e
+    body = src[start:tap].rstrip("\n")
+    # The shipped `fi`s close AFTER the tap+post-tap block, outside the
+    # cut — close the two open ifs (USB_Y, SWITCH) here so the extracted
+    # fragment is a complete script.
+    return (
+        'UI="$(cat "$1")"\n'
+        f"{body}\n"
+        "fi\nfi\n"
+        'if [ -z "$USB_Y" ]; then echo "no-row";\n'
+        'elif [ -z "$SWITCH_CENTER" ]; then echo "no-switch";\n'
+        'else echo "$SWITCH_CENTER $USB_Y_CENTER"; fi\n'
+    )
 
 
 def _run_pipeline(dump: str) -> str:
     proc = subprocess.run(
-        ["/bin/sh", "-c", PIPELINE, "sh", dump],
+        ["/bin/sh", "-c", _shipped_pipeline(), "sh", dump],
         capture_output=True, text=True, timeout=10,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
 
 
-def _assert_pipeline_shipped():
-    # The pipeline above must stay in lockstep with the generated hotplug
-    # script — if the shipped greps change without updating this test
-    # (or vice versa), fail loudly.
-    script = _adb_hotplug_script()
-    for shipped in (
-        "grep -oE 'USB.tethering[^>]*bounds=\"\\[[0-9]+,[0-9]+'",
-        'grep -oE "Switch[^>]*bounds=\\"\\[[0-9]+,${USB_Y_CENTER}"',
-        "USB_Y_CENTER=$((USB_Y + 28))",
-        "SWITCH_CENTER=$((SWITCH + 65))",
-    ):
-        assert shipped in script, f"pipeline drifted from hotplug script: {shipped}"
-
-
 class TestUsbTetherSwitchExtraction:
     def test_tether_settings_dump_taps_the_usb_switch(self):
-        _assert_pipeline_shipped()
         dump = str(FIXTURES / "ui_dump_tether_settings.xml")
         # Row text at y=650 -> tap y = 650+28 = 678; the USB switch sits at
         # x=940 (y=678), the Bluetooth switch decoy at y=533 must not match.
