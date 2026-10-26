@@ -14,7 +14,7 @@ unrouted VLANs) skip with the reason: ``conwrt configure`` shells out to
 plain ssh and needs host reachability.
 
 S3.5 executed 2026-10-15: the VM-only predecessor was deleted after the
-gate evidence in test-results/notes/run-20261015-venues-s3-hardware-dry.md
+gate evidence in test-evidence/run-20261015-venues-s3-hardware-dry.md
 (VM run green; hardware venues dry — every live DUT door owner-gated at
 deletion time, deviation recorded there on explicit reviewer instruction).
 """
