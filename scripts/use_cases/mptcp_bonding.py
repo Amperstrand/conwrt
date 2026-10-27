@@ -144,8 +144,8 @@ register(UseCase(
     params={
         "server_ipv4": ParamDef(type=str, default="", required=True,
                                 description="VPS IP running BSBF server"),
-        "server_port": ParamDef(type=str, default="", required=True,
-                               description="Port (from 'sudo bsbf-add-client' on VPS)"),
+        "server_port": ParamDef(type=int, default=0, required=True, min_value=1, max_value=65535,
+                                description="Port (from 'sudo bsbf-add-client' on VPS)"),
         "uuid": ParamDef(type=str, default="", required=True,
                         description="Client UUID (from 'sudo bsbf-add-client' on VPS)"),
     },
