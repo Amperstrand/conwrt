@@ -7024,7 +7024,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn vpn_pia_shape_gates_and_branches_match_1x() {
         let base = VpnPiaProfile {
             username: "p1234567".into(),
