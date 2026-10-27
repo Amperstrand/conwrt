@@ -70,6 +70,11 @@
 //!     "password": "testpass",
 //!     "upstream_gateway": "192.168.8.1",
 //! }))
+//! print(r["mptcp-bonding"].build_configure({
+//!     "server_ipv4": "203.0.113.7",
+//!     "server_port": "16384",
+//!     "uuid": "0f0e0d0c-0b0a-4909-8807-060504030201",
+//! }))
 //! EOF
 //! ```
 //!
@@ -81,11 +86,12 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
-    NodnsProfile, OpenClashProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TravelmateProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
-    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile,
+    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
+    TetherVariant, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -127,6 +133,12 @@ fn command_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.starts_with("opkg install "))
         .filter(|l| !l.starts_with("if command -v apk "))
         .filter(|l| !l.starts_with("&& apk add "))
+        // mptcp-bonding 1.x package one-liner
+        // (`apk add curl … || opkg update && opkg install curl … || true`):
+        // package delivery, same exclusion class — the 2.x port uses
+        // the #421 apk-aware EnsurePackage (with the
+        // offline-installed guard the raw one-liner lacks)
+        .filter(|l| !l.starts_with("apk add "))
         // openclash dnsmasq→dnsmasq-full swap: the 1.x configure script
         // carries NO package ops (packages ride the ASU image build,
         // where packages_remove handles the swap); the 2.x apply path
@@ -381,6 +393,18 @@ fn vpn_nordvpn_matches_1x_golden() {
             ..VpnNordvpnProfile::default()
         }),
         include_str!("goldens/vpn-nordvpn.sh"),
+    );
+}
+
+#[test]
+fn mptcp_bonding_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::MptcpBonding(MptcpBondingProfile {
+            server_ipv4: "203.0.113.7".into(),
+            server_port: 16384,
+            uuid: "0f0e0d0c-0b0a-4909-8807-060504030201".into(),
+        }),
+        include_str!("goldens/mptcp-bonding.sh"),
     );
 }
 
