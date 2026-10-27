@@ -916,6 +916,60 @@ impl SslProfile {
     }
 }
 
+/// MPTCP connection bonding via BondingShouldBeFree — port of the
+/// tested 1.x `mptcp-bonding` preset (`scripts/use_cases/
+/// mptcp_bonding.py`, verified on SNAPSHOT r35226 / kernel 6.18). True
+/// per-connection aggregation: xray-core (VLESS) on a VPS deaggregates
+/// MPTCP subflows from up to 8 WANs — mwan3 routes connections, BSBF
+/// splits ONE connection across all of them. Like rescue-watchdog
+/// there is no static UCI to shape: the surface is ONE remote
+/// installer line (`curl owrt.bondingshouldbefree.org | sh -s -- …`)
+/// plus verify hints. An MPTCP kernel (OpenWrt 25.12+/SNAPSHOT) is a
+/// device prerequisite the plan cannot ensure — 24.10 (CONFIG_MPTCP=n)
+/// must be excluded upstream; the 1.x closing comments say the same.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MptcpBondingProfile {
+    /// VPS running the BSBF server — IPv4 or hostname (1.x required
+    /// param, `shell_safe::validate_host` parity).
+    pub server_ipv4: String,
+    /// Client port issued by `bsbf-add-client` on the VPS (1.x required
+    /// param, `validate_port` parity).
+    pub server_port: u16,
+    /// Client UUID issued by `bsbf-add-client` (1.x required param).
+    pub uuid: String,
+}
+
+impl MptcpBondingProfile {
+    /// 1.x gated only non-emptiness, then interpolated all three values
+    /// UNQUOTED into a `curl | sh -s --` line — `;`/`$()`/backticks in
+    /// any param meant remote shell injection. The port mirrors the
+    /// Python-side fix that landed with it (validate_host / numeric
+    /// port / uuid token charset); valid input renders byte-identically.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if !valid_host(&self.server_ipv4) {
+            return Err(Unsupported::InvalidParams(
+                "server_ipv4 must be a valid hostname or IPv4 address".into(),
+            ));
+        }
+        if self.server_port == 0 {
+            return Err(Unsupported::InvalidParams(
+                "server_port must be 1-65535".into(),
+            ));
+        }
+        if self.uuid.is_empty()
+            || !self
+                .uuid
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(Unsupported::InvalidParams(
+                "uuid contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Private Internet Access via OpenVPN (tun0) — port of the 1.x
 /// `vpn-pia-openvpn` preset (`scripts/use_cases/vpn_providers/pia.py`,
 /// the validated static recipe: RSA-4096 CA, UDP 8080 pool +
@@ -1739,6 +1793,9 @@ pub enum Profile {
     VpnNordvpnOpenvpn(VpnNordvpnOpenvpnProfile),
     /// Private Internet Access via WireGuard (runtime-API script).
     VpnPia(VpnPiaProfile),
+    /// MPTCP connection bonding via BondingShouldBeFree (single remote
+    /// installer; needs an MPTCP kernel, 25.12+/SNAPSHOT).
+    MptcpBonding(MptcpBondingProfile),
 }
 
 impl Profile {
@@ -1768,6 +1825,7 @@ impl Profile {
             Profile::VpnNordvpn(_) => "vpn-nordvpn",
             Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
             Profile::VpnPia(_) => "vpn-pia",
+            Profile::MptcpBonding(_) => "mptcp-bonding",
         }
     }
 
@@ -1799,6 +1857,7 @@ impl Profile {
             Profile::VpnNordvpn(_) => &[],
             Profile::VpnNordvpnOpenvpn(_) => &[],
             Profile::VpnPia(_) => &[],
+            Profile::MptcpBonding(_) => &[],
         }
     }
 }
@@ -2123,6 +2182,7 @@ pub fn plan_profile(
         Profile::VpnNordvpn(nv) => plan_vpn_nordvpn(model, nv),
         Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
         Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
+        Profile::MptcpBonding(mp) => plan_mptcp_bonding(model, mp),
     }
 }
 
@@ -4879,6 +4939,53 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
     })
 }
 
+fn plan_mptcp_bonding(model: &DeviceModel, mp: &MptcpBondingProfile) -> Result<Plan, Unsupported> {
+    mp.validate()?;
+    // 1.x ships a legacy `apk add curl || opkg …` one-liner here —
+    // package delivery, excluded from golden comparison; the 2.x port
+    // uses the #421 apk-aware EnsurePackage instead (with the
+    // offline-installed guard the raw one-liner lacks).
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "curl -fsSL owrt.bondingshouldbefree.org | sh -s -- \
+                 --server-ipv4 {} --server-port {} --uuid {}",
+                mp.server_ipv4, mp.server_port, mp.uuid
+            ),
+        },
+        PlanOp::Shell {
+            command: "echo \"BSBF installed. Verify: bsbf-bonding --status\"".into(),
+        },
+        PlanOp::Shell {
+            command: "echo \"Monitor: bsbf-netspeed\"".into(),
+        },
+        PlanOp::Shell {
+            command: "echo \"Uninstall: bsbf-bonding --uninstall\"".into(),
+        },
+    ];
+    let verification = vec![
+        VerificationCheck {
+            description: "BSBF client installed".into(),
+            command: "command -v bsbf-bonding >/dev/null 2>&1 && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+        VerificationCheck {
+            description: "MPTCP kernel present (25.12+/SNAPSHOT prerequisite)".into(),
+            command: "test -d /proc/net/mptcp_net && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "mptcp-bonding".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_nodns(model: &DeviceModel, nd: &NodnsProfile) -> Result<Plan, Unsupported> {
     nd.validate()?;
     // curl is NOT in every base image (the preset's "no packages" claim
@@ -6917,6 +7024,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn vpn_pia_shape_gates_and_branches_match_1x() {
         let base = VpnPiaProfile {
             username: "p1234567".into(),
@@ -7129,6 +7237,68 @@ mod tests {
             assert!(
                 matches!(hostile.validate(), Err(Unsupported::InvalidParams(_))),
                 "gate must reject {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mptcp_bonding_shape_and_gates_match_1x() {
+        let mp = MptcpBondingProfile {
+            server_ipv4: "203.0.113.7".into(),
+            server_port: 16384,
+            uuid: "0f0e0d0c-0b0a-4909-8807-060504030201".into(),
+        };
+        let script = render_shell(&plan_for(Profile::MptcpBonding(mp.clone())));
+        // installer line: values UNQUOTED (1.x bytes); validate() gates
+        assert!(script.contains(
+            "curl -fsSL owrt.bondingshouldbefree.org | sh -s -- \
+             --server-ipv4 203.0.113.7 --server-port 16384 \
+             --uuid 0f0e0d0c-0b0a-4909-8807-060504030201"
+        ));
+        assert!(script.contains("echo \"BSBF installed. Verify: bsbf-bonding --status\""));
+        assert!(script.contains("echo \"Monitor: bsbf-netspeed\""));
+        assert!(script.contains("echo \"Uninstall: bsbf-bonding --uninstall\""));
+        // hostname endpoints stay first-class (validate_host parity)
+        assert!(
+            MptcpBondingProfile {
+                server_ipv4: "vps.example.com".into(),
+                ..mp.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+
+        // injection gates: hostile values never reach the pipe-to-sh line
+        for bad in [
+            MptcpBondingProfile {
+                server_ipv4: "1.2.3.4; rm -rf /".into(),
+                ..mp.clone()
+            },
+            MptcpBondingProfile {
+                server_ipv4: "$(reboot)".into(),
+                ..mp.clone()
+            },
+            MptcpBondingProfile {
+                server_ipv4: String::new(),
+                ..mp.clone()
+            },
+            MptcpBondingProfile {
+                server_port: 0,
+                ..mp.clone()
+            },
+            MptcpBondingProfile {
+                uuid: "$(reboot)".into(),
+                ..mp.clone()
+            },
+            MptcpBondingProfile {
+                uuid: String::new(),
+                ..mp.clone()
+            },
+        ] {
+            assert!(
+                matches!(bad.validate(), Err(Unsupported::InvalidParams(_))),
+                "must refuse: {:?}",
+                bad
             );
         }
     }
