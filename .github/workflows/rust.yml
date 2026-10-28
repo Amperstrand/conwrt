@@ -9,6 +9,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust.yml"
+      - "rust-toolchain.toml"
       - "Makefile"
       - "models/**"
       - "scripts/rust_nostd_parity.py"
@@ -21,6 +22,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust.yml"
+      - "rust-toolchain.toml"
       - "scripts/rust_nostd_parity.py"
 
 jobs:
