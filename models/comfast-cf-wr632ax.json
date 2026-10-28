@@ -7,6 +7,8 @@
     "device": "comfast,cf-wr632ax",
     "default_ip": "192.168.1.1",
     "profile": "comfast_cf-wr632ax",
+    "board_name": "comfast,cf-wr632ax",
+    "release": "25.12.5",
     "version": "25"
   },
   "hardware": {
@@ -22,9 +24,10 @@
     "dimensions": "123.4 x 88.7 x 34 mm"
   },
   "mac_oui": [
-    "40:A5:EF"
+    "40:A5:EF",
+    "8C:3D:16"
   ],
-  "stock_default_ip": "192.168.1.1",
+  "stock_default_ip": "192.168.0.1",
   "flash_methods": {
     "recovery-http": {
       "description": "U-Boot HTTP recovery (hold reset 10s while powering on, release on 5 green LED flashes)",
@@ -80,6 +83,17 @@
       "source": "research (forum + device tree, not yet pcap-verified)",
       "uboot_http_get_returns_html": true,
       "led_pattern": "green flashes 5x"
+    },
+    "stock_webui": {
+      "source": "verified on a live CF-WR632AX, 2026-10-25",
+      "stock_ui": "CF-WR632AX-V2.6.1.2",
+      "default_ip": "192.168.0.1",
+      "login_path": "/cgi-bin/login",
+      "login_username": "admin",
+      "login_password": "factory default; change on first use",
+      "login_content_type": "application/json",
+      "upload_endpoint": "/cgi-bin/mbox-config?method=SET&section=system_upgrade_keep",
+      "upload_field": "uploadfile"
     }
   },
   "capabilities": [
@@ -87,11 +101,21 @@
     "wifi",
     "usb"
   ],
-  "tested_hardware": {},
+  "tested_hardware": {
+    "stock_webui_openwrt_25_12_5": {
+      "tested": true,
+      "date": "2026-10-25",
+      "notes": "Stock CF-WR632AX V2.6.1.2 WebUI at 192.168.0.1 (factory admin/admin). Installed the official OpenWrt 25.12.5 sysupgrade via POST /cgi-bin/login and multipart uploadfile to /cgi-bin/mbox-config?method=SET&section=system_upgrade_keep; then ran firstboot -y on the serial console to wipe the vendor overlay. Clean OpenWrt LAN 192.168.1.1; 2.5G WAN DHCP. The stock UI initially showed the 1GbE LAN eth1 as down; after booting OpenWrt the LAN link came up at 1 Gbps, but management used the 2.5G WAN netdev wan. A reset-button press while powered did not wipe the stock config; power-cycle U-Boot recovery was not exercised. No MAC/serial/inventory retained."
+    }
+  },
   "notes": {
     "known_issue_bootloop": "Snapshot builds after r34488-059f801a2c (May 2026) cause bootloop due to U-Boot v2026.01 + TF-A 20260123 regression. Use stable release 25.12.x. See https://github.com/openwrt/openwrt/issues/23430",
     "hardware_family": "Same MT7981B+MT7976CN platform as GL.iNet Beryl AX (GL-MT3000) and Cudy TR3000 v1",
     "recovery_note": "Reset button timing matters: 5 green flashes = HTTP recovery, >7 flashes = U-Boot netconsole/TFTP",
+    "stock_webui": "V2.6.1.2 stock UI is at http://192.168.0.1 (not 192.168.1.1); OpenWrt default is 192.168.1.1. Login POST /cgi-bin/login with JSON username/password. Flash an official sysupgrade via multipart uploadfile to /cgi-bin/mbox-config?method=SET&section=system_upgrade_keep; then run firstboot -y to wipe the vendor overlay.",
+    "stock_vs_recovery_ip": "stock_default_ip is the vendor WebUI 192.168.0.1; U-Boot recovery is 192.168.1.1; OpenWrt LAN is 192.168.1.1.",
+    "lan_port": "Stock UI reported the 1GbE LAN eth1 as down during initial access; after OpenWrt the LAN link came up at 1 Gbps. Management used the 2.5G WAN netdev wan. APs are the client path.",
+    "reset_button": "A reset-button press while powered did not wipe the stock config on the tested unit. U-Boot recovery requires the power-cycle/reset timing in recovery-http and was not exercised here.",
     "uart_recovery": "Advanced recovery via mtk_uartboot with bl2 + fip files (see github.com/andros-ua/owrt-misc/tree/main/cf-wr632ax)"
   }
 }
