@@ -35,6 +35,7 @@ REQUIRED_PARAMS = {
         "uplink_password": "benchpass",
     },
     "mesh11sd": {"mesh_id": "testmesh"},
+    "fleet_identity": {"salt": "sweep-salt-0123456789"},
     "mptcp-bonding": {
         "server_ipv4": "192.0.2.10",
         "server_port": "4444",

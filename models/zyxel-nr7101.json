@@ -15,7 +15,7 @@
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
-    "wifi": "none (5G/NR modem only, no WiFi radio)",
+    "wifi": "MT7603 2.4GHz 802.11n (PCIe0, mt76 driver). Enabled in the OpenWrt DTS (mt7621_zyxel_nr7101.dts: wifi@0,0 on pcie0, 0x400-byte EEPROM from Factory@0x0) and kmod-mt7603 ships in the official image (mt7621.mk DEVICE_PACKAGES). WLAN GPIO key present. CORRECTED 2026-10-27 — earlier sessions wrongly recorded 'none' (operator + OpenWrt source both confirm the radio).",
     "modem": {
       "model": "Quectel RG502Q-EA",
       "usb_vendor_id": "2c7c",
@@ -29,7 +29,7 @@
     "serial": "UART, 57600 8N1, internal header J5 (Pin1=GND, Pin2=key/empty, Pin3=RX, Pin4=TX, Pin5=3.3V). Source: OpenWrt patch by Bjørn Mork (2021-06). Note: NOT 115200 — confirmed from OpenWrt device tree.",
     "board_revision": "A1 (verified: board_name=zyxel,nr7101)",
     "enclosure": "IP68 outdoor, PoE powered",
-    "note": "No WiFi — 5G modem only. Single PoE ethernet port."
+    "note": "2.4GHz WiFi (MT7603) + 5G modem + single PoE ethernet port. PCIe0 carries the WiFi card, NOT the modem (the modem is USB 2c7c:0800) — boot-time mt7621-pci init hangs are the WiFi card enumerating."
   },
   "mac_oui": [
     "4C:C5:3E",
@@ -337,9 +337,9 @@
   },
   "capabilities": [
     "ethernet",
+    "wifi",
     "cellular",
-    "serial",
-    "wifi"
+    "serial"
   ],
   "serial_configuration": {
     "verified": true,
@@ -401,7 +401,7 @@
         "delay_after_handoff_s": 60
       }
     ],
-    "pcie_note": "PCIe init (Quectel modem) is timing-sensitive — may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
+    "pcie_note": "PCIe init (MT7603 WiFi on pcie0 — NOT the modem, which is USB) is timing-sensitive — may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
     "uart_break_note": "FT232R serial adapter gets stuck after UART break during power cycle. Use serial-boot-capture.py with --recovery-wait to auto-recover."
   }
 }

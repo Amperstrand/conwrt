@@ -100,6 +100,13 @@ wan_ssh = false
 # port = 22                      # SSH listen port
 # restrict_gateway_ports = true  # GatewayPorts='no': forwarded ports bind loopback only (does NOT disable -R forwarding)
 
+# [use_cases.fleet_identity]
+# salt = "<openssl rand -hex 16>"  # required — fleet-wide secret, never commit it
+# hostname_prefix = "nr7101"       # hostname becomes <prefix>-<mac12>
+# password_length = 20             # hex chars of the MAC-derived root password
+# disarm_dhcp = "1"                # dhcp.lan.ignore=1 + RA off (bench/shared segments)
+# Host-side twin: python3 scripts/fleet_secrets.py --mac <MAC> --check-shell
+
 # --- WireGuard VPN server registration ---
 # After flashing, conwrt reads the auto-generated WireGuard public key from
 # the router and registers it with the VPN server via SSH.
