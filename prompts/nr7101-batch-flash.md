@@ -100,7 +100,14 @@ device in the listen window — only the target may be cycling):
 2. **Start zycast on the switch** (from the bench switch or via it, per
    `recipes/zyxel/nr7101/nr7101-flash.sh`), sending the
    initramfs-recovery image to 225.0.0.0:5631 on the bay VLAN.
-3. **PoE ON the target port.** Z-Loader enters Multiboot Listening
+3. **MAC-VERIFY THE BAY OCCUPANT FIRST (2026-10-28 incident):** during
+   the ~10s listen window (or any time the occupant ARPs), tcpdump the
+   bay VLAN for 15s — the source IPs/MACs name the resident device. A
+   wrong-attribution port-map is not hypothetical: bay2 was attributed
+   to a6e4 but held ea7f (.12.113 ARPs); a cross-arch initramfs was
+   multicast into the wrong bootloader window (unit survived — wrong-arch
+   kernel cannot boot — but only by luck of architecture).
+3b. **PoE ON the target port.** Z-Loader enters Multiboot Listening
    automatically within ~10s (no serial trigger needed). Flash ~3 min.
 4. **Kill zycast the moment the unit boots** (kernel boot seen on
    timeline/serial, or after the documented flash time). Left running,
