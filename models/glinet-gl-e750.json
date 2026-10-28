@@ -1,0 +1,64 @@
+{
+  "id": "glinet-gl-e750",
+  "vendor": "GL.iNet",
+  "description": "Mudi (GL-E750) portable 4G LTE router — QCA9533 2.4GHz + QCA9887 5GHz, battery powered",
+  "openwrt": {
+    "target": "ath79/nand",
+    "device": "glinet,gl-e750",
+    "profile": "glinet_gl-e750",
+    "board_name": "glinet,gl-e750",
+    "default_ip": "192.168.8.1",
+    "version": "25",
+    "release": "25.12.5"
+  },
+  "hardware": {
+    "soc": "QCA9533 ver 2 rev 0 (MIPS 24Kc V7.4)",
+    "flash": "NAND 128MB (ubi mtd5) + kernel mtd3 4MB",
+    "ram": "128MB",
+    "ethernet_ports": "1x 10/100 (eth0)",
+    "wifi": "2.4GHz 802.11b/g/n (QCA9533 integrated, ath9k) + 5GHz 802.11ac (QCA9887, PCIe ath10k)",
+    "lte": "Quectel EM060K-GL (USB, QMI on /dev/cdc-wdm0)",
+    "usb": "USB-A 2.0 host (mass storage enumerates)",
+    "power": "internal battery + USB-C charging"
+  },
+  "mac_oui": [
+    "94:83:C4"
+  ],
+  "stock_default_ip": "192.168.8.1",
+  "capabilities": [
+    "ethernet",
+    "wifi",
+    "usb",
+    "lte",
+    "serial",
+    "ssh"
+  ],
+  "serial_console": {
+    "baud": 115200,
+    "console_device": "ttyS0",
+    "bootloader": "U-Boot",
+    "verified_from": "live unit /proc/consoles + /etc/inittab, 2026-10-25",
+    "note": "Kernel console is ttyS0 at 115200 8N1; /etc/inittab drives it with ::askconsole: (/usr/libexec/login.sh). On the unit measured, /proc/consoles reported 'ttyS0 -W- (EC a)' (write-only) and a marker transmitted into the port never arrived at the unit, while the unit's own output was byte-clean — so treat output capture as reliable and input as unproven until loopback-tested on your own wiring. See AGENTS.md 'Serial Wiring: Verify Before Connecting'."
+  },
+  "flash_methods": {
+    "sysupgrade": {
+      "description": "SSH sysupgrade from an existing OpenWrt install (the only method documented for this model so far)",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
+    }
+  },
+  "warnings": [
+    "5 GHz QCA9887 may fail to probe entirely on some units: 'failed to read calibration data from EEPROM: -22', 'could not probe fw (-22)'. When it fails there is NO phy0 and no 5 GHz interface at all — the unit presents a single radio (2.4GHz ath9k). Do not assume two radios or a working 5 GHz radio.",
+    "Do not 'fix' the 5 GHz failure by dropping calibration files into /lib/firmware/ath10k/QCA9887/hw1.0/. On the unit measured, installing a pre-cal-*/cal-* file did not revive the radio and instead ADDED a second failure: 'failed to get board id: -122' (the target refuses the board-id query that a pre-cal file selects). Removing the files removes the -122 and restores the original -22. See felixfelix-bot/e750-repair docs/EVIDENCE.md section 3.",
+    "No recovery/bootloader flash method (U-Boot HTTP/TFTP) has been verified on this model. Do not assume one exists; treat a failed flash as requiring serial console access.",
+    "The 2.4GHz radio is commonly configured as a CLIENT (STA) uplink on this model, not an AP — check 'iw dev' for type before assuming a serving AP."
+  ],
+  "notes": "Bench observations, 2026-10-25, on OpenWrt 25.12.5 r33051-f5dae5ece4, kernel 6.12.94 (ath79/nand, mips_24kc). Identity: /tmp/sysinfo/board_name = glinet,gl-e750; /tmp/sysinfo/model = GL.iNet GL-E750; /etc/board.json model.id = glinet,gl-e750. Partition table as reported by /proc/mtd: mtd0 u-boot 0x00040000, mtd1 u-boot-env 0x00010000, mtd2 art 0x00010000, mtd3 kernel 0x00400000, mtd4 reserved 0x00ba0000, mtd5 ubi 0x08000000 (erasesize 0x00020000). Radio state on the measured unit: only phy1 present (ath9k, 2.4GHz, ch11), 5GHz QCA9887 never probed. NO flash method was exercised on this model — tested_hardware is deliberately empty rather than claiming an untested sysupgrade.",
+  "tested_hardware": {}
+}
