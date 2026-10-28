@@ -89,7 +89,7 @@ def test_nordvpn_token_tunnel_e2e(venue, nordvpn_token):
             f"{venue.name}: no direct-SSH capability — `conwrt configure` needs "
             f"plain-ssh reachability (run from a host on the bench VLAN, or "
             f"expose the place via a routed path)")
-    host, port, _key = venue.ssh_target
+    host, port, key = venue.ssh_target
 
     _ensure_wireguard(venue)
 
@@ -109,6 +109,11 @@ def test_nordvpn_token_tunnel_e2e(venue, nordvpn_token):
         env = {**os.environ, "CONWRT_CONFIG": str(config_toml)}
         cmd = ["python3", str(REPO_ROOT / "scripts" / "conwrt.py"), "configure",
                "--ip", host, "--port", str(port)]
+        if key:
+            # venue's private key is not necessarily preloaded in the
+            # invoking user's ssh config/agent — plumb it explicitly
+            # (#457: it authenticates venue.run() but was discarded here).
+            cmd += ["--ssh-key", str(key)]
         if venue.model_id:
             cmd += ["--model-id", venue.model_id]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
