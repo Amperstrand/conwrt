@@ -73,16 +73,46 @@ jobs:
       - name: Bootstrap pristine VM base (one cheap openwrt_vm test)
         # Materializes .openwrt.img + .openwrt-base.qcow2 (download, sudo
         # loop-mount prep, qemu-img convert) so the flash fixture's
-        # pristine-base gate passes instead of skipping.
+        # pristine-base gate passes instead of skipping. Nested-virt
+        # runners boot userspace slower than bare KVM hosts — widen the
+        # SSH wait accordingly.
+        env:
+          CONWRT_VM_SSH_WAIT_LOOPS: '120'
         run: |
+          set +e
           pytest tests/integration/test_sqm.py::test_openssh_available -v \
-            --timeout=900 --timeout-method=signal \
+            --timeout=1500 --timeout-method=signal \
             --junitxml=test-results/vm-lifecycle/bootstrap-junit.xml
+          rc=$?
+          set -e
+          echo "== bootstrap post-mortem (pytest rc=$rc) =="
+          tail -c 6000 tests/integration/.serial.log 2>/dev/null || echo "(no session serial log)"
+          ss -tlnp 2>/dev/null | grep -E ':2222|:2223' || echo "(no listener on 2222/2223)"
+          ps aux | grep -E '[q]emu-system' || echo "(no qemu running)"
+          exit "$rc"
       - name: Flash lifecycle test (exclusive host)
+        env:
+          CONWRT_VM_SSH_WAIT_LOOPS: '120'
         run: |
+          set +e
           pytest tests/integration/test_flash_lifecycle.py -v \
-            --timeout=1200 --timeout-method=signal \
+            --timeout=1500 --timeout-method=signal \
             --junitxml=test-results/vm-lifecycle/lifecycle-junit.xml
+          rc=$?
+          set -e
+          echo "== lifecycle post-mortem (pytest rc=$rc) =="
+          for f in tests/integration/.openwrt-flash-serial.log tests/integration/.serial.log; do
+            echo "-- $f:"; tail -c 6000 "$f" 2>/dev/null || echo "   (absent)"
+          done
+          ss -tlnp 2>/dev/null | grep -E ':2222|:2223' || echo "(no listener on 2222/2223)"
+          ps aux | grep -E '[q]emu-system' || echo "(no qemu running)"
+          exit "$rc"
+      - name: Collect VM serial logs
+        if: always()
+        run: |
+          # upload-artifact drops dotfiles listed by path — copy to plain names
+          cp tests/integration/.serial.log test-results/vm-lifecycle/session-serial.log 2>/dev/null || true
+          cp tests/integration/.openwrt-flash-serial.log test-results/vm-lifecycle/flash-serial.log 2>/dev/null || true
       - name: Upload VM evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -90,6 +120,4 @@ jobs:
           name: vm-lifecycle-evidence-${{ github.run_id }}
           path: |
             test-results/vm-lifecycle/
-            tests/integration/.openwrt-flash-serial.log
-            tests/integration/.serial.log
           if-no-files-found: ignore

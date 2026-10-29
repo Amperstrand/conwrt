@@ -354,8 +354,13 @@ def openwrt_vm():
     if r.returncode != 0:
         pytest.fail(f"QEMU failed to start: {r.stderr}")
 
-    print("Waiting for SSH (up to 5 min)...", flush=True)
-    for i in range(60):
+    # Slow hosts (nested-virt CI runners) can take several minutes from
+    # kernel boot to first SSH; fast KVM hosts finish in well under a
+    # minute. Env-tunable so a slow exclusive-runner slot (#583) can
+    # widen the window without code changes.
+    wait_loops = int(os.environ.get("CONWRT_VM_SSH_WAIT_LOOPS", "60") or 60)
+    print(f"Waiting for SSH (up to ~{wait_loops * 5}s)...", flush=True)
+    for i in range(wait_loops):
         r = _ssh("true")
         if r.returncode == 0:
             print(f"SSH ready after ~{i * 5}s", flush=True)
