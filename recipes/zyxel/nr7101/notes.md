@@ -5,7 +5,7 @@
 - RAM: 256MB DDR3
 - Flash: SPI NAND 256MB
 - Ethernet: 1x GigE (PoE 802.3at, single port)
-- WiFi: none (5G/NR modem only)
+- WiFi: MT7603 2.4GHz 802.11n (PCIe0, mt76; DTS wifi@0,0 + kmod-mt7603 in DEVICE_PACKAGES — corrected 2026-10-27, earlier recorded as none)
 - Modem: Quectel RG502Q-EA (5G NR Sub-6, NSA/SA, integrated USB)
 - Serial: UART 57600 8N1, internal header J5 (Pin1=GND, Pin2=key, Pin3=RX, Pin4=TX, Pin5=3.3V)
 - Enclosure: IP68 outdoor, PoE powered

@@ -7,6 +7,16 @@
 
 Tested procedure for flashing a Zyxel NR7101 with OpenWrt via serial-triggered zycast.
 
+> **Batch / bench-switch flashing (preferred for multiple units):** this
+> page documents the single-unit macOS+serial flow. For batches, flash via
+> the **OpenWrt GS1900-8HP bench switch** (per-port PoE cycling, no serial
+> trigger needed — Z-Loader multicast-listens on every boot) using
+> `prompts/nr7101-batch-flash.md`, which also covers per-unit identity
+> (MAC-derived passwords/hostnames/SSID), the management AP on the
+> 2.4GHz MT7603 radio, hardware burn-in, modem inventory, and FIPS mesh
+> installation. (Step 12's `--wifi-disable` is for this legacy flow only —
+> the batch flow instead configures the `nr7101_<mac12>` management AP.)
+
 ## Hardware Required
 
 - USB-serial adapter (FTDI FT232R, CP2102, or CH340) at **3.3V**

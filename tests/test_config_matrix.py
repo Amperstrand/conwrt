@@ -35,7 +35,7 @@ def test_build_plan_with_each_use_case(model_id: str, use_case_name: str) -> Non
             if pdef.type is int:
                 params[pname] = pdef.min_value or 1000
             else:
-                params[pname] = "test"
+                params[pname] = "test-1234"
     cfg = ConwrtConfig(use_cases=[UseCaseConfig(name=use_case_name, params=params)])
     plan = build_plan(cfg, mode="post_install", model_id=model_id)
     assert len(plan.steps) > 0
