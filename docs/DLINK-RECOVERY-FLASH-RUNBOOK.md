@@ -167,8 +167,15 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
   4. `uci commit network` only after the readback passes. On UBIFS
      overlay devices the commit is permanent after reboot — know the
      undo (failsafe / reflash) BEFORE committing
-  5. verify reachability from the seat gateway on the new IP before any
-     further state change
+  5. **apply, detached**: `uci commit` only writes config — it does NOT
+     reconfigure the running interface. Apply with
+     `setsid sh -c '/etc/init.d/network restart' &` (detached so the
+     SSH drop cannot kill it mid-apply; AGENTS.md "Network-Gear Config
+     Discipline" — one change, one verify; the deadman pattern applies
+     if this unit later becomes a switch you manage over this segment)
+  6. verify reachability from the seat gateway on the NEW IP before any
+     further state change (the old address is gone — the reconnect is
+     part of the check)
 - [ ] Update the lab registry / exporter so the unit is visible (bench repo
       tooling; AGENTS.md "Lab Single Source of Truth"; the registry commit
       is part of THIS runbook's close-out, not a later chore).
