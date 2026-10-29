@@ -93,10 +93,30 @@ def _blossom_urls(shell: str) -> set[str]:
 
 
 class TestBundleFreshness:
-    def test_committed_bundle_matches_code(self):
+    def test_committed_bundle_matches_code(self, monkeypatch):
         sys.path.insert(0, str(REPO_ROOT / "scripts"))
         from generate_site import build_bundle
         committed = _load_bundle()
+
+        # Freeze upstream version resolution (#589): build_bundle resolves
+        # short version keys ("24"/"25") against LIVE downloads.openwrt.org
+        # via latest_openwrt_version(), so an upstream point release makes
+        # any committed bundle stale with zero code drift — and an offline
+        # run resolves differently than an online one. Pin the resolution to
+        # the full versions the committed bundle already recorded, so this
+        # check asserts CODE freshness (recipes, models, renderers) only.
+        frozen: dict[int, str] = {}
+        for flows in committed["rendered"].values():
+            for versions in flows.values():
+                for rendered in versions.values():
+                    m = re.search(r"^# OpenWrt (\d+\.\d+(?:\.\d+)*) · ",
+                                  rendered["shell"], re.MULTILINE)
+                    if m:
+                        frozen.setdefault(int(m.group(1).split(".")[0]), m.group(1))
+        import profile.target as target_mod
+        monkeypatch.setattr(target_mod, "latest_openwrt_version",
+                            lambda major: frozen.get(major, ""))
+
         regenerated = build_bundle()
         committed.pop("generated_at", None)
         regenerated.pop("generated_at", None)
