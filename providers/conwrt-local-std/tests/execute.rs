@@ -318,6 +318,76 @@ fn deadman_armed_for_service_network_restart() {
     assert!(script.contains("[ -e \"$DM_DIR/cancel\" ] && exit 0"));
 }
 
+/// Codex #597 P1 (cancel-during-final-sleep): after the poll loop ends,
+/// the cancel flag is checked ONE more time before reverting — a cancel
+/// landing inside the final sleep interval is within the advertised
+/// window and must suppress rollback.
+#[test]
+fn deadman_revert_rechecks_cancel_after_the_final_sleep() {
+    let script = render_apply_script(&network_restart_plan());
+    // the heredoc INTRO also contains the terminator token — the revert
+    // body is the segment BETWEEN the two occurrences
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    assert_eq!(parts.len(), 3, "intro + body + tail");
+    let revert_body = parts[1];
+    // exactly TWO cancel checks in the revert script: in-loop + post-loop
+    assert_eq!(
+        revert_body
+            .matches("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+            .count(),
+        2,
+        "in-loop AND post-loop cancel checks:\n{revert_body}"
+    );
+    let loop_check = revert_body
+        .find("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("in-loop check");
+    let post_loop = revert_body
+        .rfind("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("post-loop check");
+    let revert_marker = revert_body
+        .find("apply window expired without cancel")
+        .expect("revert body");
+    assert!(loop_check < post_loop && post_loop < revert_marker);
+}
+
+/// Codex #597 P1 (stale arming isolation): every arming gets its own
+/// generation directory, the revert script derives its state dir from
+/// its own path (never a shared one), re-arming retires the previous
+/// process (neutralize + verified kill) before replacing state, and the
+/// host cancel goes through the `current` symlink (newest arming only).
+#[test]
+fn deadman_rearm_isolates_and_retires_the_previous_arming() {
+    let script = render_apply_script(&network_restart_plan());
+    // generation dir computed device-side (render stays deterministic)
+    assert!(script.contains("DM_GEN=\"$$-$(date +%s)\""));
+    assert!(script.contains("DM_DIR=\"$DM_ROOT/$DM_GEN\""));
+    // revert.sh owns ITS generation dir via $0 — a stale process can
+    // never observe a newer apply's state
+    assert!(script.contains("DM_DIR=$(dirname \"$0\")"));
+    assert!(
+        !script.contains("DM_DIR=/tmp/conwrt-deadman\n"),
+        "no shared baked-in state dir in revert.sh"
+    );
+    // retire-previous: neutralize via current/cancel, verified kill by
+    // /proc cmdline marker (kill only what we own), then replace state
+    let neutralize = script
+        .find("touch \"$DM_ROOT/current/cancel\"")
+        .expect("neutralize previous arming");
+    let kill = script
+        .find("kill \"$__dm_old_pid\"")
+        .expect("verified kill of previous deadman");
+    let wipe = script.find("rm -rf \"$DM_ROOT\"").expect("state replaced");
+    assert!(neutralize < kill && kill < wipe);
+    assert!(script.contains("grep -q conwrt-deadman \"/proc/$__dm_old_pid/cmdline\""));
+    // the newest arming is what a cancel can reach
+    assert!(script.contains("ln -sfn \"$DM_DIR\" \"$DM_ROOT/current\""));
+    assert!(script.contains("echo $! > \"$DM_ROOT/pid\""));
+    assert_eq!(
+        deadman_cancel_cmd(),
+        "touch /tmp/conwrt-deadman/current/cancel && echo deadman-cancelled"
+    );
+}
+
 /// The verbatim escape hatch (`/etc/init.d/network restart` inside a
 /// Shell payload) arms too — same dual-scan shape as #427.
 #[test]
@@ -438,6 +508,80 @@ async fn recovery_verifies_and_cancels_after_channel_loss() {
     assert!(outcome.channel_lost);
     assert!(outcome.deadman_cancelled);
     assert!(outcome.stderr.contains("reconnected within the window"));
+    drop(session);
+}
+
+/// Codex #597 P1 (unconfirmed cancel ≠ success): a verified apply whose
+/// deadman cancel stays unconfirmed must NOT read as fully verified —
+/// the device reverts at window expiry, and reporting success would be
+/// a lie about persistence.
+#[tokio::test]
+async fn verified_apply_with_unconfirmed_cancel_is_not_success() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    fixture.set_exec_response(&script, 0, "");
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    // every cancel attempt fails (touch through the symlink errors)
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let outcome = apply_plan(&session, &plan).await.expect("apply");
+    assert!(outcome.applied, "the apply itself ran clean");
+    assert!(
+        outcome.verification.iter().all(|v| v.passed),
+        "readbacks prove the config landed"
+    );
+    assert!(!outcome.deadman_cancelled, "cancel unconfirmed");
+    assert!(
+        !outcome.fully_verified(),
+        "unconfirmed cancel = pending revert = not a success"
+    );
+    drop(session);
+}
+
+/// The recovery path retries the cancel within the window: verified on
+/// reconnect but cancel unconfirmed → keep cycling until the deadline →
+/// the error names the pending revert (NOT a success outcome).
+#[tokio::test]
+async fn recovery_with_never_confirmed_cancel_expires_naming_the_revert() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("unconfirmed cancel must not exit through the success door");
+    let msg = err.to_string();
+    assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
     drop(session);
 }
 

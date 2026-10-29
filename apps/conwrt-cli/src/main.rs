@@ -1838,16 +1838,28 @@ fn cmd_apply(
                 println!("verified:  ✓ {} (`{}`)", check.description, check.stdout);
             }
             if outcome.deadman_armed {
-                println!(
-                    "deadman:   cancelled ({})",
-                    if outcome.deadman_cancelled {
-                        "device confirmed"
-                    } else {
-                        "cancel send failed — the window reverts if verification ever lied"
-                    }
-                );
+                println!("deadman:   cancelled (device confirmed)");
             }
             ExitCode::SUCCESS
+        }
+        Ok(outcome)
+            if outcome.applied
+                && !outcome.verification.is_empty()
+                && outcome.verification.iter().all(|c| c.passed) =>
+        {
+            // The only way to land here: armed && cancel unconfirmed —
+            // readbacks prove the apply landed, but the device still
+            // reverts at window expiry. NOT a success (Codex #597 P1).
+            eprintln!(
+                "apply verified but the deadman cancel is UNCONFIRMED — the device\
+                 \nreverts this config when the window expires. Cancel it manually\
+                 \nbefore then, or re-run the apply (idempotent):"
+            );
+            eprintln!(
+                "  ssh root@{ip} '{cancel}'",
+                cancel = conwrt_local_std::execute::deadman_cancel_cmd()
+            );
+            ExitCode::FAILURE
         }
         Ok(outcome) => {
             if outcome.channel_lost {

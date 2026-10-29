@@ -13,8 +13,10 @@
 //! DEVICE-SIDE deadman before the first mutation: uci snapshots of every
 //! config the plan commits, plus a detached revert script that restores
 //! the snapshots and restarts networking again if the window expires
-//! without a cancel. The cancel is sent by the executor once the apply is
-//! verified good; a channel-losing apply instead enters a bounded
+//! without a cancel. The cancel is sent by the executor once the apply
+//! is verified good — and must be CONFIRMED by the device (an
+//! unconfirmed cancel is a pending revert, never a success); a
+//! channel-losing apply instead enters a bounded
 //! reconnect-and-verify loop (`apply_plan_with_recovery`) so the
 //! no-feedback period is bounded and the recovery entry is defined.
 
@@ -74,10 +76,16 @@ pub struct ApplyOutcome {
 }
 
 impl ApplyOutcome {
-    /// Apply + every verification check passed.
+    /// Apply + every verification check passed. On a deadman-armed plan
+    /// this ALSO requires a device-confirmed cancel: readbacks alone do
+    /// not make the configuration persist while rollback stays armed —
+    /// an unconfirmed cancel means the device reverts at window expiry
+    /// (Codex #597 P1), which is not a success.
     #[must_use]
     pub fn fully_verified(&self) -> bool {
-        self.applied && self.verification.iter().all(|v| v.passed)
+        self.applied
+            && self.verification.iter().all(|v| v.passed)
+            && (!self.deadman_armed || self.deadman_cancelled)
     }
 }
 
@@ -102,10 +110,14 @@ fn recovery_poll_secs() -> u64 {
         .unwrap_or(DEFAULT_RECOVERY_POLL_SECS)
 }
 
-/// The command the executor sends to cancel an armed deadman.
+/// The command the executor sends to cancel an armed deadman. `current`
+/// is the symlink the arm block points at ITS generation directory — a
+/// cancel can therefore only ever reach the newest arming, never a
+/// superseded process still polling its own (baked-in) generation path
+/// (Codex #597 P1: generation isolation).
 #[must_use]
 pub fn deadman_cancel_cmd() -> String {
-    format!("touch {DEADMAN_DIR}/cancel && echo deadman-cancelled")
+    format!("touch {DEADMAN_DIR}/current/cancel && echo deadman-cancelled")
 }
 
 /// Does this plan restart networking (the channel-severing class)?
@@ -125,6 +137,14 @@ fn plan_restarts_network(plan: &Plan) -> bool {
 /// commits, stage a detached revert script, and start its cancel-poll
 /// window. Runs under the apply script's `set -e`; every step is either
 /// unconditional-success or explicitly guarded.
+///
+/// Generation isolation (Codex #597 P1): each arming gets its own
+/// `$$-$(date +%s)` subdirectory and the revert script derives its state
+/// dir from its own path — a stale process from an earlier arming can
+/// never observe a newer apply's cancel flag or snapshots. Re-arming
+/// first RETIRES any previous process (cancel-neutralize + verified
+/// kill) before replacing the state, so one executor per device means
+/// one live deadman at a time (the lease model).
 fn render_deadman_arm(configs: &[String], window_secs: u64) -> String {
     let poll = recovery_poll_secs();
     let polls = window_secs.div_ceil(poll);
@@ -139,23 +159,44 @@ fn render_deadman_arm(configs: &[String], window_secs: u64) -> String {
         r#"# --- deadman: this plan restarts networking (executor, #555) ---
 # A mid-script /etc/init.d/network restart can sever the SSH channel with
 # the plan half-applied and the executor blind. The snapshots below are
-# the pre-apply uci state of every config this plan commits; if
-# {DEADMAN_DIR}/cancel does not appear within {window_secs}s, revert.sh
-# re-imports them and restarts networking (the recovery entry). The
-# executor cancels once the apply is verified good.
-DM_DIR={DEADMAN_DIR}
-rm -rf "$DM_DIR"
+# the pre-apply uci state of every config this plan commits; if the
+# cancel flag does not appear within {window_secs}s, revert.sh re-imports
+# them and restarts networking (the recovery entry). The executor cancels
+# via the `current` symlink once the apply is verified good.
+DM_ROOT={DEADMAN_DIR}
+DM_GEN="$$-$(date +%s)"
+DM_DIR="$DM_ROOT/$DM_GEN"
+# Retire any previous arming BEFORE replacing its state (supersede): a
+# still-polling stale revert.sh must not survive into this apply's
+# window — its earlier deadline would roll THIS apply back prematurely.
+if [ -d "$DM_ROOT" ]; then
+    # neutralize: its next poll sees the cancel flag and exits harmlessly
+    touch "$DM_ROOT/current/cancel" 2>/dev/null || true
+    __dm_old_pid="$(cat "$DM_ROOT/pid" 2>/dev/null || true)"
+    case "$__dm_old_pid" in
+        ''|*[!0-9]*) ;;
+        *) if grep -q conwrt-deadman "/proc/$__dm_old_pid/cmdline" 2>/dev/null; then
+               kill "$__dm_old_pid" 2>/dev/null || true
+           fi ;;
+    esac
+fi
+rm -rf "$DM_ROOT"
 mkdir -p "$DM_DIR/snapshots"
 {snapshots}cat > "$DM_DIR/revert.sh" <<'CONWRT_DM_EOF'
 #!/bin/sh
 # conwrt deadman revert (#555) - runs detached; survives apply-channel death
-DM_DIR={DEADMAN_DIR}
+# Owns exactly the generation directory it lives in (re-arm supersedes).
+DM_DIR=$(dirname "$0")
 i=0
 while [ "$i" -lt {polls} ]; do
     [ -e "$DM_DIR/cancel" ] && exit 0
     sleep {poll}
     i=$((i+1))
 done
+# A cancel landing during the FINAL sleep is still inside the advertised
+# window — recheck before reverting, or a verified+cancelled apply gets
+# rolled back anyway (Codex #597 P1).
+[ -e "$DM_DIR/cancel" ] && exit 0
 logger -t conwrt-deadman "apply window expired without cancel - reverting"
 touch "$DM_DIR/fired"
 for __dm_f in "$DM_DIR/snapshots"/*.uci; do
@@ -168,7 +209,9 @@ done
 logger -t conwrt-deadman "revert applied (pre-apply uci restored)"
 CONWRT_DM_EOF
 chmod +x "$DM_DIR/revert.sh"
+ln -sfn "$DM_DIR" "$DM_ROOT/current"
 setsid "$DM_DIR/revert.sh" >/dev/null 2>&1 < /dev/null &
+echo $! > "$DM_ROOT/pid"
 "#,
         snapshots = snapshots,
         polls = polls,
@@ -365,6 +408,28 @@ where
     finish_apply(session, plan, script, armed, &output).await
 }
 
+/// Send the deadman cancel and require the DEVICE to confirm it (exit 0
+/// — the `touch` through the `current` symlink succeeded). A transport
+/// blip or a failed touch must not doom a verified apply to rollback,
+/// so the cancel is retried a bounded number of times on the live
+/// channel. Returns false only when the cancel stays unconfirmed —
+/// callers must then treat the outcome as NOT successful: the device
+/// reverts at window expiry (Codex #597 P1).
+async fn confirm_deadman_cancel(session: &SshSession) -> bool {
+    const CANCEL_ATTEMPTS: u32 = 3;
+    for _ in 0..CANCEL_ATTEMPTS {
+        let confirmed = session
+            .exec(&deadman_cancel_cmd())
+            .await
+            .map(|o| o.exit_code.unwrap_or(1) == 0)
+            .unwrap_or(false);
+        if confirmed {
+            return true;
+        }
+    }
+    false
+}
+
 /// Shared tail of both apply entry points: run the read-only verification
 /// pass, cancel an armed deadman when the apply is verified good.
 async fn finish_apply(
@@ -383,11 +448,7 @@ async fn finish_apply(
     }
     let mut cancelled = false;
     if armed && !verification.is_empty() && verification.iter().all(|v| v.passed) {
-        cancelled = session
-            .exec(&deadman_cancel_cmd())
-            .await
-            .map(|o| o.exit_code.unwrap_or(1) == 0)
-            .unwrap_or(false);
+        cancelled = confirm_deadman_cancel(session).await;
     }
 
     Ok(ApplyOutcome {
@@ -415,10 +476,12 @@ fn fate_unknown_outcome(script: String, cause: &str) -> ApplyOutcome {
 
 /// The #555 bounded no-feedback window: poll for the device (reconnect),
 /// and once reachable re-run the read-only verification pass. Verified
-/// good → cancel the deadman and report recovery; window exhausted → an
-/// error naming the revert. A plan with no verification checks cannot
-/// prove the apply landed, so it never takes the verified-good exit —
-/// the deadman reverts (conservative by construction).
+/// good → cancel the deadman (confirmed — retried through the window if
+/// the cancel write fails; an unconfirmed cancel is a pending revert,
+/// not a success) and report recovery; window exhausted → an error
+/// naming the revert. A plan with no verification checks cannot prove
+/// the apply landed, so it never takes the verified-good exit — the
+/// deadman reverts (conservative by construction).
 async fn channel_lost_path<F, Fut>(
     plan: &Plan,
     script: String,
@@ -451,12 +514,16 @@ where
                 }
             }
         }
-        if transport_ok && !verification.is_empty() && verification.iter().all(|v| v.passed) {
-            let cancelled = session
-                .exec(&deadman_cancel_cmd())
-                .await
-                .map(|o| o.exit_code.unwrap_or(1) == 0)
-                .unwrap_or(false);
+        // Verified-good exit requires a CONFIRMED cancel: if the cancel
+        // write fails we fall through and retry the whole
+        // reachable→verify→cancel cycle until the deadline — an
+        // unconfirmed cancel is a pending revert, not a success
+        // (Codex #597 P1).
+        if transport_ok
+            && !verification.is_empty()
+            && verification.iter().all(|v| v.passed)
+            && confirm_deadman_cancel(&session).await
+        {
             return Ok(ApplyOutcome {
                 script,
                 applied: true,
@@ -464,12 +531,12 @@ where
                 verification,
                 deadman_armed: true,
                 channel_lost: true,
-                deadman_cancelled: cancelled,
+                deadman_cancelled: true,
             });
         }
-        // Reachable but not (yet) verified: a just-restarted network may
-        // still be converging — sleep one poll interval and retry until
-        // the deadline.
+        // Reachable but not verified-good (or cancel still unconfirmed):
+        // a just-restarted network may still be converging — sleep one
+        // poll interval and retry until the deadline.
         tokio::time::sleep(poll).await;
     }
     Err(SshError::Transport(format!(
