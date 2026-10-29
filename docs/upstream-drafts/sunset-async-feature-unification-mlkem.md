@@ -45,12 +45,22 @@ curve25519/chacha20-poly1305/ed25519 floor cannot opt out of today.
 
 A plain `default-features = false` on sunset-async's sunset edge would
 *remove* mlkem from applications that only depend on sunset-async — a
-default-feature regression for current users. Better: keep the default
-behavior and forward an explicit opt-out feature:
+default-feature regression for current users. But an opt-out feature
+ALONE does not work either: as long as sunset-async's own dependency
+edge keeps contributing sunset's defaults, `sunset-async = { default-features = false }`
+still unifies `mlkem` back in through that edge. The fix needs BOTH
+parts in sunset-async's Cargo.toml:
 
 ```toml
+[dependencies]
+# disable sunset's defaults ON THIS EDGE — the app's default-features=false
+# cannot do it for us (feature unification)
+sunset = { version = "^0.6", default-features = false, features = ["embedded-io"] }
+
 [features]
 default = ["mlkem"]
+# forward the opt-out: std users unchanged (default still pulls mlkem),
+# embedded users drop it via default-features = false
 mlkem = ["sunset/mlkem"]
 ```
 

@@ -97,7 +97,10 @@ profile, static `size` only — nothing flashed):
   sunset 0.6 negotiates `curve25519-sha256` /
   `chacha20-poly1305@openssh.com` / `ssh-ed25519`, host-key verify +
   ed25519 pubkey auth + exec all pass — exactly this ADR's floor, no
-  ssh-rsa/SHA-1 anywhere. Against real Dropbear **2026.94** (main) the
+  ssh-rsa/SHA-1 anywhere. Against a real **upstream** Dropbear
+  **2026.94** build (the `matt.ucc.asn.au` tarball with generic
+  `./configure` — a version proxy for OpenWrt main's Dropbear, NOT
+  main's package build; #465 correction) the
   same client additionally completed a negotiated
   `mlkem768x25519-sha256` session end-to-end — and the fork
   investigation later showed sunset 0.6.0 mlkem works client *and*

@@ -172,10 +172,14 @@ default features are on, which Dropbear 2024.86 simply doesn't pick);
 negotiation, host-key verify, pubkey auth and exec all pass against the
 exact OpenWrt 24.10 Dropbear version.
 
-### Closing move: Dropbear 2026.94 (OpenWrt main) — 2026-10-16
+### Closing move: Dropbear 2026.94 (upstream tarball, NOT OpenWrt main's package) — 2026-10-16
 
-The same harness against OpenWrt main's Dropbear (closing the second
-version in ADR-0005's matrix):
+The same harness against an **upstream** Dropbear 2026.94 build — the
+plain `matt.ucc.asn.au` tarball with generic `./configure`, NOT OpenWrt
+main's package build (which carries OpenWrt-specific config and patches;
+we never built or tested that). Treat this leg as an upstream-version
+proxy for main's Dropbear, closing the second *version* in ADR-0005's
+matrix — not as an OpenWrt-main integration result:
 
 ```sh
 curl -O https://matt.ucc.asn.au/dropbear/releases/dropbear-2026.94.tar.bz2
@@ -215,9 +219,11 @@ Both sides negotiated the **mlkem768x25519-sha256** hybrid (Dropbear
 2026.94 offers it, sunset prefers it) and the full session passed. Two
 consequences:
 
-- The ADR-0005 floor holds on *both* OpenWrt branches (24.10 and main)
-  — post-quantum falls out of the intersection for 24.10 and is
-  additionally verified working on main.
+- The ADR-0005 floor holds on *both* matrix versions — post-quantum
+  falls out of the intersection for the exact OpenWrt 24.10 Dropbear and
+  is additionally verified working against upstream 2026.94 (as a proxy
+  for main's version; OpenWrt main's own package build remains untested
+  — #465 correction).
 - The client mlkem path is interoperable with a real server (a Dropbear
   2026.94 server accepts sunset's client encapsulation key and completes
   KEX). **Correction (2026-10-16, fork investigation): the in-harness
