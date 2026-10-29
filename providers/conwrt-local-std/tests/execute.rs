@@ -508,24 +508,61 @@ fn deadman_state_dirs_are_created_private() {
     );
 }
 
-/// Codex #597 P1 (completion evidence): the apply's LAST line drops the
-/// generation-scoped completion marker — set -e means an aborted script
-/// never writes it.
+/// Codex #597 P1 (completion evidence): an rc-gated EXIT trap writes the
+/// generation-scoped marker on EVERY successful exit — including plan
+/// tails that `exit 0` early (wireguard killswitch verify) — and never
+/// on `set -e` aborts or kills. A plain last-line write would be
+/// bypassed by exactly those early exits.
 #[test]
-fn deadman_armed_script_ends_with_completion_marker() {
+fn deadman_completion_marker_written_only_on_success() {
     let script = render_apply_script(&network_restart_plan());
-    let last = script
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .expect("non-empty script");
-    assert_eq!(
-        last, r#"echo done > "$DM_DIR/complete""#,
-        "the marker is the script's final statement"
+    assert!(
+        script.contains("trap 'rc=$?; [ \"$rc\" -eq 0 ] && echo done > \"$DM_DIR/complete\"' EXIT"),
+        "rc-gated EXIT trap present"
     );
-    // and a NON-network plan carries no marker
+    // registered in the arm block, before the first plan mutation
+    let trap_at = script.find("trap 'rc=$?").expect("trap");
+    let mutation = script
+        .find("uci set network.deadman_probe=interface")
+        .expect("mutation");
+    assert!(trap_at < mutation);
+    // and a NON-network plan carries no trap/marker machinery
     let plain = render_apply_script(&plan());
     assert!(!plain.contains("$DM_DIR/complete"));
+}
+
+/// Codex #597 P1 (absent-config rollback): a config ABSENT pre-apply is
+/// recorded as such, and the revert DELETES it (plus staged debris) — a
+/// plan-created config (openvpn on a router without it) must not
+/// survive the rollback as a live configuration.
+#[test]
+fn deadman_records_absent_configs_and_revert_deletes_them() {
+    let plan = Plan {
+        profile_id: "creates-config".into(),
+        model_id: "t".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set openvpn.pia=provider; uci commit openvpn".into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    assert!(
+        script.contains(": > \"$DM_DIR/snapshots/openvpn.absent\""),
+        "absence recorded for the missing config"
+    );
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let reimport = revert_body.find("uci -q import").expect("reimport");
+    let purge = revert_body
+        .find("rm -f \"/etc/config/$__dm_c\" \"/tmp/.uci/$__dm_c\"")
+        .expect("absent-config purge");
+    assert!(reimport < purge, "purge runs with the restore");
 }
 
 /// The explicit-window render arms the DEVICE with the caller's window —

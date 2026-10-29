@@ -1178,6 +1178,75 @@ async fn deadman_rearm_supersedes_stale_window() {
     .await;
 }
 
+/// Codex #597 P1 (absent-config rollback): a config that did NOT exist
+/// pre-apply and is created by the plan must be DELETED by the revert —
+/// not left behind as a live configuration. Unverified apply → window
+/// expiry → the created config is gone.
+#[tokio::test]
+async fn deadman_revert_removes_configs_created_by_the_apply() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "creates-config".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set conwrt_absent_test.pia=provider; \
+                          uci commit conwrt_absent_test"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "never passes".into(),
+            command: "true".into(),
+            expect_contains: "never-matches".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // the config file must not pre-exist (the fixture VM is pristine,
+    // but be defensive: a leftover would void the test's premise)
+    vm_exec("rm -f /etc/config/conwrt_absent_test /tmp/.uci/conwrt_absent_test").await;
+
+    let (session, _model) = connected_openwrt_session().await;
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 4, 1,
+    )
+    .await;
+    drop(session);
+
+    // window + revert margin
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let leftover =
+        vm_exec("[ -e /etc/config/conwrt_absent_test ] && echo present || echo gone").await;
+    assert_eq!(
+        leftover, "gone",
+        "a plan-created config must not survive the rollback"
+    );
+    vm_exec("rm -rf /tmp/conwrt-deadman").await;
+}
+
 /// Codex #597 P1 (cancel-vs-rollback race): once rollback has STARTED,
 /// the cancel command must FAIL — `mv armed cancel` cannot succeed after
 /// revert.sh removed `armed` at its transition. A confirmed cancel from

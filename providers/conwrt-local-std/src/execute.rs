@@ -175,6 +175,12 @@ fn render_deadman_arm(configs: &[String], window_secs: u64) -> String {
             "if [ -f \"/etc/config/{config}\" ]; then\n\
              \x20   uci -q export {config} > \"$DM_DIR/snapshots/{config}.uci\" \\\n\
              \x20       || {{ echo \"conwrt-deadman: cannot snapshot {config} - aborting before mutation\" >&2; exit 1; }}\n\
+             else\n\
+             \x20   # ABSENT pre-apply (Codex #597 P1): record the absence so the\n\
+             \x20   # revert DELETES this config if the apply creates it — a plan-\n\
+             \x20   # created config (e.g. openvpn on a router without it) must not\n\
+             \x20   # survive rollback as a live, enabled configuration\n\
+             \x20   : > \"$DM_DIR/snapshots/{config}.absent\"\n\
              fi\n"
         ));
     }
@@ -255,6 +261,13 @@ for __dm_f in "$DM_DIR/snapshots"/*.uci; do
     __dm_c="$(basename "$__dm_f" .uci)"
     uci -q import "$__dm_c" < "$__dm_f" && uci -q commit "$__dm_c"
 done
+# configs ABSENT pre-apply: delete them (and any staged debris) — a plan
+# that created them must not leave a live config behind the rollback
+for __dm_a in "$DM_DIR/snapshots"/*.absent; do
+    [ -e "$__dm_a" ] || continue
+    __dm_c="$(basename "$__dm_a" .absent)"
+    rm -f "/etc/config/$__dm_c" "/tmp/.uci/$__dm_c" 2>/dev/null
+done
 /etc/init.d/network restart >/dev/null 2>&1
 [ -s "$DM_DIR/snapshots/firewall.uci" ] && /etc/init.d/firewall restart >/dev/null 2>&1 || true
 logger -t conwrt-deadman "revert applied (pre-apply uci restored)"
@@ -263,6 +276,12 @@ chmod +x "$DM_DIR/revert.sh"
 ln -sfn "$DM_DIR" "$DM_ROOT/current"
 setsid "$DM_DIR/revert.sh" >/dev/null 2>&1 < /dev/null &
 echo $! > "$DM_ROOT/pid"
+# Completion evidence (Codex #597 P1): an rc-gated EXIT trap — written on
+# EVERY successful exit (including plan-tail `exit 0` early exits, e.g.
+# the wireguard killswitch verify), never on `set -e` aborts or kills,
+# which never reach rc 0. Recovery refuses to cancel without it: passing
+# checks alone does not prove the script completed.
+trap 'rc=$?; [ "$rc" -eq 0 ] && echo done > "$DM_DIR/complete"' EXIT
 "#,
         snapshots = snapshots,
         polls = polls,
@@ -307,15 +326,6 @@ pub fn render_apply_script_windowed(plan: &Plan, window_secs: u64) -> String {
     }
     if let Some(at) = script.find("set -e\n").map(|i| i + "set -e\n".len()) {
         script.insert_str(at, &preamble);
-    }
-    if armed {
-        // Completion evidence (Codex #597 P1): the apply's LAST line drops
-        // a marker into its own generation dir. On the recovery path,
-        // passing verification checks alone does NOT prove the script ran
-        // to its end (checks can read uci state committed before the
-        // restarts); without this marker the recovery loop refuses the
-        // verified-good exit and lets the deadman decide.
-        script.push_str("echo done > \"$DM_DIR/complete\"\n");
     }
     script
 }
