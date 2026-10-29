@@ -508,7 +508,55 @@ fn deadman_state_dirs_are_created_private() {
     );
 }
 
-/// Codex #597 P1 (completion evidence): an rc-gated EXIT trap writes the
+/// Codex #597 P1 (service reconciliation): the revert restarts the
+/// service behind every touched config (uci-restored OR absent-purged) —
+/// mapping the dhcp→dnsmasq name mismatch, skipping network/wireless
+/// (restarted unconditionally first), and gating on the init script
+/// existing.
+#[test]
+fn deadman_revert_restarts_services_of_touched_configs() {
+    let plan = Plan {
+        profile_id: "svc-reconcile".into(),
+        model_id: "t".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set openvpn.pia=provider; uci commit openvpn; \
+                          uci set dhcp.lan.dhcpv6=disabled; uci commit dhcp; \
+                          uci commit firewall"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let net_first = revert_body
+        .find("/etc/init.d/network restart")
+        .expect("unconditional network restart");
+    let reconcile = revert_body
+        .find("[ -x \"/etc/init.d/$__dm_svc\" ] && /etc/init.d/$__dm_svc restart")
+        .expect("service reconcile loop");
+    assert!(net_first < reconcile, "network back first, then reconcile");
+    assert!(
+        revert_body.contains("dhcp) __dm_svc=\"dnsmasq\""),
+        "dhcp maps to the dnsmasq service name"
+    );
+    assert!(
+        revert_body.contains("network|wireless) continue"),
+        "network/wireless excluded (handled by the netifd restart)"
+    );
+    assert!(
+        revert_body.contains("\"$DM_DIR/snapshots\"/*.uci \"$DM_DIR/snapshots\"/*.absent"),
+        "restored AND purged configs both reconcile"
+    );
+}
+
+/// Codex #597 P1 (early-exit completion evidence): an rc-gated EXIT trap writes the
 /// generation-scoped marker on EVERY successful exit — including plan
 /// tails that `exit 0` early (wireguard killswitch verify) — and never
 /// on `set -e` aborts or kills. A plain last-line write would be

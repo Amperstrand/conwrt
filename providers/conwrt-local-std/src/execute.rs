@@ -268,8 +268,26 @@ for __dm_a in "$DM_DIR/snapshots"/*.absent; do
     __dm_c="$(basename "$__dm_a" .absent)"
     rm -f "/etc/config/$__dm_c" "/tmp/.uci/$__dm_c" 2>/dev/null
 done
+# bring networking back first — the wedge class this deadman exists for
 /etc/init.d/network restart >/dev/null 2>&1
-[ -s "$DM_DIR/snapshots/firewall.uci" ] && /etc/init.d/firewall restart >/dev/null 2>&1 || true
+# Reconcile the SERVICES behind every touched config (Codex #597 P1):
+# restoring or deleting /etc/config/openvpn without restarting the
+# service leaves the apply's runtime alive behind the rollback. Service
+# names match config names on OpenWrt except the mapped cases; only
+# restart what actually has an init script.
+for __dm_s in "$DM_DIR/snapshots"/*.uci "$DM_DIR/snapshots"/*.absent; do
+    [ -e "$__dm_s" ] || continue
+    case "$__dm_s" in
+        *.uci) __dm_c="$(basename "$__dm_s" .uci)" ;;
+        *) __dm_c="$(basename "$__dm_s" .absent)" ;;
+    esac
+    case "$__dm_c" in
+        network|wireless) continue ;;
+        dhcp) __dm_svc="dnsmasq" ;;
+        *) __dm_svc="$__dm_c" ;;
+    esac
+    [ -x "/etc/init.d/$__dm_svc" ] && /etc/init.d/$__dm_svc restart >/dev/null 2>&1
+done
 logger -t conwrt-deadman "revert applied (pre-apply uci restored)"
 CONWRT_DM_EOF
 chmod +x "$DM_DIR/revert.sh"

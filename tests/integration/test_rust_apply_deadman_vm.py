@@ -39,6 +39,7 @@ def test_qemu_apply_deadman_window_on_fixture_vm(openwrt_vm):
             "deadman_cancel_after_rollback_started_is_rejected",
             "deadman_expiry_stops_post_window_mutations",
             "deadman_revert_removes_configs_created_by_the_apply",
+            "deadman_revert_restarts_services_of_touched_configs",
         ],
         capture_output=True,
         text=True,
@@ -59,6 +60,7 @@ def test_qemu_apply_deadman_window_on_fixture_vm(openwrt_vm):
         "deadman_cancel_after_rollback_started_is_rejected",
         "deadman_expiry_stops_post_window_mutations",
         "deadman_revert_removes_configs_created_by_the_apply",
+            "deadman_revert_restarts_services_of_touched_configs",
     ):
         assert f"test {needle} ... ok" in result.stdout, (
             f"{needle} did not run green; stdout tail: {result.stdout[-2000:]}"

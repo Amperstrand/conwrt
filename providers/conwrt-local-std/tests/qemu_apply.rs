@@ -1247,6 +1247,84 @@ async fn deadman_revert_removes_configs_created_by_the_apply() {
     vm_exec("rm -rf /tmp/conwrt-deadman").await;
 }
 
+/// Codex #597 P1 (service reconciliation): the revert must RESTART the
+/// service behind a config the apply created/touched — restoring or
+/// deleting /etc/config/<cfg> alone leaves the apply's runtime alive.
+/// A synthetic init.d service records its restart; an unverified apply
+/// (config created by the plan) must come back with the service
+/// restarted by the rollback.
+#[tokio::test]
+async fn deadman_revert_restarts_services_of_touched_configs() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "svc-reconcile".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "printf '#!/bin/sh\\ncase \"$1\" in restart) \
+                          echo restarted > /tmp/foo_restarted ;; esac\\n' \
+                          > /etc/init.d/conwrt_svctest; chmod +x /etc/init.d/conwrt_svctest; \
+                          uci set conwrt_svctest.x=1; uci commit conwrt_svctest"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "never passes".into(),
+            command: "true".into(),
+            expect_contains: "never-matches".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // pristine premise: no leftover service/config/marker
+    vm_exec(
+        "rm -f /etc/init.d/conwrt_svctest /etc/config/conwrt_svctest \
+              /tmp/.uci/conwrt_svctest /tmp/foo_restarted",
+    )
+    .await;
+
+    let (session, _model) = connected_openwrt_session().await;
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 4, 1,
+    )
+    .await;
+    drop(session);
+
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let restarted = vm_exec("cat /tmp/foo_restarted 2>/dev/null || true").await;
+    assert_eq!(
+        restarted, "restarted",
+        "the revert must reconcile the service behind the touched config"
+    );
+    let leftover = vm_exec("[ -e /etc/config/conwrt_svctest ] && echo present || echo gone").await;
+    assert_eq!(leftover, "gone", "the created config is purged");
+    // rollback
+    vm_exec("rm -f /etc/init.d/conwrt_svctest /tmp/foo_restarted; rm -rf /tmp/conwrt-deadman")
+        .await;
+}
+
 /// Codex #597 P1 (cancel-vs-rollback race): once rollback has STARTED,
 /// the cancel command must FAIL — `mv armed cancel` cannot succeed after
 /// revert.sh removed `armed` at its transition. A confirmed cancel from
