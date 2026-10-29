@@ -321,3 +321,33 @@ Modem firmware is flashed via the Zyxel stock firmware WebGUI (Network Setting �
 10. **Factory partition is irreplaceable** — backup before any low-level flash operations
 11. **Zycast changes the device IP to 192.168.1.1** — set up a secondary IP on the switch VLAN interface before flashing, or you lose access
 12. **Kill zycast after a successful flash** — the bootloader listens on every boot and will reflash if zycast is still running
+
+## USB composition change (RG502Q-EA modem) — cold cycle required (#569)
+
+Changing the modem's USB composition (`AT+QCFG="usbnet",N`) does NOT take
+effect until a COLD power cycle. Every warm/software path was exhausted
+(2026-10-26): `AT+CFUN=1,1` after QCFG drops the modem off USB
+permanently; router warm reboot leaves the modem powered (no effect);
+fresh kernel + cdc-mbim still finds a dead modem USB controller; USB bus
+authorize toggle resets the hub only; xHCI unload impossible (dependency
+chain in use); no modem-reset GPIO in the NR7101 device tree.
+
+Validated sequence (playbook form):
+
+1. BEFORE the change: install `kmod-usb-net-cdc-mbim` (missing = modem
+   crashes on MBIM enumeration with no host driver).
+2. Send `AT+QCFG="usbnet",2` → require `OK`.
+3. Monitor for the modem's USB disconnect (~45 s).
+4. Human/PoE step: power-cycle the device COLD (PoE off 10 s, back on).
+   On the bench this is scriptable — the GS1900 fabric switch exposes
+   software PoE (`ubus call poe manage` on the OpenWrt unit;
+   `tools/stock_ctl.py` on the stock unit), so an agent-driven flow can
+   toggle the port instead of asking for hands.
+5. Post-boot: poll for `/dev/cdc-wdm0` every 5 s, up to 120 s.
+6. Verdict: `cdc-wdm0` present → success; absent + `ttyUSB*` present →
+   fell back to ECM (retry or diagnose); absent + nothing → modem bricked,
+   escalate (serial next).
+
+Open improvement ideas tracked on #569 (uhubctl-class port power, GPIO
+reset if a pin is ever identified, QMI composition as the no-cold-cycle
+candidate, vendor re-enumeration AT command, MHI/PCIe bypass).
