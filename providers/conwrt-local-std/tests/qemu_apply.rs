@@ -1161,3 +1161,129 @@ async fn deadman_rearm_supersedes_stale_window() {
     )
     .await;
 }
+
+/// Codex #597 P1 (cancel-vs-rollback race): once rollback has STARTED,
+/// the cancel command must FAIL — `mv armed cancel` cannot succeed after
+/// revert.sh removed `armed` at its transition. A confirmed cancel from
+/// that point on would be a lie about a config the device is actively
+/// reverting.
+#[tokio::test]
+async fn deadman_cancel_after_rollback_started_is_rejected() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let (session, _model) = connected_openwrt_session().await;
+    // unverified apply, 2s window: the deadman FIRES at ~2s and the
+    // transition removes `armed`
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &deadman_probe_plan(false),
+        reconnect,
+        2,
+        1,
+    )
+    .await;
+    drop(session);
+    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+
+    // rollback underway/done: the atomic handshake must reject the cancel
+    let cancel = vm_exec(&conwrt_local_std::execute::deadman_cancel_cmd()).await;
+    assert_ne!(
+        cancel, "deadman-cancelled",
+        "cancel after rollback started must FAIL, got confirmation"
+    );
+    vm_exec("rm -rf /tmp/conwrt-deadman").await;
+}
+
+/// Codex #597 P1 (apply outliving the window): a plan whose prerequisites
+/// outlast the window must not keep mutating after the rollback — expiry
+/// STOPS the apply shell before restoring the snapshots. The marker is
+/// written AFTER a 10s sleep inside a 2s window: it must never exist.
+#[tokio::test]
+async fn deadman_expiry_stops_post_window_mutations() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "deadman-slow".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "sleep 10; uci set system.dm_slow=1; uci commit system; \
+                          echo done > /tmp/dm_slow_marker"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "slow marker".into(),
+            command: "cat /tmp/dm_slow_marker || true".into(),
+            expect_contains: "done".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let (session, _model) = connected_openwrt_session().await;
+    // window 2s, poll 1s: the deadman fires mid-sleep and kills the apply
+    let outcome = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await;
+    drop(session);
+    if let Ok(o) = &outcome {
+        assert!(
+            !o.fully_verified(),
+            "an apply the deadman reverted must not read as success"
+        );
+    }
+
+    // past the sleep (10s) + margin: the marker must NEVER have been
+    // written — the apply shell was stopped at window expiry
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    let marker = vm_exec("cat /tmp/dm_slow_marker 2>/dev/null || true").await;
+    assert!(
+        marker.is_empty(),
+        "apply mutated after window expiry+rollback: marker={marker:?}"
+    );
+    let slow_opt = vm_exec("uci -q get system.dm_slow || true").await;
+    assert!(slow_opt.is_empty(), "no post-expiry uci may survive");
+    // rollback
+    vm_exec("rm -f /tmp/dm_slow_marker; rm -rf /tmp/conwrt-deadman").await;
+}

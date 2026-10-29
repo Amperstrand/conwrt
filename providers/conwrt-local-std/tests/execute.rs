@@ -379,13 +379,71 @@ fn deadman_rearm_isolates_and_retires_the_previous_arming() {
     let wipe = script.find("rm -rf \"$DM_ROOT\"").expect("state replaced");
     assert!(neutralize < kill && kill < wipe);
     assert!(script.contains("grep -q conwrt-deadman \"/proc/$__dm_old_pid/cmdline\""));
-    // the newest arming is what a cancel can reach
+    // the newest arming is what a cancel can reach — and only while the
+    // window is genuinely cancellable (atomic mv handshake)
     assert!(script.contains("ln -sfn \"$DM_DIR\" \"$DM_ROOT/current\""));
     assert!(script.contains("echo $! > \"$DM_ROOT/pid\""));
+    assert!(script.contains(": > \"$DM_DIR/armed\""));
     assert_eq!(
         deadman_cancel_cmd(),
-        "touch /tmp/conwrt-deadman/current/cancel && echo deadman-cancelled"
+        "mv /tmp/conwrt-deadman/current/armed /tmp/conwrt-deadman/current/cancel 2>/dev/null \
+         && echo deadman-cancelled"
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     );
+}
+
+/// Codex #597 P1 (cancel-vs-rollback race): the transition to rollback
+/// removes `armed` BEFORE rechecking `cancel` — the order IS the lock.
+/// No interleaving exists where the executor confirms a cancel AND the
+/// revert body runs.
+#[test]
+fn deadman_transition_order_makes_cancel_confirmation_atomic() {
+    let script = render_apply_script(&network_restart_plan());
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    assert_eq!(parts.len(), 3, "intro + body + tail");
+    let revert_body = parts[1];
+    let remove_armed = revert_body
+        .find("rm -f \"$DM_DIR/armed\"")
+        .expect("transition removes armed");
+    let post_loop = revert_body
+        .rfind("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("post-loop cancel check");
+    let fired = revert_body
+        .find("touch \"$DM_DIR/fired\"")
+        .expect("fired marker");
+    assert!(
+        remove_armed < post_loop && post_loop < fired,
+        "rm armed → recheck cancel → fired, in that order:\n{revert_body}"
+    );
+}
+
+/// Codex #597 P1 (apply outliving the window): a slow prerequisite must
+/// not let the apply shell keep mutating AFTER the rollback — revert.sh
+/// stops the apply (pid recorded at arm time, verified `sh -s` before
+/// the kill: kill only what we own) before restoring snapshots.
+#[test]
+fn deadman_expiry_stops_the_apply_shell() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(
+        script.contains("echo $$ > \"$DM_DIR/apply.pid\""),
+        "arm records the apply shell pid"
+    );
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let fired = revert_body.find("touch \"$DM_DIR/fired\"").expect("fired");
+    let stop = revert_body
+        .find("kill \"$__dm_ap\"")
+        .expect("apply shell stopped");
+    let import = revert_body
+        .find("uci -q import")
+        .expect("snapshot reimport");
+    assert!(
+        fired < stop && stop < import,
+        "stop the apply BEFORE restoring pre-apply state:\n{revert_body}"
+    );
+    assert!(script.contains(r#"grep -q "^sh -s""#));
 }
 
 /// The verbatim escape hatch (`/etc/init.d/network restart` inside a

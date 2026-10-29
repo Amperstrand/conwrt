@@ -110,14 +110,20 @@ fn recovery_poll_secs() -> u64 {
         .unwrap_or(DEFAULT_RECOVERY_POLL_SECS)
 }
 
-/// The command the executor sends to cancel an armed deadman. `current`
-/// is the symlink the arm block points at ITS generation directory — a
-/// cancel can therefore only ever reach the newest arming, never a
-/// superseded process still polling its own (baked-in) generation path
-/// (Codex #597 P1: generation isolation).
+/// The command the executor sends to cancel an armed deadman — an
+/// ATOMIC handshake, not a flag write (Codex #597 P1): the cancel is
+/// `mv armed cancel`, and `revert.sh` removes `armed` as the very first
+/// step of its transition to rollback. `mv` only succeeds while the
+/// window is genuinely still cancellable — once rollback starts, the
+/// cancel fails and the executor reports the outcome as unconfirmed
+/// instead of claiming a verified apply that the device is actively
+/// reverting. (`current` is the symlink to the newest generation, so a
+/// cancel can also never reach a superseded arming.)
 #[must_use]
 pub fn deadman_cancel_cmd() -> String {
-    format!("touch {DEADMAN_DIR}/current/cancel && echo deadman-cancelled")
+    format!(
+        "mv {DEADMAN_DIR}/current/armed {DEADMAN_DIR}/current/cancel 2>/dev/null && echo deadman-cancelled"
+    )
 }
 
 /// Does this plan restart networking (the channel-severing class)?
@@ -162,7 +168,8 @@ fn render_deadman_arm(configs: &[String], window_secs: u64) -> String {
 # the pre-apply uci state of every config this plan commits; if the
 # cancel flag does not appear within {window_secs}s, revert.sh re-imports
 # them and restarts networking (the recovery entry). The executor cancels
-# via the `current` symlink once the apply is verified good.
+# with the atomic mv handshake through the `current` symlink once the
+# apply is verified good.
 DM_ROOT={DEADMAN_DIR}
 DM_GEN="$$-$(date +%s)"
 DM_DIR="$DM_ROOT/$DM_GEN"
@@ -182,6 +189,15 @@ if [ -d "$DM_ROOT" ]; then
 fi
 rm -rf "$DM_ROOT"
 mkdir -p "$DM_DIR/snapshots"
+# the cancel handshake's atom: exists while the window is cancellable,
+# removed (by revert.sh) the instant rollback starts — mv armed→cancel
+# is therefore an atomic win-or-too-late, never a false confirmation
+: > "$DM_DIR/armed"
+# the apply shell's own pid — revert.sh stops the apply at expiry so it
+# cannot keep mutating AFTER the rollback (Codex #597 P1: a slow
+# prerequisite must not outlive the window and re-apply on top of the
+# restored state)
+echo $$ > "$DM_DIR/apply.pid"
 {snapshots}cat > "$DM_DIR/revert.sh" <<'CONWRT_DM_EOF'
 #!/bin/sh
 # conwrt deadman revert (#555) - runs detached; survives apply-channel death
@@ -193,12 +209,25 @@ while [ "$i" -lt {polls} ]; do
     sleep {poll}
     i=$((i+1))
 done
-# A cancel landing during the FINAL sleep is still inside the advertised
-# window — recheck before reverting, or a verified+cancelled apply gets
-# rolled back anyway (Codex #597 P1).
+# Transition to rollback — ORDER IS THE LOCK (Codex #597 P1):
+# 1. remove `armed` FIRST: from this instant no cancel can ever be
+#    confirmed (the mv handshake fails) — rollback has begun;
+# 2. recheck `cancel`: if the mv won the race, the file exists and we
+#    exit 0 — a cancel landing during the FINAL sleep is inside the
+#    advertised window and must suppress rollback;
+# 3. stop the apply shell (pid verified as `sh -s` — kill only what we
+#    own) so it cannot mutate on top of the restored state.
+rm -f "$DM_DIR/armed"
 [ -e "$DM_DIR/cancel" ] && exit 0
 logger -t conwrt-deadman "apply window expired without cancel - reverting"
 touch "$DM_DIR/fired"
+__dm_ap="$(cat "$DM_DIR/apply.pid" 2>/dev/null || true)"
+case "$__dm_ap" in
+    ''|*[!0-9]*) ;;
+    *) if tr "\0" " " < "/proc/$__dm_ap/cmdline" 2>/dev/null | grep -q "^sh -s"; then
+           kill "$__dm_ap" 2>/dev/null || true
+       fi ;;
+esac
 for __dm_f in "$DM_DIR/snapshots"/*.uci; do
     [ -s "$__dm_f" ] || continue
     __dm_c="$(basename "$__dm_f" .uci)"
