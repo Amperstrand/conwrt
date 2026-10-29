@@ -466,6 +466,46 @@ fn deadman_armed_for_shell_embedded_network_restart() {
     );
 }
 
+/// Codex #597 P1 (no mutation without rollback material): an EXISTING
+/// config that fails to snapshot aborts the apply before any mutation —
+/// `|| rm -f` (proceed with no recovery material) is forbidden; a
+/// genuinely absent config file is skipped (nothing to restore).
+#[test]
+fn deadman_aborts_when_an_existing_config_cannot_be_snapshotted() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(
+        script.contains("if [ -f \"/etc/config/network\" ]; then"),
+        "snapshot gated on the config file existing"
+    );
+    let export = script
+        .find("uci -q export network > \"$DM_DIR/snapshots/network.uci\"")
+        .expect("export present");
+    let abort = script
+        .find("conwrt-deadman: cannot snapshot network - aborting before mutation")
+        .expect("abort on export failure");
+    assert!(export < abort);
+    assert!(
+        !script.contains("|| rm -f \"$DM_DIR/snapshots/"),
+        "a failed export must never be downgraded to proceed-without-snapshot"
+    );
+}
+
+/// Codex #597 P1 (snapshot secrecy): the deadman state directories are
+/// created 0700 — the exports hold live secrets (wireguard keys,
+/// wireless PSKs) and persist after a cancelled window; umask-022
+/// devices must not get world-readable copies.
+#[test]
+fn deadman_state_dirs_are_created_private() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(script.contains("mkdir -m 700 \"$DM_ROOT\""));
+    assert!(script.contains("mkdir -m 700 \"$DM_DIR\""));
+    assert!(script.contains("mkdir -m 700 \"$DM_DIR/snapshots\""));
+    assert!(
+        !script.contains("mkdir -p \"$DM_DIR/snapshots\""),
+        "no umask-default creation of snapshot state"
+    );
+}
+
 /// The explicit-window render arms the DEVICE with the caller's window —
 /// recovery loop and deadman must share one window, else the executor
 /// reports "expired, reverting" while the device still waits (observed

@@ -162,8 +162,10 @@ fn render_deadman_arm(configs: &[String], window_secs: u64) -> String {
     let mut snapshots = String::new();
     for config in configs {
         snapshots.push_str(&format!(
-            "uci -q export {config} > \"$DM_DIR/snapshots/{config}.uci\" 2>/dev/null \
-             || rm -f \"$DM_DIR/snapshots/{config}.uci\"\n"
+            "if [ -f \"/etc/config/{config}\" ]; then\n\
+             \x20   uci -q export {config} > \"$DM_DIR/snapshots/{config}.uci\" \\\n\
+             \x20       || {{ echo \"conwrt-deadman: cannot snapshot {config} - aborting before mutation\" >&2; exit 1; }}\n\
+             fi\n"
         ));
     }
     format!(
@@ -193,7 +195,12 @@ if [ -d "$DM_ROOT" ]; then
     esac
 fi
 rm -rf "$DM_ROOT"
-mkdir -p "$DM_DIR/snapshots"
+# 0700 everywhere (Codex #597 P1): the snapshots hold live secrets
+# (wireguard keys, wireless PSKs) and must not be world-readable on
+# umask-022 devices; they also persist after a cancelled window
+mkdir -m 700 "$DM_ROOT"
+mkdir -m 700 "$DM_DIR"
+mkdir -m 700 "$DM_DIR/snapshots"
 # the cancel handshake's atom: exists while the window is cancellable,
 # removed (by revert.sh) the instant rollback starts — mv armed→cancel
 # is therefore an atomic win-or-too-late, never a false confirmation

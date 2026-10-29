@@ -992,6 +992,14 @@ async fn deadman_cancelled_on_verified_apply_survives_window() {
         replay, "deadman-cancelled",
         "replaying a won cancel must confirm again, not report revert"
     );
+    // Codex #597 P1 (snapshot secrecy): deadman state is 0700 even on a
+    // umask-022 device — the snapshots hold live secrets (ls -ld, not
+    // stat: the BusyBox image may lack the stat applet)
+    let mode = vm_exec("ls -ld /tmp/conwrt-deadman").await;
+    assert!(
+        mode.starts_with("drwx------"),
+        "deadman root dir must be root-only, got: {mode:?}"
+    );
     // fired lands in the generation dir (Codex #597 isolation)
     let fired = vm_exec(
         r#"[ -n "$(ls -d /tmp/conwrt-deadman/*/fired 2>/dev/null)" ] && echo fired || echo quiet"#,
