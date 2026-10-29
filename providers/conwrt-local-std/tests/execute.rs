@@ -260,7 +260,9 @@ fn apply_script_reverts_configs_committed_inside_shell_ops() {
 // --- #555 deadman/recovery-window tests ---------------------------------
 
 use conwrt_core::plan::{Plan, PlanOp, ServiceAction};
-use conwrt_local_std::execute::{apply_plan_with_recovery, deadman_cancel_cmd};
+use conwrt_local_std::execute::{
+    apply_plan_with_recovery, deadman_cancel_cmd, deadman_complete_probe_cmd,
+};
 
 fn network_restart_plan() -> conwrt_core::plan::Plan {
     Plan {
@@ -506,6 +508,26 @@ fn deadman_state_dirs_are_created_private() {
     );
 }
 
+/// Codex #597 P1 (completion evidence): the apply's LAST line drops the
+/// generation-scoped completion marker — set -e means an aborted script
+/// never writes it.
+#[test]
+fn deadman_armed_script_ends_with_completion_marker() {
+    let script = render_apply_script(&network_restart_plan());
+    let last = script
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .expect("non-empty script");
+    assert_eq!(
+        last, r#"echo done > "$DM_DIR/complete""#,
+        "the marker is the script's final statement"
+    );
+    // and a NON-network plan carries no marker
+    let plain = render_apply_script(&plan());
+    assert!(!plain.contains("$DM_DIR/complete"));
+}
+
 /// The explicit-window render arms the DEVICE with the caller's window —
 /// recovery loop and deadman must share one window, else the executor
 /// reports "expired, reverting" while the device still waits (observed
@@ -581,7 +603,7 @@ async fn recovery_verifies_and_cancels_after_channel_loss() {
     let addr = fixture.addr.clone();
     let reconnect = move || {
         let addr = addr.clone();
-        async move {
+        async {
             let target = SshTarget {
                 addr,
                 user: "root".to_string(),
@@ -599,6 +621,8 @@ async fn recovery_verifies_and_cancels_after_channel_loss() {
             .await
         }
     };
+    // script completed (marker present) before the cancel is trusted
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
     let outcome = apply_plan_with_recovery(&session, &plan, reconnect)
         .await
         .expect("recovery succeeds");
@@ -649,6 +673,7 @@ async fn recovery_with_never_confirmed_cancel_expires_naming_the_revert() {
     let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
     fixture.set_exec_drop(&script);
     fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
     fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
 
     let session = connected(&fixture).await;
@@ -713,6 +738,105 @@ async fn recovery_with_stalled_reconnect_is_bounded_by_the_window() {
     assert!(started.elapsed().as_secs() < 30, "bounded by the window");
     let msg = err.to_string();
     assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}
+
+/// Codex #597 P1 (completion evidence): on the recovery path, passing
+/// verification checks is NOT proof the script ran to its end — checks
+/// can read state committed before the channel died. Without the
+/// completion marker the verified-good exit is refused and the deadman
+/// decides at window expiry (revert), never a success.
+#[tokio::test]
+async fn recovery_without_completion_marker_refuses_success() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    // the marker is ABSENT — the script died before its last line
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 1, "");
+    // a working cancel must not be reachable without the marker
+    fixture.set_exec_response(&deadman_cancel_cmd(), 0, "deadman-cancelled\n");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("no completion evidence → no success exit");
+    assert!(err.to_string().contains("2s window expires"));
+    drop(session);
+}
+
+/// Codex #597 P1 (cancel unconfirmed on the apply channel): a verified
+/// apply whose cancel fails on the apply channel must enter the bounded
+/// recovery path (fresh session, re-verify, cancel retry) instead of
+/// returning an armed-for-rollback outcome while the window is still
+/// winnable.
+#[tokio::test]
+async fn cancel_unconfirmed_on_apply_channel_enters_recovery() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_response(&script, 0, "");
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("cancel retries through the recovery path, still unconfirmed");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cancel unconfirmed on the apply channel"),
+        "the recovery names the routing cause: {msg}"
+    );
     assert!(msg.contains("2s window expires"), "{msg}");
     drop(session);
 }

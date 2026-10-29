@@ -131,6 +131,16 @@ pub fn deadman_cancel_cmd() -> String {
     )
 }
 
+/// The recovery path's completion-evidence probe (Codex #597 P1): exit 0
+/// iff the apply script ran to its own last line in the current
+/// generation. Verified checks alone can read state committed BEFORE the
+/// channel died; without this marker the apply's completeness is
+/// unproven and the deadman must not be cancelled.
+#[must_use]
+pub fn deadman_complete_probe_cmd() -> String {
+    format!("test -e {DEADMAN_DIR}/current/complete")
+}
+
 /// Does this plan restart networking (the channel-severing class)?
 ///
 /// Detection covers the typed op (`Service { network, Restart }`) and the
@@ -286,16 +296,26 @@ pub fn render_apply_script_windowed(plan: &Plan, window_secs: u64) -> String {
     if configs.is_empty() {
         return script;
     }
+    let armed = plan_restarts_network(plan);
     let mut preamble =
         String::from("# revert staged uci baselines before mutating (executor, #427)\n");
     for config in &configs {
         preamble.push_str(&format!("uci -q revert {config} 2>/dev/null || true\n"));
     }
-    if plan_restarts_network(plan) {
+    if armed {
         preamble.push_str(&render_deadman_arm(&configs, window_secs));
     }
     if let Some(at) = script.find("set -e\n").map(|i| i + "set -e\n".len()) {
         script.insert_str(at, &preamble);
+    }
+    if armed {
+        // Completion evidence (Codex #597 P1): the apply's LAST line drops
+        // a marker into its own generation dir. On the recovery path,
+        // passing verification checks alone does NOT prove the script ran
+        // to its end (checks can read uci state committed before the
+        // restarts); without this marker the recovery loop refuses the
+        // verified-good exit and lets the deadman decide.
+        script.push_str("echo done > \"$DM_DIR/complete\"\n");
     }
     script
 }
@@ -446,7 +466,31 @@ where
         return channel_lost_path(plan, script, cause, &mut reconnect, window_secs, poll_secs)
             .await;
     }
-    finish_apply(session, plan, script, armed, &output).await
+    // The verification tail is part of the protected window too (Codex
+    // #597 P1): a channel that dies during the checks (transport error
+    // propagated from finish_apply), or a cancel that stays unconfirmed
+    // on the dying apply channel, routes through the same bounded
+    // reconnect-and-verify path — a fresh session can still verify and
+    // cancel within the window instead of leaving a good apply armed
+    // for rollback.
+    match finish_apply(session, plan, script.clone(), armed, &output).await {
+        Ok(outcome)
+            if armed
+                && outcome.applied
+                && !outcome.verification.is_empty()
+                && outcome.verification.iter().all(|v| v.passed)
+                && !outcome.deadman_cancelled =>
+        {
+            let cause = SshError::Transport(
+                "deadman cancel unconfirmed on the apply channel (network-restart class)".into(),
+            );
+            channel_lost_path(plan, script, cause, &mut reconnect, window_secs, poll_secs).await
+        }
+        Err(e) if armed => {
+            channel_lost_path(plan, script, e, &mut reconnect, window_secs, poll_secs).await
+        }
+        result => result,
+    }
 }
 
 /// Send the deadman cancel and require the DEVICE to confirm it (exit 0
@@ -564,12 +608,23 @@ where
                 }
             }
         }
-        // Verified-good exit requires a CONFIRMED cancel: if the cancel
-        // write fails we fall through and retry the whole
-        // reachable→verify→cancel cycle until the deadline — an
+        // Completion evidence (Codex #597 P1): the checks may read state
+        // committed before the channel died; only the apply's own last
+        // line proves it ran to the end. No marker → not verified-good.
+        let complete =
+            match tokio::time::timeout_at(deadline, session.exec(&deadman_complete_probe_cmd()))
+                .await
+            {
+                Ok(Ok(output)) => output.exit_code.unwrap_or(1) == 0,
+                _ => false,
+            };
+        // Verified-good exit requires completion evidence AND a CONFIRMED
+        // cancel: if the cancel write fails we fall through and retry the
+        // whole reachable→verify→cancel cycle until the deadline — an
         // unconfirmed cancel is a pending revert, not a success
         // (Codex #597 P1).
-        if transport_ok
+        if complete
+            && transport_ok
             && !verification.is_empty()
             && verification.iter().all(|v| v.passed)
             && tokio::time::timeout_at(deadline, confirm_deadman_cancel(&session))
