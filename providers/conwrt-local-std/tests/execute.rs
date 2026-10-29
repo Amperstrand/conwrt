@@ -878,6 +878,39 @@ async fn cancel_unconfirmed_on_apply_channel_enters_recovery() {
     drop(session);
 }
 
+/// Codex #597 P1 (deadline synchronization): the recovery budget is the
+/// REMAINDER of the advertised window at routing time, never a fresh
+/// full window — when the window is already spent, recovery refuses to
+/// loop at all and names the revert immediately (the device's deadline
+/// and the host's stay synchronized).
+#[tokio::test]
+async fn recovery_with_spent_window_does_not_loop() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    // window 0 on the windowed entry = a deadman whose window is already
+    // over at routing time: the recovery must return immediately
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 0);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let started = std::time::Instant::now();
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async { Err(conwrt_local_std::ssh::SshError::Transport("dark".into())) },
+        0,
+        1,
+    )
+    .await
+    .expect_err("a spent window cannot be recovered");
+    assert!(
+        started.elapsed().as_secs() < 5,
+        "no looping past an expired window"
+    );
+    assert!(err.to_string().contains("0s window expires"), "{}", err);
+    drop(session);
+}
+
 /// Window exhausted with the device never coming back: the error names the
 /// revert the device will perform — the defined recovery entry.
 #[tokio::test]

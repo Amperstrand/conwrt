@@ -454,6 +454,15 @@ where
 {
     let script = render_apply_script_windowed(plan, window_secs);
     let armed = plan_restarts_network(plan);
+    // The protected window starts when the apply script arms the
+    // device-side deadman (the first thing `sh -s` runs). Recovery must
+    // respect the SAME deadline (Codex #597 P1): whatever part of the
+    // window the apply/tail consumed is gone — the recovery budget is
+    // the REMAINDER at routing time, never a fresh full window, so the
+    // host never keeps verifying/cancelling after the device has
+    // already reverted.
+    let armed_at = tokio::time::Instant::now();
+    let remaining = || window_secs.saturating_sub(armed_at.elapsed().as_secs());
     // stdin transport, not exec-command: Dropbear caps the command
     // length and large plans (pia: 9.2KB) die channel-level — see
     // SshSession::exec_stdin. `sh -s` reads the script from stdin;
@@ -461,8 +470,16 @@ where
     let output = match session.exec_stdin("sh -s", &script).await {
         Ok(output) => output,
         Err(e) if armed => {
-            return channel_lost_path(plan, script, e, &mut reconnect, window_secs, poll_secs)
-                .await;
+            return channel_lost_path(
+                plan,
+                script,
+                e,
+                &mut reconnect,
+                window_secs,
+                remaining(),
+                poll_secs,
+            )
+            .await;
         }
         Err(e) => return Err(e),
     };
@@ -473,16 +490,24 @@ where
         let cause = SshError::Transport(
             "apply channel closed before exit status (network-restart class)".into(),
         );
-        return channel_lost_path(plan, script, cause, &mut reconnect, window_secs, poll_secs)
-            .await;
+        return channel_lost_path(
+            plan,
+            script,
+            cause,
+            &mut reconnect,
+            window_secs,
+            remaining(),
+            poll_secs,
+        )
+        .await;
     }
     // The verification tail is part of the protected window too (Codex
     // #597 P1): a channel that dies during the checks (transport error
     // propagated from finish_apply), or a cancel that stays unconfirmed
     // on the dying apply channel, routes through the same bounded
     // reconnect-and-verify path — a fresh session can still verify and
-    // cancel within the window instead of leaving a good apply armed
-    // for rollback.
+    // cancel within the remaining window instead of leaving a good
+    // apply armed for rollback.
     match finish_apply(session, plan, script.clone(), armed, &output).await {
         Ok(outcome)
             if armed
@@ -494,10 +519,28 @@ where
             let cause = SshError::Transport(
                 "deadman cancel unconfirmed on the apply channel (network-restart class)".into(),
             );
-            channel_lost_path(plan, script, cause, &mut reconnect, window_secs, poll_secs).await
+            channel_lost_path(
+                plan,
+                script,
+                cause,
+                &mut reconnect,
+                window_secs,
+                remaining(),
+                poll_secs,
+            )
+            .await
         }
         Err(e) if armed => {
-            channel_lost_path(plan, script, e, &mut reconnect, window_secs, poll_secs).await
+            channel_lost_path(
+                plan,
+                script,
+                e,
+                &mut reconnect,
+                window_secs,
+                remaining(),
+                poll_secs,
+            )
+            .await
         }
         result => result,
     }
@@ -577,12 +620,20 @@ fn fate_unknown_outcome(script: String, cause: &str) -> ApplyOutcome {
 /// naming the revert. A plan with no verification checks cannot prove
 /// the apply landed, so it never takes the verified-good exit — the
 /// deadman reverts (conservative by construction).
+///
+/// `budget_secs` is the REMAINING part of the advertised `window` at
+/// entry (Codex #597 P1: the apply/tail may have consumed most of it —
+/// the host's deadline stays synchronized with the device's; a fresh
+/// full window here would keep verifying/cancelling after the device
+/// already reverted). Zero → the revert-naming error immediately.
+#[allow(clippy::too_many_arguments)]
 async fn channel_lost_path<F, Fut>(
     plan: &Plan,
     script: String,
     cause: SshError,
     reconnect: &mut F,
     window: u64,
+    budget_secs: u64,
     poll_secs: u64,
 ) -> Result<ApplyOutcome, SshError>
 where
@@ -590,7 +641,7 @@ where
     Fut: Future<Output = Result<SshSession, SshError>>,
 {
     let poll = Duration::from_secs(poll_secs);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(window);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(budget_secs);
     // Immediate first reconnect attempt: a brief interface bounce may be
     // over already; each further attempt waits one poll interval. Every
     // await — reconnect, checks, cancel — is bounded by the SAME
