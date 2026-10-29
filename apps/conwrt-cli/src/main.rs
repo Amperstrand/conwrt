@@ -1824,9 +1824,7 @@ fn cmd_apply(
         }
     };
     match runtime.block_on(conwrt_local_std::execute::apply_plan_with_recovery(
-        &session,
-        &plan,
-        reconnect,
+        &session, &plan, reconnect,
     )) {
         Ok(outcome) if outcome.fully_verified() => {
             if outcome.channel_lost {
@@ -1842,7 +1840,11 @@ fn cmd_apply(
             if outcome.deadman_armed {
                 println!(
                     "deadman:   cancelled ({})",
-                    if outcome.deadman_cancelled { "device confirmed" } else { "cancel send failed — the window reverts if verification ever lied" }
+                    if outcome.deadman_cancelled {
+                        "device confirmed"
+                    } else {
+                        "cancel send failed — the window reverts if verification ever lied"
+                    }
                 );
             }
             ExitCode::SUCCESS
