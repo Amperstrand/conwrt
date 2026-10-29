@@ -143,12 +143,33 @@ class TestProfileDownload:
 # === Phase 7 tests: ECM mode verification ===
 
 class TestECMDataVerification:
+    # #575 hardening: on a multi-WAN DUT these tests can FALSE-GREEN through
+    # the house/lab uplinks (identical-looking success from any route). The
+    # Speedtest profile provides registration+signal ONLY (CGNAT gateway
+    # refuses data); real data assertions are valid for silent.link and ONLY
+    # after the egress gate below proves the path is cellular.
+
+    def test_00_egress_is_cellular(self, device_ip):
+        """Egress gate (#575): the route to the test target must leave via
+        wwan0 — otherwise every following data assertion tests some other
+        uplink and any 'public IP' echo is that WAN's exit, not cellular."""
+        result = _ssh(device_ip, "ip route get 8.8.8.8 2>&1")
+        assert "dev wwan0" in result, (
+            f"egress not cellular — data tests would false-green via another "
+            f"uplink (#575 trap): {result[:200]}"
+        )
+
     def test_internet_reachable(self, device_ip):
         result = _ssh(device_ip, "ping -c 2 -W 5 8.8.8.8 2>&1")
         assert "round-trip" in result or "time=" in result, f"no internet: {result[:200]}"
 
     def test_https_works(self, device_ip):
         result = _ssh(device_ip, "wget -q -O- -T 15 https://api.ipify.org 2>&1")
+        # NOTE (#575): a public IP alone proves nothing on a multi-WAN DUT —
+        # the house WAN exit echoes too. This assertion is only meaningful
+        # after test_00_egress_is_cellular passed in the same session; the
+        # operator must eyeball that the IP differs from the house exit
+        # (never hardcode that IP here — bench/private values stay out).
         assert re.search(r'\d+\.\d+\.\d+\.\d+', result), "no public IP returned"
 
     def test_active_profile_is_silentlink(self, device_ip):
