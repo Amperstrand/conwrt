@@ -384,17 +384,17 @@ def openwrt_vm():
                "wg_fwd_port": wg_fwd_port}
     finally:
         _capture_evidence()
-    if VM_PIDFILE.exists():
-        try:
-            pid = int(VM_PIDFILE.read_text().strip())
-            cmdline = Path(f"/proc/{pid}/cmdline")
-            if cmdline.exists() and "qemu-system-x86_64" in cmdline.read_text():
-                subprocess.run(["kill", str(pid)], capture_output=True)
-        except (ValueError, OSError):
-            pass
-        VM_PIDFILE.unlink(missing_ok=True)
-    if VM_OVERLAY.exists():
-        VM_OVERLAY.unlink()
+        if VM_PIDFILE.exists():
+            try:
+                pid = int(VM_PIDFILE.read_text().strip())
+                cmdline = Path(f"/proc/{pid}/cmdline")
+                if cmdline.exists() and "qemu-system-x86_64" in cmdline.read_text():
+                    subprocess.run(["kill", str(pid)], capture_output=True)
+            except (ValueError, OSError):
+                pass
+            VM_PIDFILE.unlink(missing_ok=True)
+        if VM_OVERLAY.exists():
+            VM_OVERLAY.unlink()
 
 
 def _capture_evidence() -> None:
