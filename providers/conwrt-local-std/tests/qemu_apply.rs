@@ -984,6 +984,14 @@ async fn deadman_cancelled_on_verified_apply_survives_window() {
     tokio::time::sleep(std::time::Duration::from_secs(20)).await;
     let marker = vm_exec("uci -q get system.deadman_probe || true").await;
     assert_eq!(marker, "test", "verified apply must NOT be reverted");
+    // Codex #597 P1 (idempotent confirm): a won handshake must survive a
+    // REPLAY — if the original confirmation's exit status was lost, the
+    // retry sees `cancel` already present and still confirms
+    let replay = vm_exec(&conwrt_local_std::execute::deadman_cancel_cmd()).await;
+    assert_eq!(
+        replay, "deadman-cancelled",
+        "replaying a won cancel must confirm again, not report revert"
+    );
     // fired lands in the generation dir (Codex #597 isolation)
     let fired = vm_exec(
         r#"[ -n "$(ls -d /tmp/conwrt-deadman/*/fired 2>/dev/null)" ] && echo fired || echo quiet"#,

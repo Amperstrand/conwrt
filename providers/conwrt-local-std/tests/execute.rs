@@ -386,7 +386,8 @@ fn deadman_rearm_isolates_and_retires_the_previous_arming() {
     assert!(script.contains(": > \"$DM_DIR/armed\""));
     assert_eq!(
         deadman_cancel_cmd(),
-        "mv /tmp/conwrt-deadman/current/armed /tmp/conwrt-deadman/current/cancel 2>/dev/null \
+        "(mv /tmp/conwrt-deadman/current/armed /tmp/conwrt-deadman/current/cancel 2>/dev/null \
+         || [ -e /tmp/conwrt-deadman/current/cancel ]) \
          && echo deadman-cancelled"
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -637,6 +638,39 @@ async fn recovery_with_never_confirmed_cancel_expires_naming_the_revert() {
     )
     .await
     .expect_err("unconfirmed cancel must not exit through the success door");
+    let msg = err.to_string();
+    assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}
+
+/// Codex #597 P1 (stalled await past the deadline): a reconnect that
+/// never completes must not run the recovery loop past the advertised
+/// window — every await is bounded by the same deadline, so the call
+/// returns (naming the revert) within the window, not after the stall.
+#[tokio::test]
+async fn recovery_with_stalled_reconnect_is_bounded_by_the_window() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let started = std::time::Instant::now();
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async {
+            // a stalled reconnect: transport-level hang, not a failure
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            Err(conwrt_local_std::ssh::SshError::Transport("stalled".into()))
+        },
+        2,
+        1,
+    )
+    .await
+    .expect_err("the deadline must cut the stalled reconnect");
+    assert!(started.elapsed().as_secs() < 30, "bounded by the window");
     let msg = err.to_string();
     assert!(msg.contains("deadman armed"), "{msg}");
     assert!(msg.contains("2s window expires"), "{msg}");

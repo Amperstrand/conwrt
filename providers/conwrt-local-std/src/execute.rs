@@ -117,12 +117,17 @@ fn recovery_poll_secs() -> u64 {
 /// window is genuinely still cancellable — once rollback starts, the
 /// cancel fails and the executor reports the outcome as unconfirmed
 /// instead of claiming a verified apply that the device is actively
-/// reverting. (`current` is the symlink to the newest generation, so a
-/// cancel can also never reach a superseded arming.)
+/// reverting. The `[ -e cancel ]` disjunct makes a WON handshake
+/// idempotent: if the mv already succeeded but its exit status was lost
+/// (channel died mid-confirm), retries still confirm — `cancel` within
+/// a generation can only exist because the mv won. (`current` is the
+/// symlink to the newest generation, so a cancel can also never reach a
+/// superseded arming.)
 #[must_use]
 pub fn deadman_cancel_cmd() -> String {
     format!(
-        "mv {DEADMAN_DIR}/current/armed {DEADMAN_DIR}/current/cancel 2>/dev/null && echo deadman-cancelled"
+        "(mv {DEADMAN_DIR}/current/armed {DEADMAN_DIR}/current/cancel 2>/dev/null \
+         || [ -e {DEADMAN_DIR}/current/cancel ]) && echo deadman-cancelled"
     )
 }
 
@@ -526,18 +531,27 @@ where
     let poll = Duration::from_secs(poll_secs);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(window);
     // Immediate first reconnect attempt: a brief interface bounce may be
-    // over already; each further attempt waits one poll interval.
+    // over already; each further attempt waits one poll interval. Every
+    // await — reconnect, checks, cancel — is bounded by the SAME
+    // deadline (Codex #597 P1): a stalled operation can no longer run
+    // the loop past the advertised window; the bound is the contract.
     while tokio::time::Instant::now() < deadline {
-        let Ok(session) = reconnect().await else {
-            tokio::time::sleep(poll).await;
-            continue;
+        let session = match tokio::time::timeout_at(deadline, reconnect()).await {
+            Ok(Ok(session)) => session,
+            Err(_elapsed) => break, // the reconnect itself consumed the window
+            Ok(Err(_attempt)) => {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                tokio::time::sleep(poll.min(remaining)).await;
+                continue;
+            }
         };
         let mut verification = Vec::new();
         let mut transport_ok = true;
         for check in &plan.verification {
-            match run_check(&session, check).await {
-                Ok(result) => verification.push(result),
-                Err(_) => {
+            match tokio::time::timeout_at(deadline, run_check(&session, check)).await {
+                Ok(Ok(result)) => verification.push(result),
+                _ => {
+                    // transport error OR deadline consumed by the check
                     transport_ok = false;
                     break;
                 }
@@ -551,7 +565,9 @@ where
         if transport_ok
             && !verification.is_empty()
             && verification.iter().all(|v| v.passed)
-            && confirm_deadman_cancel(&session).await
+            && tokio::time::timeout_at(deadline, confirm_deadman_cancel(&session))
+                .await
+                .unwrap_or(false)
         {
             return Ok(ApplyOutcome {
                 script,
@@ -565,8 +581,12 @@ where
         }
         // Reachable but not verified-good (or cancel still unconfirmed):
         // a just-restarted network may still be converging — sleep one
-        // poll interval and retry until the deadline.
-        tokio::time::sleep(poll).await;
+        // poll interval (never past the deadline) and retry.
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(poll.min(remaining)).await;
     }
     Err(SshError::Transport(format!(
         "{cause}; deadman armed — the device re-imports its pre-apply uci \
