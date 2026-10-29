@@ -62,6 +62,25 @@ serial path exists: AGENTS.md "Serial-First Recovery Principle".
 
 ## 3. Pre-flight (before touching the unit)
 
+- [ ] **Specimen gate (BEFORE arming)**: identify the exact unit to flash
+      against the lab registry dossier (specimen MAC + serial), and confirm
+      the physical unit in hand matches it (label MAC/serial) BEFORE
+      entering recovery mode. The recovery server's ARP identity is
+      model-wide (soft MAC, §4) — arming detection can never confirm the
+      specimen, only the species; the specimen link is established HERE,
+      by the operator, before the physical reset-button entry. Unknown,
+      ambiguous, or mismatched identity = STOP.
+      (AGENTS.md "Verify the SPECIMEN, Not Just the Model"; the sibling
+      rule for multicast methods applies by analogy: recovery entry is
+      per-unit physical, so power-cycle ONLY the intended unit into the
+      window.)
+- [ ] **Bench place exclusivity**: `labgrid-client -p <place> acquire` for
+      the seat/DUT BEFORE any seat SVI/VLAN change or firmware upload;
+      release at runbook close (§6 close-out). Seat mutation without
+      place acquisition is a coordination failure on a shared bench
+      (AGENTS.md "Multi-Agent Coordination"; conwrt-bench
+      `docs/labgrid-coordination.md` — queue with `reserve --wait`
+      rather than poll-acquire).
 - [ ] **Image freshness**: rebuilt since the last fleet key rotation. Verify the
       baked key against the CURRENT fleet public key:
       `ssh-keygen -lf <keyfile>` compared with the key you will SSH from.
@@ -128,14 +147,34 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
 - [ ] **SSH from a fleet-key host** (the bench switch is not one — issue #230
       body). Expect the #229 pitfall below.
 - [ ] Confirm identity: MAC/serial against the specimen record before any
-      further state change (AGENTS.md "Verify the SPECIMEN, Not Just the Model").
+      further state change (AGENTS.md "Verify the SPECIMEN, Not Just the
+      Model") — this closes the loop opened by the §3 pre-flight specimen
+      gate: the unit that BOOTED must be the unit you armed.
 - [ ] Rogue-DHCP check: a fresh unit bridging onto a shared segment must have
       `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'`
       — read back the values (AGENTS.md "Rogue-DHCP Discipline").
-- [ ] Set the static seat IP + gateway per the seat plan; update the lab
-      registry / exporter so the unit is visible (bench repo tooling; AGENTS.md
-      "Lab Single Source of Truth").
+- [ ] **Set the static seat IP + gateway with UCI verify discipline**
+      (AGENTS.md "Test Before You Commit" + "Reset Failsafe Discipline"
+      rule 7 — a one-quote typo here locks out a good flash):
+  1. clean staging first: `uci revert network` (aborted runs leave
+     `/tmp/.uci` debris that survives SSH sessions and poisons later
+     diffs/commits)
+  2. set: `uci set network.lan.ipaddr='<seat ip>'` (+ gateway/proto per
+     the seat plan)
+  3. **read back the VALUE**: `uci get network.lan.ipaddr` must return
+     the seat IP — never gate on the textual shape of `uci changes`
+     (factory config shapes differ across OpenWrt release families)
+  4. `uci commit network` only after the readback passes. On UBIFS
+     overlay devices the commit is permanent after reboot — know the
+     undo (failsafe / reflash) BEFORE committing
+  5. verify reachability from the seat gateway on the new IP before any
+     further state change
+- [ ] Update the lab registry / exporter so the unit is visible (bench repo
+      tooling; AGENTS.md "Lab Single Source of Truth"; the registry commit
+      is part of THIS runbook's close-out, not a later chore).
 - [ ] Close the loop: pcap byte count matches the image size (evidence trail).
+- [ ] **Release the labgrid place** acquired in §3 (exclusivity ends at
+      close-out, not when SSH first works).
 
 ### The #229 pitfall — SSH lockout with a CORRECT key (root-caused; fix in PR #235)
 
