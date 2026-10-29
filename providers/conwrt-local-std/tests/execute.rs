@@ -331,7 +331,25 @@ fn deadman_armed_for_shell_embedded_network_restart() {
         verification: vec![],
     };
     let script = render_apply_script(&plan);
-    assert!(script.contains("# --- deadman"), "shell-embedded restart arms");
+    assert!(
+        script.contains("# --- deadman"),
+        "shell-embedded restart arms"
+    );
+}
+
+/// The explicit-window render arms the DEVICE with the caller's window —
+/// recovery loop and deadman must share one window, else the executor
+/// reports "expired, reverting" while the device still waits (observed
+/// ring-2: 8s recovery vs 300s device arm, revert never observed).
+#[test]
+fn windowed_render_arms_device_with_the_same_window() {
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 8);
+    assert!(script.contains("within 8s"), "arm names the 8s window");
+    assert!(
+        !script.contains("within 300s"),
+        "no env-default window leaks into the windowed render"
+    );
 }
 
 /// A verified-good apply cancels the armed deadman on the device.
@@ -363,12 +381,18 @@ async fn channel_drop_without_exit_status_is_fate_unknown() {
     fixture.set_exec_drop(&script);
 
     let session = connected(&fixture).await;
-    let outcome = apply_plan(&session, &plan).await.expect("still data, not error");
+    let outcome = apply_plan(&session, &plan)
+        .await
+        .expect("still data, not error");
     assert!(!outcome.applied);
     assert!(outcome.channel_lost);
     assert!(outcome.deadman_armed);
     assert!(!outcome.deadman_cancelled);
-    assert!(outcome.stderr.contains("deadman armed"), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("deadman armed"),
+        "{}",
+        outcome.stderr
+    );
     drop(session);
 }
 
@@ -423,20 +447,25 @@ async fn recovery_verifies_and_cancels_after_channel_loss() {
 async fn recovery_window_expiry_names_the_revert() {
     let fixture = Fixture::start().await;
     let plan = network_restart_plan();
-    let script = render_apply_script(&plan);
+    // the drop fixture matches the script VERBATIM — stage the same
+    // window the windowed apply renders, or the channel never drops
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
     fixture.set_exec_drop(&script);
 
     let session = connected(&fixture).await;
-    let err =
-        conwrt_local_std::execute::apply_plan_with_recovery_windowed(
-            &session,
-            &plan,
-            || async { Err(conwrt_local_std::ssh::SshError::Transport("device dark".into())) },
-            2,
-            1,
-        )
-        .await
-        .expect_err("window must expire");
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async {
+            Err(conwrt_local_std::ssh::SshError::Transport(
+                "device dark".into(),
+            ))
+        },
+        2,
+        1,
+    )
+    .await
+    .expect_err("window must expire");
     let msg = err.to_string();
     assert!(msg.contains("deadman armed"), "{msg}");
     assert!(msg.contains("2s window expires"), "{msg}");

@@ -924,8 +924,17 @@ fn deadman_probe_plan(passing_verify: bool) -> conwrt_core::plan::Plan {
         ],
         verification: vec![VerificationCheck {
             description: "deadman probe marker".into(),
-            command: "uci -q get system.deadman_probe.type || true".into(),
-            expect_contains: if passing_verify { "test" } else { "never-matches" }.into(),
+            // section-id addressing, NOT `.type`: BusyBox uci does not
+            // expose a named section's type as an option — `uci -q get
+            // system.deadman_probe.type` returns rc=1/empty; the section
+            // id itself yields its type value ("test")
+            command: "uci -q get system.deadman_probe || true".into(),
+            expect_contains: if passing_verify {
+                "test"
+            } else {
+                "never-matches"
+            }
+            .into(),
         }],
     }
 }
@@ -960,28 +969,30 @@ async fn deadman_cancelled_on_verified_apply_survives_window() {
     // short window: if cancellation were skipped, the revert would fire
     // inside the test's own wait
     let outcome = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
-        &session,
-        &plan,
-        reconnect,
-        8,
-        1,
+        &session, &plan, reconnect, 8, 1,
     )
     .await
     .expect("apply completes (recovered or clean)");
     drop(session);
-    assert!(outcome.fully_verified(), "verification: {:?}", outcome.verification);
+    assert!(
+        outcome.fully_verified(),
+        "verification: {:?}",
+        outcome.verification
+    );
 
     // wait past the window + revert's own network restart
     tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-    let marker = vm_exec("uci -q get system.deadman_probe.type || true").await;
+    let marker = vm_exec("uci -q get system.deadman_probe || true").await;
     assert_eq!(marker, "test", "verified apply must NOT be reverted");
     let fired = vm_exec("[ -e /tmp/conwrt-deadman/fired ] && echo fired || echo quiet").await;
     assert_eq!(fired, "quiet", "deadman never fired");
     // rollback
-    vm_exec("uci -q delete system.deadman_probe; uci -q commit system; \
+    vm_exec(
+        "uci -q delete system.deadman_probe; uci -q commit system; \
              uci -q delete network.deadman_note; uci -q commit network; \
-             rm -rf /tmp/conwrt-deadman")
-        .await;
+             rm -rf /tmp/conwrt-deadman",
+    )
+    .await;
 }
 
 /// Unverified apply → NO cancel → window expires → the device re-imports
@@ -1015,18 +1026,14 @@ async fn deadman_reverts_unverified_apply_at_window_expiry() {
     // Whatever the transport did (clean failure with failing verification,
     // or channel loss + failed re-verify), the DEADMAN decides on-device:
     let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
-        &session,
-        &plan,
-        reconnect,
-        8,
-        1,
+        &session, &plan, reconnect, 8, 1,
     )
     .await;
     drop(session);
 
     // window (8s) + revert's own network restart — then assert state
     tokio::time::sleep(std::time::Duration::from_secs(25)).await;
-    let marker = vm_exec("uci -q get system.deadman_probe.type || true").await;
+    let marker = vm_exec("uci -q get system.deadman_probe || true").await;
     assert!(
         marker.is_empty(),
         "unverified apply must be reverted by the deadman, marker={marker:?}"

@@ -185,6 +185,18 @@ setsid "$DM_DIR/revert.sh" >/dev/null 2>&1 < /dev/null &
 /// no-op.
 #[must_use]
 pub fn render_apply_script(plan: &Plan) -> String {
+    render_apply_script_windowed(plan, deadman_window_secs())
+}
+
+/// [`render_apply_script`] with an explicit deadman window: callers that
+/// bound the recovery loop (e.g. [`apply_plan_with_recovery_windowed`])
+/// MUST arm the device-side deadman with the SAME window — a host-side
+/// recovery deadline that expires before the device reverts leaves the
+/// executor reporting "window expired, reverting" while the device is
+/// still waiting (and a device that reverts before the host gives up
+/// races the cancel). One window, both sides.
+#[must_use]
+pub fn render_apply_script_windowed(plan: &Plan, window_secs: u64) -> String {
     let mut script = render_shell(plan);
     let configs = committed_configs(plan);
     if configs.is_empty() {
@@ -196,7 +208,7 @@ pub fn render_apply_script(plan: &Plan) -> String {
         preamble.push_str(&format!("uci -q revert {config} 2>/dev/null || true\n"));
     }
     if plan_restarts_network(plan) {
-        preamble.push_str(&render_deadman_arm(&configs, deadman_window_secs()));
+        preamble.push_str(&render_deadman_arm(&configs, window_secs));
     }
     if let Some(at) = script.find("set -e\n").map(|i| i + "set -e\n".len()) {
         script.insert_str(at, &preamble);
@@ -326,7 +338,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<SshSession, SshError>>,
 {
-    let script = render_apply_script(plan);
+    let script = render_apply_script_windowed(plan, window_secs);
     let armed = plan_restarts_network(plan);
     // stdin transport, not exec-command: Dropbear caps the command
     // length and large plans (pia: 9.2KB) die channel-level — see

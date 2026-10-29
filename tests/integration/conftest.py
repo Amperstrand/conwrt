@@ -350,6 +350,15 @@ def openwrt_vm():
     ]
 
     print("Booting OpenWrt VM...", flush=True)
+    # The root conftest's session-autouse egress stub shadows ssh/scp in
+    # PATH unless CONWRT_REAL_NETWORK=1 — polling through it ALWAYS fails
+    # and used to surface as a misleading "VM did not become reachable"
+    # after a full 300s window. Fail fast with the actual cause instead.
+    if "CONWRT_SSH_STUB_LOG" in os.environ:
+        pytest.fail(
+            "openwrt_vm needs real ssh, but the test session's network-egress "
+            "stub is on PATH (set CONWRT_REAL_NETWORK=1 for VM tests)"
+        )
     r = subprocess.run(qemu_cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         pytest.fail(f"QEMU failed to start: {r.stderr}")
