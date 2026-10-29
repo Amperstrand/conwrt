@@ -662,7 +662,9 @@ way; PRs #67/#81/#36 were later audited to clean it up).
   tracking issue with the thread permalink, current file:line, severity, and
   next action — a deferral with no destination is a blocker, not a pass.
 - Body-only review findings (no inline thread) count too — parse review bodies
-  for P0/P1/P2 markers.
+  for P0/P1/P2/P3 markers. (#478: the P0/P1/P2-only prescription silently
+  dropped P3 findings from the sweep; a P3 still gets a disposition — even
+  if it is just a one-line "tracked in #N".)
 - Unaddressed feedback on already-merged PRs is audited with the
   `pr-review-audit` skill (runbook + fleet scan + kanban in the private repo
   `Amperstrand/pr-review-audit`). Never re-litigate from memory: re-locate
