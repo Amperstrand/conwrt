@@ -43,6 +43,12 @@ permissions:
 jobs:
   flash-lifecycle:
     runs-on: ubuntu-latest
+    env:
+      # The test tier's session-autouse ssh/scp egress stub is bypassed
+      # ONLY with this flag (tests/conftest.py _ssh_egress_stub) — without
+      # it every SSH probe exits 255 instantly and even a healthy VM
+      # reads as "never reachable" (Codex P1 on the first dry run).
+      CONWRT_REAL_NETWORK: '1'
     # Generous vs the 15-min `make ci` cap (#563): image download + prep,
     # two KVM VM boots, and a full sysupgrade cycle legitimately take
     # ~10-15 min on a cold runner; 35 min still fails RED on a hang.
