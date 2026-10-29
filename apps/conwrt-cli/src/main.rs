@@ -1802,15 +1802,59 @@ fn cmd_apply(
         }
     }
     eprintln!("# executing on {ip} ...");
-    match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
+    // #555: network-restarting plans get a deadman + bounded recovery —
+    // a severed channel enters a reconnect-and-verify loop within the
+    // same window the device-side revert waits.
+    let reconnect_target = target.clone();
+    let reconnect_kh = kh_path.clone();
+    let reconnect = move || {
+        let target = reconnect_target.clone();
+        let kh_path = reconnect_kh.clone();
+        async move {
+            let mut store = FileTrustStore::new(kh_path);
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    match runtime.block_on(conwrt_local_std::execute::apply_plan_with_recovery(
+        &session,
+        &plan,
+        reconnect,
+    )) {
         Ok(outcome) if outcome.fully_verified() => {
+            if outcome.channel_lost {
+                eprintln!(
+                    "# channel lost during the apply (network-restart class) — \
+                     reconnected within the deadman window and verified good"
+                );
+            }
             println!("applied:   script exit 0");
             for check in &outcome.verification {
                 println!("verified:  ✓ {} (`{}`)", check.description, check.stdout);
             }
+            if outcome.deadman_armed {
+                println!(
+                    "deadman:   cancelled ({})",
+                    if outcome.deadman_cancelled { "device confirmed" } else { "cancel send failed — the window reverts if verification ever lied" }
+                );
+            }
             ExitCode::SUCCESS
         }
         Ok(outcome) => {
+            if outcome.channel_lost {
+                eprintln!(
+                    "apply outcome unknown: the SSH channel closed mid-apply \
+                     (network-restart class); deadman armed — the device reverts \
+                     its pre-apply uci and restarts networking when the window expires"
+                );
+            }
             eprintln!(
                 "apply incomplete: applied={} — failing checks:",
                 outcome.applied
