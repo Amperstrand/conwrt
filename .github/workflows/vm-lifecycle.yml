@@ -49,11 +49,20 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Install QEMU + KVM sanity check
+      - name: Install QEMU + enable KVM access
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils
+          # Hosted runners ship /dev/kvm as 0660 root:kvm — the runner user
+          # is not in the kvm group. Widen access (the udev rule makes it
+          # survive module reloads; the chmod covers the already-present node).
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          sudo chmod 666 /dev/kvm || true
           test -e /dev/kvm || { echo "::error::/dev/kvm missing — hosted-runner nested virt unavailable (expected on public-repo ubuntu runners)"; exit 1; }
+          test -w /dev/kvm || { echo "::error::/dev/kvm still not writable:"; ls -l /dev/kvm; exit 1; }
           qemu-system-x86_64 --version
           qemu-img --version
       - uses: actions/setup-python@v5
