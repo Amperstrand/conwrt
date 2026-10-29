@@ -57,6 +57,9 @@ pub struct FixtureServer {
     /// Total authentication attempts seen (any method) — the #125
     /// regression probe: a host-key refusal must leave this at zero.
     pub auth_attempts: Arc<AtomicUsize>,
+    /// `sh -s` scripts whose channel closes WITHOUT an exit status —
+    /// the #555 "channel died mid-script" class (fate unknown).
+    pub drop_scripts: Arc<Mutex<Vec<String>>>,
     roles: HashMap<ChannelId, ChannelRole>,
 }
 
@@ -208,6 +211,18 @@ impl russh::server::Handler for FixtureServer {
         if let Some(role) = self.roles.get_mut(&channel)
             && let Some(script) = role.stdin_exec.take()
         {
+            let dropped = self
+                .drop_scripts
+                .lock()
+                .expect("drop_scripts")
+                .iter()
+                .any(|s| s == &script);
+            if dropped {
+                // close with NO data and NO exit status — the client sees
+                // a channel that vanished mid-script (fate unknown)
+                session.close(channel)?;
+                return Ok(());
+            }
             let scripted = self
                 .exec_responses
                 .lock()
@@ -330,6 +345,7 @@ pub struct Fixture {
     pub files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     pub exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>>,
     pub auth_attempts: Arc<AtomicUsize>,
+    pub drop_scripts: Arc<Mutex<Vec<String>>>,
 }
 
 impl Fixture {
@@ -337,6 +353,7 @@ impl Fixture {
         let files: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
         let exec_responses: Arc<Mutex<HashMap<String, (u32, String)>>> = Arc::default();
         let auth_attempts: Arc<AtomicUsize> = Arc::default();
+        let drop_scripts: Arc<Mutex<Vec<String>>> = Arc::default();
         let config = Arc::new(server::Config {
             auth_rejection_time: std::time::Duration::ZERO,
             keys: vec![
@@ -354,12 +371,14 @@ impl Fixture {
         let server_files = Arc::clone(&files);
         let server_exec = Arc::clone(&exec_responses);
         let server_auth = Arc::clone(&auth_attempts);
+        let server_drop = Arc::clone(&drop_scripts);
         tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 let handler = FixtureServer {
                     files: Arc::clone(&server_files),
                     exec_responses: Arc::clone(&server_exec),
                     auth_attempts: Arc::clone(&server_auth),
+                    drop_scripts: Arc::clone(&server_drop),
                     roles: HashMap::new(),
                 };
                 let config = Arc::clone(&config);
@@ -373,7 +392,17 @@ impl Fixture {
             files,
             exec_responses,
             auth_attempts,
+            drop_scripts,
         }
+    }
+
+    /// Make the NEXT `sh -s` carrying exactly `script` close without an
+    /// exit status (the #555 mid-script channel-death class).
+    pub fn set_exec_drop(&self, script: &str) {
+        self.drop_scripts
+            .lock()
+            .expect("drop_scripts")
+            .push(script.to_string());
     }
 
     /// Authentication attempts the server has seen (any method).

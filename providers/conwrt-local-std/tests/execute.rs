@@ -256,3 +256,736 @@ fn apply_script_reverts_configs_committed_inside_shell_ops() {
         .expect("mutation");
     assert!(rev_net < mutation && rev_fw < mutation && rev_wl < mutation);
 }
+
+// --- #555 deadman/recovery-window tests ---------------------------------
+
+use conwrt_core::plan::{Plan, PlanOp, ServiceAction};
+use conwrt_local_std::execute::{
+    apply_plan_with_recovery, deadman_cancel_cmd, deadman_complete_probe_cmd,
+};
+
+fn network_restart_plan() -> conwrt_core::plan::Plan {
+    Plan {
+        profile_id: "deadman-probe".into(),
+        model_id: "test".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set network.deadman_probe=interface; uci commit network".into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![VerificationCheck {
+            description: "probe marker".into(),
+            command: "cat /tmp/deadman-probe".into(),
+            expect_contains: "applied".into(),
+        }],
+    }
+}
+
+/// A plan that never restarts networking must NOT pay the deadman tax.
+#[test]
+fn deadman_not_armed_for_non_network_plan() {
+    let script = render_apply_script(&plan());
+    assert!(
+        !script.contains("conwrt-deadman"),
+        "sqm plan arms no deadman:\n{script}"
+    );
+}
+
+/// The typed `Service { network, Restart }` op arms: snapshots exactly the
+/// committed configs, after the #427 revert preamble, before the first
+/// mutation, with a detached cancel-poll revert script.
+#[test]
+fn deadman_armed_for_service_network_restart() {
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    let arm = script.find("# --- deadman").expect("arm block present");
+    let revert = script.find("uci -q revert network").expect("#427 preamble");
+    let mutation = script
+        .find("uci set network.deadman_probe=interface")
+        .expect("mutation");
+    assert!(revert < arm, "arm comes after the revert preamble");
+    assert!(arm < mutation, "arm comes before the first mutation");
+    assert!(script.contains("uci -q export network > \"$DM_DIR/snapshots/network.uci\""));
+    assert!(
+        !script.contains("snapshots/firewall.uci\" 2>/dev/null\nuci -q export firewall"),
+        "only committed configs are snapshotted"
+    );
+    assert!(script.contains("setsid \"$DM_DIR/revert.sh\""));
+    assert!(script.contains("CONWRT_DM_EOF"));
+    // the device-side poll honors the cancel flag for the whole window
+    assert!(script.contains("[ -e \"$DM_DIR/cancel\" ] && exit 0"));
+}
+
+/// Codex #597 P1 (cancel-during-final-sleep): after the poll loop ends,
+/// the cancel flag is checked ONE more time before reverting — a cancel
+/// landing inside the final sleep interval is within the advertised
+/// window and must suppress rollback.
+#[test]
+fn deadman_revert_rechecks_cancel_after_the_final_sleep() {
+    let script = render_apply_script(&network_restart_plan());
+    // the heredoc INTRO also contains the terminator token — the revert
+    // body is the segment BETWEEN the two occurrences
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    assert_eq!(parts.len(), 3, "intro + body + tail");
+    let revert_body = parts[1];
+    // exactly TWO cancel checks in the revert script: in-loop + post-loop
+    assert_eq!(
+        revert_body
+            .matches("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+            .count(),
+        2,
+        "in-loop AND post-loop cancel checks:\n{revert_body}"
+    );
+    let loop_check = revert_body
+        .find("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("in-loop check");
+    let post_loop = revert_body
+        .rfind("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("post-loop check");
+    let revert_marker = revert_body
+        .find("apply window expired without cancel")
+        .expect("revert body");
+    assert!(loop_check < post_loop && post_loop < revert_marker);
+}
+
+/// Codex #597 P1 (stale arming isolation): every arming gets its own
+/// generation directory, the revert script derives its state dir from
+/// its own path (never a shared one), re-arming retires the previous
+/// process (neutralize + verified kill) before replacing state, and the
+/// host cancel goes through the `current` symlink (newest arming only).
+#[test]
+fn deadman_rearm_isolates_and_retires_the_previous_arming() {
+    let script = render_apply_script(&network_restart_plan());
+    // generation dir computed device-side (render stays deterministic)
+    assert!(script.contains("DM_GEN=\"$$-$(date +%s)\""));
+    assert!(script.contains("DM_DIR=\"$DM_ROOT/$DM_GEN\""));
+    // revert.sh owns ITS generation dir via $0 — a stale process can
+    // never observe a newer apply's state
+    assert!(script.contains("DM_DIR=$(dirname \"$0\")"));
+    assert!(
+        !script.contains("DM_DIR=/tmp/conwrt-deadman\n"),
+        "no shared baked-in state dir in revert.sh"
+    );
+    // retire-previous: neutralize via current/cancel, verified kill by
+    // /proc cmdline marker (kill only what we own), then replace state
+    let neutralize = script
+        .find("touch \"$DM_ROOT/current/cancel\"")
+        .expect("neutralize previous arming");
+    let kill = script
+        .find("kill \"$__dm_old_pid\"")
+        .expect("verified kill of previous deadman");
+    let wipe = script.find("rm -rf \"$DM_ROOT\"").expect("state replaced");
+    assert!(neutralize < kill && kill < wipe);
+    assert!(script.contains("grep -q conwrt-deadman \"/proc/$__dm_old_pid/cmdline\""));
+    // the newest arming is what a cancel can reach — and only while the
+    // window is genuinely cancellable (atomic mv handshake)
+    assert!(script.contains("ln -sfn \"$DM_DIR\" \"$DM_ROOT/current\""));
+    assert!(script.contains("echo $! > \"$DM_ROOT/pid\""));
+    assert!(script.contains(": > \"$DM_DIR/armed\""));
+    assert_eq!(
+        deadman_cancel_cmd(),
+        "(mv /tmp/conwrt-deadman/current/armed /tmp/conwrt-deadman/current/cancel 2>/dev/null \
+         || [ -e /tmp/conwrt-deadman/current/cancel ]) \
+         && echo deadman-cancelled"
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+}
+
+/// Codex #597 P1 (cancel-vs-rollback race): the transition to rollback
+/// removes `armed` BEFORE rechecking `cancel` — the order IS the lock.
+/// No interleaving exists where the executor confirms a cancel AND the
+/// revert body runs.
+#[test]
+fn deadman_transition_order_makes_cancel_confirmation_atomic() {
+    let script = render_apply_script(&network_restart_plan());
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    assert_eq!(parts.len(), 3, "intro + body + tail");
+    let revert_body = parts[1];
+    let remove_armed = revert_body
+        .find("rm -f \"$DM_DIR/armed\"")
+        .expect("transition removes armed");
+    let post_loop = revert_body
+        .rfind("[ -e \"$DM_DIR/cancel\" ] && exit 0")
+        .expect("post-loop cancel check");
+    let fired = revert_body
+        .find("touch \"$DM_DIR/fired\"")
+        .expect("fired marker");
+    assert!(
+        remove_armed < post_loop && post_loop < fired,
+        "rm armed → recheck cancel → fired, in that order:\n{revert_body}"
+    );
+}
+
+/// Codex #597 P1 (apply outliving the window): a slow prerequisite must
+/// not let the apply shell keep mutating AFTER the rollback — revert.sh
+/// stops the apply (pid recorded at arm time, verified `sh -s` before
+/// the kill: kill only what we own) before restoring snapshots.
+#[test]
+fn deadman_expiry_stops_the_apply_shell() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(
+        script.contains("echo $$ > \"$DM_DIR/apply.pid\""),
+        "arm records the apply shell pid"
+    );
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let fired = revert_body.find("touch \"$DM_DIR/fired\"").expect("fired");
+    let stop = revert_body
+        .find("kill \"$__dm_ap\"")
+        .expect("apply shell stopped");
+    let import = revert_body
+        .find("uci -q import")
+        .expect("snapshot reimport");
+    assert!(
+        fired < stop && stop < import,
+        "stop the apply BEFORE restoring pre-apply state:\n{revert_body}"
+    );
+    assert!(script.contains(r#"grep -q "^sh -s""#));
+}
+
+/// The verbatim escape hatch (`/etc/init.d/network restart` inside a
+/// Shell payload) arms too — same dual-scan shape as #427.
+#[test]
+fn deadman_armed_for_shell_embedded_network_restart() {
+    let plan = Plan {
+        profile_id: "shell-restart".into(),
+        model_id: "test".into(),
+        ops: vec![PlanOp::Shell {
+            command: "uci commit network; /etc/init.d/network restart".into(),
+        }],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    assert!(
+        script.contains("# --- deadman"),
+        "shell-embedded restart arms"
+    );
+}
+
+/// Codex #597 P1 (no mutation without rollback material): an EXISTING
+/// config that fails to snapshot aborts the apply before any mutation —
+/// `|| rm -f` (proceed with no recovery material) is forbidden; a
+/// genuinely absent config file is skipped (nothing to restore).
+#[test]
+fn deadman_aborts_when_an_existing_config_cannot_be_snapshotted() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(
+        script.contains("if [ -f \"/etc/config/network\" ]; then"),
+        "snapshot gated on the config file existing"
+    );
+    let export = script
+        .find("uci -q export network > \"$DM_DIR/snapshots/network.uci\"")
+        .expect("export present");
+    let abort = script
+        .find("conwrt-deadman: cannot snapshot network - aborting before mutation")
+        .expect("abort on export failure");
+    assert!(export < abort);
+    assert!(
+        !script.contains("|| rm -f \"$DM_DIR/snapshots/"),
+        "a failed export must never be downgraded to proceed-without-snapshot"
+    );
+}
+
+/// Codex #597 P1 (snapshot secrecy): the deadman state directories are
+/// created 0700 — the exports hold live secrets (wireguard keys,
+/// wireless PSKs) and persist after a cancelled window; umask-022
+/// devices must not get world-readable copies.
+#[test]
+fn deadman_state_dirs_are_created_private() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(script.contains("mkdir -m 700 \"$DM_ROOT\""));
+    assert!(script.contains("mkdir -m 700 \"$DM_DIR\""));
+    assert!(script.contains("mkdir -m 700 \"$DM_DIR/snapshots\""));
+    assert!(
+        !script.contains("mkdir -p \"$DM_DIR/snapshots\""),
+        "no umask-default creation of snapshot state"
+    );
+}
+
+/// Codex #597 P1 (service reconciliation): the revert restarts the
+/// service behind every touched config (uci-restored OR absent-purged) —
+/// mapping the dhcp→dnsmasq name mismatch, skipping network/wireless
+/// (restarted unconditionally first), and gating on the init script
+/// existing.
+#[test]
+fn deadman_revert_restarts_services_of_touched_configs() {
+    let plan = Plan {
+        profile_id: "svc-reconcile".into(),
+        model_id: "t".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set openvpn.pia=provider; uci commit openvpn; \
+                          uci set dhcp.lan.dhcpv6=disabled; uci commit dhcp; \
+                          uci commit firewall"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let net_first = revert_body
+        .find("/etc/init.d/network restart")
+        .expect("unconditional network restart");
+    let reconcile = revert_body
+        .find("[ -x \"/etc/init.d/$__dm_svc\" ] && /etc/init.d/$__dm_svc restart")
+        .expect("service reconcile loop");
+    assert!(net_first < reconcile, "network back first, then reconcile");
+    assert!(
+        revert_body.contains("dhcp) __dm_svc=\"dnsmasq\""),
+        "dhcp maps to the dnsmasq service name"
+    );
+    assert!(
+        revert_body.contains("network|wireless) continue"),
+        "network/wireless excluded (handled by the netifd restart)"
+    );
+    assert!(
+        revert_body.contains("\"$DM_DIR/snapshots\"/*.uci \"$DM_DIR/snapshots\"/*.absent"),
+        "restored AND purged configs both reconcile"
+    );
+}
+
+/// Codex #597 P1 (early-exit completion evidence): an rc-gated EXIT trap writes the
+/// generation-scoped marker on EVERY successful exit — including plan
+/// tails that `exit 0` early (wireguard killswitch verify) — and never
+/// on `set -e` aborts or kills. A plain last-line write would be
+/// bypassed by exactly those early exits.
+#[test]
+fn deadman_completion_marker_written_only_on_success() {
+    let script = render_apply_script(&network_restart_plan());
+    assert!(
+        script.contains("trap 'rc=$?; [ \"$rc\" -eq 0 ] && echo done > \"$DM_DIR/complete\"' EXIT"),
+        "rc-gated EXIT trap present"
+    );
+    // registered in the arm block, before the first plan mutation
+    let trap_at = script.find("trap 'rc=$?").expect("trap");
+    let mutation = script
+        .find("uci set network.deadman_probe=interface")
+        .expect("mutation");
+    assert!(trap_at < mutation);
+    // and a NON-network plan carries no trap/marker machinery
+    let plain = render_apply_script(&plan());
+    assert!(!plain.contains("$DM_DIR/complete"));
+}
+
+/// Codex #597 P1 (absent-config rollback): a config ABSENT pre-apply is
+/// recorded as such, and the revert DELETES it (plus staged debris) — a
+/// plan-created config (openvpn on a router without it) must not
+/// survive the rollback as a live configuration.
+#[test]
+fn deadman_records_absent_configs_and_revert_deletes_them() {
+    let plan = Plan {
+        profile_id: "creates-config".into(),
+        model_id: "t".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set openvpn.pia=provider; uci commit openvpn".into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![],
+    };
+    let script = render_apply_script(&plan);
+    assert!(
+        script.contains(": > \"$DM_DIR/snapshots/openvpn.absent\""),
+        "absence recorded for the missing config"
+    );
+    let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
+    let revert_body = parts[1];
+    let reimport = revert_body.find("uci -q import").expect("reimport");
+    let purge = revert_body
+        .find("rm -f \"/etc/config/$__dm_c\" \"/tmp/.uci/$__dm_c\"")
+        .expect("absent-config purge");
+    assert!(reimport < purge, "purge runs with the restore");
+}
+
+/// The explicit-window render arms the DEVICE with the caller's window —
+/// recovery loop and deadman must share one window, else the executor
+/// reports "expired, reverting" while the device still waits (observed
+/// ring-2: 8s recovery vs 300s device arm, revert never observed).
+#[test]
+fn windowed_render_arms_device_with_the_same_window() {
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 8);
+    assert!(script.contains("within 8s"), "arm names the 8s window");
+    assert!(
+        !script.contains("within 300s"),
+        "no env-default window leaks into the windowed render"
+    );
+}
+
+/// A verified-good apply cancels the armed deadman on the device.
+#[tokio::test]
+async fn deadman_cancelled_after_verified_apply() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    fixture.set_exec_response(&script, 0, "");
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 0, "deadman-cancelled\n");
+
+    let session = connected(&fixture).await;
+    let outcome = apply_plan(&session, &plan).await.expect("apply");
+    assert!(outcome.fully_verified());
+    assert!(outcome.deadman_armed);
+    assert!(outcome.deadman_cancelled, "cancel was sent and confirmed");
+    assert!(!outcome.channel_lost);
+    drop(session);
+}
+
+/// Channel closed before an exit status, no reconnect path: the outcome is
+/// fate-unknown (never a clean failure), the deadman stays armed.
+#[tokio::test]
+async fn channel_drop_without_exit_status_is_fate_unknown() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let outcome = apply_plan(&session, &plan)
+        .await
+        .expect("still data, not error");
+    assert!(!outcome.applied);
+    assert!(outcome.channel_lost);
+    assert!(outcome.deadman_armed);
+    assert!(!outcome.deadman_cancelled);
+    assert!(
+        outcome.stderr.contains("deadman armed"),
+        "{}",
+        outcome.stderr
+    );
+    drop(session);
+}
+
+/// The #555 recovery path: channel dies mid-script → immediate reconnect →
+/// verification passes on the reconnected session → deadman cancelled,
+/// outcome reports the recovery with the evidence.
+#[tokio::test]
+async fn recovery_verifies_and_cancels_after_channel_loss() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    fixture.set_exec_drop(&script);
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 0, "deadman-cancelled\n");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // script completed (marker present) before the cancel is trusted
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
+    let outcome = apply_plan_with_recovery(&session, &plan, reconnect)
+        .await
+        .expect("recovery succeeds");
+    assert!(outcome.applied, "verified good on the live device");
+    assert!(outcome.fully_verified());
+    assert!(outcome.channel_lost);
+    assert!(outcome.deadman_cancelled);
+    assert!(outcome.stderr.contains("reconnected within the window"));
+    drop(session);
+}
+
+/// Codex #597 P1 (unconfirmed cancel ≠ success): a verified apply whose
+/// deadman cancel stays unconfirmed must NOT read as fully verified —
+/// the device reverts at window expiry, and reporting success would be
+/// a lie about persistence.
+#[tokio::test]
+async fn verified_apply_with_unconfirmed_cancel_is_not_success() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = render_apply_script(&plan);
+    fixture.set_exec_response(&script, 0, "");
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    // every cancel attempt fails (touch through the symlink errors)
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let outcome = apply_plan(&session, &plan).await.expect("apply");
+    assert!(outcome.applied, "the apply itself ran clean");
+    assert!(
+        outcome.verification.iter().all(|v| v.passed),
+        "readbacks prove the config landed"
+    );
+    assert!(!outcome.deadman_cancelled, "cancel unconfirmed");
+    assert!(
+        !outcome.fully_verified(),
+        "unconfirmed cancel = pending revert = not a success"
+    );
+    drop(session);
+}
+
+/// The recovery path retries the cancel within the window: verified on
+/// reconnect but cancel unconfirmed → keep cycling until the deadline →
+/// the error names the pending revert (NOT a success outcome).
+#[tokio::test]
+async fn recovery_with_never_confirmed_cancel_expires_naming_the_revert() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("unconfirmed cancel must not exit through the success door");
+    let msg = err.to_string();
+    assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}
+
+/// Codex #597 P1 (stalled await past the deadline): a reconnect that
+/// never completes must not run the recovery loop past the advertised
+/// window — every await is bounded by the same deadline, so the call
+/// returns (naming the revert) within the window, not after the stall.
+#[tokio::test]
+async fn recovery_with_stalled_reconnect_is_bounded_by_the_window() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let started = std::time::Instant::now();
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async {
+            // a stalled reconnect: transport-level hang, not a failure
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            Err(conwrt_local_std::ssh::SshError::Transport("stalled".into()))
+        },
+        2,
+        1,
+    )
+    .await
+    .expect_err("the deadline must cut the stalled reconnect");
+    assert!(started.elapsed().as_secs() < 30, "bounded by the window");
+    let msg = err.to_string();
+    assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}
+
+/// Codex #597 P1 (completion evidence): on the recovery path, passing
+/// verification checks is NOT proof the script ran to its end — checks
+/// can read state committed before the channel died. Without the
+/// completion marker the verified-good exit is refused and the deadman
+/// decides at window expiry (revert), never a success.
+#[tokio::test]
+async fn recovery_without_completion_marker_refuses_success() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    // the marker is ABSENT — the script died before its last line
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 1, "");
+    // a working cancel must not be reachable without the marker
+    fixture.set_exec_response(&deadman_cancel_cmd(), 0, "deadman-cancelled\n");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("no completion evidence → no success exit");
+    assert!(err.to_string().contains("2s window expires"));
+    drop(session);
+}
+
+/// Codex #597 P1 (cancel unconfirmed on the apply channel): a verified
+/// apply whose cancel fails on the apply channel must enter the bounded
+/// recovery path (fresh session, re-verify, cancel retry) instead of
+/// returning an armed-for-rollback outcome while the window is still
+/// winnable.
+#[tokio::test]
+async fn cancel_unconfirmed_on_apply_channel_enters_recovery() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_response(&script, 0, "");
+    fixture.set_exec_response("cat /tmp/deadman-probe", 0, "applied\n");
+    fixture.set_exec_response(&deadman_complete_probe_cmd(), 0, "");
+    fixture.set_exec_response(&deadman_cancel_cmd(), 1, "");
+
+    let session = connected(&fixture).await;
+    let addr = fixture.addr.clone();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async {
+            let target = SshTarget {
+                addr,
+                user: "root".to_string(),
+                auth: SshAuth::Password(FIXTURE_PASSWORD.to_string()),
+            };
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await
+    .expect_err("cancel retries through the recovery path, still unconfirmed");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cancel unconfirmed on the apply channel"),
+        "the recovery names the routing cause: {msg}"
+    );
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}
+
+/// Codex #597 P1 (deadline synchronization): the recovery budget is the
+/// REMAINDER of the advertised window at routing time, never a fresh
+/// full window — when the window is already spent, recovery refuses to
+/// loop at all and names the revert immediately (the device's deadline
+/// and the host's stay synchronized).
+#[tokio::test]
+async fn recovery_with_spent_window_does_not_loop() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    // window 0 on the windowed entry = a deadman whose window is already
+    // over at routing time: the recovery must return immediately
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 0);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let started = std::time::Instant::now();
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async { Err(conwrt_local_std::ssh::SshError::Transport("dark".into())) },
+        0,
+        1,
+    )
+    .await
+    .expect_err("a spent window cannot be recovered");
+    assert!(
+        started.elapsed().as_secs() < 5,
+        "no looping past an expired window"
+    );
+    assert!(err.to_string().contains("0s window expires"), "{}", err);
+    drop(session);
+}
+
+/// Window exhausted with the device never coming back: the error names the
+/// revert the device will perform — the defined recovery entry.
+#[tokio::test]
+async fn recovery_window_expiry_names_the_revert() {
+    let fixture = Fixture::start().await;
+    let plan = network_restart_plan();
+    // the drop fixture matches the script VERBATIM — stage the same
+    // window the windowed apply renders, or the channel never drops
+    let script = conwrt_local_std::execute::render_apply_script_windowed(&plan, 2);
+    fixture.set_exec_drop(&script);
+
+    let session = connected(&fixture).await;
+    let err = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &plan,
+        || async {
+            Err(conwrt_local_std::ssh::SshError::Transport(
+                "device dark".into(),
+            ))
+        },
+        2,
+        1,
+    )
+    .await
+    .expect_err("window must expire");
+    let msg = err.to_string();
+    assert!(msg.contains("deadman armed"), "{msg}");
+    assert!(msg.contains("2s window expires"), "{msg}");
+    drop(session);
+}

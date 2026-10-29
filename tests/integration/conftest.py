@@ -350,46 +350,60 @@ def openwrt_vm():
     ]
 
     print("Booting OpenWrt VM...", flush=True)
+    # The root conftest's session-autouse egress stub shadows ssh/scp in
+    # PATH unless CONWRT_REAL_NETWORK=1 — polling through it ALWAYS fails
+    # and used to surface as a misleading "VM did not become reachable"
+    # after a full 300s window. Fail fast with the actual cause instead.
+    if "CONWRT_SSH_STUB_LOG" in os.environ:
+        pytest.fail(
+            "openwrt_vm needs real ssh, but the test session's network-egress "
+            "stub is on PATH (set CONWRT_REAL_NETWORK=1 for VM tests)"
+        )
     r = subprocess.run(qemu_cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         pytest.fail(f"QEMU failed to start: {r.stderr}")
 
-    # Slow hosts (nested-virt CI runners) can take several minutes from
-    # kernel boot to first SSH; fast KVM hosts finish in well under a
-    # minute. Env-tunable so a slow exclusive-runner slot (#583) can
-    # widen the window without code changes.
-    wait_loops = int(os.environ.get("CONWRT_VM_SSH_WAIT_LOOPS", "60") or 60)
-    print(f"Waiting for SSH (up to ~{wait_loops * 5}s)...", flush=True)
-    for i in range(wait_loops):
-        r = _ssh("true")
-        if r.returncode == 0:
-            print(f"SSH ready after ~{i * 5}s", flush=True)
-            break
-        time.sleep(5)
-    else:
-        serial_tail = ""
-        if SERIAL_LOG.exists():
-            serial_tail = SERIAL_LOG.read_text()[-2000:]
-        pytest.fail(
-            f"OpenWrt VM did not become reachable via SSH after 5 minutes.\n"
-            f"Serial log tail:\n{serial_tail}"
-        )
-
-    yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY),
-           "wg_fwd_port": wg_fwd_port}
-
-    _capture_evidence()
-    if VM_PIDFILE.exists():
-        try:
-            pid = int(VM_PIDFILE.read_text().strip())
-            cmdline = Path(f"/proc/{pid}/cmdline")
-            if cmdline.exists() and "qemu-system-x86_64" in cmdline.read_text():
-                subprocess.run(["kill", str(pid)], capture_output=True)
-        except (ValueError, OSError):
-            pass
-        VM_PIDFILE.unlink(missing_ok=True)
-    if VM_OVERLAY.exists():
-        VM_OVERLAY.unlink()
+    # The SSH wait sits INSIDE the try/finally: a fixture that gives up
+    # here must still tear its QEMU down — the fail-before-yield path used
+    # to leak the VM (and its host port) onto shared-host sessions
+    # (observed twice on the night-queue 2026-10-29 lane).
+    try:
+        # Slow hosts (nested-virt CI runners) can take several minutes from
+        # kernel boot to first SSH; fast KVM hosts finish in well under a
+        # minute. Env-tunable so a slow exclusive-runner slot (#583) can
+        # widen the window without code changes.
+        wait_loops = int(os.environ.get("CONWRT_VM_SSH_WAIT_LOOPS", "60") or 60)
+        print(f"Waiting for SSH (up to ~{wait_loops * 5}s)...", flush=True)
+        for i in range(wait_loops):
+            r = _ssh("true")
+            if r.returncode == 0:
+                print(f"SSH ready after ~{i * 5}s", flush=True)
+                break
+            time.sleep(5)
+        else:
+            serial_tail = ""
+            if SERIAL_LOG.exists():
+                serial_tail = SERIAL_LOG.read_text()[-2000:]
+            pytest.fail(
+                f"OpenWrt VM did not become reachable via SSH after "
+                f"{wait_loops * 5}s.\n"
+                f"Serial log tail:\n{serial_tail}"
+            )
+        yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY),
+               "wg_fwd_port": wg_fwd_port}
+    finally:
+        _capture_evidence()
+        if VM_PIDFILE.exists():
+            try:
+                pid = int(VM_PIDFILE.read_text().strip())
+                cmdline = Path(f"/proc/{pid}/cmdline")
+                if cmdline.exists() and "qemu-system-x86_64" in cmdline.read_text():
+                    subprocess.run(["kill", str(pid)], capture_output=True)
+            except (ValueError, OSError):
+                pass
+            VM_PIDFILE.unlink(missing_ok=True)
+        if VM_OVERLAY.exists():
+            VM_OVERLAY.unlink()
 
 
 def _capture_evidence() -> None:

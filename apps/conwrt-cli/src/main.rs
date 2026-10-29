@@ -1802,15 +1802,73 @@ fn cmd_apply(
         }
     }
     eprintln!("# executing on {ip} ...");
-    match runtime.block_on(conwrt_local_std::execute::apply_plan(&session, &plan)) {
+    // #555: network-restarting plans get a deadman + bounded recovery —
+    // a severed channel enters a reconnect-and-verify loop within the
+    // same window the device-side revert waits.
+    let reconnect_target = target.clone();
+    let reconnect_kh = kh_path.clone();
+    let reconnect = move || {
+        let target = reconnect_target.clone();
+        let kh_path = reconnect_kh.clone();
+        async move {
+            let mut store = FileTrustStore::new(kh_path);
+            connect(
+                &target,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    match runtime.block_on(conwrt_local_std::execute::apply_plan_with_recovery(
+        &session, &plan, reconnect,
+    )) {
         Ok(outcome) if outcome.fully_verified() => {
+            if outcome.channel_lost {
+                eprintln!(
+                    "# channel lost during the apply (network-restart class) — \
+                     reconnected within the deadman window and verified good"
+                );
+            }
             println!("applied:   script exit 0");
             for check in &outcome.verification {
                 println!("verified:  ✓ {} (`{}`)", check.description, check.stdout);
             }
+            if outcome.deadman_armed {
+                println!("deadman:   cancelled (device confirmed)");
+            }
             ExitCode::SUCCESS
         }
+        Ok(outcome)
+            if outcome.applied
+                && !outcome.verification.is_empty()
+                && outcome.verification.iter().all(|c| c.passed) =>
+        {
+            // The only way to land here: armed && cancel unconfirmed —
+            // readbacks prove the apply landed, but the device still
+            // reverts at window expiry. NOT a success (Codex #597 P1).
+            eprintln!(
+                "apply verified but the deadman cancel is UNCONFIRMED — the device\
+                 \nreverts this config when the window expires. Cancel it manually\
+                 \nbefore then, or re-run the apply (idempotent):"
+            );
+            eprintln!(
+                "  ssh root@{ip} '{cancel}'",
+                cancel = conwrt_local_std::execute::deadman_cancel_cmd()
+            );
+            ExitCode::FAILURE
+        }
         Ok(outcome) => {
+            if outcome.channel_lost {
+                eprintln!(
+                    "apply outcome unknown: the SSH channel closed mid-apply \
+                     (network-restart class); deadman armed — the device reverts \
+                     its pre-apply uci and restarts networking when the window expires"
+                );
+            }
             eprintln!(
                 "apply incomplete: applied={} — failing checks:",
                 outcome.applied

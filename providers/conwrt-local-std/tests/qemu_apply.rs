@@ -880,3 +880,573 @@ async fn ssl_certless_negative_and_cert_present_positive_on_real_openwrt() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// --- #555 deadman/recovery window on a real OpenWrt VM -------------------
+//
+// The VM's slirp network makes the channel-severing nondeterministic (the
+// guest re-DHCPs to the same address; dropbear may survive the restart or
+// not). Both tests therefore assert DEVICE STATE after the window, not the
+// transport path that got them there.
+
+async fn vm_exec(cmd: &str) -> String {
+    let (session, _model) = connected_openwrt_session().await;
+    let out = session
+        .exec(cmd)
+        .await
+        .expect("exec on VM")
+        .stdout
+        .iter()
+        .map(|b| *b as char)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    drop(session);
+    out
+}
+
+fn deadman_probe_plan(passing_verify: bool) -> conwrt_core::plan::Plan {
+    use conwrt_core::plan::{ServiceAction, VerificationCheck};
+    conwrt_core::plan::Plan {
+        profile_id: "deadman-probe".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            // committed configs = {system, network} (shell-embedded commits,
+            // the dual-scan shape) — the deadman snapshots exactly these
+            PlanOp::Shell {
+                command: "uci set system.deadman_probe=test; uci commit system; \
+                          uci set network.deadman_note=note; uci commit network"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: ServiceAction::Restart,
+            },
+        ],
+        verification: vec![VerificationCheck {
+            description: "deadman probe marker".into(),
+            // section-id addressing, NOT `.type`: BusyBox uci does not
+            // expose a named section's type as an option — `uci -q get
+            // system.deadman_probe.type` returns rc=1/empty; the section
+            // id itself yields its type value ("test")
+            command: "uci -q get system.deadman_probe || true".into(),
+            expect_contains: if passing_verify {
+                "test"
+            } else {
+                "never-matches"
+            }
+            .into(),
+        }],
+    }
+}
+
+/// Verified-good apply → deadman cancelled → the mutation SURVIVES the
+/// window (no revert).
+#[tokio::test]
+async fn deadman_cancelled_on_verified_apply_survives_window() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = deadman_probe_plan(true);
+    let (session, _model) = connected_openwrt_session().await;
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // short window: if cancellation were skipped, the revert would fire
+    // inside the test's own wait
+    let outcome = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 8, 1,
+    )
+    .await
+    .expect("apply completes (recovered or clean)");
+    drop(session);
+    assert!(
+        outcome.fully_verified(),
+        "verification: {:?}",
+        outcome.verification
+    );
+
+    // wait past the window + revert's own network restart
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let marker = vm_exec("uci -q get system.deadman_probe || true").await;
+    assert_eq!(marker, "test", "verified apply must NOT be reverted");
+    // Codex #597 P1 (idempotent confirm): a won handshake must survive a
+    // REPLAY — if the original confirmation's exit status was lost, the
+    // retry sees `cancel` already present and still confirms
+    let replay = vm_exec(&conwrt_local_std::execute::deadman_cancel_cmd()).await;
+    assert_eq!(
+        replay, "deadman-cancelled",
+        "replaying a won cancel must confirm again, not report revert"
+    );
+    // Codex #597 P1 (snapshot secrecy): deadman state is 0700 even on a
+    // umask-022 device — the snapshots hold live secrets (ls -ld, not
+    // stat: the BusyBox image may lack the stat applet)
+    let mode = vm_exec("ls -ld /tmp/conwrt-deadman").await;
+    assert!(
+        mode.starts_with("drwx------"),
+        "deadman root dir must be root-only, got: {mode:?}"
+    );
+    // fired lands in the generation dir (Codex #597 isolation)
+    let fired = vm_exec(
+        r#"[ -n "$(ls -d /tmp/conwrt-deadman/*/fired 2>/dev/null)" ] && echo fired || echo quiet"#,
+    )
+    .await;
+    assert_eq!(fired, "quiet", "deadman never fired");
+    // rollback
+    vm_exec(
+        "uci -q delete system.deadman_probe; uci -q commit system; \
+             uci -q delete network.deadman_note; uci -q commit network; \
+             rm -rf /tmp/conwrt-deadman",
+    )
+    .await;
+}
+
+/// Unverified apply → NO cancel → window expires → the device re-imports
+/// its pre-apply snapshots: the mutation is GONE and the fired marker
+/// names the recovery entry.
+#[tokio::test]
+async fn deadman_reverts_unverified_apply_at_window_expiry() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = deadman_probe_plan(false);
+    let (session, _model) = connected_openwrt_session().await;
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // Whatever the transport did (clean failure with failing verification,
+    // or channel loss + failed re-verify), the DEADMAN decides on-device:
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 8, 1,
+    )
+    .await;
+    drop(session);
+
+    // window (8s) + revert's own network restart — then assert state
+    tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+    let marker = vm_exec("uci -q get system.deadman_probe || true").await;
+    assert!(
+        marker.is_empty(),
+        "unverified apply must be reverted by the deadman, marker={marker:?}"
+    );
+    let fired = vm_exec(
+        r#"[ -n "$(ls -d /tmp/conwrt-deadman/*/fired 2>/dev/null)" ] && echo fired || echo quiet"#,
+    )
+    .await;
+    assert_eq!(fired, "fired", "the recovery entry is named on the device");
+    // rollback (defensive — the revert already restored the snapshots)
+    vm_exec("rm -rf /tmp/conwrt-deadman").await;
+}
+
+/// Codex #597 P1 (stale-arming isolation): a second network-restarting
+/// apply that arms while a previous, NEVER-cancelled deadman is still in
+/// its window must supersede it — the stale process (earlier deadline)
+/// must not roll the NEW apply back prematurely, and the new cancel must
+/// not be observed by the old generation. Old arm: window 8, unverified
+/// (no cancel). New arm at ~t=3: verified + cancelled. If supersession
+/// is broken, the stale window fires at t=8 and deletes the marker.
+#[tokio::test]
+async fn deadman_rearm_supersedes_stale_window() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let addr = vm_target();
+    let reconnect1 = {
+        let addr = addr.clone();
+        move || {
+            let addr = addr.clone();
+            async move {
+                let mut store = MemoryTrustStore::new();
+                connect(
+                    &addr,
+                    &mut store,
+                    &SshOptions {
+                        mode: TrustMode::TrustOnFirstUse,
+                        ..Default::default()
+                    },
+                )
+                .await
+            }
+        }
+    };
+    let reconnect2 = {
+        let addr = addr.clone();
+        move || {
+            let addr = addr.clone();
+            async move {
+                let mut store = MemoryTrustStore::new();
+                connect(
+                    &addr,
+                    &mut store,
+                    &SshOptions {
+                        mode: TrustMode::TrustOnFirstUse,
+                        ..Default::default()
+                    },
+                )
+                .await
+            }
+        }
+    };
+    // arm #1: unverified (never cancelled) — a stale live window remains
+    let (session, _model) = connected_openwrt_session().await;
+    let outcome = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &deadman_probe_plan(false),
+        reconnect1,
+        8,
+        1,
+    )
+    .await;
+    // unverified: Ok(!fully_verified) or Err(recovery) — either way the
+    // FIRST deadman stays armed; nothing here may cancel it
+    if let Ok(o) = &outcome {
+        assert!(!o.fully_verified(), "arm #1 is unverified by design");
+        assert!(!o.deadman_cancelled, "arm #1 must NOT be cancelled");
+    }
+    drop(session);
+
+    // ~3s into arm #1's 8s window: arm #2 (same mutation, verified) —
+    // supersede: retire #1, own the device state going forward
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let (session2, _model2) = connected_openwrt_session().await;
+    let outcome2 = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session2,
+        &deadman_probe_plan(true),
+        reconnect2,
+        8,
+        1,
+    )
+    .await
+    .expect("arm #2 completes (recovered or clean)");
+    drop(session2);
+    assert!(
+        outcome2.fully_verified(),
+        "arm #2 verifies AND its cancel is confirmed: {:?}",
+        outcome2.verification
+    );
+
+    // past BOTH windows (+revert margin): the verified apply must have
+    // survived — the stale window never fired
+    tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+    let marker = vm_exec("uci -q get system.deadman_probe || true").await;
+    assert_eq!(
+        marker, "test",
+        "stale window must not roll back the superseding verified apply"
+    );
+    let fired = vm_exec(
+        r#"[ -n "$(ls -d /tmp/conwrt-deadman/*/fired 2>/dev/null)" ] && echo fired || echo quiet"#,
+    )
+    .await;
+    assert_eq!(fired, "quiet", "no generation may fire");
+    // rollback
+    vm_exec(
+        "uci -q delete system.deadman_probe; uci -q commit system; \
+             uci -q delete network.deadman_note; uci -q commit network; \
+             rm -rf /tmp/conwrt-deadman",
+    )
+    .await;
+}
+
+/// Codex #597 P1 (absent-config rollback): a config that did NOT exist
+/// pre-apply and is created by the plan must be DELETED by the revert —
+/// not left behind as a live configuration. Unverified apply → window
+/// expiry → the created config is gone.
+#[tokio::test]
+async fn deadman_revert_removes_configs_created_by_the_apply() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "creates-config".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "uci set conwrt_absent_test.pia=provider; \
+                          uci commit conwrt_absent_test"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "never passes".into(),
+            command: "true".into(),
+            expect_contains: "never-matches".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // the config file must not pre-exist (the fixture VM is pristine,
+    // but be defensive: a leftover would void the test's premise)
+    vm_exec("rm -f /etc/config/conwrt_absent_test /tmp/.uci/conwrt_absent_test").await;
+
+    let (session, _model) = connected_openwrt_session().await;
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 4, 1,
+    )
+    .await;
+    drop(session);
+
+    // window + revert margin
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let leftover =
+        vm_exec("[ -e /etc/config/conwrt_absent_test ] && echo present || echo gone").await;
+    assert_eq!(
+        leftover, "gone",
+        "a plan-created config must not survive the rollback"
+    );
+    vm_exec("rm -rf /tmp/conwrt-deadman").await;
+}
+
+/// Codex #597 P1 (service reconciliation): the revert must RESTART the
+/// service behind a config the apply created/touched — restoring or
+/// deleting /etc/config/<cfg> alone leaves the apply's runtime alive.
+/// A synthetic init.d service records its restart; an unverified apply
+/// (config created by the plan) must come back with the service
+/// restarted by the rollback.
+#[tokio::test]
+async fn deadman_revert_restarts_services_of_touched_configs() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "svc-reconcile".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "printf '#!/bin/sh\\ncase \"$1\" in restart) \
+                          echo restarted > /tmp/foo_restarted ;; esac\\n' \
+                          > /etc/init.d/conwrt_svctest; chmod +x /etc/init.d/conwrt_svctest; \
+                          uci set conwrt_svctest.x=1; uci commit conwrt_svctest"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "never passes".into(),
+            command: "true".into(),
+            expect_contains: "never-matches".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    // pristine premise: no leftover service/config/marker
+    vm_exec(
+        "rm -f /etc/init.d/conwrt_svctest /etc/config/conwrt_svctest \
+              /tmp/.uci/conwrt_svctest /tmp/foo_restarted",
+    )
+    .await;
+
+    let (session, _model) = connected_openwrt_session().await;
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 4, 1,
+    )
+    .await;
+    drop(session);
+
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let restarted = vm_exec("cat /tmp/foo_restarted 2>/dev/null || true").await;
+    assert_eq!(
+        restarted, "restarted",
+        "the revert must reconcile the service behind the touched config"
+    );
+    let leftover = vm_exec("[ -e /etc/config/conwrt_svctest ] && echo present || echo gone").await;
+    assert_eq!(leftover, "gone", "the created config is purged");
+    // rollback
+    vm_exec("rm -f /etc/init.d/conwrt_svctest /tmp/foo_restarted; rm -rf /tmp/conwrt-deadman")
+        .await;
+}
+
+/// Codex #597 P1 (cancel-vs-rollback race): once rollback has STARTED,
+/// the cancel command must FAIL — `mv armed cancel` cannot succeed after
+/// revert.sh removed `armed` at its transition. A confirmed cancel from
+/// that point on would be a lie about a config the device is actively
+/// reverting.
+#[tokio::test]
+async fn deadman_cancel_after_rollback_started_is_rejected() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let (session, _model) = connected_openwrt_session().await;
+    // unverified apply, 2s window: the deadman FIRES at ~2s and the
+    // transition removes `armed`
+    let _ = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session,
+        &deadman_probe_plan(false),
+        reconnect,
+        2,
+        1,
+    )
+    .await;
+    drop(session);
+    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+
+    // rollback underway/done: the atomic handshake must reject the cancel
+    let cancel = vm_exec(&conwrt_local_std::execute::deadman_cancel_cmd()).await;
+    assert_ne!(
+        cancel, "deadman-cancelled",
+        "cancel after rollback started must FAIL, got confirmation"
+    );
+    vm_exec("rm -rf /tmp/conwrt-deadman").await;
+}
+
+/// Codex #597 P1 (apply outliving the window): a plan whose prerequisites
+/// outlast the window must not keep mutating after the rollback — expiry
+/// STOPS the apply shell before restoring the snapshots. The marker is
+/// written AFTER a 10s sleep inside a 2s window: it must never exist.
+#[tokio::test]
+async fn deadman_expiry_stops_post_window_mutations() {
+    let _vm = vm_lock().await;
+    if !vm_available() {
+        eprintln!("[qemu_apply] skipping: CONWRT_QEMU_VM not set / VM down");
+        return;
+    }
+    let plan = conwrt_core::plan::Plan {
+        profile_id: "deadman-slow".into(),
+        model_id: "virtual-x86-64".into(),
+        ops: vec![
+            PlanOp::Shell {
+                command: "sleep 10; uci set system.dm_slow=1; uci commit system; \
+                          echo done > /tmp/dm_slow_marker"
+                    .into(),
+            },
+            PlanOp::Service {
+                name: "network".into(),
+                action: conwrt_core::plan::ServiceAction::Restart,
+            },
+        ],
+        verification: vec![conwrt_core::plan::VerificationCheck {
+            description: "slow marker".into(),
+            command: "cat /tmp/dm_slow_marker || true".into(),
+            expect_contains: "done".into(),
+        }],
+    };
+    let addr = vm_target();
+    let reconnect = move || {
+        let addr = addr.clone();
+        async move {
+            let mut store = MemoryTrustStore::new();
+            connect(
+                &addr,
+                &mut store,
+                &SshOptions {
+                    mode: TrustMode::TrustOnFirstUse,
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    };
+    let (session, _model) = connected_openwrt_session().await;
+    // window 2s, poll 1s: the deadman fires mid-sleep and kills the apply
+    let outcome = conwrt_local_std::execute::apply_plan_with_recovery_windowed(
+        &session, &plan, reconnect, 2, 1,
+    )
+    .await;
+    drop(session);
+    if let Ok(o) = &outcome {
+        assert!(
+            !o.fully_verified(),
+            "an apply the deadman reverted must not read as success"
+        );
+    }
+
+    // past the sleep (10s) + margin: the marker must NEVER have been
+    // written — the apply shell was stopped at window expiry
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    let marker = vm_exec("cat /tmp/dm_slow_marker 2>/dev/null || true").await;
+    assert!(
+        marker.is_empty(),
+        "apply mutated after window expiry+rollback: marker={marker:?}"
+    );
+    let slow_opt = vm_exec("uci -q get system.dm_slow || true").await;
+    assert!(slow_opt.is_empty(), "no post-expiry uci may survive");
+    // rollback
+    vm_exec("rm -f /tmp/dm_slow_marker; rm -rf /tmp/conwrt-deadman").await;
+}
