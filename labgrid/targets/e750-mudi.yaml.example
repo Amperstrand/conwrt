@@ -1,0 +1,71 @@
+## Reference rig: GL.iNet GL-E750 "Mudi" — SSH venue with CAPTURE-ONLY serial.
+##
+## Local labgrid target: NO coordinator/exporter needed (labgrid can build a
+## Target in-process from YAML). Copy to a local (gitignored) file, fill in the
+## placeholders for your own bench, and run with the labgrid pytest plugin or a
+## small driver script.
+##
+## Model: models/glinet-gl-e750.json (ath79/nand, mips_24kc). Species notes:
+## recipes/glinet/e750/notes.md.
+##
+## Only REAL labgrid classes are used here. Note that `ManualPowerPort` /
+## `ManualSwitchPort` are NOT labgrid classes (checked against labgrid 26.0.1:
+## resource classes are LAAPowerPort, NetworkPowerPort, NetworkYKUSHPowerPort,
+## SiSPMPowerPort, TasmotaPowerPort, USBPowerPort, YKUSHPowerPort). conwrt's
+## desk-rig equivalent of "a human is the power/button resource" is
+## `scripts/flash/context.py::manual_step()` (docs/DEVICE-TRANSITIONS.md P1),
+## which is what to call for the power step below.
+##
+## WHY THE POWER STEP IS MANUAL
+## The GL-E750 is battery powered with no switched power and no controllable
+## PoE port. Nothing in labgrid can power-cycle it, so a test that needs a cold
+## boot must ask the operator (manual_step()) and then poll for the box coming
+## back (SSH port / link) rather than assume it.
+##
+## WHY THERE IS NO SerialDriver / ShellDriver BELOW — measured, not assumed
+## On the unit tested, the serial console was TX-ONLY. The kernel console is
+## ttyS0 @115200 and /proc/consoles reports it write-only ('ttyS0 -W-'). A
+## closed-loop marker test settled it: the unit's own output arrived byte-clean
+## on the adapter, but a marker transmitted INTO the port never reached the
+## unit (cat /dev/ttyS0 on the box stayed empty). A ShellDriver here would
+## block until timeout and look like a dead board.
+## So RawSerialPort is declared for CAPTURE ONLY — boot logs, panic output, and
+## recovery evidence when SSH is down — and carries no driver. Everything that
+## mutates goes over SSH.
+##
+## If YOUR unit's wiring does accept input (verify with a loopback test first,
+## per AGENTS.md "Serial Wiring: Verify Before Connecting"), then add:
+##     SerialDriver: {}
+##     ShellDriver:
+##       prompt: "# "
+##       login_prompt: "Please press Enter to activate this console"
+##       username: root
+## The console is askfirst — it prints nothing until it receives a bare CR
+## (conwrt crates/conwrt-serial/src/watch.rs nudges it every ~10s).
+##
+## EXPECT ONE RADIO
+## If the 5GHz QCA9887 fails to probe ("could not probe fw (-22)") there is no
+## phy0 and no 5GHz interface at all — only the 2.4GHz ath9k. Do not write tests
+## that assume two radios, and check `iw dev` for type: the 2.4GHz interface is
+## commonly a CLIENT (STA) uplink, not an AP.
+##
+## Placeholders to replace for your own bench:
+##   <dut-ip>        management/LAN address of the unit
+##   <dut-console>   /dev/serial/by-id/... of your UART adapter — pin the FTDI
+##                   SERIAL, never the ttyUSB index (the index drifts on replug)
+targets:
+  main:
+    resources:
+      NetworkService:
+        address: <dut-ip>
+        username: root
+      RawSerialPort:
+        port: <dut-console>
+        speed: 115200          ## verified: ttyS0 115200 8N1
+    drivers:
+      SSHDriver:
+        keyfile: "~/.ssh/id_ed25519"
+        connection_timeout: 120.0
+        explicit_scp_mode: True   ## OpenWrt dropbear has no sftp-server -> scp -O
+images:
+  root: null                       ## filled per-run: path to the sysupgrade image
