@@ -23,15 +23,23 @@
 ## back (SSH port / link) rather than assume it.
 ##
 ## WHY THERE IS NO SerialDriver / ShellDriver BELOW — measured, not assumed
-## On the unit tested, the serial console was TX-ONLY. The kernel console is
-## ttyS0 @115200 and /proc/consoles reports it write-only ('ttyS0 -W-'). A
-## closed-loop marker test settled it: the unit's own output arrived byte-clean
-## on the adapter, but a marker transmitted INTO the port never reached the
-## unit (cat /dev/ttyS0 on the box stayed empty). A ShellDriver here would
-## block until timeout and look like a dead board.
-## So RawSerialPort is declared for CAPTURE ONLY — boot logs, panic output, and
+## OUTPUT WORKS, INPUT DOES NOT. The kernel console is ttyS0 @115200 and
+## /proc/consoles reports it write-only ('ttyS0 -W-'). Two closed-loop tests
+## against the unit's own ttyS0 settle the direction:
+##   board -> host: a marker written to /dev/kmsg over SSH arrived BYTE-CLEAN
+##                  on the adapter (38 bytes). Output and host RX are fine.
+##   host -> board: the unit's own UART counters DO count the bytes
+##                  (/proc/tty/driver/serial: "tx:22461 rx:1785 fe:5" — 5 framing
+##                  errors), but nothing is ever echoed back. CR, LF, CRLF and
+##                  24+ bare CRs across two sessions produced zero returned bytes,
+##                  and /sbin/askfirst never printed a prompt.
+## So a ShellDriver here would block until timeout and look like a dead board.
+## RawSerialPort is declared for CAPTURE ONLY — boot logs, panic output, and
 ## recovery evidence when SSH is down — and carries no driver. Everything that
 ## mutates goes over SSH.
+## (An earlier revision of this file said the UART was outright 'TX-only'; that
+## was wrong in the details — bytes do reach the board, framing errors are
+## counted. The statement above is the operationally correct one.)
 ##
 ## If YOUR unit's wiring does accept input (verify with a loopback test first,
 ## per AGENTS.md "Serial Wiring: Verify Before Connecting"), then add:
