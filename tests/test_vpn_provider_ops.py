@@ -442,13 +442,14 @@ class TestOpenvpnOps:
 
     def test_credentials_file(self):
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
-        assert "vpn-auth.txt" in r
+        # credentials ride UCI overrides (init-script contract, Codex #603)
         assert "ovpnuser" in r
+        assert "uci set openvpn.vpn_client.username='ovpnuser'" in r
 
     def test_uci_openvpn_configured(self):
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
         assert "uci set openvpn.vpn_client" in r
-        assert "config-openvpn" in r
+        assert "uci set openvpn.vpn_client=openvpn" in r
 
     def test_network_interface(self):
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))

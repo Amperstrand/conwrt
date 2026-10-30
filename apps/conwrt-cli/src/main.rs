@@ -24,7 +24,8 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile, WireguardServerProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -538,6 +539,7 @@ enum ProfileChoice {
     MptcpBonding,
     Tollgate,
     TollgateSecurity,
+    VpnOpenvpn,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -832,6 +834,21 @@ struct ProfileArgs {
     /// the 2.x planner is I/O-free; pass the 1.x-resolved rate).
     #[arg(long)]
     tollgate_fx_sats_per_usd: Option<u32>,
+    /// vpn-openvpn: inline .ovpn configuration text (required).
+    #[arg(long)]
+    vpn_ovpn_config: Option<String>,
+    /// vpn-openvpn: VPN username (if the config requires it).
+    #[arg(long)]
+    vpn_ovpn_username: Option<String>,
+    /// vpn-openvpn: VPN password (if the config requires it).
+    #[arg(long)]
+    vpn_ovpn_password: Option<String>,
+    /// vpn-openvpn: transport protocol (udp default).
+    #[arg(long)]
+    vpn_ovpn_proto: Option<String>,
+    /// vpn-openvpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    vpn_ovpn_no_kill_switch: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2270,6 +2287,14 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             fx_sats_per_usd: args.tollgate_fx_sats_per_usd.unwrap_or(0),
         })),
         ProfileChoice::TollgateSecurity => Ok(Profile::TollgateSecurity(TollgateSecurityProfile)),
+        ProfileChoice::VpnOpenvpn => Ok(Profile::VpnOpenvpn(VpnOpenvpnProfile {
+            // required-config gate fires at plan time (validate)
+            ovpn_config: args.vpn_ovpn_config.clone().unwrap_or_default(),
+            username: args.vpn_ovpn_username.clone().unwrap_or_default(),
+            password: args.vpn_ovpn_password.clone().unwrap_or_default(),
+            proto: args.vpn_ovpn_proto.clone().unwrap_or_else(|| "udp".into()),
+            kill_switch: !args.vpn_ovpn_no_kill_switch,
+        })),
     }
 }
 
@@ -3367,6 +3392,11 @@ mod tests {
             tollgate_upstream_usd_per_gb: None,
             tollgate_markup: None,
             tollgate_fx_sats_per_usd: None,
+            vpn_ovpn_config: None,
+            vpn_ovpn_username: None,
+            vpn_ovpn_password: None,
+            vpn_ovpn_proto: None,
+            vpn_ovpn_no_kill_switch: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
@@ -3396,6 +3426,30 @@ mod tests {
         assert_eq!(mp.server_port, 16384);
         assert_eq!(mp.server_ipv4, "203.0.113.7");
         assert!(mp.validate().is_ok());
+    }
+
+    #[test]
+    fn build_profile_vpn_openvpn_defaults_and_gate() {
+        let Profile::VpnOpenvpn(vo) =
+            &build_profile(&profile_args(ProfileChoice::VpnOpenvpn)).expect("builds")
+        else {
+            panic!("vpn-openvpn profile");
+        };
+        assert_eq!(vo.proto, "udp");
+        assert!(vo.kill_switch);
+        // empty config refused at plan time (heredoc + choice gates)
+        assert!(matches!(
+            vo.validate(),
+            Err(conwrt_core::plan::Unsupported::InvalidParams(_))
+        ));
+        let mut args = profile_args(ProfileChoice::VpnOpenvpn);
+        args.vpn_ovpn_config = Some("client\nremote vpn.example.com 1194".into());
+        args.vpn_ovpn_no_kill_switch = true;
+        let Profile::VpnOpenvpn(set) = &build_profile(&args).expect("builds") else {
+            panic!("vpn-openvpn profile");
+        };
+        assert!(!set.kill_switch);
+        assert!(set.validate().is_ok());
     }
 
     #[test]

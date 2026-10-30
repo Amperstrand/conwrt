@@ -87,6 +87,11 @@
 //!     "fx_sats_per_usd": 2500,
 //! }))
 //! print(r["tollgate-security"].build_configure({}))
+//! print(r["vpn-openvpn"].build_configure({
+//!     "ovpn_config": "client\nremote vpn.example.com 1194\nproto udp\nauth-user-pass",
+//!     "username": "svcuser",
+//!     "password": "svcpass",
+//! }))
 //! EOF
 //! ```
 //!
@@ -102,8 +107,8 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
     TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
-    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -444,6 +449,19 @@ fn tollgate_security_matches_1x_golden() {
     assert_plan_matches_golden(
         Profile::TollgateSecurity(TollgateSecurityProfile),
         include_str!("goldens/tollgate-security.sh"),
+    );
+}
+
+#[test]
+fn vpn_openvpn_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnOpenvpn(VpnOpenvpnProfile {
+            ovpn_config: "client\nremote vpn.example.com 1194\nproto udp\nauth-user-pass".into(),
+            username: "svcuser".into(),
+            password: "svcpass".into(),
+            ..VpnOpenvpnProfile::default()
+        }),
+        include_str!("goldens/vpn-openvpn.sh"),
     );
 }
 
