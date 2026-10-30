@@ -8,7 +8,7 @@ live Python retirement**. Companions:
 
 ## The test device made it all possible
 
-`x1860-1` (COVR-X1860 A1, MAC `a8:63:7d:8f:61:a8`) at `192.168.105.52`
+`x1860-1` (COVR-X1860 A1, MAC `a8:63:7d:xx:xx:xx` — redacted #508, verbatim preserved in the private lab project) at `192.168.105.UNIT`
 — adopted 2026-10-22 via two Rust-path flashes (vanilla 25.12.6, then
 the ASU-baked loop, PR #437): key door, rogue-DHCP disarmed, seat IP
 with explicit netmask. Facts/baseline/lock protocol live in
