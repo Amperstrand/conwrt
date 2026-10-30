@@ -15,7 +15,7 @@
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
-    "wifi": "MT7603 2.4GHz 802.11n (PCIe0, mt76 driver). Enabled in the OpenWrt DTS (mt7621_zyxel_nr7101.dts: wifi@0,0 on pcie0, 0x400-byte EEPROM from Factory@0x0) and kmod-mt7603 ships in the official image (mt7621.mk DEVICE_PACKAGES). WLAN GPIO key present. CORRECTED 2026-10-27 — earlier sessions wrongly recorded 'none' (operator + OpenWrt source both confirm the radio).",
+    "wifi": "MT7603 2.4GHz 802.11n (PCIe0, mt76 driver). Enabled in the OpenWrt DTS (mt7621_zyxel_nr7101.dts: wifi@0,0 on pcie0, 0x400-byte EEPROM from Factory@0x0) and kmod-mt7603 ships in the official image (mt7621.mk DEVICE_PACKAGES). WLAN GPIO key present. CORRECTED 2026-10-27 — earlier sessions wrongly recorded 'none' (operator + OpenWrt source both confirm the radio). Live-verified 2026-10-30 on the 919c-role unit: radio0 + phy0-sta0/phy0-ap0 present.",
     "modem": {
       "model": "Quectel RG502Q-EA",
       "usb_vendor_id": "2c7c",
@@ -55,26 +55,13 @@
           "type": "ras"
         }
       },
-      "zycast_binary": "conwrt scripts/zycast.py (C binary with Python fallback)",
-      "resources_required": [
-        "power",
-        "multicast-l2"
-      ],
-      "envelope": [
-        "zycast-kill-plan"
-      ]
+      "zycast_binary": "conwrt scripts/zycast.py (C binary with Python fallback)"
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt. SCP image to /tmp/ then run sysupgrade -n. Use scp -O (legacy protocol) as OpenWrt dropbear may lack SFTP. Boot takes ~60s after flash.",
       "command": "sysupgrade -n /tmp/firmware.bin",
       "scp_note": "Use scp -O flag — OpenWrt dropbear lacks /usr/libexec/sftp-server",
-      "boot_time_seconds": 60,
-      "resources_required": [
-        "ssh-service"
-      ],
-      "envelope": [
-        "board-name-match"
-      ]
+      "boot_time_seconds": 60
     }
   },
   "signatures": {
@@ -325,6 +312,20 @@
         "pdp_type": "ipv4",
         "verified": true,
         "date": "2026-05-19"
+      },
+      "silentlink_roaming_no": {
+        "carrier": "silent.link eSIM (roaming, Norway)",
+        "apn": "internet",
+        "auth": "none",
+        "pdp_type": "ipv4",
+        "verified": true,
+        "date": "2026-10-30",
+        "networks": {
+          "Telia (242/2)": "WORKS — data + UDP (wg passes) + TCP/443",
+          "Telenor (242/1)": "RX-BLACKHOLE — PDP gets an address but zero forwarding (TX climbs, RX 0). Auto-selection camps here when signal favors it; looks like a modem/account fault but is not (balance verified fine mid-incident)"
+        },
+        "fix_recipe": "AT+COPS=1,0,\"Telia\",7 via /dev/ttyUSB2 (attach takes 3+ min; +CME 30 on a follow-up attempt means already-registering); then ONE `ifup wan` to drop the stale PDP; verify with a wwan0-PINNED HTTP-204 (unpinned checks false-positive over WiFi)",
+        "note": "Documented from the 2026-10-30 incident on the nr7101-919c-role unit (bench evidence in conwrt-bench registry/devices/nr7101-919c.yaml)"
       }
     },
     "setup_commands": {
