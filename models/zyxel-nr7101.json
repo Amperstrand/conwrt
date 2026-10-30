@@ -41,13 +41,12 @@
     "zycast": {
       "description": "Flash via ZyXEL multicast protocol (zycast). Flashes both Kernel and Kernel2 partitions simultaneously. Uses initramfs-recovery image with zytrx header. No password required. TESTED on hardware (2026-05-26, Go binary on MIPS OpenWrt switch, NR7101 Telenor).",
       "resources_required": [
-        "poe-power-control",
-        "multicast-reachable-segment",
-        "initramfs-recovery-image"
+        "power",
+        "multicast-l2",
+        "packet-observer"
       ],
       "envelope": [
-        "image-type-initramfs",
-        "zytrx-header"
+        "zycast-kill-plan"
       ],
       "multicast_group": "225.0.0.0",
       "multicast_port": 5631,
@@ -69,12 +68,10 @@
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt. SCP image to /tmp/ then run sysupgrade -n. Use scp -O (legacy protocol) as OpenWrt dropbear may lack SFTP. Boot takes ~60s after flash.",
       "resources_required": [
-        "ssh-service",
-        "scp-legacy-protocol"
+        "ssh-service"
       ],
       "envelope": [
-        "board-name-match",
-        "config-wipe-default"
+        "board-name-match"
       ],
       "command": "sysupgrade -n /tmp/firmware.bin",
       "scp_note": "Use scp -O flag — OpenWrt dropbear lacks /usr/libexec/sftp-server",
