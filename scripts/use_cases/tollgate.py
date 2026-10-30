@@ -9,7 +9,8 @@ from typing import Any, Callable
 from urllib.request import urlretrieve
 
 from flash.context import sha256_file as _sha256_file
-from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAdd, UciAddList, UciCommit, UciSet, render_shell
+from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciAddList, UciCommit, UciSet, render_shell
+from shell_safe import interface_name
 
 from . import ParamDef, UseCase, register
 
@@ -408,6 +409,13 @@ def _derive_price_sats_per_mib(
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    # hotplug_interface is interpolated into the printf-installed ifup
+    # script's double-quoted test — a `$(...)`/backtick value would
+    # execute on the ROUTER at ifup time (pbr-class injection; gated
+    # with this port's Rust twin, plan.rs TollgateProfile::validate).
+    hotplug_interface = interface_name(
+        str(params.get("hotplug_interface", "wwan")), "hotplug_interface"
+    )
     return {
         "mint_url": str(params.get("mint_url", "")),
         "lightning_address": str(params.get("lightning_address", "")),
@@ -417,7 +425,7 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "clientid": str(params.get("clientid", "mac")),
         "allow_lan_ssh": bool(params.get("allow_lan_ssh", False)),
         "install_hotplug": params.get("install_hotplug", True),
-        "hotplug_interface": str(params.get("hotplug_interface", "wwan")),
+        "hotplug_interface": hotplug_interface,
         "price_sats_per_mib": int(params.get("price_sats_per_mib", 0)),
         "upstream_usd_per_gb": float(params.get("upstream_usd_per_gb", 0.0)),
         "markup": float(params.get("markup", 2.0)),
@@ -432,6 +440,13 @@ _HOTPLUG_SCRIPT = """\
 logger -t tollgate-hotplug "{iface} up \\u2014 restarting tollgate"
 /etc/init.d/tollgate-wrt restart &
 """
+
+
+def _users_to_router_rules(allow_lan_ssh: bool) -> list[str]:
+    rules = ["allow tcp port 2121", "allow tcp port 2050"]
+    if allow_lan_ssh:
+        rules.append("allow tcp port 22")
+    return rules
 
 
 def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
@@ -461,13 +476,16 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
     if nds_values:
         ops.append(UciSet(config="nodogsplash", section="@nodogsplash[0]", values=nds_values))
 
-    ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
-                          option="users_to_router", value="allow tcp port 2121"))
-    ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
-                          option="users_to_router", value="allow tcp port 2050"))
-    if allow_lan_ssh:
+    # Idempotent re-configure (fixed with this port): del_list before
+    # add_list — plain add_list accumulated duplicate allow rules on
+    # every re-run (the doh/nodns del_list-then-add precedent).
+    for port_rule in _users_to_router_rules(allow_lan_ssh):
+        ops.append(ShellCommand(
+            command=f"uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='{port_rule}' "
+                    f"2>/dev/null || true"
+        ))
         ops.append(UciAddList(config="nodogsplash", section="@nodogsplash[0]",
-                              option="users_to_router", value="allow tcp port 22"))
+                              option="users_to_router", value=port_rule))
     ops.append(UciCommit(config="nodogsplash"))
     ops.append(ServiceAction(name="nodogsplash", action="enable"))
     ops.append(ServiceAction(name="nodogsplash", action="restart"))
@@ -494,7 +512,11 @@ def _build_tollgate_ops(params: dict[str, Any]) -> list[Op]:
             values["lightning_address"] = lightning_address
         if price_per_minute != 1:
             values["price_per_minute"] = str(price_per_minute)
-        ops.append(UciAdd(config="tollgate", type="tollgate", values=values))
+        # Named section (fixed with this port): the 1.x `uci add tollgate
+        # tollgate` created an ANONYMOUS section — every re-configure run
+        # appended another tollgate section instead of replacing.
+        ops.append(ShellCommand("uci set tollgate.payment=tollgate"))
+        ops.append(UciSet(config="tollgate", section="payment", values=values))
         ops.append(UciCommit(config="tollgate"))
 
     pricing = _derive_price_sats_per_mib(

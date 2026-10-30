@@ -22,9 +22,9 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TravelmateProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -536,6 +536,8 @@ enum ProfileChoice {
     /// 1.x preset name (kebab by default).
     VpnPia,
     MptcpBonding,
+    Tollgate,
+    TollgateSecurity,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -790,6 +792,46 @@ struct ProfileArgs {
     /// mptcp-bonding: client UUID from `bsbf-add-client` on the VPS.
     #[arg(long)]
     mptcp_uuid: Option<String>,
+    /// tollgate: nodogsplash gateway name shown to clients.
+    #[arg(long)]
+    tollgate_gateway_name: Option<String>,
+    /// tollgate: nodogsplash gateway domain.
+    #[arg(long)]
+    tollgate_gateway_domain: Option<String>,
+    /// tollgate: client identification (mac, token, ip; default mac).
+    #[arg(long)]
+    tollgate_clientid: Option<String>,
+    /// tollgate: expose SSH (tcp 22) to pre-auth portal clients.
+    #[arg(long)]
+    tollgate_allow_lan_ssh: bool,
+    /// tollgate: opt OUT of the WiFi-STA ifup restart hook.
+    #[arg(long)]
+    tollgate_no_hotplug: bool,
+    /// tollgate: interface whose ifup restarts tollgate-wrt (default wwan).
+    #[arg(long)]
+    tollgate_hotplug_interface: Option<String>,
+    /// tollgate: Cashu mint URL.
+    #[arg(long)]
+    tollgate_mint_url: Option<String>,
+    /// tollgate: Lightning address for payouts.
+    #[arg(long)]
+    tollgate_lightning_address: Option<String>,
+    /// tollgate: price in sats per minute (rendered when != 1).
+    #[arg(long)]
+    tollgate_price_per_minute: Option<u32>,
+    /// tollgate: direct byte price in sats/MiB (0 = derive).
+    #[arg(long)]
+    tollgate_price_sats_per_mib: Option<u32>,
+    /// tollgate: upstream cost USD/GB for derivation (decimal).
+    #[arg(long)]
+    tollgate_upstream_usd_per_gb: Option<String>,
+    /// tollgate: cost multiplier for derivation (default 2.0).
+    #[arg(long)]
+    tollgate_markup: Option<String>,
+    /// tollgate: sats/USD for derivation (required when deriving —
+    /// the 2.x planner is I/O-free; pass the 1.x-resolved rate).
+    #[arg(long)]
+    tollgate_fx_sats_per_usd: Option<u32>,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2203,6 +2245,31 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 uuid: args.mptcp_uuid.clone().unwrap_or_default(),
             }))
         }
+        ProfileChoice::Tollgate => Ok(Profile::Tollgate(TollgateProfile {
+            gateway_name: args.tollgate_gateway_name.clone().unwrap_or_default(),
+            gateway_domain: args.tollgate_gateway_domain.clone().unwrap_or_default(),
+            clientid: args
+                .tollgate_clientid
+                .clone()
+                .unwrap_or_else(|| "mac".into()),
+            allow_lan_ssh: args.tollgate_allow_lan_ssh,
+            install_hotplug: !args.tollgate_no_hotplug,
+            hotplug_interface: args
+                .tollgate_hotplug_interface
+                .clone()
+                .unwrap_or_else(|| "wwan".into()),
+            mint_url: args.tollgate_mint_url.clone().unwrap_or_default(),
+            lightning_address: args.tollgate_lightning_address.clone().unwrap_or_default(),
+            price_per_minute: args.tollgate_price_per_minute.unwrap_or(1),
+            price_sats_per_mib: args.tollgate_price_sats_per_mib.unwrap_or(0),
+            upstream_usd_per_gb: args
+                .tollgate_upstream_usd_per_gb
+                .clone()
+                .unwrap_or_else(|| "0".into()),
+            markup: args.tollgate_markup.clone().unwrap_or_else(|| "2.0".into()),
+            fx_sats_per_usd: args.tollgate_fx_sats_per_usd.unwrap_or(0),
+        })),
+        ProfileChoice::TollgateSecurity => Ok(Profile::TollgateSecurity(TollgateSecurityProfile)),
     }
 }
 
@@ -3287,6 +3354,19 @@ mod tests {
             mptcp_server_ipv4: None,
             mptcp_server_port: None,
             mptcp_uuid: None,
+            tollgate_gateway_name: None,
+            tollgate_gateway_domain: None,
+            tollgate_clientid: None,
+            tollgate_allow_lan_ssh: false,
+            tollgate_no_hotplug: false,
+            tollgate_hotplug_interface: None,
+            tollgate_mint_url: None,
+            tollgate_lightning_address: None,
+            tollgate_price_per_minute: None,
+            tollgate_price_sats_per_mib: None,
+            tollgate_upstream_usd_per_gb: None,
+            tollgate_markup: None,
+            tollgate_fx_sats_per_usd: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
@@ -3316,6 +3396,42 @@ mod tests {
         assert_eq!(mp.server_port, 16384);
         assert_eq!(mp.server_ipv4, "203.0.113.7");
         assert!(mp.validate().is_ok());
+    }
+
+    #[test]
+    fn build_profile_tollgate_defaults_and_pricing_gate() {
+        let Profile::Tollgate(tg) =
+            &build_profile(&profile_args(ProfileChoice::Tollgate)).expect("tollgate builds")
+        else {
+            panic!("tollgate profile");
+        };
+        // 1.x defaults ride omitted flags; validate passes (no derivation)
+        assert_eq!(
+            (tg.clientid.as_str(), tg.hotplug_interface.as_str()),
+            ("mac", "wwan")
+        );
+        assert!(tg.install_hotplug && !tg.allow_lan_ssh);
+        assert!(tg.validate().is_ok());
+
+        // derivation without an explicit fx rate refuses at plan time
+        // (the I/O-free planner purity delta)
+        let mut args = profile_args(ProfileChoice::Tollgate);
+        args.tollgate_upstream_usd_per_gb = Some("0.83".into());
+        let Profile::Tollgate(deriving) = &build_profile(&args).expect("tollgate builds") else {
+            panic!("tollgate profile");
+        };
+        assert!(matches!(
+            deriving.validate(),
+            Err(conwrt_core::plan::Unsupported::InvalidParams(_))
+        ));
+
+        // wifi capability gate on the security profile
+        assert_eq!(
+            build_profile(&profile_args(ProfileChoice::TollgateSecurity))
+                .expect("security builds")
+                .requires(),
+            &["wifi"]
+        );
     }
 
     #[test]
