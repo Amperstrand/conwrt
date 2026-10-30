@@ -4973,9 +4973,14 @@ fn plan_mptcp_bonding(model: &DeviceModel, mp: &MptcpBondingProfile) -> Result<P
             expect_contains: "yes".into(),
         },
         VerificationCheck {
-            description: "MPTCP kernel present (25.12+/SNAPSHOT prerequisite)".into(),
-            command: "test -d /proc/net/mptcp_net && echo yes".into(),
-            expect_contains: "yes".into(),
+            // upstream MPTCP ABI on 25.12+/SNAPSHOT is the sysctl tree,
+            // not the legacy /proc/net/mptcp_net dir the 1.x docstring
+            // names — which would false-fail good devices (Codex #600 P2,
+            // kernel doc: docs.kernel.org/networking/mptcp-sysctl.html).
+            // Reading "1" proves support AND enabled in one probe.
+            description: "MPTCP kernel enabled (25.12+/SNAPSHOT prerequisite)".into(),
+            command: "cat /proc/sys/net/mptcp/enabled".into(),
+            expect_contains: "1".into(),
         },
     ];
     Ok(Plan {
@@ -7257,6 +7262,17 @@ mod tests {
         assert!(script.contains("echo \"BSBF installed. Verify: bsbf-bonding --status\""));
         assert!(script.contains("echo \"Monitor: bsbf-netspeed\""));
         assert!(script.contains("echo \"Uninstall: bsbf-bonding --uninstall\""));
+        // kernel prerequisite probes the upstream sysctl, never the
+        // legacy /proc/net/mptcp_net dir (Codex #600 P2)
+        let plan = plan_for(Profile::MptcpBonding(mp.clone()));
+        let kernel_check = plan
+            .verification
+            .iter()
+            .find(|c| c.description.contains("MPTCP"))
+            .expect("kernel prerequisite check");
+        assert!(kernel_check.command.contains("/proc/sys/net/mptcp/enabled"));
+        assert_eq!(kernel_check.expect_contains, "1");
+        assert!(!kernel_check.command.contains("mptcp_net"));
         // hostname endpoints stay first-class (validate_host parity)
         assert!(
             MptcpBondingProfile {
