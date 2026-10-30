@@ -970,6 +970,210 @@ impl MptcpBondingProfile {
     }
 }
 
+/// OpenTollGate — Bitcoin/Lightning payment gateway for selling
+/// internet access — port of the tested 1.x `tollgate` preset
+/// (`scripts/use_cases/tollgate.py`, ops characterization + transport
+/// parity + physical router verification). FLASH-TIME slice: the plan
+/// shapes the nodogsplash captive portal (branding, users_to_router
+/// allow rules), installs the WiFi-STA hotplug hook, stages the
+/// payment config (named section — the 1.x anonymous `uci add`
+/// accumulated a new section per re-run, fixed Python-side with this
+/// port), and optionally patches byte pricing into the ipk's
+/// config.json. The tollgate ipk itself is a POST-FLASH, host-side
+/// step (`deploy_tollgate_post_flash`: nostr/GitHub-CI resolve → SCP
+/// → opkg/apk) — 1.x marks the preset post-flash for exactly that.
+///
+/// Pricing purity delta (documented honestly): 1.x auto-fetches the
+/// sats/USD rate from mempool.space at BUILD time when
+/// `fx_sats_per_usd` is unset; the 2.x planner is I/O-free by
+/// invariant, so derivation REQUIRES an explicit rate — pass the
+/// 1.x-resolved value (the derivation math itself is identical and
+/// unit-pinned).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TollgateProfile {
+    /// Nodogsplash gateway name shown to clients (empty = default).
+    pub gateway_name: String,
+    /// Nodogsplash gateway domain (empty = default).
+    pub gateway_domain: String,
+    /// Client identification method (1.x choice set: `mac`, `token`,
+    /// `ip`).
+    pub clientid: String,
+    /// Expose SSH (tcp 22) to pre-auth clients via users_to_router.
+    pub allow_lan_ssh: bool,
+    /// Install the ifup hotplug hook that restarts tollgate-wrt.
+    pub install_hotplug: bool,
+    /// Interface whose ifup restarts tollgate (1.x default `wwan`;
+    /// `shell_safe::interface_name` charset — it executes inside the
+    /// installed script's double-quoted test, the pbr-class gate).
+    pub hotplug_interface: String,
+    /// Cashu mint URL (empty = skip payment section).
+    pub mint_url: String,
+    /// Lightning address for payouts (empty = skip).
+    pub lightning_address: String,
+    /// Price in sats per minute (1.x default 1; rendered only when
+    /// different from 1).
+    pub price_per_minute: u32,
+    /// Direct byte price in sats/MiB (0 = derive from upstream cost).
+    pub price_sats_per_mib: u32,
+    /// Upstream data cost, USD per GB, as a decimal string (1.x
+    /// float param kept as a string for plan equality).
+    pub upstream_usd_per_gb: String,
+    /// Cost multiplier applied to the upstream cost (decimal string;
+    /// 1.x default 2.0).
+    pub markup: String,
+    /// Sats per USD for the derivation (REQUIRED when deriving — see
+    /// the purity delta in the type docs).
+    pub fx_sats_per_usd: u32,
+}
+
+impl Default for TollgateProfile {
+    fn default() -> Self {
+        Self {
+            gateway_name: String::new(),
+            gateway_domain: String::new(),
+            clientid: "mac".into(),
+            allow_lan_ssh: false,
+            install_hotplug: true,
+            hotplug_interface: "wwan".into(),
+            mint_url: String::new(),
+            lightning_address: String::new(),
+            price_per_minute: 1,
+            price_sats_per_mib: 0,
+            upstream_usd_per_gb: "0".into(),
+            markup: "2.0".into(),
+            fx_sats_per_usd: 0,
+        }
+    }
+}
+
+impl TollgateProfile {
+    /// 1.x gates ported: the `hotplug_interface` charset (runtime
+    /// injection in the installed ifup script), the `clientid` choice
+    /// set, and the pricing-derivation bounds (`markup` must be > 0;
+    /// `upstream_usd_per_gb` must parse). The explicit-fx requirement
+    /// is the 2.x purity delta (see type docs).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.hotplug_interface) {
+            return Err(Unsupported::InvalidParams(
+                "hotplug_interface contains unsafe characters".into(),
+            ));
+        }
+        if !matches!(self.clientid.as_str(), "mac" | "token" | "ip") {
+            return Err(Unsupported::InvalidParams(
+                "clientid must be one of: mac, token, ip".into(),
+            ));
+        }
+        let upstream: f64 = self.upstream_usd_per_gb.parse().map_err(|_| {
+            Unsupported::InvalidParams("upstream_usd_per_gb must be a number".into())
+        })?;
+        // NaN skips every comparison gate below (all false) and would
+        // clamp to a 1-sat price in the derivation (Codex #601 P2 r4)
+        if !upstream.is_finite() {
+            return Err(Unsupported::InvalidParams(
+                "upstream_usd_per_gb must be a finite number".into(),
+            ));
+        }
+        if upstream < 0.0 {
+            return Err(Unsupported::InvalidParams(
+                "upstream_usd_per_gb must be >= 0".into(),
+            ));
+        }
+        let markup: f64 = self
+            .markup
+            .parse()
+            .map_err(|_| Unsupported::InvalidParams("markup must be a number".into()))?;
+        if !markup.is_finite() {
+            return Err(Unsupported::InvalidParams(
+                "markup must be a finite number".into(),
+            ));
+        }
+        if self.price_sats_per_mib == 0 && upstream > 0.0 {
+            if markup <= 0.0 {
+                return Err(Unsupported::InvalidParams("markup must be > 0".into()));
+            }
+            if self.fx_sats_per_usd == 0 {
+                return Err(Unsupported::InvalidParams(
+                    "fx_sats_per_usd is required for price derivation (the 1.x \
+                     mempool.space auto-fetch is a build-time I/O the I/O-free \
+                     2.x planner refuses; pass the resolved rate)"
+                        .into(),
+                ));
+            }
+        }
+        // shared range gate: an out-of-range derived price must be
+        // rejected HERE too, not only at render (Codex #601 P2 round 3)
+        self.derived_price_checked()?;
+        Ok(())
+    }
+
+    /// 1.x `_derive_price_sats_per_mib` parity (pure half): explicit
+    /// price wins; else derive `upstream/1024 * fx * markup`, ceil,
+    /// min 1. `None` = no pricing block. The ceiling is a manual
+    /// truncate-then-bump — `f64::ceil` is std-only and this crate
+    /// cross-builds no_std (CI thumbv7em gate). Extreme inputs that
+    /// would overflow the u32 price are REJECTED (a saturating cast
+    /// plus the bump wraps to ZERO in release builds — a free-access
+    /// price on a payment gateway; Codex #601 P2 round 3).
+    fn derived_price_checked(&self) -> Result<Option<(u32, &'static str)>, Unsupported> {
+        if self.price_sats_per_mib > 0 {
+            return Ok(Some((
+                self.price_sats_per_mib,
+                "explicit price_sats_per_mib",
+            )));
+        }
+        let upstream: f64 = match self.upstream_usd_per_gb.parse() {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        if upstream <= 0.0 {
+            return Ok(None);
+        }
+        let markup: f64 = match self.markup.parse() {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        let price = upstream / 1024.0 * self.fx_sats_per_usd as f64 * markup;
+        // check the UNCLAMPED product: f64::max(NaN, 1.0) returns 1.0,
+        // so clamping first would launder a NaN into a 1-sat price
+        // (Codex #601 P2 round 4)
+        if !price.is_finite() || price <= 0.0 {
+            return Err(Unsupported::InvalidParams(
+                "derived price is not a finite positive number".into(),
+            ));
+        }
+        let price = price.max(1.0);
+        if price >= u32::MAX as f64 {
+            return Err(Unsupported::InvalidParams(
+                "derived price exceeds the supported sats/MiB range — refusing to \
+                 plan a price that could wrap to zero"
+                    .into(),
+            ));
+        }
+        let truncated = price as u32;
+        let ceil = if price > truncated as f64 {
+            truncated + 1
+        } else {
+            truncated
+        };
+        Ok(Some((ceil, "derived")))
+    }
+}
+
+/// RFC 1918 isolation for TollGate public WiFi — port of the tested
+/// 1.x `tollgate-security` preset (`scripts/use_cases/
+/// tollgate_security.py`). Four named lan→wan DROP rules (RFC 1918
+/// A/B/C + link-local) plus WiFi client isolation on both default
+/// radios. The router's own OUTPUT chain is untouched by design —
+/// payments, DNS, and updates keep flowing. No params, no
+/// interpolation; named firewall sections re-set in place (idempotent).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TollgateSecurityProfile;
+
 /// Private Internet Access via OpenVPN (tun0) — port of the 1.x
 /// `vpn-pia-openvpn` preset (`scripts/use_cases/vpn_providers/pia.py`,
 /// the validated static recipe: RSA-4096 CA, UDP 8080 pool +
@@ -1796,6 +2000,11 @@ pub enum Profile {
     /// MPTCP connection bonding via BondingShouldBeFree (single remote
     /// installer; needs an MPTCP kernel, 25.12+/SNAPSHOT).
     MptcpBonding(MptcpBondingProfile),
+    /// OpenTollGate payment gateway (flash-time portal + payment
+    /// config; the ipk deploy is a host-side post-flash step).
+    Tollgate(TollgateProfile),
+    /// RFC 1918 isolation for TollGate public WiFi.
+    TollgateSecurity(TollgateSecurityProfile),
 }
 
 impl Profile {
@@ -1826,6 +2035,8 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
             Profile::VpnPia(_) => "vpn-pia",
             Profile::MptcpBonding(_) => "mptcp-bonding",
+            Profile::Tollgate(_) => "tollgate",
+            Profile::TollgateSecurity(_) => "tollgate-security",
         }
     }
 
@@ -1858,6 +2069,8 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => &[],
             Profile::VpnPia(_) => &[],
             Profile::MptcpBonding(_) => &[],
+            Profile::Tollgate(_) => &[],
+            Profile::TollgateSecurity(_) => &["wifi"],
         }
     }
 }
@@ -2183,6 +2396,8 @@ pub fn plan_profile(
         Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
         Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
         Profile::MptcpBonding(mp) => plan_mptcp_bonding(model, mp),
+        Profile::Tollgate(tg) => plan_tollgate(model, tg),
+        Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }
 }
 
@@ -4991,6 +5206,271 @@ fn plan_mptcp_bonding(model: &DeviceModel, mp: &MptcpBondingProfile) -> Result<P
     })
 }
 
+fn plan_tollgate(model: &DeviceModel, tg: &TollgateProfile) -> Result<Plan, Unsupported> {
+    tg.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // TLS-backend guard (plan_ssl's, Codex #601 P2): the libustream
+    // variants all own libustream-ssl.so — unconditionally installing
+    // wolfssl next to an existing backend is a file-clash abort under
+    // `set -e` before the portal is configured. Install only when NO
+    // provider is present (the 1.x packages list entry stays an
+    // image-build choice); excluded from golden parity by the
+    // established ssl-guard comparator filter.
+    let mut ops: Vec<PlanOp> = vec![PlanOp::Shell {
+        command: concat!(
+            "if ! (opkg list-installed 2>/dev/null || apk info 2>/dev/null) ",
+            "| grep -q '^libustream-'; then ",
+            "if command -v apk >/dev/null 2>&1; then ",
+            "apk add libustream-wolfssl || { apk update && apk add libustream-wolfssl; }; ",
+            "else opkg update && opkg install libustream-wolfssl; fi; fi",
+        )
+        .into(),
+    }];
+    ops.extend(
+        ["nodogsplash", "ca-bundle", "ca-certificates"]
+            .iter()
+            .map(|name| PlanOp::EnsurePackage {
+                name: (*name).into(),
+            }),
+    );
+    ops.push(PlanOp::SetUciOptions {
+        config: "nodogsplash".into(),
+        section: "@nodogsplash[0]".into(),
+        options: vec![("enabled".into(), literal("1".into()))],
+    });
+    let mut branding = Vec::new();
+    if !tg.gateway_name.is_empty() {
+        branding.push(("gatewayname".to_string(), tg.gateway_name.clone()));
+    }
+    if !tg.gateway_domain.is_empty() {
+        branding.push(("gatewaydomainname".to_string(), tg.gateway_domain.clone()));
+    }
+    if !tg.clientid.is_empty() {
+        branding.push(("clientid".to_string(), tg.clientid.clone()));
+    }
+    if !branding.is_empty() {
+        ops.push(PlanOp::SetUciOptions {
+            config: "nodogsplash".into(),
+            section: "@nodogsplash[0]".into(),
+            options: branding.into_iter().map(|(k, v)| (k, literal(v))).collect(),
+        });
+    }
+    // guarded del_list before each add_list — idempotent re-configure
+    // (1.x plain-appended duplicates; fixed Python-side with this port)
+    let mut rules = vec!["allow tcp port 2121", "allow tcp port 2050"];
+    if tg.allow_lan_ssh {
+        rules.push("allow tcp port 22");
+    }
+    for rule in rules {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='{rule}' \
+                 2>/dev/null || true"
+            ),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "nodogsplash".into(),
+            section: "@nodogsplash[0]".into(),
+            option: "users_to_router".into(),
+            value: rule.into(),
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "nodogsplash".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "nodogsplash".into(),
+        action: ServiceAction::Enable,
+    });
+    ops.push(PlanOp::Service {
+        name: "nodogsplash".into(),
+        action: ServiceAction::Restart,
+    });
+    if tg.install_hotplug {
+        // 1.x _HOTPLUG_SCRIPT, byte-verbatim (the \u2014 in the logger
+        // line is a LITERAL escape sequence in the 1.x source, kept)
+        let iface = &tg.hotplug_interface;
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "mkdir -p /etc/hotplug.d/iface && \
+                 printf '%s' '#!/bin/sh\n\
+                 [ \"$ACTION\" = \"ifup\" ] || exit 0\n\
+                 [ \"$INTERFACE\" = \"{iface}\" ] || exit 0\n\
+                 logger -t tollgate-hotplug \"{iface} up \\u2014 restarting tollgate\"\n\
+                 /etc/init.d/tollgate-wrt restart &\n\
+                 ' > /etc/hotplug.d/iface/95-tollgate-restart && \
+                 chmod +x /etc/hotplug.d/iface/95-tollgate-restart"
+            ),
+        });
+    }
+    if !tg.mint_url.is_empty() || !tg.lightning_address.is_empty() || tg.price_per_minute != 1 {
+        ops.push(PlanOp::Shell {
+            command: "touch /etc/config/tollgate".into(),
+        });
+        let mut values: Vec<(String, UciValue)> = Vec::new();
+        if !tg.mint_url.is_empty() {
+            values.push(("mint_url".into(), literal(tg.mint_url.clone())));
+        }
+        if !tg.lightning_address.is_empty() {
+            values.push((
+                "lightning_address".into(),
+                literal(tg.lightning_address.clone()),
+            ));
+        }
+        if tg.price_per_minute != 1 {
+            values.push((
+                "price_per_minute".into(),
+                literal(tg.price_per_minute.to_string()),
+            ));
+        }
+        // named section — 1.x's anonymous `uci add` accumulated one
+        // section per re-run (fixed Python-side with this port)
+        ops.push(PlanOp::Shell {
+            command: "uci set tollgate.payment=tollgate".into(),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "tollgate".into(),
+            section: "payment".into(),
+            options: values,
+        });
+        ops.push(PlanOp::CommitUci {
+            config: "tollgate".into(),
+        });
+    }
+    if let Some((price, _origin)) = tg.derived_price_checked()? {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "if [ -f /etc/tollgate/config.json ]; then \
+                 SS=$(sed -n 's/.*\"step_size\":[ ]*\\([0-9][0-9]*\\).*/\\1/p' \
+                 /etc/tollgate/config.json | head -1); \
+                 [ -n \"$SS\" ] || SS=1048576; \
+                 P=$(( ( {price} * SS + 1048575 ) / 1048576 )); \
+                 sed -i 's/\"price_per_step\":[ ]*[0-9]*/\"price_per_step\": '\"$P\"'/g' \
+                 /etc/tollgate/config.json \
+                 && /etc/init.d/tollgate-wrt restart 2>/dev/null \
+                 && echo \"tollgate: price_per_step=$P applied (step_size=$SS bytes; {price} sat/MiB)\" \
+                 || echo \"tollgate: price patch FAILED on existing config.json\"; \
+                 else echo \"tollgate: /etc/tollgate/config.json absent (ipk not installed yet) \
+                 — re-run configure after deploy_tollgate_post_flash\"; fi"
+            ),
+        });
+    }
+    let mut verification = vec![
+        VerificationCheck {
+            description: "nodogsplash enabled".into(),
+            command: "uci -q get nodogsplash.@nodogsplash[0].enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "portal service enabled at boot".into(),
+            command: "/etc/init.d/nodogsplash enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    if !tg.mint_url.is_empty() {
+        verification.push(VerificationCheck {
+            description: "payment mint url persisted".into(),
+            command: "uci -q get tollgate.payment.mint_url".into(),
+            expect_contains: tg.mint_url.clone(),
+        });
+    }
+    Ok(Plan {
+        profile_id: "tollgate".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
+fn plan_tollgate_security(
+    model: &DeviceModel,
+    _ts: &TollgateSecurityProfile,
+) -> Result<Plan, Unsupported> {
+    let literal = |v: String| UciValue::Literal(v);
+    let ranges = [
+        ("10", "10.0.0.0/8"),
+        ("172", "172.16.0.0/12"),
+        ("192", "192.168.0.0/16"),
+        ("LL", "169.254.0.0/16"),
+    ];
+    let mut ops: Vec<PlanOp> = Vec::new();
+    for (suffix, cidr) in ranges {
+        let name = format!("Block-LAN-To-RFC1918-{suffix}");
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: name.clone(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal(name.clone())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("dest_ip".into(), literal(cidr.into())),
+                ("proto".into(), literal("all".into())),
+                ("family".into(), literal("ipv4".into())),
+                ("target".into(), literal("DROP".into())),
+            ],
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    // Codex #601 P1: committed UCI alone leaves the RUNNING firewall
+    // open until some later reload — activate before apply reports
+    // success, and verify the LIVE ruleset (below), not just UCI.
+    ops.push(PlanOp::Service {
+        name: "firewall".into(),
+        action: ServiceAction::Restart,
+    });
+    // client isolation over DISCOVERED wifi-iface sections (Codex #601
+    // P2 round 2): hardcoded default_radio0/1 aborted mid-apply on
+    // single-radio devices under `set -e` — firewall already
+    // activated, isolation never applied. Factory section names are
+    // not a guarantee; `done; true` guards zero-iface devices.
+    ops.push(PlanOp::Shell {
+        command: "for _s in $(uci show wireless 2>/dev/null | grep '=wifi-iface' \
+                  | cut -d. -f2 | cut -d= -f1); do \
+                  uci set wireless.$_s.isolate='1'; done; true"
+            .into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "wireless".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "wifi reload".into(),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "ISP-LAN block rule persisted".into(),
+            command: "uci -q get firewall.Block-LAN-To-RFC1918-192.target".into(),
+            expect_contains: "DROP".into(),
+        },
+        VerificationCheck {
+            description: "client isolation set on at least one wifi-iface".into(),
+            command: "uci show wireless 2>/dev/null | grep -q \"isolate='1'\" && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+        VerificationCheck {
+            description: "block rule LIVE in the fw4 ruleset (effective \
+                          protection, not just staged UCI)"
+                .into(),
+            // whole TABLE, not the base forward chain: fw4 emits
+            // src='lan' rules into the forward_lan zone chain, and
+            // `list chain` does not recurse into jump targets (Codex
+            // #601 P1 round 2)
+            command: "nft list table inet fw4 2>/dev/null \
+                      | grep -q Block-LAN-To-RFC1918-192 && echo yes"
+                .into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "tollgate-security".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_nodns(model: &DeviceModel, nd: &NodnsProfile) -> Result<Plan, Unsupported> {
     nd.validate()?;
     // curl is NOT in every base image (the preset's "no packages" claim
@@ -7243,6 +7723,210 @@ mod tests {
                 "gate must reject {hostile:?}"
             );
         }
+    }
+
+    #[test]
+    fn tollgate_shape_branches_and_gates_match_1x() {
+        let tg = TollgateProfile {
+            gateway_name: "net4sats".into(),
+            gateway_domain: "net4sats.lan".into(),
+            allow_lan_ssh: true,
+            mint_url: "https://mint.example.com".into(),
+            lightning_address: "user@domain.com".into(),
+            price_per_minute: 5,
+            upstream_usd_per_gb: "0.83".into(),
+            markup: "2.0".into(),
+            fx_sats_per_usd: 2500,
+            ..TollgateProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::Tollgate(tg.clone())));
+        assert!(script.contains("uci set nodogsplash.@nodogsplash[0].enabled='1'"));
+        assert!(script.contains("uci set nodogsplash.@nodogsplash[0].gatewayname='net4sats'"));
+        assert!(
+            script.contains("uci set nodogsplash.@nodogsplash[0].gatewaydomainname='net4sats.lan'")
+        );
+        assert!(script.contains("uci set nodogsplash.@nodogsplash[0].clientid='mac'"));
+        // idempotency fixes: guarded del_list pairs, named payment section
+        for rule in [
+            "allow tcp port 2121",
+            "allow tcp port 2050",
+            "allow tcp port 22",
+        ] {
+            assert!(script.contains(&format!(
+                "uci -q del_list nodogsplash.@nodogsplash[0].users_to_router='{rule}' \
+                 2>/dev/null || true"
+            )));
+            assert!(script.contains(&format!(
+                "uci add_list nodogsplash.@nodogsplash[0].users_to_router='{rule}'"
+            )));
+        }
+        assert!(!script.contains("uci add tollgate"));
+        assert!(script.contains("uci set tollgate.payment=tollgate"));
+        assert!(script.contains("uci set tollgate.payment.mint_url='https://mint.example.com'"));
+        assert!(script.contains("uci set tollgate.payment.price_per_minute='5'"));
+        assert!(script.contains("uci commit tollgate"));
+        // hotplug hook: verbatim script body, literal \u2014 escape kept
+        assert!(script.contains("[ \"$INTERFACE\" = \"wwan\" ] || exit 0"));
+        assert!(
+            script.contains("logger -t tollgate-hotplug \"wwan up \\u2014 restarting tollgate\"")
+        );
+        // fx-derived price: 0.83/1024*2500*2.0 = 4.05 -> ceil 5
+        assert!(script.contains("P=$(( ( 5 * SS + 1048575 ) / 1048576 ))"));
+        assert!(script.contains("5 sat/MiB"));
+
+        // minimal profile: no payment section, no ssh rule, hotplug on
+        let minimal = render_shell(&plan_for(Profile::Tollgate(TollgateProfile::default())));
+        assert!(minimal.contains("uci set nodogsplash.@nodogsplash[0].enabled='1'"));
+        assert!(!minimal.contains("users_to_router='allow tcp port 22'"));
+        assert!(!minimal.contains("tollgate.payment"));
+        assert!(minimal.contains("[ \"$INTERFACE\" = \"wwan\" ]"));
+        // hotplug off drops the hook entirely
+        let no_hotplug = render_shell(&plan_for(Profile::Tollgate(TollgateProfile {
+            install_hotplug: false,
+            ..TollgateProfile::default()
+        })));
+        assert!(!no_hotplug.contains("hotplug.d/iface"));
+        // explicit price pins the direct path
+        let explicit = render_shell(&plan_for(Profile::Tollgate(TollgateProfile {
+            price_sats_per_mib: 8,
+            ..TollgateProfile::default()
+        })));
+        assert!(explicit.contains("P=$(( ( 8 * SS + 1048575 ) / 1048576 ))"));
+
+        // gates: runtime injection via hotplug_interface; clientid
+        // choice set; pricing bounds + the purity-delta fx requirement
+        assert!(matches!(
+            TollgateProfile {
+                hotplug_interface: "wwan$(reboot)".into(),
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            TollgateProfile {
+                clientid: "evil".into(),
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            TollgateProfile {
+                markup: "0".into(),
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            TollgateProfile {
+                fx_sats_per_usd: 0,
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            TollgateProfile {
+                upstream_usd_per_gb: "not-a-number".into(),
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        // overflow guard: absurd derived prices are rejected, never
+        // wrapped to a zero (free-access) price (Codex #601 P2 round 3)
+        assert!(matches!(
+            TollgateProfile {
+                upstream_usd_per_gb: "1000000000".into(),
+                markup: "2".into(),
+                fx_sats_per_usd: 2500,
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        // NaN/inf operands are rejected, never laundered through the
+        // 1.0 clamp into a 1-sat price (Codex #601 P2 round 4)
+        for bad in ["NaN", "inf", "-inf"] {
+            assert!(
+                matches!(
+                    TollgateProfile {
+                        markup: bad.into(),
+                        ..tg.clone()
+                    }
+                    .validate(),
+                    Err(Unsupported::InvalidParams(_))
+                ),
+                "markup {bad} must be refused"
+            );
+        }
+        assert!(matches!(
+            TollgateProfile {
+                upstream_usd_per_gb: "NaN".into(),
+                ..tg.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn tollgate_security_shape_matches_1x() {
+        let script = render_shell(&plan_for(Profile::TollgateSecurity(
+            TollgateSecurityProfile,
+        )));
+        for (suffix, cidr) in [
+            ("10", "10.0.0.0/8"),
+            ("172", "172.16.0.0/12"),
+            ("192", "192.168.0.0/16"),
+            ("LL", "169.254.0.0/16"),
+        ] {
+            assert!(script.contains(&format!(
+                "uci set firewall.Block-LAN-To-RFC1918-{suffix}=rule"
+            )));
+            assert!(script.contains(&format!(
+                "uci set firewall.Block-LAN-To-RFC1918-{suffix}.dest_ip='{cidr}'"
+            )));
+            assert!(script.contains(&format!(
+                "uci set firewall.Block-LAN-To-RFC1918-{suffix}.target='DROP'"
+            )));
+        }
+        assert!(!script.contains("uci add firewall"));
+        assert!(script.contains("uci commit firewall"));
+        assert!(script.contains("uci commit wireless"));
+        assert!(script.contains("/etc/init.d/firewall restart"));
+        assert!(script.contains("wifi reload"));
+        // isolation targets DISCOVERED wifi-iface sections — no
+        // hardcoded factory radio names (single-radio devices abort
+        // otherwise, Codex #601 P2 round 2)
+        assert!(!script.contains("default_radio0"));
+        assert!(!script.contains("default_radio1"));
+        assert!(script.contains("uci set wireless.$_s.isolate='1'"));
+        assert!(!script.contains("OUTPUT"));
+        // the P1 fix verifies EFFECTIVE protection: the live fw4
+        // ruleset must carry the block rule, not just staged UCI — and
+        // the whole TABLE (fw4 puts src-zone rules in forward_lan)
+        let plan = plan_for(Profile::TollgateSecurity(TollgateSecurityProfile));
+        let live = plan
+            .verification
+            .iter()
+            .find(|c| c.description.contains("LIVE"))
+            .expect("live-ruleset check");
+        assert!(live.command.contains("nft list table inet fw4"));
+        assert!(!live.command.contains("list chain"));
+        assert!(live.command.contains("Block-LAN-To-RFC1918-192"));
+        // the libustream TLS backend is presence-guarded (P2), never
+        // unconditionally ensured
+        let tg_script = render_shell(&plan_for(Profile::Tollgate(TollgateProfile::default())));
+        assert!(tg_script.contains("| grep -q '^libustream-'"));
+        assert!(!tg_script.contains("# install package libustream-wolfssl"));
+        // wifi capability gate (1.x requires_capabilities=["wifi"])
+        assert_eq!(
+            Profile::TollgateSecurity(TollgateSecurityProfile).requires(),
+            &["wifi"]
+        );
     }
 
     #[test]

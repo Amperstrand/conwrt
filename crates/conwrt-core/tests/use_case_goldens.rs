@@ -75,6 +75,18 @@
 //!     "server_port": "16384",
 //!     "uuid": "0f0e0d0c-0b0a-4909-8807-060504030201",
 //! }))
+//! print(r["tollgate"].build_configure({
+//!     "gateway_name": "net4sats",
+//!     "gateway_domain": "net4sats.lan",
+//!     "allow_lan_ssh": True,
+//!     "mint_url": "https://mint.example.com",
+//!     "lightning_address": "user@domain.com",
+//!     "price_per_minute": 5,
+//!     "upstream_usd_per_gb": 0.83,
+//!     "markup": 2.0,
+//!     "fx_sats_per_usd": 2500,
+//! }))
+//! print(r["tollgate-security"].build_configure({}))
 //! EOF
 //! ```
 //!
@@ -89,9 +101,9 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile, render_shell,
+    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -405,6 +417,33 @@ fn mptcp_bonding_matches_1x_golden() {
             uuid: "0f0e0d0c-0b0a-4909-8807-060504030201".into(),
         }),
         include_str!("goldens/mptcp-bonding.sh"),
+    );
+}
+
+#[test]
+fn tollgate_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Tollgate(TollgateProfile {
+            gateway_name: "net4sats".into(),
+            gateway_domain: "net4sats.lan".into(),
+            allow_lan_ssh: true,
+            mint_url: "https://mint.example.com".into(),
+            lightning_address: "user@domain.com".into(),
+            price_per_minute: 5,
+            upstream_usd_per_gb: "0.83".into(),
+            markup: "2.0".into(),
+            fx_sats_per_usd: 2500,
+            ..TollgateProfile::default()
+        }),
+        include_str!("goldens/tollgate.sh"),
+    );
+}
+
+#[test]
+fn tollgate_security_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::TollgateSecurity(TollgateSecurityProfile),
+        include_str!("goldens/tollgate-security.sh"),
     );
 }
 

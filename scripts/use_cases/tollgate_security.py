@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile.ops import Comment, Op, ShellCommand, UciSet, UciCommit, render_shell
+from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciSet, UciCommit, render_shell
 
 from . import UseCase, register
 
@@ -54,12 +54,27 @@ def _build_security_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(Comment(text=f"  {name}: {description}"))
 
     ops.append(UciCommit(config="firewall"))
+    # Activate: committed UCI alone leaves the RUNNING firewall wide
+    # open until some later reload — restart fw4 so the block rules are
+    # live before apply reports success (found by Codex #601 P1; fixed
+    # with this port's Rust twin).
+    ops.append(ServiceAction(name="firewall", action="restart"))
 
-    # WiFi client isolation — prevent public clients from talking to each other
+    # WiFi client isolation — prevent public clients from talking to each other.
+    # Discovery over ALL wifi-iface sections (Codex #601 P2): the 1.x
+    # hardcoded default_radio0/default_radio1 aborted mid-apply on
+    # single-radio devices under set -e (firewall already activated,
+    # isolation never applied); section names are factory defaults,
+    # not a guarantee. `done; true` guards zero-iface devices.
     ops.append(Comment(text="--- WiFi client isolation ---"))
-    ops.append(ShellCommand(command="uci set wireless.default_radio0.isolate='1'"))
-    ops.append(ShellCommand(command="uci set wireless.default_radio1.isolate='1'"))
+    ops.append(ShellCommand(
+        command="for _s in $(uci show wireless 2>/dev/null | grep '=wifi-iface' "
+                "| cut -d. -f2 | cut -d= -f1); do "
+                "uci set wireless.$_s.isolate='1'; done; true"
+    ))
     ops.append(ShellCommand(command="uci commit wireless"))
+    # ... and activate the radio change too
+    ops.append(ShellCommand(command="wifi reload"))
 
     return ops
 
