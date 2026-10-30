@@ -17,6 +17,13 @@ ALL_MODEL_IDS = [m["id"] for m in list_models()]
 USE_CASE_NAMES = sorted(registry().keys())
 BANDS = ["2.4ghz", "5ghz"]
 
+# Use cases whose required params need more than the generic string
+# placeholder "test" to clear their _resolve_params gates (e.g. a
+# numeric port). Keyed by use-case name, merged over the placeholder.
+VALID_PLACEHOLDER_PARAMS: dict[str, dict] = {
+    "mptcp-bonding": {"server_port": "16384"},
+}
+
 
 @pytest.mark.parametrize("model_id", ALL_MODEL_IDS)
 def test_build_plan_minimal_config(model_id: str) -> None:
@@ -36,6 +43,7 @@ def test_build_plan_with_each_use_case(model_id: str, use_case_name: str) -> Non
                 params[pname] = pdef.min_value or 1000
             else:
                 params[pname] = "test-1234"
+    params.update(VALID_PLACEHOLDER_PARAMS.get(use_case_name, {}))
     cfg = ConwrtConfig(use_cases=[UseCaseConfig(name=use_case_name, params=params)])
     plan = build_plan(cfg, mode="post_install", model_id=model_id)
     assert len(plan.steps) > 0

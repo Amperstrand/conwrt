@@ -21,10 +21,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
-    Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile,
-    VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TravelmateProfile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -535,6 +535,7 @@ enum ProfileChoice {
     VpnNordvpnOpenvpn,
     /// 1.x preset name (kebab by default).
     VpnPia,
+    MptcpBonding,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -780,6 +781,15 @@ struct ProfileArgs {
     /// vpn-pia: opt OUT of SSH/LuCI access from the VPN zone.
     #[arg(long)]
     pia_no_management: bool,
+    /// mptcp-bonding: VPS IP (or hostname) running the BSBF server.
+    #[arg(long)]
+    mptcp_server_ipv4: Option<String>,
+    /// mptcp-bonding: client port from `bsbf-add-client` on the VPS.
+    #[arg(long)]
+    mptcp_server_port: Option<u16>,
+    /// mptcp-bonding: client UUID from `bsbf-add-client` on the VPS.
+    #[arg(long)]
+    mptcp_uuid: Option<String>,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2183,6 +2193,16 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 ..CashuVpnClientProfile::default()
             }))
         }
+        ProfileChoice::MptcpBonding => {
+            // all three credentials come from `bsbf-add-client` on the
+            // VPS — no sane defaults; charset/format gates fire at plan
+            // time (MptcpBondingProfile::validate)
+            Ok(Profile::MptcpBonding(MptcpBondingProfile {
+                server_ipv4: args.mptcp_server_ipv4.clone().unwrap_or_default(),
+                server_port: args.mptcp_server_port.unwrap_or(0),
+                uuid: args.mptcp_uuid.clone().unwrap_or_default(),
+            }))
+        }
     }
 }
 
@@ -3264,11 +3284,38 @@ mod tests {
             pia_ovpn_iface: None,
             pia_ovpn_no_kill_switch: false,
             pia_ovpn_no_management: false,
+            mptcp_server_ipv4: None,
+            mptcp_server_port: None,
+            mptcp_uuid: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
             trm_no_captive: false,
         }
+    }
+
+    #[test]
+    fn build_profile_mptcp_bonding_gates_credentials_at_plan_time() {
+        let mut args = profile_args(ProfileChoice::MptcpBonding);
+        // no flags: profile builds empty, plan time refuses (1.x required gates)
+        let Profile::MptcpBonding(mp) = &build_profile(&args).expect("mptcp builds") else {
+            panic!("mptcp profile");
+        };
+        assert!(mp.server_ipv4.is_empty() && mp.server_port == 0 && mp.uuid.is_empty());
+        assert!(matches!(
+            mp.validate(),
+            Err(conwrt_core::plan::Unsupported::InvalidParams(_))
+        ));
+
+        args.mptcp_server_ipv4 = Some("203.0.113.7".into());
+        args.mptcp_server_port = Some(16384);
+        args.mptcp_uuid = Some("0f0e0d0c-0b0a-4909-8807-060504030201".into());
+        let Profile::MptcpBonding(mp) = &build_profile(&args).expect("mptcp builds") else {
+            panic!("mptcp profile");
+        };
+        assert_eq!(mp.server_port, 16384);
+        assert_eq!(mp.server_ipv4, "203.0.113.7");
+        assert!(mp.validate().is_ok());
     }
 
     #[test]

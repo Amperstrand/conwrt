@@ -69,11 +69,15 @@ References:
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from profile.ops import BlankLine, Comment, Op, ShellCommand, render_shell
+from shell_safe import validate_host, validate_port
 
 from . import ParamDef, UseCase, register
+
+_UUID_TOKEN_RE = re.compile(r"^[0-9a-zA-Z-]+$")
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +91,17 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("server_port is required (from 'bsbf-add-client' on VPS)")
     if not uuid:
         raise ValueError("uuid is required (from 'bsbf-add-client' on VPS)")
+
+    # The three values interpolate UNQUOTED into a `curl | sh -s --`
+    # command line below — gate them or a `;`/`$()`/backtick value runs
+    # arbitrary shell on the router (same class as pbr/openclash, fixed
+    # with this port's Rust twin; plan.rs MptcpBondingProfile::validate).
+    server_ipv4 = validate_host(server_ipv4, "server_ipv4")
+    if not server_port.isdigit():
+        raise ValueError("server_port must be numeric (1-65535), got: " + repr(server_port))
+    server_port = str(validate_port(int(server_port), "server_port"))
+    if not _UUID_TOKEN_RE.fullmatch(uuid):
+        raise ValueError(f"uuid contains unsafe characters, got: {uuid!r}")
 
     return {"server_ipv4": server_ipv4, "server_port": server_port, "uuid": uuid}
 
@@ -130,7 +145,7 @@ register(UseCase(
         "server_ipv4": ParamDef(type=str, default="", required=True,
                                 description="VPS IP running BSBF server"),
         "server_port": ParamDef(type=str, default="", required=True,
-                               description="Port (from 'sudo bsbf-add-client' on VPS)"),
+                                description="Port (from 'sudo bsbf-add-client' on VPS)"),
         "uuid": ParamDef(type=str, default="", required=True,
                         description="Client UUID (from 'sudo bsbf-add-client' on VPS)"),
     },
