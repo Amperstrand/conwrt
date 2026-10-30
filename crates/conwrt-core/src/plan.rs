@@ -982,6 +982,78 @@ impl MptcpBondingProfile {
 /// config.json. The tollgate ipk itself is a POST-FLASH, host-side
 /// step (`deploy_tollgate_post_flash`: nostr/GitHub-CI resolve → SCP
 /// → opkg/apk) — 1.x marks the preset post-flash for exactly that.
+/// Generic OpenVPN client — port of the 1.x `vpn-openvpn` preset
+/// (`scripts/use_cases/vpn_providers/openvpn.py`, 1.x marks it
+/// UNTESTED — same evidence bar here). For any provider offering
+/// .ovpn files (ExpressVPN, ProtonVPN, CyberGhost…): the plan writes
+/// the inline config (+optional credentials, chmod 600) via quoted
+/// heredocs, shapes the `openvpn.vpn_client` service + `vpn_if`
+/// network interface, reuses the shared VPN firewall block (zone,
+/// lan→vpn forwarding, management rule, kill switch), and pairs the
+/// kill switch with base.py's 45-second tun-verify fail-open loop —
+/// which the 1.x preset FORGOT (a bad config + kill switch bricked
+/// WAN; fixed Python-side with this port).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnOpenvpnProfile {
+    /// Inline .ovpn configuration text (1.x required param). Must not
+    /// contain a line `OVPNEOF` — it would escape the quoted heredoc
+    /// and run as live script (injection gate, fixed with this port).
+    pub ovpn_config: String,
+    /// VPN username (optional; single line — rides the UCI override).
+    pub username: String,
+    /// VPN password (optional; single line — rides the UCI override).
+    pub password: String,
+    /// Transport protocol (1.x choice set: `udp`, `tcp`).
+    pub proto: String,
+    /// Block all non-VPN traffic if the tunnel drops (1.x default on;
+    /// paired with the fail-open verify loop).
+    pub kill_switch: bool,
+}
+
+impl Default for VpnOpenvpnProfile {
+    fn default() -> Self {
+        Self {
+            ovpn_config: String::new(),
+            username: String::new(),
+            password: String::new(),
+            proto: "udp".into(),
+            kill_switch: true,
+        }
+    }
+}
+
+impl VpnOpenvpnProfile {
+    /// Heredoc-terminator + choice gates mirroring the Python-side
+    /// `_resolve_params` fix: an `OVPNEOF` line escapes the quoted
+    /// heredoc (pbr-class injection), newlines break the UCI
+    /// credential options, and `proto` lands in a rendered comment.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.ovpn_config.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "ovpn_config is required (inline .ovpn text)".into(),
+            ));
+        }
+        if self.ovpn_config.lines().any(|l| l.trim() == "OVPNEOF") {
+            return Err(Unsupported::InvalidParams(
+                "ovpn_config must not contain a line 'OVPNEOF' (heredoc terminator)".into(),
+            ));
+        }
+        for (field, value) in [("username", &self.username), ("password", &self.password)] {
+            if value.contains('\n') || value.contains('\r') {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must be a single line"
+                )));
+            }
+        }
+        if !matches!(self.proto.as_str(), "udp" | "tcp") {
+            return Err(Unsupported::InvalidParams(
+                "proto must be udp or tcp".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 ///
 /// Pricing purity delta (documented honestly): 1.x auto-fetches the
 /// sats/USD rate from mempool.space at BUILD time when
@@ -2000,6 +2072,9 @@ pub enum Profile {
     /// MPTCP connection bonding via BondingShouldBeFree (single remote
     /// installer; needs an MPTCP kernel, 25.12+/SNAPSHOT).
     MptcpBonding(MptcpBondingProfile),
+    /// Generic OpenVPN client for providers without a WireGuard API
+    /// (inline .ovpn config; 1.x marks the preset untested).
+    VpnOpenvpn(VpnOpenvpnProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2035,6 +2110,7 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
             Profile::VpnPia(_) => "vpn-pia",
             Profile::MptcpBonding(_) => "mptcp-bonding",
+            Profile::VpnOpenvpn(_) => "vpn-openvpn",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2069,6 +2145,7 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => &[],
             Profile::VpnPia(_) => &[],
             Profile::MptcpBonding(_) => &[],
+            Profile::VpnOpenvpn(_) => &[],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -2396,6 +2473,7 @@ pub fn plan_profile(
         Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
         Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
         Profile::MptcpBonding(mp) => plan_mptcp_bonding(model, mp),
+        Profile::VpnOpenvpn(vo) => plan_vpn_openvpn(model, vo),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }
@@ -5206,6 +5284,213 @@ fn plan_mptcp_bonding(model: &DeviceModel, mp: &MptcpBondingProfile) -> Result<P
     })
 }
 
+fn plan_vpn_openvpn(model: &DeviceModel, vo: &VpnOpenvpnProfile) -> Result<Plan, Unsupported> {
+    vo.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops: Vec<PlanOp> = ["openvpn-openssl", "luci-app-openvpn"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    // 1.x setup script, byte-verbatim: the quoted heredoc makes the
+    // config literal (validate() gates the OVPNEOF delimiter);
+    // credentials ride UCI overrides — the init script's contract for
+    // external-config instances (Codex #603 P1)
+    let mut setup = String::new();
+    setup.push_str("# Write OpenVPN config\n");
+    setup.push_str("mkdir -p /etc/openvpn\n");
+    setup.push_str("cat > /etc/openvpn/vpn-client.ovpn << 'OVPNEOF'\n");
+    setup.push_str(&vo.ovpn_config);
+    setup.push_str("\nOVPNEOF\n");
+    ops.push(PlanOp::Shell { command: setup });
+    ops.push(PlanOp::CleanupUciSections {
+        config: "openvpn".into(),
+        pattern: "vpn_client=config-openvpn".into(),
+    });
+    // the 1.x pattern `config=openvpn` matched NOTHING (uci show
+    // renders the declaration with a hyphen; values are quoted) — dead
+    // cleanup, so stale options like previous credentials survived
+    // re-applies. The matching cleanup deletes the section; the
+    // recreate below then rebuilds it option-clean (Codex #603 P2).
+    ops.push(PlanOp::CleanupUciSections {
+        config: "openvpn".into(),
+        pattern: "vpn_client=openvpn".into(),
+    });
+    // section type `openvpn` (Codex #603 P1): the init script starts
+    // instances via `config_foreach start_uci_instance 'openvpn'` —
+    // the 1.x type `config-openvpn` was never started at all
+    ops.push(PlanOp::Shell {
+        command: "uci set openvpn.vpn_client=openvpn".into(),
+    });
+    let mut client_opts = vec![
+        (
+            "config".to_string(),
+            literal("/etc/openvpn/vpn-client.ovpn".into()),
+        ),
+        ("enabled".to_string(), literal("1".into())),
+    ];
+    if !vo.username.is_empty() && !vo.password.is_empty() {
+        client_opts.push(("username".to_string(), literal(vo.username.clone())));
+        client_opts.push(("password".to_string(), literal(vo.password.clone())));
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "openvpn".into(),
+        section: "vpn_client".into(),
+        options: client_opts,
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "openvpn".into(),
+    });
+    ops.push(PlanOp::CleanupUciSections {
+        config: "network".into(),
+        pattern: "proto='openvpn'".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: "uci set network.vpn_if=interface".into(),
+    });
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: "vpn_if".into(),
+        options: vec![
+            ("proto".to_string(), literal("openvpn".into())),
+            (
+                "config".to_string(),
+                literal("/etc/openvpn/vpn-client.ovpn".into()),
+            ),
+        ],
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    // shared firewall block (base.py build_firewall_ops, iface=vpn_if,
+    // management on, kill switch per profile)
+    for pattern in [
+        "name='vpn'",
+        "dest='vpn'",
+        "name='KillSwitch-Reject-NonVPN'",
+        "name='Allow-VPN-Management'",
+    ] {
+        ops.push(PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: pattern.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_zone".into(),
+        section_type: "zone".into(),
+        options: vec![
+            ("name".into(), literal("vpn".into())),
+            ("input".into(), literal("REJECT".into())),
+            ("output".into(), literal("ACCEPT".into())),
+            ("forward".into(), literal("REJECT".into())),
+            ("masq".into(), literal("1".into())),
+            ("mtu_fix".into(), literal("1".into())),
+            ("network".into(), literal("vpn_if".into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_fwd".into(),
+        section_type: "forwarding".into(),
+        options: vec![
+            ("src".into(), literal("lan".into())),
+            ("dest".into(), literal("vpn".into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_mgmt".into(),
+        section_type: "rule".into(),
+        options: vec![
+            ("name".into(), literal("Allow-VPN-Management".into())),
+            ("src".into(), literal("vpn".into())),
+            ("proto".into(), literal("tcp".into())),
+            ("dest_port".into(), literal("22 80 443".into())),
+            ("target".into(), literal("ACCEPT".into())),
+        ],
+    });
+    if vo.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "openvpn".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    // fail-open tail (base.py build_verify_ops, kind=openvpn): the
+    // commits/restarts are idempotent; the 45s tun-check auto-removes
+    // the kill switch when the tunnel never comes up — the pairing
+    // the 1.x preset forgot (fixed with this port)
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "dhcp".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "dnsmasq".into(),
+        action: ServiceAction::Restart,
+    });
+    if vo.kill_switch {
+        ops.push(PlanOp::Shell {
+            command: "i=0; while [ $i -lt 45 ]; do \
+                      if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then \
+                      echo 'VPN: tun interface verified'; exit 0; \
+                      fi; sleep 1; i=$((i+1)); \
+                      done; \
+                      echo 'VPN: tun interface failed — removing kill switch to restore WAN'; \
+                      uci delete firewall.vpn_killswitch; \
+                      uci commit firewall; \
+                      fw4 restart"
+                .into(),
+        });
+    }
+    let verification = vec![
+        VerificationCheck {
+            description: "openvpn service section enabled".into(),
+            command: "uci -q get openvpn.vpn_client.enabled".into(),
+            expect_contains: "1".into(),
+        },
+        VerificationCheck {
+            description: "tun interface carrying an address".into(),
+            command: "ip -4 addr show dev tun0 2>/dev/null | grep -q inet && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-openvpn".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 fn plan_tollgate(model: &DeviceModel, tg: &TollgateProfile) -> Result<Plan, Unsupported> {
     tg.validate()?;
     let literal = |v: String| UciValue::Literal(v);
@@ -7927,6 +8212,77 @@ mod tests {
             Profile::TollgateSecurity(TollgateSecurityProfile).requires(),
             &["wifi"]
         );
+    }
+
+    #[test]
+    fn vpn_openvpn_shape_branches_and_gates_match_1x() {
+        let vo = VpnOpenvpnProfile {
+            ovpn_config: "client\nremote vpn.example.com 1194\nproto udp\nauth-user-pass".into(),
+            username: "svcuser".into(),
+            password: "svcpass".into(),
+            ..VpnOpenvpnProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnOpenvpn(vo.clone())));
+        assert!(script.contains("cat > /etc/openvpn/vpn-client.ovpn << 'OVPNEOF'"));
+        assert!(script.contains("remote vpn.example.com 1194"));
+        // credentials ride UCI overrides (init-script contract, P1 fix)
+        assert!(!script.contains("vpn-auth.txt"));
+        assert!(script.contains("uci set openvpn.vpn_client=openvpn"));
+        assert!(script.contains("uci set openvpn.vpn_client.username='svcuser'"));
+        assert!(script.contains("uci set openvpn.vpn_client.password='svcpass'"));
+        assert!(script.contains("uci set network.vpn_if.proto='openvpn'"));
+        assert!(script.contains("uci set firewall.vpn_zone.network='vpn_if'"));
+        assert!(script.contains("uci set firewall.vpn_killswitch.name='KillSwitch-Reject-NonVPN'"));
+        // the fail-open pairing the 1.x preset forgot
+        assert!(script.contains("ip -4 addr show dev tun0"));
+        assert!(
+            script
+                .contains("echo 'VPN: tun interface failed — removing kill switch to restore WAN'")
+        );
+
+        // no creds: no auth file; no kill switch: no killswitch section
+        let bare = render_shell(&plan_for(Profile::VpnOpenvpn(VpnOpenvpnProfile {
+            ovpn_config: "client".into(),
+            kill_switch: false,
+            ..VpnOpenvpnProfile::default()
+        })));
+        assert!(!bare.contains("vpn-auth.txt"));
+        assert!(!bare.contains("uci set firewall.vpn_killswitch=rule"));
+        assert!(!bare.contains("tun interface failed"));
+
+        // gates: heredoc terminators, credential newlines, proto choice
+        assert!(matches!(
+            VpnOpenvpnProfile {
+                ovpn_config: "client\nOVPNEOF\nreboot".into(),
+                ..vo.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            VpnOpenvpnProfile {
+                password: "AUTHEOF".into(),
+                ..vo.clone()
+            }
+            .validate(),
+            Ok(())
+        ));
+        assert!(matches!(
+            VpnOpenvpnProfile {
+                username: "u\nrm -rf /".into(),
+                ..vo.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        assert!(matches!(
+            VpnOpenvpnProfile {
+                proto: "udp; reboot".into(),
+                ..vo.clone()
+            }
+            .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
     }
 
     #[test]
