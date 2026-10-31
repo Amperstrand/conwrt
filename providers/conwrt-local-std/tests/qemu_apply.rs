@@ -936,6 +936,7 @@ fn deadman_probe_plan(passing_verify: bool) -> conwrt_core::plan::Plan {
             }
             .into(),
         }],
+        warnings: Vec::new(),
     }
 }
 
@@ -1208,6 +1209,7 @@ async fn deadman_revert_removes_configs_created_by_the_apply() {
             command: "true".into(),
             expect_contains: "never-matches".into(),
         }],
+        warnings: Vec::new(),
     };
     let addr = vm_target();
     let reconnect = move || {
@@ -1281,6 +1283,7 @@ async fn deadman_revert_restarts_services_of_touched_configs() {
             command: "true".into(),
             expect_contains: "never-matches".into(),
         }],
+        warnings: Vec::new(),
     };
     let addr = vm_target();
     let reconnect = move || {
@@ -1406,6 +1409,7 @@ async fn deadman_expiry_stops_post_window_mutations() {
             command: "cat /tmp/dm_slow_marker || true".into(),
             expect_contains: "done".into(),
         }],
+        warnings: Vec::new(),
     };
     let addr = vm_target();
     let reconnect = move || {

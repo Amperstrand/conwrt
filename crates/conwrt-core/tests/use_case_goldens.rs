@@ -127,7 +127,7 @@ fn model_with_capabilities(caps: Option<Vec<String>>) -> DeviceModel {
     });
     let json = format!(
         "{{\"id\":\"test-model\",\"vendor\":\"Test\",\"description\":\"d\",\
-          \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"24\"}},\
+          \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"25.12.6\"}},\
           \"mac_oui\":[]{}}}",
         caps_json.unwrap_or_default()
     );
