@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
+.PHONY: help lint typecheck validate-schemas validate-models check-pins init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -43,6 +43,9 @@ validate-schemas: ## Compile all JSON schemas with ajv-cli@5
 		fi; \
 	done; \
 	if [ "$$FAIL" -ne 0 ]; then exit 1; fi
+
+check-pins: ## OpenWrt version-pin audit (SSOT layering: docs/version-pins-ssot.md)
+	python3 scripts/check_version_pins.py
 
 validate-models: ## Validate all models/*.json against schemas/model.schema.json
 	@python3 scripts/validate_models.py
