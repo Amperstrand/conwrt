@@ -1187,22 +1187,33 @@ const SURFSHARK_WG_BODY_SH: &str = concat!(
 /// token-shaped text (`abc__IFACE__def`) survives verbatim — chained
 /// `.replace()` calls would rewrite it (Codex #604 P2 round 5).
 fn substitute_tokens(template: &str, pairs: &[(&str, &str)]) -> String {
+    // generic single-pass: at each step splice the EARLIEST token
+    // occurrence and continue after the inserted value — inserted
+    // values are never re-scanned, whatever their shape (token styles
+    // vary: `__TOK__`, `{iface}` …). Non-token text passes through.
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
-    'outer: while let Some(pos) = rest.find("__") {
+    loop {
+        let mut best: Option<(usize, &str, &str)> = None;
         for (tok, val) in pairs {
-            if let Some(suffix) = rest[pos..].strip_prefix(tok) {
-                out.push_str(&rest[..pos]);
-                out.push_str(val);
-                rest = suffix;
-                continue 'outer;
+            if let Some(pos) = rest.find(tok) {
+                if best.is_none_or(|(p, _, _)| pos < p) {
+                    best = Some((pos, tok, val));
+                }
             }
         }
-        out.push_str(&rest[..pos + 2]);
-        rest = &rest[pos + 2..];
+        match best {
+            Some((pos, tok, val)) => {
+                out.push_str(&rest[..pos]);
+                out.push_str(val);
+                rest = &rest[pos + tok.len()..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
     }
-    out.push_str(rest);
-    out
 }
 
 fn plan_vpn_surfshark(model: &DeviceModel, ss: &VpnSurfsharkProfile) -> Result<Plan, Unsupported> {
@@ -2154,16 +2165,23 @@ fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<Plan, Unsupp
     // creds ride sh-quoted into `curl -u` (1.x sh_quote parity — the
     // same escaping render_shell uses for uci literals); the body is
     // the verbatim 1.x script with sentinel tokens for the four
-    // interpolations (validate()'s gates make them payload-safe)
+    // interpolations (validate()'s gates make them payload-safe).
+    // Single-pass substitution: chained `.replace()` would rewrite
+    // token-shaped payloads inside the quoted creds (the surfshark
+    // #604-P2 class, applied here by the hardening audit).
     let creds = shell_quote(&format!("{}:{}", pia.username, pia.password));
     let body = format!(
         "{}{}",
         VPN_JSON_HELPER_SH,
-        PIA_WG_BODY_SH
-            .replace("__CREDS__", &creds)
-            .replace("__REGION__", &pia.region)
-            .replace("__IFACE__", &pia.upstream_iface)
-            .replace("__GATEWAY__", &pia.upstream_gateway),
+        substitute_tokens(
+            PIA_WG_BODY_SH,
+            &[
+                ("__CREDS__", creds.as_str()),
+                ("__REGION__", pia.region.as_str()),
+                ("__IFACE__", pia.upstream_iface.as_str()),
+                ("__GATEWAY__", pia.upstream_gateway.as_str()),
+            ],
+        ),
     );
     let payload = format!(
         "cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/vpn_setup.sh",
@@ -2179,6 +2197,12 @@ fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<Plan, Unsupp
         },
         PlanOp::EnsurePackage {
             name: "luci-proto-wireguard".into(),
+        },
+        // the script's first act is `curl -u` auth (hardening audit:
+        // the surfshark #604-P2 gap, same class here) — not in every
+        // base image
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
         },
         PlanOp::Shell { command: payload },
     ];
@@ -5243,9 +5267,15 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
     // block (1.x _GATEWAY_DISCOVER_SH) that finds the default-route
     // gateway at apply time
     let route_block = if nv.upstream_gateway.is_empty() {
-        NORD_GATEWAY_DISCOVER_SH
-            .replace("{iface}", &nv.upstream_iface)
-            .replace("{route_ip}", &route_ip)
+        // single-pass substitution (hardening audit: the #604-P2
+        // token-collision class — validated values, defense in depth)
+        substitute_tokens(
+            NORD_GATEWAY_DISCOVER_SH,
+            &[
+                ("{iface}", nv.upstream_iface.as_str()),
+                ("{route_ip}", route_ip.as_str()),
+            ],
+        )
     } else {
         format!(
             "uci set network.nordvpn_server_route=route\n\
@@ -6216,10 +6246,14 @@ fn plan_nodns(model: &DeviceModel, nd: &NodnsProfile) -> Result<Plan, Unsupporte
     let mut ops: Vec<PlanOp> = vec![PlanOp::EnsurePackage {
         name: "curl".into(),
     }];
-    let poll_script = NODNS_POLL_SCRIPT_TEMPLATE
-        .replace("__URL__", &nd.api_url)
-        .replace("__ZONE__", &nd.zone)
-        .replace("__POLL_INTERVAL__", &nd.poll_interval.to_string());
+    let poll_script = substitute_tokens(
+        NODNS_POLL_SCRIPT_TEMPLATE,
+        &[
+            ("__URL__", nd.api_url.as_str()),
+            ("__ZONE__", nd.zone.as_str()),
+            ("__POLL_INTERVAL__", &nd.poll_interval.to_string()),
+        ],
+    );
     ops.extend([
         PlanOp::Shell {
             command: "mkdir -p /etc/dnsmasq.d".into(),
@@ -8428,6 +8462,9 @@ mod tests {
             ..VpnPiaProfile::default()
         };
         let script = render_shell(&plan_for(Profile::VpnPia(base.clone())));
+        // curl IS ensured — the script's first act is `curl -u` auth
+        // (hardening audit; the surfshark #604-P2 class)
+        assert!(script.contains("# install package curl"));
         // one heredoc runtime-API payload: keypair on device, token
         // exchange, addKey, abort-before-cleanup gates
         assert!(script.contains("cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'"));
@@ -9050,6 +9087,26 @@ mod tests {
                 bad
             );
         }
+    }
+
+    #[test]
+    fn vpn_pia_token_shaped_credentials_survive_substitution() {
+        // hardening-audit regression: chained `.replace()` rewrote
+        // token-shaped payloads inside the quoted creds before the
+        // single-pass substitution landed (surfshark #604-P2 class)
+        let base = VpnPiaProfile {
+            username: "u__IFACE__x".into(),
+            password: "p__GATEWAY__y".into(),
+            region: "czech".into(),
+            upstream_gateway: "192.168.1.1".into(),
+            ..VpnPiaProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnPia(base)));
+        // creds survive verbatim …
+        assert!(script.contains("-u 'u__IFACE__x:p__GATEWAY__y'"));
+        // … while the real tokens still substituted
+        assert!(script.contains("https://czech.privacy.network:1337/addKey"));
+        assert!(script.contains("uci set network.pia_server_route.gateway='192.168.1.1'"));
     }
 
     #[test]
