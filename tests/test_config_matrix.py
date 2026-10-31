@@ -22,6 +22,7 @@ BANDS = ["2.4ghz", "5ghz"]
 # numeric port). Keyed by use-case name, merged over the placeholder.
 VALID_PLACEHOLDER_PARAMS: dict[str, dict] = {
     "mptcp-bonding": {"server_port": "16384"},
+    "vpn-surfshark": {"upstream_gateway": "192.168.1.1"},
 }
 
 

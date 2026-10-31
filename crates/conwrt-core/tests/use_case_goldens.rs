@@ -92,6 +92,12 @@
 //!     "username": "svcuser",
 //!     "password": "svcpass",
 //! }))
+//! print(r["vpn-surfshark"].build_configure({
+//!     "username": "svcuser",
+//!     "password": "svcpass",
+//!     "country": "Germany",
+//!     "upstream_gateway": "192.168.8.1",
+//! }))
 //! EOF
 //! ```
 //!
@@ -108,7 +114,8 @@ use conwrt_core::plan::{
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
     TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
     VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
+    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -462,6 +469,20 @@ fn vpn_openvpn_matches_1x_golden() {
             ..VpnOpenvpnProfile::default()
         }),
         include_str!("goldens/vpn-openvpn.sh"),
+    );
+}
+
+#[test]
+fn vpn_surfshark_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnSurfshark(VpnSurfsharkProfile {
+            username: "svcuser".into(),
+            password: "svcpass".into(),
+            country: "Germany".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnSurfsharkProfile::default()
+        }),
+        include_str!("goldens/vpn-surfshark.sh"),
     );
 }
 
