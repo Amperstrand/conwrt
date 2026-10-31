@@ -1134,6 +1134,162 @@ impl VpnMullvadProfile {
     }
 }
 
+/// Self-announcing WireGuard VPN server — port of the 1.x `vpn-node`
+/// preset (`scripts/use_cases/vpn_node.py`, 1.x marks it untested).
+/// Not a tunnel configurer: the plan installs the Nostr Europa
+/// listing publisher (a first-boot script that signs a kind-30402
+/// event with `nak` using the operator's nsec, read from a 600-perm
+/// file at run time — the secret never rides the script's command
+/// line in cleartext logs beyond the initial write). The WireGuard
+/// SERVER half is the separate `wireguard-server` preset — the 1.x
+/// docstring pairs them. Everything is baked into the script text at
+/// build time, so `validate()` gates every value (the surfshark #604
+/// class, plus a 1.x non-determinism fix: the d_tag fallback was a
+/// TIMESTAMP contradicting the declared `vpn-node` default).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnNodeProfile {
+    /// Operator Nostr nsec (hex or `nsec1…` bech32) — lands inside a
+    /// single-quoted `echo` writing the 600-perm secret file.
+    pub nsec: String,
+    /// Nostr listing d-tag identifier (1.x default `vpn-node`).
+    pub d_tag: String,
+    /// Listing title (single-quoted shell arg AND JSON string).
+    pub title: String,
+    /// Public hostname or IP clients connect to (JSON endpoint).
+    pub endpoint_host: String,
+    /// WireGuard UDP port for the JSON endpoint.
+    pub endpoint_port: u16,
+    /// ISO country code for the region tag.
+    pub country: String,
+    /// Price in sats.
+    pub price_amount: u32,
+    /// Price unit: hour, day, week, month.
+    pub price_unit: String,
+    /// Listing description (same quoting surface as title).
+    pub content: String,
+    /// Comma-separated wss:// relay URLs — BARE shell words in the
+    /// script, so the URL charset is the safety story.
+    pub relays: String,
+    /// Path to the nak binary (default `/usr/bin/nak`).
+    pub nak_path: String,
+}
+
+impl Default for VpnNodeProfile {
+    fn default() -> Self {
+        Self {
+            nsec: String::new(),
+            d_tag: "vpn-node".into(),
+            title: "VPN Node".into(),
+            endpoint_host: String::new(),
+            endpoint_port: 51820,
+            country: "US".into(),
+            price_amount: 50,
+            price_unit: "hour".into(),
+            content: "VPN node. WireGuard. No logs.".into(),
+            relays: "wss://relay.damus.io,wss://relay.cashu.email".into(),
+            nak_path: "/usr/bin/nak".into(),
+        }
+    }
+}
+
+impl VpnNodeProfile {
+    /// Charset gates mirroring the Python-side `_resolve_params` fix:
+    /// every value is baked into the transport-script text (single-
+    /// and double-quoted args, a JSON string, bare shell words).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.nsec.is_empty() || !self.nsec.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(Unsupported::InvalidParams(
+                "nsec must be hex (or nsec1… bech32) — no quotes or metacharacters".into(),
+            ));
+        }
+        if self.d_tag.is_empty()
+            || !self
+                .d_tag
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "d_tag must be letters/digits/dots/hyphens".into(),
+            ));
+        }
+        let text_ok = |v: &str| {
+            !v.is_empty() && !v.contains(['\'', '"', '\\']) && !v.chars().any(|c| (c as u32) < 0x20)
+        };
+        for (field, value) in [("title", &self.title), ("content", &self.content)] {
+            if !text_ok(value) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must not contain quotes, backslashes, or control characters"
+                )));
+            }
+        }
+        if !valid_host(&self.endpoint_host) {
+            return Err(Unsupported::InvalidParams(
+                "endpoint_host must be a valid hostname or IPv4 address".into(),
+            ));
+        }
+        if self.endpoint_port == 0 {
+            return Err(Unsupported::InvalidParams(
+                "endpoint_port must be 1-65535".into(),
+            ));
+        }
+        if self.country.len() != 2 || !self.country.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(Unsupported::InvalidParams(
+                "country must be a 2-letter code".into(),
+            ));
+        }
+        if self.price_amount == 0 {
+            return Err(Unsupported::InvalidParams(
+                "price_amount must be a positive integer (sats)".into(),
+            ));
+        }
+        if !matches!(self.price_unit.as_str(), "hour" | "day" | "week" | "month") {
+            return Err(Unsupported::InvalidParams(
+                "price_unit must be one of: hour, day, week, month".into(),
+            ));
+        }
+        for relay in self.relays.split(',') {
+            let ok = relay.starts_with("wss://")
+                && relay.len() > 6
+                && relay["wss://".len()..]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '/' | ':' | '_'));
+            if !ok {
+                return Err(Unsupported::InvalidParams(format!(
+                    "relay {relay:?} must be a wss:// URL without quotes/spaces/metacharacters"
+                )));
+            }
+        }
+        if self.nak_path.is_empty()
+            || !self.nak_path.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '.' | '/' | '_' | '(' | ')' | '-')
+            })
+        {
+            return Err(Unsupported::InvalidParams(
+                "nak_path contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The Europa listing JSON, byte-identical to the 1.x f-string.
+    fn listing_json(&self) -> String {
+        format!(
+            "{{\"type\":\"vpn-service\",\"name\":\"{title}\",\
+             \"endpoint\":\"{host}:{port}\",\
+             \"protocols\":[\"wireguard\"],\
+             \"prices\":[{{\"amount\":{amount},\"currency\":\"sat\",\"unit\":\"{unit}\"}}],\
+             \"policies\":[\"no-logs\"],\
+             \"content\":\"{content}\"}}",
+            title = self.title,
+            host = self.endpoint_host,
+            port = self.endpoint_port,
+            amount = self.price_amount,
+            unit = self.price_unit,
+            content = self.content,
+        )
+    }
+}
+
 /// Surfshark WireGuard VPN — port of the 1.x `vpn-surfshark` preset
 /// (`scripts/use_cases/vpn_providers/surfshark.py`, 1.x marks it
 /// UNTESTED). Runtime-API twin of vpn-pia: one transport-heredoc
@@ -1524,6 +1680,94 @@ fn substitute_tokens(template: &str, pairs: &[(&str, &str)]) -> String {
 /// (per-provider shell var name), per-provider static-route section,
 /// and the pre-commit address readback — spliced with the planner's
 /// tokens in ONE substitution pass.
+/// The vpn-node first-boot publisher script, byte-verbatim vs the
+/// FIXED 1.x builder — sentinel tokens for the gated interpolations
+/// (nak path, d_tag, region, price, listing JSON, relays, nsec).
+/// NOTE: unlike the runtime-API VPN presets there is no transport
+/// heredoc wrapper — the 1.x op IS this script directly.
+const VPN_NODE_FIRST_BOOT_SH: &str = concat!(
+    "cat > /etc/vpn-listing.sh << 'SCRIPT'\n",
+    "#!/bin/sh\n",
+    "# Publish Europa listing on first boot\n",
+    "NSEC_FILE=\"/etc/vpn-node/nsec\"\n",
+    "WG_PUBKEY=$(wg show wg0 public-key 2>/dev/null)\n",
+    "if [ -z \"$WG_PUBKEY\" ] || [ ! -f \"$NSEC_FILE\" ]; then\n",
+    "    echo \"vpn-listing: missing wg0 pubkey or nsec, skipping\" >&2\n",
+    "    exit 0\n",
+    "fi\n",
+    "NSEC=$(cat \"$NSEC_FILE\")\n",
+    "__NAK__ event \\\n",
+    "    -k 30402 \\\n",
+    "    --sec \"$NSEC\" \\\n",
+    "    -d \"__DTAG__\" \\\n",
+    "    -t \"t=vpn-service\" \\\n",
+    "    -t \"t=wireguard\" \\\n",
+    "    -t \"protocol=wireguard\" \\\n",
+    "    -t \"region=__COUNTRY__\" \\\n",
+    "    -t \"price=__PRICE__\" \\\n",
+    "    -c '__LISTING_JSON__' \\\n",
+    "    __RELAYS__ 2>&1\n",
+    "echo \"vpn-listing: published\"\n",
+    "SCRIPT\n",
+    "chmod +x /etc/vpn-listing.sh\n",
+    "\n",
+    "mkdir -p /etc/vpn-node\n",
+    "echo '__NSEC__' > /etc/vpn-node/nsec\n",
+    "chmod 600 /etc/vpn-node/nsec\n",
+    "\n",
+    "( sleep 30 && /etc/vpn-listing.sh > /tmp/vpn-listing.log 2>&1 ) &\n",
+);
+
+fn plan_vpn_node(model: &DeviceModel, vn: &VpnNodeProfile) -> Result<Plan, Unsupported> {
+    vn.validate()?;
+    // single-pass: the nsec/relays/listing JSON are values, never
+    // re-scanned (token-shaped payloads survive verbatim)
+    let body = substitute_tokens(
+        VPN_NODE_FIRST_BOOT_SH,
+        &[
+            ("__NAK__", vn.nak_path.as_str()),
+            ("__DTAG__", vn.d_tag.as_str()),
+            ("__COUNTRY__", vn.country.as_str()),
+            (
+                "__PRICE__",
+                format!("{}sat/{}", vn.price_amount, vn.price_unit).as_str(),
+            ),
+            ("__LISTING_JSON__", vn.listing_json().as_str()),
+            (
+                "__RELAYS__",
+                vn.relays.split(',').collect::<Vec<_>>().join(" ").as_str(),
+            ),
+            ("__NSEC__", vn.nsec.as_str()),
+        ],
+    );
+    let mut ops: Vec<PlanOp> = ["wireguard-tools", "luci-proto-wireguard"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    ops.push(PlanOp::Shell { command: body });
+    let verification = vec![
+        VerificationCheck {
+            description: "listing publisher installed and executable".into(),
+            command: "test -x /etc/vpn-listing.sh && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+        VerificationCheck {
+            description: "operator nsec file written".into(),
+            command: "test -f /etc/vpn-node/nsec && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-node".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
 /// The shared 30s wg-handshake fail-open verify tail (base.py parity).
 const VERIFY_WG_30S: &str = "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart";
 
@@ -2915,6 +3159,9 @@ pub enum Profile {
     /// Mullvad WireGuard VPN (runtime-API script; 1.x marks the
     /// preset untested).
     VpnMullvad(VpnMullvadProfile),
+    /// Self-announcing WireGuard server: Nostr Europa listing
+    /// publisher (pairs with wireguard-server; 1.x marks it untested).
+    VpnNode(VpnNodeProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2954,6 +3201,7 @@ impl Profile {
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::VpnIvpn(_) => "vpn-ivpn",
             Profile::VpnMullvad(_) => "vpn-mullvad",
+            Profile::VpnNode(_) => "vpn-node",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2992,6 +3240,7 @@ impl Profile {
             Profile::VpnSurfshark(_) => &[],
             Profile::VpnIvpn(_) => &[],
             Profile::VpnMullvad(_) => &[],
+            Profile::VpnNode(_) => &[],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -3401,6 +3650,7 @@ pub fn plan_profile(
         Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::VpnIvpn(iv) => plan_vpn_ivpn(model, iv),
         Profile::VpnMullvad(mu) => plan_vpn_mullvad(model, mu),
+        Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }?;
@@ -9378,6 +9628,86 @@ mod tests {
             Profile::TollgateSecurity(TollgateSecurityProfile).requires(),
             &["wifi"]
         );
+    }
+
+    #[test]
+    fn vpn_node_shape_gates_and_json_match_1x() {
+        let vn = VpnNodeProfile {
+            nsec: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            endpoint_host: "vpn.example.com".into(),
+            ..VpnNodeProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnNode(vn.clone())));
+        assert!(script.contains("cat > /etc/vpn-listing.sh << 'SCRIPT'"));
+        assert!(script.contains("-k 30402"));
+        assert!(script.contains("-d \"vpn-node\""));
+        assert!(script.contains("-t \"region=US\""));
+        assert!(script.contains("-t \"price=50sat/hour\""));
+        assert!(script.contains(
+            "-c '{\"type\":\"vpn-service\",\"name\":\"VPN Node\",\
+                 \"endpoint\":\"vpn.example.com:51820\""
+        ));
+        assert!(script.contains("wss://relay.damus.io wss://relay.cashu.email 2>&1"));
+        assert!(script.contains(
+            "echo '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' > /etc/vpn-node/nsec"
+        ));
+        assert!(script.contains("chmod 600 /etc/vpn-node/nsec"));
+
+        // gates: the full baked-text surface
+        for bad in [
+            VpnNodeProfile {
+                nsec: "x'; rm -rf /".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                title: "John's VPN".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                content: "say \"hi\"".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                d_tag: "a\"; rm".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                endpoint_host: "a; rm -rf /".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                country: "swe".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                price_amount: 0,
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                price_unit: "century".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                relays: "wss://a;rm".into(),
+                ..vn.clone()
+            },
+            VpnNodeProfile {
+                nak_path: "/usr/bin/nak; rm".into(),
+                ..vn.clone()
+            },
+        ] {
+            assert!(
+                matches!(bad.validate(), Err(Unsupported::InvalidParams(_))),
+                "must refuse: {:?}",
+                bad
+            );
+        }
+        // token-shaped payloads survive the single-pass substitution
+        let tok = render_shell(&plan_for(Profile::VpnNode(VpnNodeProfile {
+            d_tag: "a__NSEC__b".into(),
+            ..vn.clone()
+        })));
+        assert!(tok.contains("-d \"a__NSEC__b\""));
     }
 
     #[test]

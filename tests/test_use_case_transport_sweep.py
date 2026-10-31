@@ -42,6 +42,7 @@ REQUIRED_PARAMS = {
         "uuid": "test-uuid-1234",
     },
     "vpn-ivpn": {"account_id": "ivpn-test123", "upstream_gateway": "192.168.1.1"},
+    "vpn-node": {"nsec": "0123456789abcdef", "endpoint_host": "vpn.example.com"},
     "vpn-mullvad": {
         "account_token": "1234567890",
         "country": "se",

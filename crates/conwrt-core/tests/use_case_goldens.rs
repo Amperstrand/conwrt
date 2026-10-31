@@ -100,6 +100,10 @@
 //!     "account_token": "a1b2c3d4e5f6",
 //!     "upstream_gateway": "192.168.8.1",
 //! }))
+//! print(r["vpn-node"].build_configure({
+//!     "nsec": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+//!     "endpoint_host": "vpn.example.com",
+//! }))
 //! print(r["vpn-surfshark"].build_configure({
 //!     "username": "svcuser",
 //!     "password": "svcpass",
@@ -121,9 +125,9 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
     TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
-    VpnMullvadProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    VpnMullvadProfile, VpnNodeProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -501,6 +505,18 @@ fn vpn_mullvad_matches_1x_golden() {
             ..VpnMullvadProfile::default()
         }),
         include_str!("goldens/vpn-mullvad.sh"),
+    );
+}
+
+#[test]
+fn vpn_node_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnNode(VpnNodeProfile {
+            nsec: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            endpoint_host: "vpn.example.com".into(),
+            ..VpnNodeProfile::default()
+        }),
+        include_str!("goldens/vpn-node.sh"),
     );
 }
 
