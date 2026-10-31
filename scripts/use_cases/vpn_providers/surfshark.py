@@ -5,9 +5,11 @@ registers WG key, fetches server config, configures WireGuard interface.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from profile.ops import Comment, Op, ShellCommand
+from shell_safe import interface_name
 
 from .. import ParamDef, UseCase, register
 from .base import (
@@ -22,14 +24,52 @@ from .base import (
     wg_cleanup_sh,
 )
 
+# values are baked into the transport-script TEXT (single-quoted JSON
+# body, jq test pattern, quoted uci values) — a `'` closes the shell
+# arg, `"` breaks the JSON string, `\` breaks the JSON, and
+# quotes/semicolons in the jq pattern inject expression (pbr-class,
+# found by this port; plan.rs VpnSurfsharkProfile::validate mirrors
+# these gates).
+_CRED_SAFE = re.compile(r"^[^'\"\\\x00-\x1f]+$")
+_COUNTRY_SAFE = re.compile(r"^[A-Za-z0-9 .-]*$")
+_GATEWAY_SAFE = re.compile(r"^[0-9.]+$")
+
+
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    username = str(params["username"])
+    password = str(params["password"])
+    country = str(params.get("country", ""))
+    gateway = str(params["upstream_gateway"])
+    upstream_iface = str(params.get("upstream_iface", "wwan"))
+    kill_switch = bool(params.get("kill_switch", True))
+
+    if not _CRED_SAFE.fullmatch(username):
+        raise ValueError("username must not contain quotes, double quotes, backslashes, or control characters")
+    if not _CRED_SAFE.fullmatch(password):
+        raise ValueError("password must not contain quotes, double quotes, backslashes, or control characters")
+    if not _COUNTRY_SAFE.fullmatch(country):
+        raise ValueError(f"country must be letters/digits/spaces/hyphens, got {country!r}")
+    if not _GATEWAY_SAFE.fullmatch(gateway):
+        raise ValueError(f"upstream_gateway must be an IPv4 address, got {gateway!r}")
+    upstream_iface = interface_name(upstream_iface, "upstream_iface")
+    return {
+        "username": username,
+        "password": password,
+        "country": country,
+        "upstream_gateway": gateway,
+        "upstream_iface": upstream_iface,
+        "kill_switch": kill_switch,
+    }
+
 
 def _build_surfshark_ops(params: dict[str, Any]) -> list[Op]:
-    username = params["username"]
-    password = params["password"]
-    country = params.get("country", "")
-    gateway = params["upstream_gateway"]
-    upstream_iface = params.get("upstream_iface", "wwan")
-    kill_switch = params.get("kill_switch", True)
+    r = _resolve_params(params)
+    username = r["username"]
+    password = r["password"]
+    country = r["country"]
+    gateway = r["upstream_gateway"]
+    upstream_iface = r["upstream_iface"]
+    kill_switch = r["kill_switch"]
 
     country_filter = f"country/{country}/" if country else ""
 
@@ -50,7 +90,7 @@ WG_RESP=$(curl -s -m 15 -X POST \\
     "https://api.surfshark.com/v1/account/wireguard/new" \\
     -H "Authorization: Bearer ${{AUTH_TOKEN}}" \\
     -H "Content-Type: application/json" \\
-    -d '{{"publicKey":"${{WG_PUB}}"}}')
+    -d '{{"publicKey":"'"${{WG_PUB}}"'"}}')
 PEER_IP=$(echo "$WG_RESP" | json_get ipAddress)
 # Strip CIDR if present
 PEER_IP=${{PEER_IP%%/*}}
@@ -75,6 +115,7 @@ SERVER_PORT=51820
 SERVER_IP=$(nslookup "$SERVER_HOST" 2>/dev/null | awk '$1=="Address:" && $2 ~ /^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$/ {{print $2}}' | tail -1)
 [ -n "$SERVER_KEY" ] && [ -n "$SERVER_HOST" ] \\
     || {{ echo 'Surfshark: server list incomplete — aborting before wg0 cleanup'; exit 1; }}
+if [ -z "$PEER_IP" ]; then echo 'Surfshark: key registration failed (no peer IP) — aborting before wg0 cleanup'; exit 1; fi
 
 {wg_cleanup_sh()}
 
@@ -87,10 +128,25 @@ if [ -n "$SERVER_IP" ]; then
 {static_route_sh("SERVER_IP", gateway, upstream_iface, "surfshark_server_route")}else
     echo "Surfshark: endpoint DNS unresolved — skipping static route (netifd installs its own)"
 fi
+
+# Pre-commit IP readback (AGENTS.md): the shared ops below commit and
+# restart networking — refuse to reach commit with a tunnel address
+# that is not a sane /32 (Codex #604 P1 round 3).
+WG_ADDR=$(uci -q get network.wg0.addresses)
+case "$WG_ADDR" in
+    */32) ;;
+    *) echo "Surfshark: wg0 address '$WG_ADDR' not a sane /32 — aborting before commit"; exit 1 ;;
+esac
 """
 
     ops: list[Op] = [
         Comment(text=f"--- Surfshark WireGuard VPN ---"),
+        # Clean baseline (AGENTS.md, Codex #604 P1 round 4): aborted
+        # runs leave /tmp/.uci staging debris — revert before staging
+        # so the later commits cannot make unrelated changes permanent.
+        ShellCommand(command="uci -q revert network 2>/dev/null || true"),
+        ShellCommand(command="uci -q revert firewall 2>/dev/null || true"),
+        ShellCommand(command="uci -q revert dhcp 2>/dev/null || true"),
         ShellCommand(command=transport_sh(surfshark_script)),
     ]
     ops.extend(build_firewall_ops(kill_switch=kill_switch))

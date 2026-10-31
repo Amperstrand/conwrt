@@ -982,6 +982,319 @@ impl MptcpBondingProfile {
 /// config.json. The tollgate ipk itself is a POST-FLASH, host-side
 /// step (`deploy_tollgate_post_flash`: nostr/GitHub-CI resolve → SCP
 /// → opkg/apk) — 1.x marks the preset post-flash for exactly that.
+/// Surfshark WireGuard VPN — port of the 1.x `vpn-surfshark` preset
+/// (`scripts/use_cases/vpn_providers/surfshark.py`, 1.x marks it
+/// UNTESTED). Runtime-API twin of vpn-pia: one transport-heredoc
+/// script authenticates with service credentials, registers a WG
+/// keypair, auto-selects a server (optional country filter), and
+/// configures wg0 + the endpoint /32 route; the shared firewall/DNS/
+/// verify composition follows. Credentials, country, and gateway are
+/// BAKED into the script text — validate() gates them to charsets
+/// that cannot break the single-quoted JSON body, the jq test
+/// pattern, or the quoted uci values (injection fix landed with this
+/// port, both sides).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnSurfsharkProfile {
+    /// Surfshark service username (dashboard > Manual setup).
+    pub username: String,
+    /// Surfshark service password.
+    pub password: String,
+    /// Country filter for server selection (empty = first server).
+    pub country: String,
+    /// Upstream gateway IP pinning the endpoint /32 route.
+    pub upstream_gateway: String,
+    /// Upstream interface for the route (1.x default `wwan`).
+    pub upstream_iface: String,
+    /// Block all non-VPN traffic if the tunnel drops (1.x default on;
+    /// paired with the shared fail-open verify tail).
+    pub kill_switch: bool,
+}
+
+impl Default for VpnSurfsharkProfile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            country: String::new(),
+            upstream_gateway: String::new(),
+            upstream_iface: "wwan".into(),
+            kill_switch: true,
+        }
+    }
+}
+
+impl VpnSurfsharkProfile {
+    /// Charset gates mirroring the Python-side `_resolve_params` fix:
+    /// a `'` closes the script's single-quoted JSON arg, `\` breaks
+    /// the JSON, quotes/semicolons inject into the jq test pattern,
+    /// and the gateway/iface land in quoted uci values.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let cred_ok = |v: &str| {
+            !v.is_empty()
+                && !v.contains('\'')
+                && !v.contains('"')
+                && !v.contains('\\')
+                && !v.chars().any(|c| (c as u32) < 0x20)
+        };
+        if !cred_ok(&self.username) {
+            return Err(Unsupported::InvalidParams(
+                "username must not contain quotes, backslashes, or control characters".into(),
+            ));
+        }
+        if !cred_ok(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "password must not contain quotes, backslashes, or control characters".into(),
+            ));
+        }
+        if !self
+            .country
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '-'))
+        {
+            return Err(Unsupported::InvalidParams(
+                "country must be letters/digits/spaces/hyphens".into(),
+            ));
+        }
+        if self.upstream_gateway.is_empty()
+            || !self
+                .upstream_gateway
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.')
+        {
+            return Err(Unsupported::InvalidParams(
+                "upstream_gateway must be an IPv4 address".into(),
+            ));
+        }
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        };
+        if !iface_ok(&self.upstream_iface) {
+            return Err(Unsupported::InvalidParams(
+                "upstream_iface contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The surfshark runtime-API script body AFTER the shared JSON helper
+/// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
+/// sentinel tokens for the gated interpolations.
+const SURFSHARK_WG_BODY_SH: &str = concat!(
+    "# Generate WireGuard keypair\n",
+    "wg genkey > /tmp/vpn_private.key\n",
+    "wg pubkey < /tmp/vpn_private.key > /tmp/vpn_public.key\n",
+    "chmod 600 /tmp/vpn_private.key\n",
+    "\n",
+    "\n",
+    "WG_PUB=$(cat /tmp/vpn_public.key)\n",
+    "\n",
+    "# Authenticate with Surfshark — get auth token\n",
+    "AUTH_RESP=$(curl -s -m 15 -X POST \\\n",
+    "    \"https://api.surfshark.com/v1/auth/login\" \\\n",
+    "    -H \"Content-Type: application/json\" \\\n",
+    "    -d '{\"username\":\"__USERNAME__\",\"password\":\"__PASSWORD__\"}')\n",
+    "AUTH_TOKEN=$(echo \"$AUTH_RESP\" | json_get token)\n",
+    "\n",
+    "# Generate WireGuard configuration\n",
+    "WG_RESP=$(curl -s -m 15 -X POST \\\n",
+    "    \"https://api.surfshark.com/v1/account/wireguard/new\" \\\n",
+    "    -H \"Authorization: Bearer ${AUTH_TOKEN}\" \\\n",
+    "    -H \"Content-Type: application/json\" \\\n",
+    "    -d '{\"publicKey\":\"'\"${WG_PUB}\"'\"}')\n",
+    "PEER_IP=$(echo \"$WG_RESP\" | json_get ipAddress)\n",
+    "# Strip CIDR if present\n",
+    "PEER_IP=${PEER_IP%%/*}\n",
+    "\n",
+    "# Fetch server list and pick best (v4 clusters: public endpoint, hostname-only\n",
+    "# entries — connectionName/pubKey; no IP field, so the endpoint is a DNS name)\n",
+    "SERVERS=$(curl -s -m 15 \\\n",
+    "    \"https://api.surfshark.com/v4/server/clusters/generic?countryCode=\" \\\n",
+    "    -H \"Content-Type: application/json\")\n",
+    "if [ -n \"__COUNTRY_FILTER__\" ]; then\n",
+    "    SERVER_ENTRY=$(echo \"$SERVERS\" | jq -r '[.[] | select(.country | test(\"__COUNTRY__\";\"i\"))] | .[0]')\n",
+    "else\n",
+    "    SERVER_ENTRY=$(echo \"$SERVERS\" | jq -r '.[0]')\n",
+    "fi\n",
+    "SERVER_HOST=$(echo \"$SERVER_ENTRY\" | json_get connectionName)\n",
+    "SERVER_KEY=$(echo \"$SERVER_ENTRY\" | json_get pubKey)\n",
+    "SERVER_PORT=51820\n",
+    "# Resolve the endpoint hostname for the static /32 route; skip the route\n",
+    "# (netifd's wireguard proto installs its own endpoint route) when DNS fails.\n",
+    "# BusyBox nslookup (OpenWrt 25.12.5, verified live 2026-10-14) prints the\n",
+    "# resolver as \"Address: <ip>:53\" and each answer as \"Address: <ip>\".\n",
+    "SERVER_IP=$(nslookup \"$SERVER_HOST\" 2>/dev/null | awk '$1==\"Address:\" && $2 ~ /^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$/ {print $2}' | tail -1)\n",
+    "[ -n \"$SERVER_KEY\" ] && [ -n \"$SERVER_HOST\" ] \\\n",
+    "    || { echo 'Surfshark: server list incomplete — aborting before wg0 cleanup'; exit 1; }\n",
+    // a failed key registration (error JSON) leaves PEER_IP empty —
+    // without this guard the script below would DELETE the working
+    // wg0 and write addresses=/32 (Codex #604 P2 round 2)
+    "if [ -z \"$PEER_IP\" ]; then echo 'Surfshark: key registration failed (no peer IP) — aborting before wg0 cleanup'; exit 1; fi\n",
+    "\n",
+    "# Clean up old WireGuard interface + peers\n",
+    "uci -q delete network.wg0\n",
+    "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
+    "    uci delete network.@wireguard_wg0[0]\n",
+    "done\n",
+    "\n",
+    "\n",
+    "SS_PRIV=$(cat /tmp/vpn_private.key)\n",
+    "\n",
+    "# Configure WireGuard interface\n",
+    "uci set network.wg0=interface\n",
+    "uci set network.wg0.proto='wireguard'\n",
+    "uci set network.wg0.private_key=\"$SS_PRIV\"\n",
+    "uci set network.wg0.listen_port='51820'\n",
+    "uci add_list network.wg0.addresses=\"${PEER_IP}/32\"\n",
+    "uci set network.wg0.mtu='1280'\n",
+    "uci set network.wg0.auto='1'\n",
+    "\n",
+    "uci add network wireguard_wg0\n",
+    "uci set network.@wireguard_wg0[0].public_key=\"$SERVER_KEY\"\n",
+    "uci set network.@wireguard_wg0[0].endpoint_host=\"$SERVER_HOST\"\n",
+    "uci set network.@wireguard_wg0[0].endpoint_port=\"$SERVER_PORT\"\n",
+    "uci add_list network.@wireguard_wg0[0].allowed_ips='0.0.0.0/0'\n",
+    "uci set network.@wireguard_wg0[0].route_allowed_ips='1'\n",
+    "uci set network.@wireguard_wg0[0].persistent_keepalive='25'\n",
+    "\n",
+    "\n",
+    "if [ -n \"$SERVER_IP\" ]; then\n",
+    "# Static route: prevent circular routing through VPN tunnel\n",
+    "uci -q delete network.surfshark_server_route\n",
+    "uci set network.surfshark_server_route=route\n",
+    "uci set network.surfshark_server_route.interface='__IFACE__'\n",
+    "uci set network.surfshark_server_route.target=\"${SERVER_IP}\"\n",
+    "uci set network.surfshark_server_route.netmask='255.255.255.255'\n",
+    "uci set network.surfshark_server_route.gateway='__GATEWAY__'\n",
+    "else\n",
+    "    echo \"Surfshark: endpoint DNS unresolved — skipping static route (netifd installs its own)\"\n",
+    "fi\n",
+    "\n",
+    "# Pre-commit IP readback (AGENTS.md): the shared ops below commit\n",
+    "# and restart networking — refuse to reach commit with a tunnel\n",
+    "# address that is not a sane /32 (Codex #604 P1 round 3).\n",
+    "WG_ADDR=$(uci -q get network.wg0.addresses)\n",
+    "case \"$WG_ADDR\" in\n",
+    "    */32) ;;\n",
+    "    *) echo \"Surfshark: wg0 address '$WG_ADDR' not a sane /32 — aborting before commit\"; exit 1 ;;\n",
+    "esac\n",
+);
+
+/// Single left-to-right pass over `__TOKEN__` placeholders: inserted
+/// values are never re-scanned, so a credential that itself contains
+/// token-shaped text (`abc__IFACE__def`) survives verbatim — chained
+/// `.replace()` calls would rewrite it (Codex #604 P2 round 5).
+fn substitute_tokens(template: &str, pairs: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    'outer: while let Some(pos) = rest.find("__") {
+        for (tok, val) in pairs {
+            if let Some(suffix) = rest[pos..].strip_prefix(tok) {
+                out.push_str(&rest[..pos]);
+                out.push_str(val);
+                rest = suffix;
+                continue 'outer;
+            }
+        }
+        out.push_str(&rest[..pos + 2]);
+        rest = &rest[pos + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn plan_vpn_surfshark(model: &DeviceModel, ss: &VpnSurfsharkProfile) -> Result<Plan, Unsupported> {
+    ss.validate()?;
+    // creds/country/gateway ride the script text verbatim — the
+    // validate() charset gates are what make every interpolation a
+    // safe payload (no quoting needed, 1.x bytes preserved)
+    let country_filter = if ss.country.is_empty() {
+        String::new()
+    } else {
+        format!("country/{}/", ss.country)
+    };
+    let body = format!(
+        "{}{}",
+        VPN_JSON_HELPER_SH,
+        substitute_tokens(
+            SURFSHARK_WG_BODY_SH,
+            &[
+                ("__USERNAME__", ss.username.as_str()),
+                ("__PASSWORD__", ss.password.as_str()),
+                ("__COUNTRY_FILTER__", country_filter.as_str()),
+                ("__COUNTRY__", ss.country.as_str()),
+                ("__IFACE__", ss.upstream_iface.as_str()),
+                ("__GATEWAY__", ss.upstream_gateway.as_str()),
+            ],
+        ),
+    );
+    let payload = format!(
+        "cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/vpn_setup.sh",
+        body.trim_end()
+    );
+    // Clean baseline (AGENTS.md, Codex #604 P1 round 4): aborted runs
+    // leave /tmp/.uci staging debris — revert before staging so the
+    // later commits cannot make unrelated changes permanent.
+    let mut ops = vec![
+        PlanOp::RevertUci {
+            config: "network".into(),
+        },
+        PlanOp::RevertUci {
+            config: "firewall".into(),
+        },
+        PlanOp::RevertUci {
+            config: "dhcp".into(),
+        },
+        // runtime-API script needs wg tooling + kmod on vanilla images
+        PlanOp::EnsurePackage {
+            name: "kmod-wireguard".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        // the script authenticates via curl (Codex #604 P2) — not in
+        // every base image
+        PlanOp::EnsurePackage {
+            name: "curl".into(),
+        },
+        PlanOp::Shell { command: payload },
+    ];
+    // shared composition (zone on wg0, management on) + Surfshark DNS
+    // pair in the 1.x order + the 30s wg handshake verify tail
+    push_vpn_shared_ops(
+        &mut ops,
+        "wg0",
+        &["162.252.172.57", "149.154.159.92"],
+        ss.kill_switch,
+        true,
+        "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+    );
+    let verification = vec![
+        VerificationCheck {
+            description: "wg0 interface configured".into(),
+            command: "uci -q get network.wg0.proto".into(),
+            expect_contains: "wireguard".into(),
+        },
+        VerificationCheck {
+            description: "wg0 handshake observed (tunnel actually up)".into(),
+            command: "wg show wg0 2>/dev/null | grep -q 'latest handshake' && echo up || echo down"
+                .into(),
+            expect_contains: "up".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-surfshark".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+    })
+}
+
 /// Generic OpenVPN client — port of the 1.x `vpn-openvpn` preset
 /// (`scripts/use_cases/vpn_providers/openvpn.py`, 1.x marks it
 /// UNTESTED — same evidence bar here). For any provider offering
@@ -2075,6 +2388,9 @@ pub enum Profile {
     /// Generic OpenVPN client for providers without a WireGuard API
     /// (inline .ovpn config; 1.x marks the preset untested).
     VpnOpenvpn(VpnOpenvpnProfile),
+    /// Surfshark WireGuard VPN (runtime-API script; 1.x marks the
+    /// preset untested).
+    VpnSurfshark(VpnSurfsharkProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2111,6 +2427,7 @@ impl Profile {
             Profile::VpnPia(_) => "vpn-pia",
             Profile::MptcpBonding(_) => "mptcp-bonding",
             Profile::VpnOpenvpn(_) => "vpn-openvpn",
+            Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2146,6 +2463,7 @@ impl Profile {
             Profile::VpnPia(_) => &[],
             Profile::MptcpBonding(_) => &[],
             Profile::VpnOpenvpn(_) => &[],
+            Profile::VpnSurfshark(_) => &[],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -2474,6 +2792,7 @@ pub fn plan_profile(
         Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
         Profile::MptcpBonding(mp) => plan_mptcp_bonding(model, mp),
         Profile::VpnOpenvpn(vo) => plan_vpn_openvpn(model, vo),
+        Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }
@@ -8212,6 +8531,71 @@ mod tests {
             Profile::TollgateSecurity(TollgateSecurityProfile).requires(),
             &["wifi"]
         );
+    }
+
+    #[test]
+    fn vpn_surfshark_shape_and_gates_match_1x() {
+        let ss = VpnSurfsharkProfile {
+            username: "svcuser".into(),
+            password: "svcpass".into(),
+            country: "Germany".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnSurfsharkProfile::default()
+        };
+        let script = render_shell(&plan_for(Profile::VpnSurfshark(ss.clone())));
+        assert!(script.contains("cat > /tmp/vpn_setup.sh << 'VPN_SETUP_EOF'"));
+        assert!(script.contains("-d '{\"username\":\"svcuser\",\"password\":\"svcpass\"}')"));
+        assert!(script.contains("test(\"Germany\";\"i\")"));
+        assert!(script.contains("uci set network.surfshark_server_route.gateway='192.168.8.1'"));
+        assert!(script.contains("uci set network.wg0.proto='wireguard'"));
+        assert!(script.contains("uci set firewall.vpn_zone.name='vpn'"));
+        assert!(script.contains("uci add_list dhcp.@dnsmasq[0].server='162.252.172.57'"));
+        assert!(script.contains("wg show wg0"));
+        assert!(script.contains("sh /tmp/vpn_setup.sh"));
+        // no country: first-server branch, no baked filter
+        let no_country = render_shell(&plan_for(Profile::VpnSurfshark(VpnSurfsharkProfile {
+            country: String::new(),
+            ..ss.clone()
+        })));
+        assert!(no_country.contains("jq -r '.[0]'"));
+        assert!(!no_country.contains("country/"));
+        // gates: quote/backslash creds, jq-pattern country, non-IP
+        // gateway, iface charset
+        for bad in [
+            VpnSurfsharkProfile {
+                username: "x'; rm -rf /; '".into(),
+                ..ss.clone()
+            },
+            VpnSurfsharkProfile {
+                password: "a\\b".into(),
+                ..ss.clone()
+            },
+            VpnSurfsharkProfile {
+                country: "Ger\"; rm".into(),
+                ..ss.clone()
+            },
+            VpnSurfsharkProfile {
+                upstream_gateway: "$(reboot)".into(),
+                ..ss.clone()
+            },
+            VpnSurfsharkProfile {
+                upstream_iface: "wwan; rm".into(),
+                ..ss.clone()
+            },
+        ] {
+            assert!(
+                matches!(bad.validate(), Err(Unsupported::InvalidParams(_))),
+                "must refuse: {:?}",
+                bad
+            );
+        }
+        // token-shaped credentials survive substitution verbatim
+        // (single-pass, values never re-scanned — Codex #604 P2 r5)
+        let tok = render_shell(&plan_for(Profile::VpnSurfshark(VpnSurfsharkProfile {
+            password: "abc__IFACE__def".into(),
+            ..ss.clone()
+        })));
+        assert!(tok.contains("\"password\":\"abc__IFACE__def\""));
     }
 
     #[test]

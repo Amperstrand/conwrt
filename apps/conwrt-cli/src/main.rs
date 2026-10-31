@@ -24,8 +24,8 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -540,6 +540,7 @@ enum ProfileChoice {
     Tollgate,
     TollgateSecurity,
     VpnOpenvpn,
+    VpnSurfshark,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -849,6 +850,24 @@ struct ProfileArgs {
     /// vpn-openvpn: opt OUT of the kill switch (default on).
     #[arg(long)]
     vpn_ovpn_no_kill_switch: bool,
+    /// vpn-surfshark: service username (dashboard > Manual setup).
+    #[arg(long)]
+    surfshark_username: Option<String>,
+    /// vpn-surfshark: service password.
+    #[arg(long)]
+    surfshark_password: Option<String>,
+    /// vpn-surfshark: country filter for server selection (default first).
+    #[arg(long)]
+    surfshark_country: Option<String>,
+    /// vpn-surfshark: upstream gateway IP for the endpoint route (required).
+    #[arg(long)]
+    surfshark_gateway: Option<String>,
+    /// vpn-surfshark: upstream interface (default wwan).
+    #[arg(long)]
+    surfshark_iface: Option<String>,
+    /// vpn-surfshark: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    surfshark_no_kill_switch: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2295,6 +2314,18 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             proto: args.vpn_ovpn_proto.clone().unwrap_or_else(|| "udp".into()),
             kill_switch: !args.vpn_ovpn_no_kill_switch,
         })),
+        ProfileChoice::VpnSurfshark => Ok(Profile::VpnSurfshark(VpnSurfsharkProfile {
+            // required-credential/gateway gates fire at plan time
+            username: args.surfshark_username.clone().unwrap_or_default(),
+            password: args.surfshark_password.clone().unwrap_or_default(),
+            country: args.surfshark_country.clone().unwrap_or_default(),
+            upstream_gateway: args.surfshark_gateway.clone().unwrap_or_default(),
+            upstream_iface: args
+                .surfshark_iface
+                .clone()
+                .unwrap_or_else(|| "wwan".into()),
+            kill_switch: !args.surfshark_no_kill_switch,
+        })),
     }
 }
 
@@ -3397,6 +3428,12 @@ mod tests {
             vpn_ovpn_password: None,
             vpn_ovpn_proto: None,
             vpn_ovpn_no_kill_switch: false,
+            surfshark_username: None,
+            surfshark_password: None,
+            surfshark_country: None,
+            surfshark_gateway: None,
+            surfshark_iface: None,
+            surfshark_no_kill_switch: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
@@ -3449,6 +3486,31 @@ mod tests {
             panic!("vpn-openvpn profile");
         };
         assert!(!set.kill_switch);
+        assert!(set.validate().is_ok());
+    }
+
+    #[test]
+    fn build_profile_vpn_surfshark_gates_at_plan_time() {
+        let Profile::VpnSurfshark(ss) =
+            &build_profile(&profile_args(ProfileChoice::VpnSurfshark)).expect("builds")
+        else {
+            panic!("surfshark profile");
+        };
+        assert_eq!(ss.upstream_iface, "wwan");
+        assert!(ss.kill_switch);
+        // empty credentials/gateway refused at plan time
+        assert!(matches!(
+            ss.validate(),
+            Err(conwrt_core::plan::Unsupported::InvalidParams(_))
+        ));
+        let mut args = profile_args(ProfileChoice::VpnSurfshark);
+        args.surfshark_username = Some("svcuser".into());
+        args.surfshark_password = Some("svcpass".into());
+        args.surfshark_gateway = Some("192.168.8.1".into());
+        args.surfshark_country = Some("Germany".into());
+        let Profile::VpnSurfshark(set) = &build_profile(&args).expect("builds") else {
+            panic!("surfshark profile");
+        };
         assert!(set.validate().is_ok());
     }
 
