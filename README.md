@@ -468,6 +468,28 @@ conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for
 
 **Status: 14/15 use cases tested on OpenWrt 24.10.2** (QEMU/SHC). See [test results](https://tests.tollgate.me/) (conwrt tab). Use cases requiring WiFi (guest-wifi, travelmate, ap-nostr-id) need physical hardware. MPTCP bonding requires OpenWrt 25.12+ or SNAPSHOT.
 
+### Security & platform floors (2026-10-31)
+
+- **CVE-2026-98432** (CVSS 9.8): a use-after-free in the kernel's IPv4
+  TCP handshake path — remotely reachable by any unauthenticated peer,
+  with a publicly demonstrated zero-click **root** exploit chain against
+  hosts running **MPTCP listeners** (Anthropic, Oct 27; ~53 min to RCE).
+  Fixed upstream at kernel **6.12.113** (and 6.6.159 / 6.1.190 / 5.15.223
+  on the older LTS series). Because Go ≥ 1.24 enables MPTCP **by default**
+  for TCP listeners, any Go service on an unpatched kernel — including
+  tollgate-wrt and BSBF's xray — may expose an MPTCP listener without
+  anyone asking for one.
+- **conwrt 2.x enforces this at three layers**: profiles declare hard
+  OpenWrt floors (`mptcp-bonding` refuses to plan below **25.12**), every
+  apply against a 24.x model carries a **deprecation warning** (24.10's
+  6.6 kernels are past end-of-support with unpatched CVEs — warn and
+  plan the upgrade, not silent refusal), and the mptcp-bonding
+  verification refuses to report a healthy apply on a kernel below
+  6.12.113.
+- **Server side (your VPS)**: patch the kernel (≥ 6.12.113 / distro
+  equivalent) — disabling MPTCP alone is NOT sufficient (the UAF fires
+  through ordinary TCP; it merely removes the proven root path).
+
 ### How It Works
 
 Each preset is a single Python file in `scripts/use_cases/` that declares:

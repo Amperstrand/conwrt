@@ -40,7 +40,7 @@ pub use identify::{MatchKind, ModelMatch, identify_by_mac};
 pub use mock::MockProber;
 pub use plan::{
     Plan, PlanOp, Profile, ServiceAction, SqmProfile, UciValue, Unsupported, VerificationCheck,
-    plan_profile, render_shell,
+    plan_profile, plan_profile_for_device, render_shell,
 };
 pub use ssh::{
     HostKeyView, MemoryTrustStore, Refusal, RefusalReason, TrustDecision, TrustMode, TrustedHow,

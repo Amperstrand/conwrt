@@ -240,6 +240,7 @@ fn apply_script_reverts_configs_committed_inside_shell_ops() {
             },
         ],
         verification: vec![],
+        warnings: Vec::new(),
     };
     let script = render_apply_script(&plan);
     let rev_net = script
@@ -282,6 +283,7 @@ fn network_restart_plan() -> conwrt_core::plan::Plan {
             command: "cat /tmp/deadman-probe".into(),
             expect_contains: "applied".into(),
         }],
+        warnings: Vec::new(),
     }
 }
 
@@ -460,6 +462,7 @@ fn deadman_armed_for_shell_embedded_network_restart() {
             command: "uci commit network; /etc/init.d/network restart".into(),
         }],
         verification: vec![],
+        warnings: Vec::new(),
     };
     let script = render_apply_script(&plan);
     assert!(
@@ -531,6 +534,7 @@ fn deadman_revert_restarts_services_of_touched_configs() {
             },
         ],
         verification: vec![],
+        warnings: Vec::new(),
     };
     let script = render_apply_script(&plan);
     let parts: Vec<&str> = script.split("CONWRT_DM_EOF").collect();
@@ -598,6 +602,7 @@ fn deadman_records_absent_configs_and_revert_deletes_them() {
             },
         ],
         verification: vec![],
+        warnings: Vec::new(),
     };
     let script = render_apply_script(&plan);
     assert!(

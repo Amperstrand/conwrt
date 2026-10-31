@@ -1292,6 +1292,7 @@ fn plan_vpn_surfshark(model: &DeviceModel, ss: &VpnSurfsharkProfile) -> Result<P
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -2209,6 +2210,7 @@ fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<Plan, Unsupp
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -2468,6 +2470,30 @@ impl Profile {
             Profile::TollgateSecurity(_) => &["wifi"],
         }
     }
+
+    /// Hard OpenWrt floor (major.minor) the profile requires, if any.
+    /// Enforced against `model.openwrt.version` in [`plan_profile`];
+    /// a version without a minor part (e.g. `25`) passes on major.
+    #[must_use]
+    pub fn min_openwrt(&self) -> Option<(u32, u32)> {
+        match self {
+            // MPTCP kernels: pre-25.12 OpenWrt either lacks CONFIG_MPTCP
+            // (24.10) or is unqualified; 25.12 also matches the
+            // mptcp-bonding preset's tested surface (kernel 6.12.x —
+            // CVE-2026-98432 patched at 6.12.113+)
+            Profile::MptcpBonding(_) => Some((25, 12)),
+            _ => None,
+        }
+    }
+}
+
+/// Parse an OpenWrt version string into (major, minor?) — `24.10.2` →
+/// `(24, Some(10))`, `25` → `(25, None)`, `snapshot`/junk → `None`.
+fn parse_openwrt_version(v: &str) -> Option<(u32, Option<u32>)> {
+    let mut parts = v.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|m| m.parse().ok());
+    Some((major, minor))
 }
 
 /// SysV init/service action (renders to `/etc/init.d/<name> <action>`).
@@ -2704,6 +2730,9 @@ pub struct Plan {
     pub ops: Vec<PlanOp>,
     /// Post-apply verification, all of which must pass.
     pub verification: Vec<VerificationCheck>,
+    /// Non-fatal advisories (e.g. the 24.x deprecation warning) —
+    /// rendered as comments, never as commands.
+    pub warnings: Vec<String>,
 }
 
 /// Why a profile cannot be planned for this device/model.
@@ -2722,6 +2751,15 @@ pub enum Unsupported {
     },
     /// Profile parameters failed validation (bounds ported from 1.x).
     InvalidParams(String),
+    /// The model's OpenWrt release is below the profile's hard floor
+    /// (e.g. mptcp-bonding requires 25.12+ — pre-25.12 kernels either
+    /// lack MPTCP entirely or carry unpatched CVEs).
+    OpenWrtTooOld {
+        /// Version the model declares (e.g. `24.10.2`).
+        have: String,
+        /// Minimum the profile requires (e.g. `25.12`).
+        need: String,
+    },
 }
 
 impl fmt::Display for Unsupported {
@@ -2736,6 +2774,9 @@ impl fmt::Display for Unsupported {
                 write!(f, "model {model} lacks required capability `{capability}`")
             }
             Unsupported::InvalidParams(why) => write!(f, "invalid profile parameters: {why}"),
+            Unsupported::OpenWrtTooOld { have, need } => {
+                write!(f, "OpenWrt {have} is below this profile's floor {need}")
+            }
         }
     }
 }
@@ -2754,7 +2795,32 @@ fn capabilities_satisfied(model: &DeviceModel, required: &[&str]) -> Result<(), 
     Ok(())
 }
 
-/// Plan the operations to reach a profile's desired state.
+/// Plan against the device's AUTHENTICATED release when the apply path
+/// has it (`/etc/openwrt_release` DISTRIB_RELEASE via fingerprint) —
+/// the species-level model version is a qualification claim that goes
+/// stale the moment a device is sysupgraded (Codex #606 P2: a device
+/// upgraded to 25.12 under a `version: "24"` model was refused despite
+/// running a supported kernel). Unparseable live values (local builds)
+/// fall back to the model claim; `None` is offline planning.
+pub fn plan_profile_for_device(
+    state: &DeviceState,
+    model: &DeviceModel,
+    profile: &Profile,
+    live_release: Option<&str>,
+) -> Result<Plan, Unsupported> {
+    if let Some(live) = live_release {
+        if parse_openwrt_version(live).is_some() {
+            let mut live_model = model.clone();
+            live_model.openwrt.version = live.to_string();
+            return plan_profile(state, &live_model, profile);
+        }
+    }
+    plan_profile(state, model, profile)
+}
+
+/// Plan the operations to reach a profile's desired state, judged
+/// against the species-level model claim (offline planning — prefer
+/// [`plan_profile_for_device`] when the live release is known).
 ///
 /// Pure: consumes the already-classified state, model facts, and the profile;
 /// performs no I/O and touches no provider.
@@ -2767,7 +2833,21 @@ pub fn plan_profile(
         return Err(Unsupported::UnconfirmedDeviceState(*state));
     }
     capabilities_satisfied(model, profile.requires())?;
-    match profile {
+    if let Some((need_major, need_minor)) = profile.min_openwrt() {
+        if let Some((major, minor)) = parse_openwrt_version(&model.openwrt.version) {
+            let below = major < need_major
+                || (major == need_major && minor.is_some_and(|m| m < need_minor));
+            if below {
+                return Err(Unsupported::OpenWrtTooOld {
+                    have: model.openwrt.version.clone(),
+                    need: format!("{need_major}.{need_minor}"),
+                });
+            }
+        }
+        // unparseable (e.g. `snapshot`): cannot judge — the runtime
+        // kernel check in the plan's verification covers reality
+    }
+    let mut plan = match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
         Profile::Doh(doh) => plan_doh(model, doh),
         Profile::Tether(tether) => plan_tether(model, tether),
@@ -2795,7 +2875,21 @@ pub fn plan_profile(
         Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
+    }?;
+    // 24.x deprecation advisory (warning, not refusal — policy: warn
+    // and plan the upgrade; see the deprecation tracking issue):
+    // 24.10 kernels (6.6) sit past end-of-support with unpatched CVEs
+    // (e.g. CVE-2026-98432, fixed at 6.6.159) and most presets are
+    // 25.x-qualified.
+    if let Some((24, _)) = parse_openwrt_version(&model.openwrt.version) {
+        plan.warnings.push(
+            "OpenWrt 24.x is past end-of-support: known kernel CVEs unpatched \
+             (CVE-2026-98432 fixed only at 6.6.159+) and 25.x is the \
+             qualified release family — plan an upgrade"
+                .into(),
+        );
     }
+    Ok(plan)
 }
 
 fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> {
@@ -2887,6 +2981,7 @@ fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> 
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3160,6 +3255,7 @@ fn plan_tether(model: &DeviceModel, tether: &TetherProfile) -> Result<Plan, Unsu
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3329,6 +3425,7 @@ fn plan_wireguard_client(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3486,6 +3583,7 @@ fn plan_wireguard_server(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3643,6 +3741,7 @@ fn plan_cashu_vpn_client(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3706,6 +3805,7 @@ fn plan_ssh_hardening(model: &DeviceModel, sh: &SshHardeningProfile) -> Result<P
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3856,6 +3956,7 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -3934,6 +4035,7 @@ fn plan_adguard(model: &DeviceModel, ag: &AdguardProfile) -> Result<Plan, Unsupp
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -4004,6 +4106,7 @@ fn plan_mesh11sd(model: &DeviceModel, mesh: &Mesh11sdProfile) -> Result<Plan, Un
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -4403,6 +4506,7 @@ fn plan_rescue_watchdog(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -4564,6 +4668,7 @@ fn plan_mwan3(model: &DeviceModel, mw: &Mwan3Profile) -> Result<Plan, Unsupporte
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -4645,6 +4750,7 @@ fn plan_pbr(model: &DeviceModel, pbr: &PbrProfile) -> Result<Plan, Unsupported> 
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -4775,6 +4881,7 @@ fn plan_openclash(model: &DeviceModel, oc: &OpenClashProfile) -> Result<Plan, Un
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5081,6 +5188,7 @@ fn plan_vpn_pia_openvpn(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5247,6 +5355,7 @@ fn plan_vpn_nordvpn(model: &DeviceModel, nv: &VpnNordvpnProfile) -> Result<Plan,
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5426,6 +5535,7 @@ fn plan_vpn_nordvpn_openvpn(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5548,6 +5658,7 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5594,12 +5705,26 @@ fn plan_mptcp_bonding(model: &DeviceModel, mp: &MptcpBondingProfile) -> Result<P
             command: "cat /proc/sys/net/mptcp/enabled".into(),
             expect_contains: "1".into(),
         },
+        VerificationCheck {
+            // CVE-2026-98432 (CVSS 9.8): IPv4-TCP-handshake UAF with
+            // the proven zero-click-root path against MPTCP listeners;
+            // fixed at kernel 6.12.113 (6.6.159 on the 6.6 series).
+            // MPTCP-bearing 25.12 kernels are 6.12.x — refuse to call
+            // an apply healthy on an unpatched kernel.
+            description: "kernel patched for CVE-2026-98432 (>= 6.12.113)".into(),
+            command: "K=$(uname -r); awk -v k=\"$K\" 'BEGIN{split(k,a,\"[-.]\"); \
+                      if (a[1]>6 || (a[1]==6 && (a[2]>12 || (a[2]==12 && a[3]>=113)))) exit 0; \
+                      exit 1}' && echo patched || echo VULNERABLE"
+                .into(),
+            expect_contains: "patched".into(),
+        },
     ];
     Ok(Plan {
         profile_id: "mptcp-bonding".into(),
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5812,6 +5937,7 @@ fn plan_vpn_openvpn(model: &DeviceModel, vo: &VpnOpenvpnProfile) -> Result<Plan,
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -5988,6 +6114,7 @@ fn plan_tollgate(model: &DeviceModel, tg: &TollgateProfile) -> Result<Plan, Unsu
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6077,6 +6204,7 @@ fn plan_tollgate_security(
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6158,6 +6286,7 @@ fn plan_nodns(model: &DeviceModel, nd: &NodnsProfile) -> Result<Plan, Unsupporte
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6296,6 +6425,7 @@ fn plan_auto_sqm(model: &DeviceModel, asq: &AutoSqmProfile) -> Result<Plan, Unsu
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6491,6 +6621,7 @@ fn plan_guest_wifi(model: &DeviceModel, gw: &GuestWifiProfile) -> Result<Plan, U
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6572,6 +6703,14 @@ pub fn render_shell(plan: &Plan) -> String {
         plan.profile_id, plan.model_id
     ));
     script.push_str("set -e\n\n");
+    // advisories render as comments only — never commands (golden
+    // comparator filters comments, so parity is unaffected)
+    for warning in &plan.warnings {
+        script.push_str(&format!("# WARNING: {warning}\n"));
+    }
+    if !plan.warnings.is_empty() {
+        script.push('\n');
+    }
 
     for op in &plan.ops {
         match op {
@@ -6872,6 +7011,7 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
     })
 }
 
@@ -6886,7 +7026,7 @@ mod tests {
         });
         let json = format!(
             "{{\"id\":\"test-model\",\"vendor\":\"Test\",\"description\":\"d\",\
-              \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"24\"}},\
+              \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"25.12.6\"}},\
               \"mac_oui\":[]{}}}",
             caps_json.unwrap_or_default()
         );
@@ -6903,6 +7043,167 @@ mod tests {
             link_layer: "none".into(),
             overhead: 0,
         }
+    }
+
+    #[test]
+    fn openwrt_24x_models_get_deprecation_warning_not_refusal() {
+        let v24 = model_with_version("24.10.2");
+        let plan = plan_profile(
+            &DeviceState::OpenWrt,
+            &v24,
+            &Profile::Sqm(test_sqm_defaults()),
+        )
+        .expect("24.x plans — policy is warn, not refuse");
+        assert_eq!(plan.warnings.len(), 1);
+        assert!(plan.warnings[0].contains("24.x"));
+        assert!(plan.warnings[0].contains("CVE-2026-98432"));
+        // and the warning renders as a comment, never a command
+        let script = render_shell(&plan);
+        assert!(script.contains("# WARNING: OpenWrt 24.x"));
+        let command = script
+            .lines()
+            .find(|l| l.trim_start().starts_with("WARNING") && !l.starts_with('#'));
+        assert!(
+            command.is_none(),
+            "warning must render as a comment line only"
+        );
+        // 25.12 models: no warning
+        let v25 = model_with_version("25.12.6");
+        let clean = plan_profile(
+            &DeviceState::OpenWrt,
+            &v25,
+            &Profile::Sqm(test_sqm_defaults()),
+        )
+        .expect("plans");
+        assert!(clean.warnings.is_empty());
+    }
+
+    #[test]
+    fn live_release_overrides_stale_model_version() {
+        let mp = || {
+            Profile::MptcpBonding(MptcpBondingProfile {
+                server_ipv4: "203.0.113.7".into(),
+                server_port: 16384,
+                uuid: "u".into(),
+            })
+        };
+        let v24_model = model_with_version("24.10.2");
+        // device sysupgraded under a stale `24.10.2` model: the
+        // authenticated 25.12.6 release wins — plans, no warning
+        let plan =
+            plan_profile_for_device(&DeviceState::OpenWrt, &v24_model, &mp(), Some("25.12.6"))
+                .expect("live release wins over the stale model claim");
+        assert!(plan.warnings.is_empty());
+        // and the reverse: a model claiming 25.12 on a device actually
+        // running 24.10 is judged by reality — refused + (via the
+        // model path) would warn
+        assert!(matches!(
+            plan_profile_for_device(
+                &DeviceState::OpenWrt,
+                &model_with_version("25.12.6"),
+                &mp(),
+                Some("24.10.2")
+            ),
+            Err(Unsupported::OpenWrtTooOld { .. })
+        ));
+        // unparseable live release falls back to the model claim
+        assert!(
+            plan_profile_for_device(
+                &DeviceState::OpenWrt,
+                &model_with_version("25.12.6"),
+                &mp(),
+                Some("local-build-2026")
+            )
+            .is_ok()
+        );
+        // None = offline planning, model claim governs
+        assert!(matches!(
+            plan_profile_for_device(&DeviceState::OpenWrt, &v24_model, &mp(), None),
+            Err(Unsupported::OpenWrtTooOld { .. })
+        ));
+    }
+
+    #[test]
+    fn mptcp_bonding_requires_25_12_floor() {
+        // 24.10 model: hard refusal with both versions in the error
+        let v2410 = model_with_version("24.10.2");
+        let refused = plan_profile(
+            &DeviceState::OpenWrt,
+            &v2410,
+            &Profile::MptcpBonding(MptcpBondingProfile {
+                server_ipv4: "203.0.113.7".into(),
+                server_port: 16384,
+                uuid: "0f0e0d0c-0b0a-4909-8807-060504030201".into(),
+            }),
+        );
+        match refused {
+            Err(Unsupported::OpenWrtTooOld { have, need }) => {
+                assert_eq!((have.as_str(), need.as_str()), ("24.10.2", "25.12"));
+            }
+            other => panic!("expected OpenWrtTooOld, got {other:?}"),
+        }
+        // 25.0-era minor below floor also refuses; 25.12+ and bare `25`
+        // (minor unknown → cannot judge) pass
+        assert!(matches!(
+            plan_profile(
+                &DeviceState::OpenWrt,
+                &model_with_version("25.6.1"),
+                &Profile::MptcpBonding(MptcpBondingProfile {
+                    server_ipv4: "203.0.113.7".into(),
+                    server_port: 16384,
+                    uuid: "u".into(),
+                })
+            ),
+            Err(Unsupported::OpenWrtTooOld { .. })
+        ));
+        for ok_version in ["25.12.6", "25", "snapshot"] {
+            assert!(
+                plan_profile(
+                    &DeviceState::OpenWrt,
+                    &model_with_version(ok_version),
+                    &Profile::MptcpBonding(MptcpBondingProfile {
+                        server_ipv4: "203.0.113.7".into(),
+                        server_port: 16384,
+                        uuid: "u".into(),
+                    })
+                )
+                .is_ok(),
+                "{ok_version} must plan"
+            );
+        }
+    }
+
+    #[test]
+    fn mptcp_verification_includes_cve_2026_98432_kernel_floor() {
+        let plan = plan_profile(
+            &DeviceState::OpenWrt,
+            &model_with_capabilities(None),
+            &Profile::MptcpBonding(MptcpBondingProfile {
+                server_ipv4: "203.0.113.7".into(),
+                server_port: 16384,
+                uuid: "u".into(),
+            }),
+        )
+        .expect("plans");
+        let cve = plan
+            .verification
+            .iter()
+            .find(|c| c.description.contains("CVE-2026-98432"))
+            .expect("CVE kernel-floor check");
+        assert!(cve.description.contains("6.12.113"));
+        assert!(cve.command.contains("uname -r"));
+        // the encoded floor: awk major>6 || (6, >12 || 12 && >=113)
+        assert!(cve.command.contains("a[2]==12 && a[3]>=113"));
+        assert_eq!(cve.expect_contains, "patched");
+    }
+
+    fn model_with_version(version: &str) -> DeviceModel {
+        let json = format!(
+            "{{\"id\":\"test-model\",\"vendor\":\"Test\",\"description\":\"d\",\
+              \"openwrt\":{{\"target\":\"x/y\",\"device\":\"t,d\",\"profile\":\"t_d\",\"version\":\"{version}\"}},\
+              \"mac_oui\":[]}}"
+        );
+        serde_json::from_str(&json).expect("fixture model parses")
     }
 
     #[test]

@@ -1618,6 +1618,9 @@ fn cmd_plan(
     match plan_profile(&diagnosis.state, &model, &profile) {
         Ok(plan) => {
             println!("plan:     {} → model {}", plan.profile_id, plan.model_id);
+            for warning in &plan.warnings {
+                eprintln!("⚠ WARNING: {warning}");
+            }
             println!(
                 "state:    {} (confirmed OpenWrt identity)",
                 diagnosis.state.as_str()
@@ -1855,13 +1858,24 @@ fn cmd_apply(
             return ExitCode::FAILURE;
         }
     }
-    let plan = match plan_profile(&confirmed, &model, &profile) {
+    let plan = match conwrt_core::plan_profile_for_device(
+        &confirmed,
+        &model,
+        &profile,
+        // the AUTHENTICATED release from the live fingerprint wins over
+        // the species-level model claim (a sysupgraded device under a
+        // stale model version is judged by what it actually runs)
+        report.release.as_ref().and_then(|r| r.release.as_deref()),
+    ) {
         Ok(plan) => plan,
         Err(reason) => {
             eprintln!("planning refused: {reason}");
             return ExitCode::FAILURE;
         }
     };
+    for warning in &plan.warnings {
+        eprintln!("⚠ WARNING: {warning}");
+    }
     println!(
         "# plan: {} ops, {} verification checks",
         plan.ops.len(),
