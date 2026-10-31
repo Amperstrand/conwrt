@@ -108,11 +108,18 @@ OVPNEOF
         UciCommit(config="openvpn"),
         BlankLine(),
         Comment(text="--- OpenVPN network interface ---"),
+        # 1.x created vpn_if with proto='openvpn' — that is NOT a netifd
+        # protocol (the openvpn package ships no handler), so the
+        # interface never came up and the firewall zone referencing it
+        # never matched. Unmanaged interface on the actual tunnel
+        # device instead (the ansible/roles/pia_openvpn pattern; Codex
+        # #603 P1 finding 3).
         uci_cleanup_sections("network", "proto='openvpn'"),
+        uci_cleanup_sections("network", "vpn_if=interface"),
         ShellCommand(command="uci set network.vpn_if=interface"),
         UciSet(config="network", section="vpn_if", values={
-            "proto": "openvpn",
-            "config": "/etc/openvpn/vpn-client.ovpn",
+            "proto": "none",
+            "device": "tun0",
         }),
         UciCommit(config="network"),
     ])

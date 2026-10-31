@@ -5665,6 +5665,14 @@ fn plan_vpn_openvpn(model: &DeviceModel, vo: &VpnOpenvpnProfile) -> Result<Plan,
         config: "network".into(),
         pattern: "proto='openvpn'".into(),
     });
+    // proto='openvpn' is NOT a netifd protocol (no handler ships) —
+    // the 1.x vpn_if never came up and the zone referencing it never
+    // matched. Unmanaged interface on the actual tunnel device, the
+    // ansible/roles/pia_openvpn pattern (Codex #603 P1 finding 3).
+    ops.push(PlanOp::CleanupUciSections {
+        config: "network".into(),
+        pattern: "vpn_if=interface".into(),
+    });
     ops.push(PlanOp::Shell {
         command: "uci set network.vpn_if=interface".into(),
     });
@@ -5672,11 +5680,8 @@ fn plan_vpn_openvpn(model: &DeviceModel, vo: &VpnOpenvpnProfile) -> Result<Plan,
         config: "network".into(),
         section: "vpn_if".into(),
         options: vec![
-            ("proto".to_string(), literal("openvpn".into())),
-            (
-                "config".to_string(),
-                literal("/etc/openvpn/vpn-client.ovpn".into()),
-            ),
+            ("proto".to_string(), literal("none".into())),
+            ("device".to_string(), literal("tun0".into())),
         ],
     });
     ops.push(PlanOp::CommitUci {
@@ -8614,7 +8619,11 @@ mod tests {
         assert!(script.contains("uci set openvpn.vpn_client=openvpn"));
         assert!(script.contains("uci set openvpn.vpn_client.username='svcuser'"));
         assert!(script.contains("uci set openvpn.vpn_client.password='svcpass'"));
-        assert!(script.contains("uci set network.vpn_if.proto='openvpn'"));
+        // unmanaged interface on the real tunnel device — proto='openvpn'
+        // is not a netifd protocol (Codex #603 P1 finding 3)
+        assert!(script.contains("uci set network.vpn_if.proto='none'"));
+        assert!(script.contains("uci set network.vpn_if.device='tun0'"));
+        assert!(!script.contains("uci set network.vpn_if.proto='openvpn'"));
         assert!(script.contains("uci set firewall.vpn_zone.network='vpn_if'"));
         assert!(script.contains("uci set firewall.vpn_killswitch.name='KillSwitch-Reject-NonVPN'"));
         // the fail-open pairing the 1.x preset forgot

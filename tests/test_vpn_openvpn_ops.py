@@ -36,7 +36,12 @@ class TestVpnOpenvpnOps:
         assert "uci set openvpn.vpn_client.username='svcuser'" in rendered
         assert "uci set openvpn.vpn_client.password='svcpass'" in rendered
         assert "uci set network.vpn_if=interface" in rendered
-        assert "uci set network.vpn_if.proto='openvpn'" in rendered
+        # unmanaged interface on the real tunnel device — proto='openvpn'
+        # is not a netifd protocol (Codex #603 P1 finding 3)
+        assert "uci set network.vpn_if.proto='none'" in rendered
+        assert "uci set network.vpn_if.device='tun0'" in rendered
+        # proto='openvpn' survives ONLY inside the legacy-debris cleanup
+        assert "uci set network.vpn_if.proto='openvpn'" not in rendered
         assert "uci set firewall.vpn_zone.network='vpn_if'" in rendered
         assert "uci set firewall.vpn_killswitch.name='KillSwitch-Reject-NonVPN'" in rendered
 

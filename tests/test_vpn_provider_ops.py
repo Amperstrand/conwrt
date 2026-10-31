@@ -453,7 +453,7 @@ class TestOpenvpnOps:
 
     def test_network_interface(self):
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
-        assert "proto='openvpn'" in r or "proto=openvpn" in r
+        assert "proto='none'" in r and "device='tun0'" in r
 
     def test_kill_switch_present(self):
         r = render_shell(_build_openvpn_ops(OVPN_PARAMS))
