@@ -532,7 +532,7 @@ def test_vpn_node_dry_run_generates_listing_script(tmp_path):
         enabled = ["vpn-node"]
 
         [use_cases.vpn-node]
-        nsec = "test-nsec-hex"
+        nsec = "0123456789abcdef0123456789abcdef"
         endpoint_host = "vpn.example.com"
         endpoint_port = 51820
     """, tmp_path)

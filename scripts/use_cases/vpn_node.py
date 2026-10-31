@@ -11,25 +11,101 @@ For payment collection, deploy alongside tollgate-auth (RADIUS + Cashu).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from profile.ops import Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
+from shell_safe import validate_host, validate_port
 
 from . import ParamDef, UseCase, register
 
+# Everything is baked into the transport-script TEXT at build time:
+# nsec into `echo '{nsec}'` (single-quoted), title/content into BOTH a
+# single-quoted shell arg and a JSON string, d_tag/region/price into
+# double-quoted -t args, relays as BARE shell words, nak_path as an
+# unquoted command. A quote/metacharacter in any of them injects shell
+# at first-boot run time (surfshark #604 class; plan.rs
+# VpnNodeProfile::validate mirrors these gates).
+_NSEC_RE = re.compile(r"^[A-Za-z0-9]+$")  # hex or nsec1… bech32
+_TAG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_TEXT_RE = re.compile(r"^[^'\"\\\x00-\x1f]+$")  # display strings: no quotes/backslash/ctrl
+_COUNTRY_RE = re.compile(r"^[A-Za-z]{2}$")
+_RELAY_RE = re.compile(r"^wss://[A-Za-z0-9./:_-]+$")
+_PATH_RE = re.compile(r"^[A-Za-z0-9./_()-]+$")
+_PRICE_UNITS = ("hour", "day", "week", "month")
+
+
+def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
+    nsec = str(params["nsec"])
+    d_tag = str(params.get("d_tag", "vpn-node"))
+    title = str(params.get("title", "VPN Node"))
+    endpoint_host = str(params.get("endpoint_host", ""))
+    endpoint_port = int(params.get("endpoint_port", 51820))
+    country = str(params.get("country", "US"))
+    price_amount = int(params.get("price_amount", 50))
+    price_unit = str(params.get("price_unit", "hour"))
+    relays = str(params.get("relays", "wss://relay.damus.io,wss://relay.cashu.email"))
+    content = str(params.get("content", "VPN node. WireGuard. No logs."))
+    nak_bin = str(params.get("nak_path", "/usr/bin/nak"))
+
+    if not _NSEC_RE.fullmatch(nsec):
+        raise ValueError("nsec must be hex (or nsec1… bech32) — no quotes or metacharacters")
+    if not _TAG_RE.fullmatch(d_tag):
+        raise ValueError(f"d_tag must be letters/digits/dots/hyphens, got {d_tag!r}")
+    for field, value in (("title", title), ("content", content)):
+        if not _TEXT_RE.fullmatch(value):
+            raise ValueError(
+                f"{field} must not contain quotes, backslashes, or control characters "
+                f"(it lands inside a single-quoted shell arg and a JSON string)"
+            )
+    if not endpoint_host:
+        raise ValueError("endpoint_host is required (public hostname or IP)")
+    endpoint_host = validate_host(endpoint_host, "endpoint_host")
+    endpoint_port = validate_port(endpoint_port, "endpoint_port")
+    if not _COUNTRY_RE.fullmatch(country):
+        raise ValueError(f"country must be a 2-letter code, got {country!r}")
+    if price_amount <= 0:
+        raise ValueError("price_amount must be a positive integer (sats)")
+    if price_unit not in _PRICE_UNITS:
+        raise ValueError(f"price_unit must be one of {', '.join(_PRICE_UNITS)}, got {price_unit!r}")
+    for relay in relays.split(","):
+        if not _RELAY_RE.fullmatch(relay):
+            raise ValueError(f"relay {relay!r} must be a wss:// URL without quotes/spaces/metacharacters")
+    if not _PATH_RE.fullmatch(nak_bin):
+        raise ValueError(f"nak_path contains unsafe characters, got {nak_bin!r}")
+    return {
+        "nsec": nsec,
+        "d_tag": d_tag,
+        "title": title,
+        "endpoint_host": endpoint_host,
+        "endpoint_port": endpoint_port,
+        "country": country,
+        "price_amount": price_amount,
+        "price_unit": price_unit,
+        "relays": relays,
+        "content": content,
+        "nak_bin": nak_bin,
+    }
+
 
 def _build_vpn_node_ops(params: dict[str, Any]) -> list[Op]:
-    nsec = params.get("nsec", "")
-    d_tag = params.get("d_tag", f"vpn-{__import__('time').time():.0f}")
-    title = params.get("title", "VPN Node")
-    endpoint_host = params.get("endpoint_host", "")
-    endpoint_port = str(params.get("endpoint_port", 51820))
-    region_country = params.get("country", "US")
-    price_amount = str(params.get("price_amount", 50))
-    price_unit = params.get("price_unit", "hour")
-    relays = params.get("relays", "wss://relay.damus.io,wss://relay.cashu.email")
-    content = params.get("content", "VPN node. WireGuard. No logs.")
-    nak_bin = params.get("nak_path", "/usr/bin/nak")
+    # 1.x defect fixed with this port: the d_tag fallback was a
+    # TIMESTAMP (f"vpn-{time():.0f}") — contradicting the ParamDef
+    # default `vpn-node` and making direct-call output
+    # non-deterministic (golden regeneration differs every run).
+    # _resolve_params applies the declared default.
+    r = _resolve_params(params)
+    nsec = r["nsec"]
+    d_tag = r["d_tag"]
+    title = r["title"]
+    endpoint_host = r["endpoint_host"]
+    endpoint_port = str(r["endpoint_port"])
+    region_country = r["country"]
+    price_amount = str(r["price_amount"])
+    price_unit = r["price_unit"]
+    relays = r["relays"]
+    content = r["content"]
+    nak_bin = r["nak_bin"]
 
     relay_args = " ".join(relays.split(","))
 

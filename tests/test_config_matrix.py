@@ -25,6 +25,7 @@ VALID_PLACEHOLDER_PARAMS: dict[str, dict] = {
     "vpn-surfshark": {"upstream_gateway": "192.168.1.1"},
     "vpn-ivpn": {"upstream_gateway": "192.168.1.1"},
     "vpn-mullvad": {"upstream_gateway": "192.168.1.1"},
+    "vpn-node": {"nsec": "0123456789abcdef"},
 }
 
 

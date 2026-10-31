@@ -23,7 +23,7 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
     VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
     VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
 };
@@ -543,6 +543,7 @@ enum ProfileChoice {
     VpnSurfshark,
     VpnIvpn,
     VpnMullvad,
+    VpnNode,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -897,6 +898,39 @@ struct ProfileArgs {
     /// vpn-mullvad: opt OUT of the kill switch (default on).
     #[arg(long)]
     mullvad_no_kill_switch: bool,
+    /// vpn-node: operator Nostr nsec (hex or nsec1…; required).
+    #[arg(long)]
+    node_nsec: Option<String>,
+    /// vpn-node: Nostr listing d-tag (default vpn-node).
+    #[arg(long)]
+    node_d_tag: Option<String>,
+    /// vpn-node: listing title.
+    #[arg(long)]
+    node_title: Option<String>,
+    /// vpn-node: public hostname or IP (required).
+    #[arg(long)]
+    node_endpoint_host: Option<String>,
+    /// vpn-node: WireGuard UDP port for the listing.
+    #[arg(long)]
+    node_endpoint_port: Option<u16>,
+    /// vpn-node: ISO country code for the region tag.
+    #[arg(long)]
+    node_country: Option<String>,
+    /// vpn-node: price in sats.
+    #[arg(long)]
+    node_price_amount: Option<u32>,
+    /// vpn-node: price unit (hour/day/week/month).
+    #[arg(long)]
+    node_price_unit: Option<String>,
+    /// vpn-node: comma-separated wss:// relay URLs.
+    #[arg(long)]
+    node_relays: Option<String>,
+    /// vpn-node: listing description.
+    #[arg(long)]
+    node_content: Option<String>,
+    /// vpn-node: path to the nak binary.
+    #[arg(long)]
+    node_nak_path: Option<String>,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2382,6 +2416,32 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             upstream_iface: args.mullvad_iface.clone().unwrap_or_else(|| "wwan".into()),
             kill_switch: !args.mullvad_no_kill_switch,
         })),
+        ProfileChoice::VpnNode => Ok(Profile::VpnNode(VpnNodeProfile {
+            // required gates (nsec/endpoint_host) fire at plan time
+            nsec: args.node_nsec.clone().unwrap_or_default(),
+            d_tag: args.node_d_tag.clone().unwrap_or_else(|| "vpn-node".into()),
+            title: args.node_title.clone().unwrap_or_else(|| "VPN Node".into()),
+            endpoint_host: args.node_endpoint_host.clone().unwrap_or_default(),
+            endpoint_port: args.node_endpoint_port.unwrap_or(51820),
+            country: args.node_country.clone().unwrap_or_else(|| "US".into()),
+            price_amount: args.node_price_amount.unwrap_or(50),
+            price_unit: args
+                .node_price_unit
+                .clone()
+                .unwrap_or_else(|| "hour".into()),
+            relays: args
+                .node_relays
+                .clone()
+                .unwrap_or_else(|| "wss://relay.damus.io,wss://relay.cashu.email".into()),
+            content: args
+                .node_content
+                .clone()
+                .unwrap_or_else(|| "VPN node. WireGuard. No logs.".into()),
+            nak_path: args
+                .node_nak_path
+                .clone()
+                .unwrap_or_else(|| "/usr/bin/nak".into()),
+        })),
     }
 }
 
@@ -3499,6 +3559,17 @@ mod tests {
             mullvad_gateway: None,
             mullvad_iface: None,
             mullvad_no_kill_switch: false,
+            node_nsec: None,
+            node_d_tag: None,
+            node_title: None,
+            node_endpoint_host: None,
+            node_endpoint_port: None,
+            node_country: None,
+            node_price_amount: None,
+            node_price_unit: None,
+            node_relays: None,
+            node_content: None,
+            node_nak_path: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
