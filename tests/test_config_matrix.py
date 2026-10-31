@@ -23,6 +23,8 @@ BANDS = ["2.4ghz", "5ghz"]
 VALID_PLACEHOLDER_PARAMS: dict[str, dict] = {
     "mptcp-bonding": {"server_port": "16384"},
     "vpn-surfshark": {"upstream_gateway": "192.168.1.1"},
+    "vpn-ivpn": {"upstream_gateway": "192.168.1.1"},
+    "vpn-mullvad": {"upstream_gateway": "192.168.1.1"},
 }
 
 

@@ -92,6 +92,14 @@
 //!     "username": "svcuser",
 //!     "password": "svcpass",
 //! }))
+//! print(r["vpn-ivpn"].build_configure({
+//!     "account_id": "ivpn-abc123",
+//!     "upstream_gateway": "192.168.8.1",
+//! }))
+//! print(r["vpn-mullvad"].build_configure({
+//!     "account_token": "a1b2c3d4e5f6",
+//!     "upstream_gateway": "192.168.8.1",
+//! }))
 //! print(r["vpn-surfshark"].build_configure({
 //!     "username": "svcuser",
 //!     "password": "svcpass",
@@ -112,10 +120,10 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile, render_shell,
+    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
+    VpnMullvadProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -469,6 +477,30 @@ fn vpn_openvpn_matches_1x_golden() {
             ..VpnOpenvpnProfile::default()
         }),
         include_str!("goldens/vpn-openvpn.sh"),
+    );
+}
+
+#[test]
+fn vpn_ivpn_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnIvpn(VpnIvpnProfile {
+            account_id: "ivpn-abc123".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnIvpnProfile::default()
+        }),
+        include_str!("goldens/vpn-ivpn.sh"),
+    );
+}
+
+#[test]
+fn vpn_mullvad_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnMullvad(VpnMullvadProfile {
+            account_token: "a1b2c3d4e5f6".into(),
+            upstream_gateway: "192.168.8.1".into(),
+            ..VpnMullvadProfile::default()
+        }),
+        include_str!("goldens/vpn-mullvad.sh"),
     );
 }
 
