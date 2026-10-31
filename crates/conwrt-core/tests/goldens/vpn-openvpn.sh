@@ -22,9 +22,10 @@ uci commit openvpn
 
 # --- OpenVPN network interface ---
 while uci show network 2>/dev/null | grep -q "proto='openvpn'"; do _s=$(uci show network 2>/dev/null | grep "proto='openvpn'" | head -1 | cut -d. -f2 | cut -d= -f1); uci delete "network.$_s" 2>/dev/null; done; true
+while uci show network 2>/dev/null | grep -q "vpn_if=interface"; do _s=$(uci show network 2>/dev/null | grep "vpn_if=interface" | head -1 | cut -d. -f2 | cut -d= -f1); uci delete "network.$_s" 2>/dev/null; done; true
 uci set network.vpn_if=interface
-uci set network.vpn_if.proto='openvpn'
-uci set network.vpn_if.config='/etc/openvpn/vpn-client.ovpn'
+uci set network.vpn_if.proto='none'
+uci set network.vpn_if.device='tun0'
 uci commit network
 
 # --- VPN firewall zone + forwarding ---
