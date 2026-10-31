@@ -22,13 +22,32 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from vm_port import port_from_env, require_free  # noqa: E402
 
 VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
+# file-based consumers (tests/test_integration_image_gate.py loads this
+# conftest via spec_from_file_location — no sys.path entry) resolve the
+# pin by path, keeping the single-source contract for both import styles
+import importlib.util as _ilu
+from pathlib import Path as _Path
+
+_pins_spec = _ilu.spec_from_file_location(
+    "_pins", _Path(__file__).with_name("_pins.py")
+)
+_pins = _ilu.module_from_spec(_pins_spec)
+_pins_spec.loader.exec_module(_pins)
+IMAGE_URL, OPENWRT_VERSION = _pins.IMAGE_URL, _pins.OPENWRT_VERSION
+PACKAGES_URL, PKG_MANAGER = _pins.PACKAGES_URL, _pins.PKG_MANAGER
+
 VM_BASE = REPO_ROOT / "tests" / "integration" / ".openwrt-base.qcow2"
 VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 # #460: digest of the PREPPED image, recorded at creation time. Reuse
 # requires this sidecar to exist AND match — a legacy .openwrt.img from
 # the direct-boot era (accumulated mutations, no record) is untrusted
 # and forces a from-scratch re-download + base rebuild.
-DIGEST_SIDECAR = VM_IMAGE.with_name(VM_IMAGE.name + ".sha256")
+# keyed by the REQUESTED release (Codex #608 P2): a digest-only cache
+# would let a CONWRT_TEST_OPENWRT_VERSION override boot the previously
+# cached image — the sidecar must miss when the release changes
+DIGEST_SIDECAR = VM_IMAGE.with_name(
+    VM_IMAGE.name + f".sha256-{OPENWRT_VERSION}"
+)
 
 
 def _image_digest() -> str:
@@ -56,9 +75,6 @@ SSH_HOST = "127.0.0.1"
 # sibling QEMU session), the forward is omitted and that test skips — boot
 # behavior for every other test is unchanged.
 WG_FWD_PORT = port_from_env("CONWRT_VM_WG_FWD_PORT", 51820)
-OPENWRT_VERSION = "25.12.5"
-IMAGE_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/targets/x86/64/openwrt-{OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
-PACKAGES_URL = f"https://downloads.openwrt.org/releases/{OPENWRT_VERSION}/packages/x86_64/packages"
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
 SERIAL_LOG = REPO_ROOT / "tests" / "integration" / ".serial.log"
 PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libatomic1",

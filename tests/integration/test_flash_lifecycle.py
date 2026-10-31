@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from vm_port import port_from_env, require_free  # noqa: E402
 
 FLASH_PORT = port_from_env("CONWRT_VM_FLASH_PORT", 2223)
-OPENWRT_VERSION = "25.12.5"
+from _pins import OPENWRT_VERSION  # noqa: E402  (single source: _pins.py)
 
 SSH_BASE = [
     "ssh", "-o", "StrictHostKeyChecking=no",
