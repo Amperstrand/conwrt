@@ -468,6 +468,14 @@ conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for
 
 **Status: 14/15 use cases tested on OpenWrt 24.10.2** (QEMU/SHC). See [test results](https://tests.tollgate.me/) (conwrt tab). Use cases requiring WiFi (guest-wifi, travelmate, ap-nostr-id) need physical hardware. MPTCP bonding requires OpenWrt 25.12+ or SNAPSHOT.
 
+<!-- BEGIN generated:test-status -->
+**Test status (generated — do not edit; sources: `tests/integration/_pins.py`, `docs/roadmap/parity-matrix.md`, the use-case registry; refresh: `make gen-status`):**
+- QEMU/oracle image: OpenWrt **25.12.5** (single pin: `tests/integration/_pins.py`)
+- §4 typed-ops: **29 of 34** presets ported with golden parity
+- 1.x registry: **43** presets, **13** still 1.x-untested (ap-nostr-id, fleet_identity, maas-portable-lab, openperf_client, openperf_server, rescue-watchdog, vpn-ivpn, vpn-mullvad, vpn-node, vpn-nordvpn-ikev2, vpn-openvpn, vpn-pia-openvpn, vpn-surfshark)
+- Policy: 24.x models plan with a deprecation warning (CVE-2026-98432 / EoS — #607); mptcp-bonding requires ≥ 25.12 and a kernel ≥ 6.12.113
+<!-- END generated:test-status -->
+
 ### Security & platform floors (2026-10-31)
 
 - **CVE-2026-98432** (CVSS 9.8): a use-after-free in the kernel's IPv4
