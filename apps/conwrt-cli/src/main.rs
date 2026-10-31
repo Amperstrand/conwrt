@@ -23,9 +23,9 @@ use conwrt_core::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -541,6 +541,8 @@ enum ProfileChoice {
     TollgateSecurity,
     VpnOpenvpn,
     VpnSurfshark,
+    VpnIvpn,
+    VpnMullvad,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -868,6 +870,33 @@ struct ProfileArgs {
     /// vpn-surfshark: opt OUT of the kill switch (default on).
     #[arg(long)]
     surfshark_no_kill_switch: bool,
+    /// vpn-ivpn: IVPN account ID (e.g. ivpn-xxxxx; required).
+    #[arg(long)]
+    ivpn_account_id: Option<String>,
+    /// vpn-ivpn: upstream gateway IP for the endpoint route (required).
+    #[arg(long)]
+    ivpn_gateway: Option<String>,
+    /// vpn-ivpn: upstream interface (default wwan).
+    #[arg(long)]
+    ivpn_iface: Option<String>,
+    /// vpn-ivpn: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    ivpn_no_kill_switch: bool,
+    /// vpn-mullvad: account token (required).
+    #[arg(long)]
+    mullvad_account_token: Option<String>,
+    /// vpn-mullvad: 2-letter country filter (default first server).
+    #[arg(long)]
+    mullvad_country: Option<String>,
+    /// vpn-mullvad: upstream gateway IP for the endpoint route (required).
+    #[arg(long)]
+    mullvad_gateway: Option<String>,
+    /// vpn-mullvad: upstream interface (default wwan).
+    #[arg(long)]
+    mullvad_iface: Option<String>,
+    /// vpn-mullvad: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    mullvad_no_kill_switch: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2340,6 +2369,19 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 .unwrap_or_else(|| "wwan".into()),
             kill_switch: !args.surfshark_no_kill_switch,
         })),
+        ProfileChoice::VpnIvpn => Ok(Profile::VpnIvpn(VpnIvpnProfile {
+            account_id: args.ivpn_account_id.clone().unwrap_or_default(),
+            upstream_gateway: args.ivpn_gateway.clone().unwrap_or_default(),
+            upstream_iface: args.ivpn_iface.clone().unwrap_or_else(|| "wwan".into()),
+            kill_switch: !args.ivpn_no_kill_switch,
+        })),
+        ProfileChoice::VpnMullvad => Ok(Profile::VpnMullvad(VpnMullvadProfile {
+            account_token: args.mullvad_account_token.clone().unwrap_or_default(),
+            country: args.mullvad_country.clone().unwrap_or_default(),
+            upstream_gateway: args.mullvad_gateway.clone().unwrap_or_default(),
+            upstream_iface: args.mullvad_iface.clone().unwrap_or_else(|| "wwan".into()),
+            kill_switch: !args.mullvad_no_kill_switch,
+        })),
     }
 }
 
@@ -3448,6 +3490,15 @@ mod tests {
             surfshark_gateway: None,
             surfshark_iface: None,
             surfshark_no_kill_switch: false,
+            ivpn_account_id: None,
+            ivpn_gateway: None,
+            ivpn_iface: None,
+            ivpn_no_kill_switch: false,
+            mullvad_account_token: None,
+            mullvad_country: None,
+            mullvad_gateway: None,
+            mullvad_iface: None,
+            mullvad_no_kill_switch: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,
