@@ -29,11 +29,13 @@ def _venue_scope():
     FixtureFunctionDefinition (scope on _fixture_function), older ones
     hang a _pytestfixturefunction marker off the plain function."""
     definition = conftest.venue
-    for holder in (
+    holders = (
         definition,
+        getattr(definition, "_fixture_function_marker", None),
         getattr(definition, "_fixture_function", None),
         getattr(definition, "_pytestfixturefunction", None),
-    ):
+    )
+    for holder in holders:
         scope = getattr(holder, "scope", None)
         if scope:
             return scope
