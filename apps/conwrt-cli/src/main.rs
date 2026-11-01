@@ -24,9 +24,9 @@ use conwrt_core::plan::{
     GuestWifiProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
     PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
     TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
