@@ -76,7 +76,11 @@ def _build_mwan3_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(ShellCommand(command="uci set mwan3.wan=interface"))
     ops.append(UciSet(config="mwan3", section="wan", values={"enabled": "1"}))
     for ip in track_ips:
-        ops.append(ShellCommand(command=f"list track_ip '{ip}'"))
+        # UciAddList, not a bare `list track_ip '…'` shell line: the bare
+        # form only parses inside `uci batch`, so at script top level it
+        # was a silent `list: not found` and the track IPs were never
+        # committed (parity harness caught it — Rust renders add_list).
+        ops.append(UciAddList(config="mwan3", section="wan", option="track_ip", value=ip))
     ops.append(UciSet(config="mwan3", section="wan", values={
         "family": "ipv4",
         "reliability": "1",
@@ -92,7 +96,7 @@ def _build_mwan3_ops(params: dict[str, Any]) -> list[Op]:
     ops.append(ShellCommand(command=f"uci set mwan3.{secondary}=interface"))
     ops.append(UciSet(config="mwan3", section=secondary, values={"enabled": "1"}))
     for ip in track_ips:
-        ops.append(ShellCommand(command=f"list track_ip '{ip}'"))
+        ops.append(UciAddList(config="mwan3", section=secondary, option="track_ip", value=ip))
     ops.append(UciSet(config="mwan3", section=secondary, values={
         "family": "ipv4",
         "reliability": "1",

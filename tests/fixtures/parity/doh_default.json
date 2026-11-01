@@ -1,0 +1,7 @@
+{
+  "use_case": "doh",
+  "params": {
+    "provider": "cloudflare",
+    "listen_port": 5053
+  }
+}

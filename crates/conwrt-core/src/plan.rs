@@ -2976,6 +2976,11 @@ fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> 
             name: "dnsmasq".into(),
             action: ServiceAction::Restart,
         },
+        // 1.x parity: the informational trailing line (doh.py's final
+        // ShellCommand) — provider NAME, not the resolved URL.
+        PlanOp::Shell {
+            command: format!("echo \"DoH configured: {} on port {port}\"", doh.provider),
+        },
     ];
     let verification = vec![
         VerificationCheck {

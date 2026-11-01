@@ -20,7 +20,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::plan::{
-    DohProfile, Profile, SqmProfile, WireguardClientProfile, WireguardServerProfile, render_shell,
+    AdguardProfile, DohProfile, Mwan3Profile, Profile, SqmProfile, SshHardeningProfile,
+    WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -158,6 +159,53 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 listen_port: get_u16(&params, "listen_port", 5053),
             };
             Ok(Profile::Doh(p))
+        }
+        "adguard" => {
+            let p = AdguardProfile {
+                listen_ip: get_str(&params, "listen_ip").unwrap_or_else(|| "0.0.0.0".into()),
+                web_port: get_u16(&params, "web_port", 3000),
+                dns_port: get_u16(&params, "dns_port", 5353),
+            };
+            Ok(Profile::Adguard(p))
+        }
+        "ssh-hardening" => {
+            let p = SshHardeningProfile {
+                disable_password_auth: get_bool(&params, "disable_password_auth", true),
+                idle_timeout: params
+                    .get("idle_timeout")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| u32::try_from(v).map_err(|_| "idle_timeout out of range"))
+                    .transpose()?
+                    .unwrap_or(300),
+                max_auth_tries: params
+                    .get("max_auth_tries")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| u32::try_from(v).map_err(|_| "max_auth_tries out of range"))
+                    .transpose()?
+                    .unwrap_or(3),
+                port: get_u16(&params, "port", 22),
+                restrict_gateway_ports: get_bool(&params, "restrict_gateway_ports", true),
+            };
+            Ok(Profile::SshHardening(p))
+        }
+        "mwan3" => {
+            let mut p = Mwan3Profile::default();
+            if let Some(v) = get_str(&params, "primary") {
+                p.primary = v;
+            }
+            if let Some(v) = get_str(&params, "secondary") {
+                p.secondary = v;
+            }
+            if let Some(v) = get_str(&params, "policy") {
+                p.policy = v;
+            }
+            if let Some(list) = params.get("track_ips").and_then(|v| v.as_array()) {
+                p.track_ips = list
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+            }
+            Ok(Profile::Mwan3(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }

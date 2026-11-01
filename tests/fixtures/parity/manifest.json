@@ -1,5 +1,5 @@
 {
-  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review — gaps close loudly, never silently.",
+  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review \u2014 gaps close loudly, never silently.",
   "fixtures": {
     "wireguard_client_default": {
       "use_case": "wireguard-client",
@@ -24,10 +24,41 @@
     "sqm_default": {
       "use_case": "sqm",
       "expect": "EQUAL"
+    },
+    "doh_default": {
+      "use_case": "doh",
+      "expect": "EQUAL"
+    },
+    "doh_custom_url": {
+      "use_case": "doh",
+      "expect": "EQUAL"
+    },
+    "adguard_default": {
+      "use_case": "adguard",
+      "expect": "EQUAL"
+    },
+    "adguard_custom": {
+      "use_case": "adguard",
+      "expect": "EQUAL"
+    },
+    "ssh_hardening_default": {
+      "use_case": "ssh-hardening",
+      "expect": "EQUAL"
+    },
+    "ssh_hardening_custom": {
+      "use_case": "ssh-hardening",
+      "expect": "EQUAL"
+    },
+    "mwan3_default": {
+      "use_case": "mwan3",
+      "expect": "EQUAL"
+    },
+    "mwan3_balanced": {
+      "use_case": "mwan3",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [
-    "doh (Rust plan exists; needs fixture + gap accounting)",
-    "vpn presets (ivpn, mullvad, node, nordvpn-ikev2), openperf_client, openperf_server, ap-nostr-id, configurationwizzard, fips-bluetooth-rfcomm — 9 of 39 presets (no Rust profile yet)"
+    "vpn presets (ivpn, mullvad, node, nordvpn-ikev2), openperf_client, openperf_server, ap-nostr-id, configurationwizzard, fips-bluetooth-rfcomm \u2014 9 of 39 presets (no Rust profile yet)"
   ]
 }
