@@ -13,11 +13,18 @@ from typing import Any
 from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, UciCommit, UciSet, render_shell
 
 from . import ParamDef, UseCase, register
+from .openperf_client import _ssid_ok
 
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     mgmt_ssid = str(params.get("mgmt_ssid", "openperf"))
     port = int(params.get("port", 7777))
+    if not _ssid_ok(mgmt_ssid):
+        raise ValueError(
+            f"mgmt_ssid must not contain quotes or control characters, got {mgmt_ssid!r}"
+        )
+    if not (1 <= port <= 65535):
+        raise ValueError(f"port must be 1-65535, got {port}")
     return {"mgmt_ssid": mgmt_ssid, "port": port}
 
 

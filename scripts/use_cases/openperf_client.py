@@ -12,10 +12,26 @@ from profile.ops import BlankLine, Comment, Op, ServiceAction, ShellCommand, Uci
 
 from . import ParamDef, UseCase, register
 
+# the SSID lands inside single-quoted uci values (`uci set wireless.$i.ssid='...'`)
+# and the -halow variant — a quote or metacharacter injects shell (the
+# surfshark #604 class; plan.rs OpenPerfClientProfile::validate mirrors).
+def _ssid_ok(v: str) -> bool:
+    return (
+        bool(v)
+        and "'" not in v
+        and '"' not in v
+        and "\\" not in v
+        and not any(ord(c) < 0x20 for c in v)
+    )
+
 
 def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     mgmt_ssid = str(params.get("mgmt_ssid", "openperf"))
     wan_test = str(params.get("wan_test", "1"))
+    if not _ssid_ok(mgmt_ssid):
+        raise ValueError(
+            f"mgmt_ssid must not contain quotes or control characters, got {mgmt_ssid!r}"
+        )
     return {"mgmt_ssid": mgmt_ssid, "wan_test": wan_test}
 
 
