@@ -241,25 +241,47 @@ def _download_prebake_packages() -> None:
     if any(prebake_dir.glob("*.apk")):
         return
     print("Downloading pre-bake packages...", flush=True)
-    listing = subprocess.run(
-        ["curl", "-sfL", PACKAGES_URL + "/"],
-        capture_output=True, text=True, timeout=30,
-    )
-    if listing.returncode != 0:
-        print(f"  Warning: could not fetch package listing: {listing.stderr}")
-        return
     import re
-    available = set(re.findall(r'href="([^"]+\.apk)"', listing.stdout))
-    for pkg in PREBAKE_PACKAGES:
-        match = next((a for a in available if a.startswith(pkg + "_")), None)
-        if not match:
-            print(f"  Warning: {pkg} not found in package repo")
-            continue
-        subprocess.run(
-            ["curl", "-sfL", "-o", str(prebake_dir / match), f"{PACKAGES_URL}/{match}"],
-            capture_output=True, timeout=30,
+    # apk feeds split packages across subfeeds (base/luci/packages/...),
+    # and apk file names are `name-version.arch.apk` (DASH before the
+    # version — the opkg `name_version.ipk` convention is gone). A
+    # single-feed listing with an underscore matcher finds nothing on
+    # 25.x: wireguard-tools lives in base/, luci-app-sqm in luci/,
+    # sqm-scripts in packages/ (bench-verified 2026-10-31, #607 caveat).
+    feed_urls = [PACKAGES_URL.rsplit("/", 1)[0] + "/" + feed
+                 for feed in ("base", "luci", "packages", "routing")]
+    available: dict[str, str] = {}  # apk filename -> full URL
+    for feed in feed_urls:
+        listing = subprocess.run(
+            ["curl", "-sfL", feed + "/"],
+            capture_output=True, text=True, timeout=60,
         )
-    print(f"  Pre-baked {len(list(prebake_dir.glob('*.ipk')))} packages", flush=True)
+        if listing.returncode != 0:
+            print(f"  Warning: could not fetch feed listing {feed}: "
+                  f"{listing.stderr.strip()[:80]}")
+            continue
+        for name in re.findall(r'href="([^"]+\.apk)"', listing.stdout):
+            available.setdefault(name, feed + "/" + name)
+    for pkg in PREBAKE_PACKAGES:
+        # Prefer the exact package: `pkg-<digit>...` (iperf3, not
+        # iperf3-ssl — both start with "iperf3-").
+        candidates = [n for n in available
+                      if n.startswith(pkg + "-")
+                      and len(n) > len(pkg) + 1
+                      and n[len(pkg) + 1].isdigit()]
+        if not candidates:
+            candidates = [n for n in available if n.startswith(pkg + "-")]
+        if not candidates:
+            print(f"  Warning: {pkg} not found in any prebake feed")
+            continue
+        match = sorted(candidates)[0]
+        subprocess.run(
+            ["curl", "-sfL", "-o", str(prebake_dir / match),
+             available[match]],
+            capture_output=True, timeout=120,
+        )
+    print(f"  Pre-baked {len(list(prebake_dir.glob('*.apk')))} packages",
+          flush=True)
 
 
 def _vm_layer_supported() -> bool:
