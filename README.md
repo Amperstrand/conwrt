@@ -471,7 +471,7 @@ conwrt doesn't just install OpenWrt — it installs OpenWrt **pre-configured for
 <!-- BEGIN generated:test-status -->
 **Test status (generated — do not edit; sources: `tests/integration/_pins.py`, `docs/roadmap/parity-matrix.md`, the use-case registry; refresh: `make gen-status`):**
 - QEMU/oracle image: OpenWrt **25.12.5** (single pin: `tests/integration/_pins.py`)
-- §4 typed-ops: **33 of 34** presets ported with golden parity
+- §4 typed-ops: **34 of 34** presets ported with golden parity
 - 1.x registry: **43** presets, **13** still 1.x-untested (ap-nostr-id, fleet_identity, maas-portable-lab, openperf_client, openperf_server, rescue-watchdog, vpn-ivpn, vpn-mullvad, vpn-node, vpn-nordvpn-ikev2, vpn-openvpn, vpn-pia-openvpn, vpn-surfshark)
 - Policy: 24.x models plan with a deprecation warning (CVE-2026-98432 / EoS — #607); mptcp-bonding requires ≥ 25.12 and a kernel ≥ 6.12.113
 <!-- END generated:test-status -->
