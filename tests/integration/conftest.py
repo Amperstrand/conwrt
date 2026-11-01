@@ -8,6 +8,7 @@ Requires: qemu-system-x86_64, losetup, mount
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -500,7 +501,10 @@ _VENUE_UNREACHABLE_MARKERS = (
     "Connection timed out",
     "Connection refused",
     "No route to host",
-    "Traceback (most recent call last)",
+    # NO generic "Traceback (most recent call last)" here: labgrid-client
+    # transports the REMOTE command's stderr, so a deliberate remote Python
+    # run failing normally would classify as darkness and skip — hiding the
+    # real failure (review debt conwrt#184).
     # a place without a usable NetworkService (or with a resource class the
     # local labgrid install doesn't know) is an environment condition, not
     # a test failure — the sweep evidence 2026-10-15 hit both shapes
@@ -540,20 +544,65 @@ def _qemu_venue_runner(vm: dict):
 
 def _labgrid(args: list[str], place: str, timeout: int = 40):
     client = os.environ.get("CONWRT_LABGRID_CLIENT", "labgrid-client")
-    coordinator = os.environ.get("CONWRT_LABGRID_COORDINATOR", "ai-legion:20408")
+    cmd = [client]
+    if not os.environ.get("LG_COORDINATOR"):
+        # No native coordinator configured: keep the bench default. When
+        # LG_COORDINATOR IS set, labgrid-client resolves it natively and an
+        # explicit -x would override it onto the wrong coordinator
+        # (review debt conwrt#184; AGENTS.md bench ops rule).
+        cmd += ["-x", os.environ.get("CONWRT_LABGRID_COORDINATOR", "ai-legion:20408")]
+    cmd += ["-p", place, *args]
     return subprocess.run(
-        [client, "-x", coordinator, "-p", place, *args],
+        cmd,
         capture_output=True, text=True, timeout=timeout, check=False,
     )
 
 
-@pytest.fixture(params=VENUES, ids=[v.key for v in VENUES])
+def _reservation_token(stdout: str) -> str:
+    m = re.search(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", stdout
+    )
+    return m.group(0) if m else ""
+
+
+def _queue_wait_s() -> int:
+    return int(os.environ.get("CONWRT_VENUE_QUEUE_WAIT_S", "300") or 300)
+
+
+def _acquire_place(place: str) -> tuple[bool, str]:
+    """Acquire a labgrid place, queueing on contention per the bench
+    coordination rule (review debt conwrt#184): ONE blocking
+    `reserve --wait` instead of silently skipping (or poll-acquiring —
+    the 2026-10-19 reserve-churn starvation). Returns (ok, token-or-reason);
+    the token must be cancelled after the matching release."""
+    acquired = _labgrid(["acquire"], place, timeout=25)
+    if acquired.returncode == 0:
+        return True, ""
+    reserved = _labgrid(
+        ["reserve", "--wait", f"name={place}"], place, timeout=_queue_wait_s()
+    )
+    if reserved.returncode != 0:
+        return False, f"reservation queue exhausted: {reserved.stderr.strip()[-200:]}"
+    token = _reservation_token(reserved.stdout)
+    second = _labgrid(["acquire"], place, timeout=25)
+    if second.returncode != 0:
+        if token:
+            _labgrid(["cancel-reservation", token], place, timeout=25)
+        return False, f"place reserved but acquire refused: {second.stderr.strip()[-200:]}"
+    return True, token
+
+
+@pytest.fixture(scope="session", params=VENUES, ids=[v.key for v in VENUES])
 def venue(request):
     """A device to run commands on — QEMU VM, labgrid place, or direct SSH.
 
     Selected by the runner via CONWRT_VENUES (default: qemu-session only).
-    Dark labgrid venues SKIP (never fail) — on a multi-agent host the place
-    may be held by a sibling session or the device itself dark.
+    Session-scoped so one labgrid lease covers the whole run for each place
+    (review debt conwrt#184: function scope re-acquired per test and another
+    session could take the device in the gap).
+    Dark labgrid venues SKIP (never fail) — dark = genuinely unreachable
+    per the labgrid diagnostics below, NOT queueable contention (that
+    queues via _acquire_place instead).
     """
     chosen = request.param
     if chosen.kind == "qemu-session":
@@ -593,13 +642,12 @@ def venue(request):
         return
 
     place = chosen.place or ""
-    acquired = _labgrid(["acquire"], place, timeout=25)
-    if acquired.returncode != 0:
+    acquired, token = _acquire_place(place)
+    if not acquired:
         pytest.skip(
             f"labgrid place {place!r} not acquirable on "
-            f"{os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')} "
-            f"(held by a sibling session or coordinator down): "
-            f"{acquired.stderr.strip()[-200:]}"
+            f"{os.environ.get('LG_COORDINATOR') or os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')}: "
+            f"{token}"
         )
 
     def _run(command: str, timeout: int):
@@ -615,6 +663,10 @@ def venue(request):
         yield VenueHandle(name=f"labgrid:{place}", run=_run)
     finally:
         _labgrid(["release"], place, timeout=25)
+        if token:
+            # free the allocated reservation instead of waiting out its
+            # expiry (labgrid-coordination.md: cancel on abort paths)
+            _labgrid(["cancel-reservation", token], place, timeout=25)
 
 
 @pytest.fixture
