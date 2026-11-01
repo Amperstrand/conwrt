@@ -22,11 +22,11 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
     GuestWifiProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
+    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -548,6 +548,8 @@ enum ProfileChoice {
     VpnMullvad,
     VpnNode,
     VpnNordvpnIke2,
+    OpenPerfClient,
+    OpenPerfServer,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -964,6 +966,15 @@ struct ProfileArgs {
     /// vpn-nordvpn-ikev2: opt OUT of management from the VPN zone.
     #[arg(long)]
     ike2_no_management: bool,
+    /// openperf-client: SSID to scan for (default openperf).
+    #[arg(long)]
+    perf_client_ssid: Option<String>,
+    /// openperf-server: management SSID to broadcast.
+    #[arg(long)]
+    perf_server_ssid: Option<String>,
+    /// openperf-server: JSON-RPC TCP port (default 7777).
+    #[arg(long)]
+    perf_server_port: Option<u16>,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2494,6 +2505,19 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             kill_switch: !args.ike2_no_kill_switch,
             allow_management: !args.ike2_no_management,
         })),
+        ProfileChoice::OpenPerfClient => Ok(Profile::OpenPerfClient(OpenPerfClientProfile {
+            mgmt_ssid: args
+                .perf_client_ssid
+                .clone()
+                .unwrap_or_else(|| "openperf".into()),
+        })),
+        ProfileChoice::OpenPerfServer => Ok(Profile::OpenPerfServer(OpenPerfServerProfile {
+            mgmt_ssid: args
+                .perf_server_ssid
+                .clone()
+                .unwrap_or_else(|| "openperf".into()),
+            port: args.perf_server_port.unwrap_or(7777),
+        })),
     }
 }
 
@@ -3631,6 +3655,9 @@ mod tests {
             ike2_no_hw_accel: false,
             ike2_no_kill_switch: false,
             ike2_no_management: false,
+            perf_client_ssid: None,
+            perf_server_ssid: None,
+            perf_server_port: None,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,

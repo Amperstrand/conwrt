@@ -1440,6 +1440,85 @@ impl VpnNordvpnIke2Profile {
     }
 }
 
+/// WiFi performance test client (STA side) — port of the 1.x
+/// `openperf_client` preset (`scripts/use_cases/openperf_client.py`,
+/// 1.x marks it untested). Deploys the STA autostart procd service
+/// and points the 2.4GHz STA + HaHalow interfaces at the openperf AP
+/// SSID. The Python test files themselves ride
+/// `install-openperf.sh` — this plan shapes the service + radio
+/// config only. The SSID lands inside single-quoted uci values →
+/// charset-gated (the surfshark #604 class).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPerfClientProfile {
+    /// SSID to scan for (must match the AP's openperf_server).
+    pub mgmt_ssid: String,
+}
+
+impl Default for OpenPerfClientProfile {
+    fn default() -> Self {
+        Self {
+            mgmt_ssid: "openperf".into(),
+        }
+    }
+}
+
+impl OpenPerfClientProfile {
+    /// SSID charset gate: lands inside single-quoted uci values —
+    /// a quote or metacharacter injects shell (surfshark #604 class).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ok = !self.mgmt_ssid.is_empty()
+            && !self.mgmt_ssid.contains(['\'', '"', '\\'])
+            && !self.mgmt_ssid.chars().any(|c| (c as u32) < 0x20);
+        if !ok {
+            return Err(Unsupported::InvalidParams(
+                "mgmt_ssid must not contain quotes or control characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// WiFi performance testing server — port of the 1.x `openperf_server`
+/// preset (`scripts/use_cases/openperf_server.py`, 1.x marks it
+/// untested). Deploys the JSON-RPC server procd service (PORT param)
+/// and configures the AP SSID. The Python files ride
+/// `install-openperf.sh` — same boundary as the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPerfServerProfile {
+    /// Management SSID broadcast on 2.4 GHz for client discovery.
+    pub mgmt_ssid: String,
+    /// TCP port for the JSON-RPC server (1.x default 7777).
+    pub port: u16,
+}
+
+impl Default for OpenPerfServerProfile {
+    fn default() -> Self {
+        Self {
+            mgmt_ssid: "openperf".into(),
+            port: 7777,
+        }
+    }
+}
+
+impl OpenPerfServerProfile {
+    /// SSID charset gate (same surface as the client) + the JSON-RPC
+    /// port bound (1-65535; lands unquoted in the procd env line).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let ok = !self.mgmt_ssid.is_empty()
+            && !self.mgmt_ssid.contains(['\'', '"', '\\'])
+            && !self.mgmt_ssid.chars().any(|c| (c as u32) < 0x20);
+        if !ok {
+            return Err(Unsupported::InvalidParams(
+                "mgmt_ssid must not contain quotes or control characters".into(),
+            ));
+        }
+        if self.port == 0 {
+            return Err(Unsupported::InvalidParams("port must be 1-65535".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Surfshark WireGuard VPN — port of the 1.x `vpn-surfshark` preset
 /// (`scripts/use_cases/vpn_providers/surfshark.py`, 1.x marks it
 /// UNTESTED). Runtime-API twin of vpn-pia: one transport-heredoc
@@ -2194,6 +2273,189 @@ fn plan_vpn_nordvpn_ike2(
     ];
     Ok(Plan {
         profile_id: "vpn-nordvpn-ikev2".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// The openperf-client STA autostart procd init script (static — no
+/// interpolations; the SSID lands only in the uci loops below).
+const OPENPERF_CLIENT_INITD_SH: &str = concat!(
+    "cat > /etc/init.d/openperf-autostart << 'OPENPERF_EOF'\n",
+    "#!/bin/sh /etc/rc.common\n",
+    "USE_PROCD=1\n",
+    "START=98\n",
+    "STOP=1\n",
+    "\n",
+    "start_service() {\n",
+    "    procd_open_instance\n",
+    "    procd_set_param respawn 3600 5 0\n",
+    "    procd_set_param env AP_IP=\n",
+    "    procd_set_param command /usr/bin/python3 /root/openperf/sta_autostart.py\n",
+    "    procd_set_param stdout 1\n",
+    "    procd_set_param stderr 1\n",
+    "    procd_close_instance\n",
+    "}\n",
+    "OPENPERF_EOF\n",
+    "chmod +x /etc/init.d/openperf-autostart",
+);
+
+/// The openperf-server procd init script (PORT token).
+const OPENPERF_SERVER_INITD_SH: &str = concat!(
+    "cat > /etc/init.d/openperf-server << 'OPENPERF_EOF'\n",
+    "#!/bin/sh /etc/rc.common\n",
+    "USE_PROCD=1\n",
+    "START=99\n",
+    "STOP=1\n",
+    "\n",
+    "start_service() {\n",
+    "    procd_open_instance\n",
+    "    procd_set_param respawn 3600 5 0\n",
+    "    procd_set_param command /usr/bin/python3 /root/openperf/server.py\n",
+    "    procd_set_param stdout 1\n",
+    "    procd_set_param stderr 1\n",
+    "    procd_set_param env PORT=__PORT__\n",
+    "    procd_close_instance\n",
+    "}\n",
+    "OPENPERF_EOF\n",
+    "chmod +x /etc/init.d/openperf-server",
+);
+
+fn plan_openperf_client(
+    model: &DeviceModel,
+    oc: &OpenPerfClientProfile,
+) -> Result<Plan, Unsupported> {
+    oc.validate()?;
+    let mut ops: Vec<PlanOp> = ["python3", "iperf3"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    ops.push(PlanOp::Shell {
+        command: "mkdir -p /root/openperf/init.d".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: OPENPERF_CLIENT_INITD_SH.into(),
+    });
+    // STA config loop — SSID lands in single-quoted uci values
+    ops.push(PlanOp::Shell {
+        command: [
+            "for iface in sta_radio0 phy0_sta; do".to_string(),
+            "    if uci -q get wireless.$iface >/dev/null 2>&1; then".to_string(),
+            format!("        uci set wireless.$iface.ssid='{}'", oc.mgmt_ssid),
+            "        uci set wireless.$iface.encryption='none'".to_string(),
+            "        uci set wireless.$iface.network='wan'".to_string(),
+            "        break".to_string(),
+            "    fi".to_string(),
+            "done".to_string(),
+        ]
+        .join("\n"),
+    });
+    // HaHalow STA loop — the -halow SSID variant
+    ops.push(PlanOp::Shell {
+        command: [
+            "for iface in default_radio1; do".to_string(),
+            "    if uci -q get wireless.$iface >/dev/null 2>&1; then".to_string(),
+            format!(
+                "        uci set wireless.$iface.ssid='{}-halow'",
+                oc.mgmt_ssid
+            ),
+            "        uci set wireless.$iface.encryption='sae'".to_string(),
+            "        uci set wireless.$iface.key='openperf-test'".to_string(),
+            "        break".to_string(),
+            "    fi".to_string(),
+            "done".to_string(),
+        ]
+        .join("\n"),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "wireless".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "openperf-autostart".into(),
+        action: ServiceAction::Enable,
+    });
+    let verification = vec![VerificationCheck {
+        description: "STA autostart service enabled".into(),
+        command: "/etc/init.d/openperf-autostart enabled && echo yes".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "openperf_client".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+fn plan_openperf_server(
+    model: &DeviceModel,
+    os: &OpenPerfServerProfile,
+) -> Result<Plan, Unsupported> {
+    os.validate()?;
+    let mut ops: Vec<PlanOp> = ["python3", "iperf3"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    ops.push(PlanOp::Shell {
+        command: "mkdir -p /root/openperf/init.d".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: substitute_tokens(
+            OPENPERF_SERVER_INITD_SH,
+            &[("__PORT__", os.port.to_string().as_str())],
+        ),
+    });
+    // AP config loop — SSID lands in single-quoted uci values
+    ops.push(PlanOp::Shell {
+        command: [
+            "for iface in phy0-ap0 default_radio0; do".to_string(),
+            "    if uci -q get wireless.$iface >/dev/null 2>&1; then".to_string(),
+            format!("        uci set wireless.$iface.ssid='{}'", os.mgmt_ssid),
+            "        uci set wireless.$iface.encryption='none'".to_string(),
+            "        break".to_string(),
+            "    fi".to_string(),
+            "done".to_string(),
+        ]
+        .join("\n"),
+    });
+    // HaHalow AP loop
+    ops.push(PlanOp::Shell {
+        command: [
+            "for iface in default_radio1; do".to_string(),
+            "    if uci -q get wireless.$iface >/dev/null 2>&1; then".to_string(),
+            format!(
+                "        uci set wireless.$iface.ssid='{}-halow'",
+                os.mgmt_ssid
+            ),
+            "        uci set wireless.$iface.encryption='sae'".to_string(),
+            "        uci set wireless.$iface.key='openperf-test'".to_string(),
+            "        break".to_string(),
+            "    fi".to_string(),
+            "done".to_string(),
+        ]
+        .join("\n"),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "wireless".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "openperf-server".into(),
+        action: ServiceAction::Enable,
+    });
+    let verification = vec![VerificationCheck {
+        description: "server service enabled".into(),
+        command: "/etc/init.d/openperf-server enabled && echo yes".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "openperf_server".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -3600,6 +3862,10 @@ pub enum Profile {
     /// NordVPN IKEv2/IPsec via strongSwan (resolved statics; 1.x
     /// marks the preset's IKEv2 path hardware-tested).
     VpnNordvpnIke2(VpnNordvpnIke2Profile),
+    /// openperf WiFi performance test client (STA side).
+    OpenPerfClient(OpenPerfClientProfile),
+    /// openperf WiFi performance test server (JSON-RPC).
+    OpenPerfServer(OpenPerfServerProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -3642,6 +3908,8 @@ impl Profile {
             Profile::VpnMullvad(_) => "vpn-mullvad",
             Profile::VpnNode(_) => "vpn-node",
             Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
+            Profile::OpenPerfClient(_) => "openperf_client",
+            Profile::OpenPerfServer(_) => "openperf_server",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -3683,6 +3951,8 @@ impl Profile {
             Profile::VpnMullvad(_) => &[],
             Profile::VpnNode(_) => &[],
             Profile::VpnNordvpnIke2(_) => &[],
+            Profile::OpenPerfClient(_) => &["wifi"],
+            Profile::OpenPerfServer(_) => &["wifi"],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -4095,6 +4365,8 @@ pub fn plan_profile(
         Profile::VpnMullvad(mu) => plan_vpn_mullvad(model, mu),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::VpnNordvpnIke2(i2) => plan_vpn_nordvpn_ike2(model, i2),
+        Profile::OpenPerfClient(oc) => plan_openperf_client(model, oc),
+        Profile::OpenPerfServer(os) => plan_openperf_server(model, os),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }?;

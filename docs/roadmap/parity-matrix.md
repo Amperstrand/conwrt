@@ -47,7 +47,7 @@ Inventory date: 2026-10-16. Rust = `crates/` + `apps/`; Python engine =
 
 | Python component | LOC | Rust coverage | Evidence | Retirement |
 |---|---|---|---|---|
-Partial — 34 of 34 use cases typed (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate, adguard, mesh11sd, rescue-watchdog, mwan3, pbr, nodns, auto-sqm, openclash, ssl, vpn-pia-openvpn, vpn-pia, vpn-nordvpn, vpn-nordvpn-openvpn, mptcp-bonding, tollgate, tollgate-security, vpn-openvpn, vpn-surfshark, vpn-ivpn, vpn-mullvad, vpn-node, vpn-nordvpn-ikev2, ap-nostr-id); openperf_client/openperf_server classified §8 permanent-Python (scaffold-only plans — see manifest)| `scripts/configure-stock-switch.py`, `cmd_lan_migrate.py` | ~400 | none | — | None — bench-adjacent one-offs |
+Partial — 36 of 39 use cases typed (sqm, doh, tether ×4, wireguard-client, wireguard-server, guest-wifi, ssh-hardening, travelmate, adguard, mesh11sd, rescue-watchdog, mwan3, pbr, nodns, auto-sqm, openclash, ssl, vpn-pia-openvpn, vpn-pia, vpn-nordvpn, vpn-nordvpn-openvpn, mptcp-bonding, tollgate, tollgate-security, vpn-openvpn, vpn-surfshark, vpn-ivpn, vpn-mullvad, vpn-node, vpn-nordvpn-ikev2, ap-nostr-id); openperf_client/openperf_server classified §8 permanent-Python (scaffold-only plans — see manifest)| `scripts/configure-stock-switch.py`, `cmd_lan_migrate.py` | ~400 | none | — | None — bench-adjacent one-offs |
 
 ## 5. Serial & protocols
 
