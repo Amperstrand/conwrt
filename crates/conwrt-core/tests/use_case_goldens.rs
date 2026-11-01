@@ -75,6 +75,10 @@
 //!     "server_port": "16384",
 //!     "uuid": "0f0e0d0c-0b0a-4909-8807-060504030201",
 //! }))
+//! print(r["ap-nostr-id"].build_configure({
+//!     "npub": "npub1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs",
+//!     "nsec": "nsec1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs",
+//! }))
 //! print(r["tollgate"].build_configure({
 //!     "gateway_name": "net4sats",
 //!     "gateway_domain": "net4sats.lan",
@@ -127,9 +131,9 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, AutoSqmProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile,
-    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, DohProfile, GuestWifiProfile,
+    Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
+    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
     TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
     VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile,
     VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
@@ -447,6 +451,17 @@ fn mptcp_bonding_matches_1x_golden() {
             uuid: "0f0e0d0c-0b0a-4909-8807-060504030201".into(),
         }),
         include_str!("goldens/mptcp-bonding.sh"),
+    );
+}
+
+#[test]
+fn ap_nostr_id_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::ApNostrId(ApNostrIdProfile {
+            npub: "npub1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into(),
+            nsec: "nsec1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into(),
+        }),
+        include_str!("goldens/ap-nostr-id.sh"),
     );
 }
 

@@ -1,5 +1,5 @@
 {
-  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review — gaps close loudly, never silently.",
+  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review \u2014 gaps close loudly, never silently.",
   "fixtures": {
     "wireguard_client_default": {
       "use_case": "wireguard-client",
@@ -28,6 +28,7 @@
   },
   "pending_migration": [
     "doh (Rust plan exists; needs fixture + gap accounting)",
-    "openperf_client, openperf_server, ap-nostr-id, configurationwizzard, fips-bluetooth-rfcomm — 5 of 39 presets (no Rust profile yet)"
+    "unported presets: configurationwizzard, fips-bluetooth-rfcomm — 2 of 39 (all others typed or classified)",
+    "CLASSIFIED §8 permanent-Python (2026-11-01, ports-d lane): openperf_client, openperf_server — the plan emits only a scaffold; the actual payload (sta_autostart.py etc.) arrives via install-openperf.sh, there is no fleet/batch-plan consumer (grep: prompts/recipes/firmware-manager/bench-tools all negative), and the preset is a bench-lab WiFi fixture (AP/STA pairs, HaHalow). A Rust twin would parity-test a shell scaffold while the substance stays external Python."
   ]
 }

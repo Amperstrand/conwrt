@@ -20,13 +20,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
-    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
-    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
-    WireguardServerProfile,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
+    GuestWifiProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
+    PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
+    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -538,6 +538,8 @@ enum ProfileChoice {
     /// 1.x preset name (kebab by default).
     VpnPia,
     MptcpBonding,
+    /// 1.x preset name (kebab by default).
+    ApNostrId,
     Tollgate,
     TollgateSecurity,
     VpnOpenvpn,
@@ -800,6 +802,13 @@ struct ProfileArgs {
     /// mptcp-bonding: client UUID from `bsbf-add-client` on the VPS.
     #[arg(long)]
     mptcp_uuid: Option<String>,
+    /// ap-nostr-id: pre-generated npub (bech32, `npub1…`; generate
+    /// host-side — the planner does not generate keys).
+    #[arg(long)]
+    ap_nostr_npub: Option<String>,
+    /// ap-nostr-id: pre-generated nsec (bech32, `nsec1…`), paired with npub.
+    #[arg(long)]
+    ap_nostr_nsec: Option<String>,
     /// tollgate: nodogsplash gateway name shown to clients.
     #[arg(long)]
     tollgate_gateway_name: Option<String>,
@@ -2382,6 +2391,15 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 uuid: args.mptcp_uuid.clone().unwrap_or_default(),
             }))
         }
+        ProfileChoice::ApNostrId => {
+            // both-or-neither + bech32 charset gates fire at plan time
+            // (ApNostrIdProfile::validate); no defaults — keys are
+            // generated host-side and passed in.
+            Ok(Profile::ApNostrId(ApNostrIdProfile {
+                npub: args.ap_nostr_npub.clone().unwrap_or_default(),
+                nsec: args.ap_nostr_nsec.clone().unwrap_or_default(),
+            }))
+        }
         ProfileChoice::Tollgate => Ok(Profile::Tollgate(TollgateProfile {
             gateway_name: args.tollgate_gateway_name.clone().unwrap_or_default(),
             gateway_domain: args.tollgate_gateway_domain.clone().unwrap_or_default(),
@@ -3479,6 +3497,8 @@ mod tests {
     fn profile_args(profile: ProfileChoice) -> ProfileArgs {
         ProfileArgs {
             profile,
+            ap_nostr_npub: None,
+            ap_nostr_nsec: None,
             download_kbps: None,
             upload_kbps: None,
             interface: "wan".into(),
@@ -3616,6 +3636,27 @@ mod tests {
             trm_retry: None,
             trm_no_captive: false,
         }
+    }
+
+    #[test]
+    fn build_profile_ap_nostr_id_gates_at_plan_time() {
+        let mut args = profile_args(ProfileChoice::ApNostrId);
+        let Profile::ApNostrId(ap) = &build_profile(&args).expect("ap-nostr-id builds") else {
+            panic!("ap-nostr-id profile");
+        };
+        // empty-empty: profile builds, plan time refuses (host-side
+        // generation boundary)
+        assert!(ap.npub.is_empty() && ap.nsec.is_empty());
+        assert!(matches!(
+            ap.validate(),
+            Err(conwrt_core::plan::Unsupported::InvalidParams(_))
+        ));
+        args.ap_nostr_npub = Some("npub1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into());
+        args.ap_nostr_nsec = Some("nsec1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into());
+        let Profile::ApNostrId(ap) = &build_profile(&args).expect("ap-nostr-id builds") else {
+            panic!("ap-nostr-id profile");
+        };
+        assert!(ap.validate().is_ok());
     }
 
     #[test]

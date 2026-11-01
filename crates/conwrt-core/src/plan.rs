@@ -970,6 +970,65 @@ impl MptcpBondingProfile {
     }
 }
 
+/// Per-AP Nostr identity — port of the 1.x `ap-nostr-id` preset
+/// (`scripts/use_cases/ap_nostr_id.py`, untested tier): writes the AP's
+/// Nostr secret to `/etc/tollgate/ap-nsec`, the public key to
+/// `ap-npub`, and stamps `nas_identifier` on every `wifi-iface` so
+/// RADIUS requests self-identify the AP. 1.x auto-generates a keypair
+/// when both params are empty (host-side python, secp256k1); the Rust
+/// twin deliberately does NOT pull a crypto dependency for that — the
+/// boundary mirrors vpn-node's nsec handling: keys are generated
+/// host-side (`scripts/generate_nostr_keypair.py`) and passed in.
+/// Values land inside single-quoted shell lines → hard charset gate.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ApNostrIdProfile {
+    /// Public key, bech32 `npub1…` (paired with `nsec`).
+    pub npub: String,
+    /// Secret key, bech32 `nsec1…` (paired with `npub`).
+    pub nsec: String,
+}
+
+/// Bech32 payload charset (BIP-173) — the only characters allowed
+/// after the `npub1`/`nsec1` human-readable prefixes.
+const BECH32_CHARSET: &str = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+impl ApNostrIdProfile {
+    /// 1.x gates (prefix + both-or-neither) plus the shell-safety
+    /// charset gate the 1.x printf/uci interpolations lacked: a
+    /// quote-bearing npub would close the single-quoted string and run
+    /// arbitrary shell on the router.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if self.npub.is_empty() && self.nsec.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "npub and nsec are required (generate host-side with \\
+scripts/generate_nostr_keypair.py — the planner does not generate keys)"
+                    .into(),
+            ));
+        }
+        if self.npub.is_empty() || self.nsec.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "npub and nsec must both be provided or both be empty".into(),
+            ));
+        }
+        for (name, value, prefix) in [("npub", &self.npub, "npub1"), ("nsec", &self.nsec, "nsec1")]
+        {
+            if !value.starts_with(prefix) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{name} must start with '{prefix}'"
+                )));
+            }
+            let body = &value[prefix.len()..];
+            if body.is_empty() || !body.chars().all(|c| BECH32_CHARSET.contains(c)) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{name} must be bech32 (charset {BECH32_CHARSET:?} after \\
+                     the prefix; no quotes or metacharacters)"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// OpenTollGate — Bitcoin/Lightning payment gateway for selling
 /// internet access — port of the tested 1.x `tollgate` preset
 /// (`scripts/use_cases/tollgate.py`, ops characterization + transport
@@ -3521,6 +3580,8 @@ pub enum Profile {
     /// MPTCP connection bonding via BondingShouldBeFree (single remote
     /// installer; needs an MPTCP kernel, 25.12+/SNAPSHOT).
     MptcpBonding(MptcpBondingProfile),
+    /// Per-AP Nostr identity (npub as `nas_identifier`).
+    ApNostrId(ApNostrIdProfile),
     /// Generic OpenVPN client for providers without a WireGuard API
     /// (inline .ovpn config; 1.x marks the preset untested).
     VpnOpenvpn(VpnOpenvpnProfile),
@@ -3574,6 +3635,7 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => "vpn-nordvpn-openvpn",
             Profile::VpnPia(_) => "vpn-pia",
             Profile::MptcpBonding(_) => "mptcp-bonding",
+            Profile::ApNostrId(_) => "ap-nostr-id",
             Profile::VpnOpenvpn(_) => "vpn-openvpn",
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::VpnIvpn(_) => "vpn-ivpn",
@@ -3614,6 +3676,7 @@ impl Profile {
             Profile::VpnNordvpnOpenvpn(_) => &[],
             Profile::VpnPia(_) => &[],
             Profile::MptcpBonding(_) => &[],
+            Profile::ApNostrId(_) => &[],
             Profile::VpnOpenvpn(_) => &[],
             Profile::VpnSurfshark(_) => &[],
             Profile::VpnIvpn(_) => &[],
@@ -4025,6 +4088,7 @@ pub fn plan_profile(
         Profile::VpnNordvpnOpenvpn(nv) => plan_vpn_nordvpn_openvpn(model, nv),
         Profile::VpnPia(pia) => plan_vpn_pia(model, pia),
         Profile::MptcpBonding(mp) => plan_mptcp_bonding(model, mp),
+        Profile::ApNostrId(a) => plan_ap_nostr_id(model, a),
         Profile::VpnOpenvpn(vo) => plan_vpn_openvpn(model, vo),
         Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::VpnIvpn(iv) => plan_vpn_ivpn(model, iv),
@@ -6819,6 +6883,63 @@ fn plan_ssl(model: &DeviceModel, ssl: &SslProfile) -> Result<Plan, Unsupported> 
     }
     Ok(Plan {
         profile_id: "ssl".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+fn plan_ap_nostr_id(model: &DeviceModel, ap: &ApNostrIdProfile) -> Result<Plan, Unsupported> {
+    ap.validate()?;
+    let npub24: String = ap.npub.chars().take(24).collect();
+    let ops = vec![
+        PlanOp::Shell {
+            command: "mkdir -p /etc/tollgate".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "[ -f /etc/tollgate/ap-nsec ] || printf '%s\\n' '{}' > /etc/tollgate/ap-nsec",
+                ap.nsec
+            ),
+        },
+        PlanOp::Shell {
+            command: "[ -f /etc/tollgate/ap-nsec ] || chmod 600 /etc/tollgate/ap-nsec".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "[ -f /etc/tollgate/ap-npub ] || printf '%s\\n' '{}' > /etc/tollgate/ap-npub",
+                ap.npub
+            ),
+        },
+        PlanOp::Shell {
+            command: "[ -f /etc/tollgate/ap-npub ] || chmod 644 /etc/tollgate/ap-npub".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "for _s in $(uci show wireless 2>/dev/null | grep '=wifi-iface' | cut -d. -f2 | cut -d= -f1); do uci set wireless.$_s.nas_identifier='{}'; done",
+                ap.npub
+            ),
+        },
+        PlanOp::CommitUci {
+            config: "wireless".into(),
+        },
+        PlanOp::Shell {
+            command: "wifi reload 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: format!("echo \"AP Nostr identity configured: npub={npub24}...\""),
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "ap-npub present and wireless carries nas_identifier".into(),
+        command: "[ -f /etc/tollgate/ap-npub ] && uci show wireless \\
+                  | grep -q nas_identifier && echo yes"
+            .into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "ap-nostr-id".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -10226,6 +10347,61 @@ mod tests {
                 ..vo.clone()
             }
             .validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn ap_nostr_id_gates_match_1x_plus_charset() {
+        let good = ApNostrIdProfile {
+            npub: "npub1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into(),
+            nsec: "nsec1qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into(),
+        };
+        assert!(good.validate().is_ok());
+
+        // both-or-neither (1.x gate)
+        let neither = ApNostrIdProfile::default();
+        assert!(matches!(
+            neither.validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+        let half = ApNostrIdProfile {
+            npub: good.npub.clone(),
+            nsec: String::new(),
+        };
+        assert!(matches!(
+            half.validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+
+        // prefixes (1.x gate)
+        let bad_prefix = ApNostrIdProfile {
+            npub: "npub2qqv9p7wq3zq5x2swp3jv4tdd6syr8whs".into(),
+            nsec: good.nsec.clone(),
+        };
+        assert!(matches!(
+            bad_prefix.validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+
+        // charset: a quote-bearing npub would close the single-quoted
+        // printf and run arbitrary shell — refused, never quoted.
+        let hostile = ApNostrIdProfile {
+            npub: "npub1qqv9'; touch /tmp/conwrt-pwned;".into(),
+            nsec: good.nsec.clone(),
+        };
+        assert!(matches!(
+            hostile.validate(),
+            Err(Unsupported::InvalidParams(_))
+        ));
+
+        // non-bech32 body (an 'o' — excluded from the BIP-173 charset)
+        let non_bech32 = ApNostrIdProfile {
+            npub: "npub1goldenfixture0000examplepub111key".into(),
+            nsec: good.nsec.clone(),
+        };
+        assert!(matches!(
+            non_bech32.validate(),
             Err(Unsupported::InvalidParams(_))
         ));
     }
