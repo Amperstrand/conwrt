@@ -1290,6 +1290,97 @@ impl VpnNodeProfile {
     }
 }
 
+/// NordVPN IKEv2/IPsec via strongSwan — port of the 1.x
+/// `vpn-nordvpn-ikev2` preset (`scripts/use_cases/vpn_providers/
+/// nordvpn.py`). EAP-MSCHAPv2 auth against NordVPN's IPsec gateways
+/// with kernel ESP. Hardware-bring-up lessons baked in (2026-10-08,
+/// COVR-X1860 / MT7621): socket-default is mandatory, eap-identity
+/// answers the EAP_IDENTITY request, ESP proposals must NOT include
+/// modp, and the stock mt7621 kernel ships without XFRM (the
+/// kmod-ipsec* packages are in the plan).
+///
+/// Purity contract (the vpn-nordvpn WireGuard precedent): 1.x resolves
+/// EAP credentials + server from the access token at BUILD time via
+/// the NordVPN API — the I/O-free 2.x planner carries the RESOLVED
+/// statics (username/password/station/hostname) and never calls the
+/// API. The Python builder gained a statics-direct mode with this
+/// port; `validate()` gates every value (credentials land inside
+/// double-quoted swanctl values where a `"` breaks config parsing).
+///
+/// hw_accel: `true` = modprobe the EIP-93 crypto engine; `false` =
+/// rmmod + blacklist before any SA exists (with live references it
+/// wedges the kernel — AGENTS.md; SAD EINVAL was observed on kernel
+/// 6.12.94 with eip93 loaded; hw_accel=false is the supported path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnNordvpnIke2Profile {
+    /// EAP service username (resolved from the access token at build
+    /// time on the host; lands inside `eap_id = "…"`.
+    pub username: String,
+    /// EAP service password (lands inside `secret = "…"`).
+    pub password: String,
+    /// Server IPv4 (swanctl `remote_addrs`).
+    pub station: String,
+    /// Server hostname (display only — the echo line).
+    pub hostname: String,
+    /// EIP-93 hardware crypto on (false = rmmod + blacklist).
+    pub hw_accel: bool,
+    /// Block LAN→WAN traffic if the tunnel drops (1.x default on).
+    pub kill_switch: bool,
+    /// Allow SSH/LuCI to the router from the VPN zone (1.x default on).
+    pub allow_management: bool,
+}
+
+impl Default for VpnNordvpnIke2Profile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            station: String::new(),
+            hostname: String::new(),
+            hw_accel: true,
+            kill_switch: true,
+            allow_management: true,
+        }
+    }
+}
+
+impl VpnNordvpnIke2Profile {
+    /// Gates mirroring the Python-side `_resolve_params` fix: the
+    /// credentials land inside double-quoted swanctl values (a `"`
+    /// or control char breaks config parsing inside the quoted
+    /// heredoc — the heredoc guards shell, not swanctl syntax), the
+    /// station is a bare dotted-quad `remote_addrs`, the hostname
+    /// rides a double-quoted echo.
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        let secret_ok =
+            |v: &str| !v.is_empty() && !v.contains('"') && !v.chars().any(|c| (c as u32) < 0x20);
+        for (field, value) in [("username", &self.username), ("password", &self.password)] {
+            if !secret_ok(value) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{field} must not contain double quotes or control characters"
+                )));
+            }
+        }
+        if self.station.is_empty() || !self.station.chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            return Err(Unsupported::InvalidParams(
+                "station must be an IPv4 address".into(),
+            ));
+        }
+        if self.hostname.is_empty()
+            || !self
+                .hostname
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            return Err(Unsupported::InvalidParams(
+                "hostname must be a plain hostname".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Surfshark WireGuard VPN — port of the 1.x `vpn-surfshark` preset
 /// (`scripts/use_cases/vpn_providers/surfshark.py`, 1.x marks it
 /// UNTESTED). Runtime-API twin of vpn-pia: one transport-heredoc
@@ -1761,6 +1852,289 @@ fn plan_vpn_node(model: &DeviceModel, vn: &VpnNodeProfile) -> Result<Plan, Unsup
     ];
     Ok(Plan {
         profile_id: "vpn-node".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+const NORDVPN_IKE2_CA_PEM: &str = concat!(
+    "-----BEGIN CERTIFICATE-----\n",
+    "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\n",
+    "-----END CERTIFICATE-----\n",
+);
+
+/// The IKEv2 swanctl connection config (byte-verbatim vs 1.x, with
+/// sentinel tokens for the gated interpolations). Written to
+/// /etc/swanctl/conf.d/nordvpn-ikev2.conf inside a quoted heredoc.
+const NORDVPN_IKE2_SWANCTL_SH: &str = concat!(
+    "connections {\n",
+    "  nordvpn {\n",
+    "    version = 2\n",
+    "    send_cert = never\n",
+    "    local_addrs = %defaultroute\n",
+    "    remote_addrs = __STATION__\n",
+    "    proposals = aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048\n",
+    "    reauth_time = 0s\n",
+    "    fragmentation = yes\n",
+    "    mobike = yes\n",
+    "    local {\n",
+    "      auth = eap\n",
+    "      eap_id = \"__USERNAME__\"\n",
+    "    }\n",
+    "    remote {\n",
+    "      auth = pubkey\n",
+    "      id = %any\n",
+    "    }\n",
+    "    vips = 0.0.0.0\n",
+    "    dpd_delay = 60s\n",
+    "    children {\n",
+    "      nord {\n",
+    "        remote_ts = 0.0.0.0/0\n",
+    "        local_ts = dynamic\n",
+    "        start_action = start\n",
+    "        close_action = restart\n",
+    "        esp_proposals = aes256-sha256, aes256-sha1, aes128-sha256\n",
+    "        rekey_time = 3600s\n",
+    "      }\n",
+    "    }\n",
+    "  }\n",
+    "}\n",
+    "secrets {\n",
+    "  eap-nord {\n",
+    "    secret = \"__PASSWORD__\"\n",
+    "  }\n",
+    "}",
+);
+
+fn plan_vpn_nordvpn_ike2(
+    model: &DeviceModel,
+    i2: &VpnNordvpnIke2Profile,
+) -> Result<Plan, Unsupported> {
+    i2.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops: Vec<PlanOp> = [
+        "strongswan",
+        "strongswan-charon",
+        "strongswan-swanctl",
+        "strongswan-mod-aes",
+        "strongswan-mod-sha1",
+        "strongswan-mod-sha2",
+        "strongswan-mod-gmp",
+        "strongswan-mod-hmac",
+        "strongswan-mod-pubkey",
+        "strongswan-mod-x509",
+        "strongswan-mod-pem",
+        "strongswan-mod-random",
+        "strongswan-mod-nonce",
+        "strongswan-mod-eap-identity",
+        "strongswan-mod-eap-mschapv2",
+        "strongswan-mod-md4",
+        "strongswan-mod-kernel-netlink",
+        "strongswan-mod-updown",
+        "strongswan-mod-attr",
+        "strongswan-mod-openssl",
+        "strongswan-mod-socket-default",
+        "kmod-ipsec4",
+        "kmod-xfrm-interface",
+        "kmod-nft-xfrm",
+    ]
+    .iter()
+    .map(|name| PlanOp::EnsurePackage {
+        name: (*name).into(),
+    })
+    .collect();
+    // hw_accel branch: true = modprobe the EIP-93; false = rmmod +
+    // blacklist before any SA exists (with live references it wedges
+    // the kernel — AGENTS.md; the 1.x hardware lessons)
+    let hw_block = if i2.hw_accel {
+        "modprobe crypto_hw_eip93 2>/dev/null || true\n".to_string()
+    } else {
+        concat!(
+            "rmmod crypto_hw_eip93 2>/dev/null || true\n",
+            "mkdir -p /etc/modprobe.d\n",
+            "echo 'blacklist crypto_hw_eip93' > /etc/modprobe.d/no-eip93.conf\n",
+        )
+        .to_string()
+    };
+    let hw_echo = if i2.hw_accel { "on" } else { "off" };
+    let swanctl = substitute_tokens(
+        NORDVPN_IKE2_SWANCTL_SH,
+        &[
+            ("__STATION__", i2.station.as_str()),
+            ("__USERNAME__", i2.username.as_str()),
+            ("__PASSWORD__", i2.password.as_str()),
+        ],
+    );
+    let bringup = "( sleep 8; /usr/lib/ipsec/charon >/dev/null 2>&1; ) &\n\
+                   ( sleep 20; swanctl --load-all >/dev/null 2>&1; \
+                    swanctl --initiate --child nord >/dev/null 2>&1; ) &";
+    // transport script body, line-by-line for byte fidelity with the
+    // FIXED 1.x builder (golden: tests/goldens/vpn-nordvpn-ikev2.sh)
+    let mut body = String::new();
+    body.push_str("# --- NordVPN IKEv2 (strongSwan, EAP-MSCHAPv2) ---\n");
+    body.push_str(&hw_block);
+    body.push('\n');
+    body.push_str("mkdir -p /var/ipsec /etc/swanctl/conf.d /etc/swanctl/x509ca\n\n");
+    // printf with shell-escaped \n sequences (literal backslash-n, not
+    // actual newlines — the golden bytes)
+    body.push_str(
+        "printf 'charon {\\n  install_routes = yes\\n}\\n' > /var/ipsec/strongswan.conf\n\n",
+    );
+    body.push_str("cat > /etc/swanctl/x509ca/nordvpn.pem << 'NORD_CA_EOF'\n");
+    body.push_str(NORDVPN_IKE2_CA_PEM);
+    body.push_str("NORD_CA_EOF\n\n");
+    body.push_str("cat > /etc/swanctl/conf.d/nordvpn-ikev2.conf << 'NORD_SWAN_EOF'\n");
+    body.push_str(&swanctl);
+    body.push('\n');
+    body.push_str("NORD_SWAN_EOF\n\n");
+    body.push_str("chmod 600 /etc/swanctl/conf.d/nordvpn-ikev2.conf\n\n");
+    body.push_str("# charon is not under procd here: start it from rc.local after the network\n");
+    body.push_str(
+        "grep -q 'nordvpn-ikev2-charon' /etc/rc.local 2>/dev/null || \
+         cat >> /etc/rc.local << 'NORD_RC_EOF'\n",
+    );
+    body.push_str("# nordvpn-ikev2-charon\n");
+    body.push_str(bringup);
+    body.push('\n');
+    body.push_str("NORD_RC_EOF\n\n");
+    body.push_str("# also bring it up right now (first boot)\n");
+    body.push_str(bringup);
+    body.push('\n');
+    body.push_str(&format!(
+        "echo \"NordVPN IKEv2 staged: server {} ({}), hw_accel={}\"",
+        i2.hostname, i2.station, hw_echo
+    ));
+    let payload = format!(
+        "cat > /tmp/nordvpn_ikev2_setup.sh << 'VPN_SETUP_EOF'\n{}\nVPN_SETUP_EOF\nsh /tmp/nordvpn_ikev2_setup.sh",
+        body.trim_end()
+    );
+    ops.push(PlanOp::Shell { command: payload });
+    // firewall block inline (ikev2 does NOT use the shared verify
+    // tail — charon bring-up is rc.local-based; the zone rides the
+    // ipsec0 logical interface)
+    for pattern in [
+        "name='vpn'",
+        "dest='vpn'",
+        "name='KillSwitch-Reject-NonVPN'",
+        "name='Allow-VPN-Management'",
+    ] {
+        ops.push(PlanOp::CleanupUciSections {
+            config: "firewall".into(),
+            pattern: pattern.into(),
+        });
+    }
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_zone".into(),
+        section_type: "zone".into(),
+        options: vec![
+            ("name".into(), literal("vpn".into())),
+            ("input".into(), literal("REJECT".into())),
+            ("output".into(), literal("ACCEPT".into())),
+            ("forward".into(), literal("REJECT".into())),
+            ("masq".into(), literal("1".into())),
+            ("mtu_fix".into(), literal("1".into())),
+            ("network".into(), literal("ipsec0".into())),
+        ],
+    });
+    ops.push(PlanOp::SetUciSection {
+        config: "firewall".into(),
+        section: "vpn_fwd".into(),
+        section_type: "forwarding".into(),
+        options: vec![
+            ("src".into(), literal("lan".into())),
+            ("dest".into(), literal("vpn".into())),
+        ],
+    });
+    if i2.allow_management {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_mgmt".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("Allow-VPN-Management".into())),
+                ("src".into(), literal("vpn".into())),
+                ("proto".into(), literal("tcp".into())),
+                ("dest_port".into(), literal("22 80 443".into())),
+                ("target".into(), literal("ACCEPT".into())),
+            ],
+        });
+    }
+    if i2.kill_switch {
+        ops.push(PlanOp::SetUciSection {
+            config: "firewall".into(),
+            section: "vpn_killswitch".into(),
+            section_type: "rule".into(),
+            options: vec![
+                ("name".into(), literal("KillSwitch-Reject-NonVPN".into())),
+                ("src".into(), literal("lan".into())),
+                ("dest".into(), literal("wan".into())),
+                ("proto".into(), literal("all".into())),
+                ("target".into(), literal("REJECT".into())),
+            ],
+        });
+    }
+    ops.push(PlanOp::Shell {
+        command: "nft add rule inet fw4 input_wan udp dport { 500, 4500 } accept comment 'IKE/NAT-T' 2>/dev/null; \
+                  nft add rule inet fw4 input_wan meta l4proto esp accept comment 'ESP' 2>/dev/null; true"
+            .into(),
+    });
+    for dns in ["103.86.96.100", "103.86.99.100"] {
+        ops.push(PlanOp::Shell {
+            command: format!("uci del_list dhcp.@dnsmasq[0].server='{dns}' 2>/dev/null; true"),
+        });
+        ops.push(PlanOp::UciAddList {
+            config: "dhcp".into(),
+            section: "@dnsmasq[0]".into(),
+            option: "server".into(),
+            value: dns.into(),
+        });
+    }
+    ops.push(PlanOp::Shell {
+        command: "uci set dhcp.@dnsmasq[0].noresolv='1'".into(),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "swanctl config present".into(),
+            command: "test -f /etc/swanctl/conf.d/nordvpn-ikev2.conf && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+        VerificationCheck {
+            description: "NordVPN CA certificate installed".into(),
+            command: "test -f /etc/swanctl/x509ca/nordvpn.pem && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "vpn-nordvpn-ikev2".into(),
         model_id: model.id.clone(),
         ops,
         verification,
@@ -3162,6 +3536,9 @@ pub enum Profile {
     /// Self-announcing WireGuard server: Nostr Europa listing
     /// publisher (pairs with wireguard-server; 1.x marks it untested).
     VpnNode(VpnNodeProfile),
+    /// NordVPN IKEv2/IPsec via strongSwan (resolved statics; 1.x
+    /// marks the preset's IKEv2 path hardware-tested).
+    VpnNordvpnIke2(VpnNordvpnIke2Profile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -3202,6 +3579,7 @@ impl Profile {
             Profile::VpnIvpn(_) => "vpn-ivpn",
             Profile::VpnMullvad(_) => "vpn-mullvad",
             Profile::VpnNode(_) => "vpn-node",
+            Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -3241,6 +3619,7 @@ impl Profile {
             Profile::VpnIvpn(_) => &[],
             Profile::VpnMullvad(_) => &[],
             Profile::VpnNode(_) => &[],
+            Profile::VpnNordvpnIke2(_) => &[],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -3651,6 +4030,7 @@ pub fn plan_profile(
         Profile::VpnIvpn(iv) => plan_vpn_ivpn(model, iv),
         Profile::VpnMullvad(mu) => plan_vpn_mullvad(model, mu),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
+        Profile::VpnNordvpnIke2(i2) => plan_vpn_nordvpn_ike2(model, i2),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }?;

@@ -23,6 +23,7 @@ wireguard_udp, per-server WG public key in technologies metadata).
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Any
 
@@ -804,12 +805,6 @@ def _build_ikev2_ops(params: dict[str, Any]) -> list[Op]:
       way.
     """
     access_token = params.get("access_token", "")
-    if not access_token:
-        return [Comment(
-            text="vpn-nordvpn-ikev2: NOT CONFIGURED — set access_token in "
-                 "config.toml [use_cases.vpn-nordvpn-ikev2] (EAP credentials "
-                 "are derived from it at build time)",
-        )]
     server = params.get("server") or "DE"
     hw_accel = params.get("hw_accel", True)
     kill_switch = params.get("kill_switch", True)
@@ -817,9 +812,56 @@ def _build_ikev2_ops(params: dict[str, Any]) -> list[Op]:
     ap_ssid = params.get("ap_ssid", "")
     ap_key = params.get("ap_key", "")
 
-    basic = base64.b64encode(f"token:{access_token}".encode()).decode()
-    creds = _fetch_credentials(basic)
-    srv = _resolve_server(server, access_token, "ikev2")
+    # Statics-direct mode (the 2.x planner's purity contract, added with
+    # the Rust port): resolved credentials + server ride the params —
+    # the golden path and the I/O-free planner both use this. The
+    # access_token path stays for the 1.x host flow (network at build
+    # time). plan.rs VpnNordvpnIke2Profile::validate mirrors the gates.
+    su = str(params.get("username", ""))
+    sp = str(params.get("password", ""))
+    sst = str(params.get("station", ""))
+    shn = str(params.get("hostname", ""))
+    if su or sp or sst or shn:
+        if not (su and sp and sst):
+            raise ValueError(
+                "vpn-nordvpn-ikev2 statics mode requires username, password, "
+                "and station together (partial statics are a config error)"
+            )
+        creds = {"username": su, "password": sp}
+        srv = {"station": sst, "hostname": shn or sst}
+    elif access_token:
+        basic = base64.b64encode(f"token:{access_token}".encode()).decode()
+        creds = _fetch_credentials(basic)
+        srv = _resolve_server(server, access_token, "ikev2")
+    else:
+        return [Comment(
+            text="vpn-nordvpn-ikev2: NOT CONFIGURED — set access_token in "
+                 "config.toml [use_cases.vpn-nordvpn-ikev2] (EAP credentials "
+                 "are derived from it at build time), or pass resolved "
+                 "statics (username + password + station)",
+        )]
+
+    # The credentials land inside DOUBLE-QUOTED swanctl values (eap_id =
+    # "…", secret = "…") inside the quoted heredoc — the heredoc guards
+    # shell, but a `"` or control char breaks swanctl config parsing;
+    # the station lands bare as remote_addrs (dotted quad); the hostname
+    # rides a double-quoted echo. Gate all four (surfshark #604 class).
+    _IKE2_SECRET_RE = re.compile(r"^[^\"\x00-\x1f]+$")
+    for _field, _value in (("username", creds["username"]),
+                            ("password", creds["password"])):
+        if not _IKE2_SECRET_RE.fullmatch(_value):
+            raise ValueError(
+                f"vpn-nordvpn-ikev2 {_field} must not contain double quotes "
+                f"or control characters (it lands inside a swanctl value)"
+            )
+    if not re.fullmatch(r"[0-9.]+", srv["station"]):
+        raise ValueError(
+            f"vpn-nordvpn-ikev2 station must be an IPv4 address, got {srv['station']!r}"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", srv["hostname"]):
+        raise ValueError(
+            f"vpn-nordvpn-ikev2 hostname must be a plain hostname, got {srv['hostname']!r}"
+        )
 
     hw_block = (
         "modprobe crypto_hw_eip93 2>/dev/null || true\n"
@@ -929,6 +971,14 @@ register(UseCase(
     params={
         "access_token": ParamDef(type=str, required=False, allow_empty=True,
                                  description="NordVPN access token (Nord Account dashboard)"),
+        "username": ParamDef(type=str, required=False, allow_empty=True,
+                             description="IKEv2 statics mode: service username (resolved from access_token at build time; 2.x purity path)"),
+        "password": ParamDef(type=str, required=False, allow_empty=True,
+                             description="IKEv2 statics mode: service password"),
+        "station": ParamDef(type=str, required=False, allow_empty=True,
+                            description="IKEv2 statics mode: server IPv4 (remote_addrs)"),
+        "hostname": ParamDef(type=str, required=False, allow_empty=True,
+                             description="IKEv2 statics mode: server hostname (display only)"),
         "server": ParamDef(type=str, default="DE",
                            description="Country selection: 'DE', 'germany', or a country id (hostname/IP pins are refused)"),
         "hw_accel": ParamDef(type=bool, default=True,
