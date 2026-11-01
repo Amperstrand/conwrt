@@ -24,8 +24,9 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -544,6 +545,7 @@ enum ProfileChoice {
     VpnIvpn,
     VpnMullvad,
     VpnNode,
+    VpnNordvpnIke2,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -931,6 +933,28 @@ struct ProfileArgs {
     /// vpn-node: path to the nak binary.
     #[arg(long)]
     node_nak_path: Option<String>,
+    /// vpn-nordvpn-ikev2: EAP service username (resolved from access
+    /// token at build time; the 2.x purity path).
+    #[arg(long)]
+    ike2_username: Option<String>,
+    /// vpn-nordvpn-ikev2: EAP service password.
+    #[arg(long)]
+    ike2_password: Option<String>,
+    /// vpn-nordvpn-ikev2: server IPv4 (swanctl remote_addrs).
+    #[arg(long)]
+    ike2_station: Option<String>,
+    /// vpn-nordvpn-ikev2: server hostname (display only).
+    #[arg(long)]
+    ike2_hostname: Option<String>,
+    /// vpn-nordvpn-ikev2: opt OUT of EIP-93 hw accel (default on).
+    #[arg(long)]
+    ike2_no_hw_accel: bool,
+    /// vpn-nordvpn-ikev2: opt OUT of the kill switch (default on).
+    #[arg(long)]
+    ike2_no_kill_switch: bool,
+    /// vpn-nordvpn-ikev2: opt OUT of management from the VPN zone.
+    #[arg(long)]
+    ike2_no_management: bool,
     /// pbr: LAN interface counted as local traffic (default `lan`).
     #[arg(long)]
     pbr_lan: Option<String>,
@@ -2442,6 +2466,16 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 .clone()
                 .unwrap_or_else(|| "/usr/bin/nak".into()),
         })),
+        ProfileChoice::VpnNordvpnIke2 => Ok(Profile::VpnNordvpnIke2(VpnNordvpnIke2Profile {
+            // required gates (username/password/station) fire at plan time
+            username: args.ike2_username.clone().unwrap_or_default(),
+            password: args.ike2_password.clone().unwrap_or_default(),
+            station: args.ike2_station.clone().unwrap_or_default(),
+            hostname: args.ike2_hostname.clone().unwrap_or_default(),
+            hw_accel: !args.ike2_no_hw_accel,
+            kill_switch: !args.ike2_no_kill_switch,
+            allow_management: !args.ike2_no_management,
+        })),
     }
 }
 
@@ -3570,6 +3604,13 @@ mod tests {
             node_relays: None,
             node_content: None,
             node_nak_path: None,
+            ike2_username: None,
+            ike2_password: None,
+            ike2_station: None,
+            ike2_hostname: None,
+            ike2_no_hw_accel: false,
+            ike2_no_kill_switch: false,
+            ike2_no_management: false,
             trm_radio: None,
             trm_timeout: None,
             trm_retry: None,

@@ -28,6 +28,6 @@
   },
   "pending_migration": [
     "doh (Rust plan exists; needs fixture + gap accounting)",
-    "vpn presets (nordvpn-ikev2), openperf_client, openperf_server, ap-nostr-id, configurationwizzard, fips-bluetooth-rfcomm — 6 of 39 presets (no Rust profile yet)"
+    "openperf_client, openperf_server, ap-nostr-id, configurationwizzard, fips-bluetooth-rfcomm — 5 of 39 presets (no Rust profile yet)"
   ]
 }

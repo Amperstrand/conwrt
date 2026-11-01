@@ -100,6 +100,12 @@
 //!     "account_token": "a1b2c3d4e5f6",
 //!     "upstream_gateway": "192.168.8.1",
 //! }))
+//! print(r["vpn-nordvpn-ikev2"].build_configure({
+//!     "username": "svcuser",
+//!     "password": "svcpass",
+//!     "station": "193.29.107.10",
+//!     "hostname": "de500.nordvpn.com",
+//! }))
 //! print(r["vpn-node"].build_configure({
 //!     "nsec": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 //!     "endpoint_host": "vpn.example.com",
@@ -125,8 +131,8 @@ use conwrt_core::plan::{
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
     TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
-    VpnMullvadProfile, VpnNodeProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile,
+    VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
     WireguardClientProfile, WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
@@ -505,6 +511,20 @@ fn vpn_mullvad_matches_1x_golden() {
             ..VpnMullvadProfile::default()
         }),
         include_str!("goldens/vpn-mullvad.sh"),
+    );
+}
+
+#[test]
+fn vpn_nordvpn_ikev2_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::VpnNordvpnIke2(VpnNordvpnIke2Profile {
+            username: "svcuser".into(),
+            password: "svcpass".into(),
+            station: "193.29.107.10".into(),
+            hostname: "de500.nordvpn.com".into(),
+            ..VpnNordvpnIke2Profile::default()
+        }),
+        include_str!("goldens/vpn-nordvpn-ikev2.sh"),
     );
 }
 
