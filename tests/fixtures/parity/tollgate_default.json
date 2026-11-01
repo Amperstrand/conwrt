@@ -1,0 +1,1 @@
+{"use_case": "tollgate", "params": {"mint_url": "https://testnut.cashu.space", "lightning_address": "bench@ln.test", "price_per_minute": 2, "price_sats_per_mib": 21, "gateway_name": "bench-gw", "gateway_domain": "gw.bench.test"}}

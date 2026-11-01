@@ -64,8 +64,15 @@ _DROP_WORDS = {"2>/dev/null"}
 # deliberate Rust-side extension; 1.x Python bakes packages into the
 # image, so its configure render carries no install lines. Same
 # exclusion as crates/conwrt-core/src/parity.rs::command_lines and
-# tests/use_case_goldens.rs.
-_DROP_LINE_PREFIXES = ("opkg install ", "if command -v apk ", "&& apk add ")
+# tests/use_case_goldens.rs. The `if ! (opkg list-installed` shape is the
+# same preamble wrapped in an idempotence guard (ssl's libustream).
+_DROP_LINE_PREFIXES = (
+    "opkg install ",
+    "if command -v apk ",
+    "&& apk add ",
+    "if ! (opkg list-installed ",
+    "if [ -n \"$(opkg list-installed ",
+)
 
 
 def _normalize_line(line: str) -> list[str] | None:
@@ -108,7 +115,61 @@ def _normalize_line(line: str) -> list[str] | None:
 
 def normalize(script: str) -> list[list[str]]:
     """Normalize a rendered script to its semantic command stream."""
-    return [t for t in (_normalize_line(l) for l in script.splitlines()) if t is not None]
+    # Join backslash-continued lines FIRST: a trailing `\\` is shell
+    # line-wrapping (presentation), not a semantic boundary — tokenizing
+    # the wrapped halves separately chokes on the dangling escape. Applied
+    # to both renders identically. Heredoc BODIES are data, not command
+    # lines (shlex chokes on awk/sed quoting inside them): each body is
+    # emitted as one two-token opaque comparison unit, bypassing _normalize_line.
+    raw = script.splitlines()
+    out: list[list[str]] = []
+    buf = ""
+    heredoc_marker: str | None = None
+    heredoc_lines: list[str] = []
+    for line in raw:
+        if heredoc_marker is not None:
+            if line.strip() == heredoc_marker:
+                out.append(["__HEREDOC__", "\n".join(heredoc_lines)])
+                heredoc_marker = None
+                heredoc_lines = []
+            else:
+                heredoc_lines.append(line.rstrip())
+            continue
+        candidate = (buf + line) if buf else line
+        if _opens_shell_continuation(candidate):
+            # either a trailing backslash (line wrap) or an unterminated
+            # single quote (a printf-embedded script — legal multi-line
+            # shell); both are presentation joins, not command boundaries.
+            buf = candidate.rstrip()[:-1] + " " if candidate.rstrip().endswith("\\") else candidate + "\n"
+            continue
+        line = candidate
+        buf = ""
+        if (tok := _normalize_line(line)) is not None:
+            out.append(tok)
+        start = _heredoc_start(line)
+        if start is not None:
+            heredoc_marker = start
+    if buf:  # trailing continuation with nothing after it
+        if (tok := _normalize_line(buf.rstrip())) is not None:
+            out.append(tok)
+    return out
+
+
+def _opens_shell_continuation(candidate: str) -> bool:
+    """True when the shell would keep reading: trailing `\\`, or an odd
+    number of unescaped single quotes (multi-line quoted literal)."""
+    stripped = candidate.rstrip()
+    if stripped.endswith("\\"):
+        return True
+    return stripped.count("'") % 2 == 1
+
+
+def _heredoc_start(line: str) -> str | None:
+    """Return the terminator if `line` opens a heredoc (`<< 'EOF'` etc.)."""
+    import re
+
+    m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+    return m.group(1) if m else None
 
 
 def _render_tokens(lines: list[list[str]]) -> list[str]:

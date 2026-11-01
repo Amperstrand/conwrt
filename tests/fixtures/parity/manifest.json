@@ -56,6 +56,82 @@
     "mwan3_balanced": {
       "use_case": "mwan3",
       "expect": "EQUAL"
+    },
+    "mesh11sd_default": {
+      "use_case": "mesh11sd",
+      "expect": "EQUAL"
+    },
+    "mesh11sd_wpa3_key": {
+      "use_case": "mesh11sd",
+      "expect": "EQUAL"
+    },
+    "travelmate_default": {
+      "use_case": "travelmate",
+      "expect": "EQUAL"
+    },
+    "travelmate_uplinks": {
+      "use_case": "travelmate",
+      "expect": "EQUAL"
+    },
+    "ssl_default": {
+      "use_case": "ssl",
+      "expect": "EQUAL"
+    },
+    "ssl_qip": {
+      "use_case": "ssl",
+      "expect": "EQUAL"
+    },
+    "nodns_default": {
+      "use_case": "nodns",
+      "expect": "EQUAL"
+    },
+    "nodns_custom": {
+      "use_case": "nodns",
+      "expect": "EQUAL"
+    },
+    "pbr_default": {
+      "use_case": "pbr",
+      "expect": "EQUAL"
+    },
+    "pbr_custom": {
+      "use_case": "pbr",
+      "expect": "EQUAL"
+    },
+    "openclash_default": {
+      "use_case": "openclash",
+      "expect": "EQUAL"
+    },
+    "openclash_tun": {
+      "use_case": "openclash",
+      "expect": "EQUAL"
+    },
+    "guest_wifi_default": {
+      "use_case": "guest-wifi",
+      "expect": "EQUAL"
+    },
+    "guest_wifi_custom": {
+      "use_case": "guest-wifi",
+      "expect": "EQUAL"
+    },
+    "tollgate_default": {
+      "use_case": "tollgate",
+      "expect": "EQUAL"
+    },
+    "tollgate_security_default": {
+      "use_case": "tollgate-security",
+      "expect": "EQUAL"
+    },
+    "auto_sqm_static": {
+      "use_case": "auto-sqm",
+      "expect": "EQUAL"
+    },
+    "auto_sqm_iperf": {
+      "use_case": "auto-sqm",
+      "expect": "EQUAL"
+    },
+    "cashu_vpn_default": {
+      "use_case": "cashu-vpn-client",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

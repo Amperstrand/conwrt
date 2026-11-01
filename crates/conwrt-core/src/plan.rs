@@ -3958,10 +3958,19 @@ fn plan_travelmate(model: &DeviceModel, tm: &TravelmateProfile) -> Result<Plan, 
         action: ServiceAction::Restart,
     });
     ops.push(PlanOp::Shell {
-        command: format!(
-            "echo \"Travelmate configured: auto-connect on {}\"",
-            tm.radio
-        ),
+        // 1.x parity: with seeded uplinks the count is part of the line.
+        command: if tm.uplinks.is_empty() {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {}\"",
+                tm.radio
+            )
+        } else {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {} ({} uplinks)\"",
+                tm.radio,
+                tm.uplinks.len()
+            )
+        },
     });
     let verification = vec![
         VerificationCheck {
