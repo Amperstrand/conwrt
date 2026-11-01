@@ -24,10 +24,26 @@ sys.modules["integration_conftest_under_test"] = conftest
 _spec.loader.exec_module(conftest)
 
 
+def _venue_scope():
+    """Scope across pytest generations: newer pytest wraps fixtures in a
+    FixtureFunctionDefinition (scope on _fixture_function), older ones
+    hang a _pytestfixturefunction marker off the plain function."""
+    definition = conftest.venue
+    for holder in (
+        definition,
+        getattr(definition, "_fixture_function", None),
+        getattr(definition, "_pytestfixturefunction", None),
+    ):
+        scope = getattr(holder, "scope", None)
+        if scope:
+            return scope
+    return None
+
+
 def test_venue_fixture_is_session_scoped():
     """r4274274201: function scope released the labgrid place after every
     test — a sibling session could take the device in the gap."""
-    assert conftest.venue._pytestfixturefunction.scope == "session"
+    assert _venue_scope() == "session"
 
 
 def test_darkness_marker_ignores_remote_tracebacks():
