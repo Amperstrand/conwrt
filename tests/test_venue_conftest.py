@@ -55,7 +55,7 @@ def test_labgrid_honors_native_coordinator(monkeypatch):
     monkeypatch.setenv("LG_COORDINATOR", "other-host:20407")
     monkeypatch.delenv("CONWRT_LABGRID_COORDINATOR", raising=False)
     conftest._labgrid(["acquire"], "p1")
-    assert "-x" not in calls[0][0]
+    assert "-x" not in calls[0]
 
 
 def test_labgrid_keeps_default_coordinator_without_native(monkeypatch):
