@@ -103,7 +103,7 @@ pub fn derive_v1(
     use sha2::Digest;
     let preimage = alloc::format!("{DOMAIN_VERSION_V1}:{domain}:{salt}:{mac12}");
     let digest = Sha256::digest(preimage.as_bytes());
-    Ok(hex(&digest[..(length + 1) / 2])[..length].to_string())
+    Ok(hex(&digest[..length.div_ceil(2)])[..length].to_string())
 }
 
 /// v2 derivation (HKDF, RFC 5869): first `length` hex characters of
