@@ -416,8 +416,10 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 "tether-android-adb" => TetherVariant::AndroidAdb,
                 _ => TetherVariant::Ios,
             };
-            let mut p = TetherProfile::default();
-            p.variant = variant;
+            let mut p = TetherProfile {
+                variant,
+                ..TetherProfile::default()
+            };
             if let Some(v) = get_str(&params, "interface") {
                 p.interface = v;
             }
