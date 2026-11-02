@@ -20,11 +20,13 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
-    GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile,
-    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile,
-    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
+    ConfigurationWizzardProfile, DohProfile, FleetIdentityProfile, GuestWifiProfile,
+    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
+    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink,
+    WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -468,6 +470,58 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 p.nak_path = v;
             }
             Ok(Profile::VpnNode(p))
+        }
+        "openperf_client" => {
+            let p = OpenPerfClientProfile {
+                mgmt_ssid: get_str(&params, "mgmt_ssid").unwrap_or_else(|| "openperf".into()),
+            };
+            Ok(Profile::OpenPerfClient(p))
+        }
+        "openperf_server" => {
+            let p = OpenPerfServerProfile {
+                mgmt_ssid: get_str(&params, "mgmt_ssid").unwrap_or_else(|| "openperf".into()),
+                port: get_u16(&params, "port", 7777),
+            };
+            Ok(Profile::OpenPerfServer(p))
+        }
+        "configurationwizzard" => Ok(Profile::ConfigurationWizzard(ConfigurationWizzardProfile)),
+        "fleet_identity" => {
+            let mut p = FleetIdentityProfile::default();
+            p.salt = get_str(&params, "salt").ok_or("salt is required")?;
+            if let Some(v) = get_str(&params, "hostname_prefix") {
+                p.hostname_prefix = v;
+            }
+            if let Some(v) = get_str(&params, "ssid_prefix") {
+                p.ssid_prefix = v;
+            }
+            if let Some(v) = get_str(&params, "wifi_network") {
+                p.wifi_network = v;
+            }
+            if let Some(v) = params.get("password_length").and_then(|v| v.as_u64()) {
+                p.password_length = u32::try_from(v).map_err(|_| "password_length out of range")?;
+            }
+            p.disarm_dhcp = get_bool(&params, "disarm_dhcp", true);
+            p.configure_ap = get_bool(&params, "configure_ap", true);
+            Ok(Profile::FleetIdentity(p))
+        }
+        "tollgate-cellular" => {
+            let mut p = TollgateCellularProfile::default();
+            for (key, slot) in [
+                ("apn", &mut p.apn),
+                ("sim_slot", &mut p.sim_slot),
+                ("wan_iface", &mut p.wan_iface),
+                ("usb_iface", &mut p.usb_iface),
+                ("iccid", &mut p.iccid),
+                ("provider", &mut p.provider),
+                ("eid", &mut p.eid),
+                ("balance_api", &mut p.balance_api),
+                ("management_ip", &mut p.management_ip),
+            ] {
+                if let Some(v) = get_str(&params, key) {
+                    *slot = v;
+                }
+            }
+            Ok(Profile::TollgateCellular(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }

@@ -164,10 +164,51 @@
     "vpn_node_default": {
       "use_case": "vpn-node",
       "expect": "EQUAL"
+    },
+    "openperf_client_default": {
+      "use_case": "openperf_client",
+      "expect": "EQUAL"
+    },
+    "openperf_client_custom": {
+      "use_case": "openperf_client",
+      "expect": "EQUAL"
+    },
+    "openperf_server_default": {
+      "use_case": "openperf_server",
+      "expect": "EQUAL"
+    },
+    "openperf_server_custom": {
+      "use_case": "openperf_server",
+      "expect": "EQUAL"
+    },
+    "configurationwizzard_default": {
+      "use_case": "configurationwizzard",
+      "expect": "EQUAL"
+    },
+    "fleet_identity_default": {
+      "use_case": "fleet_identity",
+      "expect": "EQUAL"
+    },
+    "fleet_identity_minimal": {
+      "use_case": "fleet_identity",
+      "expect": "EQUAL"
+    },
+    "tollgate_cellular_full": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+      ]
+    },
+    "tollgate_cellular_minimal": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+      ]
     }
   },
   "pending_migration": [
-    "parity-harness unreachable via Profile enum (typed only in the ports-m separate ops registry): openperf_client, openperf_server, configurationwizzard, fleet-identity, tollgate-cellular \u2014 wire when those presets gain Profile variants or the harness learns their registry",
-    "vpn provider arms (credless-fixture design pending \u2014 build-time server resolution)"
+    "vpn provider arms (nordvpn/pia/surfshark/openvpn/ivpn/mullvad): presets resolve servers at Python build time (network + credentials) \u2014 credless-fixture design pending; ports-m typed the profiles (enum variants exist), only the cross-implementation fixtures are blocked"
   ]
 }

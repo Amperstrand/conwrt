@@ -2829,3 +2829,160 @@ impl AutoSqmProfile {
         Ok(())
     }
 }
+
+/// Deterministic per-device identity — port of the 1.x `fleet_identity`
+/// use case (`scripts/use_cases/fleet_identity.py`; host twin
+/// `scripts/fleet_secrets.py`): MAC-derived root password + hostname +
+/// optional management AP + rogue-DHCP disarm, in ONE ash invocation
+/// (the derivations must share a process).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetIdentityProfile {
+    /// Fleet salt, 8-128 chars of `[A-Za-z0-9_-]` (single-quote-safe).
+    pub salt: String,
+    /// Hostname prefix (`[a-z0-9][a-z0-9-]{0,19}`).
+    pub hostname_prefix: String,
+    /// Management-AP SSID prefix (defaults to the hostname prefix).
+    pub ssid_prefix: String,
+    /// Wifi domain name for the AP key derivation.
+    pub wifi_network: String,
+    /// Derived-password length, 8..=32 (1.x default 20).
+    pub password_length: u32,
+    /// Disarm rogue DHCP (dhcp.lan.ignore + ra/dhcpv6 disabled).
+    pub disarm_dhcp: bool,
+    /// Configure the guarded management AP block.
+    pub configure_ap: bool,
+}
+
+impl Default for FleetIdentityProfile {
+    fn default() -> Self {
+        Self {
+            salt: String::new(),
+            hostname_prefix: "fleet".into(),
+            ssid_prefix: String::new(),
+            wifi_network: "fleet".into(),
+            password_length: 20,
+            disarm_dhcp: true,
+            configure_ap: true,
+        }
+    }
+}
+
+impl FleetIdentityProfile {
+    pub(crate) fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        let salt_ok = (8..=128).contains(&self.salt.len())
+            && self
+                .salt
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+        if !salt_ok {
+            return Err(bad(
+                "salt must be 8-128 chars of [A-Za-z0-9_-] (openssl rand -hex 16)",
+            ));
+        }
+        let prefix_ok = |v: &str| {
+            (1..=20).contains(&v.len())
+                && v.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                && v.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        };
+        if !prefix_ok(&self.hostname_prefix) {
+            return Err(bad("hostname_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        if !self.ssid_prefix.is_empty() && !prefix_ok(&self.ssid_prefix) {
+            // empty = "use hostname_prefix" (1.x `or` fallback); the
+            // resolved value is then the already-validated prefix.
+            return Err(bad("ssid_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        let net_ok = (1..=16).contains(&self.wifi_network.len())
+            && self
+                .wifi_network
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !net_ok {
+            return Err(bad("wifi_network must match [a-z0-9][a-z0-9-]{0,15}"));
+        }
+        if !(8..=32).contains(&self.password_length) {
+            return Err(bad("password_length must be 8..=32"));
+        }
+        Ok(())
+    }
+}
+
+/// TollGate cellular upstream — port of the 1.x `tollgate-cellular`
+/// use case (`scripts/use_cases/tollgate_cellular.py`, bench-validated
+/// on the NR7101 2026-10-24): Quectel-class modem as ECM WAN with SIM
+/// slot and APN via the AT port (NEVER uqmi — the hang class), one-shot
+/// idempotent modem setup, optional SIM balance tooling, and hotplug
+/// re-up.
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TollgateCellularProfile {
+    /// APN for cid 1 (modem auto-dial in ECM mode).
+    pub apn: String,
+    /// Dual-slot modems: slot holding the profile card ("" = skip).
+    pub sim_slot: String,
+    /// UCI network iface for the modem WAN (1.x default `wan`).
+    pub wan_iface: String,
+    /// USB ECM interface the modem enumerates (1.x default `usb0`).
+    pub usb_iface: String,
+    /// SIM ICCID — non-empty stages sim.json + the balance tooling.
+    pub iccid: String,
+    /// Provider label for sim.json.
+    pub provider: String,
+    /// SIM EID for sim.json.
+    pub eid: String,
+    /// Provider balance API URL template ({{iccid}} substituted on-device).
+    pub balance_api: String,
+    /// Optional wired-side management IP (also configures network.lan).
+    pub management_ip: String,
+}
+
+impl Default for TollgateCellularProfile {
+    fn default() -> Self {
+        Self {
+            apn: String::new(),
+            sim_slot: String::new(),
+            wan_iface: "wan".into(),
+            usb_iface: "usb0".into(),
+            iccid: String::new(),
+            provider: String::new(),
+            eid: String::new(),
+            balance_api: String::new(),
+            management_ip: String::new(),
+        }
+    }
+}
+
+impl TollgateCellularProfile {
+    pub(crate) fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        // Every string lands in single-quoted shell or uci values.
+        for v in [
+            &self.apn,
+            &self.sim_slot,
+            &self.iccid,
+            &self.provider,
+            &self.eid,
+            &self.balance_api,
+            &self.management_ip,
+        ] {
+            if v.contains('\'') || v.contains('\\') || v.contains('"') {
+                return Err(bad(
+                    "tollgate-cellular string params must not contain quotes/backslashes",
+                ));
+            }
+        }
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        };
+        if !iface_ok(&self.wan_iface) || !iface_ok(&self.usb_iface) {
+            return Err(bad("wan_iface/usb_iface must be plain interface names"));
+        }
+        Ok(())
+    }
+}
