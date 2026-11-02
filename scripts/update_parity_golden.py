@@ -33,10 +33,21 @@ def main() -> int:
             continue
         fixture = json.loads(fixture_path.read_text())
         uc = use_cases.get(fixture["use_case"])
-        if uc is None or uc.build_configure_ops is None:
+        if uc is None:
             print(f"skip {fixture_path.name}: no Python builder", file=sys.stderr)
             continue
-        script = render_shell(uc.build_configure_ops(fixture["params"]))
+        # parity fixtures render through the SAME credless stub path the
+        # test harness uses (vpn providers fetch/resolve at build time)
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+        try:
+            import test_parity_rust_plan as _tpr
+        except ImportError:
+            _tpr = None
+        if _tpr is not None and fixture["use_case"] in _tpr._VPN_PROVIDER_STUBS:
+            script = _tpr._python_render(fixture)
+        else:
+            assert uc.build_configure_ops is not None, fixture["use_case"]
+            script = render_shell(uc.build_configure_ops(fixture["params"]))
         out = golden_dir / f"{fixture_path.stem}.sh"
         out.write_text(script)
         print(f"wrote {out.relative_to(REPO)} ({len(script.splitlines())} lines)")
