@@ -20,12 +20,12 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
-    GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    OpenperfClientProfile, OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
-    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink, WireguardClientProfile,
-    WireguardServerProfile, render_shell,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
+    ConfigurationwizzardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
+    NodnsProfile, OpenClashProfile, OpenperfClientProfile, OpenperfServerProfile, PbrProfile,
+    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
+    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile,
+    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -482,6 +482,7 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             }
             Ok(Profile::VpnNode(p))
         }
+        "configurationwizzard" => Ok(Profile::Configurationwizzard(ConfigurationwizzardProfile)),
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
 }

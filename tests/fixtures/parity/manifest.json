@@ -180,6 +180,10 @@
     "vpn_node_default": {
       "use_case": "vpn-node",
       "expect": "EQUAL"
+    },
+    "configurationwizzard_default": {
+      "use_case": "configurationwizzard",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": []

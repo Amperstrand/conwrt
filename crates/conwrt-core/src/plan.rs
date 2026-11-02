@@ -1261,6 +1261,13 @@ impl VpnNodeProfile {
     }
 }
 
+/// configurationwizzard — 1.x parity shell: the preset's ops are
+/// comment-only (the real deploy is the host-side
+/// `deploy_configurationwizzard()` npm+SCP flow, out of planner scope),
+/// so the plan is intentionally EMPTY of commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConfigurationwizzardProfile;
+
 /// The surfshark runtime-API script body AFTER the shared JSON helper
 /// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
 /// sentinel tokens for the gated interpolations.
@@ -2603,6 +2610,7 @@ pub enum Profile {
     OpenperfServer(OpenperfServerProfile),
     ApNostrId(ApNostrIdProfile),
     VpnNode(VpnNodeProfile),
+    Configurationwizzard(ConfigurationwizzardProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2644,6 +2652,7 @@ impl Profile {
             Profile::OpenperfServer(_) => "openperf_server",
             Profile::ApNostrId(_) => "ap-nostr-id",
             Profile::VpnNode(_) => "vpn-node",
+            Profile::Configurationwizzard(_) => "configurationwizzard",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2674,6 +2683,7 @@ impl Profile {
             Profile::OpenperfServer(_) => &["wifi"],
             Profile::ApNostrId(_) => &[],
             Profile::VpnNode(_) => &[],
+            Profile::Configurationwizzard(_) => &[],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -3097,6 +3107,7 @@ pub fn plan_profile(
         Profile::OpenperfServer(op) => plan_openperf_server(model, op),
         Profile::ApNostrId(an) => plan_ap_nostr_id(model, an),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
+        Profile::Configurationwizzard(cw) => plan_configurationwizzard(model, cw),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):
@@ -6485,6 +6496,21 @@ fn plan_vpn_node(model: &DeviceModel, vn: &VpnNodeProfile) -> Result<Plan, Unsup
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// configurationwizzard — 1.x ops are comment-only (deploy is host-side);
+/// the plan is empty by design, matching the 1.x render.
+fn plan_configurationwizzard(
+    model: &DeviceModel,
+    _cw: &ConfigurationwizzardProfile,
+) -> Result<Plan, Unsupported> {
+    Ok(Plan {
+        profile_id: "configurationwizzard".into(),
+        model_id: model.id.clone(),
+        ops: Vec::new(),
+        verification: Vec::new(),
         warnings: Vec::new(),
     })
 }
