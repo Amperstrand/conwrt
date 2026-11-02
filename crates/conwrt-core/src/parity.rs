@@ -24,7 +24,7 @@ use crate::plan::{
     GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
     OpenperfClientProfile, OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
     SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, WifiUplink, WireguardClientProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink, WireguardClientProfile,
     WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
@@ -444,6 +444,43 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 nsec: get_str(&params, "nsec").unwrap_or_default(),
             };
             Ok(Profile::ApNostrId(p))
+        }
+        "vpn-node" => {
+            let mut p = VpnNodeProfile::default();
+            if let Some(v) = get_str(&params, "nsec") {
+                p.nsec = v;
+            }
+            if let Some(v) = get_str(&params, "d_tag") {
+                p.d_tag = v;
+            }
+            if let Some(v) = get_str(&params, "title") {
+                p.title = v;
+            }
+            if let Some(v) = get_str(&params, "endpoint_host") {
+                p.endpoint_host = v;
+            }
+            if let Some(v) = params.get("endpoint_port").and_then(|v| v.as_u64()) {
+                p.endpoint_port = u16::try_from(v).map_err(|_| "endpoint_port out of range")?;
+            }
+            if let Some(v) = get_str(&params, "country") {
+                p.country = v;
+            }
+            if let Some(v) = params.get("price_amount").and_then(|v| v.as_u64()) {
+                p.price_amount = u32::try_from(v).map_err(|_| "price_amount out of range")?;
+            }
+            if let Some(v) = get_str(&params, "price_unit") {
+                p.price_unit = v;
+            }
+            if let Some(v) = get_str(&params, "content") {
+                p.content = v;
+            }
+            if let Some(v) = get_str(&params, "relays") {
+                p.relays = v;
+            }
+            if let Some(v) = get_str(&params, "nak_path") {
+                p.nak_path = v;
+            }
+            Ok(Profile::VpnNode(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }

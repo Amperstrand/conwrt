@@ -1184,6 +1184,83 @@ impl ApNostrIdProfile {
     }
 }
 
+/// Self-announcing WireGuard VPN node — port of the 1.x `vpn-node` use
+/// case (`scripts/use_cases/vpn_node.py`): publishes a kind-30402 Europa
+/// listing on first boot via `nak`. The 1.x `d_tag` default embeds a
+/// build timestamp (`vpn-{time}`) — nondeterministic, so the planner
+/// REQUIRES `d_tag` (fixtures and callers pass it explicitly).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnNodeProfile {
+    /// Operator Nostr nsec (for listing + wallet).
+    pub nsec: String,
+    /// Nostr event `d` tag (1.x default is timestamped — must be given).
+    pub d_tag: String,
+    /// Listing title.
+    pub title: String,
+    /// Public WireGuard endpoint host (required by 1.x).
+    pub endpoint_host: String,
+    /// Public WireGuard endpoint port.
+    pub endpoint_port: u16,
+    /// Region country tag.
+    pub country: String,
+    /// Price amount in sats.
+    pub price_amount: u32,
+    /// Price unit (hour/day/...).
+    pub price_unit: String,
+    /// Free-text listing content.
+    pub content: String,
+    /// Comma-separated relay list.
+    pub relays: String,
+    /// Path to the nak binary.
+    pub nak_path: String,
+}
+
+impl Default for VpnNodeProfile {
+    fn default() -> Self {
+        Self {
+            nsec: String::new(),
+            d_tag: "vpn-node".into(),
+            title: "VPN Node".into(),
+            endpoint_host: String::new(),
+            endpoint_port: 51_820,
+            country: "US".into(),
+            price_amount: 50,
+            price_unit: "hour".into(),
+            content: "VPN node. WireGuard. No logs.".into(),
+            relays: "wss://relay.damus.io,wss://relay.cashu.email".into(),
+            nak_path: "/usr/bin/nak".into(),
+        }
+    }
+}
+
+impl VpnNodeProfile {
+    fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        if self.nsec.is_empty() || self.endpoint_host.is_empty() {
+            return Err(bad("nsec and endpoint_host are required"));
+        }
+        // The nsec/title/content/d_tag land inside single-quoted shell
+        // strings or the listing JSON — quotes/backslashes would inject.
+        for v in [
+            &self.nsec,
+            &self.d_tag,
+            &self.title,
+            &self.content,
+            &self.country,
+            &self.price_unit,
+            &self.relays,
+            &self.nak_path,
+        ] {
+            if v.contains('\'') || v.contains('\\') || v.contains('"') {
+                return Err(bad(
+                    "vpn-node string params must not contain quotes or backslashes",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The surfshark runtime-API script body AFTER the shared JSON helper
 /// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
 /// sentinel tokens for the gated interpolations.
@@ -2525,6 +2602,7 @@ pub enum Profile {
     OpenperfClient(OpenperfClientProfile),
     OpenperfServer(OpenperfServerProfile),
     ApNostrId(ApNostrIdProfile),
+    VpnNode(VpnNodeProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2565,6 +2643,7 @@ impl Profile {
             Profile::OpenperfClient(_) => "openperf_client",
             Profile::OpenperfServer(_) => "openperf_server",
             Profile::ApNostrId(_) => "ap-nostr-id",
+            Profile::VpnNode(_) => "vpn-node",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2594,6 +2673,7 @@ impl Profile {
             Profile::OpenperfClient(_) => &["wifi"],
             Profile::OpenperfServer(_) => &["wifi"],
             Profile::ApNostrId(_) => &[],
+            Profile::VpnNode(_) => &[],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -3016,6 +3096,7 @@ pub fn plan_profile(
         Profile::OpenperfClient(op) => plan_openperf_client(model, op),
         Profile::OpenperfServer(op) => plan_openperf_server(model, op),
         Profile::ApNostrId(an) => plan_ap_nostr_id(model, an),
+        Profile::VpnNode(vn) => plan_vpn_node(model, vn),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):
@@ -6319,6 +6400,88 @@ fn plan_ap_nostr_id(model: &DeviceModel, an: &ApNostrIdProfile) -> Result<Plan, 
     }];
     Ok(Plan {
         profile_id: "ap-nostr-id".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// vpn-node — 1.x port: the first-boot Europa listing publisher script,
+/// byte-verbatim (nak event with backslash continuations, heredoc).
+fn plan_vpn_node(model: &DeviceModel, vn: &VpnNodeProfile) -> Result<Plan, Unsupported> {
+    vn.validate()?;
+    let relay_args = vn.relays.split(',').collect::<Vec<_>>().join(" ");
+    let listing_json = format!(
+        concat!(
+            "{{\"type\":\"vpn-service\",",
+            "\"name\":\"{}\",",
+            "\"endpoint\":\"{}:{}\",",
+            "\"protocols\":[\"wireguard\"],",
+            "\"prices\":[{{\"amount\":{},\"currency\":\"sat\",\"unit\":\"{}\"}}],",
+            "\"policies\":[\"no-logs\"],",
+            "\"content\":\"{}\"}}"
+        ),
+        vn.title, vn.endpoint_host, vn.endpoint_port, vn.price_amount, vn.price_unit, vn.content
+    );
+    let first_boot = format!(
+        concat!(
+            "cat > /etc/vpn-listing.sh << 'SCRIPT'\n",
+            "#!/bin/sh\n",
+            "# Publish Europa listing on first boot\n",
+            "NSEC_FILE=\"/etc/vpn-node/nsec\"\n",
+            "WG_PUBKEY=$(wg show wg0 public-key 2>/dev/null)\n",
+            "if [ -z \"$WG_PUBKEY\" ] || [ ! -f \"$NSEC_FILE\" ]; then\n",
+            "\x20   echo \"vpn-listing: missing wg0 pubkey or nsec, skipping\" >&2\n",
+            "\x20   exit 0\n",
+            "fi\n",
+            "NSEC=$(cat \"$NSEC_FILE\")\n",
+            "{nak} event \\\n",
+            "\x20   -k 30402 \\\n",
+            "\x20   --sec \"$NSEC\" \\\n",
+            "\x20   -d \"{d_tag}\" \\\n",
+            "\x20   -t \"t=vpn-service\" \\\n",
+            "\x20   -t \"t=wireguard\" \\\n",
+            "\x20   -t \"protocol=wireguard\" \\\n",
+            "\x20   -t \"region={country}\" \\\n",
+            "\x20   -t \"price={amount}sat/{unit}\" \\\n",
+            "\x20   -c '{listing}' \\\n",
+            "\x20   {relays} 2>&1\n",
+            "echo \"vpn-listing: published\"\n",
+            "SCRIPT\n",
+            "chmod +x /etc/vpn-listing.sh\n",
+            "mkdir -p /etc/vpn-node\n",
+            "echo '{nsec}' > /etc/vpn-node/nsec\n",
+            "chmod 600 /etc/vpn-node/nsec\n",
+            "( sleep 30 && /etc/vpn-listing.sh > /tmp/vpn-listing.log 2>&1 ) &\n",
+        ),
+        nak = vn.nak_path,
+        d_tag = vn.d_tag,
+        country = vn.country,
+        amount = vn.price_amount,
+        unit = vn.price_unit,
+        listing = listing_json,
+        relays = relay_args,
+        nsec = vn.nsec,
+    );
+    let ops = vec![
+        PlanOp::EnsurePackage {
+            name: "wireguard-tools".into(),
+        },
+        PlanOp::EnsurePackage {
+            name: "luci-proto-wireguard".into(),
+        },
+        PlanOp::Shell {
+            command: first_boot,
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "listing script installed".into(),
+        command: "test -x /etc/vpn-listing.sh && echo ok".into(),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "vpn-node".into(),
         model_id: model.id.clone(),
         ops,
         verification,

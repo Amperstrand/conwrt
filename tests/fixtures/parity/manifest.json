@@ -176,6 +176,10 @@
     "ap_nostr_id_default": {
       "use_case": "ap-nostr-id",
       "expect": "EQUAL"
+    },
+    "vpn_node_default": {
+      "use_case": "vpn-node",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": []
