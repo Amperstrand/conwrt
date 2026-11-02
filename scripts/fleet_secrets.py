@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Deterministic per-device fleet secrets derived from MAC + fleet salt.
+"""DEPRECATED — use `conwrt fleet-derive` (Rust, conwrt-core::identity).
+
+Deterministic per-device fleet secrets derived from MAC + fleet salt.
+The CANONICAL implementation now lives in Rust
+(``crates/conwrt-core/src/identity.rs``, exposed as
+``conwrt fleet-derive``): it computes BOTH derivation versions —
+v1 (this module's sha256 pipeline, byte-compatible, frozen wire format)
+and v2 (HKDF-SHA256, RFC 5869, the new standard). This module is
+retained only as the legacy v1 reference for cross-checking and for
+callers that cannot exec the Rust binary; it emits DeprecationWarning.
 
 Pattern follows tollgate-module-basic-go ``src/identity/identity.go``:
 domain-separated, versioned derivations from a single per-device root, so
@@ -29,7 +38,7 @@ idiom mac_hash.py documents)::
 first-boot/SSH-apply script; this module is the host-side twin used to
 look credentials up for the operator and to cross-check the device.
 
-CLI:
+CLI (deprecated — prefer ``conwrt fleet-derive --mac ... --salt ...``):
     python3 scripts/fleet_secrets.py --mac AA:BB:CC:DD:EE:FF --salt <salt> [--json]
     CONWRT_FLEET_SALT=<salt> python3 scripts/fleet_secrets.py --mac ...
 """
@@ -40,8 +49,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import warnings
 
 # Bumped when the derivation format changes; both sides (this module and
 # the fleet_identity use case script) embed it in every hashed string, so
@@ -72,6 +83,12 @@ def validate_salt(salt: str) -> str:
 
 def derive(mac: str, salt: str, domain: str, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
     """Domain-separated hex secret: sha256(version:domain:salt:mac)[:length]."""
+    warnings.warn(
+        "fleet_secrets.derive is deprecated: use `conwrt fleet-derive` "
+        "(conwrt-core::identity computes v1 identically plus the HKDF v2)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if not (MIN_PASSWORD_LENGTH <= length <= MAX_PASSWORD_LENGTH):
         raise ValueError(f"length must be {MIN_PASSWORD_LENGTH}..{MAX_PASSWORD_LENGTH}")
     validate_salt(salt)
@@ -143,6 +160,23 @@ def _load_salt_from_config(path: str) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Delegate to the canonical Rust implementation when available; the
+    # local fallback stays for environments without the binary (and
+    # emits DeprecationWarning via derive()).
+    conwrt = shutil.which("conwrt")
+    if conwrt and argv is None and not any(a == "--check-shell" or a == "--json" for a in sys.argv[1:]):
+        known = ["--mac", "--salt", "--config", "--hostname-prefix", "--ssid-prefix", "--length"]
+        passthrough, skip = [], False
+        for a in sys.argv[1:]:
+            if skip:
+                skip = False
+                continue
+            if a in known:
+                passthrough += [a]
+                skip = True
+            elif "=" in a and a.split("=", 1)[0] in known:
+                passthrough.append(a)
+        return subprocess.run([conwrt, "fleet-derive", *passthrough]).returncode
     import argparse
     from pathlib import Path
 

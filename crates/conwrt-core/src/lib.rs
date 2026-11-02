@@ -25,6 +25,7 @@ use alloc::vec::Vec;
 pub mod capability;
 pub mod fingerprint;
 pub mod identify;
+pub mod identity;
 pub mod mock;
 pub mod plan;
 pub mod ssh;
