@@ -195,3 +195,38 @@ class TestUseCase:
         )
         assert r.returncode == 0, r.stderr
         assert r.stdout == f"{root_password(MAC, SALT)}|{wifi_password(MAC, SALT)}"
+
+
+class TestRustCanonicalCrossCheck:
+    """The Rust implementation (conwrt-core::identity, `conwrt
+    fleet-derive`) is the CANONICAL derivation; this module is the
+    deprecated v1 reference. Pin their agreement so the deprecation
+    can never silently fork."""
+
+    def _bin(self):
+        for cand in (
+            __import__("pathlib").Path(__file__).resolve().parents[1] / "target" / "debug" / "conwrt",
+        ):
+            if cand.exists():
+                return str(cand)
+        return __import__("shutil").which("conwrt")
+
+    def test_rust_fleet_derive_matches_python_v1(self):
+        bin_path = self._bin()
+        if bin_path is None:
+            pytest.skip("conwrt binary not built (cargo build -p conwrt-cli)")
+        r = subprocess.run(
+            [bin_path, "fleet-derive", "--mac", MAC, "--salt", SALT,
+             "--hostname-prefix", "nr7101", "--network", "fleet"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert r.returncode == 0, r.stderr
+        fields = dict(
+            line.split(None, 1) for line in r.stdout.splitlines() if " " in line
+        )
+        assert fields["root_v1"] == root_password(MAC, SALT)
+        assert fields["wifi_v1"] == wifi_password(MAC, SALT)
+        assert fields["hostname"] == hostname(MAC, "nr7101")
+        # v2 exists and differs from v1 (versioned domain separation).
+        assert fields["root_v2"] != fields["root_v1"]
+        assert len(fields["root_v2"]) == 20

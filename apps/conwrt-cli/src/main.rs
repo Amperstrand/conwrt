@@ -283,6 +283,31 @@ enum Command {
         #[command(subcommand)]
         command: CacheCommand,
     },
+    /// Derive deterministic per-device fleet identity (replaces
+    /// `scripts/fleet_secrets.py`): hostname, SSID, and root/wifi
+    /// passwords for BOTH derivation versions — v1 (frozen, byte-
+    /// compatible with the on-device BusyBox pipeline) and v2 (HKDF,
+    /// RFC 5869; conwrt-core::identity is the canonical implementation).
+    FleetDerive {
+        /// Device MAC (`aa:bb:cc:dd:ee:ff` or already-stripped).
+        #[arg(long)]
+        mac: String,
+        /// Fleet salt (8-128 chars of [A-Za-z0-9_-]).
+        #[arg(long)]
+        salt: String,
+        /// Derived-password length in hex characters (8..=32).
+        #[arg(long, default_value_t = 20)]
+        length: u32,
+        /// Hostname prefix (also the SSID prefix unless --ssid-prefix).
+        #[arg(long, default_value = "fleet")]
+        hostname_prefix: String,
+        /// SSID prefix override (default: the hostname prefix).
+        #[arg(long)]
+        ssid_prefix: Option<String>,
+        /// Wifi domain name (v1 derivation input; default "fleet").
+        #[arg(long, default_value = "fleet")]
+        network: String,
+    },
     /// Source the vanilla OpenWrt image for a model from
     /// downloads.openwrt.org: resolve release/flavour through the
     /// precedence chains (CLI > env > model > default), fetch the
@@ -1297,6 +1322,21 @@ fn main() -> ExitCode {
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
         Command::Cache { command } => cmd_cache(command),
+        Command::FleetDerive {
+            mac,
+            salt,
+            length,
+            hostname_prefix,
+            ssid_prefix,
+            network,
+        } => cmd_fleet_derive(&FleetDeriveArgs {
+            mac: &mac,
+            salt: &salt,
+            length: length as usize,
+            hostname_prefix: &hostname_prefix,
+            ssid_prefix: ssid_prefix.as_deref(),
+            network: &network,
+        }),
         Command::SourceImage {
             model_id,
             release,
@@ -2765,6 +2805,58 @@ fn cmd_maas_vm(command: VmCommand) -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// Args for `conwrt fleet-derive` (see `cmd_fleet_derive`).
+struct FleetDeriveArgs<'a> {
+    mac: &'a str,
+    salt: &'a str,
+    length: usize,
+    hostname_prefix: &'a str,
+    ssid_prefix: Option<&'a str>,
+    network: &'a str,
+}
+
+/// `conwrt fleet-derive` — canonical fleet-identity derivations
+/// (conwrt-core::identity), printing both v1 (device-frozen) and v2
+/// (HKDF) values plus the derived hostname/SSID.
+fn cmd_fleet_derive(args: &FleetDeriveArgs) -> ExitCode {
+    use conwrt_core::identity::{clean_mac, derive_v1, derive_v2, hostname, wifi_ssid};
+    let mac12 = clean_mac(args.mac);
+    let ssid_prefix = args.ssid_prefix.unwrap_or(args.hostname_prefix);
+    // The wifi domain embeds the network (`wifi:<network>`) — the exact
+    // preimage the on-device shell builds (fleet_identity 1.x).
+    let wifi_domain = format!("wifi:{}", args.network);
+    let show = |label: &str, r: Result<String, conwrt_core::plan::Unsupported>| -> bool {
+        match r {
+            Ok(v) => {
+                println!("{label:<14} {v}");
+                true
+            }
+            Err(e) => {
+                eprintln!("conwrt: fleet-derive: {label}: {e}");
+                false
+            }
+        }
+    };
+    println!("mac12          {mac12}");
+    println!("hostname       {}", hostname(args.hostname_prefix, &mac12));
+    println!("ssid           {}", wifi_ssid(ssid_prefix, &mac12));
+    let ok = show("root_v1", derive_v1(&mac12, args.salt, "root", args.length))
+        & show(
+            "wifi_v1",
+            derive_v1(&mac12, args.salt, &wifi_domain, args.length),
+        )
+        & show("root_v2", derive_v2(&mac12, args.salt, "root", args.length))
+        & show(
+            "wifi_v2",
+            derive_v2(&mac12, args.salt, &wifi_domain, args.length),
+        );
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
     }
 }
 
