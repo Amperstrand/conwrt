@@ -172,6 +172,10 @@
     "openperf_server_custom": {
       "use_case": "openperf_server",
       "expect": "EQUAL"
+    },
+    "ap_nostr_id_default": {
+      "use_case": "ap-nostr-id",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": []

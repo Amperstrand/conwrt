@@ -1149,6 +1149,41 @@ impl OpenperfServerProfile {
     }
 }
 
+/// AP Nostr identity — port of the 1.x `ap-nostr-id` use case
+/// (`scripts/use_cases/ap_nostr_id.py`): writes the npub as hostapd
+/// `nas_identifier` on every wifi-iface and parks the keypair under
+/// /etc/tollgate. The pair must be PROVIDED: 1.x generates a fresh
+/// keypair when both are empty — a nondeterministic host-side step that
+/// stays outside the planner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApNostrIdProfile {
+    /// Public key, bech32 `npub1…`.
+    pub npub: String,
+    /// Secret key, bech32 `nsec1…`.
+    pub nsec: String,
+}
+
+impl ApNostrIdProfile {
+    fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        if !self.npub.is_empty() && !self.npub.starts_with("npub1") {
+            return Err(bad("npub must start with 'npub1'"));
+        }
+        if !self.nsec.is_empty() && !self.nsec.starts_with("nsec1") {
+            return Err(bad("nsec must start with 'nsec1'"));
+        }
+        if self.npub.is_empty() || self.nsec.is_empty() {
+            return Err(bad(
+                "npub and nsec must both be provided (keypair generation is a 1.x host-side step)",
+            ));
+        }
+        if self.npub.contains('\'') || self.nsec.contains('\'') {
+            return Err(bad("npub/nsec must not contain single quotes"));
+        }
+        Ok(())
+    }
+}
+
 /// The surfshark runtime-API script body AFTER the shared JSON helper
 /// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
 /// sentinel tokens for the gated interpolations.
@@ -2489,6 +2524,7 @@ pub enum Profile {
     VpnSurfshark(VpnSurfsharkProfile),
     OpenperfClient(OpenperfClientProfile),
     OpenperfServer(OpenperfServerProfile),
+    ApNostrId(ApNostrIdProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2528,6 +2564,7 @@ impl Profile {
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::OpenperfClient(_) => "openperf_client",
             Profile::OpenperfServer(_) => "openperf_server",
+            Profile::ApNostrId(_) => "ap-nostr-id",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2556,6 +2593,7 @@ impl Profile {
             Profile::GuestWifi(_) => &["wifi"],
             Profile::OpenperfClient(_) => &["wifi"],
             Profile::OpenperfServer(_) => &["wifi"],
+            Profile::ApNostrId(_) => &[],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -2977,6 +3015,7 @@ pub fn plan_profile(
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
         Profile::OpenperfClient(op) => plan_openperf_client(model, op),
         Profile::OpenperfServer(op) => plan_openperf_server(model, op),
+        Profile::ApNostrId(an) => plan_ap_nostr_id(model, an),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):
@@ -6225,6 +6264,61 @@ fn plan_openperf_server(
     }];
     Ok(Plan {
         profile_id: "openperf_server".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// ap-nostr-id — 1.x port (byte-verbatim bodies; the pair is provided).
+fn plan_ap_nostr_id(model: &DeviceModel, an: &ApNostrIdProfile) -> Result<Plan, Unsupported> {
+    an.validate()?;
+    let npub = &an.npub;
+    let nsec = &an.nsec;
+    let npub_head: String = npub.chars().take(24).collect();
+    let ops = vec![
+        PlanOp::Shell {
+            command: "mkdir -p /etc/tollgate".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "[ -f /etc/tollgate/ap-nsec ] || printf '%s\\n' '{nsec}' > /etc/tollgate/ap-nsec"
+            ),
+        },
+        PlanOp::Shell {
+            command: "[ -f /etc/tollgate/ap-nsec ] || chmod 600 /etc/tollgate/ap-nsec".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "[ -f /etc/tollgate/ap-npub ] || printf '%s\\n' '{npub}' > /etc/tollgate/ap-npub"
+            ),
+        },
+        PlanOp::Shell {
+            command: "[ -f /etc/tollgate/ap-npub ] || chmod 644 /etc/tollgate/ap-npub".into(),
+        },
+        PlanOp::Shell {
+            command: format!(
+                "for _s in $(uci show wireless 2>/dev/null | grep '=wifi-iface' | cut -d. -f2 | cut -d= -f1); do uci set wireless.$_s.nas_identifier='{npub}'; done"
+            ),
+        },
+        PlanOp::CommitUci {
+            config: "wireless".into(),
+        },
+        PlanOp::Shell {
+            command: "wifi reload 2>/dev/null || true".into(),
+        },
+        PlanOp::Shell {
+            command: format!("echo \"AP Nostr identity configured: npub={npub_head}...\""),
+        },
+    ];
+    let verification = vec![VerificationCheck {
+        description: "nas_identifier set on wifi-ifaces".into(),
+        command: "uci show wireless 2>/dev/null | grep -q nas_identifier && echo ok".into(),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "ap-nostr-id".into(),
         model_id: model.id.clone(),
         ops,
         verification,

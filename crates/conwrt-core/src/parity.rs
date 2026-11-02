@@ -20,10 +20,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::plan::{
-    AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
-    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenperfClientProfile,
-    OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
+    GuestWifiProfile, Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
+    OpenperfClientProfile, OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, WifiUplink, WireguardClientProfile,
     WireguardServerProfile, render_shell,
 };
@@ -437,6 +437,13 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 port: get_u16(&params, "port", 7777),
             };
             Ok(Profile::OpenperfServer(p))
+        }
+        "ap-nostr-id" => {
+            let p = ApNostrIdProfile {
+                npub: get_str(&params, "npub").unwrap_or_default(),
+                nsec: get_str(&params, "nsec").unwrap_or_default(),
+            };
+            Ok(Profile::ApNostrId(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
