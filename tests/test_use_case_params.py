@@ -29,3 +29,22 @@ def test_apply_defaults_applies_defaults() -> None:
     params = apply_defaults("sqm", {"download_kbps": 1000, "upload_kbps": 500})
     assert params["qdisc"] == "cake"
     assert params["interface"] == "wan"
+
+
+def test_resolve_params_sqm_rejects_unsupported_qdisc() -> None:
+    # Codex P2 on #127: builder-time gate, not device-side after apply.
+    from use_cases.sqm import _resolve_params
+
+    with pytest.raises(ValueError, match="qdisc"):
+        _resolve_params({"download_kbps": 1000, "upload_kbps": 500, "qdisc": "hfsc"})
+
+
+def test_resolve_params_sqm_interface_is_a_uci_section_name() -> None:
+    # 1.x `uci_name` parity pin (Codex P2 on #127): the sqm interface
+    # doubles as the `sqm.$INTERFACE` section id — hyphens are rejected.
+    from use_cases.sqm import _resolve_params
+
+    with pytest.raises(ValueError, match="interface"):
+        _resolve_params(
+            {"download_kbps": 1000, "upload_kbps": 500, "interface": "wan-backup"}
+        )

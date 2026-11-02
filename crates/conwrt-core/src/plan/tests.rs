@@ -199,6 +199,23 @@ fn capabilities_gate_rejects_missing_tag() {
 #[test]
 fn param_bounds_match_1x() {
     assert!(sqm().validate().is_ok());
+    // Codex P2 on #127: a hyphenated alias is fine as a device name but
+    // not as the `sqm.$INTERFACE` UCI section id — rpcd rejects it.
+    {
+        let mut s = sqm();
+        s.interface = "wan-backup".into();
+        assert!(s.validate().is_err());
+    }
+    // Codex P2 on #127: unsupported/empty qdisc must fail at plan time,
+    // not device-side after apply.
+    {
+        let mut s = sqm();
+        s.qdisc = "hfsc".into();
+        assert!(s.validate().is_err());
+        let mut s2 = sqm();
+        s2.qdisc = String::new();
+        assert!(s2.validate().is_err());
+    }
     assert!(matches!(
         SqmProfile {
             download_kbps: 0,
