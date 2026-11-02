@@ -3704,7 +3704,7 @@ pub(super) fn plan_vpn_nordvpn(
     // render safe
     let body = format!(
         concat!(
-            "{JSON_HELPER}\n",
+            "{JSON_HELPER}",
             "WG_PRIV=\"{PRIV}\"\n",
             "SERVER_KEY=\"{PUB}\"\n",
             "SERVER_IP=\"{HOST}\"\n",

@@ -25,8 +25,8 @@ use crate::plan::{
     Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
     OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink,
-    WireguardClientProfile, WireguardServerProfile, render_shell,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, VpnNordvpnProfile,
+    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -522,6 +522,27 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 }
             }
             Ok(Profile::TollgateCellular(p))
+        }
+        "vpn-nordvpn" => {
+            let p = VpnNordvpnProfile {
+                private_key: get_str(&params, "private_key")
+                    .unwrap_or_else(|| "STUBPRIVKEYbase64filledfortestonly0000=".into()),
+                server_public_key: get_str(&params, "server_public_key")
+                    .unwrap_or_else(|| "STUBPUBKEYbase64filledfortestonly0000=".into()),
+                endpoint_host: get_str(&params, "server")
+                    .unwrap_or_else(|| "de500.nordvpn.com".into()),
+                route_target: get_str(&params, "route_target")
+                    .unwrap_or_else(|| "193.29.107.10".into()),
+                endpoint_port: get_str(&params, "endpoint_port").unwrap_or_else(|| "51820".into()),
+                address: get_str(&params, "address").unwrap_or_else(|| "10.5.0.2/32".into()),
+                mtu: get_str(&params, "mtu").unwrap_or_else(|| "1420".into()),
+                keepalive: get_str(&params, "keepalive").unwrap_or_else(|| "25".into()),
+                upstream_gateway: get_str(&params, "upstream_gateway")
+                    .unwrap_or_else(|| "192.168.8.1".into()),
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
+                ..VpnNordvpnProfile::default()
+            };
+            Ok(Profile::VpnNordvpn(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }

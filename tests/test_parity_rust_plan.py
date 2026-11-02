@@ -238,7 +238,43 @@ def _python_render(fixture: dict) -> str:
     assert uc.build_configure_ops is not None, (
         f"use case {fixture['use_case']} has no ops builder"
     )
+    # Credless vpn-provider rendering: the provider presets fetch
+    # credentials / resolve servers over the network at BUILD time. The
+    # canonical offline recipe (same values as the Rust-side
+    # tests/use_case_goldens.rs regeneration header) stubs those two
+    # module functions — parity fixtures must never touch a live API.
+    stubs = _VPN_PROVIDER_STUBS.get(fixture["use_case"])
+    if stubs:
+        return stubs(uc, fixture["params"])
     return render_shell(uc.build_configure_ops(fixture["params"]))
+
+
+def _make_vpn_stub(module_name: str):
+    import importlib
+
+    def _stub(uc, params):
+        mod = importlib.import_module(f"use_cases.vpn_providers.{module_name}")
+        saved = {n: getattr(mod, n, None) for n in ("_fetch_credentials", "_resolve_server", "_resolve_endpoint")}
+        mod._fetch_credentials = lambda basic: {"username": "svcuser1234", "password": "svcpass5678abcd",
+                                              "nordlynx_private_key": "STUBPRIVKEYbase64filledfortestonly0000=",
+                                              "nordlynx_public_key": "STUBPUBKEYbase64filledfortestonly0000="}
+        mod._resolve_server = lambda value, token, tech: {"station": "193.29.107.10", "hostname": "de500.nordvpn.com"}
+        mod._resolve_endpoint = lambda value, token, tech="wireguard_udp": ("de500.nordvpn.com", "51820", "STUBPUBKEYbase64filledfortestonly0000=")
+        try:
+            return render_shell(uc.build_configure_ops(params))
+        finally:
+            for n, v in saved.items():
+                if v is not None:
+                    setattr(mod, n, v)
+
+    return _stub
+
+
+_VPN_PROVIDER_STUBS = {
+    "vpn-nordvpn": _make_vpn_stub("nordvpn"),
+    "vpn-nordvpn-openvpn": _make_vpn_stub("nordvpn"),
+    "vpn-nordvpn-ikev2": _make_vpn_stub("nordvpn"),
+}
 
 
 def _rust_render(bin_path: Path, fixture_path: Path) -> str:
