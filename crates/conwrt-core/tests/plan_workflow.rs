@@ -138,7 +138,10 @@ fn sqm_plan_ops_are_typed_and_ordered() {
             ("sqm".into(), ServiceAction::Restart)
         ]
     );
-    assert_eq!(plan.verification.len(), 3);
+    // 4 = download rate, upload rate (Codex P2 on #127: the download-only
+    // check let a lost upload assignment pass every gate), qdisc-on-device,
+    // echo summary.
+    assert_eq!(plan.verification.len(), 4);
 }
 
 #[test]
