@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models check-pins gen-status init run-step redact validate commit-run test test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
+.PHONY: help lint typecheck validate-schemas validate-models check-pins gen-status init run-step redact validate commit-run test check-bats test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -127,15 +127,19 @@ test: ## Fast unit tier (~1 min): excludes QEMU-backed integration tests, live A
 	@pytest tests -m "not integration and not bench and not live" --timeout=120 --timeout-method=signal
 	@pytest tests/integration/test_use_cases_dry_run.py -q
 	@$(MAKE) smoke
-	@if command -v bats >/dev/null 2>&1; then \
-		bats tests/*.bats; \
-	else \
-		echo "bats-core is not installed; skipping bats tests (smoke still ran)"; \
-	fi
+	@$(MAKE) check-bats
 
 test-all: ## Everything `test` runs plus QEMU integration tests inline (KVM hosts only)
 	@pytest tests
 	@$(MAKE) smoke
+	@$(MAKE) check-bats
+
+check-bats: ## Bats shell checks — shared by `test` and `test-all` (skips gracefully without bats-core)
+	@if command -v bats >/dev/null 2>&1; then \
+		bats tests/*.bats; \
+	else \
+		echo "bats-core is not installed; skipping bats tests"; \
+	fi
 
 bg-integration: ## Fire-and-forget: launch the VM suite detached; verdict lands in test-results/history.md
 	@mkdir -p test-results

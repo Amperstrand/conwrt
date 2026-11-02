@@ -31,6 +31,7 @@ markers = [
   "destructive: mutates device state (sysupgrade, firstboot)",
   "hardware: requires physical router connected via ethernet",
   "integration: QEMU-backed tests under tests/integration (deselect with -m \"not integration\")",
+  "layer1: static, VM-free checks under tests/integration that stay in the fast unit tier",
   "live: hits real VPN provider APIs over the network (tests/live; credential-gated subset needs env secrets)",
 ]
 filterwarnings = [

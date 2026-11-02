@@ -99,7 +99,12 @@ def pytest_collection_modifyitems(config, items):
             item_path = Path(str(item.path))
         except (AttributeError, TypeError):
             continue
-        if integration_root in item_path.parents:
+        # `layer1` opts a test out of this blanket: static, VM-free bundle
+        # checks must stay in the fast unit tier so unsafe generated
+        # scripts cannot merge without CI coverage (Codex finding on #82).
+        if integration_root in item_path.parents and not item.get_closest_marker(
+            "layer1"
+        ):
             item.add_marker(pytest.mark.integration)
 
 
