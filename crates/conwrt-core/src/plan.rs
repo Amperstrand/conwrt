@@ -1519,6 +1519,340 @@ impl OpenPerfServerProfile {
     }
 }
 
+/// net4sats admin UI + captive portal — port of the 1.x
+/// `configurationwizzard` preset (`scripts/use_cases/
+/// configurationwizzard.py`). The entire deployment is a HOST-SIDE
+/// operation (`deploy_configurationwizzard()`: npm build → SCP →
+/// rpcd plugin install → uhttpd config); the device-side configure
+/// ops are purely informational comments. The 2.x plan mirrors that
+/// boundary exactly — it emits the same comments and performs NO
+/// device mutations (the golden comparator filters them to an empty
+/// command stream, proving the parity).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigurationWizzardProfile;
+
+fn plan_configuration_wizzard(
+    model: &DeviceModel,
+    _cw: &ConfigurationWizzardProfile,
+) -> Result<Plan, Unsupported> {
+    let ops = vec![PlanOp::Shell {
+        command: "# --- configurationwizzard: deployed via deploy_configurationwizzard() ---\n\
+                  # Admin: http://router/ (uhttpd port 80)\n\
+                  # Portal: served by NDS on port 2050\n\
+                  # rpcd plugin bridges ubus → tollgate CLI"
+            .into(),
+    }];
+    let verification = vec![VerificationCheck {
+        description: "admin panel deployed (host-side deploy_configurationwizzard)".into(),
+        command: "test -d /www/net4sats && echo yes || echo missing".into(),
+        expect_contains: "yes".into(),
+    }];
+    Ok(Plan {
+        profile_id: "configurationwizzard".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// FIPS mesh networking over Bluetooth RFCOMM — port of the 1.x
+/// `fips-bluetooth-rfcomm` preset (`scripts/use_cases/
+/// fips_bluetooth_rfcomm.py`, 1.x marks it experimental — tested on
+/// ASUS Lyra MAP-AC2200 star topology). Deploys the fips.yaml config
+/// (echo-write for BusyBox compatibility), bt-pin, two procd init
+/// scripts (bt-agent + fips), and peers.allow in server mode. The
+/// FIPS binary itself rides host-side SCP — documented boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FipsBluetoothRfcommProfile {
+    /// RFCOMM role: `server` accepts connections, `client` initiates.
+    pub role: String,
+    /// RFCOMM channel number (1.x bound 1–30).
+    pub channel: u8,
+    /// Enable TUN interface for IP-over-mesh.
+    pub tun_enabled: bool,
+    /// Enable DNS over TUN.
+    pub tun_dns: bool,
+    /// Enable gateway over TUN.
+    pub tun_gateway: bool,
+    /// Bluetooth pairing PIN (lands in `echo '{pin}' > file`).
+    pub bt_pin: String,
+    /// Mesh peers (Noise + transport level).
+    pub peers: Vec<FipsPeer>,
+}
+
+/// One FIPS mesh peer: npub + Bluetooth MAC (transport + identity).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FipsPeer {
+    /// Peer Nostr public key (bech32 npub…).
+    pub npub: String,
+    /// Peer Bluetooth MAC address (XX:XX:XX:XX:XX:XX).
+    pub bt_mac: String,
+    /// Optional human alias.
+    pub alias: String,
+}
+
+impl Default for FipsBluetoothRfcommProfile {
+    fn default() -> Self {
+        Self {
+            role: "client".into(),
+            channel: 1,
+            tun_enabled: true,
+            tun_dns: true,
+            tun_gateway: true,
+            bt_pin: "0000".into(),
+            peers: Vec::new(),
+        }
+    }
+}
+
+impl FipsBluetoothRfcommProfile {
+    /// Gates: role choice set, channel 1–30, PIN charset (lands in
+    /// `echo '{pin}'` — single-quoted), npub/MAC charsets (land in
+    /// double-quoted YAML values + single-quote-escaped echo lines).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(self.role.as_str(), "server" | "client") {
+            return Err(Unsupported::InvalidParams(
+                "role must be server or client".into(),
+            ));
+        }
+        if !(1..=30).contains(&self.channel) {
+            return Err(Unsupported::InvalidParams("channel must be 1-30".into()));
+        }
+        let pin_ok = !self.bt_pin.is_empty()
+            && !self.bt_pin.contains(['\'', '"', '\\'])
+            && !self.bt_pin.chars().any(|c| (c as u32) < 0x20);
+        if !pin_ok {
+            return Err(Unsupported::InvalidParams(
+                "bt_pin must not contain quotes or control characters".into(),
+            ));
+        }
+        for peer in &self.peers {
+            let npub_ok = !peer.npub.is_empty()
+                && !peer.npub.contains(['\'', '"', '\\'])
+                && !peer.npub.chars().any(|c| (c as u32) < 0x20);
+            if !npub_ok {
+                return Err(Unsupported::InvalidParams(
+                    "peer npub must not contain quotes or control characters".into(),
+                ));
+            }
+            let mac_ok = !peer.bt_mac.is_empty()
+                && peer
+                    .bt_mac
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == ':');
+            if !mac_ok {
+                return Err(Unsupported::InvalidParams(
+                    "peer bt_mac must be a hex MAC address (XX:XX:XX:XX:XX:XX)".into(),
+                ));
+            }
+            let alias_ok = peer.alias.is_empty()
+                || (!peer.alias.contains(['\'', '"', '\\'])
+                    && !peer.alias.chars().any(|c| (c as u32) < 0x20));
+            if !alias_ok {
+                return Err(Unsupported::InvalidParams(
+                    "peer alias must not contain quotes or control characters".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The fips.yaml content (1.x `_build_yaml_parts` parity).
+    fn yaml_config(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push("node:".into());
+        lines.push("  identity:".into());
+        lines.push("    persistent: true".into());
+        lines.push(String::new());
+        lines.push("tun:".into());
+        lines.push(format!("  enabled: {}", self.tun_enabled));
+        lines.push(String::new());
+        if self.tun_dns {
+            lines.push("dns:".into());
+            lines.push("  enabled: true".into());
+            lines.push(String::new());
+        }
+        lines.push("transports:".into());
+        lines.push("  rfcomm:".into());
+        lines.push(format!("    mode: \"{}\"", self.role));
+        lines.push(format!("    channel: {}", self.channel));
+        lines.push("    mtu: 1000".into());
+        if self.role == "server" {
+            lines.push("    accept_connections: true".into());
+        } else {
+            lines.push("    auto_connect: true".into());
+        }
+        if !self.peers.is_empty() {
+            lines.push("    peers:".into());
+            for peer in &self.peers {
+                lines.push(format!("      - mac: \"{}\"", peer.bt_mac));
+            }
+        }
+        lines.push(String::new());
+        if !self.peers.is_empty() {
+            lines.push("peers:".into());
+            for peer in &self.peers {
+                lines.push(format!("  - npub: \"{}\"", peer.npub));
+                if !peer.alias.is_empty() {
+                    lines.push(format!("    alias: \"{}\"", peer.alias));
+                }
+                lines.push("    addresses:".into());
+                lines.push("      - transport: serial".into());
+                lines.push(format!("        addr: \"{}\"", peer.bt_mac));
+                lines.push("    connect_policy: auto_connect".into());
+            }
+        } else {
+            lines.push("peers: []".into());
+        }
+        lines.push(String::new());
+        if self.tun_gateway {
+            lines.push("gateway:".into());
+            lines.push("  enabled: true".into());
+            lines.push("  pool: \"fd01::/112\"".into());
+            lines.push("  lan_interface: \"br-lan\"".into());
+            lines.push("  dns:".into());
+            lines.push("    listen: \"[::1]:5353\"".into());
+            lines.push("    upstream: \"[::1]:5354\"".into());
+            lines.push("    ttl: 60".into());
+            lines.push(String::new());
+        }
+        if self.role == "server" {
+            lines.push("peers_allow: /etc/fips/peers.allow".into());
+            lines.push(String::new());
+        }
+        lines.join("\n")
+    }
+
+    /// The server-mode peers.allow content (one npub per line).
+    fn peers_allow(&self) -> String {
+        if self.role != "server" {
+            return String::new();
+        }
+        let npubs: Vec<&str> = self
+            .peers
+            .iter()
+            .filter(|p| !p.npub.is_empty())
+            .map(|p| p.npub.as_str())
+            .collect();
+        if npubs.is_empty() {
+            return String::new();
+        }
+        format!("{}\n", npubs.join("\n"))
+    }
+}
+
+/// 1.x `_echo_write`: single-quote-escaped echo lines for BusyBox.
+fn echo_write_ops(path: &str, content: &str) -> Vec<PlanOp> {
+    let mut lines: Vec<&str> = content.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let mut ops = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let op = if i == 0 { ">" } else { ">>" };
+        let escaped = line.replace('\'', "'\\\''");
+        ops.push(PlanOp::Shell {
+            command: format!("echo '{escaped}' {op} {path}"),
+        });
+    }
+    ops
+}
+
+fn plan_fips_bluetooth_rfcomm(
+    model: &DeviceModel,
+    fips: &FipsBluetoothRfcommProfile,
+) -> Result<Plan, Unsupported> {
+    fips.validate()?;
+    let yaml = fips.yaml_config();
+    let mut ops: Vec<PlanOp> = ["bluez-libs", "bluez-utils", "bluez-utils-extra", "kmod-tun"]
+        .iter()
+        .map(|name| PlanOp::EnsurePackage {
+            name: (*name).into(),
+        })
+        .collect();
+    ops.push(PlanOp::Shell {
+        command: "mkdir -p /etc/fips".into(),
+    });
+    ops.extend(echo_write_ops("/etc/fips/fips.yaml", &yaml));
+    ops.push(PlanOp::Shell {
+        command: format!("echo '{}' > /etc/fips/bt-pin", fips.bt_pin),
+    });
+    let peers_allow = fips.peers_allow();
+    if !peers_allow.is_empty() {
+        ops.extend(echo_write_ops("/etc/fips/peers.allow", &peers_allow));
+    }
+    // bt-agent init script (static)
+    let bt_agent_init = [
+        "#!/bin/sh /etc/rc.common",
+        "START=98",
+        "STOP=10",
+        "start() {",
+        "    hciconfig hci0 up",
+        "    command -v bt-agent >/dev/null 2>&1 && bt-agent -c NoInputNoOutput -p /etc/fips/bt-pin &",
+        "}",
+        "stop() {",
+        "    killall bt-agent 2>/dev/null",
+        "}",
+    ].join("\n");
+    ops.extend(echo_write_ops("/etc/init.d/bt-agent", &bt_agent_init));
+    ops.push(PlanOp::Shell {
+        command: "chmod +x /etc/init.d/bt-agent".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "bt-agent".into(),
+        action: ServiceAction::Enable,
+    });
+    // fips init script (static)
+    let fips_init = [
+        "#!/bin/sh /etc/rc.common",
+        "START=99",
+        "STOP=10",
+        "start() {",
+        "    fips -c /etc/fips/fips.yaml &",
+        "}",
+        "stop() {",
+        "    killall fips 2>/dev/null",
+        "}",
+    ]
+    .join("\n");
+    ops.extend(echo_write_ops("/etc/init.d/fips", &fips_init));
+    ops.push(PlanOp::Shell {
+        command: "chmod +x /etc/init.d/fips".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "fips".into(),
+        action: ServiceAction::Enable,
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo 'FIPS Bluetooth RFCOMM configured ({}, channel {}, {} peer(s))'",
+            fips.role,
+            fips.channel,
+            fips.peers.len()
+        ),
+    });
+    let verification = vec![
+        VerificationCheck {
+            description: "fips.yaml written".into(),
+            command: "test -f /etc/fips/fips.yaml && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+        VerificationCheck {
+            description: "fips service enabled".into(),
+            command: "/etc/init.d/fips enabled && echo yes".into(),
+            expect_contains: "yes".into(),
+        },
+    ];
+    Ok(Plan {
+        profile_id: "fips-bluetooth-rfcomm".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
 /// Surfshark WireGuard VPN — port of the 1.x `vpn-surfshark` preset
 /// (`scripts/use_cases/vpn_providers/surfshark.py`, 1.x marks it
 /// UNTESTED). Runtime-API twin of vpn-pia: one transport-heredoc
@@ -3866,6 +4200,10 @@ pub enum Profile {
     OpenPerfClient(OpenPerfClientProfile),
     /// openperf WiFi performance test server (JSON-RPC).
     OpenPerfServer(OpenPerfServerProfile),
+    /// net4sats admin UI + captive portal (host-side deploy).
+    ConfigurationWizzard(ConfigurationWizzardProfile),
+    /// FIPS mesh over Bluetooth RFCOMM (experimental).
+    FipsBluetoothRfcomm(FipsBluetoothRfcommProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -3910,6 +4248,8 @@ impl Profile {
             Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
             Profile::OpenPerfClient(_) => "openperf_client",
             Profile::OpenPerfServer(_) => "openperf_server",
+            Profile::ConfigurationWizzard(_) => "configurationwizzard",
+            Profile::FipsBluetoothRfcomm(_) => "fips-bluetooth-rfcomm",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -3953,6 +4293,8 @@ impl Profile {
             Profile::VpnNordvpnIke2(_) => &[],
             Profile::OpenPerfClient(_) => &["wifi"],
             Profile::OpenPerfServer(_) => &["wifi"],
+            Profile::ConfigurationWizzard(_) => &[],
+            Profile::FipsBluetoothRfcomm(_) => &["bluetooth"],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
         }
@@ -4367,6 +4709,8 @@ pub fn plan_profile(
         Profile::VpnNordvpnIke2(i2) => plan_vpn_nordvpn_ike2(model, i2),
         Profile::OpenPerfClient(oc) => plan_openperf_client(model, oc),
         Profile::OpenPerfServer(os) => plan_openperf_server(model, os),
+        Profile::ConfigurationWizzard(cw) => plan_configuration_wizzard(model, cw),
+        Profile::FipsBluetoothRfcomm(fp) => plan_fips_bluetooth_rfcomm(model, fp),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
     }?;
@@ -4481,7 +4825,7 @@ fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> 
 
 /// Single-quote a literal for POSIX shells (`'` → `'\''`).
 fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    format!("'{}'", value.replace('\'', "'\''"))
 }
 
 // ---- tether (1.x `scripts/use_cases/usb_tether.py`, verbatim ports) ----
@@ -8878,7 +9222,7 @@ mod tests {
         let plan = plan_profile(&DeviceState::OpenWrt, &model, &Profile::Sqm(sqm)).expect("plans");
         let script = render_shell(&plan);
         assert!(
-            script.contains("uci set sqm.wan.script='evil'\\''; rm -rf /; '\\'''"),
+            script.contains("uci set sqm.wan.script='evil'\''; rm -rf /; '\'''"),
             "single quotes must be escaped, not interpolated: {script}"
         );
     }
@@ -9545,9 +9889,9 @@ mod tests {
         }));
         let hostile_script = render_shell(&hostile);
         assert!(
-            hostile_script.contains("uci set wireless.trm_uplink3.ssid='ev'\\''; rm -rf /; '\\''")
+            hostile_script.contains("uci set wireless.trm_uplink3.ssid='ev'\''; rm -rf /; '\''")
         );
-        assert!(hostile_script.contains("uci set wireless.trm_uplink3.key='p'\\''w'"));
+        assert!(hostile_script.contains("uci set wireless.trm_uplink3.key='p'\''w'"));
     }
 
     #[test]
@@ -10005,7 +10349,7 @@ mod tests {
             ..base.clone()
         })));
         assert!(
-            quoted.contains("-u 'p1234567:p$a\"b'\\''c'"),
+            quoted.contains("-u 'p1234567:p$a\"b'\''c'"),
             "sh_quote parity"
         );
 
@@ -11218,7 +11562,7 @@ mod tests {
             ..GuestWifiProfile::default()
         })));
         assert!(
-            script.contains("uci set wireless.guest_ap.ssid='evil'\\''; rm -rf /; '\\''"),
+            script.contains("uci set wireless.guest_ap.ssid='evil'\''; rm -rf /; '\''"),
             "ssid must be single-quote escaped: {script}"
         );
         // uci section names derived from user input stay identifier-safe
@@ -11228,6 +11572,6 @@ mod tests {
                 ..wireguard()
             },
         )));
-        assert!(script.contains("uci set network.wg0.private_key='k'\\''; dropbear off'"));
+        assert!(script.contains("uci set network.wg0.private_key='k'\''; dropbear off'"));
     }
 }

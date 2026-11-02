@@ -20,13 +20,14 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile,
-    GuestWifiProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
+    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile,
+    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
+    OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
+    SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
+    VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile,
+    VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
+    WireguardClientProfile, WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -550,6 +551,8 @@ enum ProfileChoice {
     VpnNordvpnIke2,
     OpenPerfClient,
     OpenPerfServer,
+    ConfigurationWizzard,
+    FipsBluetoothRfcomm,
 }
 
 /// Profile selection + per-profile parameters, shared by `apply` and
@@ -2518,6 +2521,12 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
                 .unwrap_or_else(|| "openperf".into()),
             port: args.perf_server_port.unwrap_or(7777),
         })),
+        ProfileChoice::ConfigurationWizzard => {
+            Ok(Profile::ConfigurationWizzard(ConfigurationWizzardProfile))
+        }
+        ProfileChoice::FipsBluetoothRfcomm => Ok(Profile::FipsBluetoothRfcomm(
+            FipsBluetoothRfcommProfile::default(),
+        )),
     }
 }
 
