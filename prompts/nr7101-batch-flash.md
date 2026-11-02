@@ -73,7 +73,7 @@ What each original ask maps to:
    uplinks = [ { type = "sim" }, { type = "ethernet" } ]   # no wifi type — no radio
    ```
 7. **Sanity-check derivations host-side:**
-   `python3 scripts/fleet_secrets.py --mac <unit MAC> --check-shell`
+   `conwrt fleet-derive --mac <unit MAC> --salt <salt>` (canonical, prints v1+v2; the deprecated `scripts/fleet_secrets.py` still works and delegates to it)
    for each target unit (from labels). Print + privately store
    (passwords, LAN IPs) for the session.
 8. **Image:** `python3 scripts/firmware-manager.py request --profile
@@ -122,7 +122,7 @@ device in the listen window — only the target may be cycling):
    - `uci get dhcp.lan.ignore` → `1`
    - `iw dev` shows radio0/phy; `uci get wireless.default_radio0.ssid` →
      `nr7101_<mac12>`; a WiFi client can see the SSID and join with the
-     derived wifi password (`fleet_secrets.py` output). If the AP block
+     derived wifi password (`conwrt fleet-derive` output; the wifi_v1 line). If the AP block
      skipped at first boot (wireless config not yet generated — known
      uci-defaults timing), the SSH-apply pass configures it: re-run apply,
      then re-verify.

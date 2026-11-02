@@ -11,6 +11,7 @@ Locks three things:
 
 from __future__ import annotations
 
+import pytest
 import re
 import subprocess
 import sys
