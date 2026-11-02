@@ -294,7 +294,7 @@ def _vm_lan_ip(vm):
     out = _vm_ssh(
         vm,
         "ubus call network.interface.lan status 2>/dev/null | "
-        "jsonfilter -e '@.ipv4-address[0]' 2>/dev/null || "
+        "jsonfilter -e '@[\'ipv4-address'][0].address' 2>/dev/null || "
         "ip -4 addr show 2>/dev/null | grep -oE 'inet 10\\.0\\.2\\.[0-9]+' | head -1",
     ).stdout
     ip = out.replace("inet", "").strip()
