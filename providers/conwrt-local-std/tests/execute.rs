@@ -69,7 +69,8 @@ async fn apply_runs_whole_script_then_verifies() {
     let plan = plan();
     let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 0, "conwrt-plan-applied\n");
-    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "download").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "upload").command, 0, "ok\n");
     fixture.set_exec_response(
         &check(&plan, "qdisc").command,
         0,
@@ -86,8 +87,10 @@ async fn apply_runs_whole_script_then_verifies() {
         "verification: {:?}",
         outcome.verification
     );
-    assert_eq!(outcome.verification.len(), 3);
+    // 4 checks: download, upload (#127 upload-rate twin), qdisc, summary.
+    assert_eq!(outcome.verification.len(), 4);
     assert_eq!(outcome.verification[0].stdout, "ok");
+    assert_eq!(outcome.verification[1].stdout, "ok");
     drop(session);
 }
 
@@ -97,7 +100,8 @@ async fn failed_script_is_data_not_error_and_skips_verification() {
     let plan = plan();
     let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 1, "");
-    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "download").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "upload").command, 0, "ok\n");
 
     let session = connected(&fixture).await;
     let outcome = apply_plan(&session, &plan)
@@ -119,7 +123,8 @@ async fn verification_failure_is_reported_per_check() {
     let plan = plan();
     let script = render_apply_script(&plan);
     fixture.set_exec_response(&script, 0, "applied\n");
-    fixture.set_exec_response(&check(&plan, "rate").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "download").command, 0, "ok\n");
+    fixture.set_exec_response(&check(&plan, "upload").command, 0, "ok\n");
     fixture.set_exec_response(
         &check(&plan, "qdisc").command,
         0,
@@ -137,7 +142,9 @@ async fn verification_failure_is_reported_per_check() {
         .iter()
         .find(|v| !v.passed)
         .expect("one failed check");
+    // the upload check is now second (#127); the qdisc check third
     assert_eq!(failed.description, "qdisc active on the shaped device");
+    assert_eq!(outcome.verification[1].description, "upload shaper rate persisted exactly");
     drop(session);
 }
 
