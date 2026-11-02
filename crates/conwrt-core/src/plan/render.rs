@@ -253,6 +253,7 @@ pub fn render_shell(plan: &Plan) -> String {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
                     ServiceAction::Start => "start",
+                    ServiceAction::Reload => "reload",
                 };
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",

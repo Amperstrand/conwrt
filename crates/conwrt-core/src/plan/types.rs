@@ -218,6 +218,9 @@ pub enum ServiceAction {
     Restart,
     /// Start now (without restart semantics — 1.x `start`).
     Start,
+    /// Re-read config without the full teardown of a restart (1.x
+    /// `network reload`, used by tollgate-cellular).
+    Reload,
 }
 
 impl fmt::Display for ServiceAction {
@@ -226,6 +229,7 @@ impl fmt::Display for ServiceAction {
             ServiceAction::Enable => write!(f, "enable"),
             ServiceAction::Restart => write!(f, "restart"),
             ServiceAction::Start => write!(f, "start"),
+            ServiceAction::Reload => write!(f, "reload"),
         }
     }
 }
