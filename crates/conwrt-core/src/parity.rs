@@ -21,10 +21,11 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
-    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, WifiUplink,
-    WireguardClientProfile, WireguardServerProfile, render_shell,
+    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenperfClientProfile,
+    OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, WifiUplink, WireguardClientProfile,
+    WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -423,6 +424,20 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             }
             Ok(Profile::Tether(p))
         }
+        "openperf_client" => {
+            let p = OpenperfClientProfile {
+                mgmt_ssid: get_str(&params, "mgmt_ssid").unwrap_or_else(|| "openperf".into()),
+                wan_test: get_str(&params, "wan_test").unwrap_or_else(|| "1".into()),
+            };
+            Ok(Profile::OpenperfClient(p))
+        }
+        "openperf_server" => {
+            let p = OpenperfServerProfile {
+                mgmt_ssid: get_str(&params, "mgmt_ssid").unwrap_or_else(|| "openperf".into()),
+                port: get_u16(&params, "port", 7777),
+            };
+            Ok(Profile::OpenperfServer(p))
+        }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
 }
@@ -464,6 +479,19 @@ pub fn command_lines(script: &str) -> Vec<String> {
         .lines()
         .map(|l| l.trim())
         .map(|l| l.replace(" || true)", ")").replace(" || true ;", " ;"))
+        // Executor-side decorations with no semantic effect — the SAME
+        // set the pytest harness strips (its _DROP_WORDS / -q-after-uci /
+        // trailing-||-true rules): structured-op renders carry them
+        // (`uci -q delete … || true`) while 1.x renders bare, and the
+        // golden pin compares the semantic command stream.
+        .map(|l| {
+            if let Some(stripped) = l.strip_suffix(" || true") {
+                stripped.to_string()
+            } else {
+                l
+            }
+        })
+        .map(|l| l.replace("uci -q ", "uci "))
         .filter(|l| {
             !l.is_empty()
                 && !l.starts_with('#')

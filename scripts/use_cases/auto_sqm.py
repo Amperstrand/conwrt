@@ -211,7 +211,7 @@ def _build_auto_sqm_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(ShellCommand(
             # sed-dedupe first: re-applying must not stack duplicate cron
             # lines (2.x Rust twin has the same guard — parity-locked).
-            command=f"sed -i /auto-sqm/d /etc/crontabs/root 2>/dev/null; "
+            command=f"sed -i '/auto-sqm/d' /etc/crontabs/root 2>/dev/null; "
                     f"echo '0 */{dynamic_interval_hours} * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root"
         ))
         ops.append(ServiceAction(name="cron", action="enable"))

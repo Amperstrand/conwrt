@@ -155,7 +155,7 @@ cat <<'HOTPLUG_EOF' > /etc/hotplug.d/iface/10-sqm-autotune
 HOTPLUG_EOF
 chmod +x /etc/hotplug.d/iface/10-sqm-autotune
 
-sed -i /auto-sqm/d /etc/crontabs/root 2>/dev/null; echo '0 */6 * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root
+sed -i '/auto-sqm/d' /etc/crontabs/root 2>/dev/null; echo '0 */6 * * * /usr/sbin/auto-sqm' >> /etc/crontabs/root
 /etc/init.d/cron enable
 /etc/init.d/cron restart
 
