@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn model_with_capabilities(caps: Option<Vec<String>>) -> DeviceModel {
