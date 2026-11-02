@@ -4630,6 +4630,213 @@ pub(super) fn plan_tollgate(
     })
 }
 
+/// fleet-identity — 1.x port: ONE ash invocation for the MAC-derived
+/// derivations (variables must share a process), guarded AP block,
+/// optional rogue-DHCP disarm. Byte-verbatim with 1.x.
+pub(super) fn plan_fleet_identity(
+    model: &DeviceModel,
+    fi: &FleetIdentityProfile,
+) -> Result<Plan, Unsupported> {
+    fi.validate()?;
+    let salt = &fi.salt;
+    let prefix = &fi.hostname_prefix;
+    let ssid_prefix = if fi.ssid_prefix.is_empty() {
+        prefix
+    } else {
+        &fi.ssid_prefix
+    };
+    let length = fi.password_length;
+    let wifi_derivation = if fi.configure_ap {
+        format!(
+            "_wpw=$(printf '%s' \"conwrt-fleet-v1:wifi:{}:{salt}:$_m\" | sha256sum | cut -c1-{length}) && ",
+            fi.wifi_network
+        )
+    } else {
+        String::new()
+    };
+    let identity_cmd = format!(
+        "_mac=$(cat /sys/class/net/eth0/address) && \
+         _m=$(printf '%s' \"$_mac\" | tr -d ':') && \
+         _pw=$(printf '%s' \"conwrt-fleet-v1:root:{salt}:$_m\" | sha256sum | cut -c1-{length}) && \
+         {wifi_derivation}\
+         printf '%s\\n%s\\n' \"$_pw\" \"$_pw\" | passwd root && \
+         uci set system.@system[0].hostname=\"{prefix}-$_m\" && \
+         uci commit system && \
+         mkdir -p /etc/fleet && \
+         printf 'derivation=%s\\nmac=%s\\nhostname=%s-%s\\n' \
+         'conwrt-fleet-v1' '$_mac' '{prefix}' '$_m' > /etc/fleet/identity"
+    );
+    let mut ops = vec![PlanOp::Shell {
+        command: identity_cmd,
+    }];
+    if fi.configure_ap {
+        // Guarded by radio presence: skipped whole on radio-less models
+        // or when /etc/config/wireless is not generated yet (first-boot).
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "if uci -q get wireless.radio0 >/dev/null 2>&1 && \
+                 uci -q get wireless.default_radio0 >/dev/null 2>&1; then \
+                 uci set wireless.radio0.disabled=\"0\"; \
+                 uci set wireless.default_radio0.ssid=\"{ssid_prefix}_$_m\"; \
+                 uci set wireless.default_radio0.encryption=\"psk2\"; \
+                 uci set wireless.default_radio0.key=\"$_wpw\"; \
+                 uci set wireless.default_radio0.network=\"lan\"; \
+                 uci commit wireless; wifi reload 2>/dev/null || true; fi"
+            ),
+        });
+    }
+    if fi.disarm_dhcp {
+        ops.push(PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "lan".into(),
+            options: vec![
+                ("ignore".into(), UciValue::Literal("1".into())),
+                ("ra".into(), UciValue::Literal("disabled".into())),
+                ("dhcpv6".into(), UciValue::Literal("disabled".into())),
+            ],
+        });
+        ops.push(PlanOp::CommitUci {
+            config: "dhcp".into(),
+        });
+        ops.push(PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Service {
+            name: "odhcpd".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "echo fleet-identity dhcp.lan.ignore=$(uci get dhcp.lan.ignore)".into(),
+        });
+    }
+    let verification = vec![VerificationCheck {
+        description: "identity marker written".into(),
+        command: "test -f /etc/fleet/identity && echo ok".into(),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "fleet_identity".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// tollgate-cellular — 1.x port: ECM WAN + AT-port modem bring-up
+/// (bodies verbatim from `plan_cellular_bodies`), readback-gated uci,
+/// optional SIM tooling, hotplug re-up.
+pub(super) fn plan_tollgate_cellular(
+    model: &DeviceModel,
+    tc: &TollgateCellularProfile,
+) -> Result<Plan, Unsupported> {
+    tc.validate()?;
+    use super::plan_cellular_bodies::{HOTPLUG_SH, MODEM_SETUP_SH, SIM_BALANCE_SH};
+    let wan = &tc.wan_iface;
+    let usb = &tc.usb_iface;
+    let shell_quote_sq = |s: &str| s.replace('\'', "'\\''");
+    let mut ops = vec![PlanOp::Shell {
+        command: format!("uci -q revert network.{wan} || true"),
+    }];
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: "uci -q revert network.lan || true".into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: wan.clone(),
+        options: vec![
+            ("proto".into(), UciValue::Literal("dhcp".into())),
+            ("device".into(), UciValue::Literal(usb.clone())),
+            ("metric".into(), UciValue::Literal("5".into())),
+        ],
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: "lan".into(),
+            options: vec![("ipaddr".into(), UciValue::Literal(tc.management_ip.clone()))],
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "G1=\"$(uci -q get network.{wan}.proto)\"; G2=\"$(uci -q get network.{wan}.device)\"; \
+             [ \"$G1\" = dhcp ] && [ \"$G2\" = {usb} ] \
+             || {{ echo \"cellular: readback FAILED (proto=$G1 device=$G2)\"; exit 1; }}"
+        ),
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "G3=\"$(uci -q get network.lan.ipaddr)\"; [ \"$G3\" = {} ] \
+                 || {{ echo \"cellular: lan readback FAILED ($G3)\"; exit 1; }}",
+                tc.management_ip
+            ),
+        });
+    }
+    let setup = MODEM_SETUP_SH
+        .replace("{SIMSLOT}", &tc.sim_slot)
+        .replace("{APN}", &tc.apn)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /usr/bin && printf '%s' '{}' > /usr/bin/cellular-setup \
+             && chmod +x /usr/bin/cellular-setup \
+             && ( /usr/bin/cellular-setup || true )",
+            shell_quote_sq(&setup)
+        ),
+    });
+    if !tc.iccid.is_empty() {
+        let sim_json = format!(
+            "{{\"provider\":\"{}\",\"iccid\":\"{}\",\"eid\":\"{}\",\
+             \"balance_api\":\"{}\",\"modem_if\":\"{}\"}}",
+            tc.provider, tc.iccid, tc.eid, tc.balance_api, usb
+        );
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "mkdir -p /etc/tollgate && printf '%s' '{sim_json}' > /etc/tollgate/sim.json"
+            ),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "printf '%s' '{}' > /usr/bin/sim-balance && chmod +x /usr/bin/sim-balance",
+                shell_quote_sq(SIM_BALANCE_SH)
+            ),
+        });
+    }
+    let hotplug = HOTPLUG_SH
+        .replace("{USBIFACE}", usb)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /etc/hotplug.d/iface && printf '%s' '{}' \
+             > /etc/hotplug.d/iface/96-cellular-up && chmod +x /etc/hotplug.d/iface/96-cellular-up",
+            shell_quote_sq(&hotplug)
+        ),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Reload,
+    });
+    let verification = vec![VerificationCheck {
+        description: "wan iface reads modem device".into(),
+        command: format!("[ \"$(uci -q get network.{wan}.device)\" = {usb} ] && echo ok"),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "tollgate-cellular".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
 pub(super) fn plan_tollgate_security(
     model: &DeviceModel,
     _ts: &TollgateSecurityProfile,
