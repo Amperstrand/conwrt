@@ -1,0 +1,1 @@
+{"use_case": "guest-wifi", "params": {"ssid": "BenchGuest", "key": "guestkey99", "encryption": "sae", "band": "5ghz", "isolation": false, "network_name": "guest5"}}

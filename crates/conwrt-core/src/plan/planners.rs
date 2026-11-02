@@ -1449,7 +1449,7 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
     let url = doh.resolver_url().to_string();
     let port = doh.listen_port;
     let literal = |v: String| UciValue::Literal(v);
-    let ops = vec![
+    let mut ops = vec![
         PlanOp::EnsurePackage {
             name: "https-dns-proxy".into(),
         },
@@ -1528,6 +1528,10 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
             expect_contains: "yes".into(),
         },
     ];
+    // 1.x parity: trailing informational line (doh.py final status echo).
+    ops.push(PlanOp::Shell {
+        command: format!("echo \"DoH configured: {} on port {port}\"", doh.provider),
+    });
     Ok(Plan {
         profile_id: "doh".into(),
         model_id: model.id.clone(),
@@ -2490,10 +2494,18 @@ pub(super) fn plan_travelmate(
         action: ServiceAction::Restart,
     });
     ops.push(PlanOp::Shell {
-        command: format!(
-            "echo \"Travelmate configured: auto-connect on {}\"",
-            tm.radio
-        ),
+        command: if tm.uplinks.is_empty() {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {}\"",
+                tm.radio
+            )
+        } else {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {} ({} uplinks)\"",
+                tm.radio,
+                tm.uplinks.len()
+            )
+        },
     });
     let verification = vec![
         VerificationCheck {
