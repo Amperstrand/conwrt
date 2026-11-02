@@ -23,6 +23,11 @@ conwrt-types = { path = "../conwrt-types", default-features = false }
 # #215 slice 5: the shared detection core owns the vocabulary matching
 # primitives — host classify and firmware detect run the same matcher.
 conwrt-probe-core = { path = "../conwrt-probe-core", default-features = false }
+# Fleet identity derivations (identity.rs): v1 is the FROZEN on-device
+# sha256 pipeline; v2 is HKDF (RFC 5869) — both RustCrypto, no_std-safe
+# with default-features off (ADR-0002 thumbv7em check).
+sha2 = { version = "0.10", default-features = false }
+hkdf = { version = "0.12", default-features = false }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
