@@ -1268,6 +1268,87 @@ impl VpnNodeProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ConfigurationwizzardProfile;
 
+/// Deterministic per-device identity — port of the 1.x `fleet_identity`
+/// use case (`scripts/use_cases/fleet_identity.py`; host twin
+/// `scripts/fleet_secrets.py`): MAC-derived root password + hostname +
+/// optional management AP + rogue-DHCP disarm, in ONE ash invocation
+/// (the derivations must share a process).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetIdentityProfile {
+    /// Fleet salt, 8-128 chars of `[A-Za-z0-9_-]` (single-quote-safe).
+    pub salt: String,
+    /// Hostname prefix (`[a-z0-9][a-z0-9-]{0,19}`).
+    pub hostname_prefix: String,
+    /// Management-AP SSID prefix (defaults to the hostname prefix).
+    pub ssid_prefix: String,
+    /// Wifi domain name for the AP key derivation.
+    pub wifi_network: String,
+    /// Derived-password length, 8..=32 (1.x default 20).
+    pub password_length: u32,
+    /// Disarm rogue DHCP (dhcp.lan.ignore + ra/dhcpv6 disabled).
+    pub disarm_dhcp: bool,
+    /// Configure the guarded management AP block.
+    pub configure_ap: bool,
+}
+
+impl Default for FleetIdentityProfile {
+    fn default() -> Self {
+        Self {
+            salt: String::new(),
+            hostname_prefix: "fleet".into(),
+            ssid_prefix: String::new(),
+            wifi_network: "fleet".into(),
+            password_length: 20,
+            disarm_dhcp: true,
+            configure_ap: true,
+        }
+    }
+}
+
+impl FleetIdentityProfile {
+    fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        let salt_ok = (8..=128).contains(&self.salt.len())
+            && self
+                .salt
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+        if !salt_ok {
+            return Err(bad(
+                "salt must be 8-128 chars of [A-Za-z0-9_-] (openssl rand -hex 16)",
+            ));
+        }
+        let prefix_ok = |v: &str| {
+            (1..=20).contains(&v.len())
+                && v.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                && v.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        };
+        if !prefix_ok(&self.hostname_prefix) {
+            return Err(bad("hostname_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        if !self.ssid_prefix.is_empty() && !prefix_ok(&self.ssid_prefix) {
+            // empty = "use hostname_prefix" (1.x `or` fallback); the
+            // resolved value is then the already-validated prefix.
+            return Err(bad("ssid_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        let net_ok = (1..=16).contains(&self.wifi_network.len())
+            && self
+                .wifi_network
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !net_ok {
+            return Err(bad("wifi_network must match [a-z0-9][a-z0-9-]{0,15}"));
+        }
+        if !(8..=32).contains(&self.password_length) {
+            return Err(bad("password_length must be 8..=32"));
+        }
+        Ok(())
+    }
+}
+
 /// The surfshark runtime-API script body AFTER the shared JSON helper
 /// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
 /// sentinel tokens for the gated interpolations.
@@ -2611,6 +2692,7 @@ pub enum Profile {
     ApNostrId(ApNostrIdProfile),
     VpnNode(VpnNodeProfile),
     Configurationwizzard(ConfigurationwizzardProfile),
+    FleetIdentity(FleetIdentityProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2653,6 +2735,7 @@ impl Profile {
             Profile::ApNostrId(_) => "ap-nostr-id",
             Profile::VpnNode(_) => "vpn-node",
             Profile::Configurationwizzard(_) => "configurationwizzard",
+            Profile::FleetIdentity(_) => "fleet_identity",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2684,6 +2767,7 @@ impl Profile {
             Profile::ApNostrId(_) => &[],
             Profile::VpnNode(_) => &[],
             Profile::Configurationwizzard(_) => &[],
+            Profile::FleetIdentity(_) => &[],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -3108,6 +3192,7 @@ pub fn plan_profile(
         Profile::ApNostrId(an) => plan_ap_nostr_id(model, an),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::Configurationwizzard(cw) => plan_configurationwizzard(model, cw),
+        Profile::FleetIdentity(fi) => plan_fleet_identity(model, fi),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):
@@ -6511,6 +6596,100 @@ fn plan_configurationwizzard(
         model_id: model.id.clone(),
         ops: Vec::new(),
         verification: Vec::new(),
+        warnings: Vec::new(),
+    })
+}
+
+/// fleet-identity — 1.x port: ONE ash invocation for the MAC-derived
+/// derivations (variables must share a process), guarded AP block,
+/// optional rogue-DHCP disarm. Byte-verbatim with 1.x.
+fn plan_fleet_identity(
+    model: &DeviceModel,
+    fi: &FleetIdentityProfile,
+) -> Result<Plan, Unsupported> {
+    fi.validate()?;
+    let salt = &fi.salt;
+    let prefix = &fi.hostname_prefix;
+    let ssid_prefix = if fi.ssid_prefix.is_empty() {
+        prefix
+    } else {
+        &fi.ssid_prefix
+    };
+    let length = fi.password_length;
+    let wifi_derivation = if fi.configure_ap {
+        format!(
+            "_wpw=$(printf '%s' \"conwrt-fleet-v1:wifi:{}:{salt}:$_m\" | sha256sum | cut -c1-{length}) && ",
+            fi.wifi_network
+        )
+    } else {
+        String::new()
+    };
+    let identity_cmd = format!(
+        "_mac=$(cat /sys/class/net/eth0/address) && \
+         _m=$(printf '%s' \"$_mac\" | tr -d ':') && \
+         _pw=$(printf '%s' \"conwrt-fleet-v1:root:{salt}:$_m\" | sha256sum | cut -c1-{length}) && \
+         {wifi_derivation}\
+         printf '%s\\n%s\\n' \"$_pw\" \"$_pw\" | passwd root && \
+         uci set system.@system[0].hostname=\"{prefix}-$_m\" && \
+         uci commit system && \
+         mkdir -p /etc/fleet && \
+         printf 'derivation=%s\\nmac=%s\\nhostname=%s-%s\\n' \
+         'conwrt-fleet-v1' '$_mac' '{prefix}' '$_m' > /etc/fleet/identity"
+    );
+    let mut ops = vec![PlanOp::Shell {
+        command: identity_cmd,
+    }];
+    if fi.configure_ap {
+        // Guarded by radio presence: skipped whole on radio-less models
+        // or when /etc/config/wireless is not generated yet (first-boot).
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "if uci -q get wireless.radio0 >/dev/null 2>&1 && \
+                 uci -q get wireless.default_radio0 >/dev/null 2>&1; then \
+                 uci set wireless.radio0.disabled=\"0\"; \
+                 uci set wireless.default_radio0.ssid=\"{ssid_prefix}_$_m\"; \
+                 uci set wireless.default_radio0.encryption=\"psk2\"; \
+                 uci set wireless.default_radio0.key=\"$_wpw\"; \
+                 uci set wireless.default_radio0.network=\"lan\"; \
+                 uci commit wireless; wifi reload 2>/dev/null || true; fi"
+            ),
+        });
+    }
+    if fi.disarm_dhcp {
+        ops.push(PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "lan".into(),
+            options: vec![
+                ("ignore".into(), UciValue::Literal("1".into())),
+                ("ra".into(), UciValue::Literal("disabled".into())),
+                ("dhcpv6".into(), UciValue::Literal("disabled".into())),
+            ],
+        });
+        ops.push(PlanOp::CommitUci {
+            config: "dhcp".into(),
+        });
+        ops.push(PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Service {
+            name: "odhcpd".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "echo fleet-identity dhcp.lan.ignore=$(uci get dhcp.lan.ignore)".into(),
+        });
+    }
+    let verification = vec![VerificationCheck {
+        description: "identity marker written".into(),
+        command: "test -f /etc/fleet/identity && echo ok".into(),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "fleet_identity".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
         warnings: Vec::new(),
     })
 }

@@ -21,11 +21,12 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationwizzardProfile, DohProfile, GuestWifiProfile, Mesh11sdProfile, Mwan3Profile,
-    NodnsProfile, OpenClashProfile, OpenperfClientProfile, OpenperfServerProfile, PbrProfile,
-    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile,
-    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
+    ConfigurationwizzardProfile, DohProfile, FleetIdentityProfile, GuestWifiProfile,
+    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenperfClientProfile,
+    OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink, WireguardClientProfile,
+    WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -483,6 +484,25 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             Ok(Profile::VpnNode(p))
         }
         "configurationwizzard" => Ok(Profile::Configurationwizzard(ConfigurationwizzardProfile)),
+        "fleet_identity" => {
+            let mut p = FleetIdentityProfile::default();
+            p.salt = get_str(&params, "salt").ok_or("salt is required")?;
+            if let Some(v) = get_str(&params, "hostname_prefix") {
+                p.hostname_prefix = v;
+            }
+            if let Some(v) = get_str(&params, "ssid_prefix") {
+                p.ssid_prefix = v;
+            }
+            if let Some(v) = get_str(&params, "wifi_network") {
+                p.wifi_network = v;
+            }
+            if let Some(v) = params.get("password_length").and_then(|v| v.as_u64()) {
+                p.password_length = u32::try_from(v).map_err(|_| "password_length out of range")?;
+            }
+            p.disarm_dhcp = get_bool(&params, "disarm_dhcp", true);
+            p.configure_ap = get_bool(&params, "configure_ap", true);
+            Ok(Profile::FleetIdentity(p))
+        }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
 }
