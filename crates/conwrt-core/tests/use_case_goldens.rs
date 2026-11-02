@@ -104,6 +104,8 @@
 //!     "account_token": "a1b2c3d4e5f6",
 //!     "upstream_gateway": "192.168.8.1",
 //! }))
+//! print(r["configurationwizzard"].build_configure({}))
+//! print(r["fips-bluetooth-rfcomm"].build_configure({}))
 //! print(r["openperf_client"].build_configure({}))
 //! print(r["openperf_server"].build_configure({}))
 //! print(r["vpn-nordvpn-ikev2"].build_configure({
@@ -133,14 +135,15 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, DohProfile, GuestWifiProfile,
-    Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
-    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
-    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
-    WireguardServerProfile, plan_profile, render_shell,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DohProfile,
+    FipsBluetoothRfcommProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile,
+    Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile,
+    PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
+    TetherProfile, TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
+    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -543,6 +546,22 @@ fn vpn_nordvpn_ikev2_matches_1x_golden() {
             ..VpnNordvpnIke2Profile::default()
         }),
         include_str!("goldens/vpn-nordvpn-ikev2.sh"),
+    );
+}
+
+#[test]
+fn configurationwizzard_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::ConfigurationWizzard(ConfigurationWizzardProfile),
+        include_str!("goldens/configurationwizzard.sh"),
+    );
+}
+
+#[test]
+fn fips_bluetooth_rfcomm_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::FipsBluetoothRfcomm(FipsBluetoothRfcommProfile::default()),
+        include_str!("goldens/fips-bluetooth-rfcomm.sh"),
     );
 }
 
