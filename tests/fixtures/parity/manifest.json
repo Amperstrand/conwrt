@@ -140,6 +140,22 @@
     "rescue_watchdog_bench": {
       "use_case": "rescue-watchdog",
       "expect": "EQUAL"
+    },
+    "tether_default": {
+      "use_case": "tether",
+      "expect": "EQUAL"
+    },
+    "tether-android_default": {
+      "use_case": "tether-android",
+      "expect": "EQUAL"
+    },
+    "tether-android-adb_default": {
+      "use_case": "tether-android-adb",
+      "expect": "EQUAL"
+    },
+    "tether-ios_default": {
+      "use_case": "tether-ios",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

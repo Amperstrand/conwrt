@@ -22,9 +22,9 @@ use alloc::vec::Vec;
 use crate::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
     Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
-    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, WifiUplink, WireguardClientProfile,
-    WireguardServerProfile, render_shell,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
+    TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, WifiUplink,
+    WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -408,6 +408,20 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 target: get_str(&params, "target").unwrap_or_else(|| "192.168.1.254".into()),
             };
             Ok(Profile::RescueWatchdog(p))
+        }
+        "tether" | "tether-android" | "tether-android-adb" | "tether-ios" => {
+            let variant = match use_case {
+                "tether" => TetherVariant::Auto,
+                "tether-android" => TetherVariant::Android,
+                "tether-android-adb" => TetherVariant::AndroidAdb,
+                _ => TetherVariant::Ios,
+            };
+            let mut p = TetherProfile::default();
+            p.variant = variant;
+            if let Some(v) = get_str(&params, "interface") {
+                p.interface = v;
+            }
+            Ok(Profile::Tether(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
