@@ -13,21 +13,34 @@ pub struct MacAddress([u8; 6]);
 
 impl MacAddress {
     /// Parse a MAC in colon, dash, or bare hexadecimal form
-    /// (case-insensitive), e.g. `94:83:C4:00:11:22`.
+    /// (case-insensitive), e.g. `94:83:C4:00:11:22`. Octets may be
+    /// unpadded — macOS `arp -a` emits single-hex-digit octets
+    /// (`a4:83:e7:2:41:9a`), which the old whole-string 12-hex-digit
+    /// check rejected (Codex P2 on #122).
     pub fn parse(s: &str) -> Result<Self, MacParseError> {
-        let cleaned: String = s
-            .chars()
-            .filter(|c| *c != ':' && *c != '-')
-            .map(|c| c.to_ascii_lowercase())
-            .collect();
-        if cleaned.len() != 12 || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
+        let mut bytes = [0u8; 6];
+        if !s.contains(':') && !s.contains('-') {
+            let bare = s.to_ascii_lowercase();
+            if bare.len() != 12 || !bare.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(MacParseError(s.into()));
+            }
+            for (i, chunk) in bare.as_bytes().chunks(2).enumerate() {
+                let hi = (chunk[0] as char).to_digit(16).unwrap_or(0) as u8;
+                let lo = (chunk[1] as char).to_digit(16).unwrap_or(0) as u8;
+                bytes[i] = (hi << 4) | lo;
+            }
+            return Ok(Self(bytes));
+        }
+        let octets: Vec<&str> = s.split([':', '-']).collect();
+        if octets.len() != 6 {
             return Err(MacParseError(s.into()));
         }
-        let mut bytes = [0u8; 6];
-        for (i, chunk) in cleaned.as_bytes().chunks(2).enumerate() {
-            let hi = (chunk[0] as char).to_digit(16).unwrap_or(0) as u8;
-            let lo = (chunk[1] as char).to_digit(16).unwrap_or(0) as u8;
-            bytes[i] = (hi << 4) | lo;
+        for (i, octet) in octets.iter().enumerate() {
+            if octet.is_empty() || octet.len() > 2 || !octet.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Err(MacParseError(s.into()));
+            }
+            bytes[i] = u8::from_str_radix(octet, 16).unwrap_or(0);
         }
         Ok(Self(bytes))
     }
@@ -158,6 +171,17 @@ mod tests {
         assert_eq!(a, c);
         assert_eq!(a.to_string(), "94:83:c4:00:11:22");
         assert_eq!(a.octets(), [0x94, 0x83, 0xc4, 0x00, 0x11, 0x22]);
+    }
+
+    #[test]
+    fn parses_unpadded_octets_macos_arp_form() {
+        // macOS `arp -a` emits single-hex-digit octets (Codex P2 on #122):
+        // the old whole-string 12-hex-digit check silently dropped these
+        // neighbors during interface ARP discovery.
+        let a = MacAddress::parse("a4:83:e7:2:41:9a").unwrap();
+        let b = MacAddress::parse("a4:83:e7:02:41:9a").unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.octets(), [0xa4, 0x83, 0xe7, 0x02, 0x41, 0x9a]);
     }
 
     #[test]
