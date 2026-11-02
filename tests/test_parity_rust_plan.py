@@ -140,7 +140,14 @@ def normalize(script: str) -> list[list[str]]:
             # either a trailing backslash (line wrap) or an unterminated
             # single quote (a printf-embedded script — legal multi-line
             # shell); both are presentation joins, not command boundaries.
-            buf = candidate.rstrip()[:-1] + " " if candidate.rstrip().endswith("\\") else candidate + "\n"
+            # A backslash-newline inside the quoted literal (1.x's
+            # render_shell line-wrap) is equivalent to the clean newline
+            # the Rust renderer emits — normalize both to a plain newline.
+            stripped_c = candidate.rstrip()
+            if stripped_c.endswith("\\"):
+                buf = stripped_c[:-1] + " "
+            else:
+                buf = candidate.replace("\\\n", "\n") + "\n"
             continue
         line = candidate
         buf = ""

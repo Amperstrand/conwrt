@@ -28,6 +28,8 @@ pub mod identify;
 pub mod identity;
 pub mod mock;
 pub mod plan;
+// Verbatim 1.x `tollgate-cellular` script bodies (generated).
+mod plan_cellular_bodies;
 pub mod ssh;
 pub mod state;
 // Cross-implementation parity harness (Rust half); see

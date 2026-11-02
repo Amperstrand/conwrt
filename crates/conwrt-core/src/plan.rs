@@ -1349,6 +1349,80 @@ impl FleetIdentityProfile {
     }
 }
 
+/// TollGate cellular upstream — port of the 1.x `tollgate-cellular`
+/// use case (`scripts/use_cases/tollgate_cellular.py`, bench-validated
+/// on the NR7101 2026-10-24): Quectel-class modem as ECM WAN, SIM slot
+/// + APN via the AT port (NEVER uqmi — the hang class), one-shot
+/// idempotent modem setup, optional SIM balance tooling, hotplug re-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TollgateCellularProfile {
+    /// APN for cid 1 (modem auto-dial in ECM mode).
+    pub apn: String,
+    /// Dual-slot modems: slot holding the profile card ("" = skip).
+    pub sim_slot: String,
+    /// UCI network iface for the modem WAN (1.x default `wan`).
+    pub wan_iface: String,
+    /// USB ECM interface the modem enumerates (1.x default `usb0`).
+    pub usb_iface: String,
+    /// SIM ICCID — non-empty stages sim.json + the balance tooling.
+    pub iccid: String,
+    /// Provider label for sim.json.
+    pub provider: String,
+    /// SIM EID for sim.json.
+    pub eid: String,
+    /// Provider balance API URL template ({{iccid}} substituted on-device).
+    pub balance_api: String,
+    /// Optional wired-side management IP (also configures network.lan).
+    pub management_ip: String,
+}
+
+impl Default for TollgateCellularProfile {
+    fn default() -> Self {
+        Self {
+            apn: String::new(),
+            sim_slot: String::new(),
+            wan_iface: "wan".into(),
+            usb_iface: "usb0".into(),
+            iccid: String::new(),
+            provider: String::new(),
+            eid: String::new(),
+            balance_api: String::new(),
+            management_ip: String::new(),
+        }
+    }
+}
+
+impl TollgateCellularProfile {
+    fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        // Every string lands in single-quoted shell or uci values.
+        for v in [
+            &self.apn,
+            &self.sim_slot,
+            &self.iccid,
+            &self.provider,
+            &self.eid,
+            &self.balance_api,
+            &self.management_ip,
+        ] {
+            if v.contains('\'') || v.contains('\\') || v.contains('"') {
+                return Err(bad(
+                    "tollgate-cellular string params must not contain quotes/backslashes",
+                ));
+            }
+        }
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        };
+        if !iface_ok(&self.wan_iface) || !iface_ok(&self.usb_iface) {
+            return Err(bad("wan_iface/usb_iface must be plain interface names"));
+        }
+        Ok(())
+    }
+}
+
 /// The surfshark runtime-API script body AFTER the shared JSON helper
 /// (1.x `surfshark_script` minus `JSON_HELPER_SH`), byte-verbatim with
 /// sentinel tokens for the gated interpolations.
@@ -2693,6 +2767,7 @@ pub enum Profile {
     VpnNode(VpnNodeProfile),
     Configurationwizzard(ConfigurationwizzardProfile),
     FleetIdentity(FleetIdentityProfile),
+    TollgateCellular(TollgateCellularProfile),
     /// OpenTollGate payment gateway (flash-time portal + payment
     /// config; the ipk deploy is a host-side post-flash step).
     Tollgate(TollgateProfile),
@@ -2736,6 +2811,7 @@ impl Profile {
             Profile::VpnNode(_) => "vpn-node",
             Profile::Configurationwizzard(_) => "configurationwizzard",
             Profile::FleetIdentity(_) => "fleet_identity",
+            Profile::TollgateCellular(_) => "tollgate-cellular",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
         }
@@ -2768,6 +2844,7 @@ impl Profile {
             Profile::VpnNode(_) => &[],
             Profile::Configurationwizzard(_) => &[],
             Profile::FleetIdentity(_) => &[],
+            Profile::TollgateCellular(_) => &["usb"],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -2817,6 +2894,9 @@ pub enum ServiceAction {
     Restart,
     /// Start now (without restart semantics — 1.x `start`).
     Start,
+    /// Re-read config without the full teardown of a restart (1.x
+    /// `network reload`, used by tollgate-cellular).
+    Reload,
 }
 
 impl fmt::Display for ServiceAction {
@@ -2825,6 +2905,7 @@ impl fmt::Display for ServiceAction {
             ServiceAction::Enable => write!(f, "enable"),
             ServiceAction::Restart => write!(f, "restart"),
             ServiceAction::Start => write!(f, "start"),
+            ServiceAction::Reload => write!(f, "reload"),
         }
     }
 }
@@ -3193,6 +3274,7 @@ pub fn plan_profile(
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::Configurationwizzard(cw) => plan_configurationwizzard(model, cw),
         Profile::FleetIdentity(fi) => plan_fleet_identity(model, fi),
+        Profile::TollgateCellular(tc) => plan_tollgate_cellular(model, tc),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):
@@ -6694,6 +6776,119 @@ fn plan_fleet_identity(
     })
 }
 
+/// tollgate-cellular — 1.x port: ECM WAN + AT-port modem bring-up
+/// (bodies verbatim from `plan_cellular_bodies`), readback-gated uci,
+/// optional SIM tooling, hotplug re-up.
+fn plan_tollgate_cellular(
+    model: &DeviceModel,
+    tc: &TollgateCellularProfile,
+) -> Result<Plan, Unsupported> {
+    tc.validate()?;
+    use crate::plan_cellular_bodies::{HOTPLUG_SH, MODEM_SETUP_SH, SIM_BALANCE_SH};
+    let wan = &tc.wan_iface;
+    let usb = &tc.usb_iface;
+    let shell_quote_sq = |s: &str| s.replace('\'', "'\\''");
+    let mut ops = vec![PlanOp::Shell {
+        command: format!("uci -q revert network.{wan} || true"),
+    }];
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: "uci -q revert network.lan || true".into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: wan.clone(),
+        options: vec![
+            ("proto".into(), UciValue::Literal("dhcp".into())),
+            ("device".into(), UciValue::Literal(usb.clone())),
+            ("metric".into(), UciValue::Literal("5".into())),
+        ],
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: "lan".into(),
+            options: vec![("ipaddr".into(), UciValue::Literal(tc.management_ip.clone()))],
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "G1=\"$(uci -q get network.{wan}.proto)\"; G2=\"$(uci -q get network.{wan}.device)\"; \
+             [ \"$G1\" = dhcp ] && [ \"$G2\" = {usb} ] \
+             || {{ echo \"cellular: readback FAILED (proto=$G1 device=$G2)\"; exit 1; }}"
+        ),
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "G3=\"$(uci -q get network.lan.ipaddr)\"; [ \"$G3\" = {} ] \
+                 || {{ echo \"cellular: lan readback FAILED ($G3)\"; exit 1; }}",
+                tc.management_ip
+            ),
+        });
+    }
+    let setup = MODEM_SETUP_SH
+        .replace("{SIMSLOT}", &tc.sim_slot)
+        .replace("{APN}", &tc.apn)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /usr/bin && printf '%s' '{}' > /usr/bin/cellular-setup \
+             && chmod +x /usr/bin/cellular-setup \
+             && ( /usr/bin/cellular-setup || true )",
+            shell_quote_sq(&setup)
+        ),
+    });
+    if !tc.iccid.is_empty() {
+        let sim_json = format!(
+            "{{\"provider\":\"{}\",\"iccid\":\"{}\",\"eid\":\"{}\",\
+             \"balance_api\":\"{}\",\"modem_if\":\"{}\"}}",
+            tc.provider, tc.iccid, tc.eid, tc.balance_api, usb
+        );
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "mkdir -p /etc/tollgate && printf '%s' '{sim_json}' > /etc/tollgate/sim.json"
+            ),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "printf '%s' '{}' > /usr/bin/sim-balance && chmod +x /usr/bin/sim-balance",
+                shell_quote_sq(SIM_BALANCE_SH)
+            ),
+        });
+    }
+    let hotplug = HOTPLUG_SH
+        .replace("{USBIFACE}", usb)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /etc/hotplug.d/iface && printf '%s' '{}' \
+             > /etc/hotplug.d/iface/96-cellular-up && chmod +x /etc/hotplug.d/iface/96-cellular-up",
+            shell_quote_sq(&hotplug)
+        ),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Reload,
+    });
+    let verification = vec![VerificationCheck {
+        description: "wan iface reads modem device".into(),
+        command: format!("[ \"$(uci -q get network.{wan}.device)\" = {usb} ] && echo ok"),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "tollgate-cellular".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
 fn plan_tollgate(model: &DeviceModel, tg: &TollgateProfile) -> Result<Plan, Unsupported> {
     tg.validate()?;
     let literal = |v: String| UciValue::Literal(v);
@@ -7633,6 +7828,7 @@ pub fn render_shell(plan: &Plan) -> String {
                     ServiceAction::Enable => "enable",
                     ServiceAction::Restart => "restart",
                     ServiceAction::Start => "start",
+                    ServiceAction::Reload => "reload",
                 };
                 script.push_str(&format!(
                     "# service {name} {action}\n/etc/init.d/{} {}\n\n",

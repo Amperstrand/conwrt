@@ -192,6 +192,20 @@
     "fleet_identity_minimal": {
       "use_case": "fleet_identity",
       "expect": "EQUAL"
+    },
+    "tollgate_cellular_full": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "renderer representation gap: the 1.x render_shell wraps the printf-embedded modem-setup/sim-balance script literals with quote+backslash line-wrapping, the Rust render emits clean single-quoted literals \u2014 byte-different wrapping of the same logical command; script bodies themselves are byte-exact (generated from the 1.x source into plan_cellular_bodies.rs). Needs either a normalizer that understands quoted-literal wrapping or a 1.x render change; not a semantic divergence."
+      ]
+    },
+    "tollgate_cellular_minimal": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "renderer representation gap: the 1.x render_shell wraps the printf-embedded modem-setup/sim-balance script literals with quote+backslash line-wrapping, the Rust render emits clean single-quoted literals \u2014 byte-different wrapping of the same logical command; script bodies themselves are byte-exact (generated from the 1.x source into plan_cellular_bodies.rs). Needs either a normalizer that understands quoted-literal wrapping or a 1.x render change; not a semantic divergence."
+      ]
     }
   },
   "pending_migration": []

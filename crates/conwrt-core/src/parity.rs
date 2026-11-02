@@ -24,9 +24,9 @@ use crate::plan::{
     ConfigurationwizzardProfile, DohProfile, FleetIdentityProfile, GuestWifiProfile,
     Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenperfClientProfile,
     OpenperfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
-    TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink, WireguardClientProfile,
-    WireguardServerProfile, render_shell,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, WifiUplink,
+    WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -502,6 +502,25 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             p.disarm_dhcp = get_bool(&params, "disarm_dhcp", true);
             p.configure_ap = get_bool(&params, "configure_ap", true);
             Ok(Profile::FleetIdentity(p))
+        }
+        "tollgate-cellular" => {
+            let mut p = TollgateCellularProfile::default();
+            for (key, slot) in [
+                ("apn", &mut p.apn),
+                ("sim_slot", &mut p.sim_slot),
+                ("wan_iface", &mut p.wan_iface),
+                ("usb_iface", &mut p.usb_iface),
+                ("iccid", &mut p.iccid),
+                ("provider", &mut p.provider),
+                ("eid", &mut p.eid),
+                ("balance_api", &mut p.balance_api),
+                ("management_ip", &mut p.management_ip),
+            ] {
+                if let Some(v) = get_str(&params, key) {
+                    *slot = v;
+                }
+            }
+            Ok(Profile::TollgateCellular(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
