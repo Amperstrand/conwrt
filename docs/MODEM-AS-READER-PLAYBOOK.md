@@ -134,8 +134,7 @@ Full table: `KNOWN-GOOD-ONDEVICE-PROVISIONING.md` §6. The load-bearing ones:
 
 Task issue #619 carries the full context drop (EM060K-GL port map research,
 fingerprint checklist, lessons). Expected AT ttyUSB2/3 (USB `2c7c:030b`,
-externally verified), arch `mips_24kc` (shares the ath79 artifact class with
-Appendix C). Battery-powered handheld: the physical-power-cut recovery rung is
+externally verified), arch `mips_24kc` (ath79). Battery-powered handheld: the physical-power-cut recovery rung is
 trivial (hold power), and rung 2 (UIM power-cycle) should be available if the
 unit runs a QMI/MBIM composition on `/dev/cdc-wdm0`. Fill this appendix from
 the #619 results: port map, fingerprint diff vs §reference, rehearsal
@@ -143,8 +142,11 @@ transcript pointers, model JSON updates.
 
 ## Appendix C — ZTE MF286D (stub → #621)
 
-Task issue #621. Community-build OpenWrt only (eko.one.pl framework / 24.10.4
-community build) — record build provenance per the rules above. ZTE cat.12
-mPCIe modem: a genuinely new firmware family for the fingerprint library; no
-CSIM behavior assumed either way. Arch `mips_24kc` (ath79) — same lpac
-artifact class as Appendix B.
+Task issue #621 (see its correction comment). Community-build OpenWrt only
+(currently a 25.12.4 ipq40xx build with QMI/MBIM + ModemManager) — record
+build provenance per the rules above. ZTE cat.12 mPCIe modem: a genuinely new
+firmware family for the fingerprint library; no CSIM behavior assumed either
+way. **Arch correction (2026-11-02): the MF286D is IPQ4019 — `ipq40xx/generic`,
+`arm_cortex-a7-neon-vfpv4` — NOT ath79/mips_24kc like the MF286C sibling and
+the E750.** It needs its own lpac artifact; the lpac-openwrt build script has
+the `ipq40xx/generic` case and the artifact is being prepared.
