@@ -92,6 +92,7 @@ def _blossom_urls(shell: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.layer1
 class TestBundleFreshness:
     def test_committed_bundle_matches_code(self, monkeypatch):
         sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -132,6 +133,7 @@ class TestBundleFreshness:
         assert bundle["versions"], "no versions rendered"
 
 
+@pytest.mark.layer1
 class TestRenderSubstitution:
     def test_all_placeholders_substitutable(self):
         for model, flow, version, shell in _all_renders(_load_bundle()):
@@ -152,6 +154,7 @@ class TestRenderSubstitution:
             )
 
 
+@pytest.mark.layer1
 class TestNoHardcodedRouterIps:
     def test_default_ip_appears_only_in_ip_assignment(self):
         for model, flow, version, shell in _all_renders(_load_bundle()):
@@ -163,6 +166,7 @@ class TestNoHardcodedRouterIps:
                     )
 
 
+@pytest.mark.layer1
 class TestPinnedArtifacts:
     def test_artifact_installs_verify_hash_before_shipping(self):
         """Every curl-pinned artifact must be sha256-checked on the host
@@ -194,6 +198,8 @@ class TestPinnedArtifacts:
                 f"{model}/{flow}@{version}: gateway flow does not install nodogsplash"
             )
 
+    # network-bound (curl of pinned artifacts) — stays out of the fast tier
+    @pytest.mark.integration
     def test_blossom_artifacts_download_and_hash_match(self, tmp_path):
         urls: set[str] = set()
         bundle = _load_bundle()
