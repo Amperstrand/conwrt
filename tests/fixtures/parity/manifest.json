@@ -132,6 +132,14 @@
     "cashu_vpn_default": {
       "use_case": "cashu-vpn-client",
       "expect": "EQUAL"
+    },
+    "rescue_watchdog_default": {
+      "use_case": "rescue-watchdog",
+      "expect": "EQUAL"
+    },
+    "rescue_watchdog_bench": {
+      "use_case": "rescue-watchdog",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

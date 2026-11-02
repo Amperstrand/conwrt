@@ -66,16 +66,20 @@ chmod +x /usr/bin/rescue-watchdog-loop
 """
 
 
-def _build_ops(params: dict[str, Any]) -> str:
-    from profile.ops import render_shell
-
+def _build_watchdog_ops(params: dict[str, Any]) -> list[Op]:
     target = params.get("target", "192.168.1.254")
     script = WATCHDOG_INIT.replace("__TARGET__", target)
     ops: list[Op] = [
         Comment(text=f"--- rescue-watchdog (reboot if {target} unreachable 3x1min) ---"),
         ShellCommand(command=script),
     ]
-    return render_shell(ops)
+    return ops
+
+
+def _build_ops(params: dict[str, Any]) -> str:
+    from profile.ops import render_shell
+
+    return render_shell(_build_watchdog_ops(params))
 
 
 register(UseCase(
@@ -88,6 +92,7 @@ register(UseCase(
                            description="Management IP pinged once a minute (bench host LAN address)"),
     },
     build_configure=_build_ops,
+    build_configure_ops=_build_watchdog_ops,
     test_status="untested",
     tested_notes="Design born from the 2026-10-08 wedges; verify the grace period and "
                  "reboot behavior on hardware before trusting it unattended.",

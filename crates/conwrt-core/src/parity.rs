@@ -21,9 +21,10 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, AutoSqmProfile, CashuVpnClientProfile, DohProfile, GuestWifiProfile,
-    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile, SqmProfile,
-    SshHardeningProfile, SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
+    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, PbrProfile, Profile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, WifiUplink, WireguardClientProfile,
+    WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -401,6 +402,12 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             }
             p.kill_switch = get_bool(&params, "kill_switch", true);
             Ok(Profile::CashuVpnClient(p))
+        }
+        "rescue-watchdog" => {
+            let p = RescueWatchdogProfile {
+                target: get_str(&params, "target").unwrap_or_else(|| "192.168.1.254".into()),
+            };
+            Ok(Profile::RescueWatchdog(p))
         }
         other => Err(format!("no Rust profile for use case '{other}' yet")),
     }
