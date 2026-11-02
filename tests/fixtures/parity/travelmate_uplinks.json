@@ -1,0 +1,1 @@
+{"use_case": "travelmate", "params": {"radio": "radio1", "timeout": 90, "retry": 3, "captive": false, "uplinks": [{"ssid": "HotelNet", "psk": "guestpass", "encryption": "psk2", "radio": "radio0"}, {"ssid": "CafeOpen", "psk": "", "encryption": "none", "radio": "radio1"}]}}

@@ -1,0 +1,7 @@
+{
+  "use_case": "doh",
+  "params": {
+    "provider": "https://doh.example-dns.net/dns-query",
+    "listen_port": 5353
+  }
+}
