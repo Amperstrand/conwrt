@@ -144,7 +144,10 @@ async fn verification_failure_is_reported_per_check() {
         .expect("one failed check");
     // the upload check is now second (#127); the qdisc check third
     assert_eq!(failed.description, "qdisc active on the shaped device");
-    assert_eq!(outcome.verification[1].description, "upload shaper rate persisted exactly");
+    assert_eq!(
+        outcome.verification[1].description,
+        "upload shaper rate persisted exactly"
+    );
     drop(session);
 }
 
