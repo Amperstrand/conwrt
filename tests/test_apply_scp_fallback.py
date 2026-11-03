@@ -97,7 +97,7 @@ def test_scp_transfer_uses_the_resolved_port(monkeypatch, tmp_path) -> None:
     used `configure --port`'s forwarded port."""
     from profile import apply as apply_mod
 
-    captured: dict[str, object] = {}
+    captured: dict[str, list[str]] = {}
 
     def fake_run(cmd, **kwargs):
         rc = type("RC", (), {"returncode": 0, "stderr": ""})
