@@ -30,6 +30,11 @@ pub enum MachineState {
     Ready,
     /// Allocation in progress.
     Allocating,
+    /// Allocated to this project, not yet deploying — a SUCCESSFUL
+    /// allocate reports this, not Allocating (canonical lifecycle
+    /// Ready → Allocated → Deploying; previously collapsed into
+    /// Other("Allocated"), Codex P2 on #200).
+    Allocated,
     /// Deployment in progress.
     Deploying,
     /// Deployed and running.
@@ -84,6 +89,7 @@ impl fmt::Display for MachineState {
             Self::Commissioning => f.write_str("Commissioning"),
             Self::Ready => f.write_str("Ready"),
             Self::Allocating => f.write_str("Allocating"),
+            Self::Allocated => f.write_str("Allocated"),
             Self::Deploying => f.write_str("Deploying"),
             Self::Deployed => f.write_str("Deployed"),
             Self::Releasing => f.write_str("Releasing"),
@@ -108,6 +114,7 @@ impl FromStr for MachineState {
             "Commissioning" => Self::Commissioning,
             "Ready" => Self::Ready,
             "Allocating" => Self::Allocating,
+            "Allocated" => Self::Allocated,
             "Deploying" => Self::Deploying,
             "Deployed" => Self::Deployed,
             "Releasing" => Self::Releasing,
@@ -151,14 +158,21 @@ impl VmSpec {
     /// Validate against the lab's compose bounds. Mirrors the shc-toolkit
     /// parameter discipline: reject early, never at the API.
     pub fn validate(&self) -> Result<(), ComputeError> {
-        if self.name.is_empty()
-            || !self
-                .name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        // RFC 1035 label shape: 1-63 bytes, alphanumeric or '-', with
+        // alphanumeric FIRST and LAST — '-', 'host-', '-host', and >63
+        // byte labels previously passed and only failed in the remote
+        // compose call, after workflow execution had begun (Codex P2
+        // on #200).
+        let n = self.name.as_bytes();
+        let edge_ok = |b: u8| b.is_ascii_alphanumeric();
+        if n.is_empty()
+            || n.len() > 63
+            || !n.iter().all(|b| edge_ok(*b) || *b == b'-')
+            || !edge_ok(n[0])
+            || !edge_ok(n[n.len() - 1])
         {
             return Err(ComputeError::InvalidSpec(
-                "name must be a non-empty DNS label (alphanumeric or '-')".into(),
+                "name must be a DNS label: 1-63 bytes, alphanumeric or '-', alphanumeric first and last".into(),
             ));
         }
         if !(1..=64).contains(&self.cores) {

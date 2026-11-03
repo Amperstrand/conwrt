@@ -166,7 +166,10 @@ impl MaasClient for MockMaas {
             if !m.state.can_allocate() {
                 return Err(format!("cannot allocate {} in {}", m.system_id, m.state));
             }
-            m.state = MachineState::Allocating;
+            // A successful allocate reports Allocated (canonical
+            // lifecycle, Codex P2 on #200) — Allocating is the in-flight
+            // state this synchronous mock skips.
+            m.state = MachineState::Allocated;
         }
         Ok(())
     }
