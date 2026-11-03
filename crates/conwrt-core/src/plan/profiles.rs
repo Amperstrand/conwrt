@@ -2314,12 +2314,17 @@ impl VpnNordvpnProfile {
         }
         if self.route_target.is_empty() {
             return Err(Unsupported::InvalidParams(
-                "route_target is required (the resolved endpoint IP)".into(),
+                "route_target is required (the resolved endpoint IP — or, post the
+                NordVPN API change, the server hostname; 1.x pins
+                `de500.nordvpn.com`-style targets and lets the ROUTER resolve)"
+                    .into(),
             ));
         }
-        if !ipv4(&self.route_target) {
+        // route_target: IPv4 OR hostname (1.x post-API-change pins hostnames;
+        // semantic drift found by the cross-implementation parity corpus, PR #629).
+        if !host_ok(&self.route_target) {
             return Err(Unsupported::InvalidParams(
-                "route_target must be an IPv4 address".into(),
+                "route_target must be an IPv4 address or a hostname".into(),
             ));
         }
         for (field, value) in [

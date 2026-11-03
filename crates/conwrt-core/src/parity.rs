@@ -486,8 +486,10 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
         }
         "configurationwizzard" => Ok(Profile::ConfigurationWizzard(ConfigurationWizzardProfile)),
         "fleet_identity" => {
-            let mut p = FleetIdentityProfile::default();
-            p.salt = get_str(&params, "salt").ok_or("salt is required")?;
+            let mut p = FleetIdentityProfile {
+                salt: get_str(&params, "salt").ok_or("salt is required")?,
+                ..Default::default()
+            };
             if let Some(v) = get_str(&params, "hostname_prefix") {
                 p.hostname_prefix = v;
             }
@@ -531,8 +533,12 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                     .unwrap_or_else(|| "STUBPUBKEYbase64filledfortestonly0000=".into()),
                 endpoint_host: get_str(&params, "server")
                     .unwrap_or_else(|| "de500.nordvpn.com".into()),
+                // 1.x post-API-change pins the SERVER HOSTNAME as the /32
+                // route target (no more station-IP lookup) — default to the
+                // server param, same as the Python stub pipeline.
                 route_target: get_str(&params, "route_target")
-                    .unwrap_or_else(|| "193.29.107.10".into()),
+                    .or_else(|| get_str(&params, "server"))
+                    .unwrap_or_else(|| "de500.nordvpn.com".into()),
                 endpoint_port: get_str(&params, "endpoint_port").unwrap_or_else(|| "51820".into()),
                 address: get_str(&params, "address").unwrap_or_else(|| "10.5.0.2/32".into()),
                 mtu: get_str(&params, "mtu").unwrap_or_else(|| "1420".into()),
