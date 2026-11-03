@@ -1,0 +1,11 @@
+{
+  "use_case": "vpn-pia-openvpn",
+  "params": {
+    "username": "svcuser1234",
+    "password": "svcpass5678abcd",
+    "port": 1198,
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wan",
+    "kill_switch": true
+  }
+}

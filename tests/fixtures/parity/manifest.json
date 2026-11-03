@@ -223,10 +223,26 @@
     "vpn_surfshark_default": {
       "use_case": "vpn-surfshark",
       "expect": "EQUAL"
+    },
+    "vpn_pia_default": {
+      "use_case": "vpn-pia",
+      "expect": "EQUAL"
+    },
+    "vpn_openvpn_default": {
+      "use_case": "vpn-openvpn",
+      "expect": "EQUAL"
+    },
+    "vpn_pia_openvpn_default": {
+      "use_case": "vpn-pia-openvpn",
+      "expect": "EQUAL"
+    },
+    "vpn_nordvpn_openvpn_default": {
+      "use_case": "vpn-nordvpn-openvpn",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [
-    "parity-harness unreachable via Profile enum (typed only in the ports-m separate ops registry): openperf_client, openperf_server, configurationwizzard, tollgate-cellular \u2014 wire when those presets gain Profile variants or the harness learns their registry (fleet-identity GAINED its variant via #628 \u2014 fixtures restored)",
-    "vpn provider arms (credless-fixture design pending \u2014 build-time server resolution)"
+    "RESOLVED 2026-11-03: vpn-provider arms render OFFLINE (API calls ride the emitted apply-time script text; nordvpn/nordvpn-openvpn use the harness _VPN_PROVIDER_STUBS recipe) \u2014 all 9 provider presets wired EQUAL",
+    "tollgate-cellular GAP (quote+backslash literal wrapping divergence in 1.x render_shell) \u2014 documented, same logical commands"
   ]
 }

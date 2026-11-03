@@ -1299,7 +1299,6 @@ pub(super) fn plan_vpn_surfshark(
 }
 
 pub(super) const PIA_WG_BODY_SH: &str = concat!(
-    "\n",
     "# Generate WireGuard keypair\n",
     "wg genkey > /tmp/vpn_private.key\n",
     "wg pubkey < /tmp/vpn_private.key > /tmp/vpn_public.key\n",
@@ -3375,7 +3374,7 @@ pub(super) const PIA_OPENVPN_CA: &str = concat!(
     "iyd1Fzx0yujuiXDROLhISLQDRjVVAvawrAtLZWYK31bY7KlezPlQnl/D9Asxe85l\n",
     "8jO5+0LdJ6VyOs/Hd4w52alDW/MFySDZSfQHMTIc30hLBJ8OnCEIvluVQQ2UQvoW\n",
     "+no177N9L2Y+M9TcTA62ZyMXShHQGeh20rb4kK8f+iFX8NxtdHVSkxMEFSfDDyQ=\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----",
 );
 
 /// The vpn-provider family's shared firewall-zone/DNS/verify tail —
@@ -3845,7 +3844,7 @@ pub(super) const NORDVPN_OPENVPN_CA: &str = concat!(
     "wDBM1mJChneHt59Nh8Gah74+TM1jBsw4fhJPvoc7Atcg740JErb904mZfkIEmojC\n",
     "VPhBHVQ9LHBAdM8qFI2kRK0IynOmAZhexlP/aT/kpEsEPyaZQlnBn3An1CRz8h0S\n",
     "PApL8PytggYKeQmRhl499+6jLxcZ2IegLfqq41dzIjwHwTMplg+1pKIOVojpWA==\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----\n\n",
 );
 
 pub(super) const NORDVPN_OPENVPN_TLS_AUTH: &str = concat!(
@@ -3869,7 +3868,7 @@ pub(super) const NORDVPN_OPENVPN_TLS_AUTH: &str = concat!(
     "a196c9de96012090e333519ae18d3509\n",
     "9427e7b372d348d352dc4c85e18cd4b9\n",
     "3f8a56ddb2e64eb67adfc9b337157ff4\n",
-    "-----END OpenVPN Static key V1-----\n",
+    "-----END OpenVPN Static key V1-----\n\n",
 );
 
 pub(super) const NORDVPN_OPENVPN_PORTS: &str = "1231 1232 1233 1234";
@@ -3899,7 +3898,7 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
             "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
             "    uci delete network.@wireguard_wg0[0]\n",
             "done\n",
-            "\n",
+            "\n\n",
             "# Tear down any previous OpenVPN instance\n",
             "uci -q delete openvpn.nordvpn\n",
             "\n",
