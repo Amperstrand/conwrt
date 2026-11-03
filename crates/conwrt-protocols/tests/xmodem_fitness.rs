@@ -381,6 +381,30 @@ mod verified_retry {
         }
     }
 
+    #[test]
+    fn zero_attempts_is_a_configuration_error_not_a_panic() {
+        // Codex P2 on #212: a public RetryPolicy with max_attempts == 0
+        // previously fell through the loop and hit the exhausted-path
+        // expect(). The dev is a socketpair-end noop; the policy check
+        // must fire before any I/O.
+        let payload = vec![0xAB; 64];
+        let src = payload.clone();
+        let mut dev = std::io::Cursor::new(Vec::new()); // Read+Write noop
+        let err = send_firmware_verified(
+            &mut dev,
+            move || std::io::Cursor::new(src.clone()),
+            BlockLength::Standard,
+            &RetryPolicy {
+                max_attempts: 0,
+                restart_delay_ms: 0,
+            },
+            &mut || true,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(err, VerifiedError::InvalidPolicy(_)));
+    }
+
     /// Scripted XMODEM receiver. `nak_blocks` lists block numbers to NAK
     /// mid-stream (the crate limitation: it advances WITHOUT
     /// retransmitting — the block is silently lost receiver-side, and the

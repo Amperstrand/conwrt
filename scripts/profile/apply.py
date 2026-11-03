@@ -28,7 +28,7 @@ from profile.plan import ProfilePlan, ProfileStep, StepKind
 from profile.ops import render_shell, render_ubus
 from profile.render import opkg_install_script
 from profile.wifi import band_to_uci, wifi_ap_uci_lines, wifi_detect_radio_shell, wifi_sta_uci_lines
-from ssh_utils import ssh_cmd
+from ssh_utils import ssh_cmd, scp_cmd
 
 
 LogFn = Callable[[str], None]
@@ -228,13 +228,12 @@ def _scp_install_packages(
 
         log(f"  scp fallback: transferring {len(local_paths)} package(s) to device...")
         for path in local_paths:
-            scp_args = ["scp", "-O",
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "UserKnownHostsFile=/dev/null",
-                        "-o", "BatchMode=yes"]
-            if ssh_key:
-                scp_args += ["-i", ssh_key]
-            scp_args += [path, f"root@{ip}:/tmp/"]
+            # ssh_utils.scp_cmd resolves CONWRT_SSH_PORT (set by
+            # `configure --port`): the raw scp here always tried port 22
+            # while the SSH probes used the forwarded port — package
+            # transfer failed on every nonstandard-port target
+            # (Codex P2 on #186).
+            scp_args = scp_cmd(ip, path, f"root@{ip}:/tmp/", key=ssh_key or None)
             sr = subprocess.run(scp_args, capture_output=True, text=True, timeout=30, check=False)
             if sr.returncode != 0:
                 log(f"  ⚠ scp fallback: transfer failed: {sr.stderr.strip()[:200]}")

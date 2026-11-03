@@ -89,3 +89,36 @@ def test_download_package_index_both_fail() -> None:
 
     assert result is None
     assert any("cannot download package index" in str(c) for c in log.call_args_list)
+
+
+def test_scp_transfer_uses_the_resolved_port(monkeypatch, tmp_path) -> None:
+    """The scp fallback must honor CONWRT_SSH_PORT (Codex P2 on #186):
+    the raw scp invocation always tried port 22 while the SSH probes
+    used `configure --port`'s forwarded port."""
+    from profile import apply as apply_mod
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        rc = type("RC", (), {"returncode": 0, "stderr": ""})
+        if cmd[0] == "ssh":
+            # release probe: shape /etc/openwrt_release output
+            rc.stdout = "DISTRIB_RELEASE='24.10.8'\nDISTRIB_ARCH='aarch64_cortex-a53'\n"
+        else:
+            captured["cmd"] = cmd
+            rc.stdout = ""
+        return rc()
+
+    monkeypatch.setattr(apply_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(apply_mod, "_download_package_index",
+                        lambda base, log: "Package: pkg\nFilename: pkg.ipk\n")
+    monkeypatch.setattr(apply_mod.urllib.request, "urlretrieve",
+                        lambda url, path: None)
+    monkeypatch.setenv("CONWRT_SSH_PORT", "2222")
+
+    ok = apply_mod._scp_install_packages("192.168.1.1", ["pkg"], None,
+                                         lambda *a: None)
+    assert ok
+    cmd = captured["cmd"]
+    assert cmd[0] == "scp"
+    assert "-P" in cmd and cmd[cmd.index("-P") + 1] == "2222"
