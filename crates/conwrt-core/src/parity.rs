@@ -546,7 +546,6 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                     .ok_or("upstream_gateway is required")?,
                 upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
                 kill_switch: get_bool(&params, "kill_switch", true),
-                ..Default::default()
             };
             Ok(Profile::VpnMullvad(p))
         }
@@ -559,7 +558,6 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                     .ok_or("upstream_gateway is required")?,
                 upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
                 kill_switch: get_bool(&params, "kill_switch", true),
-                ..Default::default()
             };
             Ok(Profile::VpnSurfshark(p))
         }
@@ -583,7 +581,6 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 password: get_str(&params, "password").unwrap_or_default(),
                 proto: get_str(&params, "proto").unwrap_or_else(|| "udp".into()),
                 kill_switch: get_bool(&params, "kill_switch", true),
-                ..Default::default()
             };
             Ok(Profile::VpnOpenvpn(p))
         }
