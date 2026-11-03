@@ -1543,6 +1543,20 @@ fn vpn_nordvpn_shape_gates_and_branches_match_1x() {
     assert!(script.contains("WG_PRIV=\"STUBPRIVKEYbase64filledfortestonly0000=\""));
     // the endpoint /32 pin uses the RESOLVED route target, not the hostname
     assert!(script.contains("nordvpn_server_route.target='193.29.107.10'"));
+    // post-API-change contract: a HOSTNAME route target is valid (1.x pins
+    // de500.nordvpn.com and lets the router resolve) — PR #629
+    {
+        let host = VpnNordvpnProfile {
+            route_target: "de500.nordvpn.com".into(),
+            ..base.clone()
+        };
+        assert!(
+            host.validate().is_ok(),
+            "hostname route_target must be accepted"
+        );
+        let hs = render_shell(&plan_for(Profile::VpnNordvpn(host)));
+        assert!(hs.contains("nordvpn_server_route.target='de500.nordvpn.com'"));
+    }
     // wg tunnel + 30s handshake verify tail
     assert!(script.contains("uci set network.wg0.proto='wireguard'"));
     assert!(script.contains("wg show wg0 2>/dev/null | grep -q 'latest handshake'"));
@@ -1578,7 +1592,7 @@ fn vpn_nordvpn_shape_gates_and_branches_match_1x() {
             ..base.clone()
         },
         VpnNordvpnProfile {
-            route_target: "not-an-ip".into(),
+            route_target: "not an ip".into(),
             ..base.clone()
         },
         VpnNordvpnProfile {
