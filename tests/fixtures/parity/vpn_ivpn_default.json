@@ -1,0 +1,9 @@
+{
+  "use_case": "vpn-ivpn",
+  "params": {
+    "account_id": "ivpn-abc123def",
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wwan",
+    "kill_switch": true
+  }
+}
