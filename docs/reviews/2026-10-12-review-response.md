@@ -35,7 +35,10 @@ tracking issues #124 (XMODEM reliability) and #125 (SSH trust hardening).
 2. **XMODEM framing** — the memo presents the mid-stream NAK/CAN gaps as
    undiscovered; the module docs already declared them accepted limitations.
    The genuine gaps (no pinning tests, closed tracking issue, no
-   receiver matrix) are now closed as described above.
+   receiver matrix) are now addressed or tracked as described above —
+   the real-receiver compatibility matrix remains deferred under #124
+   (no automated serial flash until per-bootloader restart-safety is
+   documented), not closed.
 3. **“Ensure the Python CI workflow passes”** — it now does, but note the
    root cause was *unrelated VPN code entering the stack via branch
    pollution*, not the Rust work. The remaining Pyright errors in
