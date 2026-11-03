@@ -1,0 +1,11 @@
+{
+  "use_case": "vpn-surfshark",
+  "params": {
+    "username": "svcuser1234",
+    "password": "svcpass5678abcd",
+    "country": "dk",
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wwan",
+    "kill_switch": true
+  }
+}

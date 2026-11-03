@@ -64,8 +64,15 @@ _DROP_WORDS = {"2>/dev/null"}
 # deliberate Rust-side extension; 1.x Python bakes packages into the
 # image, so its configure render carries no install lines. Same
 # exclusion as crates/conwrt-core/src/parity.rs::command_lines and
-# tests/use_case_goldens.rs.
-_DROP_LINE_PREFIXES = ("opkg install ", "if command -v apk ", "&& apk add ")
+# tests/use_case_goldens.rs. The `if ! (opkg list-installed` shape is the
+# same preamble wrapped in an idempotence guard (ssl's libustream).
+_DROP_LINE_PREFIXES = (
+    "opkg install ",
+    "if command -v apk ",
+    "&& apk add ",
+    "if ! (opkg list-installed ",
+    "if [ -n \"$(opkg list-installed ",
+)
 
 
 def _normalize_line(line: str) -> list[str] | None:
@@ -108,7 +115,68 @@ def _normalize_line(line: str) -> list[str] | None:
 
 def normalize(script: str) -> list[list[str]]:
     """Normalize a rendered script to its semantic command stream."""
-    return [t for t in (_normalize_line(l) for l in script.splitlines()) if t is not None]
+    # Join backslash-continued lines FIRST: a trailing `\\` is shell
+    # line-wrapping (presentation), not a semantic boundary — tokenizing
+    # the wrapped halves separately chokes on the dangling escape. Applied
+    # to both renders identically. Heredoc BODIES are data, not command
+    # lines (shlex chokes on awk/sed quoting inside them): each body is
+    # emitted as one two-token opaque comparison unit, bypassing _normalize_line.
+    raw = script.splitlines()
+    out: list[list[str]] = []
+    buf = ""
+    heredoc_marker: str | None = None
+    heredoc_lines: list[str] = []
+    for line in raw:
+        if heredoc_marker is not None:
+            if line.strip() == heredoc_marker:
+                out.append(["__HEREDOC__", "\n".join(heredoc_lines)])
+                heredoc_marker = None
+                heredoc_lines = []
+            else:
+                heredoc_lines.append(line.rstrip())
+            continue
+        candidate = (buf + line) if buf else line
+        if _opens_shell_continuation(candidate):
+            # either a trailing backslash (line wrap) or an unterminated
+            # single quote (a printf-embedded script — legal multi-line
+            # shell); both are presentation joins, not command boundaries.
+            # A backslash-newline inside the quoted literal (1.x's
+            # render_shell line-wrap) is equivalent to the clean newline
+            # the Rust renderer emits — normalize both to a plain newline.
+            stripped_c = candidate.rstrip()
+            if stripped_c.endswith("\\"):
+                buf = stripped_c[:-1] + " "
+            else:
+                buf = candidate.replace("\\\n", "\n") + "\n"
+            continue
+        line = candidate
+        buf = ""
+        if (tok := _normalize_line(line)) is not None:
+            out.append(tok)
+        start = _heredoc_start(line)
+        if start is not None:
+            heredoc_marker = start
+    if buf:  # trailing continuation with nothing after it
+        if (tok := _normalize_line(buf.rstrip())) is not None:
+            out.append(tok)
+    return out
+
+
+def _opens_shell_continuation(candidate: str) -> bool:
+    """True when the shell would keep reading: trailing `\\`, or an odd
+    number of unescaped single quotes (multi-line quoted literal)."""
+    stripped = candidate.rstrip()
+    if stripped.endswith("\\"):
+        return True
+    return stripped.count("'") % 2 == 1
+
+
+def _heredoc_start(line: str) -> str | None:
+    """Return the terminator if `line` opens a heredoc (`<< 'EOF'` etc.)."""
+    import re
+
+    m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+    return m.group(1) if m else None
 
 
 def _render_tokens(lines: list[list[str]]) -> list[str]:
@@ -170,7 +238,43 @@ def _python_render(fixture: dict) -> str:
     assert uc.build_configure_ops is not None, (
         f"use case {fixture['use_case']} has no ops builder"
     )
+    # Credless vpn-provider rendering: the provider presets fetch
+    # credentials / resolve servers over the network at BUILD time. The
+    # canonical offline recipe (same values as the Rust-side
+    # tests/use_case_goldens.rs regeneration header) stubs those two
+    # module functions — parity fixtures must never touch a live API.
+    stubs = _VPN_PROVIDER_STUBS.get(fixture["use_case"])
+    if stubs:
+        return stubs(uc, fixture["params"])
     return render_shell(uc.build_configure_ops(fixture["params"]))
+
+
+def _make_vpn_stub(module_name: str):
+    import importlib
+
+    def _stub(uc, params):
+        mod = importlib.import_module(f"use_cases.vpn_providers.{module_name}")
+        saved = {n: getattr(mod, n, None) for n in ("_fetch_credentials", "_resolve_server", "_resolve_endpoint")}
+        mod._fetch_credentials = lambda basic: {"username": "svcuser1234", "password": "svcpass5678abcd",
+                                              "nordlynx_private_key": "STUBPRIVKEYbase64filledfortestonly0000=",
+                                              "nordlynx_public_key": "STUBPUBKEYbase64filledfortestonly0000="}
+        mod._resolve_server = lambda value, token, tech: {"station": "193.29.107.10", "hostname": "de500.nordvpn.com"}
+        mod._resolve_endpoint = lambda value, token, tech="wireguard_udp": ("de500.nordvpn.com", "51820", "STUBPUBKEYbase64filledfortestonly0000=")
+        try:
+            return render_shell(uc.build_configure_ops(params))
+        finally:
+            for n, v in saved.items():
+                if v is not None:
+                    setattr(mod, n, v)
+
+    return _stub
+
+
+_VPN_PROVIDER_STUBS = {
+    "vpn-nordvpn": _make_vpn_stub("nordvpn"),
+    "vpn-nordvpn-openvpn": _make_vpn_stub("nordvpn"),
+    "vpn-nordvpn-ikev2": _make_vpn_stub("nordvpn"),
+}
 
 
 def _rust_render(bin_path: Path, fixture_path: Path) -> str:
