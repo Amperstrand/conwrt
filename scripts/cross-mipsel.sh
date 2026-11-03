@@ -52,6 +52,32 @@ TOOLCHAIN_INNER="toolchain-mipsel_24kc_gcc-14.3.0_musl"
 
 TARGET=mipsel-unknown-linux-musl
 
+# The pinned OpenWrt toolchain is Linux x86_64 ELF only: its gcc cannot
+# execute on macOS or ARM64 hosts, so the build would download and
+# compile for minutes and then die at link time (Codex P2 on #175).
+# Run from a Linux/x86_64 container on those hosts.
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64) ;;
+    *)
+        echo "error: unsupported host $(uname -s)/$(uname -m) — the pinned" >&2
+        echo "OpenWrt toolchain is Linux x86_64 ELF only; use a Linux x86_64" >&2
+        echo "container for this lane." >&2
+        exit 1
+        ;;
+esac
+
+# Cargo resolves a RELATIVE CARGO_TARGET_DIR after `cd $ROOT`, but this
+# script resolved $OUT from the caller's directory — stripping/reporting
+# then looked in the wrong place (Codex P2 on #175). Normalize once,
+# before any cd.
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    case "$CARGO_TARGET_DIR" in
+        /*) ;;
+        *) CARGO_TARGET_DIR="$PWD/$CARGO_TARGET_DIR" ;;
+    esac
+    export CARGO_TARGET_DIR
+fi
+
 CACHE="${CONWRT_MIPS_CACHE:-$HOME/.cache/conwrt/mipsel}"
 LINKDIR="$CACHE/link"
 TC="$CACHE/$TOOLCHAIN_TOPDIR/$TOOLCHAIN_INNER"
@@ -122,14 +148,20 @@ exec "$TC/bin/mipsel-openwrt-linux-musl-gcc.bin" "--sysroot=$TC" "$@"
 EOF
 chmod +x "$LINKDIR/link-wrapper.sh"
 
-# ── 4. Prerequisites: nightly toolchain + rust-src ───────────────────
-if ! rustup toolchain list | grep -q '^nightly'; then
-    echo "error: nightly toolchain required (build-std). Install with:" >&2
-    echo "  rustup toolchain install nightly" >&2
+# ── 4. Prerequisites: pinned nightly toolchain + rust-src ────────────
+# One DATED nightly for check/install/build alike: the floating alias
+# could change the source-built std between identical runs, and the old
+# `grep '^nightly'` check accepted installed `nightly-YYYY-MM-DD-*`
+# names while `cargo +nightly` selected a different floating channel
+# (Codex P2 on #175).
+NIGHTLY="${CONWRT_CROSS_NIGHTLY:-nightly-2026-11-01}"
+if ! rustup toolchain list | grep -q "^$NIGHTLY"; then
+    echo "error: pinned nightly $NIGHTLY required (build-std). Install with:" >&2
+    echo "  rustup toolchain install $NIGHTLY --component rust-src" >&2
     exit 1
 fi
-if ! rustup component list --toolchain nightly 2>/dev/null | grep -q '^rust-src.*(installed)'; then
-    echo "==> installing rust-src for nightly"
+if ! rustup component list --toolchain "$NIGHTLY" 2>/dev/null | grep -q '^rust-src.*(installed)'; then
+    echo "==> installing rust-src for $NIGHTLY"
     rustup component add rust-src --toolchain nightly
 fi
 
@@ -141,7 +173,7 @@ echo "==> building conwrt-agent for $TARGET"
     cd "$ROOT"
     CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$LINKDIR/link-wrapper.sh" \
     RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-L$TC/lib -C link-arg=-L$GCCDIR -C link-arg=-L$LINKDIR" \
-    cargo +nightly build --release -p conwrt-agent \
+    cargo +"$NIGHTLY" build --release -p conwrt-agent \
         --target "$TARGET" \
         --target-dir "${CARGO_TARGET_DIR:-$ROOT/target}" \
         -Z build-std=std,panic_abort
