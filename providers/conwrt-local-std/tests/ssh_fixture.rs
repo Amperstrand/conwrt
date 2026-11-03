@@ -110,13 +110,15 @@ async fn changed_key_refusal_sends_zero_auth_attempts() {
     let mut store = MemoryTrustStore::new();
     // Seed the store with a DIFFERENT ed25519 key for this exact host:
     // the fixture's freshly generated key then presents as ChangedKey.
-    store.remember(
-        &fixture.addr,
-        &conwrt_core::ssh::HostKeyView {
-            key_algo: "ssh-ed25519".into(),
-            fingerprint: "SHA256:0000000000000000000000000000000000000000000".into(),
-        },
-    );
+    store
+        .remember(
+            &fixture.addr,
+            &conwrt_core::ssh::HostKeyView {
+                key_algo: "ssh-ed25519".into(),
+                fingerprint: "SHA256:0000000000000000000000000000000000000000000".into(),
+            },
+        )
+        .unwrap();
     let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
         .await
         .unwrap_err();
@@ -145,7 +147,7 @@ async fn tofu_remembers_then_second_connect_uses_store() {
     let session = connect(&target(&fixture.addr), &mut store, &options)
         .await
         .expect("first connect");
-    assert_eq!(store.entries(&fixture.addr).len(), 1);
+    assert_eq!(store.entries(&fixture.addr).unwrap().len(), 1);
 
     // Strict mode now succeeds purely from the store.
     let session2 = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
@@ -199,13 +201,15 @@ async fn changed_server_key_is_refused_from_store() {
     // — the MITM/reimage signature.
     let fixture = Fixture::start().await;
     let mut store = MemoryTrustStore::new();
-    store.remember(
-        &fixture.addr,
-        &conwrt_core::ssh::HostKeyView {
-            key_algo: "ssh-ed25519".to_string(),
-            fingerprint: "SHA256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD".to_string(),
-        },
-    );
+    store
+        .remember(
+            &fixture.addr,
+            &conwrt_core::ssh::HostKeyView {
+                key_algo: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD".to_string(),
+            },
+        )
+        .unwrap();
 
     let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
         .await
@@ -266,13 +270,15 @@ async fn relearn_forget_then_tofu_relearns_the_new_key() {
     let fixture = Fixture::start().await;
     let mut store = MemoryTrustStore::new();
     // Simulate a pre-reflash key: same algo, different fingerprint.
-    store.remember(
-        &fixture.addr,
-        &HostKeyView {
-            key_algo: "ssh-ed25519".into(),
-            fingerprint: "SHA256:0000000000000000000000000000000000000000000".into(),
-        },
-    );
+    store
+        .remember(
+            &fixture.addr,
+            &HostKeyView {
+                key_algo: "ssh-ed25519".into(),
+                fingerprint: "SHA256:0000000000000000000000000000000000000000000".into(),
+            },
+        )
+        .unwrap();
 
     // Without relearn: refused, zero auth attempts.
     let err = connect(&target(&fixture.addr), &mut store, &SshOptions::default())
@@ -289,8 +295,8 @@ async fn relearn_forget_then_tofu_relearns_the_new_key() {
 
     // The explicit escape hatch: forget → TOFU re-learns (the CLI's
     // relearn flag pairs with its TOFU connect mode).
-    store.forget(&fixture.addr);
-    assert!(store.entries(&fixture.addr).is_empty());
+    let _ = store.forget(&fixture.addr);
+    assert!(store.entries(&fixture.addr).unwrap().is_empty());
     let tofu = SshOptions {
         mode: TrustMode::TrustOnFirstUse,
         ..SshOptions::default()
@@ -299,9 +305,9 @@ async fn relearn_forget_then_tofu_relearns_the_new_key() {
         .await
         .expect("connect after relearn");
     assert_eq!(fixture.auth_attempts(), 1);
-    assert_eq!(store.entries(&fixture.addr).len(), 1);
+    assert_eq!(store.entries(&fixture.addr).unwrap().len(), 1);
     assert_eq!(
-        store.entries(&fixture.addr)[0].fingerprint,
+        store.entries(&fixture.addr).unwrap()[0].fingerprint,
         session.presented_key.fingerprint
     );
 }

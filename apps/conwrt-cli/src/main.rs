@@ -1844,7 +1844,12 @@ fn cmd_fingerprint(
     };
     let kh_path = FileTrustStore::default_path();
     let mut store = FileTrustStore::new(kh_path.clone());
-    let known_before = store.entries(&target.addr);
+    // Fail closed on store errors (Codex P1 on #207): an unreadable or
+    // corrupt known-hosts store must abort, never degrade to first-use.
+    let known_before = store.entries(&target.addr).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    });
     let session = match runtime.block_on(connect(
         &target,
         &mut store,
@@ -1904,7 +1909,12 @@ fn cmd_fingerprint(
 }
 fn store_forget(addr: &str) {
     use conwrt_core::ssh::TrustStore;
-    FileTrustStore::new(FileTrustStore::default_path()).forget(addr);
+    // The relearn hatch is operator-visible by contract — a failed
+    // forget must be visible too, not a silent no-op (Codex P1 on #207).
+    if let Err(e) = FileTrustStore::new(FileTrustStore::default_path()).forget(addr) {
+        eprintln!("error: relearn failed: {e}");
+        std::process::exit(2);
+    }
 }
 #[allow(clippy::too_many_arguments)] // ssh-target plumbing; grouped under one subcommand
 fn cmd_apply(
@@ -1960,7 +1970,12 @@ fn cmd_apply(
     };
     let kh_path = FileTrustStore::default_path();
     let mut store = FileTrustStore::new(kh_path.clone());
-    let known_before = store.entries(&target.addr);
+    // Fail closed on store errors (Codex P1 on #207): an unreadable or
+    // corrupt known-hosts store must abort, never degrade to first-use.
+    let known_before = store.entries(&target.addr).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    });
     let session = match runtime.block_on(connect(
         &target,
         &mut store,
@@ -3580,7 +3595,12 @@ fn persist_new_host_key(
     }
     use conwrt_core::ssh::TrustStore;
     let mut store = FileTrustStore::new(kh_path.to_path_buf());
-    store.remember(addr, key);
+    if let Err(e) = store.remember(addr, key) {
+        // An unpersisted pin would make every later run a silent
+        // first-use (Codex P1 on #207) — abort instead.
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
     println!(
         "host key:   {} (first use; recorded in {})",
         key.fingerprint,
