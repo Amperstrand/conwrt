@@ -209,14 +209,12 @@
     },
     "vpn_nordvpn_default": {
       "use_case": "vpn-nordvpn",
-      "expect": "GAP",
-      "gap_reasons": [
-        "1.x (post NordVPN API change: no more station-IP lookup) pins the /32 route target by HOSTNAME (uci set network.nordvpn_server_route.target='de500.nordvpn.com'); the typed VpnNordvpnProfile validate() still requires an IPv4 route_target \u2014 semantic drift found by the cross-implementation corpus; needs the profile contract updated (hostname allowed, router-side resolution)",
-        "credless note: rendered via the harness's _VPN_PROVIDER_STUBS (same offline recipe as use_case_goldens.rs) \u2014 parity fixtures never touch the live API"
-      ]
+      "expect": "EQUAL",
+      "gap_reasons": []
     }
   },
   "pending_migration": [
-    "vpn provider arms (nordvpn/pia/surfshark/openvpn/ivpn/mullvad): presets resolve servers at Python build time (network + credentials) \u2014 credless-fixture design pending; ports-m typed the profiles (enum variants exist), only the cross-implementation fixtures are blocked"
+    "parity-harness unreachable via Profile enum (typed only in the ports-m separate ops registry): openperf_client, openperf_server, configurationwizzard, tollgate-cellular \u2014 wire when those presets gain Profile variants or the harness learns their registry (fleet-identity GAINED its variant via #628 \u2014 fixtures restored)",
+    "vpn provider arms (credless-fixture design pending \u2014 build-time server resolution)"
   ]
 }
