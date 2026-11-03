@@ -25,8 +25,9 @@ use crate::plan::{
     Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
     OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnNodeProfile, VpnNordvpnProfile,
-    WifiUplink, WireguardClientProfile, WireguardServerProfile, render_shell,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
+    VpnNodeProfile, VpnNordvpnProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile,
+    WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -524,6 +525,42 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 }
             }
             Ok(Profile::TollgateCellular(p))
+        }
+        "vpn-ivpn" => {
+            let p = VpnIvpnProfile {
+                account_id: get_str(&params, "account_id").ok_or("account_id is required")?,
+                upstream_gateway: get_str(&params, "upstream_gateway")
+                    .unwrap_or_else(|| "192.168.8.1".into()),
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+            };
+            Ok(Profile::VpnIvpn(p))
+        }
+        "vpn-mullvad" => {
+            let p = VpnMullvadProfile {
+                account_token: get_str(&params, "account_token")
+                    .ok_or("account_token is required")?,
+                country: get_str(&params, "country").unwrap_or_default(),
+                upstream_gateway: get_str(&params, "upstream_gateway")
+                    .ok_or("upstream_gateway is required")?,
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnMullvad(p))
+        }
+        "vpn-surfshark" => {
+            let p = VpnSurfsharkProfile {
+                username: get_str(&params, "username").ok_or("username is required")?,
+                password: get_str(&params, "password").ok_or("password is required")?,
+                country: get_str(&params, "country").unwrap_or_default(),
+                upstream_gateway: get_str(&params, "upstream_gateway")
+                    .ok_or("upstream_gateway is required")?,
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnSurfshark(p))
         }
         "vpn-nordvpn" => {
             let p = VpnNordvpnProfile {

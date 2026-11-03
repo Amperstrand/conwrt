@@ -211,6 +211,18 @@
       "use_case": "vpn-nordvpn",
       "expect": "EQUAL",
       "gap_reasons": []
+    },
+    "vpn_ivpn_default": {
+      "use_case": "vpn-ivpn",
+      "expect": "EQUAL"
+    },
+    "vpn_mullvad_default": {
+      "use_case": "vpn-mullvad",
+      "expect": "EQUAL"
+    },
+    "vpn_surfshark_default": {
+      "use_case": "vpn-surfshark",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

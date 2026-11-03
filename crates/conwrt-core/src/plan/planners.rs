@@ -195,21 +195,36 @@ pub(super) fn route_block(section: &str) -> String {
 
 /// The pre-commit address readback tail (AGENTS.md).
 pub(super) fn readback_block(provider: &str) -> String {
-    let mut lines: Vec<String> = vec![
-        "# Pre-commit IP readback (AGENTS.md): refuse to reach commit with a".into(),
-        "# tunnel address that is not a sane /32 (the surfshark #604-P1 class)".into(),
+    // comment header is per-provider 1.x text — byte parity (PR #629):
+    // ivpn keeps the two-line refuse form; mullvad the single-line class
+    // tag; surfshark the three-line shared-ops form.
+    let header: &[&str] = match provider {
+        "Mullvad" => &["# Pre-commit IP readback (AGENTS.md; surfshark #604-P1 class)"],
+        "Surfshark" => &[
+            "# Pre-commit IP readback (AGENTS.md): the shared ops below commit and",
+            "# restart networking — refuse to reach commit with a tunnel address",
+            "# that is not a sane /32 (Codex #604 P1 round 3).",
+        ],
+        _ => &[
+            "# Pre-commit IP readback (AGENTS.md): refuse to reach commit with a",
+            "# tunnel address that is not a sane /32 (the surfshark #604-P1 class)",
+        ],
+    };
+    let mut lines: Vec<String> = header.iter().map(|l| (*l).into()).collect();
+    lines.extend([
         "WG_ADDR=$(uci -q get network.wg0.addresses)".into(),
         "case \"$WG_ADDR\" in".into(),
         "    */32) ;;".into(),
         "esac".into(),
-    ];
-    lines.insert(
-        5,
-        format!(
-            "    *) echo \"{provider}: wg0 address '$WG_ADDR' not a sane /32 — \
-             aborting before commit\"; exit 1 ;;"
-        ),
+    ]);
+    let abort_arm = format!(
+        "    *) echo \"{provider}: wg0 address '$WG_ADDR' not a sane /32 — aborting before commit\"; exit 1 ;;"
     );
+    let esac_idx = lines
+        .iter()
+        .position(|l| l.trim() == "esac")
+        .expect("esac line in readback tail");
+    lines.insert(esac_idx, abort_arm);
     lines.join("\n")
 }
 
@@ -276,6 +291,7 @@ pub(super) const MULLVAD_WG_BODY_SH: &str = concat!(
     "    -H \"Authorization: Token __TOKEN__\" \\\n",
     "    -H \"Content-Type: application/json\" \\\n",
     "    -d '{\"public_key\":\"'\"${WG_PUB}\"'\"}')\n",
+    "\n",
     "PEER_IP=$(echo \"$RESPONSE\" | json_get ipv4_address)\n",
     "# Strip CIDR if present (Mullvad returns 10.xx.xx.xx/32)\n",
     "PEER_IP=${PEER_IP%%/*}\n",
@@ -399,9 +415,9 @@ pub(super) const SURFSHARK_WG_BODY_SH: &str = concat!(
     "    echo \"Surfshark: endpoint DNS unresolved — skipping static route (netifd installs its own)\"\n",
     "fi\n",
     "\n",
-    "# Pre-commit IP readback (AGENTS.md): the shared ops below commit\n",
-    "# and restart networking — refuse to reach commit with a tunnel\n",
-    "# address that is not a sane /32 (Codex #604 P1 round 3).\n",
+    "# Pre-commit IP readback (AGENTS.md): the shared ops below commit and\n",
+    "# restart networking — refuse to reach commit with a tunnel address\n",
+    "# that is not a sane /32 (Codex #604 P1 round 3).\n",
     "WG_ADDR=$(uci -q get network.wg0.addresses)\n",
     "case \"$WG_ADDR\" in\n",
     "    */32) ;;\n",
