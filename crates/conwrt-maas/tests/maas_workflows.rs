@@ -278,3 +278,30 @@ fn machine_state_gates_allocation_and_reports_failures() {
     assert!(S::Broken.is_failed());
     assert!(!S::Ready.is_failed());
 }
+
+// ------------------------------------------------------- #200 review debt
+
+#[test]
+fn machine_state_parses_canonical_allocated() {
+    use conwrt_maas::MachineState;
+    use std::str::FromStr;
+    // A successful allocate reports "Allocated" (Ready → Allocated →
+    // Deploying); it previously collapsed into Other("Allocated")
+    // (Codex P2 on #200).
+    let s = MachineState::from_str("Allocated").unwrap();
+    assert_eq!(s, MachineState::Allocated);
+    assert_eq!(s.to_string(), "Allocated");
+}
+
+#[test]
+fn vm_name_must_be_a_real_dns_label() {
+    // RFC 1035 shape: 1-63 bytes, alphanumeric first and last —
+    // '-', 'host-', '-host', and >63 labels previously passed and only
+    // failed in the remote compose call (Codex P2 on #200).
+    for bad in ["-", "host-", "-host", "a".repeat(64).as_str()] {
+        assert!(spec(bad).validate().is_err(), "{bad:?} must be rejected");
+    }
+    for good in ["a", "h-1", "x".repeat(63).as_str()] {
+        assert!(spec(good).validate().is_ok(), "{good:?} must be accepted");
+    }
+}

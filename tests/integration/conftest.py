@@ -521,13 +521,19 @@ from venues import (  # noqa: E402
 
 VENUES = venues_from_env()
 
+# Darkness = the PLACE/COORDINATOR is unreachable. The generic Python
+# "Traceback" marker was removed (Codex P2 on #184): a remote command's
+# transported traceback also matches it, and _run() then skipped the
+# test before it could inspect a real product failure. Keep markers
+# specific to labgrid/coordinator diagnostics.
 _VENUE_UNREACHABLE_MARKERS = (
     "Timeout while waiting for ssh connection",
     "NoDriverFoundError",
     "Connection timed out",
     "Connection refused",
     "No route to host",
-    "Traceback (most recent call last)",
+    "labgrid.client.",
+    "Coordinator connection",
     # a place without a usable NetworkService (or with a resource class the
     # local labgrid install doesn't know) is an environment condition, not
     # a test failure — the sweep evidence 2026-10-15 hit both shapes
@@ -567,7 +573,14 @@ def _qemu_venue_runner(vm: dict):
 
 def _labgrid(args: list[str], place: str, timeout: int = 40):
     client = os.environ.get("CONWRT_LABGRID_CLIENT", "labgrid-client")
-    coordinator = os.environ.get("CONWRT_LABGRID_COORDINATOR", "ai-legion:20408")
+    # CONWRT_ override first, then labgrid's NATIVE LG_COORDINATOR — the
+    # old chain ignored a runner-set LG_COORDINATOR and always passed the
+    # hardcoded default via -x (Codex P1 on #184).
+    coordinator = (
+        os.environ.get("CONWRT_LABGRID_COORDINATOR")
+        or os.environ.get("LG_COORDINATOR")
+        or "ai-legion:20408"
+    )
     return subprocess.run(
         [client, "-x", coordinator, "-p", place, *args],
         capture_output=True, text=True, timeout=timeout, check=False,
