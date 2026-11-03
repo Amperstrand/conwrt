@@ -3,7 +3,7 @@
 //! Thin frontend over the conwrt engine (ADR-0008). M1 surface is
 //! deliberately read-only and mock-backed:
 //!
-//! - `conwrt models validate` — validate the shared `models/*.json` corpus
+//! - `conwrt models` — validate the shared `models/*.json` corpus
 //!   (parity with `make validate-models`).
 //! - `conwrt identify --mac …` — OUI-prefix model identification.
 //! - `conwrt probe --scenario …` — run the diagnostic workflow against a
