@@ -194,23 +194,60 @@ fn pin_hint(host: &str, fingerprint: &str) -> String {
     )
 }
 
+/// Why a [`TrustStore`] operation failed. All variants are fail-closed:
+/// the caller must refuse the connection / abort the operation — an
+/// unreadable or corrupt store must never degrade into "unknown host",
+/// because TOFU would then hand credentials to a replacement host
+/// (Codex P1 findings on #207).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustStoreError {
+    /// The store exists but cannot be read (permissions, I/O).
+    Unreadable,
+    /// A non-empty record line does not have the `host algo fingerprint`
+    /// shape; the store is corrupt and pins cannot be trusted.
+    Malformed(String),
+    /// The store could not be persisted (lock, temp file, write, sync,
+    /// or rename). A key that was "remembered" but not written would
+    /// make every later invocation a silent first-use.
+    Unwritable,
+}
+
+impl core::fmt::Display for TrustStoreError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unreadable => {
+                f.write_str("known-hosts store unreadable — refusing (fail closed)")
+            }
+            Self::Malformed(line) => write!(
+                f,
+                "known-hosts store has a malformed record: {line:?} — refusing (fail closed)"
+            ),
+            Self::Unwritable => f.write_str("known-hosts store could not be persisted — aborting"),
+        }
+    }
+}
+
 /// A host-key memory: what this process already trusts, per host.
 ///
 /// Implementations: [`MemoryTrustStore`] (single session, tests) and the
 /// file-backed store in `conwrt-local-std` (persistent TOFU across
 /// sessions). Stores hold **fingerprints only** — never key material —
 /// so their contents are safe to persist and print.
+///
+/// Every operation is fallible: `Err` means the store's integrity or
+/// persistence is in doubt and the caller MUST fail closed — never
+/// treat it as "unknown host" (see [`TrustStoreError`]).
 pub trait TrustStore {
     /// Keys already trusted for `host` (empty = unknown host).
-    fn entries(&self, host: &str) -> Vec<HostKeyView>;
+    fn entries(&self, host: &str) -> Result<Vec<HostKeyView>, TrustStoreError>;
 
     /// Trust `key` for `host` going forward (implementations dedupe).
-    fn remember(&mut self, host: &str, key: &HostKeyView);
+    fn remember(&mut self, host: &str, key: &HostKeyView) -> Result<(), TrustStoreError>;
 
     /// Drop every stored key for `host` — the explicit relearn escape
     /// hatch after a reflash (host keys legitimately change). Callers
     /// must make this an operator-visible action, never silent.
-    fn forget(&mut self, host: &str);
+    fn forget(&mut self, host: &str) -> Result<(), TrustStoreError>;
 }
 
 /// An in-memory [`TrustStore`] for tests and single-session TOFU flows.
@@ -228,22 +265,25 @@ impl MemoryTrustStore {
 }
 
 impl TrustStore for MemoryTrustStore {
-    fn entries(&self, host: &str) -> Vec<HostKeyView> {
-        self.entries
+    fn entries(&self, host: &str) -> Result<Vec<HostKeyView>, TrustStoreError> {
+        Ok(self
+            .entries
             .iter()
             .filter(|(h, _)| h == host)
             .map(|(_, k)| k.clone())
-            .collect()
+            .collect())
     }
 
-    fn remember(&mut self, host: &str, key: &HostKeyView) {
+    fn remember(&mut self, host: &str, key: &HostKeyView) -> Result<(), TrustStoreError> {
         if !self.entries.iter().any(|(h, k)| h == host && *k == *key) {
             self.entries.push((host.to_string(), key.clone()));
         }
+        Ok(())
     }
 
-    fn forget(&mut self, host: &str) {
+    fn forget(&mut self, host: &str) -> Result<(), TrustStoreError> {
         self.entries.retain(|(h, _)| h != host);
+        Ok(())
     }
 }
 
@@ -357,11 +397,11 @@ mod tests {
     #[test]
     fn store_remember_dedupes() {
         let mut store = MemoryTrustStore::new();
-        store.remember("h", &ed_key(ED));
-        store.remember("h", &ed_key(ED));
-        store.remember("other", &ed_key(ED));
-        assert_eq!(store.entries("h").len(), 1);
-        assert_eq!(store.entries("other").len(), 1);
-        assert!(store.entries("missing").is_empty());
+        store.remember("h", &ed_key(ED)).unwrap();
+        store.remember("h", &ed_key(ED)).unwrap();
+        store.remember("other", &ed_key(ED)).unwrap();
+        assert_eq!(store.entries("h").unwrap().len(), 1);
+        assert_eq!(store.entries("other").unwrap().len(), 1);
+        assert!(store.entries("missing").unwrap().is_empty());
     }
 }

@@ -12,7 +12,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use conwrt_core::ssh::{
-    HostKeyView, Refusal, TrustDecision, TrustMode, TrustStore, TrustedHow, evaluate_host_key,
+    HostKeyView, Refusal, TrustDecision, TrustMode, TrustStore, TrustStoreError, TrustedHow,
+    evaluate_host_key,
 };
 use std::path::Path;
 
@@ -155,6 +156,9 @@ pub enum SshError {
     Key(String),
     /// scp protocol violation.
     Scp(String),
+    /// The known-hosts store is unreadable, corrupt, or unpersistable —
+    /// fail closed before any authentication (Codex P1 on #207).
+    TrustStore(TrustStoreError),
 }
 
 impl std::fmt::Display for SshError {
@@ -166,6 +170,7 @@ impl std::fmt::Display for SshError {
             SshError::Transport(msg) => write!(f, "ssh transport error: {msg}"),
             SshError::Key(msg) => write!(f, "ssh key error: {msg}"),
             SshError::Scp(msg) => write!(f, "scp failed: {msg}"),
+            SshError::TrustStore(e) => write!(f, "{e}"),
         }
     }
 }
@@ -243,7 +248,10 @@ pub async fn connect<S: TrustStore>(
     store: &mut S,
     options: &SshOptions,
 ) -> Result<SshSession, SshError> {
-    let stored = store.entries(&target.addr);
+    // Fail closed on store errors (Codex P1 on #207): an unreadable or
+    // corrupt store must refuse the connection — never degrade to
+    // "unknown host", which TOFU would reward with credentials.
+    let stored = store.entries(&target.addr).map_err(SshError::TrustStore)?;
     let policy = Arc::new(LadderInputs {
         host: target.addr.clone(),
         pin: options.pin.clone(),
@@ -318,7 +326,9 @@ pub async fn connect<S: TrustStore>(
         &policy.stored,
         policy.mode,
     ) {
-        TrustDecision::Trusted(TrustedHow::FirstUse) => store.remember(&target.addr, &presented),
+        TrustDecision::Trusted(TrustedHow::FirstUse) => store
+            .remember(&target.addr, &presented)
+            .map_err(SshError::TrustStore)?,
         TrustDecision::Trusted(_) => {}
         TrustDecision::Refused(refusal) => return Err(SshError::HostKeyRefused(refusal)),
     }
