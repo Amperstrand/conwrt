@@ -32,8 +32,6 @@ pub const RECOVERY_FLASH_METHODS: &[&str] = &[
     "zycast",
     "dlink-hnap",
     "mtd-write",
-    "extreme-rdwr-tftp-initramfs",
-    "oem-http",
 ];
 
 /// Flash methods that additionally want the companion initramfs image
@@ -42,6 +40,7 @@ pub const INITRAMFS_FLASH_METHODS: &[&str] = &[
     "edgeos-kernel-swap",
     "extreme-rdwr-tftp-initramfs",
     "oem-http",
+    "oem-ftp",
 ];
 
 /// Image types a flash method should use, in preference order.
@@ -272,7 +271,11 @@ mod tests {
         );
         assert_eq!(
             preferred_image_types("extreme-rdwr-tftp-initramfs"),
-            &[ImageType::Recovery, ImageType::Factory]
+            // Two-stage flow: stage two sysupgrades with SelectedImage.path
+            // (extreme.py:672-686) — the recovery preference made the
+            // untyped fallback pick the initramfs entry for both paths
+            // (Codex P1 on #136).
+            &[ImageType::Sysupgrade]
         );
         assert_eq!(
             preferred_image_types("sysupgrade"),

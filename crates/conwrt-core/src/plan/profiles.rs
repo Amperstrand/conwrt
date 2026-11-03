@@ -35,17 +35,29 @@ impl SqmProfile {
         if self.upload_kbps == 0 {
             return Err(Unsupported::InvalidParams("upload_kbps must be ≥ 1".into()));
         }
+        // sqm-scripts supports fq_codel/cake/pie as shaping qdiscs; anything
+        // else (or empty) fails device-side after apply — reject at plan time
+        // (Codex P2 on #127).
+        if !matches!(self.qdisc.as_str(), "fq_codel" | "cake" | "pie") {
+            return Err(Unsupported::InvalidParams(
+                "qdisc must be one of fq_codel, cake, pie".into(),
+            ));
+        }
         if self.overhead > 512 {
             return Err(Unsupported::InvalidParams("overhead must be 0–512".into()));
         }
+        // The interface doubles as the UCI section id (`sqm.$INTERFACE`), and
+        // rpcd's UCI validator admits only [A-Za-z0-9_] for section ids — a
+        // hyphen that is fine as a device alias would make the plan's own
+        // commit fail at the ubus boundary (Codex P2 on #127).
         if self.interface.is_empty()
             || !self
                 .interface
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             return Err(Unsupported::InvalidParams(
-                "interface must be a plain UCI network name (e.g. `wan`)".into(),
+                "interface must be a plain UCI section name: [A-Za-z0-9_] (e.g. `wan`)".into(),
             ));
         }
         Ok(())

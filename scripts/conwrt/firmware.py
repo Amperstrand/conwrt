@@ -63,8 +63,6 @@ def _request_custom_image(
         "zycast",
         "dlink-hnap",
         "mtd-write",
-        "extreme-rdwr-tftp-initramfs",
-        "oem-http",
     }
     if flash_method in recovery_methods:
         preferred_types = ["recovery", "factory", "initramfs"]
@@ -131,7 +129,7 @@ def _request_custom_image(
 
     log(f"Firmware image: {image_path}")
 
-    if flash_method in {"edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http"}:
+    if flash_method in {"edgeos-kernel-swap", "extreme-rdwr-tftp-initramfs", "oem-http", "oem-ftp"}:
         initramfs_path = ""
         if image_path:
             image_dir = Path(image_path).parent

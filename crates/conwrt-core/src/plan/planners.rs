@@ -5226,10 +5226,20 @@ pub(super) fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Un
     ];
     let verification = vec![
         VerificationCheck {
-            description: "shaper rate persisted exactly".into(),
+            description: "download shaper rate persisted exactly".into(),
             command: format!(
                 "test \"$(uci -q get sqm.{iface}.download)\" = {rate} && echo ok",
                 rate = shell_quote(&sqm.download_kbps.to_string())
+            ),
+            expect_contains: "ok".into(),
+        },
+        VerificationCheck {
+            // Codex P2 on #127: the download-only check let a lost upload
+            // assignment pass every verification gate.
+            description: "upload shaper rate persisted exactly".into(),
+            command: format!(
+                "test \"$(uci -q get sqm.{iface}.upload)\" = {rate} && echo ok",
+                rate = shell_quote(&sqm.upload_kbps.to_string())
             ),
             expect_contains: "ok".into(),
         },

@@ -14,6 +14,8 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     upload_kbps = params.get("upload_kbps", 5000)
     interface = uci_name(interface_name(params.get("interface", "wan"), "SQM interface"), "SQM interface")
     qdisc = str(params.get("qdisc", "cake"))
+    if qdisc not in {"fq_codel", "cake", "pie"}:
+        raise ValueError("SQM qdisc must be one of fq_codel, cake, pie")
     script = str(params.get("script", "piece_of_cake.qos"))
     link_layer = str(params.get("link_layer", "none"))
     overhead = int_range(params.get("overhead", 0), "overhead", 0, 512)
