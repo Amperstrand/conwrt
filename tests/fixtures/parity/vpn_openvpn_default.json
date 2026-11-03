@@ -1,0 +1,10 @@
+{
+  "use_case": "vpn-openvpn",
+  "params": {
+    "ovpn_config": "client\ndev tun\nproto udp\nremote vpn.example.com 1194\nresolv-retry infinite\nnobind\nauth-user-pass /etc/openvpn/creds.txt",
+    "username": "svcuser1234",
+    "password": "svcpass5678abcd",
+    "proto": "udp",
+    "kill_switch": true
+  }
+}

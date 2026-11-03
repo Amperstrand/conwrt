@@ -26,7 +26,8 @@ use crate::plan::{
     OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
     TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile,
+    VpnNodeProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile,
     WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
@@ -561,6 +562,53 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 ..Default::default()
             };
             Ok(Profile::VpnSurfshark(p))
+        }
+        "vpn-pia" => {
+            let p = VpnPiaProfile {
+                username: get_str(&params, "username").ok_or("username is required")?,
+                password: get_str(&params, "password").ok_or("password is required")?,
+                region: get_str(&params, "region").unwrap_or_else(|| "netherlands".into()),
+                upstream_gateway: get_str(&params, "upstream_gateway")
+                    .ok_or("upstream_gateway is required")?,
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wwan".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnPia(p))
+        }
+        "vpn-openvpn" => {
+            let p = VpnOpenvpnProfile {
+                ovpn_config: get_str(&params, "ovpn_config").ok_or("ovpn_config is required")?,
+                username: get_str(&params, "username").unwrap_or_default(),
+                password: get_str(&params, "password").unwrap_or_default(),
+                proto: get_str(&params, "proto").unwrap_or_else(|| "udp".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnOpenvpn(p))
+        }
+        "vpn-pia-openvpn" => {
+            let p = VpnPiaOpenvpnProfile {
+                username: get_str(&params, "username").unwrap_or_default(),
+                password: get_str(&params, "password").unwrap_or_default(),
+                port: get_str(&params, "port").unwrap_or_else(|| "1198".into()),
+                upstream_gateway: get_str(&params, "upstream_gateway").unwrap_or_default(),
+                upstream_iface: get_str(&params, "upstream_iface").unwrap_or_else(|| "wan".into()),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                allow_management: get_bool(&params, "allow_management", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnPiaOpenvpn(p))
+        }
+        "vpn-nordvpn-openvpn" => {
+            let p = VpnNordvpnOpenvpnProfile {
+                username: get_str(&params, "username").unwrap_or_else(|| "svcuser1234".into()),
+                password: get_str(&params, "password").unwrap_or_else(|| "svcpass5678abcd".into()),
+                station: get_str(&params, "station").unwrap_or_else(|| "193.29.107.10".into()),
+                hostname: get_str(&params, "server").unwrap_or_else(|| "de500.nordvpn.com".into()),
+                ..Default::default()
+            };
+            Ok(Profile::VpnNordvpnOpenvpn(p))
         }
         "vpn-nordvpn" => {
             let p = VpnNordvpnProfile {
