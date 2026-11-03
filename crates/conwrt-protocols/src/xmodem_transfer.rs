@@ -97,6 +97,10 @@ impl Default for RetryPolicy {
 /// Why a verified transfer failed.
 #[derive(Debug)]
 pub enum VerifiedError {
+    /// The retry policy is unusable as configured — e.g. zero whole-
+    /// transfer attempts, which previously fell through the loop and
+    /// panicked on the exhausted-path `expect` (Codex P2 on #212).
+    InvalidPolicy(&'static str),
     /// The sender side failed every attempt (last library error kept).
     AttemptsExhausted {
         /// Attempts made.
@@ -143,6 +147,14 @@ where
     R: Read,
     W: FnMut(u64),
 {
+    // Codex P2 on #212: a public RetryPolicy with max_attempts == 0
+    // executes no attempts and previously panicked on the exhausted
+    // path — return an explicit configuration error instead.
+    if policy.max_attempts == 0 {
+        return Err(VerifiedError::InvalidPolicy(
+            "RetryPolicy.max_attempts must be >= 1",
+        ));
+    }
     let mut last_sender_error: Option<XmodemError> = None;
     let mut last_claimed_bytes = 0usize;
     let mut claimed_successes = 0u32;
