@@ -107,9 +107,14 @@ CARGO_VER="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
 : "${CARGO_VER:=0.0.0}"
 COMMIT_SHA=""
 if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    # Height alone is not unique: sibling branches share heights and
+    # shallow clones misreport depth, so distinct builds collided on one
+    # package identity (Codex P2 on #176). Height keeps the monotonic
+    # ordering; the short SHA makes it unique.
     COMMIT_HEIGHT="$(git -C "$ROOT" rev-list --count HEAD)"
+    COMMIT_SHA="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
     COMMIT_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-    VERSION="${CARGO_VER}-r${COMMIT_HEIGHT}"
+    VERSION="${CARGO_VER}-r${COMMIT_HEIGHT}.g${COMMIT_SHA}"
 else
     COMMIT_HEIGHT=0
     VERSION="${CARGO_VER}-r0"
