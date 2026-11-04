@@ -5,9 +5,11 @@ SSH access for conwrt configure + verification tests.
 
 Requires: qemu-system-x86_64, losetup, mount
 """
+
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -28,9 +30,7 @@ VM_IMAGE = REPO_ROOT / "tests" / "integration" / ".openwrt.img"
 import importlib.util as _ilu
 from pathlib import Path as _Path
 
-_pins_spec = _ilu.spec_from_file_location(
-    "_pins", _Path(__file__).with_name("_pins.py")
-)
+_pins_spec = _ilu.spec_from_file_location("_pins", _Path(__file__).with_name("_pins.py"))
 _pins = _ilu.module_from_spec(_pins_spec)
 _pins_spec.loader.exec_module(_pins)
 IMAGE_URL, OPENWRT_VERSION = _pins.IMAGE_URL, _pins.OPENWRT_VERSION
@@ -45,9 +45,7 @@ VM_OVERLAY = REPO_ROOT / "tests" / "integration" / ".openwrt-session.qcow2"
 # keyed by the REQUESTED release (Codex #608 P2): a digest-only cache
 # would let a CONWRT_TEST_OPENWRT_VERSION override boot the previously
 # cached image — the sidecar must miss when the release changes
-DIGEST_SIDECAR = VM_IMAGE.with_name(
-    VM_IMAGE.name + f".sha256-{OPENWRT_VERSION}"
-)
+DIGEST_SIDECAR = VM_IMAGE.with_name(VM_IMAGE.name + f".sha256-{OPENWRT_VERSION}")
 
 
 def _image_digest() -> str:
@@ -66,6 +64,8 @@ def _image_cache_valid() -> bool:
     if not DIGEST_SIDECAR.exists():
         return False
     return DIGEST_SIDECAR.read_text().strip() == _image_digest()
+
+
 VM_PIDFILE = REPO_ROOT / "tests" / "integration" / ".openwrt-session-vm.pid"
 SSH_PORT = port_from_env("CONWRT_VM_SESSION_PORT", 2222)
 SSH_HOST = "127.0.0.1"
@@ -77,8 +77,16 @@ SSH_HOST = "127.0.0.1"
 WG_FWD_PORT = port_from_env("CONWRT_VM_WG_FWD_PORT", 51820)
 SSH_KEY = REPO_ROOT / "tests" / "integration" / ".vm_ssh_key"
 SERIAL_LOG = REPO_ROOT / "tests" / "integration" / ".serial.log"
-PREBAKE_PACKAGES = ["sqm-scripts", "luci-app-sqm", "iperf3", "libiperf3", "libatomic1",
-                    "wireguard-tools", "luci-proto-wireguard", "qrencode"]
+PREBAKE_PACKAGES = [
+    "sqm-scripts",
+    "luci-app-sqm",
+    "iperf3",
+    "libiperf3",
+    "libatomic1",
+    "wireguard-tools",
+    "luci-proto-wireguard",
+    "qrencode",
+]
 
 
 def pytest_collection_modifyitems(config, items):
@@ -102,9 +110,7 @@ def pytest_collection_modifyitems(config, items):
         # `layer1` opts a test out of this blanket: static, VM-free bundle
         # checks must stay in the fast unit tier so unsafe generated
         # scripts cannot merge without CI coverage (Codex finding on #82).
-        if integration_root in item_path.parents and not item.get_closest_marker(
-            "layer1"
-        ):
+        if integration_root in item_path.parents and not item.get_closest_marker("layer1"):
             item.add_marker(pytest.mark.integration)
 
 
@@ -114,14 +120,24 @@ def _available(cmd: str) -> bool:
 
 def _ssh(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["ssh",
-         "-o", "StrictHostKeyChecking=no",
-         "-o", "UserKnownHostsFile=/dev/null",
-         "-o", "ConnectTimeout=5",
-         "-i", str(SSH_KEY),
-         "-p", str(SSH_PORT),
-         f"root@{SSH_HOST}", command],
-        capture_output=True, text=True, timeout=timeout,
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=5",
+            "-i",
+            str(SSH_KEY),
+            "-p",
+            str(SSH_PORT),
+            f"root@{SSH_HOST}",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -142,12 +158,14 @@ def _prepare_image(image_path: Path) -> None:
     if stamp.exists():
         return
     if not SSH_KEY.exists():
-        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)],
-                       capture_output=True, check=True)
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(SSH_KEY)], capture_output=True, check=True)
     pubkey = (SSH_KEY.with_suffix(".pub")).read_text().strip()
 
     r = subprocess.run(
-        ["bash", "-c", f"""
+        [
+            "bash",
+            "-c",
+            f"""
         set -e
         LOOP=$(sudo losetup -fP --show {image_path})
         sudo mkdir -p /mnt/owrt
@@ -232,8 +250,11 @@ PREBAKE
 
         sudo umount /mnt/owrt
         sudo losetup -d $LOOP
-        """],
-        capture_output=True, text=True, timeout=60,
+        """,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if r.returncode != 0:
         pytest.fail(f"Image preparation failed: {r.stderr}")
@@ -247,33 +268,33 @@ def _download_prebake_packages() -> None:
         return
     print("Downloading pre-bake packages...", flush=True)
     import re
+
     # apk feeds split packages across subfeeds (base/luci/packages/...),
     # and apk file names are `name-version.arch.apk` (DASH before the
     # version — the opkg `name_version.ipk` convention is gone). A
     # single-feed listing with an underscore matcher finds nothing on
     # 25.x: wireguard-tools lives in base/, luci-app-sqm in luci/,
     # sqm-scripts in packages/ (bench-verified 2026-10-31, #607 caveat).
-    feed_urls = [PACKAGES_URL.rsplit("/", 1)[0] + "/" + feed
-                 for feed in ("base", "luci", "packages", "routing")]
+    feed_urls = [PACKAGES_URL.rsplit("/", 1)[0] + "/" + feed for feed in ("base", "luci", "packages", "routing")]
     available: dict[str, str] = {}  # apk filename -> full URL
     for feed in feed_urls:
         listing = subprocess.run(
             ["curl", "-sfL", feed + "/"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if listing.returncode != 0:
-            print(f"  Warning: could not fetch feed listing {feed}: "
-                  f"{listing.stderr.strip()[:80]}")
+            print(f"  Warning: could not fetch feed listing {feed}: {listing.stderr.strip()[:80]}")
             continue
         for name in re.findall(r'href="([^"]+\.apk)"', listing.stdout):
             available.setdefault(name, feed + "/" + name)
     for pkg in PREBAKE_PACKAGES:
         # Prefer the exact package: `pkg-<digit>...` (iperf3, not
         # iperf3-ssl — both start with "iperf3-").
-        candidates = [n for n in available
-                      if n.startswith(pkg + "-")
-                      and len(n) > len(pkg) + 1
-                      and n[len(pkg) + 1].isdigit()]
+        candidates = [
+            n for n in available if n.startswith(pkg + "-") and len(n) > len(pkg) + 1 and n[len(pkg) + 1].isdigit()
+        ]
         if not candidates:
             candidates = [n for n in available if n.startswith(pkg + "-")]
         if not candidates:
@@ -281,12 +302,11 @@ def _download_prebake_packages() -> None:
             continue
         match = sorted(candidates)[0]
         subprocess.run(
-            ["curl", "-sfL", "-o", str(prebake_dir / match),
-             available[match]],
-            capture_output=True, timeout=120,
+            ["curl", "-sfL", "-o", str(prebake_dir / match), available[match]],
+            capture_output=True,
+            timeout=120,
         )
-    print(f"  Pre-baked {len(list(prebake_dir.glob('*.apk')))} packages",
-          flush=True)
+    print(f"  Pre-baked {len(list(prebake_dir.glob('*.apk')))} packages", flush=True)
 
 
 def _vm_layer_supported() -> bool:
@@ -320,17 +340,21 @@ def openwrt_vm():
         # image with accumulated mutations; digest mismatch = corruption or
         # tampering) must not leak into the one-time base — purge ALL
         # derived state so nothing derived from the dirty image survives.
-        for stale in (VM_IMAGE, VM_IMAGE.with_suffix(".img.gz"),
-                      VM_IMAGE.with_name(VM_IMAGE.name + f".prepped-{OPENWRT_VERSION}"),
-                      VM_BASE, DIGEST_SIDECAR):
+        for stale in (
+            VM_IMAGE,
+            VM_IMAGE.with_suffix(".img.gz"),
+            VM_IMAGE.with_name(VM_IMAGE.name + f".prepped-{OPENWRT_VERSION}"),
+            VM_BASE,
+            DIGEST_SIDECAR,
+        ):
             stale.unlink(missing_ok=True)
         print("Downloading OpenWrt x86_64 image...", flush=True)
         VM_IMAGE.parent.mkdir(parents=True, exist_ok=True)
         gz_path = VM_IMAGE.with_suffix(".img.gz")
         r = subprocess.run(
-            ["curl", "-fL", "--retry", "3", "--retry-delay", "2",
-             "-o", str(gz_path), IMAGE_URL],
-            capture_output=True, text=True,
+            ["curl", "-fL", "--retry", "3", "--retry-delay", "2", "-o", str(gz_path), IMAGE_URL],
+            capture_output=True,
+            text=True,
         )
         if r.returncode != 0:
             pytest.fail(f"curl download failed: {r.stderr}")
@@ -354,7 +378,9 @@ def openwrt_vm():
         print("Converting pristine image to qcow2 base (one-time)...", flush=True)
         r = subprocess.run(
             ["qemu-img", "convert", "-f", "raw", "-O", "qcow2", str(VM_IMAGE), str(VM_BASE)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if r.returncode != 0:
             pytest.fail(f"qemu-img convert failed: {r.stderr}")
@@ -362,32 +388,43 @@ def openwrt_vm():
         VM_OVERLAY.unlink()
     subprocess.run(
         ["qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(VM_BASE), str(VM_OVERLAY)],
-        capture_output=True, text=True, timeout=30, check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
     )
 
-    require_free(SSH_PORT, SSH_HOST, "CONWRT_VM_SESSION_PORT",
-                 "session VM (QEMU OpenWrt integration fixture)")
+    require_free(SSH_PORT, SSH_HOST, "CONWRT_VM_SESSION_PORT", "session VM (QEMU OpenWrt integration fixture)")
 
     # Optional UDP forward for the WireGuard VM-as-server E2E test. Omitted
     # (never fatal — every other test boots exactly as before) when the host
     # port is taken.
     wg_fwd_port = WG_FWD_PORT if _udp_port_free(WG_FWD_PORT) else None
     if wg_fwd_port is None:
-        print(f"  UDP {WG_FWD_PORT} busy — WireGuard hostfwd omitted "
-              f"(test_wireguard_e2e vm-as-server test will skip)", flush=True)
+        print(
+            f"  UDP {WG_FWD_PORT} busy — WireGuard hostfwd omitted (test_wireguard_e2e vm-as-server test will skip)",
+            flush=True,
+        )
     hostfwds = [f"tcp::{SSH_PORT}-:22"]
     if wg_fwd_port is not None:
         hostfwds.append(f"udp::{wg_fwd_port}-:51820")
 
     qemu_cmd = [
         "qemu-system-x86_64",
-        "-drive", f"file={VM_OVERLAY},format=qcow2,if=virtio",
-        "-m", "512M",
-        "-netdev", "user,id=net0," + ",".join(f"hostfwd={h}" for h in hostfwds),
-        "-device", "virtio-net-pci,netdev=net0",
-        "-display", "none",
-        "-serial", f"file:{SERIAL_LOG}",
-        "-pidfile", str(VM_PIDFILE),
+        "-drive",
+        f"file={VM_OVERLAY},format=qcow2,if=virtio",
+        "-m",
+        "512M",
+        "-netdev",
+        "user,id=net0," + ",".join(f"hostfwd={h}" for h in hostfwds),
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-display",
+        "none",
+        "-serial",
+        f"file:{SERIAL_LOG}",
+        "-pidfile",
+        str(VM_PIDFILE),
         "-daemonize",
         *kvm_args,
     ]
@@ -428,12 +465,9 @@ def openwrt_vm():
             if SERIAL_LOG.exists():
                 serial_tail = SERIAL_LOG.read_text()[-2000:]
             pytest.fail(
-                f"OpenWrt VM did not become reachable via SSH after "
-                f"{wait_loops * 5}s.\n"
-                f"Serial log tail:\n{serial_tail}"
+                f"OpenWrt VM did not become reachable via SSH after {wait_loops * 5}s.\nSerial log tail:\n{serial_tail}"
             )
-        yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY),
-               "wg_fwd_port": wg_fwd_port}
+        yield {"host": SSH_HOST, "port": SSH_PORT, "key": str(SSH_KEY), "wg_fwd_port": wg_fwd_port}
     finally:
         _capture_evidence()
         if VM_PIDFILE.exists():
@@ -474,17 +508,34 @@ def _capture_evidence() -> None:
 def ssh_cmd(openwrt_vm):
     def _run(command: str, timeout: int = 30) -> str:
         return _ssh(command, timeout=timeout).stdout
+
     return _run
 
 
 def vm_ssh_cmd(command: str, timeout: int = 60):
     import subprocess as _sp
+
     return _sp.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no",
-         "-o", "UserKnownHostsFile=/dev/null",
-         "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
-         "-i", str(SSH_KEY), "-p", str(SSH_PORT), f"root@{SSH_HOST}", command],
-        capture_output=True, text=True, timeout=timeout,
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "LogLevel=ERROR",
+            "-i",
+            str(SSH_KEY),
+            "-p",
+            str(SSH_PORT),
+            f"root@{SSH_HOST}",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -498,12 +549,13 @@ def wireguard_installed(openwrt_vm):
 
     if "opkg" in vm("command -v opkg || true"):
         if "wireguard-tools" not in vm("opkg list-installed"):
-            vm("opkg update >/dev/null 2>&1 && "
-               "opkg install wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
+            vm(
+                "opkg update >/dev/null 2>&1 && opkg install wireguard-tools kmod-wireguard curl >/dev/null 2>&1",
+                timeout=180,
+            )
     else:
         if "wireguard-tools" not in vm("apk info 2>/dev/null"):
-            vm("apk update >/dev/null 2>&1 && "
-               "apk add wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
+            vm("apk update >/dev/null 2>&1 && apk add wireguard-tools kmod-wireguard curl >/dev/null 2>&1", timeout=180)
     assert "wg" in vm("command -v wg || true"), "wireguard-tools not installable on the VM"
     return vm
 
@@ -568,6 +620,7 @@ class VenueHandle:
 def _qemu_venue_runner(vm: dict):
     def _run(command: str, timeout: int):
         return vm_ssh_cmd(command, timeout=timeout)
+
     return _run
 
 
@@ -576,18 +629,47 @@ def _labgrid(args: list[str], place: str, timeout: int = 40):
     # CONWRT_ override first, then labgrid's NATIVE LG_COORDINATOR — the
     # old chain ignored a runner-set LG_COORDINATOR and always passed the
     # hardcoded default via -x (Codex P1 on #184).
-    coordinator = (
-        os.environ.get("CONWRT_LABGRID_COORDINATOR")
-        or os.environ.get("LG_COORDINATOR")
-        or "ai-legion:20408"
-    )
+    coordinator = os.environ.get("CONWRT_LABGRID_COORDINATOR") or os.environ.get("LG_COORDINATOR") or "ai-legion:20408"
     return subprocess.run(
         [client, "-x", coordinator, "-p", place, *args],
-        capture_output=True, text=True, timeout=timeout, check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
     )
 
 
-@pytest.fixture(params=VENUES, ids=[v.key for v in VENUES])
+def _reservation_token(stdout: str) -> str:
+    m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", stdout)
+    return m.group(0) if m else ""
+
+
+def _queue_wait_s() -> int:
+    return int(os.environ.get("CONWRT_VENUE_QUEUE_WAIT_S", "300") or 300)
+
+
+def _acquire_place(place: str) -> tuple[bool, str]:
+    """Acquire a labgrid place, queueing on contention per the bench
+    coordination rule (review debt conwrt#184, r4274274165): ONE blocking
+    `reserve --wait` instead of silently skipping (or poll-acquiring —
+    the 2026-10-19 reserve-churn starvation). Returns (ok, token-or-reason);
+    the token must be cancelled after the matching release."""
+    acquired = _labgrid(["acquire"], place, timeout=25)
+    if acquired.returncode == 0:
+        return True, ""
+    reserved = _labgrid(["reserve", "--wait", f"name={place}"], place, timeout=_queue_wait_s())
+    if reserved.returncode != 0:
+        return False, f"reservation queue exhausted: {reserved.stderr.strip()[-200:]}"
+    token = _reservation_token(reserved.stdout)
+    second = _labgrid(["acquire"], place, timeout=25)
+    if second.returncode != 0:
+        if token:
+            _labgrid(["cancel-reservation", token], place, timeout=25)
+        return False, f"place reserved but acquire refused: {second.stderr.strip()[-200:]}"
+    return True, token
+
+
+@pytest.fixture(scope="session", params=VENUES, ids=[v.key for v in VENUES])
 def venue(request):
     """A device to run commands on — QEMU VM, labgrid place, or direct SSH.
 
@@ -614,15 +696,23 @@ def venue(request):
             dev["key"] = str(Path(dev["key"]).expanduser())
 
         def _direct_run(command: str, timeout: int):
-            cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
-                   "-o", "UserKnownHostsFile=/dev/null",
-                   "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-                   "-o", "LogLevel=ERROR"]
+            cmd = [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=8",
+                "-o",
+                "LogLevel=ERROR",
+            ]
             if dev.get("key"):
                 cmd += ["-i", str(dev["key"])]
             cmd += ["-p", str(port), f"root@{host}", command]
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, check=False)
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
 
         yield VenueHandle(
             name=f"direct:{chosen.place}({host})",
@@ -633,13 +723,12 @@ def venue(request):
         return
 
     place = chosen.place or ""
-    acquired = _labgrid(["acquire"], place, timeout=25)
-    if acquired.returncode != 0:
+    acquired, token = _acquire_place(place)
+    if not acquired:
         pytest.skip(
             f"labgrid place {place!r} not acquirable on "
-            f"{os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')} "
-            f"(held by a sibling session or coordinator down): "
-            f"{acquired.stderr.strip()[-200:]}"
+            f"{os.environ.get('LG_COORDINATOR') or os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')}: "
+            f"{token}"
         )
 
     def _run(command: str, timeout: int):
@@ -647,14 +736,17 @@ def venue(request):
         # the labgrid client tunnels through the exporter host.
         r = _labgrid(["ssh", "--", command], place, timeout=timeout)
         if _venue_unreachable(r.stderr):
-            pytest.skip(f"{place}: venue unreachable via labgrid "
-                        f"(rc={r.returncode}): {r.stderr.strip()[-300:]}")
+            pytest.skip(f"{place}: venue unreachable via labgrid (rc={r.returncode}): {r.stderr.strip()[-300:]}")
         return r
 
     try:
         yield VenueHandle(name=f"labgrid:{place}", run=_run)
     finally:
         _labgrid(["release"], place, timeout=25)
+        if token:
+            # free the allocated reservation instead of waiting out its
+            # expiry (labgrid-coordination.md: cancel on abort paths)
+            _labgrid(["cancel-reservation", token], place, timeout=25)
 
 
 @pytest.fixture
@@ -667,6 +759,7 @@ def flash_lease(request):
     — CI and hardware-safe development must set it. VM venues don't take
     leases (the QEMU overlay is its own isolation).
     """
+
     def _make(place: str, story: str = ""):
         session = os.environ.get("CONWRT_SESSION_ID") or f"pid{os.getpid()}"
         return flash_lease_ctx(
@@ -674,4 +767,5 @@ def flash_lease(request):
             session=session,
             story=story or request.node.name,
         )
+
     return _make
