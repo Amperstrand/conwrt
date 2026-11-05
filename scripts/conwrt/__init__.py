@@ -39,7 +39,7 @@ def main() -> int:
         "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
-        "esim",
+        "sim", "esim",
         "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
@@ -57,7 +57,12 @@ def main() -> int:
         _build_parser().print_help(sys.stderr)
         return 1
 
-    # eSIM subcommand
+    # SIM-mode renderer/validator (no device access, no secrets in output by default)
+    if command == "sim":
+        from conwrt import sim_modes
+        return sim_modes.cmd_sim(args)
+
+    # eSIM subcommand (deprecated MBIM provisioning path; see docs/NR7101-SIM-MODES.md)
     if command == "esim":
         esim_cmd = getattr(args, "esim_command", None)
         ip = getattr(args, "ip", None) or "192.168.1.10"

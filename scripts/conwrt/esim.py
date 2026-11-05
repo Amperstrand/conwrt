@@ -1,12 +1,20 @@
-"""eSIM provisioning and management for OpenWrt routers with eUICC cards.
+"""DEPRECATED legacy eSIM provisioning for OpenWrt routers with eUICC cards.
+
+The supported SIM-mode workflow is ``conwrt sim`` plus
+``docs/NR7101-SIM-MODES.md``. This module is kept only for the existing
+MBIM one-shot flow and for AT-only status reads; it will be removed.
+
+Why deprecated: it switches the modem to MBIM, which is no longer the proven
+APDU transport on the NR7101 (``LPAC_APDU=at`` is), and it used to reset the
+modem with ``AT+CFUN=1,1``. A modem-only reset is not a host power cycle and
+can strand the wwand bring-up; the supported flows now ask for an explicit
+router power cycle instead.
 
 Subcommands:
   status     — current serving cell, signal, band, operator, active ICCID
   profiles   — list eUICC profiles (requires MBIM mode)
   provision  — full provisioning pipeline (interactive, includes power-cycle prompts)
   switch     — switch active profile (requires MBIM mode)
-  test       — run the e2e test suite (Speedtest profile, no credential consumed)
-  monitor    — power-cycle monitoring helper
 
 Environment variables:
   CONWRT_DEVICE_IP   — router IP (default: 192.168.1.10)
@@ -144,6 +152,17 @@ def _lpac_run(ip: str, args: str, key: str | None = None) -> str:
     return _ssh(ip, f'export {env}; /usr/bin/lpac {args} 2>&1 | grep -v WARNING', key)
 
 
+_LEGACY_WARNING = (
+    "DEPRECATED: conwrt esim uses the legacy MBIM path; use "
+    "docs/NR7101-SIM-MODES.md and `conwrt sim` for the supported local "
+    "eSIM / physical-ICE / Android-SAP modes."
+)
+
+
+def _warn_legacy() -> None:
+    print(f"WARNING: {_LEGACY_WARNING}", file=sys.stderr)
+
+
 def wait_for_power_cycle(ip: str, key: str | None = None, timeout: int = 300) -> bool:
     """Poll SSH until the device goes down and comes back (a power cycle).
 
@@ -181,6 +200,7 @@ def wait_for_power_cycle(ip: str, key: str | None = None, timeout: int = 300) ->
 
 
 def cmd_esim_status(ip: str, key: str | None) -> int:
+    _warn_legacy()
     raw = _at_run(ip, 'AT+QENG="servingcell"', key)
     cell = parse_qeng(raw)
 
@@ -208,6 +228,7 @@ def cmd_esim_status(ip: str, key: str | None) -> int:
 
 
 def cmd_esim_profiles(ip: str, key: str | None) -> int:
+    _warn_legacy()
     wdm = _ssh(ip, "ls /dev/cdc-wdm0 2>/dev/null && echo MBIM || echo NOT-MBIM", key)
     if "NOT-MBIM" in wdm:
         print("ERROR: not in MBIM mode — profile management requires usbnet=2")
@@ -231,6 +252,7 @@ def cmd_esim_profiles(ip: str, key: str | None) -> int:
 
 def cmd_esim_provision(ip: str, key: str | None, smdp: str, matching_id: str,
                         apn: str, wifi_ssid: str = "", wifi_key: str = "") -> int:
+    _warn_legacy()
     print("=== eSIM Provisioning Pipeline ===")
     print(f"  SM-DP+:     {smdp}")
     print(f"  Matching-ID: {matching_id}")
@@ -343,13 +365,13 @@ def cmd_esim_provision(ip: str, key: str | None, smdp: str, matching_id: str,
     _lpac_run(ip, "notification process -a -r", key)
     print("  ✓ (done)")
 
-    # Phase 7: switch back to ECM
+    # Phase 7: switch back to ECM. Set the USB mode and APN first; a full
+    # host power cycle applies them. Do NOT reset the modem with AT+CFUN=1,1:
+    # it is not a host power cycle and can strand the wwand bring-up.
     print("[7/7] Switching back to ECM mode...")
-    _at_run(ip, "AT+CFUN=1,1", key)
-    time.sleep(60)
     _at_run(ip, f'AT+CGDCONT=1,"IPV4V6","{apn}"', key)
     _at_run(ip, 'AT+QCFG="usbnet",1', key)
-    print("  usbnet=1 sent, APN set")
+    print("  usbnet=1 and APN set; a full router power cycle applies them")
 
     if not wait_for_power_cycle(ip, key):
         print("  ERROR: power-cycle not detected")
@@ -374,12 +396,12 @@ def cmd_esim_provision(ip: str, key: str | None, smdp: str, matching_id: str,
 
 
 def cmd_esim_switch(ip: str, key: str | None, iccid: str) -> int:
+    _warn_legacy()
     print(f"Switching to profile {iccid}...")
     result = _lpac_run(ip, f"profile enable {iccid}", key)
     if '"code":0' in result:
         print("  ✓ Profile enabled")
-        _at_run(ip, "AT+CFUN=1,1", key)
-        print("  (modem resetting, wait ~60s for re-registration)")
+        print("  Power-cycle the router (PoE) to apply; this tool does not reset the modem.")
         return 0
     else:
         print(f"  ERROR: {result[:300]}")
