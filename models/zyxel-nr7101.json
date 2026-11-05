@@ -351,14 +351,14 @@
       "card_as_state": "profile nickname carries provider creds (sl|T=<token>)"
     },
     "bands": {
-      "mask_formula": "1<<(band-1)",
+      "number_format": "colon-separated LTE band numbers (Quectel QNWPREFCFG lte_band; not a bitmask)",
       "common": {
-        "B3": 4,
-        "B7": 64,
-        "B8": 128,
-        "B20": 524288
+        "B3": "3",
+        "B7": "7",
+        "B8": "8",
+        "B20": "20"
       },
-      "lock": "AT+QNWPREFCFG=\"lte_band\",<mask> (may need CFUN after; verify landing via AT+QNWINFO before spending data)",
+      "lock": "AT+QNWPREFCFG=\"lte_band\",3 or \"3:7\" (band numbers; may need CFUN after; verify landing via AT+QNWINFO before spending data)",
       "ca_note": "band lock disables carrier aggregation"
     },
     "hazards": [

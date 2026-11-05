@@ -77,11 +77,13 @@ Vendor-stack gotchas (all bench-proven):
 
 ## 4. Band selection (no uci-native option; three ways)
 
-- Vendor AT (proven on this modem): `AT+QNWPREFCFG="lte_band",<mask>`
-  where mask = 1<<(band-1): B3=4, B7=64, B8=128, B20=524288. Some
-  builds need CFUN re-init after the write (verify with AT+QNWINFO;
-  landing must be VERIFIED before spending data). Band lock disables
-  CA — lock only single-band tests or providers with one capacity
+- Vendor AT (proven on this modem): `AT+QNWPREFCFG="lte_band",<band[:band...]>`
+  using **band numbers**, not a bitmask: B3 = `3`, B7 = `7`, B8 = `8`,
+  B20 = `20`, or a colon list such as `3:7` for B3+B7. (An earlier draft
+  used `1<<(band-1)` masks; Quectel reads those as band numbers, so `4`
+  selects B4, not B3.) Some builds need CFUN re-init after the write (verify
+  with AT+QNWINFO; landing must be VERIFIED before spending data). Band lock
+  disables CA — lock only single-band tests or providers with one capacity
   band (e.g. ICE: B3-only is free; Telenor: leave auto for B3+B7 CA).
 - Stock-QMI: uqmi NAS band-preference flags (client dead here).
 - ModemManager: `mmcli --set-current-bands`.
