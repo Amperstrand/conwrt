@@ -266,6 +266,16 @@ provide it (`--pin-env`/`CONWRT_SIM_PIN`), sets `network.wwan0.apn=telia`
 and `pdp_type=ipv4v6`, commits, and restarts wwand. Override the APN for a
 different phone carrier: `--apn <carrier-apn>`.
 
+On a two-slot unit with a physical card in the non-default slot, also set
+`network.wwmodem_auto.sim_slot` to the slot the remote card should bind to
+(the bench used `1` with a physical card in slot 2). Without it the modem can
+keep serving the local card and never bind UIM Remote.
+
+Switching from a local card to the remote SIM is most reliable as a **cold
+boot**: commit the remote config, then power-cycle the donor. A warm restart
+can leave the modem `SIM_BLOCKED` if the remote card arrives after the init
+chain's SIM_UNLOCK step (bench-observed 2026-11-05).
+
 ### Verify
 
 - `wwandctl status` shows the remote SIM in use; the phone's Bluetooth
