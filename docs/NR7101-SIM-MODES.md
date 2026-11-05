@@ -86,17 +86,21 @@ conwrt sim render remote_android_sap --json
 
 1. Render with `--show-secrets` in a private terminal (or export the two
    env vars and use the default plan).
-2. Run the `uci` lines on the router. **Read back every value with
+2. On the router, start from a clean baseline: the plan's first command is
+   `uci revert network`. This discards uncommitted network staging (aborted
+   runs leave debris in `/tmp/.uci` that would otherwise be committed with
+   the SIM settings). Do not skip it because the SIM values look correct.
+3. Run the `uci` lines on the router. **Read back every value with
    `uci get` before committing** — a quoting mistake turns an APN into a
    literal string. This is the same rule the bench uses for any network
    change.
-3. `uci commit network`, then `/etc/init.d/wwand restart`. `wwandctl` may be
+4. `uci commit network`, then `/etc/init.d/wwand restart`. `wwandctl` may be
    absent for ~5 s after the restart; poll for it rather than declaring
    failure.
-4. Keep a power-cycle escape hatch ready. A SIM-mode change can strand the
+5. Keep a power-cycle escape hatch ready. A SIM-mode change can strand the
    link you are using to manage the router; a PoE power cycle is the known
    recovery and also re-initialises the modem cleanly.
-5. For a local mode, verify `wwandctl status` shows the local SIM and no
+6. For a local mode, verify `wwandctl status` shows the local SIM and no
    remote-SAP line. For the remote mode, verify the SAP helper is alive and
    the status shows the remote card in use.
 

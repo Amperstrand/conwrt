@@ -34,6 +34,13 @@ def test_every_mode_renders(mode_id):
     assert plan["restart"] == "/etc/init.d/wwand restart"
 
 
+@pytest.mark.parametrize("mode_id", sim_modes.MODE_IDS)
+def test_plan_starts_with_clean_baseline(mode_id):
+    """Staged debris from an aborted run must not ride into the commit."""
+    plan = sim_modes.render_mode(_model(), mode_id, environ={})
+    assert plan["commands"][0] == "uci revert network"
+
+
 @pytest.mark.parametrize("mode_id", LOCAL)
 def test_local_modes_delete_remote_fields(mode_id):
     plan = sim_modes.render_mode(_model(), mode_id, environ={})

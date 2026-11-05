@@ -7,9 +7,10 @@ reader spec and the SIM PIN) are read from the environment or ``--reader`` and
 are **redacted by default**; ``--show-secrets`` is for a private terminal.
 
 Why a plan instead of an apply command: a SIM-mode change can strand the very
-link used to reach the router. The operator stages the UCI values, proves them
-with ``uci get``, commits, restarts wwand, and keeps a power-cycle escape
-hatch. The tool never writes to a device.
+link used to reach the router. The operator runs ``uci revert network`` first
+(the plan includes it), stages the UCI values, proves them with ``uci get``,
+commits, restarts wwand, and keeps a power-cycle escape hatch. The tool never
+writes to a device.
 """
 from __future__ import annotations
 
@@ -265,7 +266,9 @@ def render_mode(
             raw_uci["network.wwmodem_auto.pincode"] = None
 
     display_uci: dict[str, Any] = {}
-    commands: list[str] = []
+    # Start from a clean baseline: staged debris from an aborted run lives in
+    # /tmp/.uci and would otherwise be committed along with the SIM settings.
+    commands: list[str] = ["uci revert network"]
     redacted = False
     for key, value in raw_uci.items():
         # The pincode and reader are secret in every mode: a local physical
