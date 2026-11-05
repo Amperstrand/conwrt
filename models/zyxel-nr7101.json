@@ -475,7 +475,9 @@
         "notes": [
           "QMI UIM is bound to the modem local slot: its PIN state/ICCID/IMSI describe the local card, not the phone. Use AT for the remote card.",
           "If the helper dies or the donor reboots, a stale rsim-card process can hold the phone RFCOMM channel; check the parent sshd and stop only the stale process before retrying.",
-          "The SAP chain costs about 50 s of extra cold-boot latency; throughput is comparable to a local SIM."
+          "The SAP chain costs about 50 s of extra cold-boot latency; throughput is comparable to a local SIM.",
+          "On a two-slot unit with a physical card in the non-default slot, set network.wwmodem_auto.sim_slot to the slot the remote card should bind to (bench: 1 with a physical card in slot 2); without it the modem can keep serving the local card.",
+          "Switching from a local card to the remote SIM is most reliable as a cold boot; a warm restart can leave the modem SIM_BLOCKED when the remote card arrives after the init chain's SIM_UNLOCK step."
         ]
       }
     },
