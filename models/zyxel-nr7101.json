@@ -244,7 +244,7 @@
       },
       "iccid": {
         "cmd": "AT+QCCID",
-        "example": "89470000220307144371"
+        "example": "89470000000000000001"
       },
       "usb_mode": {
         "cmd": "AT+QCFG=\"usbnet\"",
