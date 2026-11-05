@@ -10,7 +10,7 @@ Test markers:
   @pytest.mark.one_shot    — consumes a matching-id (run deliberately)
 
 Speedtest profile test data:
-  ICCID:     8944476500021393355
+  ICCID:     89470000000000000002
   Provider:  Speedtest Travel (BetterRoaming)
   APN:       truphone.com
   Carrier:   Truphone/1Global
@@ -25,10 +25,10 @@ import time
 
 import pytest
 
-SPEEDTEST_ICCID = "8944476500021393355"
+SPEEDTEST_ICCID = "89470000000000000002"
 SPEEDTEST_APN = "truphone.com"
-NADANADA_ICCID = "89353082711108402322"
-SILENTLINK_ICCID = "8948010010098742686"
+NADANADA_ICCID = "89470000000000000003"
+SILENTLINK_ICCID = "89470000000000000004"
 
 pytestmark = pytest.mark.hardware
 

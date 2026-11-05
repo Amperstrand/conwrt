@@ -161,7 +161,7 @@ APNs reachable as a ping? Findings:
   "pay/trust -> instant attach" model works; payment rails are the only
   missing piece for a civilian version.
 
-SIM disposition (bench): the seated Telenor ICCID 89470000220307358484 is
+SIM disposition (bench): the seated Telenor ICCID 89470000000000000000 is
 confirmed dead (home-PLMN quiet-fail; ice explicit deny). Retained as inert
 hardware; replace when live testing is wanted.
 
