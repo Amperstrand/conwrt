@@ -23,11 +23,16 @@ import pytest
 from .helpers import device_ssh
 
 REPO = Path(__file__).resolve().parents[2]
-ADB_HOST = os.environ.get("CONWRT_E2E_ADB_HOST", "root@192.168.13.208")
-ANDROID_SERIAL = os.environ.get("CONWRT_E2E_ANDROID_SERIAL", "ZY326DPC7R")
+ADB_HOST = os.environ.get("CONWRT_E2E_ADB_HOST", "")
+ANDROID_SERIAL = os.environ.get("CONWRT_E2E_ANDROID_SERIAL", "")
 VPN_AP_SSID = os.environ.get("CONWRT_E2E_AP_SSID", "nord")
-VPN_AP_KEY = os.environ.get("CONWRT_E2E_AP_KEY", "nordnord")
+VPN_AP_KEY = os.environ.get("CONWRT_E2E_AP_KEY", "")
 VPN_AP_SUBNET = "172.16.31."
+
+pytestmark = pytest.mark.skipif(
+    not ADB_HOST or not ANDROID_SERIAL or not VPN_AP_KEY,
+    reason="set CONWRT_E2E_ADB_HOST, CONWRT_E2E_ANDROID_SERIAL and "
+           "CONWRT_E2E_AP_KEY (bench-private values; no defaults in the repo)")
 
 
 def _adb(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:

@@ -63,20 +63,20 @@ def test_inventory_ip_history(tmp_path: Path) -> None:
     inv = tmp_path / "inventory.jsonl"
     inv.write_text(json.dumps({
         "mac_addresses": ["b4:2d:56:25:47:a2"],
-        "notes": "was at 192.168.13.253 then moved; see 10.0.0.5 also 192.168.13.253",
+        "notes": "was at 192.0.2.253 then moved; see 10.0.0.5 also 192.0.2.253",
     }) + "\n" + json.dumps({
         "mac_addresses": ["aa:bb:cc:dd:ee:ff"], "notes": "other device 1.2.3.4",
     }) + "\n")
-    assert bd.inventory_ip_history("b4:2d:56:25:47:a2", inv) == ["192.168.13.253", "10.0.0.5"]
+    assert bd.inventory_ip_history("b4:2d:56:25:47:a2", inv) == ["192.0.2.253", "10.0.0.5"]
 
 
 def test_subnet_candidates_priority_and_dedup() -> None:
     result = bd.subnet_candidates(
-        ["192.168.13.2"],                      # probe host's own subnet (host IP form)
-        inventory_history=["192.168.13.253"],  # dedups against the same /24
+        ["192.0.2.2"],                      # probe host's own subnet (host IP form)
+        inventory_history=["192.0.2.253"],  # dedups against the same /24
         extra=["10.9.9.0/24"],
     )
-    assert result[0] == "192.168.13.0/24"      # archaeology == probe-host subnet merged
+    assert result[0] == "192.0.2.0/24"         # archaeology == probe-host subnet merged
     assert "10.9.9.0/24" in result
     assert len(result) == len(set(result))
     assert result[-1] in bd.RFC1918_COMMON     # defaults are last resort
@@ -87,8 +87,8 @@ def test_subnet_candidates_priority_and_dedup() -> None:
 def _ctx():
     return bd.DiscoverContext(
         mac="b4:2d:56:25:47:a2", iface="switch.1007",
-        probe_host="switch", control_ip="192.168.13.1",
-        subnets=["192.168.13.0/24", "10.0.0.0/24"],
+        probe_host="switch", control_ip="192.0.2.1",
+        subnets=["192.0.2.0/24", "10.0.0.0/24"],
     )
 
 
@@ -106,7 +106,7 @@ def test_ladder_v6_before_v4() -> None:
     assert any("fe80::b62d:56ff:fe25:47a2" in s.command for s in v6)
     v4 = [s for s in steps if s.layer == "2-v4"]
     assert len(v4) == 2
-    assert any("192.168.13.0" in s.statement or "192.168.13" in s.command for s in v4)
+    assert any("192.0.2.0" in s.statement or "192.0.2" in s.command for s in v4)
 
 
 def test_ladder_creds_are_printed_not_commands() -> None:
@@ -127,7 +127,7 @@ def test_plan_mode_cli_no_network(tmp_path: Path, capsys: pytest.CaptureFixture[
     out = tmp_path / "ladder.json"
     rc = bd.main([
         "plan", "--mac", "b4:2d:56:25:47:a2", "--iface", "switch.1007",
-        "--control-ip", "192.168.13.1", "--probe-subnets", "192.168.13.2",
+        "--control-ip", "192.0.2.1", "--probe-subnets", "192.0.2.2",
         "--json", str(out),
     ])
     assert rc == 0

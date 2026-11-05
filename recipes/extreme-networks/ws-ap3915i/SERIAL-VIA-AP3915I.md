@@ -51,8 +51,8 @@ already 115200 8N1, so no termios setup is needed. You only have to free the tty
 from the console getty, then `cat` it. From the Mac (jump via the bench switch):
 
 ```bash
-SWITCH=root@192.168.13.2          # bench GS1900-8HP
-LISTENER=root@192.168.104.51      # lan4 reference AP (adjust per bench)
+SWITCH=root@${CONWRT_BENCH_SWITCH:?set CONWRT_BENCH_SWITCH}  # bench GS1900-8HP
+LISTENER=root@${CONWRT_REF_UNIT:?set CONWRT_REF_UNIT}        # lan4 reference AP
 
 ssh -J $SWITCH $LISTENER '
   cp /etc/inittab /etc/inittab.bak-conwrt

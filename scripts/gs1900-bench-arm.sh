@@ -1,8 +1,9 @@
 #!/bin/sh
 # gs1900-bench-arm.sh — THE idempotent bench re-arm tool for the GS1900-8HP
-# bench switch (root@192.168.13.2, zyxel gs1900-8hp-a1).
+# bench switch (CONWRT_BENCH_SWITCH, zyxel gs1900-8hp-a1).
 #
 # Usage (from the Mac, over ssh):
+#   export CONWRT_BENCH_SWITCH=<switch-mgmt>   # bare host; root@ is inferred
 #   sh scripts/gs1900-bench-arm.sh
 #
 # RE-RUN AFTER ANY SWITCH REBOOT — every component below is runtime-only
@@ -47,7 +48,16 @@
 #   - dropbear has no sftp: scp needs -O
 #   - this bench switch self-rebooted 3-4x on 2026-09-23: assume tmpfs wiped
 
-SWITCH=root@192.168.13.2
+# ---- switch identity: the address lives in the operator's private registry,
+# ---- never in this public repo. CONWRT_BENCH_SWITCH may be "host" or
+# ---- "root@host"; SSH always goes in as root.
+: "${CONWRT_BENCH_SWITCH:?set CONWRT_BENCH_SWITCH to the bench switch management host (host or root@host)}"
+case "$CONWRT_BENCH_SWITCH" in
+    *@*) SWITCH="$CONWRT_BENCH_SWITCH" ;;
+    *)   SWITCH="root@$CONWRT_BENCH_SWITCH" ;;
+esac
+SWITCH_HOST=${SWITCH#*@}
+
 STAGE_DST=/tmp/bench-arm-fit.stage
 FIT_FILE=openwrt-24.10.2-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin
 FIT_MD5=2242e9b7b31eec6251d8c168474a919d
@@ -57,6 +67,55 @@ FIT_PATH="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)/data/images/$FIT_FILE"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 note() { echo "== $*"; }
+
+# Mgmt reachability + ARP + PVID preflight. The 2026-11-05 outage: a
+# network.v1008 carrying an untagged host port (lan8:u*) made the mgmt
+# address (.12.2) silent while the v1008 SVI (.108.1) answered. Detect both
+# the stale-ARP symptom and the bad config before touching anything.
+preflight_switch() {
+    note "preflight: switch $SWITCH_HOST"
+    if ! ping -c 1 "$SWITCH_HOST" >/dev/null 2>&1; then
+        if command -v ip >/dev/null 2>&1; then
+            echo "   local IPv4 neighbours:"
+            ip -4 neigh show 2>/dev/null | sed 's/^/     /' || true
+        fi
+        die "switch $SWITCH_HOST does not answer. If another SVI answers instead, check network.v1008.ports for an untagged host port (PVID collision)."
+    fi
+    if command -v ip >/dev/null 2>&1; then
+        ARP=$(ip -4 neigh show "$SWITCH_HOST" 2>/dev/null | head -1)
+        [ -n "$ARP" ] || die "no IPv4 neighbour entry for $SWITCH_HOST after ping (ARP unresolved)"
+        echo "   arp: $ARP"
+        case "$ARP" in
+            *INCOMPLETE*|*FAILED*) die "ARP for $SWITCH_HOST is incomplete — wrong management VLAN/PVID?" ;;
+        esac
+    elif command -v arp >/dev/null 2>&1; then
+        ARP=$(arp -n "$SWITCH_HOST" 2>/dev/null | tail -1)
+        echo "   arp: $ARP"
+        case "$ARP" in
+            *incomplete*) die "ARP for $SWITCH_HOST is incomplete — wrong management VLAN/PVID?" ;;
+        esac
+    fi
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" true 2>/dev/null || \
+        die "SSH to $SWITCH failed (key auth? wrong host? wrong management VLAN?)"
+    V1008_PORTS=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" \
+        'uci -q get network.v1008.ports' 2>/dev/null) || \
+        die "cannot read network.v1008.ports from $SWITCH — is this the bench switch?"
+    [ -n "$V1008_PORTS" ] || die "network.v1008.ports is empty on $SWITCH — wrong device or unconfigured?"
+    echo "   v1008.ports: $V1008_PORTS"
+    case " $V1008_PORTS " in
+        *":u"*)
+            die "PVID collision in network.v1008.ports='$V1008_PORTS': an untagged host port shares the management VLAN. Fix: uci set network.v1008.ports='lan1:t'; uci commit network; ubus call network reload"
+            ;;
+    esac
+    V1008_IP=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" \
+        'uci -q get network.v1008.ipaddr' 2>/dev/null | cut -d/ -f1)
+    if [ -n "$V1008_IP" ]; then
+        echo "   v1008.ipaddr: $V1008_IP"
+        if command -v ip >/dev/null 2>&1; then
+            ip -4 neigh show "$SWITCH_HOST" "$V1008_IP" 2>/dev/null | sed 's/^/   neigh: /' || true
+        fi
+    fi
+}
 
 mac_md5() { md5 -q "$1" 2>/dev/null || md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 
@@ -252,6 +311,7 @@ arm_once() {
 }
 
 note "re-arming bench failsafes on $SWITCH"
+preflight_switch
 arm_once; RC=$?
 if [ "$RC" -eq 2 ]; then
     stage_fit

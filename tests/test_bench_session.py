@@ -27,8 +27,16 @@ import bench_session as bs
 from config import load_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLACE = ba.Place("ap-lan4", "b4:2d:56:25:79:b1", "192.168.104.51")
+TEST_SWITCH = "192.0.2.10"          # TEST-NET-1: never a real bench address
+TEST_COORD = "192.0.2.221:20408"
+PLACE = ba.Place("ap-lan4", "b4:2d:56:25:79:b1", "192.0.2.51")
 NO_IP_PLACE = ba.Place("ap-lan5", "b4:2d:56:24:ad:97", "")
+
+
+@pytest.fixture(autouse=True)
+def _bench_switch_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bench_session has no baked-in switch address; tests supply the env."""
+    monkeypatch.setenv("CONWRT_BENCH_SWITCH", TEST_SWITCH)
 
 
 def _run_recorder(out: str, results: list, rc: int = 0):
@@ -157,7 +165,7 @@ class TestDirectPower:
         monkeypatch.setattr(bs.subprocess, "run", _run_recorder("", calls))
         bs.DirectBench().power(PLACE, "on")
         argv, kwargs = calls[0]
-        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2",
+        assert argv == ["ssh", *bs.SSH_OPTS, f"root@{TEST_SWITCH}",
                         'ubus call poe manage \'{"port":"lan4","action":"enable"}\'']
         assert kwargs["capture_output"] is True and kwargs["text"] is True
 
@@ -218,13 +226,13 @@ class TestDirectConsole:
 class TestDirectSshTarget:
     def test_static_ip_coordinates(self) -> None:
         t = bs.DirectBench().ssh_target(PLACE)
-        assert t == bs.SshTarget(host="192.168.104.51", user="root",
-                                 jump="192.168.13.2", zone="")
+        assert t == bs.SshTarget(host="192.0.2.51", user="root",
+                                 jump=TEST_SWITCH, zone="")
 
     def test_no_ip_falls_back_to_scoped_link_local(self) -> None:
         t = bs.DirectBench().ssh_target(NO_IP_PLACE)
         assert t.host == "fe80::b62d:56ff:fe24:ad97"
-        assert t.zone == "switch.1005" and t.jump == "192.168.13.2"
+        assert t.zone == "switch.1005" and t.jump == TEST_SWITCH
 
     def test_bare_name_needs_place_record(self) -> None:
         with pytest.raises(bs.BenchError, match="Place record"):
@@ -239,10 +247,10 @@ class TestDirectTftpArm:
         monkeypatch.setattr(bs.subprocess, "run", _run_recorder("LIFELINE-OK", calls))
         handle = bs.DirectBench().tftp_arm(1004, "img.bin")
         assert handle == bs.TftpLifeline(vlan=1004, tftproot="/tmp/bench-tftp",
-                                          switch="192.168.13.2", log="/tmp/tftp-1004.log")
+                                          switch=TEST_SWITCH, log="/tmp/tftp-1004.log")
         assert handle.interface == "switch.1004"
         argv, kwargs = calls[0]
-        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2", "sh -s"]
+        assert argv == ["ssh", *bs.SSH_OPTS, f"root@{TEST_SWITCH}", "sh -s"]
         staging = ba.Place("ap-lan4", "00:00:00:00:00:00", "")
         assert kwargs["input"] == "\n".join(
             bf.lifeline_lines(staging, "img.bin", "/tmp/bench-tftp")) + "\n"
@@ -269,7 +277,7 @@ class TestDirectSwitchAccess:
         out = bs.DirectBench().switch_exec("ubus call poe info")
         assert out == "ubus-out", "command form returns stdout only (inventory parse shape)"
         argv, kwargs = calls[0]
-        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2", "ubus call poe info"]
+        assert argv == ["ssh", *bs.SSH_OPTS, f"root@{TEST_SWITCH}", "ubus call poe info"]
         assert kwargs["capture_output"] is True and kwargs["text"] is True
         assert kwargs["timeout"] == 60
 
@@ -300,7 +308,7 @@ class TestDirectSwitchAccess:
         out = bs.DirectBench().switch_sh("echo LIFELINE-OK\n")
         assert out == "LIFELINE-OK\nwarn\n", "script form returns stdout+stderr ungated"
         argv, kwargs = calls[0]
-        assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2", "sh -s"]
+        assert argv == ["ssh", *bs.SSH_OPTS, f"root@{TEST_SWITCH}", "sh -s"]
         assert kwargs["input"] == "echo LIFELINE-OK\n"
         assert kwargs["timeout"] == 90, "bench_adopt's Mac-side hang guard"
 
@@ -328,7 +336,7 @@ def _labgrid_bench(events: list, resources: dict | None = None) -> bs.LabgridBen
     session = FakeSession(events)
     if resources is not None:
         session.resources = resources
-    return bs.LabgridBench(coordinator="192.168.13.221:20408",
+    return bs.LabgridBench(coordinator=TEST_COORD,
                            session_factory=lambda c: session,
                            target_factory=lambda name: FakeTarget(events))
 
@@ -374,9 +382,9 @@ class TestLabgridBench:
         events: list = []
         resources = {("dut", "NetworkService"):
                      SimpleNamespace(cls="NetworkService",
-                                     address="192.168.102.51", username="root")}
+                                     address="192.0.2.51", username="root")}
         t = _labgrid_bench(events, resources).ssh_target("ap-lan2")
-        assert t == bs.SshTarget(host="192.168.102.51", user="root")
+        assert t == bs.SshTarget(host="192.0.2.51", user="root")
         assert events[0] == ("acquire", "ap-lan2")
 
     def test_ssh_target_without_network_service_refuses(self, labgrid_stub) -> None:
@@ -388,7 +396,7 @@ class TestLabgridBench:
         calls: list = []
         monkeypatch.setattr(bs.subprocess, "run", _run_recorder("LIFELINE-OK", calls))
         handle = _labgrid_bench([]).tftp_arm(1002, "img.bin")
-        assert handle.vlan == 1002 and handle.switch == "192.168.13.2"
+        assert handle.vlan == 1002 and handle.switch == TEST_SWITCH
         assert calls[0][0][-1] == "sh -s"
 
     def test_switch_infra_primitives_are_typed_unsupported(self, labgrid_stub) -> None:
@@ -434,7 +442,7 @@ class TestGetSession:
         _isolate(monkeypatch, tmp_path, "[password]\nmode = \"random\"\n")
         s = bs.get_session()
         assert isinstance(s, bs.DirectBench)
-        assert s.switch_host == "192.168.13.2"
+        assert s.switch_host == TEST_SWITCH
 
     def test_missing_config_file_selects_direct(self, monkeypatch: pytest.MonkeyPatch,
                                                 tmp_path: Path) -> None:
@@ -464,10 +472,10 @@ class TestGetSession:
                                               tmp_path: Path, labgrid_stub) -> None:
         _isolate(monkeypatch, tmp_path)
         monkeypatch.setenv("CONWRT_BENCH", "labgrid")
-        monkeypatch.setenv("LG_COORDINATOR", "192.168.13.221:20408")
+        monkeypatch.setenv("LG_COORDINATOR", TEST_COORD)
         s = bs.get_session()
         assert isinstance(s, bs.LabgridBench)
-        assert s.coordinator == "192.168.13.221:20408"
+        assert s.coordinator == TEST_COORD
 
     def test_unknown_backend_name_is_typed_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CONWRT_BENCH", "banana")

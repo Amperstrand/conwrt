@@ -11,7 +11,13 @@
 #
 # INSTALL (on the exporter host, e.g. ai-legion):
 #   1. cp scripts/conwrt_serial_bridge.py ~/conwrt-labgrid/conwrt_serial_bridge.py
-#   2. Adjust the four env values below (place -> listener/jump/tty/port), then:
+#   2. Put the per-place coordinates in a root-owned env file (never in this
+#      public unit): /etc/conwrt/serial-bridge.env with
+#        CONWRT_SERIAL_TARGET=root@<listener>
+#        CONWRT_SERIAL_JUMP=root@<bench-switch>   # or empty for a direct link
+#        CONWRT_SERIAL_TTY=/dev/ttyMSM0
+#        CONWRT_SERIAL_PORT=4002
+#      then install the unit:
 #      install -Dm644 conwrt-serial-bridge@.service \
 #          ~/.config/systemd/user/conwrt-serial-bridge@.service
 #      systemctl --user daemon-reload
@@ -22,7 +28,7 @@
 #      `labgrid-client -p <place> add-match '*/<place>/NetworkSerialPort'`.
 #
 # %i expands to the instance name (the place). Map place -> coords in the
-# Environment lines; keep one EnvironmentFile or drop-in per place if preferred.
+# EnvironmentFile; use a per-place drop-in if you run more than one pair.
 
 [Unit]
 Description=conwrt serial bridge (%i) — router UART over SSH to TCP
@@ -32,15 +38,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-## Per-place coordinates. %i = place name. Edit to match the serial pair:
+## Per-place coordinates. %i = place name. Keep the values out of this
+## public file; see the env file described in the INSTALL block above.
 ##   CONWRT_SERIAL_TARGET = SSH target of the LISTENER AP (holds the tty)
 ##   CONWRT_SERIAL_JUMP   = ProxyJump bastion (bench switch); empty if direct
 ##   CONWRT_SERIAL_TTY    = console device on the listener
 ##   CONWRT_SERIAL_PORT   = local TCP port for labgrid NetworkSerialPort
-Environment=CONWRT_SERIAL_TARGET=root@192.168.104.51
-Environment=CONWRT_SERIAL_JUMP=root@192.168.13.2
-Environment=CONWRT_SERIAL_TTY=/dev/ttyMSM0
-Environment=CONWRT_SERIAL_PORT=4002
+EnvironmentFile=-/etc/conwrt/serial-bridge.env
+ExecStartPre=/bin/sh -c 'test -n "$CONWRT_SERIAL_TARGET" -a -n "$CONWRT_SERIAL_TTY" -a -n "$CONWRT_SERIAL_PORT"'
 ExecStart=/usr/bin/python3 %h/conwrt-labgrid/conwrt_serial_bridge.py \
     --target ${CONWRT_SERIAL_TARGET} \
     --jump ${CONWRT_SERIAL_JUMP} \

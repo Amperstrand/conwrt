@@ -142,7 +142,7 @@ GS1900-8HP A1 (OpenWrt + realtek-poe fork), three times in one session:
 
 Root-caused 2026-10-20 on GS1900-8HP (OpenWrt snapshot r33051, kernel
 6.12.94): adding a subnet that OVERLAPS an already-routed prefix — e.g.
-`ip addr add 192.168.13.2/24 dev switch.1008` while 192.168.13.0/24 is
+`ip addr add <switch-mgmt>/24 dev switch.1008` while <bench-subnet> is
 routed elsewhere — wedges the whole network stack within seconds
 (openwrt/openwrt#26061). The earlier "PoE activity bursts" trigger theory
 for pattern 7 is RETIRED: the PoE daemon is exonerated (healthy counters

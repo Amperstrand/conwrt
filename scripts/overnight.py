@@ -14,7 +14,9 @@ Track B (QEMU): overlay-switch endurance on ai-legion (ext4)
 Track C (optional): lan6 boot monitoring via serial (read-only)
   Power-cycle → capture serial boot output → classify
 
-Usage:
+Usage (addresses/MACs come from the private registry, never the repo):
+    export CONWRT_BENCH_SWITCH=<switch-mgmt>
+    export CONWRT_DUT_IP=<dut-ip> CONWRT_DUT_MAC=<dut-mac> CONWRT_DUT_VLAN=100N
     python3 overnight.py --track hardware --cycles 100
     python3 overnight.py --track qemu --cuts 5,7,9,...,59 --runs 3
     python3 overnight.py --track all --hours 8
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -51,9 +54,19 @@ def log(row: dict) -> None:
     sys.stdout.flush()
 
 
+def switch_target() -> str:
+    """Bench switch SSH target from the operator's private registry."""
+    value = os.environ.get("CONWRT_BENCH_SWITCH", "").strip()
+    if not value:
+        raise SystemExit(
+            "CONWRT_BENCH_SWITCH is not set; export it to the bench switch "
+            "management host (host or root@host)")
+    return value if "@" in value else f"root@{value}"
+
+
 def switch_ssh(cmd: str, timeout: int = 60) -> tuple[int, str]:
     proc = subprocess.run(
-        ["ssh", *SSH_OPTS, "root@192.168.13.2", cmd],
+        ["ssh", *SSH_OPTS, switch_target(), cmd],
         capture_output=True, text=True, timeout=timeout)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -302,10 +315,17 @@ def main() -> int:
                    help="max cycles for hardware track")
     ap.add_argument("--hours", type=float, default=8,
                    help="time limit (not enforced, just for planning)")
-    ap.add_argument("--dut-ip", default="192.168.104.51")
-    ap.add_argument("--mac", default="b4:2d:56:25:79:b1")
-    ap.add_argument("--vlan", type=int, default=1004)
+    ap.add_argument("--dut-ip", default=os.environ.get("CONWRT_DUT_IP", ""),
+                    help="DUT address on its bench VLAN (default: CONWRT_DUT_IP)")
+    ap.add_argument("--mac", default=os.environ.get("CONWRT_DUT_MAC", ""),
+                    help="DUT MAC (default: CONWRT_DUT_MAC)")
+    ap.add_argument("--vlan", type=int,
+                    default=int(os.environ.get("CONWRT_DUT_VLAN", "0") or 0),
+                    help="DUT bench VLAN (default: CONWRT_DUT_VLAN)")
     args = ap.parse_args()
+    if args.track in ("hardware", "all") and not (args.dut_ip and args.mac and args.vlan):
+        ap.error("hardware track needs --dut-ip, --mac and --vlan "
+                 "(or CONWRT_DUT_IP, CONWRT_DUT_MAC, CONWRT_DUT_VLAN)")
 
     print(f"Overnight test starting at {datetime.now().isoformat()}")
     print(f"Track: {args.track}, cycles: {args.cycles}, hours: {args.hours}")
