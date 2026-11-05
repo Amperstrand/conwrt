@@ -9,8 +9,10 @@ are **redacted by default**; ``--show-secrets`` is for a private terminal.
 Why a plan instead of an apply command: a SIM-mode change can strand the very
 link used to reach the router. The operator runs ``uci revert network`` first
 (the plan includes it), stages the UCI values, proves them with ``uci get``,
-commits, restarts wwand, and keeps a power-cycle escape hatch. The tool never
-writes to a device.
+commits, and restarts wwand. Before committing they must have an independent
+management path (wired-LAN SSH or serial); a power cycle only re-initialises
+the modem and boots the same committed UCI, so it is not a rollback. The tool
+never writes to a device.
 """
 from __future__ import annotations
 
@@ -308,6 +310,10 @@ def render_mode(
         warnings.append(f"APN overridden to {apn}")
     if pdp_type:
         warnings.append(f"PDP type overridden to {pdp_type}")
+    warnings.append(
+        "Before committing, verify an independent management path (wired-LAN "
+        "SSH or serial console). A PoE power cycle re-initialises the modem but "
+        "boots the same committed UCI, so it is not a rollback.")
 
     return {
         "mode": mode_id,

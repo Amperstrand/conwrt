@@ -96,10 +96,15 @@ conwrt sim render remote_android_sap --json
    change.
 4. `uci commit network`, then `/etc/init.d/wwand restart`. `wwandctl` may be
    absent for ~5 s after the restart; poll for it rather than declaring
-   failure.
-5. Keep a power-cycle escape hatch ready. A SIM-mode change can strand the
-   link you are using to manage the router; a PoE power cycle is the known
-   recovery and also re-initialises the modem cleanly.
+   failure. Before the commit, make sure the independent path from step 5
+   is actually usable.
+5. **Verify an independent management path before committing.** Use a
+   wired-LAN SSH session or the serial console. A SIM-mode commit that
+   strands the cellular link survives a PoE power cycle — the router boots
+   back into the same committed UCI — so power cycling is not a rollback.
+   If neither wired SSH nor serial is available, do not change the mode
+   over the cellular link alone. A power cycle is still useful for
+   re-initialising the modem after a correct commit.
 6. For a local mode, verify `wwandctl status` shows the local SIM and no
    remote-SAP line. For the remote mode, verify the SAP helper is alive and
    the status shows the remote card in use.

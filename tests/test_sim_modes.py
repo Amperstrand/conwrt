@@ -41,6 +41,13 @@ def test_plan_starts_with_clean_baseline(mode_id):
     assert plan["commands"][0] == "uci revert network"
 
 
+@pytest.mark.parametrize("mode_id", sim_modes.MODE_IDS)
+def test_plan_requires_independent_management_path(mode_id):
+    """A power cycle boots the same committed UCI; it is not a rollback."""
+    plan = sim_modes.render_mode(_model(), mode_id, environ={})
+    assert any("independent management path" in w for w in plan["warnings"])
+
+
 @pytest.mark.parametrize("mode_id", LOCAL)
 def test_local_modes_delete_remote_fields(mode_id):
     plan = sim_modes.render_mode(_model(), mode_id, environ={})
