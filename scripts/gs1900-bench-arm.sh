@@ -68,10 +68,10 @@ FIT_PATH="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)/data/images/$FIT_FILE"
 die() { echo "ERROR: $*" >&2; exit 1; }
 note() { echo "== $*"; }
 
-# Mgmt reachability + ARP + PVID preflight. The 2026-11-05 outage: a
-# network.v1008 carrying an untagged host port (lan8:u*) made the mgmt
-# address (.12.2) silent while the v1008 SVI (.108.1) answered. Detect both
-# the stale-ARP symptom and the bad config before touching anything.
+# Mgmt reachability + ARP + PVID preflight. The 2026-11-05 outage: the
+# VLAN-1008 bridge-vlan carrying an untagged host port made the management
+# address silent while the VLAN-1008 SVI answered. Detect both the stale-ARP
+# symptom and the PVID collision before touching anything.
 preflight_switch() {
     note "preflight: switch $SWITCH_HOST"
     if ! ping -c 1 "$SWITCH_HOST" >/dev/null 2>&1; then
@@ -79,14 +79,29 @@ preflight_switch() {
             echo "   local IPv4 neighbours:"
             ip -4 neigh show 2>/dev/null | sed 's/^/     /' || true
         fi
-        die "switch $SWITCH_HOST does not answer. If another SVI answers instead, check network.v1008.ports for an untagged host port (PVID collision)."
+        die "switch $SWITCH_HOST does not answer. If another SVI answers instead, check the VLAN-1008 bridge-vlan ports for an untagged PVID collision with the management VLAN."
     fi
     if command -v ip >/dev/null 2>&1; then
+        ROUTE=$(ip route get "$SWITCH_HOST" 2>/dev/null | head -1)
+        [ -n "$ROUTE" ] && echo "   route: $ROUTE"
         ARP=$(ip -4 neigh show "$SWITCH_HOST" 2>/dev/null | head -1)
-        [ -n "$ARP" ] || die "no IPv4 neighbour entry for $SWITCH_HOST after ping (ARP unresolved)"
-        echo "   arp: $ARP"
-        case "$ARP" in
-            *INCOMPLETE*|*FAILED*) die "ARP for $SWITCH_HOST is incomplete — wrong management VLAN/PVID?" ;;
+        case "$ROUTE" in
+            *" via "*)
+                # Routed management: the direct neighbour is the next hop,
+                # not the switch. Its absence is diagnostic, not fatal.
+                if [ -n "$ARP" ]; then
+                    echo "   arp: $ARP"
+                else
+                    echo "   arp: none for the switch (routed via the next hop)"
+                fi
+                ;;
+            *)
+                [ -n "$ARP" ] || die "no IPv4 neighbour entry for $SWITCH_HOST after ping (ARP unresolved on an on-link route)"
+                echo "   arp: $ARP"
+                case "$ARP" in
+                    *INCOMPLETE*|*FAILED*) die "ARP for $SWITCH_HOST is incomplete — wrong management VLAN/PVID?" ;;
+                esac
+                ;;
         esac
     elif command -v arp >/dev/null 2>&1; then
         ARP=$(arp -n "$SWITCH_HOST" 2>/dev/null | tail -1)
@@ -97,18 +112,113 @@ preflight_switch() {
     fi
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" true 2>/dev/null || \
         die "SSH to $SWITCH failed (key auth? wrong host? wrong management VLAN?)"
-    V1008_PORTS=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" \
-        'uci -q get network.v1008.ports' 2>/dev/null) || \
-        die "cannot read network.v1008.ports from $SWITCH — is this the bench switch?"
-    [ -n "$V1008_PORTS" ] || die "network.v1008.ports is empty on $SWITCH — wrong device or unconfigured?"
-    echo "   v1008.ports: $V1008_PORTS"
-    case " $V1008_PORTS " in
-        *":u"*)
-            die "PVID collision in network.v1008.ports='$V1008_PORTS': an untagged host port shares the management VLAN. Fix: uci set network.v1008.ports='lan1:t'; uci commit network; ubus call network reload"
-            ;;
-    esac
-    V1008_IP=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" \
-        'uci -q get network.v1008.ipaddr' 2>/dev/null | cut -d/ -f1)
+    # Read the VLAN-1008 layout without assuming one section naming. The
+    # deploy tool emits vlan1008 (bridge-vlan) + dut1008 (interface); older
+    # bench configs use a single v1008 section. Resolve by name, then by
+    # vlan=1008/device=switch.1008, so both shapes work.
+    if ! V1008_INFO=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SWITCH" 'sh -s' <<'__PREFLIGHT__'
+vlan_sec=""; vlan_ports=""
+for s in v1008 vlan1008; do
+    p=$(uci -q get network.$s.ports)
+    [ -n "$p" ] && { vlan_sec=$s; vlan_ports=$p; break; }
+done
+if [ -z "$vlan_sec" ]; then
+    for s in $(uci -q show network | sed -n "s/^network\.\([^.=]*\)\.vlan='\?1008'\?\$/\1/p"); do
+        p=$(uci -q get network.$s.ports)
+        [ -n "$p" ] && { vlan_sec=$s; vlan_ports=$p; break; }
+    done
+fi
+svi_sec=""; svi_ip=""
+for s in v1008 dut1008; do
+    a=$(uci -q get network.$s.ipaddr)
+    [ -n "$a" ] && { svi_sec=$s; svi_ip=$a; break; }
+done
+if [ -z "$svi_sec" ]; then
+    for s in $(uci -q show network | sed -n "s/^network\.\([^.=]*\)\.device='\?\(switch\|br-lan\)\.1008'\?\$/\1/p"); do
+        a=$(uci -q get network.$s.ipaddr)
+        [ -n "$a" ] && { svi_sec=$s; svi_ip=$a; break; }
+    done
+fi
+mgmt_sec=""; mgmt_vlan=""; mgmt_ports=""
+mgmt_dev=$(uci -q get network.lan.device)
+if [ -n "$mgmt_dev" ]; then
+    mgmt_vlan=${mgmt_dev##*.}
+    for s in vlan$mgmt_vlan v$mgmt_vlan; do
+        p=$(uci -q get network.$s.ports)
+        [ -n "$p" ] && { mgmt_sec=$s; mgmt_ports=$p; break; }
+    done
+fi
+printf 'vlan_sec=%s\nvlan_ports=%s\nsvi_sec=%s\nsvi_ip=%s\nmgmt_sec=%s\nmgmt_vlan=%s\nmgmt_ports=%s\n' \
+    "$vlan_sec" "$vlan_ports" "$svi_sec" "$svi_ip" "$mgmt_sec" "$mgmt_vlan" "$mgmt_ports"
+__PREFLIGHT__
+    ); then
+        die "cannot read the VLAN-1008 layout from $SWITCH — is this the bench switch?"
+    fi
+    VLAN_SEC=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^vlan_sec=//p')
+    VLAN_PORTS=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^vlan_ports=//p')
+    SVI_SEC=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^svi_sec=//p')
+    SVI_IP=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^svi_ip=//p' | cut -d/ -f1)
+    MGMT_SEC=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^mgmt_sec=//p')
+    MGMT_VLAN=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^mgmt_vlan=//p')
+    MGMT_PORTS=$(printf '%s\n' "$V1008_INFO" | sed -n 's/^mgmt_ports=//p')
+    [ -n "$VLAN_SEC" ] && [ -n "$VLAN_PORTS" ] || \
+        die "cannot find the VLAN-1008 bridge-vlan ports on $SWITCH — wrong device or unconfigured?"
+    echo "   v1008 VLAN section: $VLAN_SEC.ports=$VLAN_PORTS"
+    if [ -n "$SVI_SEC" ]; then
+        echo "   v1008 SVI section:  $SVI_SEC.ipaddr=$SVI_IP"
+    fi
+    if [ -n "$MGMT_SEC" ]; then
+        echo "   management VLAN:    $MGMT_SEC (vlan $MGMT_VLAN).ports=$MGMT_PORTS"
+    else
+        echo "   management VLAN:    not resolved (network.lan.device is empty); PVID check skipped"
+    fi
+
+    # PVID collision: only a port that is ':u*' (untagged + PVID) in BOTH
+    # VLAN 1008 and the management VLAN is a collision. A DUT access port
+    # (:u* in 1008, absent from the management VLAN) is valid.
+    V1008_PVID=""
+    for p in $VLAN_PORTS; do
+        case "$p" in
+            *:u\**) V1008_PVID="$V1008_PVID ${p%%:*}";;
+        esac
+    done
+    MGMT_PVID=""
+    for p in $MGMT_PORTS; do
+        case "$p" in
+            *:u\**) MGMT_PVID="$MGMT_PVID ${p%%:*}";;
+        esac
+    done
+    COLLISION=""
+    for p in $V1008_PVID; do
+        case " $MGMT_PVID " in
+            *" $p "*) COLLISION="$COLLISION $p";;
+        esac
+    done
+    if [ -n "$COLLISION" ]; then
+        COLLISION_CMDS=""
+        for p in $COLLISION; do
+            COLLISION_CMDS="${COLLISION_CMDS}
+  # ${p}: host-wire/uplink option -> tag it in the DUT VLAN
+  uci del_list network.${VLAN_SEC}.ports='${p}:u*'; uci add_list network.${VLAN_SEC}.ports='${p}:t'
+  # ${p}: DUT access-port option -> remove the management PVID
+  uci del_list network.${MGMT_SEC}.ports='${p}:u*'"
+        done
+        die "PVID collision: port(s)${COLLISION} are ':u*' in both ${VLAN_SEC} and ${MGMT_SEC}.
+Repair on the switch with a deadman and a readback (do not run a bare uci commit):
+  ssh ${SWITCH_HOST}
+  nohup sh -c 'sleep 300 && reboot' >/dev/null 2>&1 &   # deadman: 300s
+  # Choose ONE option per port, then read both values back:
+${COLLISION_CMDS}
+  uci get network.${VLAN_SEC}.ports
+  [ -n '${MGMT_SEC}' ] && uci get network.${MGMT_SEC}.ports
+  uci commit network
+  ubus call network reload
+  # From the management host, verify the path before cancelling the deadman:
+  ping -c 1 ${SWITCH_HOST} && ssh ${SWITCH} true
+  # kill the sleep PID only after that verification"
+    fi
+    V1008_PORTS=$VLAN_PORTS
+    V1008_IP=$SVI_IP
     if [ -n "$V1008_IP" ]; then
         echo "   v1008.ipaddr: $V1008_IP"
         if command -v ip >/dev/null 2>&1; then
