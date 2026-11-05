@@ -301,7 +301,7 @@ class Bridge:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Bridge a router UART console (via SSH) to a TCP port.")
     ap.add_argument("--target", required=True, help="SSH target of the LISTENER router (e.g. root@192.168.104.51)")
-    ap.add_argument("--jump", default=None, help="SSH ProxyJump bastion (e.g. root@192.168.13.2)")
+    ap.add_argument("--jump", default=None, help="SSH ProxyJump bastion (e.g. root@<bench-switch>)")
     ap.add_argument("--tty", default="/dev/ttyMSM0", help="console device on the listener")
     ap.add_argument("--remote-log", default="/tmp/conwrt-bridge-target.log", help="unused side-channel log name on listener")
     ap.add_argument("--listen-host", default="127.0.0.1")

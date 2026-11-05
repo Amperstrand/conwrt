@@ -12,11 +12,16 @@ by reducing it to:
   Mac → pexpect → SSH → (serial tunnel)
 
 Usage:
+    export CONWRT_BENCH_SWITCH=<switch-mgmt>  # bare host; root@ is inferred
+    export CONWRT_REF_UNIT=<reference-unit>   # tty holder on a DUT VLAN
     from bench_console import BenchConsole
     console = BenchConsole()
     console.login_stock()                    # admin/new2day
     output = console.run("ifconfig eth0")   # marker-based
     console.close()
+
+No bench addresses are baked in: both come from the operator's private
+registry through the environment (or explicit constructor arguments).
 """
 from __future__ import annotations
 
@@ -32,8 +37,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import pexpect
 
-SWITCH_HOST = "192.168.13.2"
-REF_UNIT_HOST = "192.168.104.51"
+SWITCH_HOST = os.environ.get("CONWRT_BENCH_SWITCH", "")
+REF_UNIT_HOST = os.environ.get("CONWRT_REF_UNIT", "")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10"]
 
@@ -45,12 +50,18 @@ STOCK_PROMPT = r"->|#|\$"
 class BenchConsole:
     """Persistent serial console via SSH tunnel to the reference unit."""
 
-    def __init__(self, ref_host: str = REF_UNIT_HOST,
-                 switch_host: str = SWITCH_HOST,
+    def __init__(self, ref_host: str | None = None,
+                 switch_host: str | None = None,
                  serial_dev: str = "/dev/ttyMSM0",
                  baud: int = 115200) -> None:
-        self.ref_host = ref_host
-        self.switch_host = switch_host
+        ref = ref_host or os.environ.get("CONWRT_REF_UNIT", "")
+        switch = switch_host or os.environ.get("CONWRT_BENCH_SWITCH", "")
+        self.ref_host = ref.split("@", 1)[1] if "@" in ref else ref
+        self.switch_host = switch.split("@", 1)[1] if "@" in switch else switch
+        if not self.switch_host:
+            raise ValueError("CONWRT_BENCH_SWITCH is not set (bench switch management host)")
+        if not self.ref_host:
+            raise ValueError("CONWRT_REF_UNIT is not set (reference unit holding the tty)")
         self.serial_dev = serial_dev
         self.baud = baud
         self.child: pexpect.spawn | None = None

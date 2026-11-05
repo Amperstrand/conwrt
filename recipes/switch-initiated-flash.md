@@ -20,7 +20,7 @@ This is the MOST RELIABLE flash method because:
 ```
 ┌──────────────────────────────────────────────────┐
 │  Laptop (optional)                               │
-│  conwrt flash --via-switch 192.168.13.2          │
+│  conwrt flash --via-switch <switch-mgmt>         │
 │  ┌────────────────────────────────────────────┐  │
 │  │ SSH to switch, orchestrate flash remotely  │  │
 │  └────────────────────────┬───────────────────┘  │
@@ -216,7 +216,7 @@ conwrt-lite flash --port lan5 --model-id zyxel-nr7101 \
     --image /tmp/firmware.bin --tftp-image /tmp/initramfs.bin
 
 # From laptop: tell switch to flash (via SSH to switch)
-conwrt flash --via-switch 192.168.13.2 --port lan5 \
+conwrt flash --via-switch "$CONWRT_BENCH_SWITCH" --port lan5 \
     --model-id zyxel-nr7101 --image firmware.bin
 ```
 

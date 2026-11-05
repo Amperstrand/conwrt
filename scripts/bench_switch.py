@@ -12,7 +12,8 @@ Implements the bench-switch pattern (docs/BENCH-SWITCH-PATTERN.md):
 Subcommands:
   backup        --host IP [--out DIR]     full backup: sysupgrade -b, overlay
                                             tar (PoE fork!), uci exports, manifest
-  deploy        --host IP [--ssh|serial]  apply the bench pattern (idempotent)
+  deploy        --host IP --mgmt-gw GW [--mgmt-ip IP] [--serial DEV]
+                                            apply the bench pattern (idempotent)
   install-poe   --host IP --artifacts DIR install PoE fork from backup artifacts
   verify        --host IP                 health check: mgmt/VLANs/L3/PoE/DHCP
   reset         --host IP | --serial DEV  firstboot + reboot (needs --i-know)
@@ -27,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -40,8 +42,11 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 @dataclass
 class BenchProfile:
-    mgmt_ip: str = "192.168.13.2"
-    mgmt_gateway: str = "192.168.13.1"
+    # No bench address in the public repo: deploy derives mgmt_ip from --host
+    # (or --mgmt-ip) and takes the gateway from --mgmt-gw /
+    # CONWRT_BENCH_GATEWAY. verify uses --mgmt-ip or --host.
+    mgmt_ip: str = ""
+    mgmt_gateway: str = ""
     uplink_port: str = "lan1"
     dut_ports: tuple[str, ...] = ("lan2", "lan3", "lan4", "lan5", "lan6", "lan7", "lan8")
     vlan_base: int = 1000
@@ -259,8 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "backup":
         return cmd_backup(args.host, args.out)
     if args.cmd == "verify":
-        prof = BenchProfile(mgmt_ip=args.mgmt_ip) if args.mgmt_ip else BenchProfile()
-        return cmd_verify(args.host, prof)
+        return cmd_verify(args.host, BenchProfile(mgmt_ip=args.mgmt_ip or args.host))
     if args.cmd == "reset":
         if args.cancel_deadman:
             rc, out = ssh(args.host, "\n".join(deadman_cancel_lines()))
@@ -277,11 +281,10 @@ def main(argv: list[str] | None = None) -> int:
         print(out[-300:]); return rc
     if args.cmd == "deploy":
         pubkey = Path(args.pubkey).read_text().strip() if args.pubkey else None
-        prof = BenchProfile()
-        if args.mgmt_ip:
-            prof.mgmt_ip = args.mgmt_ip
-        if args.mgmt_gw:
-            prof.mgmt_gateway = args.mgmt_gw
+        mgmt_gw = args.mgmt_gw or os.environ.get("CONWRT_BENCH_GATEWAY", "")
+        if not mgmt_gw:
+            ap.error("deploy needs --mgmt-gw (or CONWRT_BENCH_GATEWAY) for network.lan.gateway")
+        prof = BenchProfile(mgmt_ip=args.mgmt_ip or args.host, mgmt_gateway=mgmt_gw)
         return cmd_deploy(args.host, args.serial, prof, pubkey)
     if args.cmd == "install-poe":
         return cmd_install_poe(args.host, args.artifacts)

@@ -2,8 +2,10 @@
 
 Each test is a user story: it starts from what the user plugs in and ends
 with an observable outcome on the real surface (the router, the network
-port, the lab phone). Hardware-gated: skips without CONWRT_DEVICE_IP; the
-phone stories skip without ADB access to the bench Android.
+port, the lab phone). Router stories skip without CONWRT_DEVICE_IP; phone
+stories additionally need CONWRT_E2E_ADB_HOST, CONWRT_E2E_ANDROID_SERIAL
+and CONWRT_E2E_AP_KEY, so the phone gate lives in the `phone` fixture and
+never suppresses router-only coverage.
 
 Run (bench session, ai-legion-small):
     CONWRT_DEVICE_IP=192.168.1.1 pytest tests/e2e/test_nordvpn_e2e.py -v
@@ -23,11 +25,21 @@ import pytest
 from .helpers import device_ssh
 
 REPO = Path(__file__).resolve().parents[2]
-ADB_HOST = os.environ.get("CONWRT_E2E_ADB_HOST", "root@192.168.13.208")
-ANDROID_SERIAL = os.environ.get("CONWRT_E2E_ANDROID_SERIAL", "ZY326DPC7R")
+ADB_HOST = os.environ.get("CONWRT_E2E_ADB_HOST", "")
+ANDROID_SERIAL = os.environ.get("CONWRT_E2E_ANDROID_SERIAL", "")
 VPN_AP_SSID = os.environ.get("CONWRT_E2E_AP_SSID", "nord")
-VPN_AP_KEY = os.environ.get("CONWRT_E2E_AP_KEY", "nordnord")
+VPN_AP_KEY = os.environ.get("CONWRT_E2E_AP_KEY", "")
 VPN_AP_SUBNET = "172.16.31."
+
+def _phone_config_missing() -> list[str]:
+    """Phone-only configuration; router-only stories must not be gated on it."""
+    return [
+        name for name, value in (
+            ("CONWRT_E2E_ADB_HOST", ADB_HOST),
+            ("CONWRT_E2E_ANDROID_SERIAL", ANDROID_SERIAL),
+            ("CONWRT_E2E_AP_KEY", VPN_AP_KEY),
+        ) if not value
+    ]
 
 
 def _adb(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -40,6 +52,10 @@ def _adb(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
 @pytest.fixture(scope="session")
 def phone():
     """The bench Android (prta-scenario-poc pattern: skip cleanly when absent)."""
+    missing = _phone_config_missing()
+    if missing:
+        pytest.skip("set " + ", ".join(missing) +
+                    " (bench-private values; no defaults in the repo)")
     r = _adb("echo PHONE_OK", timeout=15)
     if r.returncode != 0 or "PHONE_OK" not in r.stdout:
         pytest.skip(f"bench phone not reachable via {ADB_HOST} ({ANDROID_SERIAL})")
