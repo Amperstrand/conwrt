@@ -266,6 +266,16 @@ provide it (`--pin-env`/`CONWRT_SIM_PIN`), sets `network.wwan0.apn=telia`
 and `pdp_type=ipv4v6`, commits, and restarts wwand. Override the APN for a
 different phone carrier: `--apn <carrier-apn>`.
 
+On a two-slot unit with a physical card in the non-default slot, also set
+`network.wwmodem_auto.sim_slot` to the slot the remote card should bind to
+(the bench used `1` with a physical card in slot 2). Without it the modem can
+keep serving the local card and never bind UIM Remote.
+
+Switching from a local card to the remote SIM is most reliable as a **cold
+boot**: commit the remote config, then power-cycle the donor. A warm restart
+can leave the modem `SIM_BLOCKED` if the remote card arrives after the init
+chain's SIM_UNLOCK step (bench-observed 2026-11-05).
+
 ### Verify
 
 - `wwandctl status` shows the remote SIM in use; the phone's Bluetooth
@@ -325,6 +335,7 @@ in the private bench issue, not in this public doc.
 | Modem READY but no data | `wwandctl status`, `AT+COPS?`, APN readback | fix APN/PDP; restart wwand; power-cycle |
 | Phone SAP busy | stale `rsim-card` on helper host | verify parent sshd, kill only that PID, retry |
 | Phone not offering SAP | vendor `profile_supported_sap` off; permission | enable the SAP profile / grant permission (device-specific) |
+| SAP probe returns `no_response` right after a failed bring-up | the phone's SAP service can need ~30 s to recover | wait 30 s and retry the probe; toggle phone Bluetooth only if it persists |
 | silent.link on Telenor, no RX | carrier selection | `AT+COPS=1,0,"Telia",7` |
 | 5G advertised but LTE only | position / RAT at measurement | retest after moving; do not assume LTE-only |
 | PIN rejects | wrong PIN or retry counter | stop; verify with the operator; do not burn retries |
