@@ -301,7 +301,30 @@
       "download_speed_mbps": 56,
       "latency_ms": 43,
       "signal_rsrp_dbm": -74,
-      "notes": "uci set network.wan.apn=ice.net && uqmi ifup wan. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Only APN change needed. Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+      "notes": "Historical QMI-era test (2026-05-19): uci set network.wan.apn=ice.net && uqmi ifup wan. The current wwand stack uses network.wwan0 (see cellular.sim_modes); do not copy the wan interface name. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+    },
+    "cellular_data_esim": {
+      "tested": true,
+      "date": "2026-11-05",
+      "verified_with": "silent.link 9eSIM (Telia roaming profile), bench cold boot through a PoE switch",
+      "carrier": "Telia Norway (MCC 242, MNC 02), roaming",
+      "apn": "internet",
+      "network": "5G NSA",
+      "download_speed_mbps": 92.3,
+      "upload_speed_mbps": 12.2,
+      "notes": "PoE-on to first ping 63.7 s. Telenor is an RX blackhole at this location; select Telia if needed. The local card is the QMI-visible identity; use AT for a remote-SAP card only."
+    },
+    "cellular_data_remote_sap": {
+      "tested": true,
+      "date": "2026-11-05",
+      "verified_with": "Android phone SIM over Bluetooth SAP (wwand + wwand-rsim), bench cold boot through a PoE switch",
+      "carrier": "Telia Norway (MCC 242, MNC 02)",
+      "apn": "telia",
+      "network": "5G NSA",
+      "download_speed_mbps": 86.8,
+      "upload_speed_mbps": 12.2,
+      "download_speed_v6_mbps": 77.4,
+      "notes": "PoE-on to first ping 113.9 s (SAP helper + PIN + APDU). Phone: airplane mode off, Bluetooth on, Wi-Fi off; keep the phone's own mobile data off (one registration per SIM). QMI UIM reports the local slot; use AT for the remote card. A stale helper holds the RFCOMM channel after a donor power-off."
     },
     "wifi_ap": {
       "tested": true,
@@ -336,8 +359,125 @@
     "sim": {
       "slots": 2,
       "single_active": true,
-      "select": "AT+QUIMSLOT=n + AT+CFUN=1,1 (~3min)",
-      "verify": "AT+QCCID"
+      "select": "AT+QUIMSLOT=n; then power-cycle the router (PoE). A modem-only reset (CFUN) is not a host power cycle and can wedge the wwand bring-up.",
+      "verify": "AT+QCCID / AT+CPIN? for the local slot; the remote-SAP card is visible on AT only",
+      "remote_sap": "QMI UIM stays bound to the modem's local slot; use AT for the phone card's PIN/ICCID/IMSI"
+    },
+    "carrier_profiles": {
+      "ice_no": {
+        "label": "ice+ Norway (physical card)",
+        "carrier": "ice+ Norway (MCC 242, MNC 14)",
+        "apn": "ice.net",
+        "pdp_type": "ipv4",
+        "roaming": false,
+        "verified": "2026-05-19",
+        "notes": "Home registration; LTE B3 at 56 Mbit/s. The bench card has no PIN; pass --pin-env if yours is PIN-protected."
+      },
+      "silentlink_roaming_no": {
+        "label": "silent.link 9eSIM (Telia Norway roaming)",
+        "carrier": "Telia Norway (MCC 242, MNC 02), roaming",
+        "apn": "internet",
+        "pdp_type": "ipv4",
+        "roaming": true,
+        "verified": "2026-10-30 (profile) / 2026-11-05 (5G-NSA cold boot)",
+        "notes": "Telenor is an RX blackhole at this location; if the profile lands on Telenor, select Telia: AT+COPS=1,0,\"Telia\",7. 5G NSA is position-dependent; a 5G-capable profile can still land on LTE."
+      },
+      "phone_sap_telia": {
+        "label": "Android phone SIM over Bluetooth SAP",
+        "carrier": "Telia Norway (MCC 242, MNC 02)",
+        "apn": "telia",
+        "pdp_type": "ipv4v6",
+        "roaming": false,
+        "verified": "2026-11-05",
+        "notes": "The carrier follows the SIM in the phone; the bench profile is Telia. Set --apn for a different carrier. Keep the phone's own mobile data off while the NR7101 uses the SAP (one registration per SIM)."
+      }
+    },
+    "sim_modes": {
+      "local_esim_silentlink": {
+        "label": "Local 9eSIM - silent.link/nadanada profile",
+        "location": "modem SIM slot (local card)",
+        "carrier_profile": "silentlink_roaming_no",
+        "requires": [
+          "9eSIM (ECP3 eUICC) in the modem SIM slot; the desired profile installed and enabled",
+          "lpac APDU transport over AT (LPAC_APDU=at LPAC_APDU_AT_DEVICE=/dev/ttyUSB2); MBIM is deprecated",
+          "wwand stack installed; network.wwan0 present"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": null,
+          "network.wwmodem_auto.pincode": null,
+          "network.wwan0.apn": "internet",
+          "network.wwan0.pdp_type": "ipv4"
+        },
+        "verify": [
+          "AT+CPIN? -> READY (local slot)",
+          "AT+QCCID and lpac profile list show the intended profile",
+          "wwandctl status: SIM is local; no remote-SAP line",
+          "AT+COPS? -> Telia 242/02; if Telenor, AT+COPS=1,0,\"Telia\",7"
+        ],
+        "notes": [
+          "The local slot is the card the modem QMI UIM sees; this is the only mode where QMI identity is authoritative.",
+          "Do not use a modem-only reset to force a profile change; power-cycle the router instead.",
+          "Record the RAT at measurement time; 5G NSA is position-dependent."
+        ]
+      },
+      "local_physical_ice": {
+        "label": "Local physical ICE card",
+        "location": "modem SIM slot (physical card)",
+        "carrier_profile": "ice_no",
+        "requires": [
+          "Physical ice+ Norway SIM card in the modem SIM slot",
+          "wwand stack installed; network.wwan0 present",
+          "eSIM profile tools are not involved in this mode"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": null,
+          "network.wwmodem_auto.pincode": null,
+          "network.wwan0.apn": "ice.net",
+          "network.wwan0.pdp_type": "ipv4"
+        },
+        "verify": [
+          "AT+CPIN? -> READY (local slot; no PIN on the bench card)",
+          "AT+COPS? -> ice+ 242/14 (home), not roaming",
+          "wwandctl status: SIM is local; no remote-SAP line",
+          "ping -I wwan0 -c 3 1.1.1.1"
+        ],
+        "notes": [
+          "The physical card and the 9eSIM use the same local-slot path; only the carrier profile (APN/PDP) differs.",
+          "If the card is PIN-protected, pass --pin-env and set network.wwmodem_auto.pincode; never commit the PIN."
+        ]
+      },
+      "remote_android_sap": {
+        "label": "Android phone SIM over Bluetooth SAP",
+        "location": "phone SIM slot, presented to the modem via a Bluetooth SAP helper",
+        "carrier_profile": "phone_sap_telia",
+        "requires": [
+          "Phone: SIM in the phone; airplane mode OFF; Bluetooth ON; Wi-Fi OFF; phone unlocked and SAP permission granted",
+          "A paired helper host running rsim (wwand-rsim) with the phone RFCOMM channel free",
+          "wwand rsim_reader spec ssh:<user>@<helper-host>:bt:<phone-bt-address> (private value)",
+          "Phone SIM PIN known if enabled (keep the value private; do not commit it)",
+          "Only one modem registration per SIM: keep the phone's own mobile data off while the NR7101 uses the SAP"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": "<ssh:user@helper-host:bt:phone-bt-address>",
+          "network.wwmodem_auto.pincode": "<phone-sim-pin>",
+          "network.wwan0.apn": "telia",
+          "network.wwan0.pdp_type": "ipv4v6"
+        },
+        "secrets": [
+          "rsim_reader",
+          "pincode"
+        ],
+        "verify": [
+          "Phone Bluetooth settings show the SAP connection active; the helper process is alive",
+          "wwandctl status: remote SIM in use; AT+CPIN? -> READY (QMI UIM still reports the local slot)",
+          "AT+COPS? -> the phone carrier; ping -I wwan0 -c 3 1.1.1.1"
+        ],
+        "notes": [
+          "QMI UIM is bound to the modem local slot: its PIN state/ICCID/IMSI describe the local card, not the phone. Use AT for the remote card.",
+          "If the helper dies or the donor reboots, a stale rsim-card process can hold the phone RFCOMM channel; check the parent sshd and stop only the stale process before retrying.",
+          "The SAP chain costs about 50 s of extra cold-boot latency; throughput is comparable to a local SIM."
+        ]
+      }
     },
     "esim": {
       "tool": "lpac",
@@ -358,15 +498,16 @@
         "B8": "8",
         "B20": "20"
       },
-      "lock": "AT+QNWPREFCFG=\"lte_band\",3 or \"3:7\" (band numbers; may need CFUN after; verify landing via AT+QNWINFO before spending data)",
+      "lock": "AT+QNWPREFCFG=\"lte_band\",3 or \"3:7\" (band numbers; verify landing via AT+QNWINFO before spending data); prefer a full power cycle over a modem-only reset",
       "ca_note": "band lock disables carrier aggregation"
     },
     "hazards": [
       "never set MTU explicitly (Quectel QMI fragmentation bug)",
       "timelock all modem ops; retry loops are the outage class",
       "mode switches are PoE-class events",
+      "never use a modem-only reset (CFUN) to force a SIM or profile change; power-cycle the router",
       "sysupgrade never resets the modem",
-      "speed tests: curl -4 only"
+      "speed tests: curl -4 only unless the PDN is IPv6"
     ]
   },
   "capabilities": [

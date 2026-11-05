@@ -1,5 +1,10 @@
 # Modem-as-Reader Playbook — eSIM provisioning through a router's own modem
 
+> **Deployment counterpart:** [NR7101-SIM-MODES.md](NR7101-SIM-MODES.md)
+> covers the three supported SIM sources (local 9eSIM, physical card, phone
+> over Bluetooth SAP) and the `conwrt sim` plans. This playbook is the
+> provisioning mechanics; the deployment guide is where an operator starts.
+
 **The generalized process.** `NR7101-ESIM-PLAYBOOK.md` was the first full walk
 (one model, one modem, proven end-to-end). This document is the species-agnostic
 version: the gates, the two transport paths, the reference wire fingerprints,
