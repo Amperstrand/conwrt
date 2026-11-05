@@ -335,6 +335,7 @@ in the private bench issue, not in this public doc.
 | Modem READY but no data | `wwandctl status`, `AT+COPS?`, APN readback | fix APN/PDP; restart wwand; power-cycle |
 | Phone SAP busy | stale `rsim-card` on helper host | verify parent sshd, kill only that PID, retry |
 | Phone not offering SAP | vendor `profile_supported_sap` off; permission | enable the SAP profile / grant permission (device-specific) |
+| SAP probe returns `no_response` right after a failed bring-up | the phone's SAP service can need ~30 s to recover | wait 30 s and retry the probe; toggle phone Bluetooth only if it persists |
 | silent.link on Telenor, no RX | carrier selection | `AT+COPS=1,0,"Telia",7` |
 | 5G advertised but LTE only | position / RAT at measurement | retest after moving; do not assume LTE-only |
 | PIN rejects | wrong PIN or retry counter | stop; verify with the operator; do not burn retries |
