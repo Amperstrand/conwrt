@@ -249,7 +249,9 @@ def render_mode(
             raw_uci["network.wwmodem_auto.pincode"] = pin_value
             sources["network.wwmodem_auto.pincode"] = "environment"
         else:
-            raw_uci.pop("network.wwmodem_auto.pincode", None)
+            # Delete any pincode left from a previous mode rather than
+            # silently reusing a stale secret.
+            raw_uci["network.wwmodem_auto.pincode"] = None
             warnings.append(
                 f"SIM PIN is not set; if the phone SIM is PIN-protected, export "
                 f"{pin_env} before running the plan")
@@ -266,7 +268,10 @@ def render_mode(
     commands: list[str] = []
     redacted = False
     for key, value in raw_uci.items():
-        secret = key.rsplit(".", 1)[-1] in secrets
+        # The pincode and reader are secret in every mode: a local physical
+        # card can be PIN-protected too, and its PIN must not be printed in
+        # cleartext just because the local mode declares no secrets list.
+        secret = key in SECRET_ENV or key.rsplit(".", 1)[-1] in secrets
         env_name = _secret_environment(key, pin_env)
 
         if value is None:
@@ -295,10 +300,6 @@ def render_mode(
             display_uci[key] = f"<set {env_name}>"
             commands.append(f'uci set {key}="${env_name}"')
             redacted = True
-
-    if missing and any(key.endswith("rsim_reader") for key in missing):
-        # The command above is present but not runnable until the env is set.
-        pass
 
     if apn:
         warnings.append(f"APN overridden to {apn}")

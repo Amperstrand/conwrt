@@ -52,6 +52,24 @@ def test_local_mode_can_set_a_pin_from_env():
     assert any(PIN in command for command in plan["commands"])
 
 
+def test_local_pin_is_redacted_by_default():
+    """A PIN-protected local card must not print its PIN without --show-secrets."""
+    plan = sim_modes.render_mode(
+        _model(), "local_physical_ice", environ={sim_modes.ENV_PIN: PIN})
+    assert plan["uci"]["network.wwmodem_auto.pincode"] == sim_modes.REDACTED
+    assert plan["redacted"] is True
+    assert not any(PIN in command for command in plan["commands"])
+    assert any(sim_modes.ENV_PIN in command for command in plan["commands"])
+
+
+def test_remote_without_pin_deletes_stale_value():
+    """No PIN env means delete a pincode left by an earlier mode."""
+    plan = sim_modes.render_mode(_model(), REMOTE, reader=READER, environ={})
+    assert plan["ready"] is True
+    assert plan["uci"]["network.wwmodem_auto.pincode"] is None
+    assert "uci -q delete network.wwmodem_auto.pincode" in plan["commands"]
+
+
 def test_remote_without_reader_is_not_ready():
     plan = sim_modes.render_mode(_model(), REMOTE, environ={})
     assert plan["ready"] is False
