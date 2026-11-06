@@ -108,3 +108,25 @@ through `/bin/sh` there. On our unit:
 - The write tool's files can take ~2 s to appear in `/tmp` — retry scp.
 - HERDR + ssh chains die mid-command under load; stage big operations as
   on-disk launcher scripts and verify process liveness afterwards.
+
+## Updates from the parallel RE lanes (2026-11-05/06)
+
+- **Download-mode gating is a fota-flag byte, not the factory-mode web
+  state**: `uaztemain` reads byte 0 of the fota-flag partition every
+  boot; 0x45/0x47/0x55 enter the update flow (which only ever applies an
+  in-NAND delta at 0x3500000 — it never pulls root_uImage); 0x20/0x4e/
+  0x42/0xff boot normally. The flag writer is
+  `/usr/bin/update_control:set_update_flag()`. A device stuck in the E3
+  environment across power cycles = sticky flag + staged state.
+- **dl.eko.one.pl NORDIC/B12/mtd9.bin is a community OpenWrt 22.03-rc5
+  dump, not stock** — its goahead carries the CVE-2023-25649 exec sink
+  (`adb shell cfg set night_mode_close_all_led=%s`, no validator) which
+  the STOCK Telia B09 web daemon does not exercise. Treat any
+  strings-level conclusion drawn from that dump accordingly.
+- The live wa daemon (BD_TELIAMF286DV1.0.0B09) is store-only for the
+  LED injection family (canary-tested independently by two lanes).
+- `facSvr` (factory mode persistently open on our unit) contains a direct
+  `nandwrite /dev/mtd9 /etc/rootfs.img` path; LAN factory-state ports
+  observed: 3535, 8787 (facSvr candidates), 10005 (remserial).
+- Stock Telia goahead also references `upload.cgi` /
+  `auto_upgrade_process` — unprobed web-upload surface.
