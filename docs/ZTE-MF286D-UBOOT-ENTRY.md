@@ -44,11 +44,9 @@ All addresses are FILE OFFSETS unless noted.
   E3 entry pool block 0x1cfe0–0x1d038 — an 8-entry parameter array right after it).
 - Default filename: `sprintf(name,"%02X%02X%02X%02X.img", b0..b3)` — fmt @**0x7c5cc**,
   reached when no bootfile is set ("*** Warning: no boot file name; using '%s'" @0x7c5e1).
-  The 4 bytes: consistent with stock U-Boot's **own-IP** idiom; eko.one.pl MF286A evidence
-  (`4801A8C9.img`) = 0x48,0x01,0xA8,0xC9 — **not** fully traced to its source register
-  (own-IP vs MAC[2:5] both plausible; 72.1.168.201 as an IP is unusual, MAC xx:xx:48:01:A8:C9
-  also plausible). ⇒ **HARDENED TFTP MUST LOG THE RRQ NAME AND SERVE ANY NAME** — do not
-  assume; alias whatever is requested to root_uImage.
+  **Byte source corrected**: xorshift32 PRNG over RAM (see §3 below), NOT CDT params and
+  NOT the own-IP idiom. ⇒ serve-any-name + log remains the right server policy (and the
+  executed flash used root_uImage via lr mode regardless).
 - root_uImage is NOT tried by the zdu flow — it belongs to the separate `run lr` path
   (env `lr` @strings idx 34, referenced from 0x1e5d4/0x20ebc). Two different boot modes.
 
@@ -100,11 +98,13 @@ interrupted/`Retry count exceeded` then fall through to the state machine's erro
 ## 3. eko evidence '4801A8C9.img' — source of the 4 bytes
 
 Format string xref'd at pools 0x5a4bc/0x5acdc (state-machine handlers) + 0x5b090 area
-(uaztemain init). The bytes are produced inside the handler that runs when no explicit
-bootfile was configured (stock-U-Boot idiom = **client's own IP**). Not 100% pinned:
-if the blank-mode self-IP is of form 72.1.168.x (autoip), '4801A8C9' = own IP
-72.1.168.201; if MAC-derived, MAC contains 48:01:A8:C9. **Operational mitigation: serve
-+ log any filename; alias `<anything>.img` → root_uImage at the TFTP layer.**
+(uaztemain init). **CORRECTED (post-flash RE by the mf286d-re session — the CDT/own-IP
+hypotheses below were WRONG):** the filename bytes, the `192.%d.%d.%d` self-IP and the
+`00:aa:bb:…` MAC are all produced by an **xorshift32 PRNG seeded from the XOR of
+128 KiB of RAM at 0x86000000..0x8601FFFF** (full derivation: private-repo
+session2/work/CDT-FILENAME.md; the 0x1c980 CDT cluster is only a debug dumper).
+The observed live self-IP 192.127.179.190 is PRNG output — consistent. Serve-any-name
++ log remains correct server policy; the executed flash used `root_uImage` (lr mode).
 
 ## Operational consequences for the planned flash
 
