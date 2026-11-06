@@ -11,7 +11,7 @@ e_armprg.bin, NPRG9x55.mbn, sbl1.mbn, rpm.mbn, uboot.bin, *.ubi/.ubifs, FOTA_FS/
   the device sees as HTTP source — the agent pulls toward the IP it knows).
 
 ## 1. Start the server stack BEFORE arming
-  sudo python3 factory_tftp.py --bind 192.0.0.1 --port 69  # download-mode agent ARPs for 192.0.0.1 (ITEM_TFTP_SERVER_IP default) --root ztsuf/UPDATE/
+  sudo python3 factory_tftp.py --bind 192.0.0.1 --port 69 --root ztsuf/UPDATE/  # download-mode agent ARPs for 192.0.0.1 (ITEM_TFTP_SERVER_IP default)
   # (optionally, on another box/if: python3 ike_responder.py --bind 192.168.82.3)
 
 ## 2. Arm factory mode (already live-proven)

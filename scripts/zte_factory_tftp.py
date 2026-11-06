@@ -27,41 +27,47 @@ class Transfer:
         self.blksize = blksize
         self.sock, self.peer, self.timeout = sock, peer, timeout
         self.block = 0
+        self.offset = -self.blksize
         self.retries = 0
         self.start = time.time()
 
     def next_block(self):
-        self.block += 1
-        off = (self.block - 1) * self.blksize
+        self.block = 1 if self.block == 65535 else self.block + 1   # RFC2348 rollover
+        self.offset += self.blksize
+        off = self.offset
         chunk = self.data[off:off + self.blksize]
         return struct.pack('!HH', 3, self.block) + chunk
 
     def run(self):
         log(f"[TFTP] serving {len(self.data)} bytes, blksize={self.blksize} to {self.peer}")
         last = self.next_block()
-        while True:
-            self.sock.sendto(last, self.peer)
-            try:
-                self.sock.settimeout(self.timeout)
-                pkt, _ = self.sock.recvfrom(2048)
-            except socket.timeout:
-                self.retries += 1
-                if self.retries > 5:
-                    log(f"[TFTP] timeout block={self.block}, abort"); return False
-                continue
-            op = struct.unpack('!H', pkt[:2])[0]
-            if op == 4 and len(pkt) >= 4:
-                acked = struct.unpack('!H', pkt[2:4])[0]
-                if acked == self.block:
-                    self.retries = 0
-                    if len(last) < 4 + self.blksize:  # final block sent
-                        dt = time.time() - self.start
-                        log(f"[TFTP] DONE {self.peer} block={self.block} {len(self.data)}B in {dt:.1f}s")
-                        return True
-                    last = self.next_block()
-            elif op == 5:
-                log(f"[TFTP] client ERROR: {pkt[4:].split(b'\\x00')[0]!r}")
-                return False
+        try:
+            while True:
+                self.sock.sendto(last, self.peer)
+                try:
+                    self.sock.settimeout(self.timeout)
+                    pkt, _ = self.sock.recvfrom(65535)
+                except socket.timeout:
+                    self.retries += 1
+                    if self.retries > 5:
+                        log(f"[TFTP] timeout block={self.block}, abort"); return False
+                    continue
+                op = struct.unpack('!H', pkt[:2])[0]
+                if op == 4 and len(pkt) >= 4:
+                    acked = struct.unpack('!H', pkt[2:4])[0]
+                    if acked == self.block:
+                        self.retries = 0
+                        if len(last) < 4 + self.blksize:  # final block sent
+                            dt = time.time() - self.start
+                            log(f"[TFTP] DONE {self.peer} block={self.block} {len(self.data)}B in {dt:.1f}s")
+                            return True
+                        last = self.next_block()
+                elif op == 5:
+                    log(f"[TFTP] client ERROR: {pkt[4:].split(b'\\x00')[0]!r}")
+                    return False
+        finally:
+            try: self.sock.settimeout(None)   # restore blocking for the shared listener
+            except OSError: pass
 
 def looks_tftp(pkt):
     if len(pkt) < 4: return False
@@ -77,8 +83,9 @@ def handle_rrq(sock, pkt, peer, root, mode_strict=True):
     for i in range(0, len(rest) - 1, 2):
         opts[rest[i].decode('latin1').lower()] = rest[i+1].decode('latin1')
     log(f"[RRQ] {peer} file={fname!r} mode={mode!r} opts={opts} raw={pkt.hex()[:120]}")
-    path = os.path.normpath(os.path.join(root, fname))
-    if not path.startswith(os.path.abspath(root)) or not os.path.isfile(path):
+    root_abs = os.path.abspath(root)
+    path = os.path.realpath(os.path.join(root_abs, fname))
+    if (os.path.commonpath([root_abs, path]) != root_abs) or not os.path.isfile(path):
         log(f"[RRQ] 404 {fname}")
         sock.sendto(struct.pack('!HH', 5, 1) + b'File not found\x00', peer)
         return
@@ -87,12 +94,24 @@ def handle_rrq(sock, pkt, peer, root, mode_strict=True):
     tsize = os.path.getsize(path)
     if opts:
         ack_opts = b''
-        for k in ('blksize', 'timeout', 'tsize', 'windowsize'):
+        for k in ('blksize', 'timeout', 'tsize'):  # windowsize intentionally not echoed (window=1)
             if k in opts:
                 v = str(tsize) if k == 'tsize' else (str(blksize) if k == 'blksize' else (str(int(timeout)) if k == 'timeout' else opts[k]))
                 ack_opts += f'{k}\x00{v}\x00'.encode()
         sock.sendto(struct.pack('!H', 6) + ack_opts, peer)
         log(f"[OACK] {ack_opts!r}")
+        # RFC2347: client must ACK the OACK (block 0) before first DATA
+        for _ in range(5):
+            try:
+                sock.settimeout(timeout)
+                pkt, _ = sock.recvfrom(2048)
+                if struct.unpack('!H', pkt[:2])[0] == 4:
+                    break
+                if struct.unpack('!H', pkt[:2])[0] == 5:
+                    return
+            except socket.timeout:
+                sock.sendto(struct.pack('!H', 6) + ack_opts, peer)
+        sock.settimeout(None)
     t = Transfer(path, blksize, sock, peer, timeout)
     t.run()
 
@@ -134,6 +153,7 @@ def selftest():
     got, _ = c.recvfrom(2048)
     assert struct.unpack('!H', got[:2])[0] == 6, "expected OACK"
     log(f"[selftest] OACK ok: {got}")
+    c.sendto(struct.pack('!HH', 4, 0), ('127.0.0.1', port))   # ACK the OACK
     data = b''
     blk = 0
     while True:
