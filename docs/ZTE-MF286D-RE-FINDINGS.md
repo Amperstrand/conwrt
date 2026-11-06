@@ -69,7 +69,7 @@ String `SW donot support cmd_0x39` @ 0x1005711c: a capability check in the high-
 ## 7. IKE / cndms.ztems.com (live pivot)
 
 - Opener (440 B, `/tmp/opencode/opener.hex`): IKEv1, **exchange 0xF3 (ZTE vendor)**, flags 0, msgid 0; payloads: `0x85` vendor(4×00), SA (DOI 1, AES-128-CBC/SHA1/**DH group 19 ECP-256**/life 7200 s), `0x87` vendor(`00030000`), NONCE 48 B, VIDs incl. **MD5("RFC 3947")** + fragmentation, NAT-D ×2, KE = raw X‖Y 64 B.
-- Initiator = the ZAS tool VM (hbcd_pe, MAC 52:54:00:12:34:56) → hijacked cndms.ztems.com; it's the framework **self-updater** (`app.config.ini ENDPOINT=cndms.ztems.com, DIR=/ZSUF/UpdateTool/Release/`), not the flash path. Responder: `ike_responder.py` (selftested mirror-accept; logs hex).
+- Initiator = the ZAS tool VM (placeholder identity; hostname/MAC redacted from evidence) → hijacked cndms.ztems.com; it's the framework **self-updater** (`app.config.ini ENDPOINT=cndms.ztems.com, DIR=/ZSUF/UpdateTool/Release/`), not the flash path. Responder: `ike_responder.py` (selftested mirror-accept; logs hex).
 - Tool proven on MF286D: `zte_plugin.db3` row `SUF_DL_MF286D→MF287+-DL-BackUpNV-N-01_DL.config`; kit preconfigured "zte mf286d Nordic to Nordic_B11 192.168.32.1 pw admin".
 
 ## 8. Root/vuln surface (notes)

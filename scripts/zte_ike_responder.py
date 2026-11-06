@@ -153,9 +153,11 @@ class Responder:
         msgid = struct.unpack('!I', data[20:24])[0]
         key = icki
         sess = self.sessions.get(key)
-        if sess is None or ickr == b'\x00'*8:
+        if sess is None:
             sess = Session(icki, peer)
             self.sessions[key] = sess
+        # NB: a retransmitted opener (R-cookie zero) must NOT create a fresh session;
+        # the cached-response check below replays the original answer.
         # retransmission of same opener: resend cached response
         if sess.last_tx is not None and xchg == 0xF3 and msgid == 0 and flags == 0:
             return sess.last_tx
@@ -216,7 +218,7 @@ Responder._serve_once = _serve_once
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--bind', default='192.168.82.3')
+    ap.add_argument('--bind', default='0.0.0.0')  # bench-specific address must be passed explicitly
     ap.add_argument('--port', type=int, default=500)
     ap.add_argument('--logdir', default='/tmp/opencode/ztsuf/work/ike-logs')
     ap.add_argument('--selftest', action='store_true')
