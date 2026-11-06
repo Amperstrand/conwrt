@@ -16,7 +16,7 @@ HTTP verbs that exist in this DLL (complete list, verified by string xrefs):
 
 **AD recipe** (`fcn.100103c0`, called by both Open and Query before POSTing):
 1. fetch versions (verb 1); parse `"cr_version":"` (plain) and `"wa_inner_version":"` — **wa value truncated at first `]` inclusive if pos>=3, else at `"}`** (0x10010631–0x100106ea).
-2. `pre1 = wa + cr` (concat order WA first — `fcn.10002850(&x, wa, cr)`; plain concat, no separator).
+2. `pre1 = wa + cr` (concat order WA first — `fcn.10002850(&x, wa, cr)`; plain concat, no separator). NOTE: the `]`-truncation below is what the DLL computes — the LIVE B09 stock web accepted the FULL untruncated wa_inner_version, so try both (full worked live).
 3. `md5_1 = md5hex(pre1)` — **lowercase** (`fcn.1004b290`: 16× `sprintf("%02x")`, digest→global 0x1006bb50).
 4. fetch RD (verb 2); take **exactly 32 chars** after `"RD":"` (Mid(pos+6, 0x20) @ 0x1001081f).
 5. `AD = md5hex(md5_1 + RD)` → returned via arg2 → appended as `&AD=`.
@@ -69,7 +69,7 @@ String `SW donot support cmd_0x39` @ 0x1005711c: a capability check in the high-
 ## 7. IKE / cndms.ztems.com (live pivot)
 
 - Opener (440 B, `/tmp/opencode/opener.hex`): IKEv1, **exchange 0xF3 (ZTE vendor)**, flags 0, msgid 0; payloads: `0x85` vendor(4×00), SA (DOI 1, AES-128-CBC/SHA1/**DH group 19 ECP-256**/life 7200 s), `0x87` vendor(`00030000`), NONCE 48 B, VIDs incl. **MD5("RFC 3947")** + fragmentation, NAT-D ×2, KE = raw X‖Y 64 B.
-- Initiator = the ZAS tool VM (placeholder identity; hostname/MAC redacted from evidence) → hijacked cndms.ztems.com; it's the framework **self-updater** (`app.config.ini ENDPOINT=cndms.ztems.com, DIR=/ZSUF/UpdateTool/Release/`), not the flash path. Responder: `ike_responder.py` (selftested mirror-accept; logs hex).
+- Initiator = the ZAS tool VM (hbcd_pe, MAC 52:54:00:12:34:56) → hijacked cndms.ztems.com; it's the framework **self-updater** (`app.config.ini ENDPOINT=cndms.ztems.com, DIR=/ZSUF/UpdateTool/Release/`), not the flash path. Responder: `ike_responder.py` (selftested mirror-accept; logs hex).
 - Tool proven on MF286D: `zte_plugin.db3` row `SUF_DL_MF286D→MF287+-DL-BackUpNV-N-01_DL.config`; kit preconfigured "zte mf286d Nordic to Nordic_B11 192.168.32.1 pw admin".
 
 ## 8. Root/vuln surface (notes)
