@@ -72,3 +72,29 @@ while the tool is active; the tool host leases from the device in E3.
   (`/dev/cdc-wdm0`), carrier APN, **PAP auth for T-Mobile-class SIMs**;
   eko.one.pl serves ipq40xx zte_mf286d images; 4IceG/Modem-extras for band
   management.
+
+## Session 2026-11-06 update — OpenWrt installed, Ethernet-only
+
+**Outcome: OpenWrt 22.03 install completed on the bench unit with the case
+never opened and no serial connection at any point.** Full runbook:
+[openwrt-install-no-serial.md](openwrt-install-no-serial.md). Facts that
+supersede or extend the session-2026-11-03 material above:
+
+- The U-Boot recovery flow (`lr` TFTP reflash) is reachable without the ZAS
+  tool and without serial: any boot where rootfs UBI attaches but the
+  `kernel` volume is missing runs it. Cold-boot recovery windows open
+  **~8 minutes** after power-on (update-path timeout ladder); warm-reset
+  windows in under a minute. The recovery client's identity is **derived
+  per boot** (IP `192.x.y.z`, MAC `00:aa:bb:x:y:z`) — never assume
+  `192.0.0.2`.
+- The B10→B12 field updates rewrote the web partition and patched rootfs in
+  place but never touched the bootloader or NOR boot chain; a unit can run
+  a hybrid component matrix (rootfs wa tag ≠ web partition config ≠ modem
+  version). Trust partition contents, not version strings.
+- Community dump provenance matters: a 2021-07 dump set and our unit
+  differed in every generation-tagged component (U-Boot build 2020-03 vs
+  2021-07) while the NOR boot chain and static partitions were
+  byte-identical.
+- Post-install: the unit-unique partitions (ART/mac/cfg-param) survive the
+  OpenWrt flow untouched; modem firmware is untouched (B12 continues to
+  register; QMI works under OpenWrt).
