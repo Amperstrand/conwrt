@@ -23,7 +23,7 @@ Rationale (all verified):
 4. Windows VM oracle is RETAINED as a read-only fallback (see §6) — only if the
    Linux-native trigger fails and we need to observe the tool's handshake.
    Setup recipe for that fallback is documented (cndms_fake.py + ike_responder.py +
-   hosts entry + pkill stale instances).
+   hosts entry + stop any prior instance via its recorded PID).
 
 ## 1. Prereqs (checklist, from POSTMORTEM priorities)
 
@@ -104,7 +104,7 @@ sha256 BEFORE the window; serve under the same whitelist entry when rolling back
 
 Purpose: observe, not flash. Setup: wineprefix fresh, hosts→127.0.0.1 for
 cndms/upgrade/dmeu/dleu.ztems.com, cndms_fake.py :80 + ike_responder.py :500,
-pkill stale ZTE_Sales instances (single-instance mutex), xvfb + screenshot + OCR.
+stop the prior instance via its recorded PID (single-instance mutex; avoid pattern pkill on shared hosts), xvfb + screenshot + OCR.
 Expect: HTTP :80 verbs only (Query/get_current_version), its own cndms traffic.
 NEVER click Start (SBL path). If the oracle reveals a required extra trigger verb,
 port it to our stack and return to Linux-native.
