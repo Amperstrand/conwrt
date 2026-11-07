@@ -19,7 +19,7 @@ e_armprg.bin, NPRG9x55.mbn, sbl1.mbn, rpm.mbn, uboot.bin, *.ubi/.ubifs, FOTA_FS/
 ## 2. Arm factory mode (already live-proven)
   1) GET cmd=Language,cr_version,wa_inner_version&multi_data=1
   2) GET cmd=RD                                  (32-char RD)
-  3) POST SwitchCMD=Open  + &AD=md5hex(md5hex(wa+cr)+RD)   # lowercase; DLL truncates wa at first ']' BUT live B09 accepted FULL wa — try full first
+  3) POST SwitchCMD=Open  + &AD=md5hex(md5hex(wa+cr)+RD)   # lowercase; use the FULL wa_inner_version (live-proven on B09); the DLL-side ']' truncation is a fallback if full is rejected
   4) POST SwitchCMD=Query → OPENED               (sanity)
 
 ## 3. Trigger: do NOT send REBOOT_DEVICE (stock-only verb; fails here by design).
