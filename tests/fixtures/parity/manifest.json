@@ -27,8 +27,6 @@
     }
   },
   "pending_migration": [
-    "doh (Rust plan exists; needs fixture + gap accounting)",
-    "unported presets: configurationwizzard, fips-bluetooth-rfcomm — 2 of 39 (all others typed or classified)",
-    "CLASSIFIED §8 permanent-Python (2026-11-01, ports-d lane): openperf_client, openperf_server — the plan emits only a scaffold; the actual payload (sta_autostart.py etc.) arrives via install-openperf.sh, there is no fleet/batch-plan consumer (grep: prompts/recipes/firmware-manager/bench-tools all negative), and the preset is a bench-lab WiFi fixture (AP/STA pairs, HaHalow). A Rust twin would parity-test a shell scaffold while the substance stays external Python."
+    "NONE \u2014 the \u00a74 typed-ops march completed 2026-11-02 (#620): every preset in the 43-entry registry is typed or classified. openperf_client/openperf_server remain \u00a78 permanent-Python BY CLASSIFICATION (2026-11-01, ports-d): the plan emits only a scaffold \u2014 the actual payload (sta_autostart.py etc.) arrives via install-openperf.sh, there is no fleet/batch-plan consumer (grep: prompts/recipes/firmware-manager/bench-tools all negative), and the preset is a bench-lab WiFi fixture. A Rust twin would parity-test a shell scaffold while the substance stays external Python."
   ]
 }
