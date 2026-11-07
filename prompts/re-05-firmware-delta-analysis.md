@@ -5,6 +5,8 @@ mirrors, or captured from a live update) and you want to know *exactly*
 what each version changed — file by file — without owning every
 intermediate image.
 
+Read [CONTEXT-re-methods.md](CONTEXT-re-methods.md) first (known-plaintext section) and [CONTEXT-footguns.md](CONTEXT-footguns.md) rules 5–6 (WAF egress, DNS leftovers).
+
 ## Acquire the chain
 
 1. Find the community delta-finder for the platform (vendors often share

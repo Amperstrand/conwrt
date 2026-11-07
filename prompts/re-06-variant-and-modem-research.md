@@ -5,6 +5,8 @@ module) or when features differ between carrier variants of the same
 model. The MF286D session that produced this prompt answered "how do the
 phone lines work and can OpenWrt drive them" without opening the case.
 
+Read [CONTEXT-footguns.md](CONTEXT-footguns.md) rule 19 (version strings lie) and [CONTEXT-re-methods.md](CONTEXT-re-methods.md) first.
+
 ## Map the second computer first
 
 A cellular router is usually two Linux systems back-to-back. Before

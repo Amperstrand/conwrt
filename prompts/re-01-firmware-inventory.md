@@ -4,6 +4,8 @@ Use when a new router lands on the bench and the goal is a fast, structured
 understanding of its firmware surface before any live probing. Safe by
 design: everything here is offline or read-only.
 
+Read [CONTEXT-re-methods.md](CONTEXT-re-methods.md) and [CONTEXT-footguns.md](CONTEXT-footguns.md) first — this prompt assumes them.
+
 ## Inputs to collect first
 
 1. **Vendor images** (OTA packages, factory zips, "download files" kits from
