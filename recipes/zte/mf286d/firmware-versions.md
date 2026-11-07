@@ -107,3 +107,18 @@ Audio Calibration Database) files. VoLTE calling and carrier aggregation
 capabilities were already in the modem firmware — these updates ship
 tuned audio profiles. Security-relevant binary changes happen only in
 the full-refresh deltas (B07→B08, B08→B09, B09→B10, B12→B14).
+
+### Modem-side architecture (from delta.package analysis)
+
+The modem firmware is a universal multi-carrier build with 60+ per-carrier
+config packages (`mcfg_sw.mbn` under `modem_pr/mcfg/configs/mcfg_sw/`):
+EU (Telia/TIM/H3G/DT/Elisa/A1/Cosmote), AF (MTN/Djezzy/Telecom/Telkom/WANA),
+SEA (3HK/DIGI/StarHub/SmarTone/M1/UMobile/FarEastOne), NA (ATT/Claro),
+LATAM (AMX/Claro/Telefonica), MEA (STC/GTSF/WANA), Russia (MegaFon),
+Korea (KT). Carrier selection happens via mcfg at modem boot, not via
+firmware variant. All carrier configs ship in every firmware.
+
+Hardware features revealed by B14 config: Bluetooth (`bt_attr_support=1`),
+FM radio (`fm_attr_support=1`, FM_HZ=87.5), GPS XTRA, 32-station WiFi,
+ACS channel 1-4 disable. Internal product identity: MF920T1
+(tr069_ModelName, tr069_SerialNumber="9200000000").
