@@ -4,6 +4,8 @@ Static methodology for finding exec sinks (`system()`, `popen()`, backtick
 scripts) fed from request parameters in firmware web servers (goahead-style
 and friends). Bench-tested on an ARM goahead build with stripped sections.
 
+Read [CONTEXT-re-methods.md](CONTEXT-re-methods.md) first (handler-table walk, sink-string triage, PIC literal pools).
+
 ## Find the sinks before the handlers
 
 Scan the web-server binary and every library it loads for command-format

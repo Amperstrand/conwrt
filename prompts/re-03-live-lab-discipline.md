@@ -3,6 +3,8 @@
 How to probe a live embedded web server for command injection without
 bricking your own session. Every rule below was paid for.
 
+Read [CONTEXT-footguns.md](CONTEXT-footguns.md) first — rules 11–13 below cost a full device session each.
+
 ## Establish observability before capability
 
 In order of cost: (1) form response text (know exactly what it can and

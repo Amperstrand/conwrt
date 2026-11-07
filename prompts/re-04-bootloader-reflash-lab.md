@@ -3,6 +3,8 @@
 How to run a vendor bootloader's network recovery/reflash flow safely on a
 bench. Built around ZTE-style `lr`/TFTP flows but the discipline is generic.
 
+Read [CONTEXT-footguns.md](CONTEXT-footguns.md) first (rules 1–9: firewall masking, IP-alias traps, runts, cold-boot timing, derived identities) and [CONTEXT-re-methods.md](CONTEXT-re-methods.md).
+
 ## Before the first window
 
 1. **Full verified backups** of every flash partition, two independent
