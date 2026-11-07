@@ -98,3 +98,12 @@ research repo (LOG_EXPORT removal, led_off_mode addition).
 
 Tooling and full changelog JSON stay in the private research repo
 (species-safe summary only here).
+
+### What the "focused" updates actually change (file-level evidence)
+
+B10→B11 (VoLTE) and B11→B12 (UL-CA) are both **audio-calibration-only**
+updates at the file level: 436/438 changed files are `*.acdb` (Qualcomm
+Audio Calibration Database) files. VoLTE calling and carrier aggregation
+capabilities were already in the modem firmware — these updates ship
+tuned audio profiles. Security-relevant binary changes happen only in
+the full-refresh deltas (B07→B08, B08→B09, B09→B10, B12→B14).
