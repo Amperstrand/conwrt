@@ -63,7 +63,8 @@ class Transfer:
                             return True
                         last = self.next_block()
                 elif op == 5:
-                    log(f"[TFTP] client ERROR: {pkt[4:].split(b'\\x00')[0]!r}")
+                    errmsg = pkt[4:].split(b'\x00')[0]
+                    log(f"[TFTP] client ERROR: {errmsg!r}")
                     return False
         finally:
             try: self.sock.settimeout(None)   # restore blocking for the shared listener
