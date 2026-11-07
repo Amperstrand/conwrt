@@ -86,3 +86,18 @@ detail); session references live in the private research repos.
     addresses, unit identifiers, per-version attack surfaces; public
     gets species procedures and methodology. Redaction later is much
     more expensive than separation now.
+
+21. **Embedded web servers may run on BOTH SoCs.** Dual-processor routers
+    (host SoC + cellular modem) often run two separate web servers with
+    different codebases and different vulnerability surfaces. The modem's
+    web UI (USB tethering/RNDIS) is a distinct attack surface from the
+    LAN-side router web UI. Audit both.
+22. **OTA update packages are intelligence goldmines.** The preprocessing/
+    postprocessing shell scripts inside OTA packages reveal daemon
+    inventories, partition layouts, config reset logic, and factory
+    defaults (including TR-069 credentials). Always extract and read them.
+23. **"Minor" version bumps may be audio-calibration-only.** Two firmware
+    versions that claim feature changes (VoLTE, carrier aggregation) may
+    only ship tuned audio profiles — 436/438 changed files in the MF286D
+    B10→B11 delta were `.acdb` audio calibration. Check file-level
+    changelogs before assuming binary security changes.
