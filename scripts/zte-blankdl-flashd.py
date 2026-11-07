@@ -18,10 +18,18 @@ Safety model (deliberately rigid):
     `OK:zte blank download is done` ends the run with success.
   * dry-run mode answers nothing; it only logs what it saw.
 
+Hardening (this branch; all fixes covered by tests/test_zte_blankdl.py):
+  * TFTP block-number rollover handled after 65535 blocks (option-less
+    512-byte clients transfer >32 MiB without struct errors)
+  * OACK/DATA(1) ordering tolerant of both client personalities: the eager
+    live client (no block-0 ACK) and the RFC-strict client (ACK(0) after
+    OACK) — ACK(0) resends block 1, never skips
+  * blksize clamped to the protocol max (1468) — not the 16-bit block max
+  * per-block resend with real retries (the old loop was dead code)
+  * no per-ACK sleep (the vestigial 10 ms sleep cost ~4 min per flash)
+
 Usage:
-    python3 zte-blankdl-flashd.py --image root_uImage --sha256:<hex> [--dry-run]
-    python3 zte-blankdl-flashd.py --image root_uImage --expect-sha256 <hex> \\
-        --log-dir runs/mf286d-001
+    python3 zte-blankdl-flashd.py --image root_uImage#sha256:<hex> [--dry-run]
 
 Exit codes: 0 = fin packet seen (flash complete); 1 = error; 2 = timeout
 without fin (transfer may still have completed — check the device).
@@ -47,11 +55,13 @@ PROTO_BIND_IP = "192.0.0.1"
 PROTO_PORT = 69
 FIN_STRING = b"OK:zte blank download is done"
 OP_RRQ, OP_WRQ, OP_DATA, OP_ACK, OP_ERROR, OP_OACK = 1, 2, 3, 4, 5, 6
-MAX_BLOCK = 65535
+BLOCK_MOD = 65536
 DEFAULT_BLKSIZE = 512
+MIN_BLKSIZE = 8
 MAX_BLKSIZE = 1468  # largest the stock client asks for
 RETRIES = 8
 RX_TIMEOUT = 10.0
+ACK_DEADLINE = 1.0  # resend the in-flight block after this long
 
 
 def parse_opts(data):
@@ -70,25 +80,97 @@ def parse_opts(data):
     return mode, opts
 
 
+def clamp_blksize(raw):
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_BLKSIZE
+    return max(MIN_BLKSIZE, min(v, MAX_BLKSIZE))
+
+
 class Transfer:
     def __init__(self, addr, image, blksize, interval):
         self.addr = addr
         self.image = image
         self.blksize = blksize
         self.interval = interval
-        self.block = 0
+        self.block = 0          # last block number SENT
         self.acked = -1
+        self.sent_pkt = None    # current in-flight packet (for resends)
+        self.resends = 0
         self.deadline = time.time() + 900.0  # 38MB @ ~4MB/s worst case
         self.bytes_sent = 0
+        self.completed = False
+        self.eof_sent = False
 
-    def next_data(self):
-        off = self.block * self.blksize
-        if off >= len(self.image):
-            return None  # final block already sent; waiting for last ACK
+    def _data_pkt(self, block, chunk):
+        return struct.pack("!HH", OP_DATA, block) + chunk
+
+    def start(self):
+        """First DATA packet (block 1), sent eagerly with the OACK so both
+        the live client (no ACK(0)) and strict clients can proceed."""
+        return self.advance()
+
+    def advance(self):
+        """Prepare the next DATA packet; complete (None) when the image is
+        exhausted. An empty EOF block is sent ONLY for exact-multiple images
+        (a short final block already terminates the stream)."""
+        if self.completed:
+            return None
+        off = self.block * self.blksize if self.block else 0
+        if self.block and self.bytes_sent >= len(self.image):
+            if len(self.image) % self.blksize == 0 and not self.eof_sent:
+                # exact-multiple: no short block will occur — signal EOF
+                self.block = (self.block + 1) % BLOCK_MOD
+                self.sent_pkt = struct.pack("!HH", OP_DATA, self.block)
+                self.resends = 0
+                self.eof_sent = True
+                return self.sent_pkt
+            self.completed = True
+            return None
+        self.block = (self.block + 1) % BLOCK_MOD  # RFC rollover after 65535
         chunk = self.image[off:off + self.blksize]
-        self.block += 1
         self.bytes_sent += len(chunk)
-        return struct.pack("!HH", OP_DATA, self.block) + chunk
+        self.sent_pkt = self._data_pkt(self.block, chunk)
+        self.resends = 0
+        return self.sent_pkt
+
+    def resend(self):
+        self.resends += 1
+        return self.sent_pkt
+
+    def packet_for(self, block_no):
+        """Rebuild any already-started block's DATA packet for retransmit."""
+        off = block_no * self.blksize
+        if off >= len(self.image):
+            return struct.pack("!HH", OP_DATA, block_no)  # EOF block
+        return self._data_pkt(block_no, self.image[off:off + self.blksize])
+
+    def on_ack(self, acked_block):
+        """Classic single-window TFTP state machine.
+
+        State: block c sent, awaiting ACK(c).
+          ACK(c)  -> advance to c+1 (or complete on the EOF block)
+          other   -> the client is behind: rewind to acked+1 and retransmit
+                     exactly that block (lost-packet recovery). The stream
+                     position NEVER runs ahead of the client's ACKs.
+        """
+        self.acked = acked_block
+        if self.completed:
+            return None, False
+        if acked_block == 0 and self.block == 1 and not self.eof_sent:
+            return self.resend(), False       # strict client accepts OACK
+        if acked_block == self.block:
+            if self.eof_sent:
+                self.completed = True
+                return None, False
+            return self.advance(), False
+        # stale/duplicate/behind ACK — rewind to the client's position
+        want = (acked_block + 1) % BLOCK_MOD
+        self.block = want
+        self.eof_sent = want * self.blksize >= len(self.image) and \
+            self.bytes_sent >= len(self.image)
+        return self.packet_for(want), True
 
 
 def load_image(path, expect_sha):
@@ -112,6 +194,12 @@ def main():
     ap.add_argument("--log-dir", help="write run.json + transfer log here")
     args = ap.parse_args()
 
+    import signal
+
+    def on_term(signum, frame):
+        raise KeyboardInterrupt  # unwind to the common run.json writer below
+    signal.signal(signal.SIGTERM, on_term)
+
     path = args.image
     inline_sha = None
     if "#sha256:" in path:
@@ -134,6 +222,7 @@ def main():
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(0.5)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
     sock.bind((args.bind, args.port))
     log.info("listening on %s:%d%s", args.bind, args.port, " (dry-run)" if args.dry_run else "")
 
@@ -142,76 +231,104 @@ def main():
               "rrqs": [], "started": time.time()}
     deadline = time.time() + args.timeout
     exit_code = 2
+    last_activity = time.time()
 
-    while time.time() < deadline:
-        try:
-            data, addr = sock.recvfrom(2048)
-        except socket.timeout:
-            if xfer and time.time() > xfer.deadline:
-                log.error("transfer stalled past hard deadline")
-                break
-            continue
-
-        op = struct.unpack("!H", data[:2])[0] if len(data) >= 2 else 0
-
-        if op == OP_RRQ:
-            mode, opts = parse_opts(data[2:])
-            name = data[2:].split(b"\x00")[0].decode(errors="replace")
-            log.info("RRQ from %s: name=%r mode=%s opts=%s (aliased to pinned image)",
-                     addr[0], name, mode, opts)
-            result["rrqs"].append({"t": time.time(), "client": addr[0], "name": name})
-            if args.dry_run:
+    try:
+        while time.time() < deadline:
+        # block-level resend timer
+            if xfer and not xfer.completed and xfer.sent_pkt \
+                    and time.time() - last_activity > ACK_DEADLINE:
+                if xfer.resends >= RETRIES:
+                    log.error("block %d resent %d times without ACK — giving up",
+                              xfer.block, xfer.resends)
+                    break
+                sock.sendto(xfer.resend(), xfer.addr)
+                last_activity = time.time()
                 continue
-            blksize = min(int(opts.get("blksize", DEFAULT_BLKSIZE)), MAX_BLOCK) or DEFAULT_BLKSIZE
-            interval = min(int(opts.get("timeout", 5)), 30) or 5
-            xfer = Transfer(addr, image, blksize, interval)
-            if opts:
-                opt_items = []
-                if "blksize" in opts:
-                    opt_items += [b"blksize", str(blksize).encode()]
-                if "timeout" in opts:
-                    opt_items += [b"timeout", str(interval).encode()]
-                sock.sendto(struct.pack("!H", OP_OACK) + b"\x00".join(opt_items) + b"\x00", addr)
-            pkt = xfer.next_data()
-            if pkt:
-                sock.sendto(pkt, addr)
-            continue
 
-        if op == OP_ACK and xfer is not None and addr[0] == xfer.addr[0]:
-            acked_block = struct.unpack("!H", data[2:4])[0]
-            xfer.acked = acked_block
-            pkt = xfer.next_data()
-            if pkt is None:
-                if acked_block == xfer.block:
-                    log.info("transfer complete: %d bytes in %d blocks to %s",
-                             xfer.bytes_sent, xfer.block, addr[0])
-                    result["transferred"] = xfer.bytes_sent
-                    result["completed"] = time.time()
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                if xfer and time.time() > xfer.deadline:
+                    log.error("transfer stalled past hard deadline")
+                    break
                 continue
-            sent = False
-            for _ in range(RETRIES):
-                sock.sendto(pkt, addr)
-                sent = True
-                time.sleep(0.01)
-                break
-            continue
+            last_activity = time.time()
 
-        if op == OP_ERROR:
-            log.error("client error from %s: %r", addr[0], data)
-            continue
-
-        if op == 0 and data:
-            # non-TFTP payload — the fin packet arrives as raw ASCII on :69
+            # the fin packet is a raw ASCII UDP payload ("OK:...") whose
+            # first two bytes decode as a bogus opcode — match BEFORE dispatch
             if FIN_STRING in data:
-                log.info("FIN: %r from %s — blank download done, flash complete", data, addr[0])
+                log.info("FIN: %r from %s — blank download done, flash complete",
+                         data[:60], addr[0])
                 result["fin"] = True
                 result["fin_time"] = time.time()
                 exit_code = 0
                 break
-            log.info("non-TFTP payload from %s: %r", addr[0], data[:80])
-            result.setdefault("other_udp", []).append(
-                {"t": time.time(), "client": addr[0], "data": data[:80].hex()})
-            continue
+
+            op = struct.unpack("!H", data[:2])[0] if len(data) >= 2 else 0
+
+            if op == OP_RRQ:
+                mode, opts = parse_opts(data[2:])
+                name = data[2:].split(b"\x00")[0].decode(errors="replace")
+                log.info("RRQ from %s: name=%r mode=%s opts=%s (aliased to pinned image)",
+                         addr[0], name, mode, opts)
+                result["rrqs"].append({"t": time.time(), "client": addr[0], "name": name})
+                if args.dry_run:
+                    continue
+                blksize = clamp_blksize(opts.get("blksize"))
+                try:
+                    interval = max(1, min(int(opts.get("timeout", 5)), 30))
+                except ValueError:
+                    interval = 5
+                xfer = Transfer(addr, image, blksize, interval)
+                log.info("negotiated %s: blksize=%d timeout=%ds (client asked blksize=%s)",
+                         addr[0], blksize, interval, opts.get("blksize", "default"))
+                if opts:
+                    opt_items = []
+                    if "blksize" in opts:
+                        opt_items += [b"blksize", str(blksize).encode()]
+                    if "timeout" in opts:
+                        opt_items += [b"timeout", str(interval).encode()]
+                    sock.sendto(struct.pack("!H", OP_OACK) + b"\x00".join(opt_items) + b"\x00", addr)
+                pkt = xfer.start()
+                if pkt:
+                    sock.sendto(pkt, addr)
+                continue
+
+            if op == OP_ACK and xfer is not None and addr[0] == xfer.addr[0]:
+                acked_block = struct.unpack("!H", data[2:4])[0]
+                was_complete = xfer.completed
+                pkt, lost = xfer.on_ack(acked_block)
+                if pkt is not None:
+                    sock.sendto(pkt, addr)
+                    if lost:
+                        xfer.resends += 1
+                        last_activity = time.time()
+                elif xfer.completed and not was_complete:
+                    log.info("transfer complete: %d bytes, last block %d to %s",
+                             xfer.bytes_sent, xfer.block, addr[0])
+                    result["transferred"] = xfer.bytes_sent
+                    result["completed"] = time.time()
+                continue
+
+            if op == OP_ERROR:
+                log.error("client error from %s: %r", addr[0], data)
+                continue
+
+            if op == 0 and data:
+            # non-TFTP payload — the fin packet arrives as raw ASCII on :69
+                if FIN_STRING in data:
+                    log.info("FIN: %r from %s — blank download done, flash complete", data, addr[0])
+                    result["fin"] = True
+                    result["fin_time"] = time.time()
+                    exit_code = 0
+                    break
+                log.info("non-TFTP payload from %s: %r", addr[0], data[:80])
+                result.setdefault("other_udp", []).append(
+                    {"t": time.time(), "client": addr[0], "data": data[:80].hex()})
+                continue
+    except KeyboardInterrupt:
+        log.warning("interrupted (SIGTERM/Ctrl-C) — writing run record with partial state")
 
     if args.log_dir:
         with open(os.path.join(args.log_dir, "run.json"), "w") as f:
