@@ -110,9 +110,7 @@
     "ethernet",
     "wifi",
     "lte",
-    "usb",
-    "sim-classic-file-reader (QMI-UIM CRSM/EF file access \u2014 live-probed 2026-11-07)",
-    "NO eSIM/LPA function (firmware lockout \u2014 live-probed)"
+    "usb"
   ],
   "tested_hardware": {
     "confirmed_on": "Nordic/Telia B09 router + BD_TELIAMF286DV1.0.0B09 modem (2026-11: full flash to OpenWrt 25.12.6 via tftp-blank-download, zero bricks, no serial)",
@@ -171,6 +169,7 @@
     "measured_on": "BD_TELIAMF286DV1.0.0B12 modem firmware, OpenWrt 25.12.6, live probe 2026-11-07",
     "at_surface": "no AT+CSIM (operation not supported); AT+CRSM works (read-only classic file access)",
     "qmi_uim": "transparent APDU round-trip works via uqmi --uim-apdu-send for non-AID APDUs (genuine card status words); OPEN_CHANNEL forwards arbitrary AIDs to the card",
-    "esim_lockout": "deliberate firmware policy: OPEN_CHANNEL fw-denies the ISD-R AID alone (arbitrary other AIDs pass through); SEND_APDU blocks SELECT-by-AID (INS=A4 P1=04) as a class while allowing SELECT-by-FID. All paths to an ISD-R session are closed \u2014 the species cannot act as an eSIM reader on stock modem firmware. (Negative for eUICC/SAP; positive as classic-file reader \u2014 see docs/modem-as-reader appendix.)"
+    "esim_lockout": "deliberate firmware policy: OPEN_CHANNEL fw-denies the ISD-R AID alone (arbitrary other AIDs pass through); SEND_APDU blocks SELECT-by-AID (INS=A4 P1=04) as a class while allowing SELECT-by-FID. All paths to an ISD-R session are closed \u2014 the species cannot act as an eSIM reader on stock modem firmware. (Negative for eUICC/SAP; positive as classic-file reader \u2014 see docs/modem-as-reader appendix.)",
+    "note": "capability enum is schema-restricted; the reader verdicts live here"
   }
 }
