@@ -1,0 +1,95 @@
+{
+  "id": "zte-mf286d",
+  "vendor": "ZTE",
+  "description": "MF286D LTE cat.12 router (IPQ4019 + MDM9650 modem, Nordic/Telia carrier family)",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "zte,mf286d",
+    "default_ip": "192.168.1.1",
+    "profile": "zte_mf286d",
+    "release": "25.12.6",
+    "version": "25"
+  },
+  "hardware": {
+    "soc": "Qualcomm IPQ4019 quad-core Cortex-A7",
+    "modem": "ZTE MF286DMODULE (MDM9650, cat.12) on USB (dwc3), QMI 19d2:1485, AT port /dev/ttyUSB2",
+    "flash": "SPI-NOR 2MB (gd25q16: SBL1/MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/APPSBL) + SPI-NAND 128MB (128KiB erase blocks)",
+    "ram": "256MB DDR3",
+    "ethernet_ports": "4x LAN 1G + WAN via port1 (OpenWrt DT: wan=port1)",
+    "wifi": "2.4GHz + 5GHz 802.11ac (IPQ4019 integrated)",
+    "uart": "Board has an unpopulated 4-pin header (3.3V UART, 115200); no serial required for the TFTP flash method",
+    "power": "12V DC barrel"
+  },
+  "mac_oui": [
+    "C8:EA:F8"
+  ],
+  "stock_default_ip": "192.168.32.1",
+  "nand_partition_map": {
+    "_units": "bytes; runtime mtdN in parentheses (NAND mtd0..11, NOR mtd12..19)",
+    "fota-flag": "0x0000000 + 0xA0000 (mtd0) — bootloader handoff flag, first good 128KiB block, byte 0",
+    "ART": "0x00A0000 + 0x80000 (mtd1)",
+    "mac": "0x0012000 + 0x80000 (mtd2)",
+    "cfg-param": "0x0026000 + 0x400000 (mtd4)",
+    "web": "0x1000000 + 0x800000 (mtd8) — stock cramfs web UI",
+    "rootfs": "0x1800000 + 0x1D00000 (mtd9) — UBI: kernel + ubi_rootfs(squashfs) + rootfs_data(autoresize)",
+    "data": "0x3500000 + 0x1900000 (mtd10)",
+    "fota": "0x4E00000 + 0x3200000 (mtd11) — ZDF delta staging (yaffs under stock)",
+    "0:APPSBL": "NOR 0xF0000 + 0xC0000 (mtd18) — U-Boot (ELF, entry 0x87300000)"
+  },
+  "flash_methods": {
+    "tftp-blank-download": {
+      "description": "Stock U-Boot blank-download recovery: the bootloader itself TFTP-pulls root_uImage from 192.0.0.1:69 and rewrites web+rootfs (never NOR). Entered when the rootfs UBI attaches but has no kernel volume (e.g. interrupted flash, or a deliberately staged trigger UBI), or on a download-mode boot. No serial, no case opening.",
+      "recovery_ip": "192.0.0.1",
+      "client_ip": "derived per boot (192.x.y.z; watch ARP or the RRQ source)",
+      "client_subnet": "255.0.0.0",
+      "image": "root_uImage wrapper, exactly 38797312 bytes: [8MiB web region][0x1D00000 UBI(kernel,rootfs,rootfs_data)] — see docs/zte-mf286d-flashing.md",
+      "tftp_options": "blksize (client asks 1468) + timeout (5s) — RFC 2348/2349 OACK required",
+      "success_signal": "UDP payload 'OK:zte blank download is done' sent back to the server :69 after the write completes",
+      "flash_time_seconds": 60,
+      "resources_required": [
+        "power",
+        "recovery-subnet (host interface at 192.0.0.1)",
+        "tftp-server (scripts/zte-blankdl-flashd.py)"
+      ],
+      "envelope": [
+        "image-type-factory-root-uimage",
+        "sha256-pinned",
+        "nor-untouched"
+      ],
+      "caveats": [
+        "A FULLY erased rootfs does NOT trigger the pull (UBI attach fails before the kernel-volume check) — stage a layout-volume-bearing UBI or use a stock download-mode boot instead",
+        "Serve ANY requested filename (aliased to the pinned image) — the zdu no-bootfile path derives a per-boot 4-hex-byte name",
+        "Never run two servers on 192.0.0.1:69; the fin packet is the only success oracle"
+      ]
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
+    }
+  },
+  "signatures": {
+    "boot_log": [
+      "Uaztemain: enter into !",
+      "zte_getHandOffState: read data="
+    ],
+    "uboot_banner": "Z-LOADER/IPQ40xx (IPQ40xx) # prompt in download mode"
+  },
+  "capabilities": {
+    "lte": true,
+    "qmi": true,
+    "band_lock_at": "AT+ZSNT / AT+ZNLOCKBAND / AT+ZLOCKCELL (AT port /dev/ttyUSB2)",
+    "external_antennas": "2x SMA"
+  },
+  "tested_hardware": {
+    "confirmed_on": "Nordic/Telia B09 router + BD_TELIAMF286DV1.0.0B09 modem (2026-11: full flash to OpenWrt 25.12.6 via tftp-blank-download, zero bricks, no serial)",
+    "modem_fw_note": "QMI works on modem fw B11/B12 and below; B14 breaks QMI under OpenWrt (community-verified; downgrade is lengthy). Check ATI before configuring wwan."
+  },
+  "notes": "Species-level docs in docs/zte-mf286d-flashing.md. Stock rollback: serve a full-stock root_uImage (e.g. the Telia/Nordic B02 kit image) over the same TFTP path. Exploit-grade research (stock-web command injection, FOTA signature-chain findings) is intentionally NOT documented here — it lives in the private research repo pending a disclosure decision."
+}
