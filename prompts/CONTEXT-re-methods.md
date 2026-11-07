@@ -57,3 +57,19 @@ paid off, with pointers to the prompts that use them.
 - Publish methodology prompts (like these) as the generalizable residue
   of each project; keep payloads/addresses in the private repo and point
   to it.
+
+## OTA delta format RE (see re-05)
+
+Multi-layer containers are the norm for embedded OTA:
+- The outer package (ZIP or custom magic) wraps per-partition containers
+- Partition containers wrap either block-level diffs (custom formats with
+  CRC-verified block maps) or file-level patches (often bsdiff + LZMA)
+- Update scripts (shell) are embedded and reveal daemon inventories,
+  partition layouts, and factory defaults
+- The diff format decoder ships in the product itself — find the update
+  daemon/binary and its debug strings name every header field
+
+Key technique: the debug/log strings in the update binary contain the
+entire header field vocabulary (state=0 through state=6 in ZTE's ZFUSDK
+named every writeUnitHeader field). Read the binary's log formats before
+fighting the binary format.
