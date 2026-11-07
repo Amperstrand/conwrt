@@ -48,7 +48,11 @@ try:
         peer_pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), peer)
         return priv.exchange(ec.ECDH(), peer_pub)
 except Exception as _e:  # pragma: no cover
-    ecp256_keypair = ecp256_shared = None
+    # cryptography unavailable: keep call sites working, fail with a clear error
+    def ecp256_keypair():
+        raise RuntimeError("cryptography library unavailable — ECP256 DH impossible")
+    def ecp256_shared(priv, peer64):
+        raise RuntimeError("cryptography library unavailable — ECP256 DH impossible")
 
 VID_RFC3947 = bytes.fromhex('4a131c81070358455c5728f20e95452f')
 VID_FRAG    = bytes.fromhex('4048b7d56ebce88525e7de7f00d6c2d3')
