@@ -145,13 +145,24 @@ unit runs a QMI/MBIM composition on `/dev/cdc-wdm0`. Fill this appendix from
 the #619 results: port map, fingerprint diff vs §reference, rehearsal
 transcript pointers, model JSON updates.
 
-## Appendix C — ZTE MF286D (stub → #621)
+## Appendix C — ZTE MF286D (filled — species closed 2026-11-07)
 
-Task issue #621 (see its correction comment). Community-build OpenWrt only
-(currently a 25.12.4 ipq40xx build with QMI/MBIM + ModemManager) — record
-build provenance per the rules above. ZTE cat.12 mPCIe modem: a genuinely new
-firmware family for the fingerprint library; no CSIM behavior assumed either
-way. **Arch correction (2026-11-02): the MF286D is IPQ4019 — `ipq40xx/generic`,
-`arm_cortex-a7-neon-vfpv4` — NOT ath79/mips_24kc like the MF286C sibling and
-the E750.** It needs its own lpac artifact; the lpac-openwrt build script has
-the `ipq40xx/generic` case and the artifact is being prepared.
+- Unit: Nordic/Telia generation, now bench-flashed to official OpenWrt
+  25.12.6 (ipq40xx, arm_cortex-a7-neon-vfpv4 — NOT the E750's mips; needs
+  its own lpac artifact, which exists: lpac-openwrt ipq40xx-25.12.5-r1).
+- Modem: ZTE MF286DMODULE (MDM9650-class cat.12) on USB, QMI 19d2:1485;
+  AT port /dev/ttyUSB2 on the bench unit (re-detect per session per §3).
+- **Reader capability verdict (species-level):**
+  - `AT+CRSM` WORKS — the modem functions as a **classic-file SIM reader**
+    (read/write files via CRSM commands).
+  - **Remote-SIM/SAP lending: NOT POSSIBLE** on this ZTE modem firmware
+    (no SAP/remote-SIM support).
+  - `AT+CCHO` (logical channels) REFUSED → **no eUICC profile operations**
+    (no ISD-R access, no lpac `at_csim`-class passthrough).
+- Consequence for this playbook: the MF286D is a **negative species result**
+  for the eSIM/modem-as-reader program — usable as a classic SIM reader
+  only. The third-species slot for `AT+CSIM` generalization remains open;
+  ZTE modem firmware gates the smartcard passthrough that Quectel exposes.
+- Full species record: `models/zte-mf286d.json`, flash + root runbook in
+  `recipes/zte/mf286d/`, install/recovery in `docs/zte-mf286d-flashing.md`.
+  Security-research follow-ups live in the private research repo.
