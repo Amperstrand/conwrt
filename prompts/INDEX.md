@@ -44,3 +44,17 @@ Conventions: every prompt is species-agnostic (no payloads, no unit
 identifiers — those stay in the private research repos); each ends with
 deliverables. When a prompt succeeds or fails on new hardware, append the
 lesson to the matching CONTEXT file rather than forking the prompt.
+
+## Other mission briefs (pre-existing, now cataloged)
+
+| Prompt | Use when |
+|---|---|
+| bench-forensics-01-dark-device | a device on a bench port is silent/unresponsive — dark-device triage |
+| bench-forensics-02-session-archaeology | mining past agent sessions/logs for a device's history |
+| night-queue-20261029 | long unattended software-only queues (pattern for any such night run) |
+| nr7101-batch-flash | batch flash + inventory + burn-in of multiple units |
+| recovery-01-flash-via-rig | token-lean recovery flashing through the bench rig |
+
+(If a new prompt is added, add its row here and its transferable lessons
+to a CONTEXT file — the INDEX is the catalog, the CONTEXT files are the
+memory.)
