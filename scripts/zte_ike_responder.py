@@ -39,20 +39,27 @@ def sha1(b):
 try:
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-    def ecp256_keypair():
+    def _ecp256_keypair_impl():
         priv = ec.generate_private_key(ec.SECP256R1())
         pub = priv.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)  # 04||X||Y
         return priv, pub[1:]  # raw X||Y 64 bytes like the client sends
-    def ecp256_shared(priv, peer64):
+    def _ecp256_shared_impl(priv, peer64):
         peer = b'\x04' + peer64
         peer_pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), peer)
         return priv.exchange(ec.ECDH(), peer_pub)
-except Exception as _e:  # pragma: no cover
-    # cryptography unavailable: keep call sites working, fail with a clear error
-    def ecp256_keypair():
+    _CRYPTO_OK = True
+except Exception:  # pragma: no cover
+    _CRYPTO_OK = False
+
+def ecp256_keypair():
+    if not _CRYPTO_OK:
         raise RuntimeError("cryptography library unavailable — ECP256 DH impossible")
-    def ecp256_shared(priv, peer64):
+    return _ecp256_keypair_impl()
+
+def ecp256_shared(priv, peer64):
+    if not _CRYPTO_OK:
         raise RuntimeError("cryptography library unavailable — ECP256 DH impossible")
+    return _ecp256_shared_impl(priv, peer64)
 
 VID_RFC3947 = bytes.fromhex('4a131c81070358455c5728f20e95452f')
 VID_FRAG    = bytes.fromhex('4048b7d56ebce88525e7de7f00d6c2d3')
