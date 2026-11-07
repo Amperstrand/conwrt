@@ -122,3 +122,13 @@ Hardware features revealed by B14 config: Bluetooth (`bt_attr_support=1`),
 FM radio (`fm_attr_support=1`, FM_HZ=87.5), GPS XTRA, 32-station WiFi,
 ACS channel 1-4 disable. Internal product identity: MF920T1
 (tr069_ModelName, tr069_SerialNumber="9200000000").
+
+### Rootfs stability B09–B12 (block-level evidence)
+
+B10→B11 and B11→B12 write **zero bytes** to the router's rootfs
+partition (the delta's block map contains a single UNCHANGED block).
+The web partition is rewritten in every delta but that's cramfs
+timestamp regeneration. The router rootfs is byte-identical from B09
+through B12 — any B09–B12 rootfs image is interchangeable for
+rollback. B12→B14 is the first update that actually rewrites the
+rootfs (growing it by 512KB).
