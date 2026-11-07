@@ -118,3 +118,22 @@ the vendor system (web + rootfs). The modem is never touched by this flow.
 Keep pre-flash backups of all partitions before starting (see the private
 acquisition runbook); the unit-unique partitions (ART, mac, cfg-param)
 cannot be regenerated from any public image.
+
+## Building rollback images from OTA deltas (format decoded)
+
+The official OTA deltas (downloadable from ZTE's CDN — see
+[firmware-versions.md](firmware-versions.md)) use a multi-layer format
+now fully understood:
+
+- **delta.package** (modem side): `8855aa55` container → 15-entry
+  partition table → `ZFD01.02` file-level packages → per-file
+  LZMA-compressed BSDIFF40 patches. File-level changes are directly
+  readable and applicable with standard bsdiff tooling.
+- **root_uImage.mld** (router side): `ZDF01.05` container → `ZDFU` units
+  per partition → block map (28-byte records with per-block CRC32s for
+  source and target) → per-block copy-ops + raw literal data.
+
+This means exact rollback images for any firmware version can be
+reconstructed by: (1) starting from any known full image, (2) applying
+the delta chain's per-file bsdiff patches, and (3) verifying against
+the block-map CRCs. The private research repo holds the tooling.
