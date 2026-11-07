@@ -73,3 +73,28 @@ lockstep (mixed states confuse the updater; community-confirmed).
    attack surface per version (private lane).
 3. The modem-side delta contents (VoLTE/CA config) — read-only strings
    comparison across delta.packages.
+
+## File-level changelogs (2026-11-08 session, private tooling)
+
+The delta.package inside each .up uses a multi-layer format (outer
+8855aa55 container → per-partition entries → ZFD01.02 file-level
+packages → LZMA-compressed bsdiff40 patches per file). With the format
+decoded, every OTA delta yields a complete file-level changelog:
+
+| Delta | Files changed | Character |
+|---|---|---|
+| B07→B08 | 977 | full refresh |
+| B08→B09 | 1016 | full refresh |
+| B09→B10 | 981 | full refresh |
+| B10→B11 | 441 | focused (modem/VoLTE) |
+| B11→B12 | 441 | focused (modem/UL-CA) |
+| B12→B14 | 1303 | full refresh |
+
+Security-relevant files patched in B12→B14 include: `zte_topsw_goahead`
+(23KB patch), `qcmap_auth`, `qcmap_web_cgi`, `firewall_*` scripts,
+`busybox`, `login/su/passwd` (shadow suite). The goahead patch
+corresponds to the handler-set changes documented in the private
+research repo (LOG_EXPORT removal, led_off_mode addition).
+
+Tooling and full changelog JSON stay in the private research repo
+(species-safe summary only here).
