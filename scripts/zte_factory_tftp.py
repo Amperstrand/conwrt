@@ -32,7 +32,7 @@ class Transfer:
         self.start = time.time()
 
     def next_block(self):
-        self.block = 1 if self.block == 65535 else self.block + 1   # RFC2348 rollover
+        self.block = 0 if self.block == 65535 else self.block + 1   # RFC2348/U-Boot rollover: wraps to ZERO
         self.offset += self.blksize
         off = self.offset
         chunk = self.data[off:off + self.blksize]
@@ -83,7 +83,7 @@ def handle_rrq(sock, pkt, peer, root, mode_strict=True):
     for i in range(0, len(rest) - 1, 2):
         opts[rest[i].decode('latin1').lower()] = rest[i+1].decode('latin1')
     log(f"[RRQ] {peer} file={fname!r} mode={mode!r} opts={opts} raw={pkt.hex()[:120]}")
-    root_abs = os.path.abspath(root)
+    root_abs = os.path.realpath(root)
     path = os.path.realpath(os.path.join(root_abs, fname))
     if (os.path.commonpath([root_abs, path]) != root_abs) or not os.path.isfile(path):
         log(f"[RRQ] 404 {fname}")
@@ -92,8 +92,8 @@ def handle_rrq(sock, pkt, peer, root, mode_strict=True):
     blksize = min(max(int(opts.get('blksize', 512)), 8), 1468)
     timeout = min(max(float(opts.get('timeout', 1)), 1), 60)
     tsize = os.path.getsize(path)
-    if opts:
-        ack_opts = b''
+    ack_opts = b''
+    if opts and any(k in opts for k in ('blksize', 'timeout', 'tsize')):
         for k in ('blksize', 'timeout', 'tsize'):  # windowsize intentionally not echoed (window=1)
             if k in opts:
                 v = str(tsize) if k == 'tsize' else (str(blksize) if k == 'blksize' else (str(int(timeout)) if k == 'timeout' else opts[k]))
