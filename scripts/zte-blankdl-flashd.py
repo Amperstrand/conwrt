@@ -140,8 +140,11 @@ class Transfer:
         return self.sent_pkt
 
     def packet_for(self, block_no):
-        """Rebuild any already-started block's DATA packet for retransmit."""
-        off = block_no * self.blksize
+        """Rebuild any already-started block's DATA packet for retransmit.
+        TFTP blocks are 1-indexed: block N carries image[(N-1)*blksize : N*blksize).
+        (An earlier version used N*blksize — off by one block — which corrupted
+        resends; caught by the campaign rehearsal loopback, 2026-11-08.)"""
+        off = (block_no - 1) * self.blksize
         if off >= len(self.image):
             return struct.pack("!HH", OP_DATA, block_no)  # EOF block
         return self._data_pkt(block_no, self.image[off:off + self.blksize])

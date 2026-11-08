@@ -91,3 +91,12 @@ A single NO blocks the operation until resolved.
     networking = 192.168.1.1, passwordless root, overlay via mount_root;
     first boot after an overlay wipe may need one power cycle (dropbear
     connection-reset window).
+23. **IP changes must use the platform's own config form.** On OpenWrt, a
+    bare `uci set network.lan.ipaddr='x.x.x.x'` (no netmask) leaves the
+    address without an on-link route: ARP ANSWERS but every IP reply routes
+    out the default interface — identical symptom to a firewall drop, survives
+    every reset, and cost a full day to diagnose (two concurrent bench faults
+    made it worse). Always set explicit CIDR (`uci add_list
+    network.lan.ipaddr='x.x.x.x/24'`) and verify with a ping through the same
+    path operators will use. 'ARP answers but ping fails' on OpenWrt: suspect
+    the address FORM before the firewall.

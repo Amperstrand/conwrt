@@ -103,7 +103,7 @@ def test_live_client_full_transfer_and_fin():
 
 def test_rfc_client_no_block_skip():
     """RFC-strict client ACKs block 0 after OACK — no data block may be skipped."""
-    image, sha = make_image(1468 * 40)  # small: skip bugs show as missing bytes
+    image, sha = make_image(1468 * 40 + 123)  # non-multiple: short last block terminates cleanly
     port = free_port()
     d = Daemon(image, sha, port)
     try:
