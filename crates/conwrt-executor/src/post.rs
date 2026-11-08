@@ -47,8 +47,17 @@ pub trait HttpIo {
     /// [`retain_verdict_bytes`] — drain past the cap, never grow
     /// past it (firmware heap safety after the irreversible POST).
     ///
+    /// Implementations MUST bound the read with a deadline (the
+    /// reference `TcpHttpIo` uses 30 s per read): a verdict server
+    /// always FINs promptly, and an unbounded loop converts a burned
+    /// window into a hung task loop — the socket-abort cleanup path
+    /// never runs (#232 P2 4298093594; the Python uploader twin
+    /// bounds its POST at `curl -m 400`).
+    ///
     /// # Errors
-    /// Transport failure before EOF.
+    /// Transport failure before EOF, or the read deadline expired
+    /// (surfaced as the transport error — the window is burned
+    /// either way).
     async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), Self::Error>;
 }
 
