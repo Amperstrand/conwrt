@@ -304,16 +304,28 @@ impl ServerCore {
                             holder: self.controller.clone(),
                         })
                     }
+                    // NotOwner cannot occur on acquire; exhaustive for the
+                    // new variant (release-by-owner is handled below).
+                    Err(LeaseError::Denied(LeaseDenied::NotOwner(holder))) => {
+                        WireResult::Lease(LeaseResponse::Denied {
+                            holder: Some(holder),
+                        })
+                    }
                     Err(LeaseError::UnknownLease(id)) => {
                         WireResult::Error(WireError::UnknownLease(id))
                     }
                 }
             }
-            WireEndpoint::LeaseRelease { lease_id } => match self.leases.release(lease_id) {
-                Ok(_) => WireResult::LeaseReleased(true),
-                Err(LeaseError::UnknownLease(id)) => WireResult::Error(WireError::UnknownLease(id)),
-                Err(_) => WireResult::LeaseReleased(false),
-            },
+            WireEndpoint::LeaseRelease { lease_id } => {
+                let controller = self.controller.clone().unwrap_or_default();
+                match self.leases.release_by(lease_id, &controller) {
+                    Ok(_) => WireResult::LeaseReleased(true),
+                    Err(LeaseError::UnknownLease(id)) => {
+                        WireResult::Error(WireError::UnknownLease(id))
+                    }
+                    Err(_) => WireResult::LeaseReleased(false),
+                }
+            }
             WireEndpoint::Heartbeat(hb) => match self
                 .leases
                 .heartbeat(hb.lease_id, HEARTBEAT_BUDGET)
