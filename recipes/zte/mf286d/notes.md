@@ -4,19 +4,27 @@ Status: species-level facts from the Nov 2026 bring-up campaign (conwrt issue #6
 ledger EXP-001..022 on the bench host). Unit-specific data lives in the private
 registry + bench evidence, not here.
 
-## Architecture (two independent OS slots + NOR chain)
+## Architecture (rootfs A/B volumes + NOR chain)
 
 - SoC IPQ4019 (ipq40xx/generic), NAND 128 MB + NOR 2 MB, mPCIe Cat-12 modem (do not
   touch its firmware as part of router flashing).
-- **MAIN slot**: `web` (8 MiB @ NAND 0x1000000) + `rootfs` (29 MiB @ 0x1800000) — the
-  region the combined `root_uImage` images and the bootloader's `lr` macro write.
-  Stock and OpenWrt both live here.
-- **FACTORY/RECOVERY slot**: separate `kernel` + `ubi_rootfs` pair; boots when the
-  `fac_mode` nvram flag is set (persisted across reboots, reversible). Runs a full
-  GoAhead web (ZTE-Webs/2.5.0) at 192.168.32.1 with an update UI — independent of the
-  main slot: main can be dead and factory still boots.
+- **MAIN system region**: `web` (8 MiB @ NAND 0x1000000) + `rootfs` (29 MiB @
+  0x1800000). The `rootfs` partition holds a UBI layout with the `kernel` and
+  `ubi_rootfs` (and `ubi_rootfs_data`) **volumes** — the live /proc/mtd names
+  `kernel`/`ubi_rootfs` refer to these volumes, NOT to a separate partition or an
+  independent second OS slot.
+- **A/B root fallback**: bootipq conditionally selects between `rootfs` and
+  `rootfs_1` volume names (disasm: `rootfsname=rootfs`/`rootfs_1`, validity-gated).
+  `rootfs_1` is written by the FOTA/OTA delta flow (`lrb`/zdu into data/fota space);
+  `lr` overwrites the primary rootfs and blanks `web`. After `lr` the primary wins;
+  do NOT count `rootfs_1` as a managed fallback (it may be absent or stale).
+- **Factory/download mode** (`fac_mode` flag, persists across reboots): boots the ZTE
+  download environment with its GoAhead web (ZTE-Webs/2.5.0) at 192.168.32.1
+  (observed live; carries an update UI). Its independence from the rootfs region is
+  NOT established — when planning a rootfs rewrite, do not rely on it as a fallback.
 - **NOR chain** (mtd12-19 on the live unit): SBL1/MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/
-  APPSBL — the no-serial brick zone. Never write.
+  APPSBL — the no-serial brick zone. Never write. Secure boot is fuse-gated and
+  fuse-off on this SKU (community images boot; see docs/ZTE-MF286D-ROUND3-AUDIT.md).
 
 ## Boot / flash modes (verified)
 

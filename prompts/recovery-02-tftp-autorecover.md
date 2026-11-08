@@ -19,18 +19,22 @@ against bootloader disasm, documented on the MF286 sibling). Generic enough for 
 1. **Isolate the link**: bench interface directly to the device, nothing else on that
    L2 (the recovery server address is often a whole /8 or a subnet you must own
    exclusively during the window).
-2. **Stage the server** (one terminal, stays up for the whole session):
-   - Assign the expected server address(es) to the bench interface (e.g.
-     `192.0.0.1/8` plus any fallbacks the species tries).
-   - Serve the image directory over TFTP/UDP :69 with full logging. Reference
-     implementation: `dload_client.py --listen --ifaddr <addr> --tftp-root <dir>`
-     (RFC2348 blksize/OACK, logs every RRQ).
-   - Optional but recommended: a full-window packet capture with a visible positive
-     control (see observer discipline in AGENTS.md).
-3. **Trigger the recovery boot**: species-specific — usually "make the main kernel
-   unbootable state persist + reboot" (the bootloader detects it) or a
-   recovery-mode flag/button. Never *create* the unbootable state without a verified
-   backup of the region you're invalidating.
+2. **Start the hardened server** — first assign the expected server address(es) to
+   the bench interface (e.g. `192.0.0.1/8` for MF286D; nothing else may own it).
+   The repo's validated implementation is
+   `scripts/zte-blankdl-flashd.py` (pins the image sha256, aliases any RRQ filename,
+   treats the ASCII `fin` packet as the only success oracle; usage in
+   `docs/zte-mf286d-flashing.md`). Bench-side alternative for pure serving/logging:
+   `dload_client.py --listen --ifaddr <addr> --tftp-root <dir>` (not in-repo).
+   Full-window packet capture with a visible positive control recommended.
+3. **Trigger the recovery boot** — species-specific and DANGEROUS to improvise. For
+   MF286D-class blank download, the documented trigger is: **stage a small VALID UBI
+   layout with no kernel volume** to the rootfs partition, then power-cycle. Do NOT
+   simply erase rootfs — a fully-erased region fails UBI attach BEFORE the
+   kernel-volume check and the bootloader will not pull (wedged recovery). Where a
+   download-mode state already exists (sticky FOTA flag / download environment),
+   prefer using it over creating an invalid state. Never invalidate any region
+   without a verified backup of it.
 4. **Observe**: device ARP for the server address → RRQ for the recovery filename →
    transfer → device self-flashes → reboot. Do not power-cycle during the transfer.
 5. **Verify**: device boots; identify the running build; record ledger row
