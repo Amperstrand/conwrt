@@ -62,6 +62,20 @@ registry + bench evidence, not here.
 3. armprg/Sahara-Firehose read+program — while the download-mode chain is reachable.
 4. Serial console (X8, 115200 8N1) — requires opening the case; NOT available to us.
 
+## Modem / eSIM (B12 modem firmware)
+
+- QMI UIM service: functional (SIM state, PIN, APDU infrastructure)
+- **ISD-R (eSIM management applet) BLOCKED** by modem firmware policy via both
+  AT and QMI UIM ("Access denied" ≠ "not found" — the applet exists on the card
+  but the modem denies access). AT+CSIM: "not supported."
+- eSIM profile management IN-DEVICE: **not possible** on this firmware.
+- Alternatives: USB CCID reader + lpac ipq40xx artifact (deterministic, no
+  firmware risk), or a device without the carrier lock (bench comparison).
+- Router firmware B10/B12: CVE-2023-25649 live (close_all_led exec).
+  B14: close_all_led fixed but NIGHT_MODE_INFO_SETTINGS end_time still
+  unvalidated. Full matrix: bench evidence/firmware-matrix.md.
+- Modem firmware B14: documented as "the breaker" — do not update to it.
+
 ## OpenWrt install path (once main slot is rewritten)
 
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
