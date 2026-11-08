@@ -514,10 +514,12 @@ import sys as _sys
 
 _sys.path.insert(0, str(REPO_ROOT / "tests"))
 from venues import (  # noqa: E402
+    acquire_with_queue,
     direct_device,
     flash_lease as flash_lease_ctx,
     venues_from_env,
 )
+import venues  # noqa: E402  (qualified: venues.acquire_with_queue at the call site)
 
 VENUES = venues_from_env()
 
@@ -587,6 +589,13 @@ def _labgrid(args: list[str], place: str, timeout: int = 40):
     )
 
 
+def _labgrid_acquire_runner(args: list[str]):
+    """Adapter: acquire_with_queue passes ["-p", place, "acquire"];
+    _labgrid takes (verbs, place) — translate."""
+    i = args.index("-p")
+    return _labgrid(args[i + 2:], args[i + 1], timeout=25)
+
+
 @pytest.fixture(params=VENUES, ids=[v.key for v in VENUES])
 def venue(request):
     """A device to run commands on — QEMU VM, labgrid place, or direct SSH.
@@ -633,13 +642,22 @@ def venue(request):
         return
 
     place = chosen.place or ""
-    acquired = _labgrid(["acquire"], place, timeout=25)
-    if acquired.returncode != 0:
+    # Queue through sibling contention before giving up (#184 / the
+    # bolty-rs#271 reservation theme): a held place is WAITED for
+    # (bounded by CONWRT_VENUE_QUEUE_TIMEOUT, default 300 s), a dead
+    # coordinator still skips fast — waiting cannot fix unreachable.
+    outcome = venues.acquire_with_queue(place, runner=_labgrid_acquire_runner)
+    if outcome.status != "acquired":
+        reason = (
+            f"still held after queueing {outcome.waited_s:.0f}s "
+            f"({outcome.attempts} attempts)"
+            if outcome.status == "timeout"
+            else "coordinator unreachable / place unknown (no queue)"
+        )
         pytest.skip(
             f"labgrid place {place!r} not acquirable on "
             f"{os.environ.get('CONWRT_LABGRID_COORDINATOR', 'ai-legion:20408')} "
-            f"(held by a sibling session or coordinator down): "
-            f"{acquired.stderr.strip()[-200:]}"
+            f"— {reason}: {outcome.last_stderr.strip()[-200:]}"
         )
 
     def _run(command: str, timeout: int):
