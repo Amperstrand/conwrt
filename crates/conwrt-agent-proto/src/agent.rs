@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::dispatch::AgentEvent;
-use crate::dispatch::{WireEndpoint, WireFrame, WireResult, decode_frame, encode_frame};
+use crate::dispatch::{WireEndpoint, WireError, WireFrame, WireResult, decode_frame, encode_frame};
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
     CapabilityInfo, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse, PROTOCOL_VERSION,
@@ -57,6 +57,17 @@ pub struct AgentState {
     pub streams: BTreeMap<u64, Vec<u8>>,
     /// Expected total sizes per transfer.
     pub stream_totals: BTreeMap<u64, u64>,
+    /// Owning controller per transfer id (#164 P1 4272448227): first
+    /// chunk claims the id; chunks from a DIFFERENT controller while
+    /// the owner is still connected are refused (TransferConflict).
+    /// The claim ends with the owner's CONNECTION (not the transfer):
+    /// a takeover after a disconnect is the documented resume pattern
+    /// (the e2e kill-and-resume reconnects under a new controller id
+    /// and continues from the contiguous offset) — resume and hostile
+    /// takeover are indistinguishable at the wire, so the guarantee is
+    /// "no LIVE cross-controller interleave", enforced by sequential
+    /// connection serving + this map.
+    pub stream_owners: BTreeMap<u64, String>,
     /// Expiry events produced by the heartbeat ticker, drained by the
     /// active connection after each response (#164 P1 4272448155 —
     /// before the ticker existed, lease budgets NEVER decremented at
@@ -187,6 +198,14 @@ async fn handle_connection(
                 .await?;
         }
     }
+    // Connection end: this controller's transfer CLAIMS end with it —
+    // streams/bytes persist (resume semantics), but a fresh connection
+    // may re-claim the ids (#164 4272448227 boundary).
+    state
+        .lock()
+        .unwrap()
+        .stream_owners
+        .retain(|_, owner| owner != &controller_id);
     Ok(())
 }
 
@@ -261,6 +280,22 @@ async fn dispatch_request(
         }
         WireEndpoint::StreamChunk(chunk) => {
             let mut s = state.lock().unwrap();
+            // Transfer-id ownership (#164 P1 4272448227): the first chunk
+            // claims the id; a different controller's chunk with the same
+            // id is a CONFLICT, not data — refusing beats interleaving.
+            match s.stream_owners.get(&chunk.transfer_id) {
+                Some(owner) if owner != controller_id => {
+                    return WireResult::Error(WireError::TransferConflict {
+                        transfer_id: chunk.transfer_id,
+                        holder: owner.clone(),
+                    });
+                }
+                None => {
+                    s.stream_owners
+                        .insert(chunk.transfer_id, controller_id.to_string());
+                }
+                _ => {}
+            }
             // Idempotent contiguous-append (same semantics as the spike).
             let contiguous = {
                 let entry = s.streams.entry(chunk.transfer_id).or_default();
