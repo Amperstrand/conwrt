@@ -17,7 +17,7 @@ Orchestrates the PROVEN flash route end-to-end, phase-gated:
 Every phase logs to LOGDIR; a phase failure stops the campaign (fail-closed).
 Flash-class operations (3/4/5) require --i-understand-this-flashes unless --rehearse.
 """
-import argparse, base64, hashlib, http.client, json, os, random, socket, subprocess, sys, threading, time
+import argparse, atexit, base64, hashlib, http.client, json, os, random, socket, subprocess, sys, threading, time
 
 LOG = print
 
@@ -126,11 +126,14 @@ class MockDevice(threading.Thread):
 MOCK_STOCK_PORT, MOCK_FENCE_PORT = 18080, 18069
 
 # ---------------------------------------------------------------- fence
-def arm_fence(image, bind, port, logdir, extra=()):
+def arm_fence(image, bind, port, logdir, extra=(), timeout=1800):
     sha = hashlib.sha256(open(image, "rb").read()).hexdigest()
     pinned = f"{image}#sha256:{sha}"
-    cmd = [sys.executable, FENCE, "--image", pinned, "--bind", bind, "--port", str(port), "--log-dir", logdir, *extra]
-    return subprocess.Popen(cmd, stdout=open(os.path.join(logdir, "fence.log"), "w"), stderr=subprocess.STDOUT)
+    cmd = [sys.executable, FENCE, "--image", pinned, "--bind", bind, "--port", str(port),
+           "--timeout", str(timeout), "--log-dir", logdir, *extra]
+    global _fence_proc
+    _fence_proc = subprocess.Popen(cmd, stdout=open(os.path.join(logdir, "fence.log"), "w"), stderr=subprocess.STDOUT)
+    return _fence_proc
 
 # ---------------------------------------------------------------- campaign
 def run_campaign(args):
@@ -143,6 +146,7 @@ def run_campaign(args):
         return ok
 
     image_sha = hashlib.sha256(open(args.image, "rb").read()).hexdigest()
+    fence = None
     phase(0, "stage", os.path.isfile(args.image),
           f"image={args.image} sha={image_sha[:16]}… fence={'mock' if args.rehearse else args.fence_bind}")
 
@@ -152,14 +156,22 @@ def run_campaign(args):
         stock_ip, factory_ip, openwrt_ip = "127.0.0.1", "127.0.0.1", "127.0.0.1"
         stock_port, factory_port = MOCK_STOCK_PORT, MOCK_STOCK_PORT
         fence = arm_fence(args.image, "127.0.0.1", MOCK_FENCE_PORT, logdir)
-        time.sleep(0.7)
+        time.sleep(1.5)
+        if fence.poll() is not None:
+            phase(0.4, "fence-alive", False, f"rehearsal fence exited rc={fence.returncode}")
     else:
         stock_ip, factory_ip, openwrt_ip = "192.168.0.1", "192.168.32.1", "192.168.1.1"
         stock_port = factory_port = 80
         fence = arm_fence(args.image, args.fence_bind, 69, logdir)
+        time.sleep(1.5)
+        if fence.poll() is not None:
+            phase(0.5, "fence-alive", False, f"fence exited rc={fence.returncode} (bind {args.fence_bind}:69 failed? port in use? address missing?)")
         phase(0.5, "hw-audit", wait_http(stock_ip, timeout=20),
               f"stock web at {stock_ip} reachable? (cable in a LAN port; unit powered)")
 
+    if not args.rehearse:
+        LOG("[pre-1] SPECIMEN + OWNERSHIP CHECK: confirm intended unit (MAC/serial)")
+        LOG("[pre-1] Verify no other lane/session owns this DUT (single-owner rule)")
     g = Goform(f"{stock_ip}:{stock_port}")
     ver = g.get_cmd("wa_inner_version,cr_version,RD")
     phase(1, "stock-login", "wa_inner_version" in ver and '"0"' in g.login(args.password),
@@ -192,9 +204,9 @@ def run_campaign(args):
         LOG("[phase 5:flash] reboot device (operator power-cycle) — fence is armed; fin packet is the oracle")
         fence.wait(timeout=args.fence_timeout)
         phase(5, "flash", fence.returncode == 0, f"fence exit={fence.returncode}")
+        LOG("[phase 6] POST-FLASH: run setup (seed key, set password, hostname, dhcp-off) at the device's default address")
 
     LOG(f"CAMPAIGN {'REHEARSAL ' if args.rehearse else ''}COMPLETE — logdir={logdir}")
-    fence.terminate()
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -208,10 +220,20 @@ def main():
     ap.add_argument("--trigger-hook")
     ap.add_argument("--i-understand-this-flashes", action="store_true")
     args = ap.parse_args()
-    if not args.rehearse and not args.i_understand_this_flashes and (not args.backup_hook or not args.trigger_hook):
-        ap.error("real campaign needs --backup-hook/--trigger-hook and --i-understand-this-flashes (or --rehearse)")
+    if not args.rehearse and not args.i_understand_this_flashes:
+        ap.error("real campaign requires --i-understand-this-flashes (or --rehearse)")
+    if not args.rehearse and (not args.backup_hook or not args.trigger_hook):
+        ap.error("real campaign needs --backup-hook and --trigger-hook (or --rehearse)")
     global FENCE; FENCE = os.path.join(os.path.dirname(__file__), "zte-blankdl-flashd.py")
+    global _fence_proc; _fence_proc = None
     run_campaign(args)
+
+_fence_proc = None
+def _cleanup_fence():
+    global _fence_proc
+    if _fence_proc and _fence_proc.poll() is None:
+        _fence_proc.terminate()
+atexit.register(_cleanup_fence)
 
 if __name__ == "__main__":
     main()
