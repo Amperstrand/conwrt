@@ -58,3 +58,36 @@ A single NO blocks the operation until resolved.
 16. Ledger row BEFORE firing (hypothesis, observer, reversibility), verdict + evidence
     after; close calls recorded as lessons in AGENTS.md with the incident that
     motivated them.
+
+## Config applies (2026-11-08 addendum — the "silent router" incident)
+17. Applying another lane's committed-but-unapplied uci is a FLASH-CLASS action:
+    audit every value first; apply + verify + hand off in one motion.
+18. A firewall UCI reset does NOT touch /etc/nftables.d/ or other rule-include
+    dirs — when an input-drop survives a reset, check the includes. (An include
+    that looks custom may be the stock template — read contents before declaring
+    root cause.) Runtime-injected rules (custom daemons at boot) defeat every
+    config-file reset; pristine-overlay wipe is the only cure for that class.
+19. **Interactive prompts defeat non-interactive rescue.** `firstboot` /
+    `factoryreset` asks "Are you sure? [N/y]"; run without `-y` from a script it
+    gets EOF, answers No, and exits 255 having wiped NOTHING — three "factory
+    resets" silently declined this way. Always pass the tool's non-interactive
+    flag (`factoryreset -y`), treat nonzero exits as failures, AND verify the
+    state actually changed (config files post-reset, pre-reboot). Proven fix:
+    `factoryreset -y` exits 0 and wipes; the failsafe manual primitive is
+    `rm -rf /overlay/upper/*` after mount_root.
+20. **Test rescue tooling before the incident** (a rescue script with an
+    unwritable log path silently disabled itself during a live recovery), and
+    **test both auth paths** after any credential change — raw `$6$` shadow
+    edits were silently rejected by the target's dropbear (it accepts its own
+    passwd-applet `$5$`); use the device's own tools for credential changes,
+    and verify with a REAL interactive-style login (sshpass can false-fail;
+    pexpect confirmed).
+21. Secrets through ssh: NEVER inline `$`-containing values (hashes!) in
+    double-quoted remote commands — shell expansion mangles them silently.
+    Bake into a script file and pipe via `ssh ... "sh -s" < file`.
+22. Species failsafe quirks (MF286D): entry = SINGLE press-release while the
+    blue status LED blinks (holding = U-Boot intercepts into silent state);
+    the port needs an unplug/replug LINK EVENT once in failsafe; failsafe
+    networking = 192.168.1.1, passwordless root, overlay via mount_root;
+    first boot after an overlay wipe may need one power cycle (dropbear
+    connection-reset window).
