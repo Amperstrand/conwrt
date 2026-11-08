@@ -88,6 +88,16 @@ pub enum WireError {
     UnknownLease(u64),
     /// The transfer id is unknown.
     UnknownTransfer(u64),
+    /// The transfer id is already claimed by a DIFFERENT controller
+    /// (#164 P1 4272448227): transfer ids are agent-global, and two
+    /// controllers picking the same id would silently interleave bytes
+    /// into one stream. First writer claims; others get this error.
+    TransferConflict {
+        /// The transfer id another controller already claims.
+        transfer_id: u64,
+        /// The claiming controller.
+        holder: String,
+    },
     /// Internal agent state error.
     Internal(String),
     /// Request sent before a successful handshake.

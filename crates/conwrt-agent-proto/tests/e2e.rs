@@ -332,3 +332,79 @@ async fn heartbeat_expiry_frees_lease_via_ticker() {
         }
     }
 }
+
+#[tokio::test]
+async fn transfer_claims_end_with_connection() {
+    // #164 P1 4272448227: transfer ids are agent-global. The guarantee
+    // boundary: no LIVE cross-controller interleave (sequential serving
+    // + the ownership map), while a takeover AFTER the owner's
+    // disconnect is the documented resume pattern. Here: a's bytes
+    // persist, b re-claims the id post-drop and completes the stream.
+    use conwrt_agent_proto::protocol::StreamChunk;
+
+    let addr = spawn_agent(vec![]).await;
+    let mut a = AgentClient::connect(&addr).await.unwrap();
+    a.handshake("controller-a").await.unwrap();
+    let ack = a
+        .send_chunk(StreamChunk {
+            transfer_id: 42,
+            offset: 0,
+            total: Some(2048),
+            data: vec![0xAA; 1024],
+        })
+        .await
+        .unwrap();
+    assert_eq!(ack.contiguous, 1024);
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Post-disconnect: the claim ended with a's connection; b re-claims
+    // (resume shape) and the PRIOR bytes persist — contiguous continues
+    // from 1024, not from 0.
+    let mut b = AgentClient::connect(&addr).await.unwrap();
+    b.handshake("controller-b").await.unwrap();
+    let st = b.stream_status(42).await.unwrap();
+    assert_eq!(st.contiguous, 1024, "a's bytes must survive the disconnect");
+    let ack2 = b
+        .send_chunk(StreamChunk {
+            transfer_id: 42,
+            offset: 1024,
+            total: None,
+            data: vec![0xBB; 1024],
+        })
+        .await
+        .unwrap();
+    assert_eq!(ack2.contiguous, 2048);
+    assert!(ack2.done);
+}
+
+#[tokio::test]
+async fn oversized_chunk_refused_client_side() {
+    // #164 P2 4272448213: chunks whose encoded frame exceeds the agent's
+    // 8192B COBS accumulator are dropped silently by the receiver — the
+    // controller now refuses them before the wire, naming the limit.
+    use conwrt_agent_proto::controller::ClientError;
+    use conwrt_agent_proto::protocol::StreamChunk;
+
+    let addr = spawn_agent(vec![]).await;
+    let mut c = AgentClient::connect(&addr).await.unwrap();
+    c.handshake("chunky").await.unwrap();
+    match c
+        .send_chunk(StreamChunk {
+            transfer_id: 7,
+            offset: 0,
+            total: None,
+            data: vec![0u8; 9000],
+        })
+        .await
+    {
+        Err(ClientError::ChunkTooLarge { len, max }) => {
+            assert_eq!(len, 9000);
+            assert_eq!(max, 8192 - 512);
+        }
+        other => panic!("expected ChunkTooLarge, got {other:?}"),
+    }
+    // the connection stays usable afterwards (no half-sent frame)
+    let st = c.stream_status(7).await.unwrap();
+    assert_eq!(st.contiguous, 0);
+}
