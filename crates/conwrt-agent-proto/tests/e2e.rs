@@ -215,3 +215,120 @@ async fn lease_survives_disconnect_and_denies_next_controller() {
         other => panic!("expected Denied with holder, got {other:?}"),
     }
 }
+
+// --- #164 P1 residuals: owner-checked release + the expiry ticker ---
+
+async fn spawn_agent_tuned(
+    capabilities: Vec<CapabilityInfo>,
+    heartbeat_ms: u32,
+    budget: u32,
+) -> String {
+    use conwrt_agent_proto::agent::run_agent_on;
+    use std::sync::{Arc, Mutex};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let state = Arc::new(Mutex::new(conwrt_agent_proto::agent::AgentState::default()));
+    let config = Arc::new(AgentConfig {
+        listen: addr.clone(),
+        capabilities,
+        heartbeat_ms,
+        heartbeat_budget: budget,
+        ..Default::default()
+    });
+    tokio::spawn(async move {
+        run_agent_on(listener, state, config).await;
+    });
+    addr
+}
+
+#[tokio::test]
+async fn lease_release_is_owner_checked() {
+    let addr = spawn_agent(vec![]).await;
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    let lease_id = match owner
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+
+    // The agent serves ONE connection at a time (per-connection state
+    // model) — the intruder gets the socket only after the owner drops
+    // it. The lease SURVIVES the disconnect (state outlives connections).
+    drop(owner);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // A DIFFERENT controller must not free it: the wire bool says false
+    // and the lease stays alive for the owner's reconnect.
+    let mut intruder = AgentClient::connect(&addr).await.unwrap();
+    intruder.handshake("controller-intruder").await.unwrap();
+    let stolen = intruder.release_lease(lease_id).await.unwrap();
+    assert!(
+        !stolen,
+        "a non-owning controller must not release the lease"
+    );
+    drop(intruder);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The owner reconnects: still holds the lease (heartbeat acks), and
+    // ITS release succeeds.
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    owner.heartbeat(lease_id).await.unwrap();
+    assert!(owner.release_lease(lease_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn heartbeat_expiry_frees_lease_via_ticker() {
+    // Before #164 P1 4272448155 the tick() never ran on a timer: budgets
+    // only moved on request traffic, and a silent controller's lease
+    // NEVER expired. With the ticker, a lease whose heartbeats stop is
+    // freed after budget x interval — the re-acquire GRANTS.
+    let addr = spawn_agent_tuned(vec![], 50, 2).await;
+    let mut client = AgentClient::connect(&addr).await.unwrap();
+    client.handshake("silent-controller").await.unwrap();
+    let first = match client
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+
+    // Go silent: budget 2 x 50 ms + slack. No heartbeats sent.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The same controller re-acquires: Granted (a NEW id) — the expired
+    // lease no longer blocks, which is only true if the ticker ran.
+    match client
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => {
+            assert_ne!(
+                lease_id, first,
+                "expiry must free the old lease for a fresh grant"
+            );
+        }
+        LeaseResponse::Denied { holder } => {
+            panic!("lease {first} still held by {holder:?}: the expiry ticker did not run");
+        }
+    }
+}

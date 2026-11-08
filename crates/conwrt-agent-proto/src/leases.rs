@@ -37,6 +37,10 @@ pub enum LeaseDenied {
     HeldBy(String),
     /// This controller already holds it (re-acquire not supported).
     AlreadyHeld,
+    /// Release attempted by a controller that does not own the lease
+    /// (#164 P1 4272448192 — release must be owner-restricted, exactly
+    /// like the shell modem-lane's owner-checked release).
+    NotOwner(String),
 }
 
 /// Errors from lease operations.
@@ -110,7 +114,26 @@ impl LeaseTable {
         Ok(())
     }
 
-    /// Release a lease (controller-initiated).
+    /// Release a lease (controller-initiated), OWNER-CHECKED: only the
+    /// controller that acquired it may free it (#164 P1 4272448192).
+    pub fn release_by(&mut self, lease_id: u64, controller: &str) -> Result<Lease, LeaseError> {
+        let lease = self
+            .leases
+            .get(&lease_id)
+            .ok_or(LeaseError::UnknownLease(lease_id))?;
+        if lease.controller != controller {
+            return Err(LeaseError::Denied(LeaseDenied::NotOwner(
+                lease.controller.clone(),
+            )));
+        }
+        self.leases
+            .remove(&lease_id)
+            .ok_or(LeaseError::UnknownLease(lease_id))
+    }
+
+    /// Release a lease with no owner check — the SYSTEM path only
+    /// (expiry/supervisor/admin). Controller requests must use
+    /// [`LeaseTable::release_by`].
     pub fn release(&mut self, lease_id: u64) -> Result<Lease, LeaseError> {
         self.leases
             .remove(&lease_id)
@@ -237,6 +260,24 @@ mod tests {
         let expired = t.tick();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].lease_id, id);
+    }
+
+    #[test]
+    fn release_by_owner_restriction() {
+        let mut t = LeaseTable::new();
+        let id = t
+            .acquire("uart0", "laptop-a", true, DisconnectPolicy::Abort, 3)
+            .unwrap();
+        // a DIFFERENT controller must not free it
+        match t.release_by(id, "laptop-b") {
+            Err(LeaseError::Denied(LeaseDenied::NotOwner(h))) => assert_eq!(h, "laptop-a"),
+            other => panic!("expected NotOwner, got {other:?}"),
+        }
+        // the lease survived the refused release
+        assert!(t.get(id).is_some());
+        // the owner CAN free it
+        assert!(t.release_by(id, "laptop-a").is_ok());
+        assert!(t.get(id).is_none());
     }
 
     #[test]

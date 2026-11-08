@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::dispatch::AgentEvent;
 use crate::dispatch::{WireEndpoint, WireFrame, WireResult, decode_frame, encode_frame};
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
@@ -56,6 +57,11 @@ pub struct AgentState {
     pub streams: BTreeMap<u64, Vec<u8>>,
     /// Expected total sizes per transfer.
     pub stream_totals: BTreeMap<u64, u64>,
+    /// Expiry events produced by the heartbeat ticker, drained by the
+    /// active connection after each response (#164 P1 4272448155 —
+    /// before the ticker existed, lease budgets NEVER decremented at
+    /// runtime: a dead controller's lease outlived the agent).
+    pub pending_events: Vec<crate::protocol::LeaseExpired>,
 }
 
 /// Errors from running the agent.
@@ -95,6 +101,29 @@ pub async fn run_agent_on(
     state: Arc<Mutex<AgentState>>,
     config: Arc<AgentConfig>,
 ) {
+    // Heartbeat ticker (#164 P1 4272448155): lease budgets decrement on
+    // a TIMER, not on request traffic — expiry is what frees a dead
+    // controller's lease. Events land in pending_events; the active
+    // connection drains them after each response it sends.
+    {
+        let state = Arc::clone(&state);
+        let period = core::time::Duration::from_millis(config.heartbeat_ms.max(1).into());
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period);
+            loop {
+                ticker.tick().await;
+                let expired = {
+                    let mut s = state.lock().unwrap();
+                    s.leases.tick()
+                };
+                if !expired.is_empty() {
+                    let mut s = state.lock().unwrap();
+                    s.pending_events.extend(expired);
+                }
+            }
+        });
+    }
+
     loop {
         let (socket, _peer) = match listener.accept().await {
             Ok(x) => x,
@@ -148,6 +177,15 @@ async fn handle_connection(
             handshaked = true;
         }
         send_response(&mut sender, id, result).await?;
+        // Deliver any expiry events the ticker produced since the last
+        // frame (unsolicited, one event frame each).
+        let pending = std::mem::take(&mut state.lock().unwrap().pending_events);
+        for ev in pending {
+            let frame = WireFrame::Event(AgentEvent::LeaseExpired(ev));
+            sender
+                .send(&encode_frame(&frame).map_err(std::io::Error::other)?)
+                .await?;
+        }
     }
     Ok(())
 }
@@ -209,7 +247,10 @@ async fn dispatch_request(
         }
         WireEndpoint::LeaseRelease { lease_id } => {
             let mut s = state.lock().unwrap();
-            WireResult::LeaseReleased(s.leases.release(lease_id).is_ok())
+            // Owner-checked (#164 P1 4272448192): a controller may only
+            // free its OWN lease; the refused case reads as Released(false)
+            // (the wire bool carries no reason — the controller can query).
+            WireResult::LeaseReleased(s.leases.release_by(lease_id, controller_id).is_ok())
         }
         WireEndpoint::Heartbeat(hb) => {
             let mut s = state.lock().unwrap();
