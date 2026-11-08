@@ -69,6 +69,15 @@ registry + bench evidence, not here.
   AT and QMI UIM ("Access denied" ≠ "not found" — the applet exists on the card
   but the modem denies access). AT+CSIM: "not supported."
 - eSIM profile management IN-DEVICE: **not possible** on this firmware.
+- AT CCHO/CGLA/CCHC/CSIM: commands IMPLEMENTED in baseband (response strings in
+  firmware binary) but blocked by carrier policy. No community workaround for
+  MF286D. Same Qualcomm AMSS-level block (QMI error 82) seen on other carrier
+  modems (qmi-sim-bridge project). AT+CCHO="" (empty AID) trick from CellPort
+  (Quectel EG25-G) worth testing — may bypass if block is at AID-comparison level.
+- ifd-modemifd QMI UIM backend: would work for SIM file ops (pySim/OpenSC) but
+  NOT for ISD-R (block is upstream). See ifd-modemifd issue #10 for the
+  CCHO/CGLA fallback design.
+- MF286D hardware: physical 2FF SIM slot only, NO embedded/soldered eUICC.
 - Alternatives: USB CCID reader + lpac ipq40xx artifact (deterministic, no
   firmware risk), or a device without the carrier lock (bench comparison).
 - Router firmware B10/B12: CVE-2023-25649 live (close_all_led exec).
