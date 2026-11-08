@@ -163,6 +163,47 @@ working uplink with a dead one and kill the session mid-task.
 4. DHCP timeouts and "connected, no internet" states on the AI host are an
    immediate abort: restore the last working connection before continuing.
 
+## Brick-Zone Audit — never flash another SoC's manifest; kill auto-reboot loops first (2026-11-08)
+
+Motivating incidents (MF286D campaign, issue #621; full audit in the bench evidence,
+EXP-022): **four lockout-class close calls, all survived by luck or stalling, not by
+design.**
+
+1. **Wrong-SoC manifest nearly flashed**: the community update package's manifests
+   (`partition_nand.xml`, `zte_dload_boot.xml`, `partition.mbn`) describe the *modem*
+   SoC's NOR chain (SBL/TZ/RPM, mdm9650), not the router's actual NOR (live: SBL1/
+   MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/APPSBL — no TZ/RPM). The vendor Windows tool with
+   "update boot" enabled would have written a wrong-SoC partition set into the router
+   NOR — brick class, no serial. The tool stalling on adapter enumeration was the only
+   thing that prevented it.
+2. **Armed auto-reboot loop**: an unattended watcher fired factory-mode-Open + REBOOT
+   whenever the device appeared in normal mode. Left alive during another lane's flash
+   it means an interrupted NAND write mid-flight. It stayed "inert" only because the
+   device never stabilized.
+3. **Persisted boot-mode flag**: the factory-mode nvram flag persists across reboots;
+   the device cycled normal↔factory every ~40 s for hours. One timing coincidence away
+   from an interrupted write into a slot that was being modified.
+4. **Un-enumerated destructive variant**: the bootloader's mode-switch surface includes
+   a `clean` variant that wipes the boot-handoff area (ZTE's own strings: "extremely
+   dangerous"). Multiple lanes probed that handler family blind over days; nobody fired
+   `clean` — partly discipline, partly luck.
+
+**Rules** (enforced by `prompts/brick-risk-audit.md`, run before any flash/bootloader
+write/destructive goform):
+
+- **Verify the image's partition set against the DEVICE'S OWN live partition table**,
+  never against the vendor package manifest. A mismatched chain = wrong SoC = STOP.
+- **NOR/boot-chain partitions are never in the write set** without an explicit human
+  brick-acknowledgment; on no-serial devices treat them as unrecoverable.
+- **Kill and verify-dead every auto-retry/auto-reboot watcher before a write window**;
+  one device owner for the whole window.
+- **Enumerate destructive variants of a surface from disassembly BEFORE probing it.**
+- **Know the two-slot/fallback topology and write down the recovery ladder before
+  starting** (recovery slot → bootloader auto-TFTP → programmer → serial), with each
+  door's preconditions. An empty rung = the operation is not idiot-proof = STOP.
+- **Boot-mode flags are write-set members too**: list their post-operation value and
+  the return path (including "the flag lives in a partition we hold a backup of").
+
 ## Related Projects
 
 - **realtek-poe fork**: [Amperstrand/realtek-poe](https://github.com/Amperstrand/realtek-poe) — AI experimentation workspace for PoE research on OpenWrt switches. All AI work happens on the `ai-experiments` branch. `main` is a pristine upstream mirror. **Never interact with the upstream `Hurricos/realtek-poe` repo** — only humans may create issues or submit PRs there.
