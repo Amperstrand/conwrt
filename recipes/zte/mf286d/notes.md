@@ -102,20 +102,26 @@ real IPs while QMI WDS reports "Out of call" — the modem's data engine
 runs sessions external QMI cannot see/stop/start. Stock firmware works
 with B14 → host-control problem, not radio.
 
-House hypothesis (unproven): B14 flips data-path management to
-modem-internal autoconnect via NV — the same class of runtime-policy
-behavior as the B12 ISD-R block, which we bypassed live on 2026-11-09
-(partial-AID channel open, see evidence ledger). ARCHITECTURE NOTE
-(2026-11-09, live-proven): the B12/B14 modem is **Qualcomm MDM9650**
-(soc_id 283, msm baseband, kernel 3.18.31) — the earlier static RE target
-(B02 kit FBF) is the older **Marvell PXA1826** generation; conclusions
-from that artifact do NOT transfer to B12/B14 (firmware-matrix updated by
-the RE session). The B14 `.up` NV items are Qualcomm NV items.
-Corroborating the "policy-is-data" pattern: the router caches modem
-identity in NV (downgraded units keep reporting B14 until factory
-defaults restore re-reads it), and ADB survives on B14-era units
-(`adb shell /usr/bin/qmi_shutdown_modem` was a community fix attempt) —
-the live-diagnosis door is open for any B14 unit.
+**Modem architecture (live-proven via ADB root, 2026-11-09)**: B12/B14
+units carry a **Qualcomm MDM9650** (soc_id 283, msm baseband, kernel
+3.18.31) — the B02-kit FBF used for early static RE is the older
+**Marvell PXA1826** generation and its conclusions do NOT transfer.
+
+**Spike verdict (2026-11-09, artifacts in `recipes/zte/mf286d/b14/`)**: the
+B14 `.up` package was acquired, unpacked, and parsed. It **rewrites the
+modem's own software**: full AMSS baseband re-delta (163 files) **plus the
+modem-Linux data-path stack** — `dsi_config.xml` (likely NEW file, 1082 B),
+`libqmi_cci/csi/sap`, `mcm_ril_service`, `zte_adapter_ppp/cfg`,
+`libztecmdq` — plus **119 MCFG carrier-policy files** (Telia patched) and
+direct modem-EFS writes. The full 30-item NV script contains **no
+autoconnect/QMI item** (the forum "NV script breaks QMI" shorthand is
+incomplete): LTE-only RAT lock with Nordic bands, datastall watchdog,
+version identity in NV. Hypotheses: **H2 data-path firmware change =
+STRONG**, H3 carrier/MCFG = moderate-strong, H1 NV-autoconnect = refuted
+in its strong form. Payloads use a custom ZTE delta (LZMA-props prologue
+`5D00000200002114C48AF63F…`, not plain LZMA) — decode = experiment E1 for
+a future agent; handoff kit: `FINDINGS.md` + `NEXT-AGENT-PROMPT.md` in
+`recipes/zte/mf286d/b14/`, roadmap in `prompts/mf286d-b14-03-continuation.md`.
 
 Downgrade (community-proven, painful): ZTE Windows framework + stock
 firmware first; or B12 mtd8/9 images + factory defaults (NV-cache gotcha).

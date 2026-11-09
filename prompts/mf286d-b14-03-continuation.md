@@ -38,6 +38,16 @@ this thread is reverse engineering + simulation until one arrives.
 
 ## Hypotheses (ranked; update with evidence, don't assume)
 
+> **VERDICTS 2026-11-09 (spike, see `recipes/zte/mf286d/b14/FINDINGS.md`)**:
+> H2 STRONG (data-path stack shipped in the delta, `dsi_config.xml` likely
+> NEW), H3 moderate-strong (119 MCFG files + EFS writes), H1 **refuted in
+> its strong form** (full 30-item NV script has NO autoconnect/QMI item).
+> NV script real contents: LTE-only RAT lock (Nordic bands B1/B3/B7/B20/
+> B28/B38), datastall watchdog, version-identity-in-NV (mechanically
+> explains the eko.one.pl stale-version reports). Delta payloads use a
+> custom ZTE LZMA-variant encoding (prologue `5D00000200002114C48AF63F…`) —
+> E1 decoding is the gateway experiment.
+
 - **H2 — firmware data-path stack change** (NEW, strongest): B14 ships
   changed data-path components (`dsi_config.xml` = Qualcomm DSI data-call
   config; `libqmi_*` = the modem's own QMI framework; `mcm_ril_service`,
