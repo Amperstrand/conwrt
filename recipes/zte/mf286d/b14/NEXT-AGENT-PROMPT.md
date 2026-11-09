@@ -28,27 +28,28 @@ BASELINE FACTS (do not re-derive, do not contradict):
    Marvell — NEVER baseline against it. Live B12 modem = Qualcomm MDM9650.
 6. No B12 modem flash dump exists yet.
 
-TASKS (priority order):
-1. **E1 — decode the ZFD .p stream** (the 17-byte prologue 5D 000002 0000 2114
-   C48AF63F 042FF85A 93 then divergent bytes; LZMA props but not plain LZMA).
-   Find the delta-apply engine inside kit images (`~/mf286d-work/kit/UPDATE/
-   mdm9650-*.ubifs/ubi`, `mdm-image-mdm9650.ubifs`) or router dumps
-   (`~/mf286d-re/fw/nordic-B14/mtd8.bin`) — mount/unsquash, locate the updater
-   binary (strings: "ZFD01", "NORMDIFF", "fsdelta.bin"), reverse the hunk
-   format, write a standalone applier. Verify on Ver_Info.txt.p (178 B target).
+TASKS (priority order — NOTE: ZFD decode is SOLVED, see FINDINGS.md §S9 +
+zfd_decode.py; decoded payloads in /tmp/opencode/b14/decoded2/, key files in
+evidence/b14/decoded/):
+0. **E9 — Telia MCFG, no baseline needed**: clone
+   `github.com/sbaresearch/mbn-mcfg-tools`, run `mbn-tool -e` on
+   `decoded2/raw__modem.mld_..._EU_Telia_MF297D_Telia_SWE_mcfg_sw.mbn.p.payload`
+   (ships FULL-FILE in the B14 package). Read Data_Profiles + policyman
+   carrier_policy.xml for Telia data-call policy. Update H3.
+1. **E8 — qmi_ip_multiclient provenance (H8, top hypothesis)**: confirm
+   whether B12 ran `/usr/bin/qmi_ip_multiclient` with `/etc/qmi_ip_cfg.xml`
+   (`lan_clients_allowed=3` in B14; 3 == the PDP contexts users see). Check
+   manifests/system-scan.txt, then the D4 dump when it exists.
 2. **D4 support — B12 modem baseline**: if the RE session has produced the mtd9
-   (modem) + mtd2 (efs2) dumps by now, use them as delta bases; else check
-   `~/mf286d-re/` for new arrivals. Kit MDM9650 images are a fallback base of
-   unverified provenance — verify version strings before trusting.
-3. **E2/E3 — diff the policy payloads**: dsi_config.xml old-vs-new; Telia_SWE
-   mcfg_sw.mbn old-vs-new (MCFG tooling leads in /tmp/opencode/b14/research/
-   REPORT.md if present, else research fresh: "mcfg_sw.mbn extract tool").
-   Classify every diff item: data-path/PDP/autoconnect/QMI-relevant or not.
-4. **Update FINDINGS.md** hypothesis verdicts (H2 firmware-stack vs H3
-   carrier/EFS policy vs H1-NV — H1 strong form already refuted) and re-rank.
-5. If a B14 bench unit becomes available: run the D1–D3 live probes listed in
-   FINDINGS.md §4 (adb NV/EFS dump before/after factory reset; QMI WDS trace;
-   selective revert of dsi_config/MCFG/EFS).
+   (modem) + mtd2 (efs2) dumps by now, use them as bsdiff bases; else check
+   `~/mf286d-re/` for new arrivals. Then **E10**: LZMA-decode all 642 bsdiffs
+   and `bspatch` them vs B12 → full B14 modem-Linux tree → wholesale diff.
+3. **E11 (bench, if a B14 unit appears)**: `adb shell` — kill/reconfigure
+   qmi_ip_multiclient (single_client mode), retest uqmi/wwand QMI WDS.
+   Potential fix-without-firmware-change; highest community value.
+4. **Update FINDINGS.md** hypothesis verdicts (H8 bridge > H2 stack > H3
+   carrier; H1-NV strong form refuted) and re-rank.
+5. Report to the overseer: `herdr agent prompt w1:p5H '<summary>'`.
 6. Report to the overseer: `herdr agent prompt w1:p5H '<summary>'`.
 
 CONSTRAINTS REMINDERS: species-level facts only in anything community-facing;

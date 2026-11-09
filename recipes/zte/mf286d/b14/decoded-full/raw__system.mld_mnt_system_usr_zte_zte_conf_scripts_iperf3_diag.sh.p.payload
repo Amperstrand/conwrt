@@ -1,0 +1,100 @@
+#!/bin/sh
+#msg is 0x1673
+ZTE_ROUTER_MSG_CPE_Iperf3=5747
+exit_iperf3_diag()
+{
+	cfg set tr069_iperf3_enable=0
+	cfg set tr069_iperf3_status=finished
+	local lasttime=`date '+%d/%m/%Y %H:%M'`
+	if [ "$reverse" == "1" ]; then
+		cfg set tr069_iperf3_downlinklast="$lasttime"
+	else
+		cfg set tr069_iperf3_uplinklast="$lasttime"
+	fi
+	router_msg tr098 $ZTE_ROUTER_MSG_CPE_Iperf3 iperf3done
+
+	#test done
+	if [ "$trafficblock" == "1" ]; then
+		echo 1 > /proc/sys/net/ipv4/ip_forward
+	fi
+
+	exit 0
+}
+#clear old result
+killall -9 iperf3
+rm -f /tmp/iperf3result
+cfg set tr069_iperf3_uplinkspeed=
+cfg set tr069_iperf3_downlinkspeed=
+cfg set tr069_iperf3_uplinklast=
+cfg set tr069_iperf3_downlinklast=
+cfg set tr069_iperf3_status=unfinished
+
+#prepare arguments
+other_cmd=""
+server=`cfg get tr069_iperf3_serveraddr`
+port=`cfg get tr069_iperf3_serverport`
+timeout=`cfg get tr069_iperf3_timeout`
+parallel=`cfg get tr069_iperf3_parallel`
+reverse=`cfg get tr069_iperf3_reverse`
+omit=`cfg get tr069_iperf3_omit`
+omitnum=`cfg get tr069_iperf3_omitnum`
+trafficblock=`cfg get tr069_iperf3_trafficblock`
+proto=`cfg get tr069_iperf3_clientProtocol`
+
+if [ "$trafficblock" == "1" ]; then
+	echo 0 > /proc/sys/net/ipv4/ip_forward
+fi
+if [ "$server" == "" ]; then
+	exit_iperf3_diag
+fi
+if [ "$port" == "" ]; then
+	port=5201
+fi
+if [ "$timeout" == "" ]; then
+	timeout=10
+fi
+if [ "$parallel" -gt "0" ]; then
+	other_cmd="$other_cmd -P $parallel"
+fi
+if [ "$reverse" == "1" ]; then
+	other_cmd="$other_cmd -R"
+fi
+if [ "$omit" == "1" -a "$omitnum" -gt "0" ]; then
+	other_cmd="$other_cmd -O $omitnum"
+fi
+if [ "$proto" == "udp" ]; then
+	iperf3 -u -i 1 -c $server -p $port -t $timeout $other_cmd > /tmp/iperf3result
+else
+	iperf3 -i 1 -c $server -p $port -t $timeout $other_cmd > /tmp/iperf3result
+fi
+
+
+
+#parse result and restore
+iperfdone=`cat /tmp/iperf3result | grep "iperf Done."`
+if [ "$iperfdone" = "" ]; then # test failed
+	exit_iperf3_diag
+else # test succeed
+	if [ "$reverse" = "1" ]; then
+		parallel=`cat /tmp/iperf3result | grep receiver | wc -l`
+		if [ "$parallel" == "1" ]; then
+			speeddata=`cat /tmp/iperf3result | grep receiver | awk 'NR==1 {print $7}'`
+		else
+			speeddata=`cat /tmp/iperf3result | grep SUM | grep receiver | awk 'NR==1 {print $6}'`
+		fi
+		unit=`cat /tmp/iperf3result | grep receiver | awk 'NR==1 {print $8}'`
+		downlinkspeed=$speeddata$unit
+		cfg set tr069_iperf3_downlinkspeed=$downlinkspeed
+	else
+		parallel=`cat /tmp/iperf3result | grep sender | wc -l`
+		if [ "$parallel" == "1" ]; then
+			speeddata=`cat /tmp/iperf3result | grep sender | awk 'NR==1 {print $7}'`
+		else
+			speeddata=`cat /tmp/iperf3result | grep SUM | grep sender | awk 'NR==1 {print $6}'`
+		fi
+		unit=`cat /tmp/iperf3result | grep sender | awk 'NR==1 {print $8}'`
+		uplinkspeed=$speeddata$unit
+		cfg set tr069_iperf3_uplinkspeed=$uplinkspeed
+	fi
+	exit_iperf3_diag
+fi

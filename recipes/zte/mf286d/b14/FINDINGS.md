@@ -165,7 +165,8 @@ Under `~/mf286d-work/evidence/b14/`:
 | `FINDINGS.md` | this document |
 | `NEXT-AGENT-PROMPT.md` | ready-to-run continuation prompt |
 
-Under `/tmp/opencode/b14/` (volatile — copy before wipe):
+Under `/tmp/opencode/b14/` (was volatile during the spike — **now persisted,
+see below**):
 | path | what |
 |---|---|
 | `modem-payloads/*.payload`, `system-payloads/*.payload` | 1,169 raw per-file `.p` payloads |
@@ -173,6 +174,21 @@ Under `/tmp/opencode/b14/` (volatile — copy before wipe):
 | `wwand-pr85-reply-draft.md` | DRAFT reply for ddimension/wwand PR #85 — **needs human approval, do not post** |
 | `session-input.md` | bullet input for the PR draft |
 | `research/REPORT.md` | background research subagent output (MCFG tooling, dsi_config, community downgrade state) |
+
+**Persistence (2026-11-09 shutdown):** everything durable now lives in the
+conwrt repo, `recipes/zte/mf286d/b14/` (branch `mf286d-b14/feat`):
+- `manifests/`, `research-REPORT.md`, `decoded/` (6 key files),
+  `decoded-full/` (all 230 raw full-file decodes, 4.4 MB),
+  `drafts/wwand-pr85-reply-draft.md` (DO-NOT-POST banner intact) +
+  `drafts/session-input.md`, plus all scripts and docs.
+- Binaries (`.up`, `unpacked/`, the 642 bsdiff payloads) are intentionally NOT
+  committed (repo convention); they are fully REGENERABLE:
+  1. re-download the `.up` from the public ZTE DMS URL (S1), verify sha256
+     `7df293bd…`;
+  2. `unzip` → `python3 parse_delta.py unpacked/delta.package unpacked/mld`;
+  3. `python3 scan_zfd.py unpacked/mld/{modem,system}.mld <outdir>`;
+  4. `python3 zfd_decode.py` (or FINDINGS §S9 spec) on each `.payload`.
+  Bench-evidence originals remain at `~/mf286d-work/evidence/b14/` (59 MB).
 
 ---
 
@@ -277,3 +293,90 @@ mechanism (NV/EFS persistence) that explains post-flash version identity and
 
 ## 6. Continuation
 See `NEXT-AGENT-PROMPT.md` — ready-to-run prompt for the next session.
+
+---
+
+# UPDATE — extension window (2026-11-09, +15 min): ZFD FORMAT CRACKED, H8 FOUND
+
+## S9. The ZFD `.p` payload codec is DECODED (was S7 blocker)
+Empirically cracked (and independently confirmed by the research subagent —
+no public prior art exists). Payload layout after `name+NUL`:
+```
+[BE-u32 comp_len][BE-u32 uncomp_size][5B LZMA1 props: 5D 00 00 02 00 (=128 KiB dict)]
+[raw LZMA1 stream, NO size field, NO end marker]  → decode = synth header
+  b"\x5d\x00\x00\x02\x00" + pack("<Q", uncomp_size) + stream[5:]   (FORMAT_ALONE)
+```
+Stream decodes to either **BSDIFF40 patch** (642 records — need B12 base +
+`bspatch`) or **FULL NEW FILE** (230 records — readable NOW).
+Reference decoder: `zfd_decode.py` (evidence/b14/ + research/).
+All 872 decodable payloads: `/tmp/opencode/b14/decoded2/` (raw__*/bsdiff__*).
+Key decoded files persisted in `evidence/b14/decoded/`.
+The earlier "constant 17-byte prologue" was just LZMA of the shared
+`BSDIFF40` magic — not encryption.
+
+## S10. NEW EVIDENCE — the multi-client QMI bridge (H8, see below)
+Raw (new/wholesale-replaced) files extracted from system.mld:
+- **`/mnt/system/etc/qmi_ip_cfg.xml`** (evidence/b14/decoded/qmi_ip_cfg.xml.B14):
+  `<mode>multi_client</mode>`, `single_client_udp_port 7788`,
+  **`<lan_clients_allowed> 3 </lan_clients_allowed>`**.
+- **`/mnt/system/etc/init.d/start_stop_qmi_ip_multiclient`** (decoded/*.B14.sh):
+  starts `/usr/bin/qmi_ip_multiclient /etc/qmi_ip_cfg.xml`.
+- `data-init`, `netmgr_config.xml` (`qmi_dpm_enabled=0`, rmnet maps),
+  `qmi_shutdown_modemd`, `modem-shutdown`, `rcS-zte-before/after-modem` — all raw.
+- `dsi_config.xml` (25,421 B, fully decoded): **stock Qualcomm DSI config,
+  38 targets, NO ZTE-specific data-call knobs** → dsi_config itself is
+  exonerated; it was replaced only because it ships with the stack refresh.
+
+## S11. MCFG tooling + no-base-needed sibling (from research subagent)
+- `mcfg_sw.mbn` = ELF/MBN wrapping proprietary MCFG TLV segment. Open tools:
+  `github.com/sbaresearch/mbn-mcfg-tools` (`mbn-tool -e`, best docs),
+  `github.com/Biktorgj/mcfg_tools`, `github.com/fenrir-naru/mbn_utils`.
+  Policy contents: `Data_Profiles/Profile*.bin` (WDS/APN/auth),
+  `policyman/carrier_policy.xml`, `mmode/*` NV.
+- **`EU/Telia/MF297D/Telia_SWE/mcfg_sw.mbn` ships FULL-FILE** in our package
+  (raw, in decoded2/) — the MF286D's own Telia_SWE mcfg is a bsdiff, but the
+  MF297D sibling needs no baseline → extract it with mbn-tool NOW to read
+  Telia carrier data-call policy of this generation.
+- Community downgrade path (eko) fully documented in `research-REPORT.md`
+  §4: mtd8/9 reflash → **factory reset required to clear NV-cached modem
+  version** → Framework trick → `AT+FOTACTR` stepwise to B12; "Invalid
+  selected version" pitfall noted.
+
+## HYPOTHESES — updated ranking (supersedes §3)
+
+### H8 — qmi_ip_multiclient multi-client QMI bridge (NEW, TOP TIER)
+B14 ships/enables Qualcomm's `qmi_ip_multiclient` daemon + `multi_client`
+config (`lan_clients_allowed=3`). This daemon holds its OWN QMI WDS clients
+and brings up data calls on behalf of LAN clients — the modem's data engine
+then shows exactly the observed symptom: **three live PDP contexts** external
+QMI WDS cannot see/stop (`stop 0xffffffff` → "No effect"), start-network
+conflicts → "Unknown error". Stock fw coordinates with it; OpenWrt doesn't.
+- For: qmi_ip_cfg.xml raw-new + init script raw-new in B14; `3` == the 3 PDP
+  contexts in the wild report; mechanically explains every symptom including
+  "Out of call" while CGPADDR shows real IPs.
+- Against: must confirm B12 did NOT run the same daemon (check B12 modem
+  system dump when D4 lands — or qmi_ip_multiclient binary presence/version
+  in bsdiff list: `usr/bin/qmi_ip_multiclient` — see manifests/system-scan.txt).
+- Test: E8 below.
+
+### H2 — firmware data-path stack change (STRONG, now mostly = H8's substrate)
+Unchanged, but dsi_config.xml specifically is exonerated (stock QC content).
+Remaining suspects: `libdsi_netctrl.so`, `libqmi_*`, `mcm_ril_service`,
+`qmi_ip_multiclient` binary itself, AMSS segments b08/b10/b11/b15/b19.
+
+### H3 — carrier-policy via MCFG (MODERATE–STRONG, now actionable)
+E9 below (mf297d Telia sibling needs no baseline).
+
+### H1 — NV-script autoconnect (REFUTED, strong form) — unchanged.
+
+## NEW EXPERIMENTS (append to §4 table)
+| # | experiment | how | expected | cost |
+|---|---|---|---|---|
+| E8 | qmi_ip_multiclient provenance | Was the daemon present in B12? Check manifests, then B12 modem system dump (D4) for `/usr/bin/qmi_ip_multiclient` + `/etc/qmi_ip_cfg.xml` old content; also strings the bsdiff for the binary if listed. | H8: absent-or-different in B12; `lan_clients_allowed` newly 3 | 1–2 h after D4 |
+| E9 | Telia MCFG extraction (no base needed) | `git clone github.com/sbaresearch/mbn-mcfg-tools`; `mbn-tool -e` on decoded2/raw__*Telia_MF297D_Telia_SWE_mcfg_sw.mbn*; read Data_Profiles + policyman/carrier_policy.xml. | H3: data-profile/policy deltas incl. autoconnect-relevant settings | 2–3 h, NO hardware |
+| E10 | bsdiff mass-apply | Once D4 dump exists: LZMA-decode all 642 bsdiffs, `bspatch` vs B12 files → full B14 modem-Linux tree → wholesale diff. | Complete B12→B14 changelog with content | 0.5 day after D4 |
+| E11 | qmi_ip_cfg live test | On B14 bench unit: `adb shell` kill qmi_ip_multiclient / set mode single_client, restart, retest uqmi/wwand. | H8: QMI WDS starts working → direct fix candidate WITHOUT firmware change | bench hour |
+
+**Fix-without-firmware-change prospect (the PR #85 angle): if H8 holds, the
+"fix" for OpenWrt users may be as small as disabling/reconfiguring
+qmi_ip_multiclient on the modem via ADB — worth E11 before any downgrade.**

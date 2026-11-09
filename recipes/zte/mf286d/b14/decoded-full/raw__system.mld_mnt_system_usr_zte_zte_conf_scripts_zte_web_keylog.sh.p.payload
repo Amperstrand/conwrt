@@ -1,0 +1,38 @@
+#! /bin/sh
+# zte_web_keylog.sh show log messages according to parameter
+#$1 is filter1, $2 is filter2
+
+syslog_file_path="/logfs/key.log"
+
+if [ ! -f  $syslog_file_path ]; then
+ syslog_file_path="/tmp/key.log"
+fi 
+keylog_messages_tmp="/var/log/keylog_messages_tmp"
+restore_flag="\-\-\-\!\&\*\*\*\-\-\-device\_reset\-\-\-\*\*\*\&\!\-\-\-"
+`cat $syslog_file_path |grep "$restore_flag\|\[all\]\|\[user\]\|\[system\]\|\[security\]\|\[warning\]\|\[notice\]\|\[info\]" > $keylog_messages_tmp`
+restore_flag_line=`cat $keylog_messages_tmp |grep "$restore_flag" -n |tail -1|cut -d ":" -f 1`
+if [ "$restore_flag_line" ];then
+	echo "web line[$restore_flag_line]"
+	if [ "$1" ];then
+	  if [ "$2" ];then
+		tail -n +$restore_flag_line  $keylog_messages_tmp |grep "\[$1\]" |grep "\[$2\]" > /var/log/keylog_messages
+	  else
+		tail -n +$restore_flag_line  $keylog_messages_tmp |grep "\[$1\]"  > /var/log/keylog_messages
+	  fi
+	else
+	  tail -n +$(($restore_flag_line+1))  $keylog_messages_tmp > /var/log/keylog_messages
+	fi
+else
+	echo "web no line flag"
+	if [ "$1" ];then
+	  if [ "$2" ];then
+		cat $keylog_messages_tmp |grep "\[$1\]" |grep "\[$2\]" > /var/log/keylog_messages
+	  else
+		cat $keylog_messages_tmp |grep "\[$1\]"  > /var/log/keylog_messages
+	  fi
+	else
+	  cat $keylog_messages_tmp > /var/log/keylog_messages
+	fi
+
+fi	
+
