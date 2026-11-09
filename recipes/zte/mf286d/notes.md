@@ -164,6 +164,24 @@ delta-finder gist dream-svg/f0ff6b85. Follow-ups:
 `prompts/mf286d-b14-01-dig.md` (root-cause dig),
 `prompts/mf286d-b14-02-downgrade-automation.md` (conwrt-native downgrade).
 
+## Modem DM/DIAG channel — THE management surface (2026-11-09)
+
+**Open and fully working** (see `modem/DM-PROTOCOL.md` for the protocol
+and `modem/dm_*.c` for tooling): router `/dev/ttyUSB0` speaks DM with a
+**nonstandard CRC variant** (crcmod 0x11021/init0/xorFFFF; wrong-CRC
+requests get `0x13 BAD_CMD`+echo — looks like lockdown, isn't).
+Confirmed commands: VERNO (build date), DIAG_VER, **EXT_BUILD
+(MPSS.AT.2.5.1-00628-9655_GEN…)**, and **NV_READ — all 4096 NV items
+swept with zero errors** (harvest: `live-b12/nv/nvsweep-4096.txt`,
+incl. item 550 IMEI). **This is the QCN-equivalent of the efs2 payload,
+extracted with zero raw-flash reads** — the crasher partitions never need
+touching for NV backup. mtd9 (MPSS) also re-dumped pristine:
+sha256 `efd0b8a6…`, 74,448,896 B (= 0x04700000 exactly; an earlier
+"short dump" was a bad size constant on our side, not transport loss —
+two independent methods agree byte-for-byte). AT stack post-crash note:
+`MCM_atcop_svc` won't start (smd8 tty-class sysfs missing; survives adb
+reboot; data path + QMI + DM unaffected; cold power cycle is the fix).
+
 **Modem flash backup inventory + partition safety map (2026-11-09)**:
 
 | Partition | Content | Status |
