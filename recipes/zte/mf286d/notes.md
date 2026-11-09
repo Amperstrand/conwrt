@@ -164,6 +164,43 @@ delta-finder gist dream-svg/f0ff6b85. Follow-ups:
 `prompts/mf286d-b14-01-dig.md` (root-cause dig),
 `prompts/mf286d-b14-02-downgrade-automation.md` (conwrt-native downgrade).
 
+**Modem flash backup inventory + partition safety map (2026-11-09)**:
+
+| Partition | Content | Status |
+|---|---|---|
+| mtd0 sbl | boot loader | ✅ banked (sha `510e928e…`) |
+| mtd9 modem | MPSS/baseband | ✅ banked (sha `55848f96…`) |
+| mtd16 system | UBI → fwfs + **rootfs** + ztedata | ✅ banked (sha `2f4e3b63…`), extracted to `mtd16-extract/` |
+| mtd1 mibib / mtd2 efs2 / mtd3 tz / mtd5 efsbak / mtd6 aboot | boot chain + NV | ⛔ **crasher class — reading mtd1 reboots the whole modem** (proven); cold-boot single-shot protocol only, never hammer warm |
+| mtd4/7/10/11/12/13 | rpm/boot/misc/recovery/fota/recoveryfs | unprobed — use the uptime-continuity probe protocol before any dump |
+
+Transfer method (adb 1.0.32 constraints): `exec-out` broken ("error: closed");
+raw `adb shell` CRLF-mangles binaries; modem tmpfs only 64 MB. **Working
+pipeline**: `adb shell 'dd if=/dev/mtdN bs=65536 2>/dev/null | base64'` →
+`tr -d '\r'` → `base64 -d`, sha256 at every hop. Watch for silently-empty
+files when a crasher partition kills adbd mid-loop (bit the RE session: four
+0-byte "dumps").
+
+**Remote SIM verdict (2026-11-09)**: NO remote-SIM/vSIM/CloudSIM/SIM-over-IP
+infrastructure exists at ANY layer — stock router rootfs (zero strings),
+modem-Linux rootfs (zero daemons/configs; standard QTI LE data stack only:
+MCM suite, netmgrd, qmi_ip_multiclient, atcmdsrv), baseband mtd9 (zero
+strings). Vendor never shipped it. The only theoretical path is an
+MPSS-level SIM-APDU relay implementation (research-class, ≥ the ISD-R
+three-layer effort). For profile management keep using NR7101/USB-CCID.
+
+**H8 narrowing (from the B12 rootfs dump)**: B12 ships the SAME
+`qmi_ip_cfg.xml` (`multi_client`, `lan_clients_allowed=3`) and the same
+`start_stop_qmi_ip_multiclient` init script as B14 — but the daemon is
+**inert on live B12** (`ps` clean; nothing invokes it; no inetd entry; no
+overlay override). H8 as "B14's config takes over data calls" is therefore
+WEAKENED — the surviving form is "B14's runtime state differs (daemon
+started via a path not visible in the full-file set — possibly one of the
+642 BSDIFF40 patches)". The posted PR #85 verification prompt still tests
+exactly the right thing (runtime `ps` + stop/reconfigure on a real B14
+unit). Applying the BSDIFF40 patches to the now-banked B12 base (E1) is
+the definitive static answer — queued for the B14 lane.
+
 ## OpenWrt install path (once main slot is rewritten)
 
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
