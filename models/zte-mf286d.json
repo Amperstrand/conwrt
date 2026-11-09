@@ -42,7 +42,7 @@
   },
   "flash_methods": {
     "tftp-blank-download": {
-      "description": "Stock U-Boot blank-download recovery: the bootloader itself TFTP-pulls root_uImage from 192.0.0.1:69 and rewrites web+rootfs (never NOR). Entered when the rootfs UBI attaches but has no kernel volume (e.g. interrupted flash, or a deliberately staged trigger UBI), or on a download-mode boot. No serial, no case opening.",
+      "description": "Stock U-Boot blank-download recovery: the bootloader itself TFTP-pulls root_uImage from 192.0.0.1:69 and rewrites web+rootfs (never NOR). Retail units have EXACTLY ONE no-serial entry: rootfs UBI attaches but has no kernel volume (interrupted flash or a deliberately staged trigger UBI). The factory-kit uboot.bin additionally has a reset-hold download mode + standalone 192.0.0.1 handler; RETAIL APPSBL contains neither (verified by full boot-tree disassembly: all downloader code lives in the volume-not-found chain). Serial `run lr` is the only other entry.",
       "recovery_ip": "192.0.0.1",
       "client_ip": "derived per boot (192.x.y.z; watch ARP or the RRQ source)",
       "client_subnet": "255.0.0.0",
@@ -51,7 +51,11 @@
       "success_signal": "UDP payload 'OK:zte blank download is done' sent back to the server :69 after the write completes",
       "flash_time_seconds": 60,
       "caveats": [
-        "A FULLY erased rootfs does NOT trigger the pull (UBI attach fails before the kernel-volume check) \u2014 stage a layout-volume-bearing UBI or use a stock download-mode boot instead",
+        "Rootfs content decides the boot outcome: valid UBI + no kernel volume = pull triggers; zeros OR fully-erased 0xFF = `ubi part fs` fails BEFORE the kernel-volume check and the unit drops to a UART-only prompt (no web, no TFTP, no button fallback). Zeros and erased are equally fatal.",
+        "The U-Boot 'recovery' boot branch (SMEM boot-reason != normal) is NOT an alternate rescue: its NAND variant runs the same `ubi part fs && ubi read kernel` chain (same broken partition) and its NOR variant reads reserved1, which ships EMPTY (all 0xFF). No network variant exists anywhere in the recovery function.",
+        "Buttons are gpio-keys SOFTWARE inputs only (reset=GPIO18, wifi=GPIO11, active-low): no PMIC/PON wiring, no PS_HOLD function, not polled by SBL1/QSEE/U-Boot \u2014 pressing them before Linux boots does nothing (verified in DTB + disassembly + empirically).",
+        "No altbootcmd / bootretry / bootcount fallback machinery exists in this U-Boot build.",
+        "The entire network stack (ARP/IP/UDP/TFTP/DHCP handlers) executes only inside NetLoop, reachable solely via the volume-not-found path or serial commands \u2014 a unit sitting at the prompt after a bad rootfs has NO network listener at all (probes are provably futile).",
         "Serve ANY requested filename (aliased to the pinned image) \u2014 the zdu no-bootfile path derives a per-boot 4-hex-byte name",
         "Never run two servers on 192.0.0.1:69; the fin packet is the only success oracle"
       ],
