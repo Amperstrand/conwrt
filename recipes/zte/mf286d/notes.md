@@ -65,9 +65,27 @@ registry + bench evidence, not here.
 ## Modem / eSIM (B12 modem firmware)
 
 - QMI UIM service: functional (SIM state, PIN, APDU infrastructure)
-- **ISD-R (eSIM management applet) BLOCKED** by modem firmware policy via both
-  AT and QMI UIM ("Access denied" ≠ "not found" — the applet exists on the card
-  but the modem denies access). AT+CSIM: "not supported."
+- **ISD-R (eSIM management applet) BLOCKED** — EXP-035 (2026-11-09, live
+  B12): a deliberate **three-layer MPSS defense**, QMI bypass surface
+  *proven exhausted* (not assumed): L1 channel-open denies ISD-R AID ≥7 B
+  (QMI error 82); L2 any channel whose open-FCI revealed ISD-R receives
+  **fabricated card responses** (differential-proven: identical APDUs =
+  real data on a USIM channel vs impossible SWs like SELECT-MF→6A82 — the
+  card never sees them); L3 an APDU-payload scanner drops any SELECT
+  carrying the GSMA RSP RID (≥4 B) even on unflagged channels. Basic
+  channel is modem-only; the AT layer is separately cauterized (all
+  channel opens denied). The earlier partial-AID (6 B) channel open
+  defeats L1 only — L2 fakes everything behind it (no EID was ever read).
+  Earlier ideas now DEAD: empty-AID AT+CCHO trick, any QMI-UIM routing
+  trick. Remaining in-device paths: offline MPSS RE (AID-compare,
+  canned-SW synthesis, boot-time NV gate), NV/diag flag hunt, MBIM
+  composition check, MPSS patch class (last resort). Pragmatic path for
+  actual eSIM management: NR7101 or USB CCID reader + lpac.
+- **Full B12 MPSS firmware banked** (mtd9, 74.7 MB, sha256 55848f96…,
+  `evidence/modem-fw-re/live-b12/dumps/` via live ADB) — the modem
+  baseline for ALL offline RE incl. the B14 continuation (its 642
+  BSDIFF40 patches now have their base). efs2 NV pull deferred (reads
+  destabilize adbd; not hammered — device healthy).
 - eSIM profile management IN-DEVICE: **not possible** on this firmware.
 - AT CCHO/CGLA/CCHC/CSIM: commands IMPLEMENTED in baseband (response strings in
   firmware binary) but blocked by carrier policy. No community workaround for

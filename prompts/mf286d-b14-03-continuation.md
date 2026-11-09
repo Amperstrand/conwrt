@@ -113,17 +113,17 @@ Dynamic (requires a B14 unit — NOT on bench):
 
 ## Prerequisites / blockers (do these FIRST when picked up)
 
-1. **Dump device 1's modem flash over ADB** (`adb pull` or dd of mtd9 +
-   efs2; ~71 MB). NO B12 modem flash image exists anywhere — the verified
-   22-partition backup (`ai-legion:/home/ubuntu/mf286d-backup-20261107/`)
-   is router-side only. Coordinate with the RE session that owns the modem
-   interface (`herdr agent list`; the ISD-R/qmiuim lane).
+1. ~~Dump device 1's modem flash over ADB~~ — **DONE 2026-11-09 (EXP-035)**:
+   full MPSS firmware banked at `evidence/modem-fw-re/live-b12/dumps/`
+   (mtd9, 74.7 MB, sha256 `55848f96…`) — the B12 base for the 642
+   BSDIFF40 patches and all offline RE. (efs2 NV pull deliberately
+   deferred: reads destabilize adbd when warm; one clean cold attempt if
+   ever needed. The router-side 22-partition backup remains router-only.)
 2. **B14 unit acquisition** — flag to the operator if the community thread
    surfaces a donor; until then this thread stays static-only.
-3. **B12 `dsi_config.xml`/`libqmi` source** — after prerequisite 1 (the
-   modem dump contains the live B12 copies under /usr or /etc of the modem
-   Linux; alternatively pull via adb from the RUNNING device 1 without a
-   full flash dump).
+3. **B12 `dsi_config.xml`/`libqmi` source** — NOW AVAILABLE: apply the
+   BSDIFF40 patches from the delta to the mtd9 base (or pull the live
+   copies via adb from device 1).
 
 ## Definition of "fully working" (the ladder)
 
