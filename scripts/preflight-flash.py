@@ -36,7 +36,7 @@ Incident → check mapping (2026-11 MF286D campaign unless noted):
   fence not actually answering .......... bench fence wedge, session-4 #6
   no verify-alive before reboot ......... device-2 brick (rules 9/10)
 """
-import argparse, hashlib, json, socket, struct, subprocess, sys, time, os, urllib.request
+import argparse, hashlib, json, re, shutil, subprocess, sys, time, os, urllib.request
 
 RESULTS = []
 def check(name, status, detail=""):
@@ -102,7 +102,6 @@ def run(cfg, args):
     fence_port = cfg.get("fence", {}).get("port", 69)
     own, foreign = [], []
     for l in sh(f"ss -ulnp | grep ':{fence_port}\\b' || true").splitlines():
-        import re as _re
         m = _re.search(r"pid=(\d+)", l)
         cmd = sh(f"tr '\\0' ' ' < /proc/{m.group(1)}/cmdline") if m else ""
         (own if ("flashd" in cmd or "tftp" in cmd.lower()) else foreign).append(cmd or l[:70])
@@ -125,11 +124,12 @@ def run(cfg, args):
               rule or "ufw ACTIVE with no 69/udp allow — fence RRQs will be DROPPED")
         fails += 0 if rule else 1
     else:
-        check("firewall (ufw)", "INFO", ufw or "inactive/absent")
+        nft = sh("nft list ruleset 2>/dev/null | grep -c 'udp dport 69' || true")
+        check("firewall (ufw inactive; nft checked)", "WARN" if nft == "0" else "PASS",
+              ufw or "inactive — direct nftables/iptables rules NOT fully audited, verify udp/69 reaches the fence"); warns += nft == "0"
 
     # 6. fence answers a REAL RRQ (probe) — proves serving, not just listening
     if cfg.get("fence", {}).get("rrq_probe"):
-        import shutil
         if not shutil.which("tftp"):
             check("fence answers probe RRQ", "SKIP", "tftp client not installed (apt: tftp-hpa)")
         else:

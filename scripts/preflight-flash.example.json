@@ -1,21 +1,23 @@
 {
-  "nic": "enx00e04c3e7b58",
+  "_notice": "TEMPLATE — replace every value with YOUR campaign's specifics. Never commit real unit MACs/bench identifiers (species-level only; keep unit data in your private inventory). Linux-only tool (ip/ss/ethtool//proc).",
+  "nic": "enx<your-usb-adapter>",
   "recovery_ip": "192.0.0.1",
   "device_ip": "192.168.32.1",
-  "device_mac": "c8:ea:f8:00:07:8d",
+  "device_mac": "00:00:00:00:00:01",
   "payload": {
-    "path": "/tmp/opencode/mf286d-device2/trigger.img",
-    "sha256": "f54a7e4ddccdbedca0aad168c0ac7186372df6f50416cd65aa812c4b42f9fdef",
+    "path": "/path/to/proven-trigger.img",
+    "sha256": "<pin from the session that proved it>",
     "size": 393216,
     "expect_magic": {"offset": 0, "hex": "55424923", "what": "UBI# EC header"}
   },
   "rollback": {
-    "path": "/home/ubuntu/mf286d-vm/kit/UPDATE/root_uImage",
-    "sha256": "01f6f7bc310c26e5bbee5992aa79dbf4e5683a0f40226152ad307c92f02071d3"
+    "path": "/path/to/known-good-root_uImage",
+    "sha256": "<pin>"
   },
   "fence": {"port": 69, "rrq_probe": true},
-  "exfil": {"url": "http://192.168.32.2:8080/preflight-probe", "verb": "PUT", "test_payload": "preflight"},
-  "serial": {"attached": false, "waiver_reason": "EXAMPLE — put your real justification here"},
-  "watch_proc": "watch-all.py", "watch_log": "/tmp/opencode/mf286d-device2/watch-all.log",
+  "exfil": {"url": "http://<bench-host>:8080/preflight-probe", "verb": "PUT", "test_payload": "preflight"},
+  "serial": {"attached": false, "waiver_reason": "state the real justification, or attach the console"},
+  "watch_proc": "watch-all.py",
+  "watch_log": "/tmp/<campaign>/watch-all.log",
   "watch_max_age_s": 300
 }
