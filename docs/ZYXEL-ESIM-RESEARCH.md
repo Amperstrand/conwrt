@@ -143,11 +143,36 @@ Artifacts (ephemeral /tmp): /tmp/opencode/zyxel-nr7302/{fw,x,oem,rootfs}.
   unverified (community: `AT+QUIMSLOT` switches physical slots only). LPAd
   availability also depends on module firmware version (NR7101 ships
   RG502QEAAAR13A0x; Quectel forum has version notes).
-- **Cheap read-only probe for the NR7101 device owner** (when convenient, no
-  urgency): `AT+QESIM=?` and the LPA-status query from the app note on
-  `/dev/ttyUSB2`. If LPAd is present and slot-eUICC-aware, profile management
-  on the NR7101 could become modem-native — retiring the ifd-modemifd chain
-  for that species. Until then the pcscd/ifd-modemifd path stays production.
+## 5b. NR7101 `AT+QESIM` probe — exact procedure for the device owner
+
+Verbs below are quoted from Zyxel's production code (§3b); probe order is
+read-only, owner-executed, one port-session, no `lpa_enable` (write-class).
+
+Port: re-detect per playbook gate 3 (`AT+CPIN?` sanity, never bare `AT`);
+the bench units carry the `/dev/modem-at` symlink.
+
+```sh
+# read-only QESIM probe — run on the NR7101 (OpenWrt) against its modem AT port
+PORT=/dev/modem-at   # re-detect per session; fallback: ttyUSB2/3
+for cmd in 'ATI' 'AT+CPIN?' 'AT+QESIM=?' 'AT+QESIM?' 'AT+QESIM="eid"' 'AT+QCCID'; do
+  printf '%s\r' "$cmd"; sleep 1
+done | socat - "$PORT,crnl"   # or: atinout / picocom manual entry
+```
+
+| Result of `AT+QESIM=?` / `"eid"` | Meaning | Next |
+|---|---|---|
+| `+CME ERROR: operation not supported` / bare `ERROR` to `=?` | no QESIM in RG502Q-EA module firmware | modem-native path dead; keep pcscd/ifd-modemifd |
+| `ERROR` to `=?` but `"eid"` returns `+QESIM: "eid",<32 hex>` | partial: EID readable, LPAd control present | owner-gated: try `lpa_enable` per app note |
+| `+QESIM: "eid",<32 hex>` and `=?` lists test-mode ranges | LPAd present on module | full modem-native candidate — walk the app-note ops |
+
+**Honest caveat (Quectel support, forums.quectel.com/t/61290):** the module-side
+LPAd is **restricted-distribution software** — "it has limitation and I don't
+have permission to release it; contact your supplier" — i.e. `AT+QESIM`
+existing does NOT guarantee the full profile-download stack is loaded on a
+given RG502Q-EA firmware. The probe's real job is to sort those three rows
+cheaply. Also remember LPAd canonically manages the **embedded** eUICC; a
+removable 9eSIM in the slot may be out of its scope even when present —
+that answer only comes from the probe row 2/3 follow-ups.
 
 ## 6. Donor-buying guidance (if we extend the program to NR7302)
 
