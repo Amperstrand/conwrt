@@ -1,5 +1,11 @@
 # MF286D modem B14→B12 downgrade — conwrt automation (queue prompt)
 
+> **STATUS 2026-11-09: QUEUED, enriched by the spike** — the `.up` layout
+> is now unpacked (`evidence/b14/unpacked/`: signatures + `public_ver.pem`
+> present → E5 in prompt 03 decides whether unsigned/custom packages are
+> even installable). Missing prerequisite unchanged: no B12 modem flash
+> dump exists (router backup is router-side only; ADB dump pending).
+
 Low-urgency research-queue prompt ("expiring tokens" lane). This is
 follow-on work once the B14 dig (prompts/mf286d-b14-01-dig.md) has the
 package unpacked and the failure mode characterized. Software-only:
