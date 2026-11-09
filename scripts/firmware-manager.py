@@ -277,12 +277,28 @@ def cmd_request(args: argparse.Namespace) -> int:
     ssh_key_cleaned = plan.ssh_key_cleaned
     ssh_key_source = plan.ssh_key_source
 
+    netconsole_target = getattr(args, "netconsole", None)
+    if netconsole_target:
+        # Kernel netconsole: printk over UDP from the first netdev up. The '+'
+        # prefix keeps boot going if one interface never appears; target MAC is
+        # omitted so the kernel ARP-resolves the receiver.
+        defaults_script = (defaults_script or "") + f"""
+# --- netconsole (baked by conwrt --netconsole {netconsole_target}) ---
+cat > /etc/modules.d/netconsole <<'NCMOD'
+netconsole +6666@/br-lan,{netconsole_target} +6666@/eth0,{netconsole_target}
+NCMOD
+chmod 644 /etc/modules.d/netconsole
+"""
+        logger.info("netconsole baked: targets %s:6666 on br-lan and eth0", netconsole_target)
+
     if getattr(args, "dry_run", False):
         print_plan(plan)
         print()
         extras = list(cfg.extra_packages)
         if packages_str:
             extras += [p.strip() for p in packages_str.split(",") if p.strip()]
+        if netconsole_target:
+            extras.append("kmod-netconsole")
         packages_to_send = list(dict.fromkeys(plan.all_packages() + extras))
         remove = plan.all_packages_remove()
         for r in remove:
@@ -318,6 +334,8 @@ def cmd_request(args: argparse.Namespace) -> int:
     extras = list(cfg.extra_packages)
     if packages_str:
         extras += [p.strip() for p in packages_str.split(",") if p.strip()]
+    if netconsole_target:
+        extras.append("kmod-netconsole")
     combined = list(dict.fromkeys(plan.all_packages() + extras))
     remove = plan.all_packages_remove()
     if remove:
@@ -766,6 +784,12 @@ def main() -> int:
     p_request.add_argument(
         "--wan-ssh", action="store_true",
         help="Open SSH on WAN (requires --ssh-key, forces key-only auth)",
+    )
+    p_request.add_argument(
+        "--netconsole", default=None, metavar="RECEIVER_IP",
+        help="Bake kernel netconsole into the image (kmod-netconsole + modules.d "
+             "entry targeting RECEIVER_IP:6666 on both br-lan and eth0 — the "
+             "serial-free boot debugger; the receiver needs a UDP/6666 listener)",
     )
     p_request.add_argument(
         "--tofb", action="store_true",
