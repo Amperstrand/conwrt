@@ -127,14 +127,69 @@ to drive WDS directly and loses.
 Honest scoping: this is identified from the shipped configuration + the
 symptom fingerprint, decoded from the official package — we have NOT
 live-verified it (we own no B14 unit and won't experiment on community
-hardware). Two things would confirm: (a) checking whether a B12 modem
-lacks the daemon or runs it in single-client mode (on our bench, next
-session), and (b) any B14 owner running, over ADB (works on B14, see
-forum): `cat /etc/qmi_ip_cfg.xml` and trying
-`/etc/init.d/start_stop_qmi_ip_multiclient stop` (or editing the config to
-`single_client`) before bringing the interface up. If that restores QMI
-control, the fix is a config change — no downgrade needed. We can walk
-anyone through it.
+hardware). So instead of "we can walk you through it", here is the actual
+guided experiment, as a **prompt you can paste into
+[opencode](https://opencode.ai)** (or any coding agent) on a machine that
+can reach your router. It is read-only by default; the one interventional
+step is clearly marked, reversible, and requires your explicit go-ahead.
+
+````text
+I own a ZTE MF286D router whose internal modem runs firmware B14
+(BD_TELIAMF286DV1.0.0B14) under OpenWrt. QMI data does not work
+(uqmi/qmicli --start-network -> "Unknown error"; AT works).
+
+Researchers suspect B14 ships a modem-side daemon, qmi_ip_multiclient
+(config /etc/qmi_ip_cfg.xml, mode=multi_client, lan_clients_allowed=3),
+that takes ownership of data calls away from external QMI. Help me verify,
+safely, and produce a structured report they can use.
+
+RULES:
+- My device, my data: everything runs only against my router at
+  <ROUTER_IP> (SSH root) and its modem (adb over the router).
+- Phase 1 is READ-ONLY: no nv writes, no flashing, no service changes.
+- Phase 2 changes ONE thing, only after showing me the plan and getting
+  my explicit yes, and is reversible (daemon restart / reboot restores).
+- Capture every command's full output to files under ./b14-probe/.
+
+PHASE 1 — evidence (read-only):
+1. Connect: ssh root@<ROUTER_IP>; confirm OpenWrt + modem version
+   (ATI on the AT port; expect BD_TELIAMF286DV1.0.0B14).
+2. ADB: adb devices (install android-tools on the router if needed:
+   it has no internet? use its WiFi or offline-install adb). Then:
+   adb shell cat /etc/qmi_ip_cfg.xml          # mode? lan_clients_allowed?
+   adb shell "ps | grep -i multiclient"       # daemon running?
+   adb shell ls -la /etc/init.d/ | grep -i qmi
+3. Blind-spot reproducer (the key fingerprint):
+   AT+CGPADDR   (expect: ~3 PDP contexts with IPs)
+   uqmi -d /dev/cdc-wdm0 --get-current-settings   (expect: "Out of call")
+   uqmi -d /dev/cdc-wdm0 --get-data-status
+4. Dump for comparison: adb shell "cat /proc/mtd"; list /etc/init.d/;
+   any cfg/nv listing tools present on the modem (read-only).
+
+PHASE 2 — the H8 test (ONLY with my explicit approval, reversible):
+5. uqmi baseline: --start-network <APN> (expect fail).
+6. adb shell /etc/init.d/start_stop_qmi_ip_multiclient stop
+   (if the script name differs, find it with: adb shell ls /etc/init.d/)
+7. Re-run the exact same uqmi --start-network. Record the result
+   verbatim — SUCCESS would confirm the mechanism.
+8. RESTORE: ...start_stop_qmi_ip_multiclient start (or just reboot the
+   router). Re-verify stock behavior.
+
+REPORT — write ./b14-probe/B14-REPORT.md:
+- modem fw, router fw, OpenWrt version; whether qmi_ip_cfg.xml exists
+  and its full contents; daemon present/absent + its cmdline
+- CGPADDR vs get-current-settings outputs (phase 1)
+- phase 2: before/after start-network outputs, restore confirmation
+- anything unexpected (crashes, watchdogs, LED/state changes)
+Then show me the report and ask before doing anything else.
+````
+
+Post the report (or a link) either here or to our collection thread,
+[conwrt issue #621](https://github.com/Amperstrand/conwrt/issues/621) —
+that is where we track this platform, and structured reports there feed
+directly into conwrt's device handling (the campaign tooling already
+gates on modem version; a confirmed H8 means an automatic "disable the
+bridge during setup" step instead of a scary warning).
 
 ## The downgrade path (proven, painful)
 
@@ -208,10 +263,11 @@ Status on this device family:
 - Everything we extracted is published in our (public) conwrt repo, along
   with the tooling that produced it — the delta-container parsers and the
   payload decoder for ZTE's custom `.p` format:
-  [recipes/zte/mf286d/b14/](https://github.com/Amperstrand/conwrt/tree/master/recipes/zte/mf286d/b14)
-  (landing on `master` via PR #663 — the issue thread #621 has the running
-  log). The full NV script, the decoded `qmi_ip_cfg.xml`, and the
-  230-file decoded set are all there.
+  [recipes/zte/mf286d/b14/](https://github.com/Amperstrand/conwrt/tree/mf286d-b14/feat/recipes/zte/mf286d/b14)
+  (branch `mf286d-b14/feat`, merging to master via PR #663; the running
+  research log is [issue #621](https://github.com/Amperstrand/conwrt/issues/621)).
+  The full NV script, the decoded `qmi_ip_cfg.xml`, and the 230-file
+  decoded set are all there.
 
-Happy to coordinate with anyone holding a B14 unit — the read-only probe
-list is short and we can walk through it.
+If you run the prompt above on your B14 unit, thank you — that is the
+single most useful datapoint this platform is missing right now.
