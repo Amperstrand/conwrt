@@ -103,12 +103,19 @@ runs sessions external QMI cannot see/stop/start. Stock firmware works
 with B14 → host-control problem, not radio.
 
 House hypothesis (unproven): B14 flips data-path management to
-modem-internal autoconnect via NV — the same runtime-policy class as the
-B12 ISD-R block (EXP-034: policy lives in cfg_service.db/NV, not compiled
-code). Corroborating: router caches modem identity in NV (downgraded
-units keep reporting B14 until factory defaults restore re-reads it), and
-community ADB still works on B14-era units
-(`adb shell usr/bin/qmi_shutdown_modem` was a known fix attempt).
+modem-internal autoconnect via NV — the same class of runtime-policy
+behavior as the B12 ISD-R block, which we bypassed live on 2026-11-09
+(partial-AID channel open, see evidence ledger). ARCHITECTURE NOTE
+(2026-11-09, live-proven): the B12/B14 modem is **Qualcomm MDM9650**
+(soc_id 283, msm baseband, kernel 3.18.31) — the earlier static RE target
+(B02 kit FBF) is the older **Marvell PXA1826** generation; conclusions
+from that artifact do NOT transfer to B12/B14 (firmware-matrix updated by
+the RE session). The B14 `.up` NV items are Qualcomm NV items.
+Corroborating the "policy-is-data" pattern: the router caches modem
+identity in NV (downgraded units keep reporting B14 until factory
+defaults restore re-reads it), and ADB survives on B14-era units
+(`adb shell /usr/bin/qmi_shutdown_modem` was a community fix attempt) —
+the live-diagnosis door is open for any B14 unit.
 
 Downgrade (community-proven, painful): ZTE Windows framework + stock
 firmware first; or B12 mtd8/9 images + factory defaults (NV-cache gotcha).
