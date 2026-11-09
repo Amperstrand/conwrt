@@ -102,7 +102,7 @@ def run(cfg, args):
     fence_port = cfg.get("fence", {}).get("port", 69)
     own, foreign = [], []
     for l in sh(f"ss -ulnp | grep ':{fence_port}\\b' || true").splitlines():
-        m = _re.search(r"pid=(\d+)", l)
+        m = re.search(r"pid=(\d+)", l)
         cmd = sh(f"tr '\\0' ' ' < /proc/{m.group(1)}/cmdline") if m else ""
         (own if ("flashd" in cmd or "tftp" in cmd.lower()) else foreign).append(cmd or l[:70])
     if own:
