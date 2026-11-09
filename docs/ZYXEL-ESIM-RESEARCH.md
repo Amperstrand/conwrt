@@ -103,7 +103,48 @@ LPAd is a small daemon (one INI + one cert + one SDK .so) whose card
 transport is just `AT+CSIM` — reinforcing that ZTE's `-lpad` is likely
 equally drivable once its entry points are found.
 
-Artifacts (ephemeral /tmp): /tmp/opencode/zyxel-nr7302/{fw,x,oem,rootfs}.
+Artifacts (stable, until lane closeout): `~/scratch/zyxel-nr7302/`
+(`rootfs/` = oemapp tree, `sysroot/` = sdxlemur-sysfs base tree).
+
+## 3c. Runtime wiring — how Zyxel actually drives the LPA (full prior-art blueprint)
+
+Base system (`sdxlemur-sysfs`, 2411 files): stock Quectel Qualcomm SDX userspace
+— `atfwd_daemon` + `MCM_atcop_svc` (systemd `atfwd.service`, auto-started) are
+the AT-forwarding channel to the modem. **No eSIM code lives in the base
+system** — the whole eSIM stack is an oemapp-layer OEM addition.
+
+Control flow end-to-end:
+
+    WebUI / Zyxel Air app → zcfg data model (esimObj)
+      → libvdr_quecsoc_module.so  (vendor data-model module)
+        → spawns `thales_lpad <verb>` ON DEMAND (no resident daemon needed)
+          → card transport AT+CSIM / module-LPA AT+QESIM
+            → atfwd_daemon / ATC → modem → eUICC
+
+Complete `thales_lpad` verb set (quoted from the vendor module's spawn
+strings — this IS the production control surface):
+
+| Verb | Operation |
+|---|---|
+| `-E` | get EID |
+| `-A %s` | download by activation string (SM-DP+ address / AC) |
+| `--smds` | discovery download via SM-DS |
+| `--getprofile` | list profiles |
+| `--enable %d` / `--disable %d` | enable/disable profile by id |
+| `--delete %d` | delete profile |
+| `--nickname %d <name>` | rename profile |
+
+`bin/esmd` tracks state (`AllowedProfiles`, `CurrentProfile`) for the
+data model; `zupnp` references lpad (UPnP-adjacent surface, not explored
+further).
+
+**Blueprint value for the MF286D `-lpad` hunt (EXP-034/035):** in a shipping
+CPE, the LPA is (a) oemapp-layer, not base-system; (b) spawned **on demand
+with CLI verbs by the data-model vendor module** — no init.d entry, no unix
+socket, no resident service; (c) transported over the ordinary AT channel.
+When mapping ZTE's `-lpad`, look first for a **caller in the modem-Linux
+userspace data/RIL layer** that shells it with arguments — that caller is the
+drivable entry point, exactly as libvdr_quecsoc_module is here.
 
 ## 4. Recovery ladders (family-wide zycast; serial is NOT the first rung)
 
