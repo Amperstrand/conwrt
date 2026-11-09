@@ -412,6 +412,11 @@ enum Command {
         /// every ZyXEL bootloader in its listen window on the segment.
         #[arg(long)]
         confirm_specimen: bool,
+        /// Attest that a non-RAS payload is deliberate (raw research
+        /// images). Without it, kernel-slot sends must carry the ZyXEL
+        /// RAS magic.
+        #[arg(long)]
+        allow_raw: bool,
     },
     /// Dark-watch: watch a dark/flapping target over time and classify WHY
     /// it is dark (boot loop with cycle period / hung after boot / silent /
@@ -1509,6 +1514,7 @@ fn main() -> ExitCode {
             group,
             port,
             confirm_specimen,
+            allow_raw,
         } => zycast::run(zycast::ZycastArgs {
             image,
             interface,
@@ -1518,6 +1524,7 @@ fn main() -> ExitCode {
             group,
             port,
             confirm_specimen,
+            allow_raw,
         }),
         Command::DarkWatch {
             ip,
