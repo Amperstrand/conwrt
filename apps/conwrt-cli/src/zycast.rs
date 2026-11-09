@@ -74,12 +74,13 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
     if matches!(ty, ImageType::Ras | ImageType::Backup) && !a.allow_raw {
         const RAS_MAGIC: [u8; 4] = [0x83, 0x80, 0x00, 0x00];
         if image.len() < 4 || image[0..4] != RAS_MAGIC {
-            return Err(format!(
+            return Err(
                 "refusing to send: payload does not carry the ZyXEL RAS magic \
                  (83 80 00 00). Kernel-slot multicast of a non-RAS file (tar/sysupgrade \
                  container, squashfs, arbitrary data) bricks every listening unit. If \
                  this is a deliberate raw research payload, re-run with --allow-raw."
-            ));
+                    .into(),
+            );
         }
     }
     let chunks = chunk_count(image.len());
