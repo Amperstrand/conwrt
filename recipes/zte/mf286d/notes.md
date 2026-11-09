@@ -85,6 +85,42 @@ registry + bench evidence, not here.
   unvalidated. Full matrix: bench evidence/firmware-matrix.md.
 - Modem firmware B14: documented as "the breaker" — do not update to it.
 
+### B14 ("Nordic_B14", Oct 2024) — what actually breaks (2026-11-09 research)
+
+Package = router `V1.0.1B02` (CVE-2023-25649 fix) + modem
+`BD_TELIAMF286DV1.0.0B14` + **a modem-side NV script** (users extracted from
+the `.up`: `nv set net_select="Only_LTE"`, `nv set …_band_lock=0x…`).
+Delta filename `TELIA_MF286DV1.0.0B12-TELIA_MF286DV1.0.1B02.up` is the
+B02/B14 naming trap (same package — the wiki-note confusion documented).
+Feature history: B11 = VoLTE enable, B12 = upload CA; B14 unpublished.
+
+Under OpenWrt, B14 modem: AT/UIM/NAS/DMS/WDA all work; **QMI WDS
+start-network hangs → "Unknown error"** (PAP/CHAP, v4, v4v6 all fail);
+`--stop-network --autoconnect` → "No effect"; voice broken; 3G
+NV-disabled. Key evidence: `AT+CGPADDR` shows ACTIVE PDP contexts with
+real IPs while QMI WDS reports "Out of call" — the modem's data engine
+runs sessions external QMI cannot see/stop/start. Stock firmware works
+with B14 → host-control problem, not radio.
+
+House hypothesis (unproven): B14 flips data-path management to
+modem-internal autoconnect via NV — the same runtime-policy class as the
+B12 ISD-R block (EXP-034: policy lives in cfg_service.db/NV, not compiled
+code). Corroborating: router caches modem identity in NV (downgraded
+units keep reporting B14 until factory defaults restore re-reads it), and
+community ADB still works on B14-era units
+(`adb shell usr/bin/qmi_shutdown_modem` was a known fix attempt).
+
+Downgrade (community-proven, painful): ZTE Windows framework + stock
+firmware first; or B12 mtd8/9 images + factory defaults (NV-cache gotcha).
+Wiki warns against upgrading to B14. Fleet rule stands: never update a
+unit's modem off B12.
+
+Sources: forum.openwrt.org/t/175362 ("luca" 2025-03-03, full uqmi logs);
+eko.one.pl forum id=21790 posts ~791, 803–823; ispreview thread 42622;
+delta-finder gist dream-svg/f0ff6b85. Follow-ups:
+`prompts/mf286d-b14-01-dig.md` (root-cause dig),
+`prompts/mf286d-b14-02-downgrade-automation.md` (conwrt-native downgrade).
+
 ## OpenWrt install path (once main slot is rewritten)
 
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
