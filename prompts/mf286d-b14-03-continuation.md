@@ -47,6 +47,19 @@ this thread is reverse engineering + simulation until one arrives.
 > explains the eko.one.pl stale-version reports). Delta payloads use a
 > custom ZTE LZMA-variant encoding (prologue `5D00000200002114C48AF63F…`) —
 > E1 decoding is the gateway experiment.
+>
+> **EXTENSION WINDOW UPDATE (same day)**: ZFD codec CRACKED (`zfd_decode.py`
+> in-repo — 230 full files readable, 642 = BSDIFF40 needing B12 base;
+> no public prior art found). **H8 is the new top hypothesis**: decoded
+> `qmi_ip_cfg.xml` ships `multi_client` mode with `lan_clients_allowed=3`
+> == the 3 orphan PDP contexts users observe; `qmi_ip_multiclient` daemon
+> takes data-call ownership from external QMI. `dsi_config.xml` exonerated
+> (stock Qualcomm). Ranking now **H8 > H2 > H3**; fix candidate without
+> firmware change = stop/reconfigure the daemon via ADB (E11). First-pass
+> E8 provenance check (B12: daemon absent or single_client?) needs NO
+> flash dump — device 1's live ADB answers it in seconds. Start order per
+> NEXT-AGENT-PROMPT.md: **E9** (Telia MCFG, no hardware — MF297D sibling
+> file is full-format, no baseline needed) then **E8**.
 
 - **H2 — firmware data-path stack change** (NEW, strongest): B14 ships
   changed data-path components (`dsi_config.xml` = Qualcomm DSI data-call

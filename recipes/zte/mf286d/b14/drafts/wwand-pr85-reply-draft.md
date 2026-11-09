@@ -8,9 +8,12 @@ Merge in fresh findings from ~/mf286d-work/evidence/b14/FINDINGS.md if present.
 
 Short answer: **no — there is no known way to get QMI data working on the B14
 modem firmware today.** B12 is the only known-good, and downgrade is the only
-proven fix. But we've spent this weekend reverse-engineering this platform's
-firmware and we think we know *why* B14 breaks — and it's probably fixable
-without touching firmware at all. Details below.
+proven fix. But we spent this weekend reverse-engineering this platform,
+unpacked the actual B14 update package — and found what we believe is the
+exact mechanism: B14 ships a **modem-side multi-client data bridge** that
+takes ownership of data calls away from external QMI. It's identified from
+the shipped configuration, and it suggests a possible fix without any
+firmware change. Details below.
 
 ## What "B14" actually is
 
@@ -78,14 +81,37 @@ server still serves it) and unpacked it. Findings, in order of relevance:
 4. **None of the NV items is a QMI/autoconnect switch.** The forum
    shorthand "the update sets NV items that break QMI" is incomplete.
 
-Putting it together: the modem's data-call stack and carrier policy were
-re-shipped in B14, and the symptom shape fits — the B14 modem manages
-data sessions internally (hence live PDP contexts in `AT+CGPADDR` that
-QMI WDS cannot see, stop, or start), while the stock firmware's own
-bring-up path keeps working. We have NOT yet decoded the changed payloads
-(ZTE uses a custom LZMA-variant container), so this is a well-supported
-localization, not a final root-cause. The decode + component diff is
-queued work on our side.
+Putting it together — **the mechanism, found**: among the decoded files is
+the modem's `/etc/qmi_ip_cfg.xml` and an init script that starts
+`/usr/bin/qmi_ip_multiclient` — Qualcomm's **multi-client QMI data
+bridge**, a modem-side daemon that holds one data call per LAN client
+(the architecture router-style modems use). The B14 config ships:
+
+```xml
+<mode>multi_client</mode>
+<lan_clients_allowed>3</lan_clients_allowed>
+```
+
+Count them: **three** — exactly the number of live PDP contexts B14 users
+see in `AT+CGPADDR` while QMI WDS insists it is "out of call". With the
+modem's own bridge owning the data calls, external QMI WDS control fails
+in precisely the observed ways: `start-network` → conflict → "Unknown
+error"; `stop-network 0xffffffff` → "no effect" (it can't stop calls it
+can't see). The stock firmware drives the modem through this bridge and
+never notices; every third-party stack (uqmi, ModemManager, wwand) tries
+to drive WDS directly and loses.
+
+Honest scoping: this is identified from the shipped configuration + the
+symptom fingerprint, decoded from the official package — we have NOT
+live-verified it (we own no B14 unit and won't experiment on community
+hardware). Two things would confirm: (a) checking whether a B12 modem
+lacks the daemon or runs it in single-client mode (on our bench, next
+session), and (b) any B14 owner running, over ADB (works on B14, see
+forum): `cat /etc/qmi_ip_cfg.xml` and trying
+`/etc/init.d/qmi_ip_multiclient stop` (or editing the config to
+`single_client`) before bringing the interface up. If that restores QMI
+control, the fix is a config change — no downgrade needed. We can walk
+anyone through it.
 
 ## The downgrade path (proven, painful)
 

@@ -110,18 +110,30 @@ units carry a **Qualcomm MDM9650** (soc_id 283, msm baseband, kernel
 **Spike verdict (2026-11-09, artifacts in `recipes/zte/mf286d/b14/`)**: the
 B14 `.up` package was acquired, unpacked, and parsed. It **rewrites the
 modem's own software**: full AMSS baseband re-delta (163 files) **plus the
-modem-Linux data-path stack** — `dsi_config.xml` (likely NEW file, 1082 B),
-`libqmi_cci/csi/sap`, `mcm_ril_service`, `zte_adapter_ppp/cfg`,
-`libztecmdq` — plus **119 MCFG carrier-policy files** (Telia patched) and
-direct modem-EFS writes. The full 30-item NV script contains **no
-autoconnect/QMI item** (the forum "NV script breaks QMI" shorthand is
-incomplete): LTE-only RAT lock with Nordic bands, datastall watchdog,
-version identity in NV. Hypotheses: **H2 data-path firmware change =
-STRONG**, H3 carrier/MCFG = moderate-strong, H1 NV-autoconnect = refuted
-in its strong form. Payloads use a custom ZTE delta (LZMA-props prologue
-`5D00000200002114C48AF63F…`, not plain LZMA) — decode = experiment E1 for
-a future agent; handoff kit: `FINDINGS.md` + `NEXT-AGENT-PROMPT.md` in
-`recipes/zte/mf286d/b14/`, roadmap in `prompts/mf286d-b14-03-continuation.md`.
+modem-Linux data-path stack** — `dsi_config.xml`, `libqmi_cci/csi/sap`,
+`mcm_ril_service`, `zte_adapter_ppp/cfg`, `libztecmdq` — plus **119 MCFG
+carrier-policy files** (Telia patched) and direct modem-EFS writes.
+
+**Extension window — H8, the smoking gun**: the ZFD `.p` codec was cracked
+(`[BE32 comp_len][BE32 uncomp_size][LZMA1 props 5D/128K][raw LZMA1
+no-EOS]`; 642 records = BSDIFF40 patches needing a B12 base, 230 = full
+files readable now — decoder `zfd_decode.py` in-repo). Decoded
+`/mnt/system/etc/qmi_ip_cfg.xml` ships **`<mode>multi_client</mode>` +
+`<lan_clients_allowed>3</lan_clients_allowed>`** with an init script
+starting `/usr/bin/qmi_ip_multiclient` — a modem-side multi-client QMI
+data bridge holding one data call per LAN client. The **3 == the three
+live PDP contexts** users observe via `AT+CGPADDR` while QMI WDS reports
+"out of call"; stop-network "no effect" + start-network "unknown error"
+are both mechanically explained. `dsi_config.xml` is **exonerated**
+(decoded: stock Qualcomm DSI config, no ZTE knobs). Ranking:
+**H8 (qmi_ip_multiclient bridge) > H2 (data-path stack = H8's substrate)
+> H3 (carrier/MCFG)**; H1 (NV autoconnect) refuted — the full 30-item NV
+script has no QMI/autoconnect item (LTE-only lock, datastall watchdog,
+version-identity-in-NV — the last mechanically explains the eko.one.pl
+stale-version reports). **Fix candidate without firmware change**:
+stop/reconfigure `qmi_ip_multiclient` via ADB (E11, needs a B14 unit);
+E8 provenance check (was the daemon absent/single-client in B12?) can be
+done TODAY on device 1's live ADB — no flash dump needed for first pass.
 
 Downgrade (community-proven, painful): ZTE Windows framework + stock
 firmware first; or B12 mtd8/9 images + factory defaults (NV-cache gotcha).
