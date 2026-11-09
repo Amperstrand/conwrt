@@ -4,6 +4,14 @@ Prompt owner: bench/flash lanes. Born from the MF286D campaign close calls (conw
 issue #621, Nov 2026; full audit: EXP-022 in the bench evidence). Run every field.
 A single NO blocks the operation until resolved.
 
+**Item 0 — run the executable preflight**: `python3 scripts/preflight-flash.py
+--config <campaign>.json` (template: `scripts/preflight-flash.example.json`).
+It machine-verifies the assumptions this audit encodes: fence listener + ownership,
+recovery-IP uniqueness, routing, host firewall (udp/69!), payload sha/size/magic
+(zeros are not triggers), rollback pairing, specimen MAC, verify-alive, exfil
+verb end-to-end, watcher heartbeat, console/waiver. Exit 2 = BLOCKED. Fields 1-16
+below remain the human analysis layer on top of it.
+
 ## Device identity and image provenance
 1. Exact device identity verified live (board/`/proc/mtd`/labels) — not assumed from
    the package name or a sibling model.
