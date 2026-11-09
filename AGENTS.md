@@ -96,6 +96,62 @@ Any shell script that modifies device state (uci set, network config, IP changes
 - Python-side hash algorithms MUST match what BusyBox provides (sha256, matching on-device `sha256sum`)
 - For UBIFS overlay devices: `uci commit` is permanent after reboot — there is no "undo" after reboot
 
+## Irreversible Write Discipline (Boot-Media / Self-Flash Operations)
+
+The section above protects config; this one protects boot media. A bad config
+reverts; a bad boot-media write can leave a device whose only remaining
+console is a UART header. **These rules apply to ANY write that the next boot
+will depend on or validate: raw `nand write`, `mtd write`, `dd` to
+`/dev/mtdX`, trigger-image installation, bootloader/env writes.** Enforced by
+`prompts/brick-risk-audit.md` §"Payload and write-verification gates".
+
+1. **Reuse the proven artifact — never synthesize a payload from memory.** If
+   a prior session produced a working image (trigger, UBI container, firmware,
+   bootloader), transfer THAT artifact and verify its sha256 at the target.
+   "Reimplementing the concept" with on-the-spot `dd`/zero-fill is how a
+   valid recovery trigger becomes a brick. If the artifact cannot be
+   transferred, STOP — do not improvise a substitute on the device.
+2. **A write is not done until it is read back.** After writing, read the
+   target and verify the invariant the NEXT BOOT will check (magic bytes,
+   volume table, superblock, CRC). Zeros, erased 0xFF, and a valid header are
+   THREE DIFFERENT boot outcomes — verify you got the one you intended. On
+   mismatch: abort, do NOT reboot — a device with a bad write but a running
+   OS is still fixable over the existing channel.
+3. **Probe the device between the write and the reboot.** The running-OS
+   window after a destructive write is the LAST easy recovery chance. Confirm
+   the management channel still answers (ping/web/readback) before issuing
+   the reboot that commits the change. If the runbook says "power-cycle to
+   engage recovery", insert a verify-alive step immediately before it.
+4. **Attach (or physically verify) the console BEFORE any boot-breaking
+   procedure.** Procedures whose intent is "make normal boot fail so recovery
+   engages" leave the device single-path by design. Serial must be proven
+   working before the first such write — not requested after it fails.
+5. **Pair the destructive write with its corrective in the same runbook
+   step.** The known-good/rollback image is staged and served alongside the
+   write; the undo command is written next to the write command.
+6. **Observation channels must be tested end-to-end AND log success.**
+   Exfil/callback endpoints get a real upload test (including the HTTP verb!)
+   before the operation starts. State monitors log heartbeats or
+   last-success timestamps on every poll — never errors only. A silent
+   monitor is indistinguishable from a healthy device; errors-only logging
+   turns "still alive and fixable" into "looks like nothing is happening".
+
+**Case study (2026-11-08, ZTE MF286D unit 2)**: a flash-trigger script wrote
+zeros to the rootfs partition instead of transferring the session-proven UBI
+trigger image (valid layout volume, no kernel volume). The bootloader failed
+at `ubi part fs` — and the TFTP self-recovery path sits BEHIND a successful
+UBI attach, so the device dropped to a UART-only prompt: no web, no TFTP, no
+button fallback (all verified compiled-out or empty in that bootloader
+build). The running-OS fix window stayed open ~14 minutes, but the exfil
+endpoint rejected the log upload (501, untested verb) and the state monitor
+logged errors only — so nobody probed before the planned power-cycle. Rules
+1-6 each map to a step that would have caught it. Post-mortem: the
+distinction "UBI attaches but kernel volume missing (= recovery engages)"
+vs "UBI cannot attach (= brick at prompt)" is the single most important
+invariant of that species' self-flash path — and it was documented in our own
+RE notes before the write happened. The knowledge existed; the execution
+gate did not.
+
 ## Inventory and Access Hardening After First Access
 
 **The first time you get SSH access to a device, immediately inventory it and install an SSH key.** The COMFAST CF-WR632AX was explored and a model JSON was created, but no specimen-level inventory was recorded and no SSH key was installed. A factory reset wiped the overlay (including the `95-random-lan-ip.done` marker), the device randomized its LAN IP, and the device became permanently inaccessible. The empty-password dropbear config was useless because we couldn't find the device on the network.
