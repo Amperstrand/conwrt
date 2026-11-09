@@ -1,6 +1,6 @@
 # DRAFT — reply to obsy on ddimension/wwand PR #85 (comment 6718397441)
 
-STATUS: DRAFT — DO NOT POST. Requires human approval.
+STATUS: POSTED 2026-11-09 — https://github.com/ddimension/wwand/pull/85#issuecomment-6735989033 (operator-approved).
 Owner: mf286d-bringup session (w1:p5H). Updated: 2026-11-09.
 Merge in fresh findings from ~/mf286d-work/evidence/b14/FINDINGS.md if present.
 
