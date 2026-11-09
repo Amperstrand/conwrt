@@ -63,10 +63,47 @@ From davidohne/Zyxel_NR7302 (community RE repo, read-only reference):
 - The router OS talks to the RG520F modem over USB; **ADB runs on the router
   OS** (adbd) and DIAG/EDL belong to the modem — mirrors the MF286D two-OS
   split.
-- Not yet done (next step if we want deep RE): pull the ACHA.5 firmware, walk
-  squashfs-root for the eSIM/LPA components (Zyxel Air backend endpoint,
-  esim/lpa-named daemons, the AT/QMI plumbing into the RG520F) and document
-  the control surface the same way EXP-034 did for ZTE.
+## 3b. Firmware walk findings — Telekom `V1.00(ACHA.5)b1_F0` (done, 2026-11-09)
+
+Container is a ZIP: `oemapp.ubi` (Zyxel OEM layer, 19 MB) + `sdxlemur-{sysfs.ubi,
+boot.img}` + `NON-HLOS.ubi` + `multifota.bin` + `fotaconfig.xml`. **Platform:
+Qualcomm SDX ("sdxlemur") single-chip** — router Linux and modem in one SoC
+(RG520F = SDX-class, consistent with §2). Extraction: unzip →
+`ubireader_extract_images oemapp.ubi` → squashfs 4.0 → 416-file zcfg OEM layer.
+
+**The eSIM stack (all inside oemapp):**
+
+| Component | Role |
+|---|---|
+| `usr/bin/thales_lpad` + `usr/lib/libLPA_SDK.so` | **Thales LPAd** — router-side LPA. Transport to card: **`AT+CSIM`** raw APDUs. APIs: `lpaDownloadProfileWith{DefaultSMDP,SMDS}Address`, `lpaGetEUICCInfo`, get/set SM-DP+/SM-DS. |
+| `etc/lpad/lpa_config.ini` | SM-DP+ default `gckoem.prod.ondemandconnectivity.com` (Thales/Gemalto OEM), cert `/etc/lpad/Gemalto_LIVE_CI_BASE64_cer.crt`. |
+| `bin/esmd` | eSIM state: `AllowedProfiles`, `CurrentProfile`. |
+| `lib/vendor_modules/libvdr_quecsoc_module.so` | Quectel vendor data-model module — drives the **modem-side LPA via `AT+QESIM`**: `"eid"` read, `"lpa_enable",0/1`, and full profile ops (`ESIM_PROFILE_{ENABLE,DISABLE,DELETE,BRIEF,DETAIL,NICKNAME}`, `ESIM_LPA_STATUS`, download flag). |
+| `lib/channel_wrap/libchanl_qlatc_channel.so` | Quectel AT channel wrapper (generic ATC: QCFG usbcfg etc.). |
+| zcfg schema (`etc/config.config`) | Build gates: `CONFIG_PACKAGE_{quectel_lpad,quectel_thales_lpad,thales_lpad,xs_thales_lpad}` (**pluggable LPA provider**), `CONFIG_ZYXEL_{CELLWAN_SUPPORT_ESIM, CELLWAN_ESIM_SMDS_DOWNLOAD, WEB_GUI_CELLWAN_SUPPORT_ESIM, CM_SUPPORT_ESIM, SUPPORT_FACTORY_RESET_KEEP_ESIM_STATUS}`. |
+| `bin/zupnp`, `bin/zhttpd`, `bin/genXML` | web/UPnP fronts referencing lpad (Air-app + WebUI entry points). |
+
+**Reading:** Zyxel treats the LPA as a **build-time-selectable component** —
+router-side Thales LPAd (card via `AT+CSIM`) *or* modem-side Quectel LPAd
+(control via `AT+QESIM`) — converging on `esimObj` in the zcfg data model,
+gated per carrier via build CONFIGs (the Zyxel analogue of ZTE's runtime
+policy gating).
+
+**Direct payoff for the org's NR7101 (RG502Q-EA):** Zyxel's own production
+flow proves the **`AT+QESIM` route is a complete profile-management surface**
+on Quectel modules of this generation. The read-only probe for our units is
+now concrete: `AT+QESIM="eid"` → `AT+QESIM="lpa_enable",1` semantics per the
+Quectel RG50xQ LPA app note. If the RG502Q-EA firmware answers, NR7101
+profile management goes modem-native and the pcscd/ifd-modemifd chain retires
+for that species. (Caveat stands: LPAd usually manages the **embedded** eUICC;
+removable 9eSIM support must be confirmed by the probe.)
+
+Prior-art value for the MF286D `-lpad` hunt (EXP-034/035): a shipping CPE
+LPAd is a small daemon (one INI + one cert + one SDK .so) whose card
+transport is just `AT+CSIM` — reinforcing that ZTE's `-lpad` is likely
+equally drivable once its entry points are found.
+
+Artifacts (ephemeral /tmp): /tmp/opencode/zyxel-nr7302/{fw,x,oem,rootfs}.
 
 ## 4. Recovery ladders (family-wide zycast; serial is NOT the first rung)
 
@@ -124,6 +161,8 @@ From davidohne/Zyxel_NR7302 (community RE repo, read-only reference):
    zycast recovery) but have **no eSIM hardware** — do not expect eUICC ops.
 
 ## Sources
+
+- Telekom NR7302 firmware V1.00(ACHA.5)b1_F0 (telekom.de/hilfe/downloads/firmware-5g-outdoor-router-nr7302, extracted 2026-11-09)
 
 - davidohne/Zyxel_NR7302 (README, firmware/README.md, usb/README.md) —
   https://github.com/davidohne/Zyxel_NR7302
