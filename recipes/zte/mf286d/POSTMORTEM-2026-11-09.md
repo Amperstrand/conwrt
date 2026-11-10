@@ -88,3 +88,31 @@ theorizing never would.
    `adb reboot edl` + community tooling; images banked.
 4. Worst case: unit stays a research terminal (DM/EFS fully working);
    device 2 becomes the production unit.
+
+## RESOLUTION (2026-11-10 addendum — the outage is CLOSED)
+
+Device 1's cellular RECOVERED on 2026-11-10 after the operator power-cycled
+both units. QMI/AT/DM all live; SIM state ready; network registered.
+
+- Attribution: the recovery boot carried the SAME dmesg "oracle lines"
+  (warm class, uninitialized-allocation-table chatter, garbage TOC id) as
+  every degraded boot — captured in the healthy baseline
+  (d1-healthy-baseline/, bench evidence). Those lines are NORMAL for this
+  species on every boot; they were never the fault. What actually differed
+  between the last failed boot and the recovery boot remains one of: (a) a
+  power-removal class difference invisible in logs, or (b) the #672 EFS
+  session's writes (denylist zeroed + lpa_support created) repairing a
+  crash-damaged init dependency — the recovery boot was the first after
+  those writes. The discriminating experiment (restore banked aid_list +
+  reboot) is documented but OPTIONAL; the unit works.
+- Route B (ISD-R unlock via EFS): REFUTED live — all three deny layers
+  unchanged after the writes. The reservation is compiled Qualcomm
+  behavior (LPA-owns-ISD-R); apdu_security files are additive restrictions
+  above the compiled base.
+- Route A (drive the internal LPA via QMI UIM m2m/euicc) is the remaining
+  path; lpa_support=1 in place. Next session: QMI message enumeration
+  (IDs extractable statically from qmi_uim_m2m_euicc.c in the pristine
+  mtd9).
+- Postmortem lesson set stands, plus one: the "oracle lines" trap — capture
+  the healthy baseline BEFORE reading meaning into boot logs. It took a
+  healthy boot to prove those lines meaningless.
