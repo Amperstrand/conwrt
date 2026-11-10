@@ -174,9 +174,10 @@ pub fn retain_verdict_bytes(out: &mut Vec<u8>, segment: &[u8]) -> usize {
 /// Response BODY text: skip real HTTP response headers when present
 /// (U-Boot sends status headers before its HTML/size-line verdict),
 /// falling back to the whole stream when no `\r\n\r\n` separator
-/// exists. Shared by the upload verdict ([`RecoveryPost::finish`]) and
-/// the flash-trigger verdict ([`crate::trigger::TriggerRequest`]).
-pub(crate) fn body_after_headers(raw: &str) -> &str {
+/// exists. Shared by the upload verdict ([`RecoveryPost::finish`]),
+/// the flash-trigger verdict ([`crate::trigger::TriggerRequest`]) and
+/// host twins recovering partial bodies after transport failures.
+pub fn body_after_headers(raw: &str) -> &str {
     match raw.find("\r\n\r\n") {
         Some(at) => &raw[at + 4..],
         None => raw,

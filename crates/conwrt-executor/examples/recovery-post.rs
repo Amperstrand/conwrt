@@ -80,6 +80,52 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// `flash_time_seconds + 60` (scripts/flash/upload.py::trigger_flash).
 const TRIGGER_READ_TIMEOUT: Duration = Duration::from_secs(420);
 
+/// How a trigger step can fail (#673 codex P2 round 2): leniency
+/// applies to DEADLINE EXPIRY ONLY — any other read failure is a real
+/// error and must not report an unconfirmed flash as a successful run.
+#[derive(Debug)]
+enum TriggerStepError {
+    /// The trigger request never completed (connect/head write).
+    Send,
+    /// Read deadline expired over the full flash window — the lenient
+    /// "flash may still be in progress" shape (upload.py timeout→True).
+    DeadlineExpired,
+    /// Any other read failure (e.g. connection reset); `partial` is
+    /// what the server sent before failing, for the log.
+    Read {
+        kind: std::io::ErrorKind,
+        partial: String,
+    },
+}
+
+/// Trigger transport capturing what a failed read left behind:
+/// `PostError::Read` carries neither the io kind nor the partial body,
+/// but the lenient/punitive split needs both (#673 codex P2 round 2).
+struct TriggerIo {
+    inner: StdIo,
+    read_error: Option<std::io::ErrorKind>,
+    partial: Vec<u8>,
+}
+
+impl HttpIo for TriggerIo {
+    type Error = std::io::Error;
+
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
+        self.inner.write_all(data).await
+    }
+
+    async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), std::io::Error> {
+        match self.inner.read_response(out).await {
+            Err(e) => {
+                self.read_error = Some(e.kind());
+                self.partial = out.clone();
+                Err(e)
+            }
+            ok => ok,
+        }
+    }
+}
+
 struct Args {
     target: SocketAddr,
     image_path: String,
@@ -243,20 +289,69 @@ async fn run(
 /// after an ACCEPTED upload verdict, GET the model's
 /// `trigger_flash_endpoint` on a fresh connection — the trigger starts
 /// the actual flash and blocks until it completes, so the read budget
-/// is [`TRIGGER_READ_TIMEOUT`], not the 30 s upload-verdict one.
+/// is `read_timeout` (the twin passes [`TRIGGER_READ_TIMEOUT`], not
+/// the 30 s upload-verdict one).
+async fn trigger_over(
+    stream: TcpStream,
+    read_timeout: Duration,
+    host: &str,
+    endpoint: &str,
+) -> Result<conwrt_executor::TriggerVerdict, TriggerStepError> {
+    let mut io = TriggerIo {
+        inner: StdIo {
+            stream,
+            read_timeout,
+        },
+        read_error: None,
+        partial: Vec::new(),
+    };
+    match conwrt_executor::TriggerRequest::new(host, endpoint)
+        .trigger(&mut io)
+        .await
+    {
+        Ok(verdict) => Ok(verdict),
+        Err(PostError::Write { .. }) => Err(TriggerStepError::Send),
+        Err(PostError::Read) => {
+            // A partial body that already classifies (the server said
+            // success/in-progress, then the connection broke) beats the
+            // error split — the flash outcome is known either way.
+            if !io.partial.is_empty() {
+                let raw = String::from_utf8_lossy(&io.partial).into_owned();
+                let verdict = conwrt_executor::trigger::classify_trigger_body(
+                    conwrt_executor::post::body_after_headers(&raw),
+                );
+                if !matches!(
+                    verdict,
+                    conwrt_executor::TriggerVerdict::Rejected { .. }
+                        | conwrt_executor::TriggerVerdict::NoResponse
+                ) {
+                    return Ok(verdict);
+                }
+            }
+            let partial = String::from_utf8_lossy(&io.partial).into_owned();
+            match io.read_error {
+                Some(std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                    Err(TriggerStepError::DeadlineExpired)
+                }
+                Some(kind) => Err(TriggerStepError::Read { kind, partial }),
+                None => Err(TriggerStepError::Read {
+                    kind: std::io::ErrorKind::Other,
+                    partial,
+                }),
+            }
+        }
+        // NoTotal/Incomplete-class errors are unreachable for trigger
+        Err(_) => Err(TriggerStepError::Send),
+    }
+}
+
 async fn send_trigger(
     target: SocketAddr,
     host: &str,
     endpoint: &str,
-) -> Result<conwrt_executor::TriggerVerdict, PostError> {
-    let stream = TcpStream::connect(target).map_err(|_| PostError::Write { op: "trigger" })?;
-    let mut io = StdIo {
-        stream,
-        read_timeout: TRIGGER_READ_TIMEOUT,
-    };
-    conwrt_executor::TriggerRequest::new(host, endpoint)
-        .trigger(&mut io)
-        .await
+) -> Result<conwrt_executor::TriggerVerdict, TriggerStepError> {
+    let stream = TcpStream::connect(target).map_err(|_| TriggerStepError::Send)?;
+    trigger_over(stream, TRIGGER_READ_TIMEOUT, host, endpoint).await
 }
 
 fn main() {
@@ -402,17 +497,24 @@ fn main() {
                         );
                         std::process::exit(1);
                     }
-                    Err(PostError::Read) => {
-                        // A deadline expiry after 420 s is the
-                        // "flash may still be in progress" lenient shape
-                        // (upload.py treats its curl timeout the same).
+                    Err(TriggerStepError::DeadlineExpired) => {
+                        // A deadline expiry over the full flash window
+                        // is the "flash may still be in progress"
+                        // lenient shape (upload.py treats its curl
+                        // timeout the same).
                         eprintln!(
                             "trigger: read deadline expired — the flash may still be in progress; verify boot on the wire"
                         );
                     }
-                    Err(e) => {
+                    Err(TriggerStepError::Read { kind, partial }) => {
                         eprintln!(
-                            "trigger failed: {e:?} — image uploaded but flash not confirmed started"
+                            "trigger: read failed ({kind:?}) — partial body: {partial:?}; image uploaded but flash not confirmed started"
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(TriggerStepError::Send) => {
+                        eprintln!(
+                            "trigger send failed — image uploaded but flash not confirmed started"
                         );
                         std::process::exit(1);
                     }
@@ -597,5 +699,73 @@ mod tests {
             trigger_line, "GET /result HTTP/1.1",
             "the second request must be the trigger GET, got {trigger_line:?}"
         );
+    }
+
+    /// #673 codex P2 round 2 — a connection RESET during the trigger
+    /// read is a real failure, NOT the lenient deadline shape: the
+    /// twin must not report an unconfirmed flash as a successful run.
+    #[test]
+    fn trigger_read_reset_is_failure_not_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept, read ONE byte of the head, then drop with the rest
+        // still queued: unread data on close is an RST (deterministic
+        // reset mid-trigger-read — not a clean FIN, not a deadline).
+        let server = std::thread::spawn(move || {
+            use std::io::Read;
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut one = [0u8; 1];
+            let _ = conn.read(&mut one);
+            drop(conn);
+        });
+
+        let stream = TcpStream::connect(addr).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime");
+        let result = rt.block_on(trigger_over(
+            stream,
+            Duration::from_millis(250),
+            "h",
+            "/result",
+        ));
+        match result {
+            Err(TriggerStepError::Read { .. }) => {}
+            Err(TriggerStepError::DeadlineExpired) => {
+                panic!("a reset must not classify as the lenient deadline shape")
+            }
+            other => panic!("expected Read failure, got {other:?}"),
+        }
+        server.join().unwrap();
+    }
+
+    /// The complementary half: a server that holds the connection open
+    /// and never answers IS the deadline shape (lenient, upload.py
+    /// timeout→True) — pinned so the split cannot invert.
+    #[test]
+    fn trigger_mute_server_is_the_lenient_deadline_shape() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (_conn, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+        });
+
+        let stream = TcpStream::connect(addr).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime");
+        let result = rt.block_on(trigger_over(
+            stream,
+            Duration::from_millis(250),
+            "h",
+            "/result",
+        ));
+        assert_eq!(
+            result.map_err(|e| format!("{e:?}")),
+            Err(String::from("DeadlineExpired")),
+            "a mute server over the deadline is the lenient shape"
+        );
+        server.join().unwrap();
     }
 }

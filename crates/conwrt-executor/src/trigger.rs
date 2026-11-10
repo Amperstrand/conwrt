@@ -33,7 +33,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::post::{HttpIo, PostError, body_after_headers, retain_verdict_bytes};
-
 /// The trigger endpoint's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerVerdict {
@@ -57,6 +56,29 @@ pub enum TriggerVerdict {
 pub struct TriggerRequest {
     host: String,
     endpoint: String,
+}
+
+/// Classify a trigger response BODY (headers already stripped via
+/// [`body_after_headers`]). Public so host twins can classify a
+/// partial body captured before a transport failure — the wire order
+/// is [`TriggerRequest::trigger`]'s and must not drift from it:
+/// upload.py::trigger_flash checks "success" first (exact, then
+/// substring case-insensitive), then the in-progress page, then the
+/// lenient empty (the STRIPPED body — a headers-only response is
+/// empty too, #673 codex P2), else rejection.
+#[must_use]
+pub fn classify_trigger_body(text: &str) -> TriggerVerdict {
+    if text.to_ascii_lowercase().contains("success") {
+        TriggerVerdict::Success
+    } else if text.contains("Update in progress") {
+        TriggerVerdict::InProgress
+    } else if text.trim().is_empty() {
+        TriggerVerdict::NoResponse
+    } else {
+        TriggerVerdict::Rejected {
+            snippet: text.chars().take(80).collect(),
+        }
+    }
 }
 
 impl TriggerRequest {
@@ -99,23 +121,7 @@ impl TriggerRequest {
         match io.read_response(&mut response).await {
             Ok(()) => {
                 let raw = String::from_utf8_lossy(&response).into_owned();
-                let text = body_after_headers(&raw);
-                // upload.py::trigger_flash order: "success" first
-                // (exact, then substring case-insensitive), then the
-                // in-progress page, then lenient-empty (the STRIPPED
-                // body — a headers-only response is empty too, #673
-                // codex P2), else failure.
-                if text.to_ascii_lowercase().contains("success") {
-                    Ok(TriggerVerdict::Success)
-                } else if text.contains("Update in progress") {
-                    Ok(TriggerVerdict::InProgress)
-                } else if text.trim().is_empty() {
-                    Ok(TriggerVerdict::NoResponse)
-                } else {
-                    Ok(TriggerVerdict::Rejected {
-                        snippet: text.chars().take(80).collect(),
-                    })
-                }
+                Ok(classify_trigger_body(body_after_headers(&raw)))
             }
             Err(_) => Err(PostError::Read),
         }
