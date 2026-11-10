@@ -37,6 +37,7 @@
 //! AGENTS.md D-Link matrix.
 
 use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
 use conwrt_agent_proto::protocol::StreamChunk;
 use conwrt_executor::multipart::{BOUNDARY_PREFIX, Multipart, UPLOAD_FIELD};
@@ -53,6 +54,13 @@ const WINDOW: usize = 8 * 1024;
 const CHUNK: usize = 4 * 1024;
 /// The transfer id a solo twin uses.
 const TRANSFER_ID: u64 = 1;
+/// Per-read response deadline (#232 P2 4298093594): the `HttpIo`
+/// contract requires bounded reads (post.rs — the reference
+/// `TcpHttpIo` uses 30 s per read; the Python uploader bounds the
+/// whole POST at `curl -m 400`). A server that accepts but never
+/// FINs must turn into a failed verdict, not a hung twin, after the
+/// irreversible POST.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Args {
     target: SocketAddr,
@@ -135,20 +143,28 @@ fn boundary() -> String {
 
 /// Blocking std TCP as the pump's transport: the async surface is
 /// driven to completion on first poll, so plain IO underneath is exact.
-struct StdIo(TcpStream);
+struct StdIo {
+    stream: TcpStream,
+    read_timeout: Duration,
+}
 
 impl HttpIo for StdIo {
     type Error = std::io::Error;
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
-        std::io::Write::write_all(&mut self.0, data)
+        std::io::Write::write_all(&mut self.stream, data)
     }
 
     async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), std::io::Error> {
         use std::io::Read;
+        // The HttpIo bounded-read contract (#232 P2 4298093594): the
+        // deadline expires as WouldBlock/TimedOut, which surfaces on
+        // the error path as PostError::Read — failed verdict, burned
+        // window, no manual termination needed.
+        self.stream.set_read_timeout(Some(self.read_timeout))?;
         let mut buf = [0u8; 512];
         loop {
-            match self.0.read(&mut buf) {
+            match self.stream.read(&mut buf) {
                 Ok(0) => return Ok(()), // server FIN: verdict complete
                 // same bounded retention as the firmware: the twin
                 // reproduces the MCU's read behavior exactly
@@ -266,7 +282,10 @@ fn main() {
         }
     };
     eprintln!("connected");
-    let mut io = StdIo(stream);
+    let mut io = StdIo {
+        stream,
+        read_timeout: READ_TIMEOUT,
+    };
 
     let boundary = boundary();
     let mp = Multipart {
@@ -315,5 +334,59 @@ fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #232 P2 4298093594: the twin's own HttpIo impl must honor the
+    /// trait's bounded-read contract (post.rs) — a server that accepts
+    /// and then never FINs must produce a transport error within the
+    /// deadline, not hang the twin after the irreversible POST. The
+    /// outer recv_timeout is the red shape: pre-fix, the blocking read
+    /// never returns.
+    #[test]
+    fn read_response_is_bounded_against_a_mute_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept, hold the socket open, never write, never FIN.
+        let server = std::thread::spawn(move || {
+            let (_conn, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+        });
+
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut io = StdIo {
+            stream,
+            read_timeout: Duration::from_millis(250),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("current-thread runtime");
+            let mut out = Vec::new();
+            let result = rt.block_on(async { io.read_response(&mut out).await });
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(Err(e)) => assert!(
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
+                "deadline expiry must surface as the read-timeout kind, got {e:?}"
+            ),
+            Ok(Ok(())) => panic!("a mute server must not read as a complete verdict"),
+            Err(recv_timeout) => panic!(
+                "read_response never returned against a mute server \
+                 ({recv_timeout}): StdIo lacks the contract's read deadline"
+            ),
+        }
+        reader.join().unwrap();
+        server.join().unwrap();
     }
 }
