@@ -163,12 +163,12 @@ pub fn data_packet<'a>(buf: &'a mut [u8], block: u16, chunk: &[u8]) -> &'a [u8] 
 /// an empty slice when the client sent no options (option-less clients
 /// get no OACK at all).
 #[must_use]
-pub fn oack_packet<'a>(
-    buf: &'a mut [u8],
+pub fn oack_packet(
+    buf: &mut [u8],
     blksize: usize,
     timeout_secs: u32,
     had_options: bool,
-) -> &'a [u8] {
+) -> &[u8] {
     fn push_field(buf: &mut [u8], n: &mut usize, s: &[u8]) {
         buf[*n..*n + s.len()].copy_from_slice(s);
         *n += s.len();
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn parse_rrq_live_and_plain() {
         // live: per-boot name + blksize/timeout options
-        let body = b"3fa2\0octet\0blksize\01468\0timeout\0\x35\0";
+        let body = b"3fa2\x00octet\x00blksize\x001468\x00timeout\x005\x00";
         let info = parse_rrq(body);
         assert_eq!(info.filename, "3fa2");
         assert_eq!(info.mode, "octet");
@@ -583,7 +583,7 @@ mod tests {
         let pkt = oack_packet(&mut b, 1468, 5, true);
         assert_eq!(&pkt[..2], &OP_OACK.to_be_bytes());
         let s = core::str::from_utf8(&pkt[2..]).unwrap();
-        assert_eq!(s, "blksize\01468\0timeout\05\0");
+        assert_eq!(s, "blksize\x001468\x00timeout\x005\x00");
         let pkt = oack_packet(&mut b, 512, 5, false);
         assert!(pkt.is_empty()); // option-less client gets no OACK
     }

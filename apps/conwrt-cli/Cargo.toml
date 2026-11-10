@@ -27,6 +27,9 @@ conwrt-image = { path = "../../crates/conwrt-image" }
 conwrt-serial = { path = "../../crates/conwrt-serial" }
 conwrt-maas = { path = "../../crates/conwrt-maas" }
 conwrt-zycast = { path = "../../crates/conwrt-zycast" }
+conwrt-blankdl = { path = "../../crates/conwrt-blankdl" }
+conwrt-protocols = { path = "../../crates/conwrt-protocols", default-features = false, features = ["std"] }
+sha2 = "0.10"
 conwrt-probe-core = { path = "../../crates/conwrt-probe-core" }
 clap = { workspace = true }
 pollster = { workspace = true }

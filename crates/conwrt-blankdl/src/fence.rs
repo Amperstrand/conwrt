@@ -72,7 +72,7 @@ impl PinnedImage {
     ) -> Result<Self, FenceError> {
         let sha256_hex = hex_lower(&Sha256::digest(&bytes));
         let expect = expect_sha
-            .ok_or_else(|| FenceError::Unpinned)?;
+            .ok_or(FenceError::Unpinned)?;
         let expect = expect.trim().to_ascii_lowercase();
         if expect != sha256_hex {
             return Err(FenceError::ShaMismatch {
@@ -528,8 +528,8 @@ fn serve_loop(
                         t.resends += 1;
                         last_activity = Instant::now();
                     }
-                    (AckAction::Complete, None) => {
-                        if outcome.completed.is_none() {
+                    (AckAction::Complete, None)
+                        if outcome.completed.is_none() => {
                             outcome.transferred = Some(u64::try_from(image.len()).unwrap_or(0));
                             outcome.completed = Some(SystemTime::now());
                             log.line(&format!(
@@ -539,7 +539,6 @@ fn serve_loop(
                                 addr.ip()
                             ));
                         }
-                    }
                     _ => {}
                 }
             }

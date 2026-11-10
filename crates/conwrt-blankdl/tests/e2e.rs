@@ -384,7 +384,7 @@ fn abandoned_transfer_then_new_rrq() {
         let s = UdpSocket::bind("127.0.0.1:0").unwrap();
         s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
         let mut rrq = vec![0, OP_RRQ as u8];
-        rrq.extend_from_slice(b"aband\0octet\0blksize\01468\0timeout\05\0");
+        rrq.extend_from_slice(b"aband\x00octet\x00blksize\x001468\x00timeout\x005\x00");
         let mut buf = [0u8; 1600];
         let first = loop {
             s.send_to(&rrq, ("127.0.0.1", port)).unwrap();
