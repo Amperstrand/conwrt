@@ -181,7 +181,7 @@ fn args(image: &str, allow_raw: bool) -> ZycastArgs {
 }
 
 mod magic_gate_tests {
-    use super::*;
+    use super::{ZycastArgs, args, inner};
 
     #[test]
     fn hdr0_image_passes_the_magic_gate() {
