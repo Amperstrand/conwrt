@@ -105,6 +105,39 @@ static unsigned qmi_wait(unsigned svc, unsigned cid, unsigned want_txn,
     }
 }
 
+static const char *err_name(unsigned e) {
+    switch (e) {
+    case 0x0000: return "NONE";        case 0x0001: return "MALFORMED_MSG";
+    case 0x0002: return "NO_MEMORY";    case 0x0003: return "INTERNAL";
+    case 0x0011: return "MISSING_ARG";  case 0x0013: return "ARG_TOO_LONG";
+    case 0x0030: return "INVALID_ARG";  case 0x0039: return "INVALID_MESSAGE_ID";
+    case 0x0045: return "DISABLED";     case 0x0046: return "INVALID_OPERATION";
+    case 0x0047: return "INVALID_QMI_CMD"; case 0x004A: return "INFO_UNAVAILABLE";
+    case 0x0052: return "ACCESS_DENIED";   default:   return "?";
+    }
+}
+
+/* send a deliberately-truncated TLV body (type 1, claims 16B, provides 0) so
+ * framework decode ALWAYS fails before any handler runs -> side-effect-free
+ * presence oracle: 0x47/0x39 = id absent from dispatch; anything else = id
+ * present (decode/validation stage reached). */
+static const unsigned char BAD_TLV[3] = {0x01, 0x10, 0x00};
+
+static int ln2;
+static int probe_id(unsigned cid, unsigned id) {
+    qmi_xmit(0x0B, cid, id, BAD_TLV, 3);
+    unsigned char tlvs[1024]; int tl = sizeof tlvs;
+    qmi_wait(0x0B, cid, txn, tlvs, &tl);
+    unsigned char *res = find_tlv(tlvs, tl, 0x02, &ln2);
+    unsigned r = (res && ln2 >= 2) ? (res[0] | (res[1] << 8)) : 0xFFFF;
+    unsigned e = (res && ln2 >= 4) ? (res[2] | (res[3] << 8)) : 0;
+    if (r == 0xFFFF) { printf("  id 0x%02x: NO RESPONSE\n", id); return -1; }
+    int present = (e != 0x0047 && e != 0x0039);
+    printf("  id 0x%02x: result=%u err=0x%02x (%s) -> %s\n",
+           id, r, e, err_name(e), present ? "PRESENT <<<" : "absent");
+    return present;
+}
+
 /* ---------------- main ---------------- */
 /* proprietary block extracted in EXP-040 (uim-msgids.json) */
 static const unsigned PROP_IDS[] = {
@@ -115,36 +148,61 @@ static const unsigned PROP_IDS[] = {
 
 int main(int argc, char **argv) {
     const char *dev = argc > 1 ? argv[1] : "/dev/cdc-wdm0";
+    const char *mode = argc > 2 ? argv[2] : "bitmap";
     fd = open(dev, O_RDWR);
     if (fd < 0) { fprintf(stderr, "open %s: %s\n", dev, strerror(errno)); return 1; }
 
-    /* 1. CTL GetClientID for UIM (svc 0x0B) */
+    if (!strcmp(mode, "ver")) {
+        /* CTL GET_VERSION_LIST 0x0021 — no client needed */
+        qmi_xmit(0, 0, 0x0021, NULL, 0);
+        unsigned char tlvs[2048]; int tl = sizeof tlvs;
+        qmi_wait(0, 0, txn, tlvs, &tl);
+        int i = 0;
+        while (i + 3 <= tl) {
+            unsigned t = tlvs[i]; int l = tlvs[i+1] | (tlvs[i+2] << 8);
+            printf("TLV %02x len %d:", t, l);
+            for (int k = 0; k < l && k < 96; k++) printf(" %02X", tlvs[i+3+k]);
+            printf("\n");
+            i += 3 + l;
+        }
+        return 0;
+    }
+
+    /* allocate UIM client for probe/sweep/bitmap */
     unsigned char t_getcid[4] = {0x01, 0x01, 0x00, 0x0B};
     qmi_xmit(0, 0, 0x0022, t_getcid, 4);
-    unsigned char tlvs[1024]; int tl = sizeof tlvs;
+    unsigned char tlvs[2048]; int tl = sizeof tlvs;
     qmi_wait(0, 0, txn, tlvs, &tl);
-    int ln; unsigned char *r = find_tlv(tlvs, tl, 0x01, &ln);
+    unsigned char *r = find_tlv(tlvs, tl, 0x01, &ln2);
     int res_off = -1;
-    { unsigned char *rr = find_tlv(tlvs, tl, 0x02, &ln);
-      if (rr && ln >= 2) res_off = (rr[0] | (rr[1] << 8)); }
-    if (!r || ln < 2 || res_off) {
-        fprintf(stderr, "GetClientID failed (res=%d)\n", res_off); return 2;
-    }
+    { unsigned char *rr = find_tlv(tlvs, tl, 0x02, &ln2);
+      if (rr && ln2 >= 2) res_off = (rr[0] | (rr[1] << 8)); }
+    if (!r || ln2 < 2 || res_off) { fprintf(stderr, "GetClientID failed (res=%d)\n", res_off); return 2; }
     unsigned cid = r[1];
     printf("UIM client allocated: cid=%u\n", cid);
 
-    /* 2. UIM GET_SUPPORTED_MESSAGES 0x001E — empty request */
-    qmi_xmit(0x0B, cid, 0x001E, NULL, 0);
-    qmi_wait(0x0B, cid, txn, tlvs, &tl);
-
-    unsigned char *res = find_tlv(tlvs, tl, 0x02, &ln);
-    unsigned qmi_res = (res && ln >= 2) ? (res[0] | (res[1] << 8)) : 0xFFFF;
-    printf("QMI result: 0x%04x\n", qmi_res);
-
-    unsigned char *bm = find_tlv(tlvs, tl, 0x01, &ln);
-    if (!bm) {
-        printf("no bitmap TLV (0x01) in response\n");
-        /* dump all TLVs raw for the record */
+    if (!strcmp(mode, "probe")) {
+        for (int a = 3; a < argc; a++) probe_id(cid, strtoul(argv[a], NULL, 16));
+    } else if (!strcmp(mode, "sweep")) {
+        /* calibration sentinels then the 44 proprietary ids */
+        static const unsigned SENT[] = {0x42, 0x3B, 0x1E};
+        printf("--- calibration (expect PRESENT PRESENT absent) ---\n");
+        for (unsigned k = 0; k < 3; k++) probe_id(cid, SENT[k]);
+        printf("--- proprietary block ---\n");
+        int hits = 0, n = 0;
+        for (unsigned k = 0; k < sizeof PROP_IDS / sizeof *PROP_IDS; k++) {
+            int p = probe_id(cid, PROP_IDS[k]); n++;
+            if (p == 1) hits++;
+        }
+        printf("\nSWEEP VERDICT: %d/%d proprietary ids PRESENT externally -> %s\n",
+               hits, n, hits ? "LPA FAMILY EXTERNALLY REACHABLE" : "internal-only (door closed)");
+    } else {  /* bitmap — original probe, kept for the record */
+        qmi_xmit(0x0B, cid, 0x001E, NULL, 0);
+        qmi_wait(0x0B, cid, txn, tlvs, &tl);
+        unsigned char *res = find_tlv(tlvs, tl, 0x02, &ln2);
+        unsigned qmi_res = (res && ln2 >= 2) ? (res[0] | (res[1] << 8)) : 0xFFFF;
+        unsigned qmi_err = (res && ln2 >= 4) ? (res[2] | (res[3] << 8)) : 0;
+        printf("QMI result: 0x%04x err 0x%02x (%s)\n", qmi_res, qmi_err, err_name(qmi_err));
         int i = 0;
         while (i + 3 <= tl) {
             unsigned t = tlvs[i]; int l = tlvs[i+1] | (tlvs[i+2] << 8);
@@ -153,37 +211,8 @@ int main(int argc, char **argv) {
             printf("\n");
             i += 3 + l;
         }
-    } else {
-        printf("bitmap (%d bytes): ", ln);
-        for (int i = 0; i < ln; i++) printf("%02X", bm[i]);
-        printf("\n\nsupported request msg ids:\n  ");
-        int n_sup = 0;
-        for (int byte = 0; byte < ln; byte++)
-            for (int bit = 0; bit < 8; bit++)
-                if (bm[byte] & (1 << bit)) {
-                    printf("%02X ", byte * 8 + bit);
-                    if (++n_sup % 16 == 0) printf("\n  ");
-                }
-        printf("\n(total %d)\n\n", n_sup);
-
-        /* 3. the EXP-040 proprietary-block verdict */
-        printf("=== EXP-040 proprietary block (44 ids) ===\n");
-        int hits = 0;
-        for (unsigned k = 0; k < sizeof PROP_IDS / sizeof *PROP_IDS; k++) {
-            unsigned id = PROP_IDS[k];
-            int set = (id / 8 < ln) && (bm[id / 8] & (1 << (id % 8)));
-            if (set) hits++;
-            if (set || (id / 8 < ln))  /* only print ids within bitmap range */
-                printf("  0x%02x %s\n", id, set ? "SUPPORTED <<<" : "-");
-        }
-        printf("\nVERDICT: %d/%zu proprietary ids exposed externally -> %s\n",
-               hits, sizeof PROP_IDS / sizeof *PROP_IDS,
-               hits ? "LPA FAMILY EXTERNALLY REACHABLE" : "internal-only (door closed)");
-        unsigned maxid = ln * 8;
-        printf("bitmap covers msg ids 0x00..0x%02x\n", maxid - 1);
     }
 
-    /* 4. release the client (clean exit) */
     unsigned char t_rel[4] = {0x01, 0x01, 0x00, cid};
     qmi_xmit(0, 0, 0x0023, t_rel, 4);
     qmi_wait(0, 0, txn, tlvs, &tl);
