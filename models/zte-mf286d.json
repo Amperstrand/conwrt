@@ -168,7 +168,6 @@
     "Laptop /tmp cleaners remove staged scripts/ISOs across multi-day sessions \u2014 re-stage from source repos or keep under /tmp/opencode subdirs with recent mtimes",
     "Port 8080 on shared build hosts is frequently taken by other lanes' docker \u2014 verify payload-server ports before arming remote-exec URLs"
   ],
-<<<<<<< Updated upstream
   "lan_subnet": "192.168.0.0/24",
   "sim_access": {
     "measured_on": "BD_TELIAMF286DV1.0.0B12 modem firmware, OpenWrt 25.12.6, live probe 2026-11-07",
@@ -178,7 +177,3 @@
     "note": "capability enum is schema-restricted; the reader verdicts live here"
   }
 }
-=======
-  "lan_subnet": "192.168.0.0/24"
-}
->>>>>>> Stashed changes
