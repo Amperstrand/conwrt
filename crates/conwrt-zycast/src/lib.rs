@@ -10,4 +10,5 @@ pub mod sender;
 pub use protocol::{DEFAULT_DELAY_MS, DEFAULT_GROUP, DEFAULT_LOOPS, DEFAULT_PORT, ImageType};
 pub use sender::{SendConfig, SendStats, send};
 pub mod simulator;
+#[cfg(feature = "std")]
 pub use conwrt_protocols::zycast_receiver::ras_model_id;
