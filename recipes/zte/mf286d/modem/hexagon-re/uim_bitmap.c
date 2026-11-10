@@ -199,6 +199,28 @@ int main(int argc, char **argv) {
             }
             if (i == 0) printf("(no TLVs parsed, raw %d bytes)\n", tl2);
         }
+    } else if (!strcmp(mode, "callslot")) {
+        /* call with a single TLV{type 1, slot u8}: default slot 1 */
+        for (int a = 3; a < argc; a++) {
+            unsigned id = strtoul(argv[a], NULL, 16);
+            unsigned slot = 1;  /* default; fixed slot 1 for now */
+            unsigned char t[4] = {0x01, 0x01, 0x00, (unsigned char)slot};
+            printf("--- callslot 0x%02x slot=%u ---\n", id, slot);
+            qmi_xmit(0x0B, cid, id, t, 4);
+            unsigned char t2[4096]; int tl2 = sizeof t2;
+            qmi_wait(0x0B, cid, txn, t2, &tl2);
+            int i = 0;
+            while (i + 3 <= tl2) {
+                unsigned t = t2[i]; int l = t2[i+1] | (t2[i+2] << 8);
+                printf("TLV %02x len %d:", t, l);
+                for (int k = 0; k < l && k < 512; k++) printf(" %02X", t2[i+3+k]);
+                /* ascii render for string-ish payloads */
+                printf("  |");
+                for (int k = 0; k < l && k < 512; k++) printf("%c", (t2[i+3+k] >= 32 && t2[i+3+k] < 127) ? t2[i+3+k] : '.');
+                printf("|\n");
+                i += 3 + l;
+            }
+        }
     } else if (!strcmp(mode, "probe")) {
         for (int a = 3; a < argc; a++) probe_id(cid, strtoul(argv[a], NULL, 16));
     } else if (!strcmp(mode, "sweep")) {
