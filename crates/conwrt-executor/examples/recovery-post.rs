@@ -10,6 +10,17 @@
 //! POST burns the recovery window and re-arming means power-cycling the
 //! router back into recovery.
 //!
+//! Two-stage flows (#232 P1 4298093559): on GL.iNet models (MT3000) the
+//! accepted upload only STORES the image — flashing starts when a GET
+//! hits the model's `trigger_flash_endpoint` (`/result`), which blocks
+//! until the flash completes (~360 s) and answers `success`. Pass
+//! `--trigger /result` and the twin sends that second request on a
+//! FRESH connection (the upload connection is `Connection: close`) and
+//! only then reports success. Without `--trigger` the twin stops after
+//! the upload verdict — do not use a two-stage model without it, or
+//! the experiment reports completion while the image merely sits
+//! uploaded.
+//!
 //! Refuses to run without an explicit `--target` — no defaults, the
 //! operator names the router on every invocation:
 //!
@@ -17,7 +28,8 @@
 //! cargo run -p conwrt-executor --example recovery-post -- \
 //!     --target 192.168.0.1:80 --image openwrt.bin \
 //!     [--endpoint /upload] [--field firmware] \
-//!     [--accept-pattern "Upgrade successfully!"] [--yes]
+//!     [--accept-pattern "Upgrade successfully!"] \
+//!     [--trigger /result] [--yes]
 //! ```
 //!
 //! The endpoint and field are flags because recovery httpds disagree
@@ -45,7 +57,7 @@ use conwrt_executor::post::retain_verdict_bytes;
 use conwrt_executor::transfer::TransferState;
 use conwrt_executor::{HttpIo, PostError, PostOutcome, RecoveryPost, Verdict};
 
-const USAGE: &str = "usage: recovery-post --target HOST:PORT --image PATH [--endpoint PATH] [--field NAME] [--accept-pattern PATTERN] [--yes]";
+const USAGE: &str = "usage: recovery-post --target HOST:PORT --image PATH [--endpoint PATH] [--field NAME] [--accept-pattern PATTERN] [--trigger PATH] [--yes]";
 
 /// Undrained window capacity — the F746 firmware profile, so the twin
 /// reproduces the MCU's chunk/pump cadence.
@@ -61,6 +73,12 @@ const TRANSFER_ID: u64 = 1;
 /// FINs must turn into a failed verdict, not a hung twin, after the
 /// irreversible POST.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Trigger-read deadline (#232 P1 4298093559): the trigger request
+/// BLOCKS until the flash completes (`trigger_blocks_until_done` in
+/// models/glinet-mt3000.json — ~360 s), so the 30 s upload-verdict
+/// budget would fire mid-flash. Mirrors the Python twin's
+/// `flash_time_seconds + 60` (scripts/flash/upload.py::trigger_flash).
+const TRIGGER_READ_TIMEOUT: Duration = Duration::from_secs(420);
 
 struct Args {
     target: SocketAddr,
@@ -68,6 +86,9 @@ struct Args {
     endpoint: String,
     field: String,
     accept_pattern: String,
+    /// Two-stage flow: GET this path after an accepted upload to start
+    /// the flash (models' `trigger_flash_endpoint`, e.g. MT3000 `/result`).
+    trigger: Option<String>,
     assume_yes: bool,
 }
 
@@ -77,6 +98,7 @@ fn parse_args() -> Result<Args, String> {
     let mut endpoint = String::from("/upload");
     let mut field = String::from(UPLOAD_FIELD);
     let mut accept_pattern = String::from(conwrt_executor::post::ACCEPT_PATTERN);
+    let mut trigger: Option<String> = None;
     let mut assume_yes = false;
 
     let mut argv = std::env::args().skip(1);
@@ -92,6 +114,7 @@ fn parse_args() -> Result<Args, String> {
             "--endpoint" => endpoint = value,
             "--field" => field = value,
             "--accept-pattern" => accept_pattern = value,
+            "--trigger" => trigger = Some(value),
             other => return Err(format!("unknown flag {other:?}")),
         }
     }
@@ -113,12 +136,20 @@ fn parse_args() -> Result<Args, String> {
             "--endpoint {endpoint:?} must be an absolute path (models name it e.g. `/` or `/upload`)"
         ));
     }
+    if let Some(path) = &trigger
+        && !path.starts_with('/')
+    {
+        return Err(format!(
+            "--trigger {path:?} must be an absolute path (the model's trigger_flash_endpoint, e.g. `/result`)"
+        ));
+    }
     Ok(Args {
         target,
         image_path,
         endpoint,
         field,
         accept_pattern,
+        trigger,
         assume_yes,
     })
 }
@@ -208,6 +239,26 @@ async fn run(
     post.finish(io, &xfer).await
 }
 
+/// Stage two of the GL.iNet two-stage flow (#232 P1 4298093559):
+/// after an ACCEPTED upload verdict, GET the model's
+/// `trigger_flash_endpoint` on a fresh connection — the trigger starts
+/// the actual flash and blocks until it completes, so the read budget
+/// is [`TRIGGER_READ_TIMEOUT`], not the 30 s upload-verdict one.
+async fn send_trigger(
+    target: SocketAddr,
+    host: &str,
+    endpoint: &str,
+) -> Result<conwrt_executor::TriggerVerdict, PostError> {
+    let stream = TcpStream::connect(target).map_err(|_| PostError::Write { op: "trigger" })?;
+    let mut io = StdIo {
+        stream,
+        read_timeout: TRIGGER_READ_TIMEOUT,
+    };
+    conwrt_executor::TriggerRequest::new(host, endpoint)
+        .trigger(&mut io)
+        .await
+}
+
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
@@ -251,9 +302,20 @@ fn main() {
         "window         {WINDOW} bytes (F746 firmware profile), field {:?}, accept {:?}",
         args.field, args.accept_pattern
     );
+    if let Some(path) = &args.trigger {
+        eprintln!(
+            "trigger        {path} (two-stage flow: upload stores, GET {path} flashes; the GET blocks up to {} s)",
+            TRIGGER_READ_TIMEOUT.as_secs()
+        );
+    }
     eprintln!(
         "one-request rule: this POST is the first and only HTTP request; a failure burns\n\
-         the recovery window (re-arm = power-cycle the router into recovery)"
+         the recovery window (re-arm = power-cycle the router into recovery){}",
+        if args.trigger.is_some() {
+            " — the trigger GET is the documented\n         second request, sent only after an accepted upload"
+        } else {
+            ""
+        }
     );
 
     if !args.assume_yes {
@@ -307,6 +369,54 @@ fn main() {
                     "verdict: {:?} ({} bytes uploaded)",
                     outcome.verdict, outcome.uploaded
                 );
+                // #232 P1 4298093559: on two-stage models an accepted
+                // upload means STORED, not flashing — the run is not a
+                // success until the trigger verdict says the flash ran
+                // (or was already consumed). The trigger is NEVER sent
+                // after a rejected/no-response upload: it would flash
+                // whatever stale image the server holds.
+                let Some(trigger_path) = args.trigger.clone() else {
+                    return;
+                };
+                let host = args.target.ip().to_string();
+                match rt.block_on(send_trigger(args.target, &host, &trigger_path)) {
+                    Ok(conwrt_executor::TriggerVerdict::Success) => {
+                        println!("trigger: flash completed ('success' from {trigger_path})");
+                    }
+                    Ok(conwrt_executor::TriggerVerdict::InProgress) => {
+                        println!(
+                            "trigger: 'Update in progress' — the flash has started, answer came early"
+                        );
+                    }
+                    Ok(conwrt_executor::TriggerVerdict::NoResponse) => {
+                        // The lenient 1.x shape (upload.py::trigger_flash):
+                        // an empty trigger answer often means it was
+                        // already consumed — warn, do not fail the run.
+                        eprintln!(
+                            "trigger: EMPTY response from {trigger_path} — the flash may have been consumed already; verify boot on the wire"
+                        );
+                    }
+                    Ok(conwrt_executor::TriggerVerdict::Rejected { snippet }) => {
+                        eprintln!(
+                            "trigger: REJECTED — response body: {snippet:?} (image uploaded but flash not confirmed started)"
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(PostError::Read) => {
+                        // A deadline expiry after 420 s is the
+                        // "flash may still be in progress" lenient shape
+                        // (upload.py treats its curl timeout the same).
+                        eprintln!(
+                            "trigger: read deadline expired — the flash may still be in progress; verify boot on the wire"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "trigger failed: {e:?} — image uploaded but flash not confirmed started"
+                        );
+                        std::process::exit(1);
+                    }
+                }
             }
             Verdict::Rejected { snippet } => {
                 eprintln!(
@@ -388,5 +498,104 @@ mod tests {
         }
         reader.join().unwrap();
         server.join().unwrap();
+    }
+
+    /// #232 P1 4298093559 — the MT3000 two-stage flow, end to end over
+    /// real sockets: connection 1 takes the multipart POST and answers
+    /// the GL.iNet `<size> <md5>` upload verdict; connection 2 must be
+    /// the trigger `GET /result`, answered with `success`. The red
+    /// shape is compile-level: pre-fix, the twin had no trigger path —
+    /// an accepted upload verdict WAS the success exit.
+    #[test]
+    fn two_stage_upload_then_trigger_gets_result_before_success() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            // Stage 1: drain the upload POST until the multipart
+            // footer tail, answer the GL.iNet size-md5 shape.
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = conn.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&buf[..n]);
+                if seen.ends_with(b"--\r\n") {
+                    break; // multipart footer tail: body complete
+                }
+            }
+            assert!(
+                seen.starts_with(b"POST /upload HTTP/1.1\r\n"),
+                "upload first"
+            );
+            conn.write_all(b"4194304 0d7e2f8d5c3b1a9f6e4d2c8b7a6f5e3d")
+                .unwrap();
+            drop(conn);
+
+            // Stage 2: the trigger — a SECOND connection carrying the
+            // model's trigger_flash_endpoint as a GET.
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 512];
+            loop {
+                let n = conn.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&buf[..n]);
+                if req.ends_with(b"\r\n\r\n") {
+                    break; // request head complete
+                }
+            }
+            let first_line = String::from_utf8_lossy(&req).into_owned();
+            let first_line = first_line.lines().next().unwrap_or_default().to_string();
+            conn.write_all(b"success").unwrap();
+            drop(conn);
+            first_line
+        });
+
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut io = StdIo {
+            stream,
+            read_timeout: Duration::from_secs(5),
+        };
+        let image = vec![0xA5u8; 8 * 1024];
+        let args = Args {
+            target: addr,
+            image_path: "test-image".into(),
+            endpoint: "/upload".into(),
+            field: "firmware".into(),
+            accept_pattern: "Upgrade successfully!".into(),
+            trigger: Some("/result".into()),
+            assume_yes: true,
+        };
+        let boundary = String::from("----WebKitFormBoundary0123456789abcdef");
+        let mp = Multipart {
+            boundary: &boundary,
+            field: &args.field,
+            filename: "recovery.bin",
+            image_len: image.len() as u64,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime");
+        let outcome = rt.block_on(run(&mut io, mp, &image, &args)).unwrap();
+        assert_eq!(outcome.verdict, Verdict::Accepted, "size-md5 shape accepts");
+
+        let host = addr.ip().to_string();
+        let verdict = rt
+            .block_on(send_trigger(addr, &host, "/result"))
+            .expect("trigger completes");
+        assert_eq!(verdict, conwrt_executor::TriggerVerdict::Success);
+
+        let trigger_line = server.join().unwrap();
+        assert_eq!(
+            trigger_line, "GET /result HTTP/1.1",
+            "the second request must be the trigger GET, got {trigger_line:?}"
+        );
     }
 }
