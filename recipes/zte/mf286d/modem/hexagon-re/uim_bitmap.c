@@ -181,7 +181,25 @@ int main(int argc, char **argv) {
     unsigned cid = r[1];
     printf("UIM client allocated: cid=%u\n", cid);
 
-    if (!strcmp(mode, "probe")) {
+    if (!strcmp(mode, "call")) {
+        /* empty (fully valid) request; dump every response TLV in hex */
+        for (int a = 3; a < argc; a++) {
+            unsigned id = strtoul(argv[a], NULL, 16);
+            printf("--- call 0x%02x (empty request) ---\n", id);
+            qmi_xmit(0x0B, cid, id, NULL, 0);
+            unsigned char t2[2048]; int tl2 = sizeof t2;
+            qmi_wait(0x0B, cid, txn, t2, &tl2);
+            int i = 0;
+            while (i + 3 <= tl2) {
+                unsigned t = t2[i]; int l = t2[i+1] | (t2[i+2] << 8);
+                printf("TLV %02x len %d:", t, l);
+                for (int k = 0; k < l && k < 256; k++) printf(" %02X", t2[i+3+k]);
+                printf("\n");
+                i += 3 + l;
+            }
+            if (i == 0) printf("(no TLVs parsed, raw %d bytes)\n", tl2);
+        }
+    } else if (!strcmp(mode, "probe")) {
         for (int a = 3; a < argc; a++) probe_id(cid, strtoul(argv[a], NULL, 16));
     } else if (!strcmp(mode, "sweep")) {
         /* calibration sentinels then the 44 proprietary ids */
