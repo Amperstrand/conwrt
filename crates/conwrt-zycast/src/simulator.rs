@@ -18,6 +18,7 @@ use std::time::Duration;
 
 /// Handle to a running simulator.
 pub struct SimZLoader {
+    /// UDP port the fake bootloader listens on (127.0.0.1).
     pub port: u16,
     result: Receiver<SimResult>,
 }
@@ -25,15 +26,21 @@ pub struct SimZLoader {
 /// What the simulator observed.
 #[derive(Debug, Clone)]
 pub struct SimResult {
+    /// Whether the receiver reached flash-commit readiness.
     pub completed: bool,
+    /// Reassembled image (padded to the chunk boundary).
     /// Reassembled image (padded to the chunk boundary).
     pub image: Vec<u8>,
     /// Packets accepted into the reassembly.
+    /// Packets accepted into reassembly.
     pub accepted: usize,
     /// Out-of-order drops — each one means the receiver rolled its
     /// descriptor back and waited for a loop restart.
+    /// Out-of-order drops — each rolled the descriptor back to chunk 0.
     pub rolled_back: usize,
+    /// Checksum mismatches (packet skipped, no state damage).
     pub checksum_errors: usize,
+    /// Other drops (malformed, dedup, post-completion ignores).
     pub other_drops: usize,
 }
 

@@ -43,16 +43,26 @@ pub enum DropReason {
 }
 
 /// Outcome of feeding one packet to [`ZLoaderReceiver`].
+/// Per-packet decision: accepted into reassembly (with location), a
+/// state transition to completion, or a [`DropReason`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     /// Packet dropped, receiver state unchanged (or rolled back — see
     /// [`DropReason::OutOfOrder`], the only state-touching drop).
     Drop(DropReason),
     /// Chunk stored at `seq * 1024`; descriptor advanced.
-    Accept { ty: u8, seq: u32 },
+    Accept {
+        /// Type bit the chunk belonged to.
+        ty: u8,
+        /// Block sequence number stored.
+        seq: u32,
+    },
     /// Last block of a type arrived and the descriptor wrapped to
     /// `first_seq`: the type's bit entered the completed mask [P].
-    TypeComplete { ty: u8 },
+    TypeComplete {
+        /// The type bit that completed.
+        ty: u8,
+    },
     /// Completed mask == the sender's total-type mask (`+0x15`): the
     /// receiver applies the cmd tail and flash-commits [P].
     StreamComplete,
@@ -103,6 +113,7 @@ const DESCRIPTOR_SLOTS: usize = 8;
 /// the image and tells you what it did.
 #[derive(Debug)]
 pub struct ZLoaderReceiver {
+    /// Per-type reception descriptors (indexed by type bit).
     descriptors: [Descriptor; DESCRIPTOR_SLOTS],
     /// Completed-type bitmask [P] (`state+0x2494` in the blob).
     completed_mask: u8,
@@ -123,6 +134,7 @@ impl Default for ZLoaderReceiver {
 }
 
 impl ZLoaderReceiver {
+    /// A receiver with fresh descriptors (the post-boot state).
     #[must_use]
     pub fn new() -> Self {
         Self {
