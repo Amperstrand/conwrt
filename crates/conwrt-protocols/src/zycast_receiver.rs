@@ -439,7 +439,7 @@ mod tests {
                     let flips = next() % 3;
                     for _ in 0..flips {
                         let pos = (next() as usize) % n.max(1);
-                        pkt[pos] = pkt[pos] ^ ((next() & 0xff) as u8);
+                        pkt[pos] ^= (next() & 0xff) as u8;
                     }
                     // Functionally intact = the acceptance-relevant bytes
                     // (seq +4..+6 checksum, +6..+0xa seq, +0xa..n payload)
