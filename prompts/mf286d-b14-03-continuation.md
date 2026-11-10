@@ -115,15 +115,21 @@ Dynamic (requires a B14 unit — NOT on bench):
 
 1. ~~Dump device 1's modem flash over ADB~~ — **DONE 2026-11-09 (EXP-035)**:
    full MPSS firmware banked at `evidence/modem-fw-re/live-b12/dumps/`
-   (mtd9, 74.7 MB, sha256 `55848f96…`) — the B12 base for the 642
-   BSDIFF40 patches and all offline RE. (efs2 NV pull deliberately
+   (mtd9, 74,448,896 B = 0x04700000, sha256 `efd0b8a6…` — the PRISTINE
+   re-dump; the original 74,767,527 B pull was transport-corrupt, kept as
+   mtd9.img.corrupt-shellcat) — the B12 base for the 642 modem.mld
+   BSDIFF40 patches and all offline RE. system.mld patches use the mtd16
+   rootfs (see prerequisite 3). (efs2 NV pull deliberately
    deferred: reads destabilize adbd when warm; one clean cold attempt if
    ever needed. The router-side 22-partition backup remains router-only.)
 2. **B14 unit acquisition** — flag to the operator if the community thread
    surfaces a donor; until then this thread stays static-only.
-3. **B12 `dsi_config.xml`/`libqmi` source** — NOW AVAILABLE: apply the
-   BSDIFF40 patches from the delta to the mtd9 base (or pull the live
-   copies via adb from device 1).
+3. **B12 `dsi_config.xml`/`libqmi` source** — from the **mtd16** UBI
+   (the modem-Linux rootfs, NOT mtd9/MPSS): the extracted tree at
+   `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd16-extract/`
+   holds the live B12 copies (or pull fresh via adb from device 1).
+   Note: mtd9 is the correct base only for the MPSS/modem.mld patches;
+   system.mld patches root against the mtd16 rootfs files.
 
 ## Definition of "fully working" (the ladder)
 

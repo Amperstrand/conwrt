@@ -219,6 +219,7 @@ def run_campaign(args):
             rc = subprocess.run([args.modem_check_hook], capture_output=True, text=True)
             out = rc.stdout.strip()
             ok, found = check_modem_version(out, args.expect_modem)
+            ok = ok and rc.returncode == 0
             phase(6.5, "modem-version", ok,
                   f"modem={found or '?'} expect~{args.expect_modem} — B14 is the known QMI "
                   f"breaker (recipes/zte/mf286d/notes.md); downgrade before use or re-run "
