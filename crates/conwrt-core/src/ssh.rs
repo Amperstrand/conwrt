@@ -194,25 +194,6 @@ fn pin_hint(host: &str, fingerprint: &str) -> String {
     )
 }
 
-/// A host-key memory: what this process already trusts, per host.
-///
-/// Implementations: [`MemoryTrustStore`] (single session, tests) and the
-/// file-backed store in `conwrt-local-std` (persistent TOFU across
-/// sessions). Stores hold **fingerprints only** — never key material —
-/// so their contents are safe to persist and print.
-pub trait TrustStore {
-    /// Keys already trusted for `host` (empty = unknown host).
-    fn entries(&self, host: &str) -> Vec<HostKeyView>;
-
-    /// Trust `key` for `host` going forward (implementations dedupe).
-    fn remember(&mut self, host: &str, key: &HostKeyView);
-
-    /// Drop every stored key for `host` — the explicit relearn escape
-    /// hatch after a reflash (host keys legitimately change). Callers
-    /// must make this an operator-visible action, never silent.
-    fn forget(&mut self, host: &str);
-}
-
 /// An in-memory [`TrustStore`] for tests and single-session TOFU flows.
 #[derive(Debug, Default, Clone)]
 pub struct MemoryTrustStore {
@@ -225,10 +206,10 @@ impl MemoryTrustStore {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl TrustStore for MemoryTrustStore {
-    fn entries(&self, host: &str) -> Vec<HostKeyView> {
+    /// Store entries known for `host`.
+    #[must_use]
+    pub fn entries(&self, host: &str) -> Vec<HostKeyView> {
         self.entries
             .iter()
             .filter(|(h, _)| h == host)
@@ -236,14 +217,11 @@ impl TrustStore for MemoryTrustStore {
             .collect()
     }
 
-    fn remember(&mut self, host: &str, key: &HostKeyView) {
+    /// Remember a key for `host` (deduplicated).
+    pub fn remember(&mut self, host: &str, key: &HostKeyView) {
         if !self.entries.iter().any(|(h, k)| h == host && *k == *key) {
             self.entries.push((host.to_string(), key.clone()));
         }
-    }
-
-    fn forget(&mut self, host: &str) {
-        self.entries.retain(|(h, _)| h != host);
     }
 }
 

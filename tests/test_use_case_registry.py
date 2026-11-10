@@ -1,13 +1,8 @@
 """Guard tests for the use-case registry delivery metadata.
 
-These lock the resolved (configure_via, packages_via) for every REQUIRED use
+These lock the resolved (configure_via, packages_via) for every registered use
 case. They make the requires_post_flash -> configure_via migration provably
 behavior-preserving: the resolved values must be identical before and after.
-
-The registry auto-discovers plugins from scripts/use_cases/, so in-flight WIP
-plugins may register additional entries. Extra registrations are tolerated
-(flagged informationally); a required use case going missing or changing its
-resolved delivery metadata is a failure.
 """
 from __future__ import annotations
 
@@ -29,14 +24,12 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "doh": ("ssh", "auto"),
     "fips-bluetooth-rfcomm": ("ssh", "opkg"),
     "guest-wifi": ("ssh", "auto"),
-    "maas-portable-lab": ("ssh", "auto"),
     "mesh11sd": ("both", "auto"),
     "mptcp-bonding": ("both", "auto"),
     "mwan3": ("both", "auto"),
     "nodns": ("ssh", "auto"),
     "openclash": ("ssh", "auto"),
     "pbr": ("both", "auto"),
-    "rescue-watchdog": ("both", "auto"),
     "sqm": ("both", "auto"),
     "ssh-hardening": ("both", "auto"),
     "ssl": ("ssh", "auto"),
@@ -49,11 +42,8 @@ EXPECTED: dict[str, tuple[str, str]] = {
     "travelmate": ("both", "auto"),
     "vpn-node": ("ssh", "auto"),
     "vpn-pia": ("both", "auto"),
-    "vpn-pia-openvpn": ("both", "auto"),
     "vpn-mullvad": ("both", "auto"),
     "vpn-nordvpn": ("both", "auto"),
-    "vpn-nordvpn-openvpn": ("both", "auto"),
-    "vpn-nordvpn-ikev2": ("both", "auto"),
     "vpn-ivpn": ("both", "auto"),
     "vpn-surfshark": ("both", "auto"),
     "vpn-openvpn": ("both", "auto"),
@@ -63,21 +53,13 @@ EXPECTED: dict[str, tuple[str, str]] = {
 
 
 def test_registry_contains_expected_use_cases() -> None:
-    registered = set(uc.registry())
-    missing = set(EXPECTED) - registered
-    assert not missing, f"required use cases missing from registry: {sorted(missing)}"
-    extras = registered - set(EXPECTED)
-    if extras:
-        print(f"informational: additional plugins registered: {sorted(extras)}")
+    assert set(uc.registry()) == set(EXPECTED)
 
 
 def test_resolved_delivery_metadata_is_stable() -> None:
     reg = uc.registry()
-    for name, (configure_via, packages_via) in EXPECTED.items():
-        resolved = (reg[name].configure_via, reg[name].packages_via)
-        assert resolved == (configure_via, packages_via), (
-            f"{name}: resolved delivery metadata changed: {resolved}"
-        )
+    actual = {name: (u.configure_via, u.packages_via) for name, u in reg.items()}
+    assert actual == EXPECTED
 
 
 def test_build_configure_is_deterministic_for_shell_only_cases() -> None:

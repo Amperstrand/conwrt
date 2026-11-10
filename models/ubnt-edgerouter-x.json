@@ -24,13 +24,7 @@
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 255,
-      "resources_required": [
-        "ssh-service"
-      ],
-      "envelope": [
-        "board-name-match"
-      ]
+      "exit_code": 255
     }
   },
   "signatures": {},

@@ -51,25 +51,11 @@
       "silence_timeout": 30,
       "two_stage": true,
       "stage1_image": "initramfs",
-      "stage2_method": "sysupgrade",
-      "resources_required": [
-        "stock-web-admin",
-        "recovery-subnet"
-      ],
-      "envelope": [
-        "image-type-factory",
-        "partition-backup"
-      ]
+      "stage2_method": "sysupgrade"
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt (initramfs or permanent OpenWrt). Works for same-version or compatible version upgrades.",
-      "command": "sysupgrade -n /tmp/firmware.bin",
-      "resources_required": [
-        "ssh-service"
-      ],
-      "envelope": [
-        "board-name-match"
-      ]
+      "command": "sysupgrade -n /tmp/firmware.bin"
     },
     "mtd-write": {
       "description": "Direct MTD partition write from running OpenWrt initramfs. Used when sysupgrade rejects images due to partition layout changes between versions.",
@@ -77,14 +63,7 @@
       "partition": "firmware",
       "requires_initramfs": true,
       "flash_time_seconds": 120,
-      "silence_timeout": 30,
-      "resources_required": [
-        "ssh-service"
-      ],
-      "envelope": [
-        "board-name-match",
-        "partition-backup"
-      ]
+      "silence_timeout": 30
     },
     "serial-tftp-openwrt": {
       "description": "Flash via serial + TFTP. Requires FTDI adapter (3.3V) connected to UART header on left side of PCB. Two-stage: boot initramfs via TFTP, then sysupgrade.",
@@ -110,17 +89,8 @@
         "serverip": "192.168.1.2",
         "ipaddr": "192.168.1.1",
         "baudrate": "115200",
-        "note": "bootdelay=1 set by OEM. Dual-partition device — use 'setsys bootpartition 0' and 'savesys' before TFTP."
-      },
-      "resources_required": [
-        "power",
-        "serial-console",
-        "tftp-server",
-        "recovery-subnet"
-      ],
-      "envelope": [
-        "partition-backup"
-      ]
+        "note": "bootdelay=1 set by OEM. Dual-partition device \u2014 use 'setsys bootpartition 0' and 'savesys' before TFTP."
+      }
     }
   },
   "partition_layout": {
@@ -311,17 +281,17 @@
     "note": "Same PoE behavior as B1 revision. Bootloader enables PoE+ on all ports. realtek-poe package included by default.",
     "control_plane_wedge_class": {
       "observed": "2026-10-20, three occurrences in one session (25.12.x + realtek-poe fork r5-era)",
-      "attribution": "Root-caused 2026-10-20 to overlapping-L3/netdev configuration events (recipes/detection-and-recovery.md §7-8). The earlier \"PoE daemon activity bursts\" trigger theory is RETIRED: the PoE daemon is exonerated (healthy counters through the kill); every incident coincided with netdev/L3 config events.",
-      "trigger_pattern": "Overlapping subnet / netdev-L3 configuration events — adding a subnet that OVERLAPS an already-routed prefix wedges the network stack within seconds (openwrt/openwrt#26061). NOT PoE daemon activity.",
+      "trigger_pattern": "PoE daemon activity bursts \u2014 service restarts AND rapid port-toggle (set_port_config) sequences; each control-plane death followed within minutes",
       "symptoms": "CPU plane dies (ICMP/SSH/ubus unresponsive) while ASIC forwarding and PoE delivery KEEP WORKING \u2014 powered DUTs stay up through the outage",
       "recovery": "power cycle (mains); config survives; all PoE DUTs cold-cycle and self-recover",
       "detection": "a DUT behind the switch still answers while the switch's own mgmt IP does not = this class",
       "mitigations": [
-        "never re-use a routed subnet on a second SVI/alias — preflight any SVI add against a lab prefix inventory + live addr/route/neigh tables",
+        "batch PoE changes; ONE service restart maximum, never bursts",
+        "space port toggles; avoid rapid same-session enable/disable cycles",
         "keep the serial console attached and EXPORTED \u2014 it is the only diagnostic door when the CPU plane hangs (and console wiring needs TX, RX AND GND verified before you need it)",
         "the on-box wedge-guard timer cannot help when the whole CPU plane hangs \u2014 external liveness watch required"
       ],
-      "see_also": "recipes/detection-and-recovery.md \u00a77-8"
+      "see_also": "recipes/detection-and-recovery.md \u00a78"
     }
   },
   "safety": {

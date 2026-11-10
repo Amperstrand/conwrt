@@ -159,9 +159,6 @@ def wifi_sta_firstboot_script(
 ) -> str:
     band_uci = band_to_uci(band)
     frags = wifi_sta_uci_lines("$_r", ssid, encryption, key, network, country_code)
-    # render_shell single-quotes uci values, which would bake the radio loop
-    # variable as the literal string '$_r' — it must expand at first boot.
-    frags = [frag.replace("'$_r'", '"$_r"') for frag in frags]
     script = (
         "for _r in radio0 radio1 radio2 radio3; do "
         "uci -q get wireless.$_r.type >/dev/null || continue; "
@@ -169,7 +166,7 @@ def wifi_sta_firstboot_script(
         f'if [ "$_b" = "{band_uci}" ]; then '
     )
     script += "; ".join(frags) + "; "
-    script += "uci commit wireless; wifi reload; break; fi; done"
+    script += "uci commit wireless; wifi reload; exit 0; fi; done"
     return script
 
 
@@ -184,7 +181,6 @@ def wifi_ap_firstboot_script(
 ) -> str:
     band_uci = band_to_uci(band)
     frags = wifi_ap_uci_lines("$_r", ssid, encryption, key, channel, network, country_code)
-    frags = [frag.replace("'$_r'", '"$_r"') for frag in frags]
     script = (
         "for _r in radio0 radio1 radio2 radio3; do "
         "uci -q get wireless.$_r.type >/dev/null || continue; "
@@ -192,7 +188,7 @@ def wifi_ap_firstboot_script(
         f'if [ "$_b" = "{band_uci}" ]; then '
     )
     script += "; ".join(frags) + "; "
-    script += "uci commit wireless; break; fi; done"
+    script += "uci commit wireless; exit 0; fi; done"
     return script
 
 

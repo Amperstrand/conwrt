@@ -1,7 +1,6 @@
 """Tests for conwrt.extreme state handlers and profile helpers."""
 from __future__ import annotations
 
-
 import json
 import queue
 import shutil

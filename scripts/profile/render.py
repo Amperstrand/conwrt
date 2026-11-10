@@ -5,24 +5,13 @@ from profile.plan import ProfilePlan, StepKind
 
 
 def opkg_install_script(packages: list[str], remove: list[str] | None = None) -> str:
-    """Shell script to install packages — apk on OpenWrt >= 25.x, opkg older."""
+    """Shell script to install packages via opkg."""
+    parts = ["opkg update"]
     if remove:
-        remove_sfx = (
-            f"if command -v apk >/dev/null; then apk del {' '.join(remove)} 2>/dev/null || true; "
-            f"else opkg remove {' '.join(remove)} 2>/dev/null || true; fi"
-        )
-    else:
-        remove_sfx = ""
+        parts.append("opkg remove " + " ".join(remove) + " 2>/dev/null || true")
     if packages:
-        pkgs = " ".join(packages)
-        install = (
-            f"if command -v apk >/dev/null 2>&1; then apk add {pkgs}; "
-            f"else opkg update && opkg install {pkgs}; fi"
-        )
-    else:
-        install = ""
-    parts = [p for p in (install, remove_sfx) if p]
-    return " && ".join(parts) if parts else "true"
+        parts.append("opkg install " + " ".join(packages))
+    return " && ".join(parts)
 
 
 def print_plan(plan: ProfilePlan) -> None:

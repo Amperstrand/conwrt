@@ -15,12 +15,9 @@ Alternatives inside one restriction are separate strings (OR); restrictions
 are AND-ed; a bare ``rate=N`` means N calls/second::
 
     lightning-cli createrune null \\
-        '[[ "method=xpay", "method=pay", "method=listpays", \\
-            "method=getinfo" ], [ "rate=3" ]]'
+        '[[ "method=xpay", "method=listpays", "method=getinfo" ], [ "rate=3" ]]'
 
-That rune can only call xpay/pay/listpays/getinfo, max 3 calls per second
-(``pay`` is what xpay() falls back to on pre-v26 nodes or when a rune
-denies xpay — without it the compatibility path is a guaranteed 1502)
+That rune can only call xpay/listpays/getinfo, max 3 calls per second
 (verified: getinfo passes, invoice returns 1502 "Not permitted", burst calls
 return 1502 "too soon"). Do NOT use an unrestricted master rune for testing.
 """

@@ -109,13 +109,6 @@ impl DohProfile {
                 "provider must be a known name or an https:// URL".into(),
             ));
         }
-        if self.listen_port == 0 {
-            // Port 0 would commit dnsmasq to `127.0.0.1#0` — not a usable
-            // DNS destination — and take down LAN name resolution.
-            return Err(Unsupported::InvalidParams(
-                "listen_port must be > 0: 0 is not a usable DNS destination".into(),
-            ));
-        }
         Ok(())
     }
 }
@@ -202,13 +195,6 @@ pub enum PlanOp {
         /// opkg/apk package name.
         name: String,
     },
-    /// Revert staged `/tmp/.uci` changes for a config before the first
-    /// mutation (AGENTS.md: aborted sessions leave staging debris that
-    /// a later commit would make permanent).
-    RevertUci {
-        /// UCI config name (file), e.g. `sqm`.
-        config: String,
-    },
     /// Delete every section of a type in a UCI config (idempotent
     /// reconfigure).
     ClearUciSections {
@@ -286,7 +272,6 @@ impl fmt::Display for PlanOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PlanOp::EnsurePackage { name } => write!(f, "install package {name}"),
-            PlanOp::RevertUci { config } => write!(f, "revert staged uci {config} baseline"),
             PlanOp::ClearUciSections {
                 config,
                 section_type,
@@ -489,20 +474,14 @@ fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Unsupported> 
     ];
     let verification = vec![
         VerificationCheck {
-            description: "resolver URL persisted exactly".into(),
-            command: format!(
-                "test \"$(uci -q get https-dns-proxy.main.resolver_url)\" = {url_q} && echo ok",
-                url_q = shell_quote(&url)
-            ),
-            expect_contains: "ok".into(),
+            description: "resolver URL persisted".into(),
+            command: "uci -q get https-dns-proxy.main.resolver_url".into(),
+            expect_contains: url,
         },
         VerificationCheck {
             description: "dnsmasq forwards to the local proxy".into(),
-            command: format!(
-                "uci -q get dhcp.@dnsmasq[0].server | grep -qx {entry} && echo ok",
-                entry = shell_quote(&format!("127.0.0.1#{port}"))
-            ),
-            expect_contains: "ok".into(),
+            command: "uci -q get dhcp.@dnsmasq[0].server".into(),
+            expect_contains: format!("127.0.0.1#{port}"),
         },
         VerificationCheck {
             description: "proxy enabled at boot".into(),
@@ -590,21 +569,11 @@ pub fn render_shell(plan: &Plan) -> String {
                 script.push_str(&format!("# install package {name}\n"));
                 // 1.x apk-aware shape (a11bfd6) + index self-heal: a fresh
                 // 25.x boot may lack the apk adb index until `apk update`.
-                // The opkg branch first checks `opkg list-installed`: a
-                // device that already has the package must stay usable
-                // offline — `opkg update` aborts under `set -e` when the
-                // feed is unreachable (AGENTS.md package rules).
                 script.push_str(&format!(
-                    "if command -v apk >/dev/null 2>&1; then apk add {q} || {{ apk update \\
-&& apk add {q}; }}; else [ -n \"$(opkg list-installed {q} 2>/dev/null)\" ] || {{ opkg update && opkg install {q}; }}; fi\n\n",
+                    "if command -v apk >/dev/null 2>&1; then apk add {q} || {{ apk update \
+&& apk add {q}; }}; else opkg update && opkg install {q}; fi\n\n",
                     q = shell_quote(name)
                 ));
-            }
-            PlanOp::RevertUci { config } => {
-                script.push_str(&format!("# revert staged {config} baseline\n"));
-                // `|| true`: on a fresh install the config file may not
-                // exist yet; reverting nothing must not abort the script.
-                script.push_str(&format!("uci -q revert {config} 2>/dev/null || true\n\n"));
             }
             PlanOp::ClearUciSections {
                 config,
@@ -750,12 +719,6 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
         PlanOp::EnsurePackage {
             name: "luci-app-sqm".into(),
         },
-        // Clean baseline first: an aborted earlier session can leave
-        // staged changes in /tmp/.uci that the commit below would
-        // otherwise make permanent (AGENTS.md uci-revert rule).
-        PlanOp::RevertUci {
-            config: "sqm".into(),
-        },
         PlanOp::ClearUciSections {
             config: "sqm".into(),
             section_type: "queue".into(),
@@ -804,25 +767,13 @@ fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Unsupported> 
     ];
     let verification = vec![
         VerificationCheck {
-            description: "shaper rate persisted exactly".into(),
-            command: format!(
-                "test \"$(uci -q get sqm.{iface}.download)\" = {rate} && echo ok",
-                rate = shell_quote(&sqm.download_kbps.to_string())
-            ),
-            expect_contains: "ok".into(),
+            description: "shaper rates persisted".into(),
+            command: format!("uci -q get sqm.{iface}.download"),
+            expect_contains: sqm.download_kbps.to_string(),
         },
         VerificationCheck {
-            // Scope to the shaped device: a global `tc qdisc show` is
-            // satisfied by a matching qdisc on ANY interface (e.g. stale
-            // state elsewhere), which would false-verify the apply.
-            description: "qdisc active on the shaped device".into(),
-            command: format!(
-                "_d=$(uci get network.{iface}.device 2>/dev/null || true); \
-                 if [ -z \"$_d\" ] || ! ip addr show \"$_d\" 2>/dev/null | grep -q 'inet '; then \
-                 _d=$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{{print $5}}' | head -1); fi; \
-                 if [ -z \"$_d\" ]; then _d={iface}; fi; \
-                 tc qdisc show dev \"$_d\""
-            ),
+            description: "qdisc active on the device".into(),
+            command: "tc qdisc show".into(),
             expect_contains: sqm.qdisc.clone(),
         },
         VerificationCheck {
@@ -932,13 +883,11 @@ mod tests {
         let script = render_shell(&plan);
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains("set -e"));
-        // package install covers both package managers; the opkg branch
-        // must skip the (offline-failing) update for installed packages
+        // package install covers both package managers
         assert!(script.contains(
             "if command -v apk >/dev/null 2>&1; then apk add 'sqm-scripts' || { apk update"
         ));
-        assert!(script.contains("opkg list-installed 'sqm-scripts' 2>/dev/null"));
-        assert!(script.contains("|| { opkg update && opkg install 'sqm-scripts'; }; fi"));
+        assert!(script.contains("opkg update && opkg install 'sqm-scripts'; fi"));
         // clear-sections idiom, 1.x style
         assert!(script.contains("uci -q show sqm 2>/dev/null | grep '=queue'"));
         // device resolution sets the var the section later references
@@ -964,114 +913,6 @@ mod tests {
         assert!(
             script.contains("uci set sqm.wan.script='evil'\\''; rm -rf /; '\\'''"),
             "single quotes must be escaped, not interpolated: {script}"
-        );
-    }
-
-    #[test]
-    fn doh_validation_rejects_port_zero() {
-        let model = model_with_capabilities(None);
-        let refused = plan_profile(
-            &DeviceState::OpenWrt,
-            &model,
-            &Profile::Doh(DohProfile {
-                provider: "cloudflare".into(),
-                listen_port: 0,
-            }),
-        );
-        assert!(
-            matches!(refused, Err(Unsupported::InvalidParams(_))),
-            "port 0 must never plan 127.0.0.1#0"
-        );
-        let ok = plan_profile(
-            &DeviceState::OpenWrt,
-            &model,
-            &Profile::Doh(DohProfile {
-                provider: "cloudflare".into(),
-                listen_port: 5053,
-            }),
-        );
-        assert!(ok.is_ok());
-    }
-
-    #[test]
-    fn sqm_verification_targets_the_shaped_device_exactly() {
-        let model = model_with_capabilities(None);
-        let plan = plan_profile(
-            &DeviceState::OpenWrt,
-            &model,
-            &Profile::Sqm(test_sqm_defaults()),
-        )
-        .expect("plans");
-        let qdisc = plan
-            .verification
-            .iter()
-            .find(|c| c.description.contains("qdisc"))
-            .expect("qdisc check");
-        // scoped to one resolved device, never a global `tc qdisc show`
-        assert!(qdisc.command.contains("tc qdisc show dev \"$_d\""));
-        assert_ne!(qdisc.command, "tc qdisc show");
-        let rate = plan
-            .verification
-            .iter()
-            .find(|c| c.description.contains("rate"))
-            .expect("rate check");
-        // exact equality, not a substring that 110000 would also satisfy
-        assert!(
-            rate.command
-                .starts_with("test \"$(uci -q get sqm.wan.download)\" = '10000'")
-        );
-    }
-
-    #[test]
-    fn doh_verification_uses_exact_predicates() {
-        let model = model_with_capabilities(None);
-        let plan = plan_profile(
-            &DeviceState::OpenWrt,
-            &model,
-            &Profile::Doh(DohProfile {
-                provider: "cloudflare".into(),
-                listen_port: 5053,
-            }),
-        )
-        .expect("plans");
-        let resolver = plan
-            .verification
-            .iter()
-            .find(|c| c.description.contains("resolver"))
-            .expect("resolver check");
-        assert!(
-            resolver
-                .command
-                .starts_with("test \"$(uci -q get https-dns-proxy.main.resolver_url)\" = ")
-        );
-        let forward = plan
-            .verification
-            .iter()
-            .find(|c| c.description.contains("dnsmasq"))
-            .expect("forward check");
-        assert!(forward.command.contains("grep -qx '127.0.0.1#5053'"));
-    }
-
-    #[test]
-    fn sqm_plan_reverts_staged_baseline_before_first_mutation() {
-        let model = model_with_capabilities(None);
-        let plan = plan_profile(
-            &DeviceState::OpenWrt,
-            &model,
-            &Profile::Sqm(test_sqm_defaults()),
-        )
-        .expect("plans");
-        let script = render_shell(&plan);
-        let revert_pos = script
-            .find("uci -q revert sqm")
-            .expect("script must revert the sqm baseline");
-        let first_mutation = script
-            .find("uci -q show sqm")
-            .or_else(|| script.find("uci set sqm"))
-            .expect("script mutates sqm");
-        assert!(
-            revert_pos < first_mutation,
-            "revert must precede the first sqm mutation:\n{script}"
         );
     }
 

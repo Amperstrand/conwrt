@@ -14,12 +14,10 @@ extern crate alloc;
 
 pub mod mac;
 pub mod model;
-pub mod ordered_map;
 pub mod validate;
 
 #[cfg(feature = "json")]
 pub mod registry;
 
 pub use mac::{MacAddress, OuiPrefix};
-pub use model::{DeviceModel, FlashMethod, OpenwrtInfo, SerialConsole};
-pub use ordered_map::OrderedMap;
+pub use model::{DeviceModel, FlashMethod, OpenwrtInfo};
