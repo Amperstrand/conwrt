@@ -50,6 +50,29 @@ pub fn run(a: ZycastArgs) -> ExitCode {
     }
 }
 
+fn validate_image(image: &[u8]) -> Result<(), String> {
+    // RE #167 (Z-Loader stage-2 decode): HDR0 ("0RDH") images are validated
+    // by the bootloader (model-ID @+0x11c must equal "7101", header+data
+    // checksums, size caps); plain-RAS (8380xxxx) images SKIP validation and
+    // write anyway. Both classes are flash-legal; anything else is refused.
+    let ok = image.len() > 4 && (image[0..4] == [0x30,0x52,0x44,0x48] || image[0..2] == [0x83,0x80]);
+    if !ok { return Err("image pre-validation (RE #167): neither HDR0 nor RAS magic — bootloader will refuse/brick-class payload".into()); }
+    if image[0..4] == [0x30,0x52,0x44,0x48] {
+        if image.len() < 0x120 { return Err("HDR0 image truncated before model-ID field".into()); }
+        if &image[0x11c..0x11f] != b"710" {
+            return Err(format!("HDR0 model-ID gate (the 2026-11-10 refusal class): image model {:?} != flash model \"7101\" — bootloader drops silently (RE #167)", &image[0x11c..0x120]));
+        }
+    }
+    Ok(())
+}
+fn enforce_flash_mutex() -> Result<(), String> {
+    let out = std::process::Command::new("sh").args(["-c","ss -ulnp 2>/dev/null | grep -c ':5631 ' || true"]).output().map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().unwrap_or(0) > 0 {
+        return Err("flash-mutex: a UDP/5631 sender is already live — interleaved streams flash-loop the target (2026-11-10 incident). Kill it first.".into());
+    }
+    Ok(())
+}
+
 fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
     if !a.confirm_specimen {
         return Err(
@@ -83,6 +106,9 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
             );
         }
     }
+    if !a.allow_raw { validate_image(&image)?; }
+    enforce_flash_mutex()?;
+    if a.delay_ms < 10 { return Err("pacing clamp (2026-11-10 lesson): <10ms (477pps class) never accepted — bootloader poll-loop drops chunks. Use the proven 10ms.".into()); }
     let chunks = chunk_count(image.len());
     let est = Duration::from_millis(chunks as u64 * a.delay_ms * a.loops as u64);
     println!("=== conwrt zycast (Rust) ===");
