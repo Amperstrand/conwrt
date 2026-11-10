@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/select.h>
+#include <time.h>
 
 /* ---------------- pure QMUX/QMI frame layer (proven, EXP-035) ---------------- */
 int qmi_build_frame(unsigned char *out, int max,
@@ -203,7 +204,9 @@ int main(int argc, char **argv) {
         /* call with a single TLV{type 1, slot u8}: default slot 1 */
         for (int a = 3; a < argc; a++) {
             unsigned id = strtoul(argv[a], NULL, 16);
-            unsigned slot = 1;  /* default; fixed slot 1 for now */
+            unsigned slot = 1;
+            if (a + 1 < argc && argv[a+1][0] >= '0' && argv[a+1][0] <= '9'
+                && strstr(argv[a+1], "0x") == NULL) { slot = strtoul(argv[++a], NULL, 0); }
             unsigned char t[4] = {0x01, 0x01, 0x00, (unsigned char)slot};
             printf("--- callslot 0x%02x slot=%u ---\n", id, slot);
             qmi_xmit(0x0B, cid, id, t, 4);
@@ -220,6 +223,20 @@ int main(int argc, char **argv) {
                 printf("|\n");
                 i += 3 + l;
             }
+        }
+    } else if (!strcmp(mode, "listen")) {
+        /* print every incoming frame for N seconds (indications!) */
+        int secs = argc > 3 ? atoi(argv[3]) : 10;
+        printf("listening %ds...\n", secs);
+        time_t t0 = time(NULL);
+        while (time(NULL) - t0 < secs) {
+            fd_set z; struct timeval tv; FD_ZERO(&z); FD_SET(fd,&z); tv.tv_sec=1; tv.tv_usec=0;
+            if (select(fd+1,&z,0,0,&tv) <= 0) continue;
+            int n = read(fd, rbuf, sizeof rbuf);
+            if (n <= 0) continue;
+            printf("FRAME %dB:", n);
+            for (int k = 0; k < n && k < 96; k++) printf(" %02X", rbuf[k]);
+            printf("\n"); fflush(stdout);
         }
     } else if (!strcmp(mode, "probe")) {
         for (int a = 3; a < argc; a++) probe_id(cid, strtoul(argv[a], NULL, 16));
