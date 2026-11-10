@@ -244,12 +244,14 @@ int main(int argc, char **argv) {
         unsigned callid = argc > 4 ? strtoul(argv[4], NULL, 16) : 0x65;
         unsigned slot = argc > 5 ? strtoul(argv[5], NULL, 0) : 1;
         unsigned long long tok = argc > 6 ? strtoull(argv[6], NULL, 0) : 0xFFFFFFFFFFFFFFFFULL;
-        unsigned char t[12] = {0x01, 0x01, 0x00, slot & 0xFF,
+        unsigned char t[16] = {0x01, 0x01, 0x00, slot & 0xFF,
                                0x10, 0x08, 0x00,
                                (unsigned char)(tok & 0xFF), (unsigned char)((tok>>8)&0xFF),
-                               (unsigned char)((tok>>16)&0xFF), (unsigned char)((tok>>24)&0xFF)};
+                               (unsigned char)((tok>>16)&0xFF), (unsigned char)((tok>>24)&0xFF),
+                               (unsigned char)((tok>>32)&0xFF), (unsigned char)((tok>>40)&0xFF),
+                               (unsigned char)((tok>>48)&0xFF), (unsigned char)((tok>>56)&0xFF)};
         unsigned char tslot[4] = {0x01, 0x01, 0x00, slot & 0xFF};
-        int tlen = 11;  /* slot TLV(4) + token TLV hdr(3) + 4B token */
+        int tlen = 15;  /* slot TLV(4) + token TLV hdr(3) + 8B u64 = PROPER */
         printf("=== regcall2: reg 0x%02x {slot=%u, TLV10=u32 token=0x%llx} then 0x%02x ===\n",
                regid, slot, tok & 0xFFFFFFFFULL, callid);
         qmi_xmit(0x0B, cid, regid, t, tlen);
@@ -281,15 +283,7 @@ int main(int argc, char **argv) {
             printf("  |");
             for (int k = 0; k < l && k < 128; k++) printf("%c", (t2[i+3+k]>=32&&t2[i+3+k]<127)?t2[i+3+k]:'.');
             printf("|\n"); i += 3 + l; } }
-        /* also try EID WITH token TLV */
-        printf("--- call 0x%02x {slot+token} on same cid ---\n", callid);
-        qmi_xmit(0x0B, cid, callid, t, tlen);
-        qmi_wait(0x0B, cid, txn, t2, &tl2);
-        { int i = 0;
-          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
-            printf("rsp2 TLV %02x len %d:", ty, l);
-            for (int k = 0; k < l && k < 128; k++) printf(" %02X", t2[i+3+k]);
-            printf("\n"); i += 3 + l; } }
+        /* EID is {slot}-only per spec; the truncated-TLV bug is fixed above */
     } else if (!strcmp(mode, "regcall")) {
         /* single-session: register then call on the SAME client connection */
         unsigned regid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x67;
