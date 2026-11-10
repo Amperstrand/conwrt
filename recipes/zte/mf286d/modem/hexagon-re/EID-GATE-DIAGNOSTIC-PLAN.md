@@ -42,3 +42,27 @@ Decision table:
 4. If 81270 fires with status=0: retry 0x65 after 5s (async completion)
 5. 0x4f full body: {slot=1, TLV02 u8=0, TLV03 u32=0} — the info query
    with u8[255] varlen response (may reveal the euicc info dump)
+
+---
+
+## ⛔ CRASHER REGISTER (2026-11-10, EXP-042 live)
+
+**0x67 register with VALID u64 TLV10 token (8 bytes, any value) = MODEM QMI KILLER**
+
+- v7 (truncated 4B token): safe — MALFORMED at decode, never reaches handler
+- v8 (proper 8B u64, value 0xFFFFFFFFFFFFFFFF): **QMI subsystem died immediately**
+  - `read: No such device` during probe
+  - ALL QMI services dead after ("Failed to connect to service")
+  - AT port still works, USB device present
+  - Same SMEM/IPC partial-outage pattern as mtd1/mtd2 panics
+  - Recovery: cold power cycle required (may or may not survive)
+
+**Implication**: the u64 TLV10 in 0x67's register is NOT an event mask or
+client token — it reaches code that corrupts shared-memory state. The IDL
+spec says it's optional u64, but the handler treats nonzero/any values
+destructively. This is a FIRMWARE BUG or a deliberately booby-trapped field.
+
+**CRASHER LIST (never do these)**:
+1. Read mtd1 (mibib) or mtd2 (efs2) from modem Linux
+2. Call UIM 0x6b with bare {slot} (missing mandatory u8 TLV02)
+3. Call UIM 0x67 with valid u64 TLV10 token (8 bytes)
