@@ -284,6 +284,65 @@ int main(int argc, char **argv) {
             for (int k = 0; k < l && k < 128; k++) printf("%c", (t2[i+3+k]>=32&&t2[i+3+k]<127)?t2[i+3+k]:'.');
             printf("|\n"); i += 3 + l; } }
         /* EID is {slot}-only per spec; the truncated-TLV bug is fixed above */
+    } else if (!strcmp(mode, "enablecall")) {
+        /* LPA enable-gate sequence: read state(0x63) -> enable(0x53,{slot,u32=1}) -> read state -> EID(0x65) */
+        unsigned enbid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x53;
+        unsigned stateid = argc > 4 ? strtoul(argv[4], NULL, 16) : 0x63;
+        unsigned eidid = argc > 5 ? strtoul(argv[5], NULL, 16) : 0x65;
+        unsigned slot = argc > 6 ? strtoul(argv[6], NULL, 0) : 1;
+        unsigned enable_val = argc > 7 ? strtoul(argv[7], NULL, 0) : 1;
+        unsigned char tslot[4] = {0x01, 0x01, 0x00, slot & 0xFF};
+        /* enable body: TLV01 {slot} + TLV02 {u32 enable} */
+        unsigned char tenb[11] = {0x01, 0x01, 0x00, slot & 0xFF,
+                                   0x02, 0x04, 0x00,
+                                   enable_val & 0xFF, 0x00, 0x00, 0x00};
+        unsigned char t2[4096]; int tl2;
+
+        printf("=== enablecall: state 0x%02x -> enable 0x%02x {slot=%u, u32=%u} -> state -> EID 0x%02x ===\n",
+               stateid, enbid, slot, enable_val, eidid);
+
+        /* step 1: read current state */
+        printf("[1] read state 0x%02x {slot}...\n", stateid);
+        qmi_xmit(0x0B, cid, stateid, tslot, 4);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("  state TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 32; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
+
+        /* step 2: send enable {slot + u32} */
+        printf("[2] enable 0x%02x {slot=%u, TLV02 u32=%u}...\n", enbid, slot, enable_val);
+        qmi_xmit(0x0B, cid, enbid, tenb, 11);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("  enable TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 32; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
+
+        /* step 3: re-read state */
+        printf("[3] re-read state 0x%02x...\n", stateid);
+        qmi_xmit(0x0B, cid, stateid, tslot, 4);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("  state2 TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 32; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
+
+        /* step 4: try EID */
+        printf("[4] EID 0x%02x {slot}...\n", eidid);
+        qmi_xmit(0x0B, cid, eidid, tslot, 4);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("  EID TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 64; k++) printf(" %02X", t2[i+3+k]);
+            printf("  |");
+            for (int k = 0; k < l && k < 64; k++) printf("%c", (t2[i+3+k]>=32&&t2[i+3+k]<127)?t2[i+3+k]:'.');
+            printf("|\n"); i += 3 + l; } }
+        printf("=== done (compare state [1] vs [3]; if changed, EID [4] should succeed) ===\n");
     } else if (!strcmp(mode, "regcall")) {
         /* single-session: register then call on the SAME client connection */
         unsigned regid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x67;
