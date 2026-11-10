@@ -224,3 +224,29 @@ the definitive static answer — queued for the B14 lane.
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
 plain `sysupgrade` (never `-F`); keep `sysupgrade -b` config backups; do not touch the
 modem firmware. Verify against downloads.openwrt.org checksums.
+
+## Flash-safety lessons — preventing the device-2 lockout class (2026-11-10)
+
+Device 2 arrived with a broken mtd9 and, through a flash attempt whose erase
+completed but whose write did not, ended in a state where the bootloader's
+ONE network-recovery entry (mechanism A: volume-not-found → TFTP self-flash)
+is unreachable — with no serial attached. Species-level + canon-grade rules:
+
+1. **Erase-then-write is not atomic.** A NAND erase not followed by a
+   VERIFIED write leaves flash worse than before: the recovery mechanism
+   itself needs a valid UBI layout volume to attach. Never issue a bare
+   erase on a no-console device unless the write that follows is staged,
+   verified (readback magic + size), and completes in the same window.
+2. **Write the recovery-preserving layout, not zeros.** When manipulating
+   the UBI region on this species, write a trigger-compatible image (valid
+   layout volume, missing kernel volume — see d2repo trigger.img) so that
+   even a FAILED later step leaves mechanism A armed. Zeros disarm it.
+3. **Verify the serial door BEFORE the first flash — even on "no-serial"
+   species.** This species was believed serial-less; the OpenWrt wiki has
+   a PHOTO of the X8 connector (115200 8N1). The escape hatch existed all
+   along. Serial loopback-verified pre-flash = the ultimate rollback.
+4. **Count the doors includes doors you believe don't exist** — audit the
+   belief. "No serial available" was folklore; the wiki documented it.
+5. **The healthy modem is not a door.** All modem interfaces (AT/DM/adb/
+   QMI) terminate on router Linux via internal USB; the modem has no
+   network-facing service. A dead router Linux = unreachable modem.
