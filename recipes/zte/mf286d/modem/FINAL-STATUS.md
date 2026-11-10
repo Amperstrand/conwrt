@@ -197,12 +197,16 @@ CRC:   crcmod.mkCrcFun(0x11021, initCrc=0, xorOut=0xFFFF)
 
 | Question | Priority | Approach |
 |---|---|---|
-| Does B14 wire the LPA to a host interface? | HIGH | Diff B14 .up against B12 mtd9 |
+| ~~Does B14 wire the LPA to a host interface?~~ | **ANSWERED (EXP-038): NO** | B14-GENEALOGY-REPORT.md |
+| ~~Did any older firmware (B02+) lack the LPA/ISD-R block?~~ | **ANSWERED (EXP-038): NO — LPA present since B02; B10=B11=B12; B13 never existed** | B14-GENEALOGY-REPORT.md |
 | What are the proprietary QMI M2M euicc message IDs? | HIGH | Hexagon RE of mtd9, or QXDM tool |
 | Can the MPSS binary be patched to remove ISD-R deny? | MEDIUM | Hexagon RE → find compare → patch → hash re-sign |
-| Does a newer Qualcomm generic firmware remove the deny? | LOW | Would require cross-flashing (risky) |
+| Does a newer Qualcomm generic firmware remove the deny? | LOW | Would require cross-flashing (risky; B14 already proven useless for eSIM) |
 | Does UIM-Remote (policy-gated off) provide an alternate path? | MEDIUM | Enable via EFS → enumerate remote UIM interface |
 | What does mtd15-zterw (145MB, unread) contain? | LOW | Pull via block-mode canary (factory staging area) |
+
+**NOTE (EXP-038)**: Do NOT flash B14 — zero eSIM benefit (LPA chunks copied
+byte-identical from B12) and it breaks QMI under OpenWrt (community-verified).
 
 ---
 
