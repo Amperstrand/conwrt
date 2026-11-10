@@ -66,7 +66,8 @@ pub trait HttpIo {
 pub enum PostError {
     /// Transport failure while writing (`op` names the stage).
     Write {
-        /// Stage that failed: `"head"`, `"body"` or `"footer"`.
+        /// Stage that failed: `"head"`, `"body"`, `"footer"` (upload
+        /// POST) or `"trigger"` (flash-trigger GET, [`crate::trigger`]).
         op: &'static str,
     },
     /// Transport failure reading the verdict.
@@ -168,6 +169,18 @@ pub fn retain_verdict_bytes(out: &mut Vec<u8>, segment: &[u8]) -> usize {
     let take = segment.len().min(room);
     out.extend_from_slice(&segment[..take]);
     take
+}
+
+/// Response BODY text: skip real HTTP response headers when present
+/// (U-Boot sends status headers before its HTML/size-line verdict),
+/// falling back to the whole stream when no `\r\n\r\n` separator
+/// exists. Shared by the upload verdict ([`RecoveryPost::finish`]) and
+/// the flash-trigger verdict ([`crate::trigger::TriggerRequest`]).
+pub(crate) fn body_after_headers(raw: &str) -> &str {
+    match raw.find("\r\n\r\n") {
+        Some(at) => &raw[at + 4..],
+        None => raw,
+    }
 }
 
 /// The staged recovery POST.
@@ -327,13 +340,10 @@ impl<'a> RecoveryPost<'a> {
                 // status headers before the HTML/size line — skip them
                 // (fall back to the whole stream when absent).
                 let raw = String::from_utf8_lossy(&response).into_owned();
-                let text = match raw.find("\r\n\r\n") {
-                    Some(at) => String::from(&raw[at + 4..]),
-                    None => raw,
-                };
+                let text = body_after_headers(&raw);
                 let verdict = if text.contains(self.accept_pattern.as_str()) {
                     Verdict::Accepted
-                } else if is_size_md5_shape(&text) {
+                } else if is_size_md5_shape(text) {
                     // GL.iNet / MediaTek U-Boot: "<size> <md5>" plain
                     // text (scripts/flash/upload.py::parse_uboot_response)
                     Verdict::Accepted
