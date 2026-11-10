@@ -171,7 +171,7 @@ drivable entry point, exactly as libvdr_quecsoc_module is here.
 | Device | No-access recovery | Deep rung | Serial? |
 |---|---|---|---|
 | NR7302/01/03 | zycast multicast (LAN) | solder J3 USB → fastboot/EDL | not documented |
-| NR7101 | OEM-ssh → recovery partition | Z-Loader ESC + ATNR/ATGU TFTP | yes, rung 3 (case open) |
+| NR7101 | OEM-ssh → recovery partition → **zycast multicast** (family-wide, no case) | Z-Loader ESC + ATNR/ATGU TFTP (serial) | yes, LAST rung only — zycast and serial first |
 | ZTE MF286D | U-Boot TFTP blank-download | EDL 9008 + boot pads | last resort (org-proven no-serial flow) |
 
 ## 5. Quectel LPAd — the org-relevant capability question
@@ -203,7 +203,7 @@ done | socat - "$PORT,crnl"   # or: atinout / picocom manual entry
 | Result of `AT+QESIM=?` / `"eid"` | Meaning | Next |
 |---|---|---|
 | `+CME ERROR: operation not supported` / bare `ERROR` to `=?` | no QESIM in RG502Q-EA module firmware | modem-native path dead; keep pcscd/ifd-modemifd |
-| `ERROR` to `=?` but `"eid"` returns `+QESIM: "eid",<32 hex>` | partial: EID readable, LPAd control present | owner-gated: try `lpa_enable` per app note |
+| `ERROR` to `=?` but `"eid"` returns `+QESIM: "eid",<32 hex>` | partial: EID readable, LPAd control present | owner-gated SEPARATE follow-up (write-class): `AT+QESIM="lpa_enable",1` — NEVER part of the read-only probe |
 | `+QESIM: "eid",<32 hex>` and `=?` lists test-mode ranges | LPAd present on module | full modem-native candidate — walk the app-note ops |
 
 **Honest caveat (Quectel support, forums.quectel.com/t/61290):** the module-side
