@@ -219,3 +219,29 @@ ip link set switch.1002 up
 **Device reflashes on every boot**: Kill the zycast process after a successful flash. If the device is in Z-Loader mode and zycast is running, the bootloader will reflash on every power cycle.
 
 **Wrong port assignment**: Verify which physical port the target is connected to. On the GS1900-8HP, `lan2` is PoE port 2. Check with `ubus call poe info` to see which ports show "Delivering power".
+
+## Receiver model and simulator (RE-derived)
+
+The NR7101 bootloader's zycast receive state machine is now encoded as
+`conwrt-protocols::zycast_receiver` — reverse-engineered from the STAGE-2
+blob (evidence-graded source: conwrt-bench `docs/research/2026-11-10-zloader-re-findings.md`):
+the gate chain (magic → type → dedup → strict in-order seq → folded checksum),
+rollback-to-chunk-0 on out-of-order, per-type completion mask, and stream
+completion when the mask equals the sender's declared total mask. The
+wrap dance's exact pointer choreography is [S]-grade in the source, so
+completion is modeled as block COVERAGE (behaviorally identical for any
+sender ordering).
+
+`conwrt-zycast::simulator` wraps the model in a real UDP socket: a
+faithful fake Z-Loader. The e2e suite runs the REAL sender against it —
+clean runs reconstruct byte-exact, a forced packet loss heals via loop
+restart (the bench-proven reason loops exist, now pinned as a test), and
+late joiners (bootloader entering its window mid-send) complete on the
+next loop.
+
+Sender-side gains from the RE: the magic gate now accepts the magics the
+bootloader actually validates (HDR0/HDR4 — the legacy 83 80 00 00 constant
+was from another ZyXEL family and would have refused real NR7101 images),
+and `--expect-model <hex>` refuses BEFORE multicast any image whose RAS
+model-ID field would be refused at flash-commit ("Wrong Model ID!!" —
+the wrong-unit class). For NR7101: `--expect-model 7101`.
