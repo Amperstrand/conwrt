@@ -32,7 +32,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::post::{HttpIo, PostError, retain_verdict_bytes};
+use crate::post::{HttpIo, PostError, body_after_headers, retain_verdict_bytes};
 
 /// The trigger endpoint's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +41,10 @@ pub enum TriggerVerdict {
     Success,
     /// The `Update in progress` page — flash started, answer early.
     InProgress,
-    /// Connection closed with no body: ambiguous — the trigger may
-    /// already have been consumed (the lenient 1.x shape: warn and
-    /// verify on the wire afterwards, do not fail the run).
+    /// Body carried no content — either a bare close or HTTP headers
+    /// with an empty body (`Content-Length: 0`): ambiguous — the
+    /// trigger may already have been consumed (the lenient 1.x shape:
+    /// warn and verify on the wire afterwards, do not fail the run).
     NoResponse,
     /// Server responded, but the body matched no trigger shape.
     Rejected {
@@ -96,17 +97,20 @@ impl TriggerRequest {
 
         let mut response = Vec::new();
         match io.read_response(&mut response).await {
-            Ok(()) if response.is_empty() => Ok(TriggerVerdict::NoResponse),
             Ok(()) => {
                 let raw = String::from_utf8_lossy(&response).into_owned();
-                let text = crate::post::body_after_headers(&raw);
+                let text = body_after_headers(&raw);
                 // upload.py::trigger_flash order: "success" first
                 // (exact, then substring case-insensitive), then the
-                // in-progress page, then lenient-empty, else failure.
+                // in-progress page, then lenient-empty (the STRIPPED
+                // body — a headers-only response is empty too, #673
+                // codex P2), else failure.
                 if text.to_ascii_lowercase().contains("success") {
                     Ok(TriggerVerdict::Success)
                 } else if text.contains("Update in progress") {
                     Ok(TriggerVerdict::InProgress)
+                } else if text.trim().is_empty() {
+                    Ok(TriggerVerdict::NoResponse)
                 } else {
                     Ok(TriggerVerdict::Rejected {
                         snippet: text.chars().take(80).collect(),
@@ -188,19 +192,11 @@ mod tests {
 
     #[tokio::test]
     async fn success_matches_case_insensitively() {
+        // upload.py falls back to `"success" in response.lower()` when
+        // the exact-match misses — pin the same leniency.
         let mut io = io_with(b"Flash SUCCESS\r\n");
         let mut req = TriggerRequest::new("h", "/result");
         assert_eq!(req.trigger(&mut io).await.unwrap(), TriggerVerdict::Success);
-    }
-
-    #[tokio::test]
-    async fn update_in_progress_page_is_in_progress() {
-        let mut io = io_with(b"<html>Update in progress</html>");
-        let mut req = TriggerRequest::new("h", "/result");
-        assert_eq!(
-            req.trigger(&mut io).await.unwrap(),
-            TriggerVerdict::InProgress
-        );
     }
 
     #[tokio::test]
@@ -210,6 +206,28 @@ mod tests {
         assert_eq!(
             req.trigger(&mut io).await.unwrap(),
             TriggerVerdict::NoResponse
+        );
+    }
+
+    /// #673 codex P2: a headers-only response (empty body after the
+    /// header strip) is the same lenient shape — NOT a rejection.
+    #[tokio::test]
+    async fn headers_only_response_is_still_no_response() {
+        let mut io = io_with(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let mut req = TriggerRequest::new("h", "/result");
+        assert_eq!(
+            req.trigger(&mut io).await.unwrap(),
+            TriggerVerdict::NoResponse
+        );
+    }
+
+    #[tokio::test]
+    async fn update_in_progress_page_is_in_progress() {
+        let mut io = io_with(b"<html>Update in progress</html>");
+        let mut req = TriggerRequest::new("h", "/result");
+        assert_eq!(
+            req.trigger(&mut io).await.unwrap(),
+            TriggerVerdict::InProgress
         );
     }
 
