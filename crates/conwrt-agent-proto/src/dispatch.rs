@@ -86,6 +86,16 @@ pub enum WireResult {
 pub enum WireError {
     /// The lease id is unknown (expired or never held).
     UnknownLease(u64),
+    /// The lease id is known but belongs to a DIFFERENT controller
+    /// (#164 P1 4272448192, the heartbeat half): heartbeats are
+    /// owner-only exactly like release — a non-owner refilling a dead
+    /// controller's lease would immortalize it past every expiry tick.
+    LeaseNotOwner {
+        /// The lease id.
+        lease_id: u64,
+        /// The owning controller.
+        holder: String,
+    },
     /// The transfer id is unknown.
     UnknownTransfer(u64),
     /// The transfer id is already claimed by a DIFFERENT controller
@@ -239,6 +249,19 @@ mod tests {
         let bytes = encode_frame(&frame).unwrap();
         let back = decode_frame(&bytes).unwrap();
         assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn lease_not_owner_error_round_trips() {
+        let frame = WireFrame::Response {
+            id: 8,
+            result: WireResult::Error(WireError::LeaseNotOwner {
+                lease_id: 4,
+                holder: String::from("controller-owner"),
+            }),
+        };
+        let bytes = encode_frame(&frame).unwrap();
+        assert_eq!(decode_frame(&bytes).unwrap(), frame);
     }
 
     #[test]

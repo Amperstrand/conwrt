@@ -326,14 +326,27 @@ impl ServerCore {
                     Err(_) => WireResult::LeaseReleased(false),
                 }
             }
-            WireEndpoint::Heartbeat(hb) => match self
-                .leases
-                .heartbeat(hb.lease_id, HEARTBEAT_BUDGET)
-            {
-                Ok(()) => WireResult::HeartbeatAcked,
-                Err(LeaseError::UnknownLease(id)) => WireResult::Error(WireError::UnknownLease(id)),
-                Err(_) => WireResult::Error(WireError::Internal(String::from("heartbeat refused"))),
-            },
+            WireEndpoint::Heartbeat(hb) => {
+                let controller = self.controller.clone().unwrap_or_default();
+                match self
+                    .leases
+                    .heartbeat_by(hb.lease_id, &controller, HEARTBEAT_BUDGET)
+                {
+                    Ok(()) => WireResult::HeartbeatAcked,
+                    Err(LeaseError::UnknownLease(id)) => {
+                        WireResult::Error(WireError::UnknownLease(id))
+                    }
+                    Err(LeaseError::Denied(LeaseDenied::NotOwner(holder))) => {
+                        WireResult::Error(WireError::LeaseNotOwner {
+                            lease_id: hb.lease_id,
+                            holder,
+                        })
+                    }
+                    Err(_) => {
+                        WireResult::Error(WireError::Internal(String::from("heartbeat refused")))
+                    }
+                }
+            }
             WireEndpoint::StreamChunk(chunk) => {
                 // sink presence first: bare cores keep their historical
                 // UnknownTransfer contract (review round 4)
