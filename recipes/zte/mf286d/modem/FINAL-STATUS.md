@@ -36,6 +36,15 @@ registration, data). The only limitation is eSIM management (ISD-R access).
 The B02 kit describes a different modem generation — all B02-kit offset maps
 and architecture diagrams are **species-relative**, not live-unit truth.
 
+**Cross-link (EXP-040 review note b)**: the B02↔B12 split is not just the
+baseband — see `B02-B12-ARCH-SPLIT.md` (modem-Linux side): **atcmdsrv does
+not exist in B12** (restructured into `atfwd_daemon` + `zte_topsw_*`), and
+`zte_adapter_sim` grew 72% into a real QMI IDL UIM client
+(`uim_get_service_object_internal_v01`). Consequence: all B02-kit
+address maps (SIM_RestrictedAccess @0x46FCC etc.) do NOT transfer; B12-native
+analysis (mtd9 CP-side) is the only valid baseline — which is why B12 is the
+firmware baseline for this whole arc.
+
 ### Live unit architecture
 
 ```
