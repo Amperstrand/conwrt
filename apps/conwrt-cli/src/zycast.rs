@@ -164,7 +164,6 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 fn args(image: &str, allow_raw: bool) -> ZycastArgs {
     ZycastArgs {
         image: image.into(),
@@ -180,8 +179,9 @@ fn args(image: &str, allow_raw: bool) -> ZycastArgs {
     }
 }
 
+#[cfg(test)]
 mod magic_gate_tests {
-    use super::{ZycastArgs, args, inner};
+    use super::{args, inner};
 
     #[test]
     fn hdr0_image_passes_the_magic_gate() {
@@ -290,6 +290,7 @@ mod magic_gate_tests {
     }
 }
 
+#[cfg(test)]
 #[cfg(test)]
 mod hardening_tests {
     // Corrected versions of the #680 tests: the RE (conwrt-bench
