@@ -110,6 +110,21 @@ pub enum WireError {
     /// `DetectStatus` refuses rather than returning an empty report a
     /// controller cannot distinguish from an armed, quiet session.
     DetectNotArmed(u8),
+    /// The lease id is known but belongs to a DIFFERENT controller
+    /// (#164 P1 4272448192, the heartbeat half): heartbeats are
+    /// owner-only exactly like release — a non-owner refilling a dead
+    /// controller's lease would immortalize it past every expiry tick.
+    ///
+    /// Wire note: APPEND-ONLY placement — postcard discriminants are
+    /// variant indices, so inserting mid-enum shifts every later
+    /// variant and misdecodes mixed-version peers (codex P2 on #670);
+    /// a trailing variant keeps all existing discriminants stable.
+    LeaseNotOwner {
+        /// The lease id.
+        lease_id: u64,
+        /// The owning controller.
+        holder: String,
+    },
 }
 
 /// The wire frame: exactly one per COBS frame.
@@ -239,6 +254,19 @@ mod tests {
         let bytes = encode_frame(&frame).unwrap();
         let back = decode_frame(&bytes).unwrap();
         assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn lease_not_owner_error_round_trips() {
+        let frame = WireFrame::Response {
+            id: 8,
+            result: WireResult::Error(WireError::LeaseNotOwner {
+                lease_id: 4,
+                holder: String::from("controller-owner"),
+            }),
+        };
+        let bytes = encode_frame(&frame).unwrap();
+        assert_eq!(decode_frame(&bytes).unwrap(), frame);
     }
 
     #[test]
