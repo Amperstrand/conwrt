@@ -7,7 +7,7 @@ an NV/config item (flippable via diag) or hard-compiled (patch class).
 ## The artifact
 
 - Path (bench x280): `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd9.img`
-- Size 74,767,527 B; sha256 `55848f96b695c3470546d87b8b107ba12b01f4fc722317707a568689ab17ea15`
+- Size **74,448,896 B** (0x04700000); sha256 `efd0b8a61eec792975ecf8e5aaa3aae44fae3af7e9b5cc1240a36973940d413f` (the PRISTINE re-dump; the original 74,767,527 B pull was transport-corrupt)
 - Acquired: `adb shell cat /dev/mtd9ro` from modem Linux (read-only), 2026-11-09.
 - It is a raw NAND partition dump (erase block 0x40000). Partition name "modem",
   size 0x04700000 per `/proc/mtd`.

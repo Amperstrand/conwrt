@@ -16,8 +16,8 @@ generation. USB idProduct `19d2:1485`; interfaces: 1.0/1.1 ECM-data,
 ## Access path
 
 ```
-# from a host with SSH to ai-legion (bench):
-ssh -i ~/.ssh/google_compute_engine root@192.168.34.1      # router (OpenWrt 25.12)
+# from a host with SSH to the bench (resolve via registry):
+ssh -i <key> root@<unit-IP>   # resolve from the registry (lab.yaml / labgrid place)      # router (OpenWrt 25.12)
 adb devices                                                 # modem = MF286DZTED000000
 adb shell id                                                # uid=0 — adbd 5.0.2, NO AUTH
 ```

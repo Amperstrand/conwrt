@@ -205,7 +205,7 @@ static unsigned qmi_wait(unsigned svc, unsigned cid, unsigned want_txn,
 static void send_apdu(unsigned cid, unsigned ch, const unsigned char *ap, int al) {
     unsigned char t[600]; int i = 0;
     t[i++] = 0x10; t[i++] = 0x01; t[i++] = 0x00; t[i++] = ch;                /* channel */
-    t[i++] = 0x02; t[i++] = ((al + 2) & 0xFF); t[i++] = 0x00;                /* [u16 len][apdu] */
+    t[i++] = 0x02; { int _tl = al + 2; t[i++] = _tl & 0xFF; t[i++] = (_tl >> 8) & 0xFF; } /* [u16 len][apdu] */
     t[i++] = al & 0xFF; t[i++] = 0x00; memcpy(t + i, ap, al); i += al;
     t[i++] = 0x01; t[i++] = 0x01; t[i++] = 0x00; t[i++] = 0x01;              /* slot 1 */
     qmi_xmit(0x0B, cid, 0x003B, t, i);
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
     if (!ch0mode) {
         i = 0;
         t[i++] = 0x01; t[i++] = 0x01; t[i++] = 0x00; t[i++] = 0x01;
-        t[i++] = 0x10; t[i++] = ((aidlen + 1) & 0xFF); t[i++] = 0x00;
+        t[i++] = 0x10; { int _tl2 = aidlen + 1; t[i++] = _tl2 & 0xFF; t[i++] = (_tl2 >> 8) & 0xFF; }
         t[i++] = aidlen; memcpy(t + i, aid, aidlen); i += aidlen;
         qmi_xmit(0x0B, cid, 0x0042, t, i);
         qmi_wait(0x0B, cid, txn, tlvs, &tl);

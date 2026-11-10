@@ -20,9 +20,9 @@ access runbook.
 ```
 adb shell cat /proc/mtd                 # partition map
 adb shell cat /dev/mtd9ro > /tmp/mtd9.img   # modem/MPSS image (71MB) — WORKS
-adb shell cat /dev/mtd2ro > /tmp/efs2.img   # efs2/NV — CAUTION: warm reads
-                                            # destabilize adb; attempt ONCE
-                                            # right after a modem reboot,
+adb shell cat /dev/mtd9ro   # SAFE (proven); /dev/mtd2ro (EFS) is a
+                           # KNOWN CRASHER — see notes.md partition-safety map; use
+                           # the DM/EFS bridge for EFS content instead
                                             # never hammer
 adb shell cat /dev/mtd16ro > system.img     # modem Linux rootfs (UBIFS)
 ```
