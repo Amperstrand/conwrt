@@ -51,6 +51,33 @@ pub fn run(a: ZycastArgs) -> ExitCode {
 }
 
 fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
+    // Lesson 2026-11-10 (36h dark-fleet arc): the bootloader poll-loop drops
+    // chunks above reference pace — every 2ms (477 pkt/s) attempt failed,
+    // every 98 pkt/s (10 ms) reference attempt succeeded. Clamp hard.
+    if a.delay_ms < 10 {
+        return Err("refusing: --delay-ms < 10 is above the bootloader's proven\n             receive pace (98 pkt/s reference; 477 pkt/s produced zero accepts\n             across every attempt — conwrt-bench docs/research/2026-11-10-*)".into());
+    }
+    // Flash-mutex (same arc): two concurrent senders interleave and no
+    // bootloader can reconstruct either image; a looping sender traps units
+    // in an accept-boot-reaccept flash-loop.
+    if let Ok(dirs) = std::fs::read_dir("/proc") {
+        for d in dirs.flatten() {
+            let pid_s = d.file_name().to_string_lossy().to_string();
+            if !pid_s.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
+            }
+            if let Ok(cmd) = std::fs::read_to_string(format!("/proc/{}/cmdline", pid_s)) {
+                let c = cmd.replace('\0', " ");
+                let pid_self = std::process::id().to_string();
+                let is_sender = (c.contains("zycast") && c.contains("--interface"))
+                    || c.contains("/.cache/conwrt/zycast") || c.contains("conwrt-zycast-mips");
+                if is_sender && pid_s != pid_self {
+                    return Err(format!("flash-mutex: another zycast sender is live (pid {}): \n             {}\n             Kill it or coordinate via herdr before arming (bench lesson 2026-11-10)", pid_s, c.chars().take(80).collect::<String>()).into());
+                }
+            }
+        }
+    }
+
     if !a.confirm_specimen {
         return Err(
             "refusing to send: multicast flashes EVERY ZyXEL bootloader in its listen \
@@ -80,6 +107,30 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
                  container, squashfs, arbitrary data) bricks every listening unit. If \
                  this is a deliberate raw research payload, re-run with --allow-raw."
                     .into(),
+            );
+        }
+    }
+    // RE 2026-11-10 (Z-Loader stage-2, base 0x84024000, FINDINGS.md #167):
+    // accept gates — HDR0-magic images validate model-ID + checksums;
+    // non-HDR0 (8380xxxx) skip validation and write anyway. Model field at
+    // image+0x11c must equal the flash model string ("7101" for NR7101).
+    if matches!(ty, ImageType::Ras | ImageType::Backup) && !a.allow_raw {
+        if image.len() > 0x120 && image.starts_with(b"HDR0") {
+            let model = &image[0x11c..0x120];
+            if model != b"7101" {
+                return Err(format!(
+                    "preflight (RE decode): HDR0 image model field @0x11c is {:02x?},\n             expected ASCII '7101' — the bootloader WILL refuse this\n             ('Wrong Model ID!! Skip upgrade.', silent without serial). Gate addr:\n             FUN_8402f248-0x8402f2bc.",
+                    model
+                ).into());
+            }
+        } else if !image.starts_with(&[0x83, 0x80, 0x00, 0x00]) {
+            // neither class: warn-through but say what the bootloader will do
+            eprintln!(
+                "zycast: preflight note: image carries neither HDR0 nor the 8380-magic;\n          bootloader validation path undefined (RE FINDINGS §2)"
+            );
+        } else {
+            eprintln!(
+                "zycast: preflight note: 8380-class image — bootloader SKIPS model/checksum\n          validation and writes anyway (RE FINDINGS §2); ensure the image is trusted."
             );
         }
     }
