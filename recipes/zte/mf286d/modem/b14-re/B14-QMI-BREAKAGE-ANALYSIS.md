@@ -137,6 +137,21 @@ different stripping; no new QMI service surface).
    Security note: every B12 unit's modem-Linux root credential is therefore
    unit-independent. [REVIEW NOTE: redacted per house rules before merge —
    flagged by the modem-lane review.]
+
+### Pre-merge security disposition (leak-scan record)
+
+- Git history contains the literal value in commits `0aac179` (introduced)
+  and `4bc4523` (redacted); branch HEAD is clean (`git grep` at HEAD: none).
+- Broader credential sweep over branch-added files: no other credential-like
+  strings (bench/fleet credentials untouched — modem-lane confirmed).
+- Rotation: **not applicable** — the value is firmware-hardcoded and
+  re-applied by B12 at every boot (`set_passwd` in `rcS-zte-before-modem`),
+  so any per-unit rotation survives exactly one reboot.
+- **Disposition: ACCEPTED — firmware-public value (ships in plaintext in
+  ZTE's public OTA delta and in every B12 unit's boot script), redacted
+  going forward; history scrubbing judged UNNECESSARY because the value is
+  already public via ZTE's own firmware distribution. No fleet credential
+  affected.** (Recorded for the pre-merge gate per house rules.)
 2. **`netmgrd` minor update** (511,488→511,520 B): adds `DATA5_CNTL`…
    `DATA14_CNTL` interface names + `rmnet_sdio`, fixes a log-string typo
    (`NETMGR_IS_COMPLETE_MSG`→`NETMGR_IK_COMPLETE_MSG`). No behavior change to
