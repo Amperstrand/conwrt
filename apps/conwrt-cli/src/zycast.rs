@@ -55,19 +55,35 @@ fn validate_image(image: &[u8]) -> Result<(), String> {
     // by the bootloader (model-ID @+0x11c must equal "7101", header+data
     // checksums, size caps); plain-RAS (8380xxxx) images SKIP validation and
     // write anyway. Both classes are flash-legal; anything else is refused.
-    let ok = image.len() > 4 && (image[0..4] == [0x30,0x52,0x44,0x48] || image[0..2] == [0x83,0x80]);
-    if !ok { return Err("image pre-validation (RE #167): neither HDR0 nor RAS magic — bootloader will refuse/brick-class payload".into()); }
-    if image[0..4] == [0x30,0x52,0x44,0x48] {
-        if image.len() < 0x120 { return Err("HDR0 image truncated before model-ID field".into()); }
+    let ok =
+        image.len() > 4 && (image[0..4] == [0x30, 0x52, 0x44, 0x48] || image[0..2] == [0x83, 0x80]);
+    if !ok {
+        return Err("image pre-validation (RE #167): neither HDR0 nor RAS magic — bootloader will refuse/brick-class payload".into());
+    }
+    if image[0..4] == [0x30, 0x52, 0x44, 0x48] {
+        if image.len() < 0x120 {
+            return Err("HDR0 image truncated before model-ID field".into());
+        }
         if &image[0x11c..0x11f] != b"710" {
-            return Err(format!("HDR0 model-ID gate (the 2026-11-10 refusal class): image model {:?} != flash model \"7101\" — bootloader drops silently (RE #167)", &image[0x11c..0x120]));
+            return Err(format!(
+                "HDR0 model-ID gate (the 2026-11-10 refusal class): image model {:?} != flash model \"7101\" — bootloader drops silently (RE #167)",
+                &image[0x11c..0x120]
+            ));
         }
     }
     Ok(())
 }
 fn enforce_flash_mutex() -> Result<(), String> {
-    let out = std::process::Command::new("sh").args(["-c","ss -ulnp 2>/dev/null | grep -c ':5631 ' || true"]).output().map_err(|e| e.to_string())?;
-    if String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().unwrap_or(0) > 0 {
+    let out = std::process::Command::new("sh")
+        .args(["-c", "ss -ulnp 2>/dev/null | grep -c ':5631 ' || true"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u32>()
+        .unwrap_or(0)
+        > 0
+    {
         return Err("flash-mutex: a UDP/5631 sender is already live — interleaved streams flash-loop the target (2026-11-10 incident). Kill it first.".into());
     }
     Ok(())
@@ -106,9 +122,13 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
             );
         }
     }
-    if !a.allow_raw { validate_image(&image)?; }
+    if !a.allow_raw {
+        validate_image(&image)?;
+    }
     enforce_flash_mutex()?;
-    if a.delay_ms < 10 { return Err("pacing clamp (2026-11-10 lesson): <10ms (477pps class) never accepted — bootloader poll-loop drops chunks. Use the proven 10ms.".into()); }
+    if a.delay_ms < 10 {
+        return Err("pacing clamp (2026-11-10 lesson): <10ms (477pps class) never accepted — bootloader poll-loop drops chunks. Use the proven 10ms.".into());
+    }
     let chunks = chunk_count(image.len());
     let est = Duration::from_millis(chunks as u64 * a.delay_ms * a.loops as u64);
     println!("=== conwrt zycast (Rust) ===");
@@ -216,25 +236,29 @@ mod hardening_tests {
     use super::*;
     #[test]
     fn hdr0_wrong_model_refused_with_the_refusal_class_named() {
-        let mut img = vec![0x30,0x52,0x44,0x48]; img.resize(0x120, 0);
+        let mut img = vec![0x30, 0x52, 0x44, 0x48];
+        img.resize(0x120, 0);
         img[0x11c..0x120].copy_from_slice(b"7605");
         let e = validate_image(&img).unwrap_err();
         assert!(e.contains("model") && e.contains("710"), "{e}");
     }
     #[test]
     fn hdr0_nr7101_model_passes() {
-        let mut img = vec![0x30,0x52,0x44,0x48]; img.resize(0x140, 0);
+        let mut img = vec![0x30, 0x52, 0x44, 0x48];
+        img.resize(0x140, 0);
         img[0x11c..0x120].copy_from_slice(b"7101");
         assert!(validate_image(&img).is_ok());
     }
     #[test]
     fn hdr0_truncated_before_model_field_refused() {
-        let mut img = vec![0u8; 0x40]; img[..4].copy_from_slice(&[0x30,0x52,0x44,0x48]);
+        let mut img = vec![0u8; 0x40];
+        img[..4].copy_from_slice(&[0x30, 0x52, 0x44, 0x48]);
         assert!(validate_image(&img).is_err());
     }
     #[test]
     fn plain_ras_magic_passes_unvalidated_class() {
-        let mut img = vec![0xAAu8; 64]; img[..4].copy_from_slice(&[0x83,0x80,0,0]);
+        let mut img = vec![0xAAu8; 64];
+        img[..4].copy_from_slice(&[0x83, 0x80, 0, 0]);
         assert!(validate_image(&img).is_ok()); // RE #167: writes without bootloader validation
     }
     #[test]
