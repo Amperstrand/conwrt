@@ -10,6 +10,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+pub mod blankdl;
 pub mod serial_io;
 pub mod xmodem_transfer;
 pub mod zycast;
