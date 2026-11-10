@@ -238,6 +238,58 @@ int main(int argc, char **argv) {
             for (int k = 0; k < n && k < 96; k++) printf(" %02X", rbuf[k]);
             printf("\n"); fflush(stdout);
         }
+    } else if (!strcmp(mode, "regcall2")) {
+        /* register with u64 TLV0x10 token (v7): regid callid slot token */
+        unsigned regid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x67;
+        unsigned callid = argc > 4 ? strtoul(argv[4], NULL, 16) : 0x65;
+        unsigned slot = argc > 5 ? strtoul(argv[5], NULL, 0) : 1;
+        unsigned long long tok = argc > 6 ? strtoull(argv[6], NULL, 0) : 0xFFFFFFFFFFFFFFFFULL;
+        unsigned char t[12] = {0x01, 0x01, 0x00, slot & 0xFF,
+                               0x10, 0x08, 0x00,
+                               (unsigned char)(tok & 0xFF), (unsigned char)((tok>>8)&0xFF),
+                               (unsigned char)((tok>>16)&0xFF), (unsigned char)((tok>>24)&0xFF)};
+        unsigned char tslot[4] = {0x01, 0x01, 0x00, slot & 0xFF};
+        int tlen = 11;  /* slot TLV(4) + token TLV hdr(3) + 4B token */
+        printf("=== regcall2: reg 0x%02x {slot=%u, TLV10=u32 token=0x%llx} then 0x%02x ===\n",
+               regid, slot, tok & 0xFFFFFFFFULL, callid);
+        qmi_xmit(0x0B, cid, regid, t, tlen);
+        unsigned char t2[4096]; int tl2 = sizeof t2;
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("reg TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 64; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
+        printf("--- settle 3s ---\n"); fflush(stdout);
+        time_t t0 = time(NULL);
+        while (time(NULL) - t0 < 3) {
+            fd_set z; struct timeval tv; FD_ZERO(&z); FD_SET(fd,&z); tv.tv_sec=1; tv.tv_usec=0;
+            if (select(fd+1,&z,0,0,&tv) <= 0) continue;
+            int n = read(fd, rbuf, sizeof rbuf);
+            if (n <= 0) continue;
+            printf("INFLY %dB:", n);
+            for (int k = 0; k < n && k < 128; k++) printf(" %02X", rbuf[k]);
+            printf("\n"); fflush(stdout);
+        }
+        printf("--- call 0x%02x {slot} on same cid ---\n", callid);
+        qmi_xmit(0x0B, cid, callid, tslot, 4);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("rsp TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 128; k++) printf(" %02X", t2[i+3+k]);
+            printf("  |");
+            for (int k = 0; k < l && k < 128; k++) printf("%c", (t2[i+3+k]>=32&&t2[i+3+k]<127)?t2[i+3+k]:'.');
+            printf("|\n"); i += 3 + l; } }
+        /* also try EID WITH token TLV */
+        printf("--- call 0x%02x {slot+token} on same cid ---\n", callid);
+        qmi_xmit(0x0B, cid, callid, t, tlen);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("rsp2 TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 128; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
     } else if (!strcmp(mode, "regcall")) {
         /* single-session: register then call on the SAME client connection */
         unsigned regid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x67;
