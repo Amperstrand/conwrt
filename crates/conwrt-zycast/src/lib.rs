@@ -10,5 +10,6 @@ pub mod sender;
 pub use protocol::{DEFAULT_DELAY_MS, DEFAULT_GROUP, DEFAULT_LOOPS, DEFAULT_PORT, ImageType};
 pub use sender::{SendConfig, SendStats, send};
 pub mod simulator;
-#[cfg(feature = "std")]
+/// conwrt-zycast is unconditionally std (socket2) and enables the
+/// protocols `std` feature, so the re-export needs no gate.
 pub use conwrt_protocols::zycast_receiver::ras_model_id;
