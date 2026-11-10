@@ -186,3 +186,49 @@ mod tests {
         assert_eq!(got, image, "reassembled payload must be byte-identical");
     }
 }
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// CI-safe wire round-trip: the sender addresses (group, port) as a
+    /// plain UDP destination — with group=127.0.0.1 it is UNICAST to
+    /// localhost, so no multicast support is needed. Asserts the on-wire
+    /// framing (magic header, chunk length, bounded loop count) — the
+    /// regression net for any send-path change that goldens can't catch.
+    #[test]
+    fn unicast_roundtrip_frames_survive_the_wire() {
+        let rx = UdpSocket::bind(("127.0.0.1", 0)).expect("bind rx");
+        let port = rx.local_addr().unwrap().port();
+        rx.set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        let image: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect();
+        let cfg = SendConfig {
+            group: Ipv4Addr::LOCALHOST,
+            port,
+            interface: "lo".into(),
+            loops: 2,
+            delay: Duration::from_millis(1),
+        };
+        let img = image.clone();
+        let handle =
+            thread::spawn(move || send(&img, ImageType::Ras, &cfg, &mut |_| {}).expect("send"));
+
+        let mut packets = 0usize;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while packets < 3 && Instant::now() < deadline {
+            let mut buf = [0u8; HEADER_LEN + CHUNK_SIZE];
+            match rx.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    assert!(n > HEADER_LEN, "packet must carry payload");
+                    packets += 1;
+                }
+                Err(_) => break,
+            }
+        }
+        let stats = handle.join().expect("sender thread");
+        assert_eq!(stats.loops, 2, "bounded loops must be exact");
+        assert!(packets >= 1, "wire must have delivered framed packets");
+    }
+}

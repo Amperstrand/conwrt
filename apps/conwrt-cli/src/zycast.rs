@@ -157,6 +157,24 @@ mod magic_gate_tests {
     }
 
     #[test]
+    fn missing_confirm_specimen_refuses_before_anything_else() {
+        // The MAC-gate must refuse BEFORE reading the image (fail closed,
+        // no side effects) — regression guard for the bench doctrine
+        // "multicast flashes EVERY listening ZyXEL bootloader".
+        let mut a = args("/nonexistent/image.bin", true);
+        a.confirm_specimen = false;
+        let r = inner(a);
+        let msg = r.expect_err("must refuse without --confirm-specimen");
+        assert!(
+            msg.contains("--confirm-specimen"),
+            "message must name the flag: {msg}"
+        );
+        // It must not have progressed to file reading (the path doesn't
+        // exist; a read attempt would produce a different error).
+        assert!(!msg.contains("read image"), "refusal must precede file IO");
+    }
+
+    #[test]
     fn allow_raw_overrides_the_gate() {
         let p = std::env::temp_dir().join("zycast-gate-test.raw");
         std::fs::write(&p, b"definitely-not-a-ras-image").unwrap();
