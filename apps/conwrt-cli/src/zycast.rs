@@ -210,3 +210,35 @@ mod magic_gate_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+    #[test]
+    fn hdr0_wrong_model_refused_with_the_refusal_class_named() {
+        let mut img = vec![0x30,0x52,0x44,0x48]; img.resize(0x120, 0);
+        img[0x11c..0x120].copy_from_slice(b"7605");
+        let e = validate_image(&img).unwrap_err();
+        assert!(e.contains("model") && e.contains("710"), "{e}");
+    }
+    #[test]
+    fn hdr0_nr7101_model_passes() {
+        let mut img = vec![0x30,0x52,0x44,0x48]; img.resize(0x140, 0);
+        img[0x11c..0x120].copy_from_slice(b"7101");
+        assert!(validate_image(&img).is_ok());
+    }
+    #[test]
+    fn hdr0_truncated_before_model_field_refused() {
+        let mut img = vec![0u8; 0x40]; img[..4].copy_from_slice(&[0x30,0x52,0x44,0x48]);
+        assert!(validate_image(&img).is_err());
+    }
+    #[test]
+    fn plain_ras_magic_passes_unvalidated_class() {
+        let mut img = vec![0xAAu8; 64]; img[..4].copy_from_slice(&[0x83,0x80,0,0]);
+        assert!(validate_image(&img).is_ok()); // RE #167: writes without bootloader validation
+    }
+    #[test]
+    fn garbage_refused() {
+        assert!(validate_image(b"sysupgrade-zyxel_nr7101/ garbage").is_err());
+    }
+}
