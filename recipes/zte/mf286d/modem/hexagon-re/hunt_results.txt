@@ -1,0 +1,81 @@
+==== refs to IDLpool:qmi_uim..reset (0xc5779da2) ====
+  total: 0
+
+==== refs to IDLpool:read_record (0xc5779dcb) ====
+  total: 0
+
+==== refs to IDLpool:change_provisioning (0xc577a2e6) ====
+  total: 0
+
+==== refs to IDLpool:send_apdu (0xc577a30b) ====
+  total: 0
+
+==== refs to IDLpool:sap_connect/open_logical_channel (0xc577a334) ====
+  total: 0
+
+==== refs to IDLpool:slots_status (0xc577a370) ====
+  total: 0
+
+==== refs to IDLpool:slot_mapping/eid (0xc577a3c0) ====
+  total: 0
+
+==== refs to IDLpool:profile/nickname (0xc577a3fc) ====
+  total: 0
+
+==== refs to ISD-R AID bytes (b15) (0xc2109292) ====
+  total: 0
+
+==== refs to ISD-R AID bytes (b18) (0xc4ddf450) ====
+  total: 0
+
+==== refs to apdu_security_aid_list str (b15) (0xc231f2f9) ====
+  total: 0
+
+==== refs to apdu_security_aid_list str (b16) (0xc33cb4ae) ====
+  total: 0
+
+==== refs to qmi_uim_m2m_euicc.c str (0xc2023698) ====
+  total: 0
+
+==== refs to euiccChallenge str (0xc2109190) ====
+  total: 0
+
+==== refs to F3 log core (0xc0027e38) ====
+  ref from c07f94e8 type=DATA
+      c07f94e8: call 0xc0027e38 
+      c07f94ec: assign R1,R18 
+      c07f94f8: add R3,R18,#0x9 
+      c07f94fc: memw (SP+#0xc),R3 ; memw (SP+#0x0),R0 
+      c07f9500: immext #0x1ffc0 
+      c07f9504: assign R19,##0x1ffff 
+  ref from c07f94ec type=UNCONDITIONAL_CALL
+      c07f94ec: assign R1,R18 
+      c07f94f8: add R3,R18,#0x9 
+      c07f94fc: memw (SP+#0xc),R3 ; memw (SP+#0x0),R0 
+      c07f9500: immext #0x1ffc0 
+      c07f9504: assign R19,##0x1ffff 
+      c07f9508: and R21,R3,#-0x4 
+  ref from c07f1a28 type=UNCONDITIONAL_CALL
+      c07f1a28: call 0xc0027e38 
+      c07f1a30: assign R0,R16 
+      c07f1a34: memd R17R16,(SP+#0x8) ; memd R19R18,(SP+#0x0) 
+      c07f1a38: dealloc_return 
+      c07f1a3c: call 0xc07f6138 
+      c07f1a40: immext #0x400000 
+  ref from c07f55cc type=DATA
+      c07f55cc: call 0xc0027e38 
+      c07f55d0: assign R1,R17 
+      c07f55dc: add R21,SP,#0x0 
+      c07f55e0: assign R16,#0x1 
+      c07f55e4: memw R3,(R3) 
+      c07f55e8: jump.if:nt cmp.eq(R3.new,#0x0),0xc07f5678 
+  ref from c07f55d0 type=UNCONDITIONAL_CALL
+      c07f55d0: assign R1,R17 
+      c07f55dc: add R21,SP,#0x0 
+      c07f55e0: assign R16,#0x1 
+      c07f55e4: memw R3,(R3) 
+      c07f55e8: jump.if:nt cmp.eq(R3.new,#0x0),0xc07f5678 
+      c07f55ec: assign R3,#0x8 
+  ...more
+  total: 5
+
