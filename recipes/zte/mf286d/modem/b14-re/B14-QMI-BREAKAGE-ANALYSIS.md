@@ -129,9 +129,14 @@ different stripping; no new QMI service surface).
 ## 6. The REAL functional changes found (none QMI-related)
 
 1. **`rcS-zte-before-modem`: B14 REMOVES the hardcoded root password.**
-   B12 sets `root:zte9x15` at every boot (`set_passwd` block, lines 123-129).
-   B14 deletes the block. Security note: every B12 unit's modem-Linux ADB root
-   password is the documented string `zte9x15`.
+   B12 runs a `set_passwd` block at every boot that sets the modem-Linux ADB
+   root password to a fixed string **derived from firmware constants
+   (REDACTED — see local evidence notes / EXP-039 ledger; the value is
+   plaintext inside the boot script of every shipped B12 unit and inside
+   ZTE's public OTA delta, i.e. firmware-public).** B14 deletes the block.
+   Security note: every B12 unit's modem-Linux root credential is therefore
+   unit-independent. [REVIEW NOTE: redacted per house rules before merge —
+   flagged by the modem-lane review.]
 2. **`netmgrd` minor update** (511,488→511,520 B): adds `DATA5_CNTL`…
    `DATA14_CNTL` interface names + `rmnet_sdio`, fixes a log-string typo
    (`NETMGR_IS_COMPLETE_MSG`→`NETMGR_IK_COMPLETE_MSG`). No behavior change to
