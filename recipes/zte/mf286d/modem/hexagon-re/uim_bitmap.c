@@ -238,6 +238,54 @@ int main(int argc, char **argv) {
             for (int k = 0; k < n && k < 96; k++) printf(" %02X", rbuf[k]);
             printf("\n"); fflush(stdout);
         }
+    } else if (!strcmp(mode, "regcall")) {
+        /* single-session: register then call on the SAME client connection */
+        unsigned regid = argc > 3 ? strtoul(argv[3], NULL, 16) : 0x67;
+        unsigned callid = argc > 4 ? strtoul(argv[4], NULL, 16) : 0x65;
+        unsigned slot = 1;
+        if (argc > 5) slot = strtoul(argv[5], NULL, 0);
+        unsigned char t[4] = {0x01, 0x01, 0x00, (unsigned char)slot};
+        printf("=== single-session: register 0x%02x then call 0x%02x (slot %u, cid %u) ===\n", regid, callid, slot, cid);
+        qmi_xmit(0x0B, cid, regid, t, 4);
+        unsigned char t2[4096]; int tl2 = sizeof t2;
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("reg TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 128; k++) printf(" %02X", t2[i+3+k]);
+            printf("\n"); i += 3 + l; } }
+        printf("--- settling 3s (incoming frames below) ---\n"); fflush(stdout);
+        time_t t0 = time(NULL);
+        while (time(NULL) - t0 < 3) {
+            fd_set z; struct timeval tv; FD_ZERO(&z); FD_SET(fd,&z); tv.tv_sec=1; tv.tv_usec=0;
+            if (select(fd+1,&z,0,0,&tv) <= 0) continue;
+            int n = read(fd, rbuf, sizeof rbuf);
+            if (n <= 0) continue;
+            printf("IND/LATE %dB:", n);
+            for (int k = 0; k < n && k < 128; k++) printf(" %02X", rbuf[k]);
+            printf("\n"); fflush(stdout);
+        }
+        printf("--- calling 0x%02x on same cid ---\n", callid);
+        qmi_xmit(0x0B, cid, callid, t, 4);
+        qmi_wait(0x0B, cid, txn, t2, &tl2);
+        { int i = 0;
+          while (i + 3 <= tl2) { unsigned ty = t2[i]; int l = t2[i+1]|(t2[i+2]<<8);
+            printf("rsp TLV %02x len %d:", ty, l);
+            for (int k = 0; k < l && k < 256; k++) printf(" %02X", t2[i+3+k]);
+            printf("  |");
+            for (int k = 0; k < l && k < 256; k++) printf("%c", (t2[i+3+k]>=32&&t2[i+3+k]<127)?t2[i+3+k]:'.');
+            printf("|\n"); i += 3 + l; } }
+        printf("--- draining 6s (async results may follow) ---\n"); fflush(stdout);
+        t0 = time(NULL);
+        while (time(NULL) - t0 < 6) {
+            fd_set z; struct timeval tv; FD_ZERO(&z); FD_SET(fd,&z); tv.tv_sec=1; tv.tv_usec=0;
+            if (select(fd+1,&z,0,0,&tv) <= 0) continue;
+            int n = read(fd, rbuf, sizeof rbuf);
+            if (n <= 0) continue;
+            printf("ASYNC %dB:", n);
+            for (int k = 0; k < n && k < 256; k++) printf(" %02X", rbuf[k]);
+            printf("\n"); fflush(stdout);
+        }
     } else if (!strcmp(mode, "probe")) {
         for (int a = 3; a < argc; a++) probe_id(cid, strtoul(argv[a], NULL, 16));
     } else if (!strcmp(mode, "sweep")) {
