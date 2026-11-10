@@ -412,6 +412,11 @@ enum Command {
         /// every ZyXEL bootloader in its listen window on the segment.
         #[arg(long)]
         confirm_specimen: bool,
+        /// Expected RAS model-ID field (hex, e.g. 7101 for NR7101).
+        /// Refuses before multicast what the bootloader's flash-commit
+        /// gate would refuse after receiving ("Wrong Model ID!!").
+        #[arg(long)]
+        expect_model: Option<String>,
         /// Attest that a non-RAS payload is deliberate (raw research
         /// images). Without it, kernel-slot sends must carry the ZyXEL
         /// RAS magic.
@@ -1515,6 +1520,7 @@ fn main() -> ExitCode {
             port,
             confirm_specimen,
             allow_raw,
+            expect_model,
         } => zycast::run(zycast::ZycastArgs {
             image,
             interface,
@@ -1525,6 +1531,7 @@ fn main() -> ExitCode {
             port,
             confirm_specimen,
             allow_raw,
+            expect_model,
         }),
         Command::DarkWatch {
             ip,
