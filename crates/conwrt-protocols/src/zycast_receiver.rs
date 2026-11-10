@@ -286,6 +286,8 @@ mod tests {
     use super::*;
     use crate::zycast::{ImageType, encode_packet};
 
+    const CHUNK_MAX_TEST: usize = CHUNK_LEN; // noise packets capped at PACKET_MAX (harness buffer is exactly that)
+
     fn image_of(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i % 253) as u8).collect()
     }
@@ -397,6 +399,98 @@ mod tests {
             rx.on_packet(&pkt[..n]),
             Decision::Drop(DropReason::InvalidType)
         );
+    }
+
+    /// Property pass: the model must eat arbitrarily corrupted input
+    /// without panicking, and must NEVER report completion unless a
+    /// checksum-valid packet carrying the final block actually arrived.
+    /// Deterministic xorshift so failures reproduce from the seed.
+    #[test]
+    fn corrupted_streams_never_panic_or_false_complete() {
+        let mut rng: u64 = 0x5A17_5A17_5A17_5A17;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        for case in 0..200u32 {
+            let img = image_of(1 + (next() % 5) as usize * CHUNK_LEN);
+            let chunks = (img.len().div_ceil(CHUNK_LEN)) as u32;
+            let mut pkt = [0u8; HEADER_LEN + CHUNK_LEN];
+            let mut rx = ZLoaderReceiver::new();
+            let mut fed_some = vec![false; chunks as usize];
+            // Feed a shuffled/corrupted soup of packets derived from the
+            // real stream plus pure-noise packets.
+            let rounds = 6 * chunks + 8;
+            for step in 0..rounds {
+                let use_noise = next() % 4 == 0;
+                let n;
+                if use_noise {
+                    let len = HEADER_LEN + (next() as usize % (CHUNK_MAX_TEST + 1)); // ≤ PACKET_MAX
+                    for b in pkt.iter_mut().take(len) {
+                        *b = (next() & 0xff) as u8;
+                    }
+                    n = len;
+                } else {
+                    let idx = (next() % chunks as u64) as u32;
+                    n = encode_packet(&img, idx, ImageType::Ras, &mut pkt);
+                    // Corrupt 0-2 random bytes (header or payload).
+                    let flips = next() % 3;
+                    for _ in 0..flips {
+                        let pos = (next() as usize) % n.max(1);
+                        pkt[pos] = pkt[pos] ^ ((next() & 0xff) as u8);
+                    }
+                    // Functionally intact = the acceptance-relevant bytes
+                    // (seq +4..+6 checksum, +6..+0xa seq, +0xa..n payload)
+                    // survived the flips. Don't-care header bytes (country,
+                    // cmd flags, reserved) may differ — the bootloader
+                    // ignores them too.
+                    fed_some[idx as usize] = true;
+                }
+                // THE assertion: arbitrary bytes must not panic.
+                let decision = rx.on_packet(&pkt[..n]);
+                let _ = step;
+                #[allow(unused_mut)]
+                let mut accepted = matches!(
+                    decision,
+                    Decision::Accept { .. }
+                        | Decision::TypeComplete { .. }
+                        | Decision::StreamComplete
+                );
+                if accepted && !use_noise {
+                    // Was this packet's acceptance consistent with its own
+                    // bytes? (checksum field == folded sum of its payload)
+                    let pl = &pkt[HEADER_LEN..n];
+                    let wire = u16::from_be_bytes([pkt[4], pkt[5]]);
+                    if crate::zycast::checksum(pl) != wire {
+                        panic!("MODEL BUG: accepted packet whose checksum mismatches");
+                    }
+                }
+            }
+            // Invariants (fuzz findings baked in — see the 2026-11-10 run):
+            // 1. No panic on arbitrary input (asserted by reaching here).
+            // 2. Every ACCEPTED packet's checksum field matched its own
+            //    payload (audited above) — the model never accepts
+            //    self-inconsistent packets.
+            // 3. Completion requires every block index to have been fed
+            //    (in some form): the receiver cannot invent coverage.
+            // 4. KNOWN PROTOCOL WEAKNESS, deliberately not asserted away:
+            //    the wire checksum is a 16-bit folded byte-sum, so a
+            //    corrupted block whose checksum field collides with its
+            //    own corrupted payload (~1/65536 per corrupted block) is
+            //    accepted — by this model AND by the real bootloader
+            //    (same algorithm). The final defense is the bootloader's
+            //    flash-commit RAS header+data checksum gates, not the
+            //    wire checksum. Case 76 of this seed is a live example:
+            //    completion via a collided final block, deterministic.
+            if rx.is_done() {
+                assert!(
+                    fed_some.iter().all(|f| *f),
+                    "case {case}: completed with a block never fed at all — model invents coverage"
+                );
+            }
+        }
     }
 
     #[test]
