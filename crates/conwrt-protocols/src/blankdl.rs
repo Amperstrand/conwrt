@@ -50,17 +50,24 @@ pub const FIN_STRING: &[u8] = b"OK:zte blank download is done";
 
 /// TFTP opcodes (the subset this protocol uses).
 pub const OP_RRQ: u16 = 1;
+/// Write-request opcode (recognized, never answered).
 pub const OP_WRQ: u16 = 2;
+/// Data opcode.
 pub const OP_DATA: u16 = 3;
+/// Acknowledgement opcode.
 pub const OP_ACK: u16 = 4;
+/// Error opcode (client-reported, logged).
 pub const OP_ERROR: u16 = 5;
+/// Option-acknowledgement opcode.
 pub const OP_OACK: u16 = 6;
 
 /// Block-size negotiation bounds. 1468 is the largest the stock client
 /// asks for and the protocol max we will serve; requests beyond it are
 /// clamped, not honored.
 pub const DEFAULT_BLKSIZE: usize = 512;
+/// Smallest negotiated blksize served.
 pub const MIN_BLKSIZE: usize = 8;
+/// Largest negotiated blksize served (the stock client's ask).
 pub const MAX_BLKSIZE: usize = 1468;
 
 /// Per-block resend attempts before the fence gives up on a client.
@@ -255,6 +262,12 @@ impl Transfer {
     #[must_use]
     pub fn blocks_sent(&self) -> u64 {
         self.blocks_sent
+    }
+
+    /// Blocks the client has ACKed (never wrapped).
+    #[must_use]
+    pub fn blocks_acked(&self) -> u64 {
+        self.blocks_acked
     }
 
     /// Whether the transfer completed (terminating block ACKed).

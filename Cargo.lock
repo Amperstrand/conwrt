@@ -770,6 +770,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "conwrt-blankdl"
+version = "0.1.0"
+dependencies = [
+ "conwrt-protocols",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "socket2 0.6.5",
+]
+
+[[package]]
 name = "conwrt-cli"
 version = "0.1.0"
 dependencies = [
