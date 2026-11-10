@@ -33,6 +33,12 @@ serde_json = { workspace = true, optional = true }
 [dev-dependencies]
 pollster = { workspace = true }
 serde_json = { workspace = true }
+# The diagnose_workflow test loads the real models/ registry, which lives
+# behind conwrt-types' `json` feature. As a dev-dependency the feature only
+# unifies for tests/benches — the production feature graph is untouched
+# (per-crate `cargo check -p conwrt-core --all-targets` only worked under
+# workspace-level unification before this; issue #624).
+conwrt-types = { path = "../conwrt-types", features = ["json"] }
 
 [lints]
 workspace = true
