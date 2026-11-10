@@ -460,3 +460,71 @@ class TestRunZycastAuto(TestCase):
         result = run_zycast_auto("/tmp/fw.bin")
         mock_run.assert_called_once()
         self.assertEqual(result, mock_proc)
+
+
+class TestRustFirstDispatch(TestCase):
+    """run_zycast_auto must prefer the Rust `conwrt zycast` CLI (#683)."""
+
+    def test_rust_cli_used_when_present(self):
+        import scripts.zycast as z
+        from unittest import mock
+
+        fake = "/nonexistent/conwrt-for-test"
+        with mock.patch.object(z, "_find_conwrt_cli", return_value=fake), \
+             mock.patch.object(z.subprocess, "Popen") as popen:
+            popen.return_value = mock.Mock(stdout=None, stderr=None)
+            z._run_rust_zycast(
+                image_path="/tmp/img.bin", interface="enX",
+                multicast_group="225.0.0.0", multicast_port=5631,
+                image_type="ras",
+            )
+            argv = popen.call_args[0][0]
+        self.assertEqual(argv[0], fake)
+        self.assertIn("zycast", argv)
+        self.assertIn("--confirm-specimen", argv)
+        self.assertIn("--allow-raw", argv)
+        self.assertIn("enX", argv)
+        self.assertIn("/tmp/img.bin", argv[-1])
+        # bench-proven floor loops default
+        self.assertIn("4", argv)
+
+    def test_no_interface_falls_back(self):
+        import scripts.zycast as z
+        from unittest import mock
+
+        with mock.patch.object(z, "_find_conwrt_cli", return_value="/fake/conwrt"):
+            self.assertIsNone(
+                z._run_rust_zycast(
+                    image_path="/tmp/i", interface="",
+                    multicast_group="225.0.0.0", multicast_port=5631,
+                    image_type="ras",
+                )
+            )
+
+    def test_missing_cli_returns_none(self):
+        import scripts.zycast as z
+        from unittest import mock
+
+        with mock.patch.object(z, "_find_conwrt_cli", return_value=None):
+            self.assertIsNone(
+                z._run_rust_zycast(
+                    image_path="/tmp/i", interface="enX",
+                    multicast_group="225.0.0.0", multicast_port=5631,
+                    image_type="ras",
+                )
+            )
+
+    def test_run_zycast_auto_tries_rust_first(self):
+        import scripts.zycast as z
+        from unittest import mock
+
+        with mock.patch.object(
+            z, "_run_rust_zycast", return_value=mock.Mock()
+        ) as rust, mock.patch.object(z, "ensure_zycast_binary") as ctool:
+            z.run_zycast_auto(
+                image_path="/tmp/i", interface="enX",
+                multicast_group="225.0.0.0", multicast_port=5631,
+                image_type="ras",
+            )
+            rust.assert_called_once()
+            ctool.assert_not_called()

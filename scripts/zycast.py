@@ -448,6 +448,60 @@ class ZycastPythonSender:
         self.terminate()
 
 
+def _find_conwrt_cli() -> Optional[str]:
+    """Locate the Rust `conwrt` CLI: $CONWRT_ZYCAST_BIN, then PATH."""
+    env = os.environ.get("CONWRT_ZYCAST_BIN")
+    if env and (os.path.isfile(env) and os.access(env, os.X_OK)):
+        return env
+    import shutil
+
+    return shutil.which("conwrt")
+
+
+def _run_rust_zycast(
+    image_path: str,
+    interface: str,
+    multicast_group: str,
+    multicast_port: int,
+    image_type: str,
+    extra_args: Optional[list[str]] = None,
+) -> Optional[subprocess.Popen]:
+    """Start `conwrt zycast` if the CLI is available; None if not.
+
+    Safety-gate semantics in the dispatcher context: the recovery flow is
+    launched by an operator against a specific profile/device — that IS
+    the specimen attestation --confirm-specimen encodes. --allow-raw is
+    passed because recovery images are raw kernels (no RAS header); the
+    dispatcher's own sha256 + profile binding is the payload gate here.
+    Loops default to the bench-proven floor of 4 (override:
+    CONWRT_ZYCAST_LOOPS).
+    """
+    cli = _find_conwrt_cli()
+    if cli is None:
+        logger.info("conwrt CLI not found (CONWRT_ZYCAST_BIN/PATH); falling back")
+        return None
+    if not interface:
+        logger.warning("conwrt zycast requires an explicit --interface; falling back")
+        return None
+    try:
+        loops = str(int(os.environ.get("CONWRT_ZYCAST_LOOPS", "4")))
+    except ValueError:
+        loops = "4"
+    argv = [
+        cli, "zycast",
+        "--confirm-specimen",
+        "--allow-raw",
+        "-i", interface,
+        "-g", multicast_group,
+        "-p", str(multicast_port),
+        "-t", image_type,
+        "--loops", loops,
+        "--delay-ms", "10",
+    ] + (extra_args or []) + [image_path]
+    logger.info("starting Rust sender: %s", " ".join(argv))
+    return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
 def run_zycast_auto(
     image_path: str,
     interface: str = "",
@@ -465,6 +519,22 @@ def run_zycast_auto(
     :class:`ZycastPythonSender`.  Both expose ``.poll()``, ``.wait()``,
     ``.terminate()``, and ``.returncode``.
     """
+    # Rust-first (conwrt #678/#683): the `conwrt zycast` CLI is the
+    # primary sender — two clean hardware flashes, byte-parity with the
+    # retired Go reference, safety gates (specimen MAC-gate, RAS-magic
+    # gate, flash-mutex, pacing clamp, optional --expect-model) and the
+    # RE-derived receiver-model test suite. The C tool and the pure
+    # Python sender below remain as offline fallbacks.
+    rust = _run_rust_zycast(
+        image_path=image_path,
+        interface=interface,
+        multicast_group=multicast_group,
+        multicast_port=multicast_port,
+        image_type=image_type,
+        extra_args=extra_args,
+    )
+    if rust is not None:
+        return rust
     try:
         binary = ensure_zycast_binary()
         return run_zycast(
