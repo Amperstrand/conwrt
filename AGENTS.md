@@ -906,6 +906,58 @@ Full evidence matrix: `models/dlink-covr-x1860-a1.json` bench_observations
    before flashing anything that has been dark — case-sealed, no-serial
    units have no second door.
 
+## Recovery Management Plane: v6-first (2026-11-11)
+
+Motivating session: the MF286D Rust-recovery dogfood (#685). IPv4 burned
+~90 minutes across FIVE independent failure modes while the IPv6
+link-local door worked through every one of them. The v4 modes, so future
+sessions recognize them instantly:
+
+1. **Stale flash-rig routes**: the bench host carried `192.168.1.0/24`
+   connected routes on FOUR DUT VLANs (leftover recovery-rig IPs). The
+   kernel routes fresh-image traffic out the WRONG bay; replies return on
+   the right one and die at rp_filter. Symptom: ARP resolves, v6 works,
+   v4 ICMP/TCP silent. `ip route get <ip>` names the winning egress.
+2. **ARP/PHY post-flash blindness**: carrier solid, zero frames (the
+   documented species PHY wedge) — ping says dead, the device is up.
+3. **Fresh-image default-IP roulette**: every flash lands on some default
+   (`192.168.1.1`, `192.168.0.1`, calibration IPs) — do not chase it.
+4. **`netmask` migration trap**: `uci set network.lan.netmask=255.255.255.0`
+   on 22.03 migrates to a `/32` on 25.12. ALWAYS set
+   `network.lan.ipaddr=<ip>/24` (CIDR) and delete bare netmask.
+5. **Host-key churn**: every full flash regenerates dropbear keys
+   (`ssh-keygen -R` between sessions; `-o StrictHostKeyChecking=accept-new`).
+
+**The v6-first ladder (the door that always works):**
+- Every OpenWrt device answers on `fe80::<EUI-64 of any observed MAC>`
+   from boot — derive it: split MAC, insert FFFE, XOR bit 1 of first byte.
+- Zone-scoped v6 must be dialed FROM THE ON-LINK HOST — on the bench
+   that is the switch: `dbclient -y -y root@fe80::…%switch.<VLAN>`.
+   Use it to: prove life past a PHY wedge, quiet rogue DHCP, set the
+   management IP (CIDR), install the SSH key. THEN switch to v4 as a
+   convenience.
+- Management subnets: non-default (e.g. 192.168.34/24 per DUT), never
+   192.168.1.x — every flash rig in the building squats there.
+
+**Post-flash adoption sequence** (in this order, each read back):
+`dhcp.lan.ignore=1` + ra/dhcpv6 disabled (rogue-DHCP discipline) →
+`network.lan.ipaddr=<ip>/24` → SSH key → hostname. This is the
+`conwrt adopt` command-to-be (issue filed 2026-11-11).
+
+**LED patterns lie; dmesg doesn't.** "It keeps power-cycling" on the
+MF286D was the MODEM's USB crash-loop (qmi_wwan register/unregister
+every ~90s in dmesg) — the router was up the whole time. Check dmesg
+for USB cycles before believing a reboot loop. That modem crash-loop
+class (QMI service dead + AT alive in ~80s windows + loop survives
+router reflash AND cold power) = persistent modem-side corruption;
+the repair path is EFS/NV restore from the B12 corpus or modem firmware
+reflash — not more router-side recovery.
+
+**Fences are claimed resources.** The device-2 lane's fence ran under a
+keepalive supervisor that re-armed within seconds of a kill — stop the
+KEEPALIVE first (cmdline sanity-check both), and expect the
+`conwrt blankdl fence` flash-mutex to catch stragglers.
+
 ## Long-Running Remote Work Dies With Its Pane (2026-10-14)
 
 Herdr panes churn (operator closes tabs, sessions restart). Anything
