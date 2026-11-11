@@ -299,7 +299,7 @@ fn trigger_inner(a: &TriggerArgs) -> Result<ExitCode, String> {
 
     // ---- 2. resolve the partition BY NAME --------------------------------
     let part = &a.partition;
-    let mtd = ssh_exec(a, &format!("grep ' \"{part}$' /proc/mtd || true"))?;
+    let mtd = ssh_exec(a, &format!("grep ' \\\"{part}\\\"$' /proc/mtd || true"))?;
     if mtd.is_empty() {
         return Err(format!(
             "partition {part:?} not found in /proc/mtd — resolve by \
