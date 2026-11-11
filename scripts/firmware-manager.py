@@ -35,7 +35,11 @@ from profile.render import print_plan
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMAGES_DIR = REPO_ROOT / "images"
 
-ASU_BASE = "https://sysupgrade.openwrt.org"
+ASU_BASE = os.environ.get("CONWRT_ASU_BASE", "https://sysupgrade.openwrt.org")
+# CVE-2024-54143 class: the public ASU server had build-artifact poisoning via
+# truncated-hash + command injection. Set CONWRT_ASU_BASE to a self-hosted
+# instance or imagebuilder for fleet work; every image is sha-pinned locally
+# regardless (bench research 2026-11-10, conwrt-bench #166).
 ASU_BUILD_URL = f"{ASU_BASE}/api/v1/build"
 ASU_STORE_URL = f"{ASU_BASE}/store"
 LATEST_VERSIONS_URL = f"{ASU_BASE}/json/v1/latest.json"
