@@ -4,6 +4,42 @@ Hand this to the session that fixes the modem. The router is DONE; the
 modem is STABLE but parked. Everything below is verified-live evidence
 unless marked.
 
+## UPDATE (2026-11-11 late): the EDL client is qtools, not bkerler/edl
+
+The full community playbook was found (eko.one.pl thread 21790 p21,
+Leo-PL + stich86, proven on this exact modem):
+
+- **bkerler/edl FAILS at the hello stage** ("Sahara error state", before
+  any loader upload — with stock AND patched loaders). Not signatures, not
+  transport: qtools' `sahara.c` implements the handshake variant these
+  nandprg-era PBLs expect; edl.py's newer flow does not.
+- **The proven dump recipe**: `qdload -k12 -i -pPORT` (emergency loader
+  into 9008) → `qrflash -k12 -s@ -m -pPORT` (P-table) →
+  `qrflash -k12 -s@ -o out.bin -pPORT` (FULL DUMP, per-partition files).
+  "Slow as molasses, but it works."
+- **EFS2 IS dumpable this way** (Leo-PL: EFS2 content == EFSBAK content
+  on their unit) — our campaign gap is fillable.
+- qtools = Maks-2012 fork (has the `-k12` chipset.cfg mapping; upstream
+  forth32 lacks it). C codebase, Linux Makefile — buildable anywhere.
+  ALSO contains `qefs.c`, `qnvram.c`, `efsio.c`, `mc-efs-plugin` — EFS/NV
+  tooling beyond dumps.
+- Transport: qtools speaks serial (-pPORT). On Linux: bind usbserial to
+  the 9008 device, or the lane's PTY-USB bridge on the router directly.
+- Port exclusivity: nothing else may hold the port during qtools runs.
+- Write-path intel (for the later repair): SB3.0/qtools writes don't
+  erase unselected partitions; some units refuse partition.mbn; the
+  fota-cookie (recoveryfs boot-loop) class needs fota erased; the
+  fastboot alternative exists (erase boot+recovery → aboot fastboot →
+  flash boot/system/modem/recovery/zterw/recoveryfs by name).
+- Our machinery that stands (live-proven): `adb shell sys_reboot edl`
+  → 9008 (05c6:9008, reliable); the PBL falls through to ZTE ARMPRG
+  (05c6:900e) after ~5s of host silence — win the race with an instant
+  hotplug bind + pre-waiting client; usbip export router→ai-legion works
+  (kmod-usbip-* on 25.12.6, hotplug binder script in edl-prep/).
+- Partition table: triple-confirmed (kit partition.mbn == live /proc/mtd
+  == the community's device-read P-Table): 17 partitions, 512MiB total,
+  EFS2=44 blocks @20, MIBIB=10 @10.
+
 ## Current state (2026-11-11 evening)
 
 - **Router (d1)**: fully recovered, 25.12.6, `mf286d` @ 192.168.34.1/24,
