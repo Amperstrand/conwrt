@@ -466,7 +466,7 @@ class TestRustFirstDispatch(TestCase):
     """run_zycast_auto must prefer the Rust `conwrt zycast` CLI (#683)."""
 
     def test_rust_cli_used_when_present(self):
-        import scripts.zycast as z
+        import zycast as z
         from unittest import mock
 
         fake = "/nonexistent/conwrt-for-test"
@@ -489,7 +489,7 @@ class TestRustFirstDispatch(TestCase):
         self.assertIn("4", argv)
 
     def test_no_interface_falls_back(self):
-        import scripts.zycast as z
+        import zycast as z
         from unittest import mock
 
         with mock.patch.object(z, "_find_conwrt_cli", return_value="/fake/conwrt"):
@@ -502,7 +502,7 @@ class TestRustFirstDispatch(TestCase):
             )
 
     def test_missing_cli_returns_none(self):
-        import scripts.zycast as z
+        import zycast as z
         from unittest import mock
 
         with mock.patch.object(z, "_find_conwrt_cli", return_value=None):
@@ -515,7 +515,7 @@ class TestRustFirstDispatch(TestCase):
             )
 
     def test_run_zycast_auto_tries_rust_first(self):
-        import scripts.zycast as z
+        import zycast as z
         from unittest import mock
 
         with mock.patch.object(
