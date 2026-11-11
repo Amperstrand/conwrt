@@ -958,6 +958,34 @@ keepalive supervisor that re-armed within seconds of a kill — stop the
 KEEPALIVE first (cmdline sanity-check both), and expect the
 `conwrt blankdl fence` flash-mutex to catch stragglers.
 
+## MF286D modem crash-loop: the stabilization move (2026-11-11)
+
+When device-1's modem is in the post-v8 crash loop (QMI-dead, AT-alive
+in windows, module resets every 40-200 s from BELOW Linux — no kernel
+panic line, subsys stays ONLINE, reset is SBL/watchdog-level):
+
+1. **Stabilize FIRST, repair with the time bought**: with the modem
+   enumerated, `qmicli -d /dev/cdc-wdm0 --dms-set-operating-mode=low-power`
+   parks the baseband — the escalation trigger disappears. It can take
+   TWO tries (first SET may land as the crash hits; first read-back may
+   still say online while the transition is in flight). Verify: mode
+   reads low-power, uptime climbs past 200 s, the router's
+   `dmesg | grep -c "qmi_wwan.*register"` counter FREEZES.
+2. **The loop is runtime-only**: stabilization is lost on reboot/power
+   cycle — the EFS corruption replays. Re-apply after any reset.
+3. **What stays alive in low-power**: ADB (root), QMI CTL/DMS/WDS reads;
+   UIM/NAS stay dead (the EFS-dependent services). AT answers. adb
+   pull/shell work without window-racing.
+4. **The reset chain, mapped**: kernel log silent since ~27 s of boot →
+   death at 40-200 s → no "Restarting system" line (not a Linux reboot;
+   `/dev/rebooterdev`-based `reboot-daemon`/`diagrebootapp` are DIAG-
+   commanded servants, not the trigger). The trigger is the baseband
+   never completing init (EFS corruption class) → SBL/watchdog reset.
+5. **Do NOT read mtd1/mtd2 on the modem** (species-proven crasher,
+   community-confirmed); DIAG port has never been alive on unit 1
+   (ttyUSB0 silent since day one) — qfenix/DIAG EFS paths are dead ends
+   HERE even though the research docs describe them.
+
 ## Long-Running Remote Work Dies With Its Pane (2026-10-14)
 
 Herdr panes churn (operator closes tabs, sessions restart). Anything
