@@ -65,9 +65,27 @@ registry + bench evidence, not here.
 ## Modem / eSIM (B12 modem firmware)
 
 - QMI UIM service: functional (SIM state, PIN, APDU infrastructure)
-- **ISD-R (eSIM management applet) BLOCKED** by modem firmware policy via both
-  AT and QMI UIM ("Access denied" ≠ "not found" — the applet exists on the card
-  but the modem denies access). AT+CSIM: "not supported."
+- **ISD-R (eSIM management applet) BLOCKED** — EXP-035 (2026-11-09, live
+  B12): a deliberate **three-layer MPSS defense**, QMI bypass surface
+  *proven exhausted* (not assumed): L1 channel-open denies ISD-R AID ≥7 B
+  (QMI error 82); L2 any channel whose open-FCI revealed ISD-R receives
+  **fabricated card responses** (differential-proven: identical APDUs =
+  real data on a USIM channel vs impossible SWs like SELECT-MF→6A82 — the
+  card never sees them); L3 an APDU-payload scanner drops any SELECT
+  carrying the GSMA RSP RID (≥4 B) even on unflagged channels. Basic
+  channel is modem-only; the AT layer is separately cauterized (all
+  channel opens denied). The earlier partial-AID (6 B) channel open
+  defeats L1 only — L2 fakes everything behind it (no EID was ever read).
+  Earlier ideas now DEAD: empty-AID AT+CCHO trick, any QMI-UIM routing
+  trick. Remaining in-device paths: offline MPSS RE (AID-compare,
+  canned-SW synthesis, boot-time NV gate), NV/diag flag hunt, MBIM
+  composition check, MPSS patch class (last resort). Pragmatic path for
+  actual eSIM management: NR7101 or USB CCID reader + lpac.
+- **Full B12 MPSS firmware banked** (mtd9, 74.7 MB, sha256 55848f96…,
+  `evidence/modem-fw-re/live-b12/dumps/` via live ADB) — the modem
+  baseline for ALL offline RE incl. the B14 continuation (its 642
+  BSDIFF40 patches now have their base). efs2 NV pull deferred (reads
+  destabilize adbd; not hammered — device healthy).
 - eSIM profile management IN-DEVICE: **not possible** on this firmware.
 - AT CCHO/CGLA/CCHC/CSIM: commands IMPLEMENTED in baseband (response strings in
   firmware binary) but blocked by carrier policy. No community workaround for
@@ -85,8 +103,150 @@ registry + bench evidence, not here.
   unvalidated. Full matrix: bench evidence/firmware-matrix.md.
 - Modem firmware B14: documented as "the breaker" — do not update to it.
 
+### B14 ("Nordic_B14", Oct 2024) — what actually breaks (2026-11-09 research)
+
+Package = router `V1.0.1B02` (CVE-2023-25649 fix) + modem
+`BD_TELIAMF286DV1.0.0B14` + **a modem-side NV script** (users extracted from
+the `.up`: `nv set net_select="Only_LTE"`, `nv set …_band_lock=0x…`).
+Delta filename `TELIA_MF286DV1.0.0B12-TELIA_MF286DV1.0.1B02.up` is the
+B02/B14 naming trap (same package — the wiki-note confusion documented).
+Feature history: B11 = VoLTE enable, B12 = upload CA; B14 unpublished.
+
+Under OpenWrt, B14 modem: AT/UIM/NAS/DMS/WDA all work; **QMI WDS
+start-network hangs → "Unknown error"** (PAP/CHAP, v4, v4v6 all fail);
+`--stop-network --autoconnect` → "No effect"; voice broken; 3G
+NV-disabled. Key evidence: `AT+CGPADDR` shows ACTIVE PDP contexts with
+real IPs while QMI WDS reports "Out of call" — the modem's data engine
+runs sessions external QMI cannot see/stop/start. Stock firmware works
+with B14 → host-control problem, not radio.
+
+**Modem architecture (live-proven via ADB root, 2026-11-09)**: B12/B14
+units carry a **Qualcomm MDM9650** (soc_id 283, msm baseband, kernel
+3.18.31) — the B02-kit FBF used for early static RE is the older
+**Marvell PXA1826** generation and its conclusions do NOT transfer.
+
+**Spike verdict (2026-11-09, artifacts in `recipes/zte/mf286d/b14/`)**: the
+B14 `.up` package was acquired, unpacked, and parsed. It **rewrites the
+modem's own software**: full AMSS baseband re-delta (163 files) **plus the
+modem-Linux data-path stack** — `dsi_config.xml`, `libqmi_cci/csi/sap`,
+`mcm_ril_service`, `zte_adapter_ppp/cfg`, `libztecmdq` — plus **119 MCFG
+carrier-policy files** (Telia patched) and direct modem-EFS writes.
+
+**Extension window — H8, the smoking gun**: the ZFD `.p` codec was cracked
+(`[BE32 comp_len][BE32 uncomp_size][LZMA1 props 5D/128K][raw LZMA1
+no-EOS]`; 642 records = BSDIFF40 patches needing a B12 base, 230 = full
+files readable now — decoder `zfd_decode.py` in-repo). Decoded
+`/mnt/system/etc/qmi_ip_cfg.xml` ships **`<mode>multi_client</mode>` +
+`<lan_clients_allowed>3</lan_clients_allowed>`** with an init script
+starting `/usr/bin/qmi_ip_multiclient` — a modem-side multi-client QMI
+data bridge holding one data call per LAN client. The **3 == the three
+live PDP contexts** users observe via `AT+CGPADDR` while QMI WDS reports
+"out of call"; stop-network "no effect" + start-network "unknown error"
+are both mechanically explained. `dsi_config.xml` is **exonerated**
+(decoded: stock Qualcomm DSI config, no ZTE knobs). Ranking:
+**H8 (qmi_ip_multiclient bridge) > H2 (data-path stack = H8's substrate)
+> H3 (carrier/MCFG)**; H1 (NV autoconnect) refuted — the full 30-item NV
+script has no QMI/autoconnect item (LTE-only lock, datastall watchdog,
+version-identity-in-NV — the last mechanically explains the eko.one.pl
+stale-version reports). **Fix candidate without firmware change**:
+stop/reconfigure `qmi_ip_multiclient` via ADB (E11, needs a B14 unit);
+E8 provenance check (was the daemon absent/single-client in B12?) can be
+done TODAY on device 1's live ADB — no flash dump needed for first pass.
+
+Downgrade (community-proven, painful): ZTE Windows framework + stock
+firmware first; or B12 mtd8/9 images + factory defaults (NV-cache gotcha).
+Wiki warns against upgrading to B14. Fleet rule stands: never update a
+unit's modem off B12.
+
+Sources: forum.openwrt.org/t/175362 ("luca" 2025-03-03, full uqmi logs);
+eko.one.pl forum id=21790 posts ~791, 803–823; ispreview thread 42622;
+delta-finder gist dream-svg/f0ff6b85. Follow-ups:
+`prompts/mf286d-b14-01-dig.md` (root-cause dig),
+`prompts/mf286d-b14-02-downgrade-automation.md` (conwrt-native downgrade).
+
+## Modem DM/DIAG channel — THE management surface (2026-11-09)
+
+**Open and fully working** (see `modem/DM-PROTOCOL.md` for the protocol
+and `modem/dm_*.c` for tooling): router `/dev/ttyUSB0` speaks DM with a
+**nonstandard CRC variant** (crcmod 0x11021/init0/xorFFFF; wrong-CRC
+requests get `0x13 BAD_CMD`+echo — looks like lockdown, isn't).
+Confirmed commands: VERNO (build date), DIAG_VER, **EXT_BUILD
+(MPSS.AT.2.5.1-00628-9655_GEN…)**, and **NV_READ — all 4096 NV items
+swept with zero errors** (harvest: `live-b12/nv/nvsweep-4096.txt`,
+incl. item 550 IMEI). **This is the QCN-equivalent of the efs2 payload,
+extracted with zero raw-flash reads** — the crasher partitions never need
+touching for NV backup. mtd9 (MPSS) also re-dumped pristine:
+sha256 `efd0b8a6…`, 74,448,896 B (= 0x04700000 exactly; an earlier
+"short dump" was a bad size constant on our side, not transport loss —
+two independent methods agree byte-for-byte). AT stack post-crash note:
+`MCM_atcop_svc` won't start (smd8 tty-class sysfs missing; survives adb
+reboot; data path + QMI + DM unaffected; cold power cycle is the fix).
+
+**Modem flash backup inventory + partition safety map (2026-11-09)**:
+
+| Partition | Content | Status |
+|---|---|---|
+| mtd0 sbl | boot loader | ✅ banked (sha `510e928e…`) |
+| mtd9 modem | MPSS/baseband | ✅ banked (sha `55848f96…`) |
+| mtd16 system | UBI → fwfs + **rootfs** + ztedata | ✅ banked (sha `2f4e3b63…`), extracted to `mtd16-extract/` |
+| mtd1 mibib / mtd2 efs2 / mtd3 tz / mtd5 efsbak / mtd6 aboot | boot chain + NV | ⛔ **crasher class — reading mtd1 reboots the whole modem** (proven); cold-boot single-shot protocol only, never hammer warm |
+| mtd4/7/10/11/12/13 | rpm/boot/misc/recovery/fota/recoveryfs | unprobed — use the uptime-continuity probe protocol before any dump |
+
+Transfer method (adb 1.0.32 constraints): `exec-out` broken ("error: closed");
+raw `adb shell` CRLF-mangles binaries; modem tmpfs only 64 MB. **Working
+pipeline**: `adb shell 'dd if=/dev/mtdN bs=65536 2>/dev/null | base64'` →
+`tr -d '\r'` → `base64 -d`, sha256 at every hop. Watch for silently-empty
+files when a crasher partition kills adbd mid-loop (bit the RE session: four
+0-byte "dumps").
+
+**Remote SIM verdict (2026-11-09)**: NO remote-SIM/vSIM/CloudSIM/SIM-over-IP
+infrastructure exists at ANY layer — stock router rootfs (zero strings),
+modem-Linux rootfs (zero daemons/configs; standard QTI LE data stack only:
+MCM suite, netmgrd, qmi_ip_multiclient, atcmdsrv), baseband mtd9 (zero
+strings). Vendor never shipped it. The only theoretical path is an
+MPSS-level SIM-APDU relay implementation (research-class, ≥ the ISD-R
+three-layer effort). For profile management keep using NR7101/USB-CCID.
+
+**H8 narrowing (from the B12 rootfs dump)**: B12 ships the SAME
+`qmi_ip_cfg.xml` (`multi_client`, `lan_clients_allowed=3`) and the same
+`start_stop_qmi_ip_multiclient` init script as B14 — but the daemon is
+**inert on live B12** (`ps` clean; nothing invokes it; no inetd entry; no
+overlay override). H8 as "B14's config takes over data calls" is therefore
+WEAKENED — the surviving form is "B14's runtime state differs (daemon
+started via a path not visible in the full-file set — possibly one of the
+642 BSDIFF40 patches)". The posted PR #85 verification prompt still tests
+exactly the right thing (runtime `ps` + stop/reconfigure on a real B14
+unit). Applying the BSDIFF40 patches to the now-banked B12 base (E1) is
+the definitive static answer — queued for the B14 lane.
+
 ## OpenWrt install path (once main slot is rewritten)
 
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
 plain `sysupgrade` (never `-F`); keep `sysupgrade -b` config backups; do not touch the
 modem firmware. Verify against downloads.openwrt.org checksums.
+
+## Flash-safety lessons — preventing the device-2 lockout class (2026-11-10)
+
+Device 2 arrived with a broken mtd9 and, through a flash attempt whose erase
+completed but whose write did not, ended in a state where the bootloader's
+ONE network-recovery entry (mechanism A: volume-not-found → TFTP self-flash)
+is unreachable — with no serial attached. Species-level + canon-grade rules:
+
+1. **Erase-then-write is not atomic.** A NAND erase not followed by a
+   VERIFIED write leaves flash worse than before: the recovery mechanism
+   itself needs a valid UBI layout volume to attach. Never issue a bare
+   erase on a no-console device unless the write that follows is staged,
+   verified (readback magic + size), and completes in the same window.
+2. **Write the recovery-preserving layout, not zeros.** When manipulating
+   the UBI region on this species, write a trigger-compatible image (valid
+   layout volume, missing kernel volume — see d2repo trigger.img) so that
+   even a FAILED later step leaves mechanism A armed. Zeros disarm it.
+3. **Verify the serial door BEFORE the first flash — even on "no-serial"
+   species.** This species was believed serial-less; the OpenWrt wiki has
+   a PHOTO of the X8 connector (115200 8N1). The escape hatch existed all
+   along. Serial loopback-verified pre-flash = the ultimate rollback.
+4. **Count the doors includes doors you believe don't exist** — audit the
+   belief. "No serial available" was folklore; the wiki documented it.
+5. **The healthy modem is not a door.** All modem interfaces (AT/DM/adb/
+   QMI) terminate on router Linux via internal USB; the modem has no
+   network-facing service. A dead router Linux = unreachable modem.

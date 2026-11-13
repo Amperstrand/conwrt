@@ -1,0 +1,33 @@
+#!/bin/sh
+
+if [ "$1" == "enable" ]; then
+    echo "enable crash auto reboot" > /dev/kmsg
+    #reboot instead of turn to download mode when kernel panic
+    if [ x`cat /sys/class/android_usb/android0/download` = x"NORMAL" ]; then
+      echo "default process for crash: reboot" > /dev/kmsg
+      echo 1 > /proc/sys/kernel/panic
+      echo 0 > /sys/module/msm_poweroff/parameters/download_mode
+      echo 0 > /sys/module/qcom_dload_mode/parameters/download_mode
+      cat /proc/driver/codec_id
+    else
+      echo "default process for crash: download" > /dev/kmsg
+      cat /proc/driver/sensor_id
+    fi
+
+    #reboot when oom
+    echo 2 > /proc/sys/vm/panic_on_oom
+    cfg set crash_restart_disable=0
+    cfg save
+elif [ "$1" == "disable" ]; then
+    echo "disable crash auto reboot" > /dev/kmsg
+    echo 5 > /proc/sys/kernel/panic
+    echo 1 > /sys/module/msm_poweroff/parameters/download_mode
+    echo 1 > /sys/module/qcom_dload_mode/parameters/download_mode
+    echo 0 > /proc/sys/vm/panic_on_oom
+    cfg set crash_restart_disable=1
+    cfg save
+fi
+
+sync
+
+ 

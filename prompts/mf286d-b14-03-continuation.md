@@ -1,0 +1,152 @@
+# MF286D B14 — continuation research kit (for a future agent)
+
+Queue prompt (token-burn lane). Written 2026-11-09 at the end of the
+time-boxed B14 spike. This prompt is SELF-CONTAINED: everything the next
+agent needs is here or in the artifact paths below.
+
+**Campaign framing**: the main fleet work is device 1 + device 2 — both run
+B12 modem firmware (the known-good) and are NOT to be updated. B14 is a
+separate research thread answering the community question
+(ddimension/wwand PR #85, obsy): *"can the modem work with B14 firmware?"*
+No B14 unit exists on our bench and we will not risk community hardware:
+this thread is reverse engineering + simulation until one arrives.
+
+## State of knowledge (2026-11-09 spike, all verified on artifacts)
+
+- The "Nordic_B14" `.up` package is ACQUIRED and unpacked:
+  `~/mf286d-work/evidence/b14/TELIA_B12-V1.0.1B02.up`
+  (sha256 `7df293bd…dc9dc9`, 23.9 MB zip) → `evidence/b14/unpacked/`.
+  Contents: `root_uImage.mld` (router V1.0.1B02 image + signatures +
+  `public_ver.pem`), `delta.package` (13.2 MB), `cpe_postprocessing.sh`
+  (the FULL 30-item NV script — community had only 5 items).
+- `delta.package` = 15 `.mld` blobs. `modem.mld` = ZFD01.02 per-file delta,
+  **163 files**: full AMSS re-delta (modem.b00–b28 + mba), WLAN firmware,
+  and **119 MCFG carrier files** including EU/Telia/Telia_SWE +
+  `mcfg_sw.mbn.p` (the Telia carrier policy file is PATCHED in B14).
+- `system.mld` touches the **data-path stack directly**: `dsi_config.xml`,
+  `libqmi_cci/csi/sap`, `mcm_ril_service`, `zte_adapter_ppp/cfg`.
+- Modem hardware (live-proven via ADB root on device 1, same day):
+  **Qualcomm MDM9650**, msm baseband, kernel 3.18.31 (Jul-10-2021 =
+  B12 build), UBIFS root; `/proc/mtd` on modem: modem = 71 MB (mtd9),
+  efs2 = mtd2. Do NOT use `~/mf286d-work/evidence/modem-fw-re/extracted/`
+  as a B12 baseline — that is the B02-kit **Marvell** generation artifact
+  (different modem family; its conclusions do not transfer).
+- Community symptom matrix + sources: see `recipes/zte/mf286d/notes.md`
+  (B14 section). Key repro: `AT+CGPADDR` shows active PDP contexts while
+  QMI WDS reports "Out of call" — the modem's data engine runs sessions
+  external QMI cannot see/stop/start.
+
+## Hypotheses (ranked; update with evidence, don't assume)
+
+> **VERDICTS 2026-11-09 (spike, see `recipes/zte/mf286d/b14/FINDINGS.md`)**:
+> H2 STRONG (data-path stack shipped in the delta, `dsi_config.xml` likely
+> NEW), H3 moderate-strong (119 MCFG files + EFS writes), H1 **refuted in
+> its strong form** (full 30-item NV script has NO autoconnect/QMI item).
+> NV script real contents: LTE-only RAT lock (Nordic bands B1/B3/B7/B20/
+> B28/B38), datastall watchdog, version-identity-in-NV (mechanically
+> explains the eko.one.pl stale-version reports). Delta payloads use a
+> custom ZTE LZMA-variant encoding (prologue `5D00000200002114C48AF63F…`) —
+> E1 decoding is the gateway experiment.
+>
+> **EXTENSION WINDOW UPDATE (same day)**: ZFD codec CRACKED (`zfd_decode.py`
+> in-repo — 230 full files readable, 642 = BSDIFF40 needing B12 base;
+> no public prior art found). **H8 is the new top hypothesis**: decoded
+> `qmi_ip_cfg.xml` ships `multi_client` mode with `lan_clients_allowed=3`
+> == the 3 orphan PDP contexts users observe; `qmi_ip_multiclient` daemon
+> takes data-call ownership from external QMI. `dsi_config.xml` exonerated
+> (stock Qualcomm). Ranking now **H8 > H2 > H3**; fix candidate without
+> firmware change = stop/reconfigure the daemon via ADB (E11). First-pass
+> E8 provenance check (B12: daemon absent or single_client?) needs NO
+> flash dump — device 1's live ADB answers it in seconds. Start order per
+> NEXT-AGENT-PROMPT.md: **E9** (Telia MCFG, no hardware — MF297D sibling
+> file is full-format, no baseline needed) then **E8**.
+
+- **H2 — firmware data-path stack change** (NEW, strongest): B14 ships
+  changed data-path components (`dsi_config.xml` = Qualcomm DSI data-call
+  config; `libqmi_*` = the modem's own QMI framework; `mcm_ril_service`,
+  `zte_adapter_ppp`). The external QMI WDS interface behavior changed in
+  firmware. Test statically FIRST: extract old-vs-new `dsi_config.xml` and
+  diff; check `libqmi` version strings; check `mcm_ril_service` strings
+  for WDS/start-network handling changes.
+- **H1 — modem-internal autoconnect via NV/MCFG**: the 30-item NV script +
+  patched Telia MCFG flips data-call ownership to the modem (stock uses
+  ZTE's internal bring-up; external hosts conflict). Explains the PDP/CGPADDR
+  blind spot. Test: map all 30 NV items + the 119 MCFG files against
+  Qualcomm's data-call policy taxonomy; look for autoconnect/always-on/PDP
+  policy keys.
+- **H3 — carrier-policy gating**: the patched Telia MCFG enables a policy
+  that only the stock host satisfies (e.g. requires ZTE's connection
+  manager handshake). Test: diff Telia mcfg payload vs the EU/generic one
+  shipped in the same package — the delta between carrier variants
+  localizes Telia-specific policy.
+
+H1–H3 are not mutually exclusive; B14 likely combines them.
+
+## Experiments (each: how, expected outcome per hypothesis, cost)
+
+Static (no hardware):
+1. **E1 dsi_config.xml diff** — extract from `system.mld` (B14) vs any B12
+   source (see blockers); diff. Expect H2: changed call-config defaults.
+   Cost: hours.
+2. **E2 AMSS delta inventory** — enumerate the 163 files' deltas
+   (sizes/change-ratio); identify which AMSS images actually differ vs
+   re-packed. Expect: small true-change set → tractable RE target. Cost: 1h.
+3. **E3 NV-30 meaning table** — map each `cpe_postprocessing.sh` NV item
+   to Qualcomm NV taxonomy (public NV item lists / AOSP `nv_items`);
+   classify: RAT-lock / band / data-path / SIM-policy / other. Cost: 2h.
+4. **E4 MCFG carrier diff** — Telia vs EU vs Telia_SWE payloads in the
+   package; localize carrier-specific policy. Cost: 2h.
+5. **E5 signature chain** — `public_ver.pem` + `*.signature` files: what
+   is signed and how (answers whether a community-fixed package is even
+   installable — relevant to the downgrade prompt 02). Cost: 1h.
+
+Dynamic (requires a B14 unit — NOT on bench):
+6. **E6 ADB probes** — `adb shell` works on B14 (community-evidenced):
+   `getprop`/`cfg show`/NV dump; compare against device 1's B12 dumps
+   (capture the B12 side FIRST — see prerequisites).
+7. **E7 QMI WDS differential trace** — qmicli/uqmi transcript on B14 vs
+   device 1's B12 baseline (we hold B12 transcripts from EXP-029/030 era);
+   localize the first divergent message.
+8. **E8 targeted NV/MCFG flips** — on a B14 unit, flip candidate items
+   (from E3/E4) one at a time, reboot, re-run E7. ONLY with operator
+   approval + full modem backup first (brick-class caution).
+
+## Prerequisites / blockers (do these FIRST when picked up)
+
+1. ~~Dump device 1's modem flash over ADB~~ — **DONE 2026-11-09 (EXP-035)**:
+   full MPSS firmware banked at `evidence/modem-fw-re/live-b12/dumps/`
+   (mtd9, 74,448,896 B = 0x04700000, sha256 `efd0b8a6…` — the PRISTINE
+   re-dump; the original 74,767,527 B pull was transport-corrupt, kept as
+   mtd9.img.corrupt-shellcat) — the B12 base for the 642 modem.mld
+   BSDIFF40 patches and all offline RE. system.mld patches use the mtd16
+   rootfs (see prerequisite 3). (efs2 NV pull deliberately
+   deferred: reads destabilize adbd when warm; one clean cold attempt if
+   ever needed. The router-side 22-partition backup remains router-only.)
+2. **B14 unit acquisition** — flag to the operator if the community thread
+   surfaces a donor; until then this thread stays static-only.
+3. **B12 `dsi_config.xml`/`libqmi` source** — from the **mtd16** UBI
+   (the modem-Linux rootfs, NOT mtd9/MPSS): the extracted tree at
+   `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd16-extract/`
+   holds the live B12 copies (or pull fresh via adb from device 1).
+   Note: mtd9 is the correct base only for the MPSS/modem.mld patches;
+   system.mld patches root against the mtd16 rootfs files.
+
+## Definition of "fully working" (the ladder)
+
+1. Static root-cause: a named component + named change that explains the
+   WDS behavior (E1–E5 output).
+2. A validated fix hypothesis: an NV item / MCFG file / config that, when
+   flipped on B14, restores external QMI WDS (E8) — or proof it needs
+   firmware (feeds prompt 02's downgrade automation instead).
+3. Community deliverable: updated PR #85 reply (draft lives at
+   `/tmp/opencode/b14/wwand-pr85-reply-draft.md` on the session host —
+   may have been cleaned; the PR #663 notes + this prompt carry the
+   durable copy) + conwrt notes update.
+
+## Report/results
+
+Findings → `~/mf286d-work/evidence/b14/` (FINDINGS.md is the running
+handoff doc). Conwrt commits → your own worktree lane per AGENTS.md
+(`scripts/dev-session.sh start <name>`), `Refs: #621` in messages.
+Never interact outside Amperstrand repos; the PR #85 reply ships only
+after human approval.

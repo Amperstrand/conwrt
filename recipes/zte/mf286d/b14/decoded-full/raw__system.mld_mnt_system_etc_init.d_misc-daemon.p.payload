@@ -1,0 +1,147 @@
+#!/bin/sh
+
+
+set -e
+
+FindAndMountVolumeUBI () {
+   volume_name=$1
+   dir=$2
+   if [ ! -d $dir ]
+   then
+       mkdir -p $dir
+   fi
+   echo "Mounting volume $volume_name on directory $dir"
+   mount -t ubifs ubi0:$volume_name $dir -o bulk_read
+}
+
+CleanupRecoveryFiles () {
+  set +e # ignore any errors in this function
+
+  # explicit mount of recoveryfs to /cleanup_mnt
+  mtd_block_number=`cat /proc/mtd | grep -i "recoveryfs" | sed 's/^mtd//' | awk -F ':' '{print $1}'`
+  echo "Cleanup: Detected /dev/mtdblock$mtd_block_number for recoveryfs" > /dev/kmsg
+
+  umount /cleanup_mnt # unmount recoveryfs
+  rmdir /cleanup_mnt # remove the mount point
+  ubidetach  -m $mtd_block_number # explicit ubidetach
+
+  mkdir /cleanup_mnt # create mount point
+
+  # Now attach mtd to ubi layer
+  ubiattach -m $mtd_block_number -d 10 /dev/ubi_ctrl
+  # 10 is a randomly high number here as its unlikely that there are 10 ubi devices
+  device=/dev/ubi10_0
+
+  count=100
+  while [ 1 ]
+  do
+    if [ -c $device ]
+    then
+      mount -t ubifs $device /cleanup_mnt -o bulk_read
+      matched=`df | grep -c ubi10_0`
+      if [ "$matched" -eq "1" ]
+      then
+        echo "Cleanup: Mounted recoveryfs partition to /cleanup_mnt" > /dev/kmsg
+        echo "Cleanup: Removing /var/volatile/* contents from recoveryfs..." > /dev/kmsg
+        rm -rf /cleanup_mnt/var/volatile/* # remove any content /var/volatile
+        break
+      else
+        echo "Cleanup: recoveryfs mount failed, exiting!" > /dev/kmsg
+      fi
+      break
+    else
+      count=$(($count - 1))
+      if [ $count -lt 1 ]; then
+        echo "/dev/ubi10_0 not yet created! exiting" > /dev/kmsg
+        break
+      else
+        echo "/dev/ubi10_0 not yet created! waiting..." > /dev/kmsg
+        sleep 0.010
+      fi
+    fi
+  done
+
+  # Also, cachefs would have been mounted by now
+  echo "Cleanup: Removing /cache/recovery/log..." > /dev/kmsg
+  rm -rf /cache/recovery/log # "log" has all previous recovery logs, remove it
+
+  df > /dev/kmsg # just for bookkeeping
+
+  umount /cleanup_mnt # unmount recoveryfs
+  rmdir /cleanup_mnt # remove the mount point
+  ubidetach  -m $mtd_block_number
+
+  set -e
+}
+
+case "$1" in
+  start)
+        echo -n "Starting modem dependent daemons: "
+		search_dir="/sys/bus/msm_subsys/devices/"
+        for entry in `ls $search_dir`
+        do
+            subsys_temp=`cat $search_dir/$entry/name`
+            if [ "$subsys_temp" == "modem" ]
+            then
+                break
+            fi
+        done
+		sh /etc/rcS-zte-before-modem &
+		
+        counter=0
+        while [ ${counter} -le 50 ]
+        do
+           msstate=`cat $search_dir/$entry/state`
+           if [ "$msstate" == "ONLINE" ]
+           then
+              break
+           fi
+           counter=$(( $counter + 1 ))
+           sleep 0.2
+        done
+        sh /etc/rcS-zte-after-modem &
+		
+        if [ -f /etc/init.d/init_qcom_audio ]
+        then
+           /etc/init.d/init_qcom_audio start
+        fi
+
+        /etc/init.d/diagrebootapp start
+        /sbin/reboot-daemon &
+        /etc/init.d/start_atfwd_daemon start
+        #/etc/init.d/lighttpd start #disabled by zte, if enable, remove this comment
+        /etc/init.d/start_stop_qti_ppp_le start
+        emmc_dir=/dev/block/bootdevice/by-name
+        if [ ! -d $emmc_dir ]
+        then
+         fstype="UBI"
+         #eval FindAndMountVolume${fstype} cachefs /cache
+         eval CleanupRecoveryFiles
+        fi
+        /etc/init.d/start_loc_launcher start
+        echo "done"
+        ;;
+  stop)
+        echo -n "Stoping modem dependent daemon: "
+        /etc/init.d/start_stop_qti_ppp_le stop
+        #/etc/init.d/lighttpd stop #disabled by zte, if enable, remove this comment
+        /etc/init.d/start_atfwd_daemon stop
+        /etc/init.d/diagrebootapp stop
+        /etc/init.d/start_loc_launcher stop
+        if [ -f /etc/init.d/init_qcom_audio ]
+        then
+            /etc/init.d/init_qcom_audio stop
+        fi
+        echo "done"
+        ;;
+  restart)
+        $0 stop
+        $0 start
+        ;;
+  *)
+        echo "Usage misc-daemon { start | stop | restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

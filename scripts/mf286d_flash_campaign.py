@@ -136,6 +136,16 @@ def arm_fence(image, bind, port, logdir, extra=(), timeout=1800):
     return _fence_proc
 
 # ---------------------------------------------------------------- campaign
+def check_modem_version(output, expect):
+    """Post-flash modem gate. B14 ('the breaker') silently kills QMI data:
+    the campaign must fail-closed unless the operator explicitly re-runs
+    with a matching --expect-modem. Returns (ok, found) where found is the
+    BD_... version string seen in the hook output ('' if none)."""
+    import re
+    m = re.search(r"(BD_[A-Z0-9_]*MF286D[A-Za-z0-9_.]*B\d+)", output or "")
+    found = m.group(1) if m else ""
+    return (expect in (output or "")) and bool(found), found
+
 def run_campaign(args):
     logdir = args.logdir; os.makedirs(logdir, exist_ok=True)
     def phase(n, name, ok, detail=""):
@@ -205,6 +215,18 @@ def run_campaign(args):
         fence.wait(timeout=args.fence_timeout)
         phase(5, "flash", fence.returncode == 0, f"fence exit={fence.returncode}")
         LOG("[phase 6] POST-FLASH: run setup (seed key, set password, hostname, dhcp-off) at the device's default address")
+        if args.modem_check_hook:
+            rc = subprocess.run([args.modem_check_hook], capture_output=True, text=True)
+            out = rc.stdout.strip()
+            ok, found = check_modem_version(out, args.expect_modem)
+            ok = ok and rc.returncode == 0
+            phase(6.5, "modem-version", ok,
+                  f"modem={found or '?'} expect~{args.expect_modem} — B14 is the known QMI "
+                  f"breaker (recipes/zte/mf286d/notes.md); downgrade before use or re-run "
+                  f"with --expect-modem deliberately")
+        else:
+            LOG("[phase 6.5] modem-version SKIPPED (no --modem-check-hook) — "
+                "B14 units will register but never pass QMI data; verify ATI before configuring")
 
     LOG(f"CAMPAIGN {'REHEARSAL ' if args.rehearse else ''}COMPLETE — logdir={logdir}")
 
@@ -218,6 +240,12 @@ def main():
     ap.add_argument("--fence-timeout", type=int, default=1800)
     ap.add_argument("--backup-hook")
     ap.add_argument("--trigger-hook")
+    ap.add_argument("--modem-check-hook",
+                    help="post-flash command that prints the modem version (e.g. ssh root@192.168.1.1 "
+                         "'printf \\'ATI\\r\\' > /dev/ttyUSB1; sleep 1; head -c200 /dev/ttyUSB1'); "
+                         "fail-closed gate against the B14 QMI breaker")
+    ap.add_argument("--expect-modem", default="BD_TELIAMF286DV1.0.0B12",
+                    help="expected modem firmware substring (default: the known-good B12)")
     ap.add_argument("--i-understand-this-flashes", action="store_true")
     args = ap.parse_args()
     if not args.rehearse and not args.i_understand_this_flashes:

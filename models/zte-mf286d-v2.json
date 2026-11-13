@@ -1,0 +1,209 @@
+{
+  "id": "zte-mf286d",
+  "vendor": "ZTE",
+  "description": "MF286D Cat12 LTE router (IPQ4019 + MDM9650 mPCIe modem)",
+  "openwrt": {
+    "target": "ipq40xx/generic",
+    "device": "zte,mf286d",
+    "default_ip": "192.168.1.1",
+    "profile": "zte_mf286d",
+    "board_name": "zte,mf286d",
+    "version": "24"
+  },
+  "identity": {
+    "mac_oui": ["c8:ea:f8"],
+    "usb_ids": [{"vid": "19d2", "pid": "1485", "role": "modem_composite"}],
+    "detection": {
+      "stock_web": {
+        "url": "http://{ip}/goform/goform_get_cmd_process",
+        "method": "POST",
+        "body": "multi_data=1&cmd=wa_inner_version,cr_version,RD",
+        "match": "TELIA_MF286D"
+      },
+      "openwrt_ssh": {
+        "command": "cat /etc/openwrt_release",
+        "match": "DISTRIB_RELEASE='25."
+      },
+      "at_modem": {
+        "port": "/dev/ttyUSB2",
+        "command": "ATI",
+        "match": "MF286DMODULE"
+      }
+    }
+  },
+  "hardware": {
+    "soc": "Qualcomm IPQ4019 (quad-core Cortex-A7)",
+    "modem": {
+      "chipset": "Qualcomm MDM9650",
+      "fw_prefix": "BD_TELIAMF286D",
+      "known_good": "B12",
+      "never_update_to": "B14 (breaks QMI under OpenWrt — MPSS protocol change)",
+      "interfaces": {
+        "at": {"port": "/dev/ttyUSB2", "speed": 115200},
+        "at2": {"port": "/dev/ttyUSB1"},
+        "dm_diag": {"port": "/dev/ttyUSB0", "crc": "crcmod_0x11021_init0_xorFFFF"},
+        "qmi": {"port": "/dev/cdc-wdm0"},
+        "adb": {"package": "adb-enablemodem", "persistent": true}
+      }
+    },
+    "flash": {
+      "router_nor": ["0:SBL1", "0:MIBIB", "0:QSEE", "0:CDT", "0:DDRPARAMS", "0:APPSBLENV", "0:APPSBL"],
+      "router_nand": ["fota-flag", "ART", "mac", "cfg-param", "log", "oops", "web", "rootfs", "data", "fota"],
+      "modem_nand": {
+        "safe_to_read": [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        "crasher_partitions": [1, 2],
+        "crasher_note": "mtd1 (mibib) and mtd2 (efs2) reads panic the whole SoC. Use DM/EFS bridge for efs2 content."
+      }
+    },
+    "serial": {
+      "connector": "X8",
+      "speed": 115200,
+      "pins": "TX→RX, RX→TX, GND, NO VCC",
+      "always_available": true
+    },
+    "buttons": {
+      "reset": "GPIO18 (linux input only — no hardware boot function)",
+      "wifi": "GPIO11 (linux input only)"
+    },
+    "power": "12V DC barrel",
+    "ethernet_quirks": {
+      "phy_cold_boot": "PHY comes up dead after cold boots — needs power-cycle-with-cable for link event",
+      "advertise_wedge": "May advertise 10baseT-only when boot state is abnormal"
+    }
+  },
+  "backup": {
+    "router": {
+      "method": "mtd_read_via_ssh",
+      "partitions": "all",
+      "pipeline": "dd if=/dev/mtd{N} bs=65536 | base64",
+      "verify": "sha256 at every hop"
+    },
+    "modem": {
+      "method": "adb_shell_dd_base64",
+      "pipeline": "adb shell 'dd if=/dev/mtdblock{N} bs=65536 | base64' | tr -d '\\r' | base64 -d",
+      "safety": {
+        "canary_protocol": {
+          "read_size": 4096,
+          "uptime_check": true,
+          "settle_time_seconds": 3,
+          "on_crash": "skip_partition"
+        }
+      },
+      "nv_items": {
+        "method": "dm_port_nv_read",
+        "crc_variant": "crcmod_0x11021_init0_xorFFFF",
+        "range": "0-4095"
+      },
+      "efs_tree": {
+        "method": "qcsuper_or_qfenix_via_bridge",
+        "bridge_port": 7975,
+        "priority_files": [
+          "/nv/item_files/modem/qmi/uim/apdu_security_aid_list",
+          "/nv/item_files/modem/uim/lpa/lpa_support"
+        ]
+      }
+    }
+  },
+  "recovery": {
+    "strategies": [
+      {
+        "name": "bootloader_trigger",
+        "description": "Write kernel-volume-less UBI to force bootloader TFTP recovery",
+        "difficulty": "moderate",
+        "preconditions": [
+          "ssh_access_to_router",
+          "tftp_fence_armed_on_management_vlan",
+          "firewall_rule_for_udp_69"
+        ],
+        "steps": [
+          {"action": "push_image", "source": "trigger.img", "target": "/tmp/", "verify_size": 393216},
+          {"action": "erase_partition", "target": "rootfs", "note": "MUST be full erase — mtd write only erases blocks it writes"},
+          {"action": "write_image", "target": "rootfs", "verify_magic": "UBI#"},
+          {"action": "verify_no_kernel_volume", "method": "ubi_scan"},
+          {"action": "reboot"},
+          {"action": "wait_for_fence_pull", "timeout_seconds": 600},
+          {"action": "wait_for_boot", "timeout_seconds": 300}
+        ],
+        "known_blockers": [
+          {
+            "name": "iptables_default_drop",
+            "symptom": "TFTP requests arrive but fence responses never leave",
+            "fix": "iptables -I INPUT -i {iface} -p udp --dport 69 -j ACCEPT",
+            "diagnostic": "tcpdump sees requests, zero responses from server IP"
+          }
+        ]
+      },
+      {
+        "name": "sysupgrade",
+        "description": "Standard OpenWrt sysupgrade from running OpenWrt",
+        "difficulty": "easy",
+        "preconditions": ["openwrt_running", "ssh_access"],
+        "steps": [
+          {"action": "download_image", "source": "downloads.openwrt.org", "verify": "sha256"},
+          {"action": "push_image", "target": "/tmp/sysupgrade.bin"},
+          {"action": "sysupgrade", "flags": "-n"},
+          {"action": "wait_for_boot", "timeout_seconds": 300}
+        ]
+      }
+    ],
+    "fence": {
+      "type": "zte-blankdl-flashd",
+      "bind": "192.0.0.1",
+      "port": 69,
+      "image": "root_uImage",
+      "requires_firewall": true,
+      "firewall_rule": "iptables -I INPUT -i {iface} -p udp --dport 69 -j ACCEPT"
+    }
+  },
+  "configure": {
+    "post_flash": [
+      {"action": "ssh_copy_id", "key": "from_operator_profile"},
+      {"action": "set_password"},
+      {"action": "set_lan_ip", "value": "from_ip_plan", "note": "MUST use CIDR form (x.x.x.x/24)"},
+      {"action": "set_hostname", "value": "from_operator_profile"},
+      {"action": "disable_dhcp", "note": "house rule: dhcp.lan.ignore=1, ra=disabled, dhcpv6=disabled"},
+      {"action": "install_packages", "packages": ["adb", "adb-enablemodem"], "note": "25.12.6 uses apk, not opkg"},
+      {"action": "enable_service", "service": "adb-enablemodem"}
+    ]
+  },
+  "diagnostics": {
+    "boot_oracles": [
+      {"pattern": "power-on reason.*cold boot", "meaning": "cold_boot", "always_present": true},
+      {"pattern": "smd_channel_probe_now.*not initialized", "meaning": "smem_check", "always_present": true},
+      {"pattern": "Failed to load modem", "meaning": "pil_early_retry", "always_present": true, "note": "these lines are NORMAL — do not diagnose from them alone"}
+    ],
+    "service_health": [
+      {"name": "at", "test": "printf 'ATI\\r' > /dev/ttyUSB2; sleep 2; read", "expected": "MF286DMODULE", "timeout": 5},
+      {"name": "qmi_uim", "test": "uqmi -d /dev/cdc-wdm0 --uim-get-sim-state", "expected": "card_application_state.*ready", "timeout": 5},
+      {"name": "qmi_nas", "test": "uqmi -d /dev/cdc-wdm0 --get-signal-info", "expected": "type.*lte", "timeout": 5},
+      {"name": "qmi_wds", "test": "uqmi -d /dev/cdc-wdm0 --get-data-status", "expected": "connected|disconnected", "timeout": 5},
+      {"name": "dm", "test": "dm_probe /dev/ttyUSB0", "expected": "VERNO response", "timeout": 3}
+    ],
+    "modem_partition_safety": {
+      "protocol": "canary_read",
+      "check_uptime_continuity": true,
+      "on_crash": "mark_partition_as_crasher"
+    }
+  },
+  "safety": {
+    "never_write_partitions": ["0:SBL1", "0:MIBIB", "0:QSEE", "0:CDT", "0:DDRPARAMS", "0:APPSBLENV", "0:APPSBL"],
+    "never_update_modem_to": "B14",
+    "crasher_partitions": [1, 2],
+    "kernel_panic_warning": "Panics on this species can damage SMEM/IPC state that survives reboots — treat crashes as potential-permanent damage",
+    "phy_cold_boot_quirk": "After cold boots, Ethernet PHY may come up dead — always power-cycle-with-cable if no link"
+  },
+  "esim": {
+    "status": "BLOCKED_BY_COMPILED_POLICY",
+    "block_type": "Qualcomm compiled ISD-R reservation (not EFS-configurable)",
+    "internal_lpa": {
+      "present": true,
+      "api": ["get_EID", "add_profile", "enable", "disable", "delete_profile", "nickname", "server_address"],
+      "gated_by": "/nv/item_files/modem/uim/lpa/lpa_support",
+      "qmi_messages": "44 undocumented IDs extracted (0x2b-0x6f block)"
+    },
+    "external_paths": [
+      {"name": "NR7101 + lpac", "status": "proven"},
+      {"name": "USB CCID reader + lpac", "status": "proven"}
+    ]
+  }
+}
