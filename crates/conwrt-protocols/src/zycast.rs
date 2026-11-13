@@ -72,6 +72,18 @@ impl core::str::FromStr for ImageType {
 }
 
 impl ImageType {
+    /// SPEC §4: wire byte carries the type bit directly.
+    pub fn from_wire_bits(b: u8) -> Option<Self> {
+        match b {
+            0x01 => Some(Self::Bootbase),
+            0x02 => Some(Self::Rom),
+            0x04 => Some(Self::Ras),
+            0x08 => Some(Self::Romd),
+            0x10 => Some(Self::Backup),
+            _ => None,
+        }
+    }
+
     /// Wire bitmap bit for this image type.
     #[must_use]
     pub const fn bit(self) -> u8 {
@@ -116,6 +128,57 @@ impl fmt::Display for ImageType {
 /// NOTE: this is a plain fold — no one's-complement, no zero substitution
 /// (it is NOT the internet checksum).
 #[must_use]
+/// Wire header, SPEC §2 (conwrt #691): 30 bytes, big-endian fields.
+/// Single source of truth for framing; sender and future receivers share it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    pub checksum: u16,
+    pub block_seq: u32,
+    pub payload_len: u32,
+    pub total_size: u32,
+    pub image_type: ImageType,
+    pub total_type_mask: u8,
+    pub cmd_flags: u16,
+    pub cmd_bits: u8,
+}
+
+impl Header {
+    /// SPEC §2: encode into the fixed 30-byte wire header.
+    pub fn encode(&self, out: &mut [u8; HEADER_LEN]) {
+        out[..3].copy_from_slice(b"zyx");
+        out[3] = 0;
+        out[4..6].copy_from_slice(&self.checksum.to_be_bytes());
+        out[6..10].copy_from_slice(&self.block_seq.to_be_bytes());
+        out[10..14].copy_from_slice(&self.payload_len.to_be_bytes());
+        out[14..18].copy_from_slice(&self.total_size.to_be_bytes());
+        out[18] = self.image_type.bit(); // SPEC §4: type bit at +0x12 low byte (&0xff00 at gate)
+        out[20] = 0;
+        out[21] = self.total_type_mask;
+        out[22..24].copy_from_slice(&self.cmd_flags.to_be_bytes());
+        out[24] = self.cmd_bits;
+        for b in out[25..HEADER_LEN].iter_mut() {
+            *b = 0xFF;
+        }
+    }
+
+    /// SPEC §2: decode; None on bad magic/framing (§6 gate entry).
+    pub fn decode(buf: &[u8]) -> Option<Self> {
+        if buf.len() < HEADER_LEN || &buf[0..3] != b"zyx" {
+            return None;
+        }
+        Some(Self {
+            checksum: u16::from_be_bytes([buf[4], buf[5]]),
+            block_seq: u32::from_be_bytes(buf[6..10].try_into().ok()?),
+            payload_len: u32::from_be_bytes(buf[10..14].try_into().ok()?),
+            total_size: u32::from_be_bytes(buf[14..18].try_into().ok()?),
+            image_type: ImageType::from_wire_bits(buf[18])?,
+            total_type_mask: buf[21],
+            cmd_flags: u16::from_be_bytes([buf[22], buf[23]]),
+            cmd_bits: buf[24],
+        })
+    }
+}
+
 pub fn checksum(data: &[u8]) -> u16 {
     let mut total: u32 = 0;
     for &b in data {

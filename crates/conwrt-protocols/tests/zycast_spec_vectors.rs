@@ -82,3 +82,28 @@ fn spec_s6_gate_chain_classes_documented() {
     const HDR0_MODEL_ID_OFFSET: usize = 0x11c; // SPEC §6, FUN_8402f248
     assert_eq!(HDR0_MODEL_ID_OFFSET, 0x11c);
 }
+
+// SPEC §2: the Header codec round-trips and is the single framing source.
+#[test]
+fn spec_s2_header_codec_roundtrip() {
+    use conwrt_protocols::zycast::Header;
+    let h = Header {
+        checksum: 0xABCD,
+        block_seq: 42,
+        payload_len: 1024,
+        total_size: 65_536,
+        image_type: ImageType::Ras,
+        total_type_mask: 0x04,
+        cmd_flags: 0,
+        cmd_bits: 0,
+    };
+    let mut buf = [0u8; 30];
+    h.encode(&mut buf);
+    assert_eq!(&buf[0..3], b"zyx", "SPEC §2: magic");
+    assert_eq!(Header::decode(&buf), Some(h), "SPEC §2: roundtrip");
+    assert_eq!(
+        Header::decode(&b"xyz".iter().copied().chain([0; 40]).collect::<Vec<u8>>()),
+        None,
+        "SPEC §6: bad magic drops"
+    );
+}
