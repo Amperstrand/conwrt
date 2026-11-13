@@ -72,7 +72,7 @@ impl core::str::FromStr for ImageType {
 }
 
 impl ImageType {
-    /// SPEC §4: wire byte carries the type bit directly.
+    /// SPEC §4: wire byte carries the type bit directly (map to [Self]).
     pub fn from_wire_bits(b: u8) -> Option<Self> {
         match b {
             0x01 => Some(Self::Bootbase),
@@ -132,13 +132,21 @@ impl fmt::Display for ImageType {
 /// Single source of truth for framing; sender and future receivers share it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
+    /// SPEC §2 +4: checksum16 over the payload (BE).
     pub checksum: u16,
+    /// SPEC §2 +6: block sequence number (BE; reassembly key, §5).
     pub block_seq: u32,
+    /// SPEC §2 +0xa: payload length in bytes (BE).
     pub payload_len: u32,
+    /// SPEC §2 +0xe: total image size (BE).
     pub total_size: u32,
+    /// SPEC §4 +0x12: stream type bit.
     pub image_type: ImageType,
+    /// SPEC §2 +0x15: sender's total-type mask (completion condition, §5).
     pub total_type_mask: u8,
+    /// SPEC §7 +0x16: command tail flags (e.g. 0x02 erase rom, 0x04 erase romd).
     pub cmd_flags: u16,
+    /// SPEC §7 +0x18: command bits.
     pub cmd_bits: u8,
 }
 
@@ -179,6 +187,7 @@ impl Header {
     }
 }
 
+/// SPEC §3: checksum16 — byte-sum folded once (receiver FUN_8402f740).
 pub fn checksum(data: &[u8]) -> u16 {
     let mut total: u32 = 0;
     for &b in data {
