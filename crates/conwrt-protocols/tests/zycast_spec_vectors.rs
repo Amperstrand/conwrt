@@ -56,10 +56,17 @@ fn spec_s4_image_type_bits_match_gate_chain() {
     assert_eq!(ImageType::Rom.bit(), 0x02, "SPEC §4: rom=bit1");
     assert_eq!(ImageType::Ras.bit(), 0x04, "SPEC §4: ras=bit2");
     assert_eq!(ImageType::Romd.bit(), 0x08, "SPEC §4: romd=bit3");
+    // SPEC §4 corollary: the protocol defines backup (0x10) and the codec keeps
+    // the complete type set; the NR7101 stage-2 gate rejects it (0x8402fb70,
+    // per-model) — sender-side validation (#680) is where that belongs.
+    assert!(
+        ImageType::parse("backup").is_some(),
+        "codec keeps the protocol-complete type set (SPEC §4)"
+    );
     assert_eq!(
-        ImageType::parse("backup"),
-        None,
-        "SPEC §4 corollary: backup not accepted by NR7101 build"
+        ImageType::Backup.bit(),
+        0x10,
+        "SPEC §4: backup=bit4 (rejected at the NR7101 gate, not the wire)"
     );
 }
 
