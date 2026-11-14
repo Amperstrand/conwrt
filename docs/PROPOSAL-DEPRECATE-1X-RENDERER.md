@@ -88,3 +88,23 @@ Evidence: tests/integration/test-evidence/vm-apply-acceptance-2026-11-14.json
 
 Approve the freeze (step 1) and the apply-acceptance extension (step 2);
 steps 3-4 return for sign-off with their own evidence.
+
+## Follow-up (2026-11-14, same day — post-approval status)
+
+- APPROVED and merged: steps 1-2 (decision delegated to the parity lane
+  and recorded on PR #695). 1.x renderers are frozen for features.
+- net-roles: DONE ahead of schedule (PR #696) — typed port + core ops
+  builder + the three staged-daemon subsystems; 7 fixtures (5 EQUAL, 2
+  GAP-class documented: printf-embedded awk-quote bodies, the
+  tollgate-cellular class).
+- maas-portable-lab: classified OUT of parity scope by nature — it has no
+  ops pipeline (generates Pi first-boot artifacts, not PlanOp-shaped
+  router config), and the bench problems it scaffolded (subnet/DHCP/
+  identity) are now solved natively (net-roles, fleet-derive, bench SSOT).
+  Disposition candidate: retire as redundant (owner call).
+- Apply-acceptance (step 2, executing): 12 fixtures attempted to date —
+  9 APPLY_RC=0 (5 with verified uci side effects), 1 abort-gate design
+  verified, 2 environment-limited (radios/modem; hardware-in-the-loop
+  planned via board-claimed DUTs).
+- Remaining before the step-4 proposal: acceptance coverage extended
+  corpus-wide, one real-DUT soak, then the flag-flip sign-off returns.
