@@ -3149,8 +3149,8 @@ impl NetRolesProfile {
                     .into(),
             ));
         }
-        let mut seen_ifaces = std::collections::BTreeSet::new();
-        let mut seen_radios = std::collections::BTreeSet::new();
+        let mut seen_ifaces = alloc::collections::BTreeSet::new();
+        let mut seen_radios = alloc::collections::BTreeSet::new();
         if self.uplinks.len() > Self::METRICS.len() {
             return Err(Unsupported::InvalidParams(
                 "net-roles: at most 5 uplinks supported".into(),
