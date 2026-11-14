@@ -319,11 +319,26 @@ class TestPlanRendererParity:
         assert fx["expect"] is not None, (
             f"{fx['stem']} missing from manifest.json — record EQUAL or GAP"
         )
-        py = normalize(_python_render(fx["fixture"]))
-        rs = normalize(_rust_render(plan_render_bin, fx["path"]))
-        actual = "EQUAL" if py == rs else "GAP"
-        detail = ""
-        if actual == "GAP":
+        def _safe_norm(script: str):
+            # GAP-class fixtures embed multi-KB daemon scripts in single
+            # printf lines whose awk '\''-idiom quoting shlex cannot
+            # tokenize (tollgate-cellular / net-roles conn-adapter class).
+            # A tokenize failure on EITHER side is a GAP, never a crash —
+            # the recorded status still gates (gaps close loudly).
+            try:
+                return normalize(script), None
+            except AssertionError as err:
+                return None, str(err)[:120]
+
+        py, py_err = _safe_norm(_python_render(fx["fixture"]))
+        rs, rs_err = _safe_norm(_rust_render(plan_render_bin, fx["path"]))
+        if py_err or rs_err:
+            actual = "GAP"
+            detail = f"(normalizer cannot tokenize: {py_err or rs_err})"
+        else:
+            actual = "EQUAL" if py == rs else "GAP"
+            detail = ""
+        if actual == "GAP" and detail == "":
             detail = "\n".join(
                 difflib.unified_diff(
                     _render_tokens(py),

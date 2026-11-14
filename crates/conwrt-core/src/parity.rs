@@ -23,13 +23,13 @@ use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
     ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
     FleetIdentityProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile,
-    NodnsProfile, OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
-    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
-    TetherVariant, TollgateCellularProfile, TollgateProfile, TollgateSecurityProfile,
-    TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile, WireguardServerProfile,
-    render_shell,
+    NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
+    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
+    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
+    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
+    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WifiUplink,
+    WireguardClientProfile, WireguardServerProfile, render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -670,6 +670,108 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 }
             }
             Ok(Profile::FipsBluetoothRfcomm(p))
+        }
+        "net-roles" => {
+            const METRICS: [u32; 5] = [5, 100, 200, 300, 400];
+            let mut uplinks = Vec::new();
+            if let Some(list) = params.get("uplinks").and_then(|v| v.as_array()) {
+                for (i, entry) in list.iter().enumerate() {
+                    let get = |k: &str| {
+                        entry
+                            .get(k)
+                            .and_then(|v| match v {
+                                serde_json::Value::String(s) => Some(s.clone()),
+                                other => other.as_u64().map(|n| n.to_string()),
+                            })
+                            .unwrap_or_default()
+                    };
+                    let get_u16 = |k: &str, d: u16| {
+                        entry
+                            .get(k)
+                            .and_then(|v| v.as_u64())
+                            .map(|n| u16::try_from(n).unwrap_or(d))
+                            .unwrap_or(d)
+                    };
+                    let kind = get("type");
+                    let iface = if get("iface").is_empty() {
+                        match kind.as_str() {
+                            "sim" => "wan".into(),
+                            "wifi" => "wwan".into(),
+                            _ => "waneth".into(),
+                        }
+                    } else {
+                        get("iface")
+                    };
+                    uplinks.push(NetUplink {
+                        metric: METRICS.get(i).copied().unwrap_or(400),
+                        kind,
+                        iface,
+                        vlan: get_u16("vlan", 0),
+                        ssid: get("ssid"),
+                        key: get("key"),
+                        encryption: if get("encryption").is_empty() {
+                            "psk2".into()
+                        } else {
+                            get("encryption")
+                        },
+                        radio: if get("radio").is_empty() {
+                            "radio0".into()
+                        } else {
+                            get("radio")
+                        },
+                    });
+                }
+            }
+            let get_bool_p =
+                |k: &str, d: bool| params.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
+            let p = NetRolesProfile {
+                uplinks,
+                serve_ethernet: get_bool_p("serve_ethernet", true),
+                serve_wifi: get_bool_p("serve_wifi", true),
+                mgmt_vlan: params
+                    .get("mgmt_vlan")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u16,
+                mgmt_ip: get_str(&params, "mgmt_ip").unwrap_or_default(),
+                mgmt_netmask: get_str(&params, "mgmt_netmask")
+                    .unwrap_or_else(|| "255.255.255.0".into()),
+                adaptive_vlans: params
+                    .get("adaptive_vlans")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_u64().and_then(|n| u16::try_from(n).ok()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                adaptive_base_port: get_str(&params, "adaptive_base_port")
+                    .unwrap_or_else(|| "eth0".into()),
+                auto_switch: get_bool(&params, "auto_switch", false),
+                switch_interval: params
+                    .get("switch_interval")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as u32,
+                wifi_shared_radio: get_bool(&params, "wifi_shared_radio", false),
+                price_sim_sats_per_mib: params
+                    .get("price_sim_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                price_wifi_sats_per_mib: params
+                    .get("price_wifi_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                price_eth_sats_per_mib: params
+                    .get("price_eth_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                adaptive_serve_dhcp: get_bool(&params, "adaptive_serve_dhcp", false),
+                adaptive_interval: params
+                    .get("adaptive_interval")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(30) as u32,
+                metered_guard: get_bool(&params, "metered_guard", false),
+            };
+            Ok(Profile::NetRoles(p))
         }
         "vpn-nordvpn" => {
             let p = VpnNordvpnProfile {

@@ -71,6 +71,8 @@ pub enum Profile {
     /// IVPN WireGuard VPN (runtime-API script; 1.x marks the preset
     /// untested).
     VpnIvpn(VpnIvpnProfile),
+    /// Multi-uplink role assignment (serving bridge vs WAN uplinks).
+    NetRoles(NetRolesProfile),
     /// Mullvad WireGuard VPN (runtime-API script; 1.x marks the
     /// preset untested).
     VpnMullvad(VpnMullvadProfile),
@@ -131,6 +133,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => "vpn-openvpn",
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::VpnIvpn(_) => "vpn-ivpn",
+            Profile::NetRoles(_) => "net-roles",
             Profile::VpnMullvad(_) => "vpn-mullvad",
             Profile::VpnNode(_) => "vpn-node",
             Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
@@ -178,6 +181,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => &[],
             Profile::VpnSurfshark(_) => &[],
             Profile::VpnIvpn(_) => &[],
+            Profile::NetRoles(_) => &[],
             Profile::VpnMullvad(_) => &[],
             Profile::VpnNode(_) => &[],
             Profile::VpnNordvpnIke2(_) => &[],
