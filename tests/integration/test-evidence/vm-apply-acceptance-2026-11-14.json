@@ -27,16 +27,17 @@
     },
     "vpn_ivpn_default": {
       "apply_rc": 1,
-      "verdict": "APPLY-RUN, in-script failure (apply-time API curls / wireguard pkg install over slirp) \u2014 expected-class, needs per-case triage"
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
     },
     "tollgate_cellular_minimal": {
       "apply_rc": 1,
-      "verdict": "APPLY-RUN, in-script failure (x86 VM lacks the modem/USB hardware the readback gates check) \u2014 environment, not render"
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
     },
     "guest_wifi_default": {
       "apply_rc": null,
-      "verdict": "TIMED OUT at 600s (wifi radio bringup on x86) \u2014 environment"
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
     }
   },
-  "summary": "2 of 6 fully ACCEPTED with verified side effects (doh, mwan3 \u2014 the latter validating the #628 bugfix live); 2 accepted with readback caveats; 2 environment-limited (hardware/API deps the VM cannot satisfy). Raw logs: /tmp/apply-run{1..5}.log."
+  "summary": "2 of 6 fully ACCEPTED with verified side effects (doh, mwan3 \u2014 the latter validating the #628 bugfix live); 2 accepted with readback caveats; 2 environment-limited (hardware/API deps the VM cannot satisfy). Raw logs: /tmp/apply-run{1..5}.log.",
+  "correction_2026-11-14": "RETRACTION/CORRECTION: the vpn_ivpn/tollgate_cellular RC=1 and guest-wifi timeout verdicts are CONTAMINATED \u2014 all fixtures ran sequentially on ONE shared VM, and earlier applies (mwan3 policy routing/firewall hooks, doh dnsmasq norev, ssh-hardening) mutate guest network state; the ivpn trace shows 'wget: Operation not permitted' (egress blocked by previously applied policy, not by the ivpn render itself). Only the FIRST fixture on a fresh VM (doh) and order-independent uci asserts (mwan3 track_ip readback) are clean evidence. Next runner revision: fresh overlay per fixture (the fips fixture pattern)."
 }
