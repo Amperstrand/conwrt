@@ -1,0 +1,22 @@
+[package]
+name = "conwrt-blankdl"
+description = "ZTE ipq40xx blank-download flash fence — the hardened TFTP serving daemon for the bootloader's volume-not-found recovery (Rust port of scripts/zte-blankdl-flashd.py, hardware-proven on the MF286D campaign #621)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conwrt-protocols = { path = "../conwrt-protocols", default-features = false, features = ["std"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+socket2 = { version = "0.6", features = ["all"] }
+
+[dev-dependencies]
+sha2 = "0.10"
+socket2 = { version = "0.6", features = ["all"] }
+
+[lints]
+workspace = true
