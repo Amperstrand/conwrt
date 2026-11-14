@@ -52,5 +52,20 @@
     },
     "verdict": "3 of 6 FULL ACCEPT with verified side effects (doh, mwan3, ssh-hardening); ivpn verifies its abort-gate design (external-API-limited); cellular/guest-wifi hardware-limited. All verdicts from isolated fresh-overlay VMs."
   },
-  "closed_2026-11-14": "cellular + guest-wifi closed as GAP-by-environment (owner disposition 2026-11-14); no open items remain in this evidence file."
+  "closed_2026-11-14": "cellular + guest-wifi closed as GAP-by-environment (owner disposition 2026-11-14); no open items remain in this evidence file.",
+  "extension_batches": [
+    {
+      "date": "2026-11-14",
+      "batch": "post-approval extension #1 (approved via merged proposal PR #695)",
+      "fixtures": {
+        "guest_wifi_default": "APPLY_RC=1 \u2014 x86 VM lacks radios (known env class)",
+        "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (third independent reproduction)",
+        "sqm_default": "APPLY_RC=0",
+        "wireguard_client_default": "APPLY_RC=0",
+        "doh_custom_url": "APPLY_RC=0, custom resolver_url + 127.0.0.1#5353 forward VERIFIED",
+        "adguard_default": "APPLY_RC=0"
+      },
+      "tally": "Acceptance attempted 12 fixtures: 9 APPLY_RC=0 (5 with verified uci side effects), 1 abort-gate design verified, 2 env-limited (radios/modem)."
+    }
+  ]
 }
