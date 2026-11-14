@@ -37,10 +37,6 @@ use conwrt_types::DeviceModel;
 /// Model id used for parity plans (the model only labels the plan header).
 pub const PARITY_MODEL_ID: &str = "parity-fixture";
 
-fn parity_model() -> DeviceModel {
-    parity_model_for("24", &[])
-}
-
 /// The fixture model, with optional per-fixture OpenWrt version
 /// (`model_version` — mptcp-bonding's 25.12 floor) and extra capabilities
 /// (`model_capabilities` — fips-bluetooth-rfcomm needs `bluetooth`).
