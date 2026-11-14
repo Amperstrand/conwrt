@@ -421,20 +421,19 @@ def test_vm2_mesh_peering(fips_vms):
     assert peer["noise"]["send_counter"] > 0, "link not Noise-encrypted"
     assert peer["transport_type"] == "udp"
 
-    # VM1 sees the inbound side too — vm1 runs the GATEWAY, whose control
-    # surface is show_gateway / show_mappings (pool + sessions), NOT the
-    # node daemon's peer list: `fipsctl show peers` on a gateway returns
-    # {"peers": []} BY DESIGN ("peers" is absent from src/gateway —
-    # verified in fips-src 2026-11-14). Assert the lease vm2's connection
-    # holds in the pool instead.
+    # VM1 sees the inbound side too — DYNAMIC state, not the configured
+    # peer list: vm1's yaml has peers: [] (one-way discovery by design), so
+    # `fipsctl show peers` (configured+authenticated) legitimately returns
+    # []. The inbound link shows in `show links` (the pinned fipsctl's
+    # dynamic surface: status/peers/links/tree/sessions/bloom/mmp).
     vm1 = fips_vms["vm1"]
-    gw = json.loads(vm1.ssh_out("fipsctl show gateway"))
-    if gw.get("pool_active", 0) < 1:
+    links = json.loads(vm1.ssh_out("fipsctl show links"))
+    if not links.get("links"):
         dump = vm1.ssh_out(
-            "for c in gateway mappings; do echo ===$c===; "
+            "for c in status links sessions peers; do echo ===$c===; "
             "fipsctl show $c 2>&1 | head -30; done", timeout=60)
-        raise AssertionError(f"vm1 gateway holds no active lease: {gw}\n{dump}")
-    assert gw["pool_active"] >= 1
+        raise AssertionError(f"vm1 shows no inbound link from vm2.\n{dump}")
+    assert links["links"]
 
 
 # ---------------------------------------------------------------------------
