@@ -1,0 +1,14 @@
+{
+  "use_case": "vpn-nordvpn-ikev2",
+  "params": {
+    "access_token": "stub-token",
+    "server": "de500.nordvpn.com",
+    "username": "svcuser1234",
+    "password": "svcpass5678abcd",
+    "station": "193.29.107.10",
+    "hostname": "de500.nordvpn.com",
+    "hw_accel": true,
+    "kill_switch": true,
+    "allow_management": true
+  }
+}
