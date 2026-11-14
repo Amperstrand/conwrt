@@ -90,3 +90,31 @@ registry + bench evidence, not here.
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
 plain `sysupgrade` (never `-F`); keep `sysupgrade -b` config backups; do not touch the
 modem firmware. Verify against downloads.openwrt.org checksums.
+
+## Modem architecture correction + ISD-R policy (EXP-034/035, 2026-11-09)
+
+The live B12 modem card is a **Qualcomm MDM9650** (soc 283), not the Marvell
+PXA1826 of the 2019 kit FBF — two modem generations share this chassis.
+Full corrected architecture, the B02-kit container RE, and the live probe
+tooling live in `recipes/zte/mf286d/modem/` (ANALYSIS-b02-kit-marvell.md,
+TESTPLAN-live-b12.md, qmiuim.c) and `prompts/modem-fw-0{1,2,3}-*.md`.
+
+Key live facts (all on B12, differential-verified):
+
+- **ADB**: no-auth root on modem Linux (adbd 5.0.2, `adb-enablemodem` kept
+  enabled) — standing research surface, survives reboots.
+- **ISD-R (eSIM) block = three-layer MPSS policy**: (L1) channel-open deny
+  for ISD-R AID ≥7 bytes; (L2) fabricated card responses on any channel
+  whose open-FCI revealed the ISD-R; (L3) APDU payload scanner dropping
+  SELECTs carrying the GSMA RSP RID (≥4B). Basic channel host-APDUs rejected
+  entirely; AT layer separately cauterized (CSIM/CCHO).
+- Consequence: no in-device eSIM management via AT/QMI on stock B12 without
+  an NV flip or MPSS patch (offline RE of the banked mtd9 image is the next
+  step; see prompt modem-fw-02). NR7101 / USB-CCID reader remain the proven
+  management paths.
+- **mtd9 (MPSS) image banked** on bench x280:
+  `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd9.img`
+  sha256 55848f96b695c3470546d87b8b107ba12b01f4fc722317707a568689ab17ea15 —
+  also serves as the BSDIFF40 base for the B14 `.up` package line.
+- efs2 (NV) reads destabilize adb when the modem is warm: one cold attempt
+  per boot max; never hammer (device-health rule).

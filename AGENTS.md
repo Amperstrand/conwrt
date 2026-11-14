@@ -14,6 +14,30 @@ way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
 - If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
 - Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
 
+## Decode Before Probe — mandatory RE gates for undocumented interfaces (L-PROBE-01)
+
+**No test, probe, or command shall be sent to any undocumented or
+partially-understood modem/router interface until ALL of these gates pass:**
+
+1. **Protocol Structure Decode**: All message/command structures decoded
+   from firmware (IDL extraction, disassembly, or protocol analysis).
+   Mandatory parameters identified. State-modifying vs. read-only classified.
+   Cannot decode → probe does not proceed.
+
+2. **Adversarial Safety Review** (by an agent OTHER than the proposer):
+   - Worst case if this probe executes? (crash / persistent corruption / full brick)
+   - Recovery path for each failure mode? (reboot / EDL reflash / serial / JTAG)
+   - Backups exist? (flash dump, QCN, verified recovery image)
+   - Any empty recovery rung → probe does not proceed.
+
+3. **New Parameters = New Risk Class**: Never classify a probe with new
+   parameters as "same safety class" as a previous probe. Adding a real
+   parameter crosses from "does this exist?" to "execute the handler."
+
+**Full lesson**: conwrt-bench/lessons/L-PROBE-01-decode-before-probe.md
+**Evidence**: MF286D modem crash loop (2026-11-11) — 0x67-with-token probe
+wrote corrupted EFS state → permanent boot crash loop → EDL reflash required.
+
 ## NEVER Force Sysupgrade
 
 **`sysupgrade -F` is FORBIDDEN.** No exceptions.

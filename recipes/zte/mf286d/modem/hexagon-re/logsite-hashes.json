@@ -1,0 +1,52 @@
+{
+ "mmgsdilib.c:1075": [
+  76880,
+  21,
+  "APDU streaming not allowed on default channel"
+ ],
+ "mmgsdi_session.c:3359": [
+  79158,
+  21,
+  "After Manage Channel,Select AID failed.sw1=0x%x,sw2=0x%x"
+ ],
+ "mmgsdi_uicc_rsp.c:635": [
+  79208,
+  21,
+  "GSDI_ACCESS_DENIED"
+ ],
+ "mmgsdi_uicc_rsp.c:963": [
+  79213,
+  21,
+  "Access Denied sw2: 0x%x"
+ ],
+ "uim_sigs.c:577": [
+  80069,
+  21,
+  "UIM_%d: STREAMING COMMAND is not allowed for channel 0x%x"
+ ],
+ "qmi_uim.c:1479": [
+  80507,
+  21,
+  "Silent PIN1 verification configuration: 0x%x,APDU security r"
+ ],
+ "qmi_uim.c:1116": [
+  80509,
+  21,
+  "APDU security AID list type: 0x%x, list count: 0x%x"
+ ],
+ "qmi_uim_m2m_euicc.c:137": [
+  80675,
+  21,
+  "Sending response for GET_EID"
+ ],
+ "lpalib.c:463": [
+  81270,
+  21,
+  "Queue of command: LPA get EID: status 0x%x"
+ ],
+ "mmgsdi_euicc.c:140": [
+  84298,
+  21,
+  "Channel id open failed for channel:0x%x:"
+ ]
+}
