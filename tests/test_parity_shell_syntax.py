@@ -18,11 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from test_parity_rust_plan import _fixtures
+from test_parity_rust_plan import _fixtures, plan_render_bin as _bin_fixture
 
 
 class TestCorpusShellSyntax:
-    def test_every_fixture_renders_shell_clean(self, plan_render_bin):
+    def test_every_fixture_renders_shell_clean(self):
+        plan_render_bin = _bin_fixture()
         checked = 0
         failures: list[str] = []
         for fixture in _fixtures():
