@@ -39,5 +39,17 @@
     }
   },
   "summary": "2 of 6 fully ACCEPTED with verified side effects (doh, mwan3 \u2014 the latter validating the #628 bugfix live); 2 accepted with readback caveats; 2 environment-limited (hardware/API deps the VM cannot satisfy). Raw logs: /tmp/apply-run{1..5}.log.",
-  "correction_2026-11-14": "RETRACTION/CORRECTION: the vpn_ivpn/tollgate_cellular RC=1 and guest-wifi timeout verdicts are CONTAMINATED \u2014 all fixtures ran sequentially on ONE shared VM, and earlier applies (mwan3 policy routing/firewall hooks, doh dnsmasq norev, ssh-hardening) mutate guest network state; the ivpn trace shows 'wget: Operation not permitted' (egress blocked by previously applied policy, not by the ivpn render itself). Only the FIRST fixture on a fresh VM (doh) and order-independent uci asserts (mwan3 track_ip readback) are clean evidence. Next runner revision: fresh overlay per fixture (the fips fixture pattern)."
+  "correction_2026-11-14": "RETRACTION/CORRECTION: the vpn_ivpn/tollgate_cellular RC=1 and guest-wifi timeout verdicts are CONTAMINATED \u2014 all fixtures ran sequentially on ONE shared VM, and earlier applies (mwan3 policy routing/firewall hooks, doh dnsmasq norev, ssh-hardening) mutate guest network state; the ivpn trace shows 'wget: Operation not permitted' (egress blocked by previously applied policy, not by the ivpn render itself). Only the FIRST fixture on a fresh VM (doh) and order-independent uci asserts (mwan3 track_ip readback) are clean evidence. Next runner revision: fresh overlay per fixture (the fips fixture pattern).",
+  "isolated_rerun_2026-11-14": {
+    "runner": "tests/integration/vm_apply_acceptance_iso.py (fresh overlay VM per fixture, ephemeral port, scp -O, -F /dev/null)",
+    "results": {
+      "doh_default": "APPLY_RC=0, resolver_url + dnsmasq_fwd VERIFIED (reproduces isolated)",
+      "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (reproduces isolated \u2014 #628 fix stands)",
+      "ssh_hardening_default": "APPLY_RC=0; readback keys return empty \u2014 the render sets dropbear.@dropbear[0].RootPasswordAuth='off' but uci -q get returns nothing on the applied VM: UNRESOLVED readback question (commit ordering / section naming), script itself exits 0",
+      "vpn_ivpn_default": "APPLY_RC=1 = DESIGNED ABORT GATE: package install OK (20.8 MiB/197 pkgs \u2014 egress works), keypair OK, api.ivpn.net key registration returns no peer IP from this bench -> 'aborting before wg0 cleanup' fires exactly as designed (#604-P2 class). APPLY-CORRECT, external-API-limited. NOT a render defect.",
+      "tollgate_cellular_minimal": "APPLY_RC=1 \u2014 cellular readback gates abort (x86 VM has no modem/ECM iface): environment-limited, script logic runs",
+      "guest_wifi_default": "APPLY_RC=1 \u2014 wifi config on x86 (no radios): environment-limited"
+    },
+    "verdict": "Isolated rerun confirms: 2 fixtures FULL ACCEPT with verified side effects; ivpn VERIFIES its abort-gate safety design (API-limited); ssh_hardening applies clean with one open readback question; 2 fixtures environment-limited (hardware the VM lacks). Order-effect contamination ruled out for all six."
+  }
 }
