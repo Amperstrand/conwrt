@@ -100,6 +100,18 @@ class VM:
               "-b", str(base), str(self.disk)], check=True)
         netdev = (f"user,id=net0,hostfwd=tcp::{self.ssh_port}-:22"
                   f"{self.extra_netdev}")
+        # The root conftest's session-autouse egress stub shadows ssh/scp
+        # in PATH unless CONWRT_REAL_NETWORK=1 — polling through it ALWAYS
+        # fails and surfaces as a misleading "SSH never came up" after the
+        # full window (same class the session-VM fixture guards against;
+        # observed burning 6.5 min per test on the parity lane 2026-11-14).
+        # BEFORE boot: raising after would leak the daemonized QEMU.
+        if "CONWRT_SSH_STUB_LOG" in os.environ:
+            raise AssertionError(
+                f"{self.name}: needs real ssh, but the test session's "
+                "network-egress stub is on PATH "
+                "(set CONWRT_REAL_NETWORK=1 for VM tests)"
+            )
         kvm = ["-enable-kvm", "-cpu", "host"] if Path("/dev/kvm").exists() else []
         cmd = ["qemu-system-x86_64",
                "-drive", f"file={self.disk},format=qcow2,if=virtio",
@@ -111,11 +123,24 @@ class VM:
                "-pidfile", str(self.pidfile),
                "-daemonize", *kvm]
         _run(cmd, check=True, timeout=60)
-        deadline = time.time() + 240
+        # Same env knob as the session VM (conftest) — a flat 240s died on
+        # loaded hosts (boot still progressing at deadline, SSH fine ~100s
+        # on a quiet KVM host). Default 60×5s matches conftest.
+        wait_loops = int(os.environ.get("CONWRT_VM_SSH_WAIT_LOOPS", "60") or 60)
+        deadline = time.time() + wait_loops * 5
+        hard_cap = time.time() + 900
+        last_size = self.serial.stat().st_size if self.serial.exists() else 0
         while time.time() < deadline:
             if self.ssh("true").returncode == 0:
                 return
             time.sleep(5)
+            # Progress-aware: serial still growing = boot slow, not hung —
+            # extend (host-load insurance), capped by the hard deadline.
+            if self.serial.exists():
+                size = self.serial.stat().st_size
+                if size > last_size and time.time() < hard_cap:
+                    last_size = size
+                    deadline = time.time() + wait_loops * 5
         serial = self.serial.read_text()[-1500:] if self.serial.exists() else ""
         raise AssertionError(f"{self.name}: SSH never came up.\n{serial}")
 
