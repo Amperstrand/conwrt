@@ -71,7 +71,10 @@ _DROP_LINE_PREFIXES = (
     "if command -v apk ",
     "&& apk add ",
     "if ! (opkg list-installed ",
-    "if [ -n \"$(opkg list-installed ",
+    'if [ -n "$(opkg list-installed ',
+    # 1.x mptcp-bonding renders its EnsurePackage as a single best-effort
+    # line — same semantic as the 2.x preamble above, so both drop.
+    "apk add curl 2>/dev/null",
 )
 
 

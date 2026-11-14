@@ -21,14 +21,15 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationWizzardProfile, DohProfile, FleetIdentityProfile, GuestWifiProfile,
-    Mesh11sdProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
-    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
-    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile,
-    WireguardServerProfile, render_shell,
+    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
+    FleetIdentityProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile,
+    NodnsProfile, OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
+    Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TetherProfile,
+    TetherVariant, TollgateCellularProfile, TollgateProfile, TollgateSecurityProfile,
+    TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile, WireguardServerProfile,
+    render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -37,11 +38,27 @@ use conwrt_types::DeviceModel;
 pub const PARITY_MODEL_ID: &str = "parity-fixture";
 
 fn parity_model() -> DeviceModel {
-    let json = r#"{"id":"parity-fixture","vendor":"Parity","description":"fixture",
-        "openwrt":{"target":"x/y","device":"t,d","profile":"t_d","version":"24"},
+    parity_model_for("24", &[])
+}
+
+/// The fixture model, with optional per-fixture OpenWrt version
+/// (`model_version` — mptcp-bonding's 25.12 floor) and extra capabilities
+/// (`model_capabilities` — fips-bluetooth-rfcomm needs `bluetooth`).
+fn parity_model_for(version: &str, extra_caps: &[&str]) -> DeviceModel {
+    let mut caps = vec!["ethernet", "wifi", "usb"];
+    caps.extend_from_slice(extra_caps);
+    let caps_json = caps
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"id":"parity-fixture","vendor":"Parity","description":"fixture",
+        "openwrt":{{"target":"x/y","device":"t,d","profile":"t_d","version":"{version}"}},
         "mac_oui":[],
-        "capabilities":["ethernet","wifi","usb"]}"#;
-    serde_json::from_str(json).expect("parity fixture model parses")
+        "capabilities":[{caps_json}]}}"#
+    );
+    serde_json::from_str(&json).expect("parity fixture model parses")
 }
 
 fn get_str(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -607,6 +624,58 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
             };
             Ok(Profile::VpnNordvpnOpenvpn(p))
         }
+        "mptcp-bonding" => {
+            let p = MptcpBondingProfile {
+                server_ipv4: get_str(&params, "server_ipv4").unwrap_or_default(),
+                server_port: get_u16(&params, "server_port", 0),
+                uuid: get_str(&params, "uuid").unwrap_or_default(),
+            };
+            Ok(Profile::MptcpBonding(p))
+        }
+        "vpn-nordvpn-ikev2" => {
+            let p = VpnNordvpnIke2Profile {
+                username: get_str(&params, "username").ok_or("username is required")?,
+                password: get_str(&params, "password").ok_or("password is required")?,
+                station: get_str(&params, "station").ok_or("station is required")?,
+                hostname: get_str(&params, "hostname")
+                    .or_else(|| get_str(&params, "server"))
+                    .ok_or("hostname is required")?,
+                hw_accel: get_bool(&params, "hw_accel", true),
+                kill_switch: get_bool(&params, "kill_switch", true),
+                allow_management: get_bool(&params, "allow_management", true),
+                ..Default::default()
+            };
+            Ok(Profile::VpnNordvpnIke2(p))
+        }
+        "fips-bluetooth-rfcomm" => {
+            let mut p = FipsBluetoothRfcommProfile {
+                role: get_str(&params, "role").unwrap_or_else(|| "client".into()),
+                channel: u8::try_from(params.get("channel").and_then(|v| v.as_u64()).unwrap_or(1))
+                    .map_err(|_| "channel out of range")?,
+                tun_enabled: get_bool(&params, "tun_enabled", true),
+                tun_dns: get_bool(&params, "tun_dns", true),
+                tun_gateway: get_bool(&params, "tun_gateway", true),
+                bt_pin: get_str(&params, "bt_pin").unwrap_or_else(|| "0000".into()),
+                peers: Vec::new(),
+            };
+            if let Some(list) = params.get("peers").and_then(|v| v.as_array()) {
+                for entry in list {
+                    let get = |k: &str| {
+                        entry
+                            .get(k)
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                            .unwrap_or_default()
+                    };
+                    p.peers.push(FipsPeer {
+                        npub: get("npub"),
+                        bt_mac: get("bt_mac"),
+                        alias: get("alias"),
+                    });
+                }
+            }
+            Ok(Profile::FipsBluetoothRfcomm(p))
+        }
         "vpn-nordvpn" => {
             let p = VpnNordvpnProfile {
                 private_key: get_str(&params, "private_key")
@@ -640,7 +709,19 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
 /// fixture → Profile → `plan_profile` → `render_shell`.
 pub fn render_fixture(fixture: &serde_json::Value) -> Result<String, String> {
     let profile = profile_from_fixture(fixture)?;
-    let plan = crate::plan::plan_profile(&DeviceState::OpenWrt, &parity_model(), &profile)
+    let extra_caps: Vec<&str> = fixture
+        .get("model_capabilities")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>())
+        .unwrap_or_default();
+    let model = parity_model_for(
+        fixture
+            .get("model_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("24"),
+        &extra_caps,
+    );
+    let plan = crate::plan::plan_profile(&DeviceState::OpenWrt, &model, &profile)
         .map_err(|e| e.to_string())?;
     Ok(render_shell(&plan))
 }
@@ -696,6 +777,9 @@ pub fn command_lines(script: &str) -> Vec<String> {
                 && !l.starts_with("&& apk add ")
                 && !l.starts_with("if ! (opkg list-installed ")
                 && !l.starts_with("if [ -n \"$(opkg list-installed ")
+            // 1.x mptcp-bonding one-liner package install — same semantic
+            // as the structured-op preamble above (pytest side mirrors).
+            && !l.starts_with("apk add curl 2>/dev/null")
         })
         .collect()
 }

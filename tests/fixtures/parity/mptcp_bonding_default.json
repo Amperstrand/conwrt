@@ -1,0 +1,9 @@
+{
+  "use_case": "mptcp-bonding",
+  "params": {
+    "server_ipv4": "192.168.13.10",
+    "server_port": 5000,
+    "uuid": "b3accb70-3fdd-4c1e-a8b1-conftest0001"
+  },
+  "model_version": "25.12"
+}

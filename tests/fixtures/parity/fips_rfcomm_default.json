@@ -1,0 +1,21 @@
+{
+  "use_case": "fips-bluetooth-rfcomm",
+  "params": {
+    "role": "client",
+    "channel": 1,
+    "tun_enabled": true,
+    "tun_dns": true,
+    "tun_gateway": true,
+    "bt_pin": "0000",
+    "peers": [
+      {
+        "npub": "npub1qpzry9x8gf2tvdw0s3jn",
+        "bt_mac": "AA:BB:CC:DD:EE:01",
+        "alias": "bench-peer-1"
+      }
+    ]
+  },
+  "model_capabilities": [
+    "bluetooth"
+  ]
+}

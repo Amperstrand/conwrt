@@ -580,7 +580,7 @@ pub(super) const NORDVPN_IKE2_CA_PEM: &str = concat!(
     "wDBM1mJChneHt59Nh8Gah74+TM1jBsw4fhJPvoc7Atcg740JErb904mZfkIEmojC\n",
     "VPhBHVQ9LHBAdM8qFI2kRK0IynOmAZhexlP/aT/kpEsEPyaZQlnBn3An1CRz8h0S\n",
     "PApL8PytggYKeQmRhl499+6jLxcZ2IegLfqq41dzIjwHwTMplg+1pKIOVojpWA==\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----\n\n",
 );
 
 /// The IKEv2 swanctl connection config (byte-verbatim vs 1.x, with
@@ -4199,6 +4199,11 @@ pub(super) fn plan_mptcp_bonding(
                  --server-ipv4 {} --server-port {} --uuid {}",
                 mp.server_ipv4, mp.server_port, mp.uuid
             ),
+        },
+        // 1.x parity: blank line between the installer pipe and the
+        // usage echoes (mptcp.py's f-string keeps it).
+        PlanOp::Shell {
+            command: String::new(),
         },
         PlanOp::Shell {
             command: "echo \"BSBF installed. Verify: bsbf-bonding --status\"".into(),

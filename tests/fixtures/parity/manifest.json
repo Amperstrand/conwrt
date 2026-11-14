@@ -239,6 +239,18 @@
     "vpn_nordvpn_openvpn_default": {
       "use_case": "vpn-nordvpn-openvpn",
       "expect": "EQUAL"
+    },
+    "mptcp_bonding_default": {
+      "use_case": "mptcp-bonding",
+      "expect": "EQUAL"
+    },
+    "vpn_nordvpn_ikev2_default": {
+      "use_case": "vpn-nordvpn-ikev2",
+      "expect": "EQUAL"
+    },
+    "fips_rfcomm_default": {
+      "use_case": "fips-bluetooth-rfcomm",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [
