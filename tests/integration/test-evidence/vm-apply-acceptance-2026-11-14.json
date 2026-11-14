@@ -45,11 +45,11 @@
     "results": {
       "doh_default": "APPLY_RC=0, resolver_url + dnsmasq_fwd VERIFIED (reproduces isolated)",
       "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (reproduces isolated \u2014 #628 fix stands)",
-      "ssh_hardening_default": "APPLY_RC=0; readback keys return empty \u2014 the render sets dropbear.@dropbear[0].RootPasswordAuth='off' but uci -q get returns nothing on the applied VM: UNRESOLVED readback question (commit ordering / section naming), script itself exits 0",
+      "ssh_hardening_default": "RESOLVED: APPLY_RC=0 + readbacks VERIFIED with post-apply settle \u2014 RootPasswordAuth=off, PasswordAuth=off, MaxAuthTries=3 (the earlier empty readback was a race with the dropbear restart, not a commit/config defect). Runner now settles+retries readbacks.",
       "vpn_ivpn_default": "APPLY_RC=1 = DESIGNED ABORT GATE: package install OK (20.8 MiB/197 pkgs \u2014 egress works), keypair OK, api.ivpn.net key registration returns no peer IP from this bench -> 'aborting before wg0 cleanup' fires exactly as designed (#604-P2 class). APPLY-CORRECT, external-API-limited. NOT a render defect.",
       "tollgate_cellular_minimal": "APPLY_RC=1 \u2014 cellular readback gates abort (x86 VM has no modem/ECM iface): environment-limited, script logic runs",
       "guest_wifi_default": "APPLY_RC=1 \u2014 wifi config on x86 (no radios): environment-limited"
     },
-    "verdict": "Isolated rerun confirms: 2 fixtures FULL ACCEPT with verified side effects; ivpn VERIFIES its abort-gate safety design (API-limited); ssh_hardening applies clean with one open readback question; 2 fixtures environment-limited (hardware the VM lacks). Order-effect contamination ruled out for all six."
+    "verdict": "3 of 6 FULL ACCEPT with verified side effects (doh, mwan3, ssh-hardening); ivpn verifies its abort-gate design (external-API-limited); cellular/guest-wifi hardware-limited. All verdicts from isolated fresh-overlay VMs."
   }
 }

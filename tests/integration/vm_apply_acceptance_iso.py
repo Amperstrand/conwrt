@@ -114,7 +114,15 @@ def main():
                            capture_output=True, timeout=60, check=True)
             a = vm.ssh(f"sh /tmp/{name}.sh; echo APPLY_RC=$?", timeout=600)
             rc = next((l for l in a.stdout.splitlines() if l.startswith("APPLY_RC=")), "APPLY_RC=?")
+            # settle+retry: ssh-hardening restarts dropbear and the immediate
+            # readback races it (empty uci output, found 2026-11-14)
+            time.sleep(4)
             checks = readbacks(name, vm)
+            for _ in range(4):
+                if all(v for v in checks.values()):
+                    break
+                time.sleep(4)
+                checks = readbacks(name, vm)
             tail = [l for l in a.stdout.splitlines() if l.strip()][-3:]
             results[name] = {"apply": rc, "checks": checks, "tail": tail}
             print(f"{name}: {rc} {checks}", flush=True)
