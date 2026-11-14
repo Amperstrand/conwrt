@@ -643,7 +643,6 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 hw_accel: get_bool(&params, "hw_accel", true),
                 kill_switch: get_bool(&params, "kill_switch", true),
                 allow_management: get_bool(&params, "allow_management", true),
-                ..Default::default()
             };
             Ok(Profile::VpnNordvpnIke2(p))
         }
