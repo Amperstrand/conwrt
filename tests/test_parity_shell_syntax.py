@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from test_parity_rust_plan import _fixtures, plan_render_bin
+from test_parity_rust_plan import _fixtures
 
 
 class TestCorpusShellSyntax:
