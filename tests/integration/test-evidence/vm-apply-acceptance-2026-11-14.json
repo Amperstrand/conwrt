@@ -47,9 +47,10 @@
       "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (reproduces isolated \u2014 #628 fix stands)",
       "ssh_hardening_default": "RESOLVED: APPLY_RC=0 + readbacks VERIFIED with post-apply settle \u2014 RootPasswordAuth=off, PasswordAuth=off, MaxAuthTries=3 (the earlier empty readback was a race with the dropbear restart, not a commit/config defect). Runner now settles+retries readbacks.",
       "vpn_ivpn_default": "APPLY_RC=1 = DESIGNED ABORT GATE: package install OK (20.8 MiB/197 pkgs \u2014 egress works), keypair OK, api.ivpn.net key registration returns no peer IP from this bench -> 'aborting before wg0 cleanup' fires exactly as designed (#604-P2 class). APPLY-CORRECT, external-API-limited. NOT a render defect.",
-      "tollgate_cellular_minimal": "APPLY_RC=1 \u2014 cellular readback gates abort (x86 VM has no modem/ECM iface): environment-limited, script logic runs",
-      "guest_wifi_default": "APPLY_RC=1 \u2014 wifi config on x86 (no radios): environment-limited"
+      "tollgate_cellular_minimal": "CLOSED AS GAP-BY-ENVIRONMENT: the x86 QEMU VM lacks the hardware the fixture's readback gates check (cellular: no modem/ECM iface; guest-wifi: no radios). Render parity for both is EQUAL in the 61-fixture corpus; apply-acceptance would need hardware-in-the-loop (bench DUT) \u2014 out of scope for the VM layer by design.",
+      "guest_wifi_default": "CLOSED AS GAP-BY-ENVIRONMENT: the x86 QEMU VM lacks the hardware the fixture's readback gates check (cellular: no modem/ECM iface; guest-wifi: no radios). Render parity for both is EQUAL in the 61-fixture corpus; apply-acceptance would need hardware-in-the-loop (bench DUT) \u2014 out of scope for the VM layer by design."
     },
     "verdict": "3 of 6 FULL ACCEPT with verified side effects (doh, mwan3, ssh-hardening); ivpn verifies its abort-gate design (external-API-limited); cellular/guest-wifi hardware-limited. All verdicts from isolated fresh-overlay VMs."
-  }
+  },
+  "closed_2026-11-14": "cellular + guest-wifi closed as GAP-by-environment (owner disposition 2026-11-14); no open items remain in this evidence file."
 }
