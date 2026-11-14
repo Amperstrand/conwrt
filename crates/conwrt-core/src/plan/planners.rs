@@ -195,21 +195,36 @@ pub(super) fn route_block(section: &str) -> String {
 
 /// The pre-commit address readback tail (AGENTS.md).
 pub(super) fn readback_block(provider: &str) -> String {
-    let mut lines: Vec<String> = vec![
-        "# Pre-commit IP readback (AGENTS.md): refuse to reach commit with a".into(),
-        "# tunnel address that is not a sane /32 (the surfshark #604-P1 class)".into(),
+    // comment header is per-provider 1.x text — byte parity (PR #629):
+    // ivpn keeps the two-line refuse form; mullvad the single-line class
+    // tag; surfshark the three-line shared-ops form.
+    let header: &[&str] = match provider {
+        "Mullvad" => &["# Pre-commit IP readback (AGENTS.md; surfshark #604-P1 class)"],
+        "Surfshark" => &[
+            "# Pre-commit IP readback (AGENTS.md): the shared ops below commit and",
+            "# restart networking — refuse to reach commit with a tunnel address",
+            "# that is not a sane /32 (Codex #604 P1 round 3).",
+        ],
+        _ => &[
+            "# Pre-commit IP readback (AGENTS.md): refuse to reach commit with a",
+            "# tunnel address that is not a sane /32 (the surfshark #604-P1 class)",
+        ],
+    };
+    let mut lines: Vec<String> = header.iter().map(|l| (*l).into()).collect();
+    lines.extend([
         "WG_ADDR=$(uci -q get network.wg0.addresses)".into(),
         "case \"$WG_ADDR\" in".into(),
         "    */32) ;;".into(),
         "esac".into(),
-    ];
-    lines.insert(
-        5,
-        format!(
-            "    *) echo \"{provider}: wg0 address '$WG_ADDR' not a sane /32 — \
-             aborting before commit\"; exit 1 ;;"
-        ),
+    ]);
+    let abort_arm = format!(
+        "    *) echo \"{provider}: wg0 address '$WG_ADDR' not a sane /32 — aborting before commit\"; exit 1 ;;"
     );
+    let esac_idx = lines
+        .iter()
+        .position(|l| l.trim() == "esac")
+        .expect("esac line in readback tail");
+    lines.insert(esac_idx, abort_arm);
     lines.join("\n")
 }
 
@@ -276,6 +291,7 @@ pub(super) const MULLVAD_WG_BODY_SH: &str = concat!(
     "    -H \"Authorization: Token __TOKEN__\" \\\n",
     "    -H \"Content-Type: application/json\" \\\n",
     "    -d '{\"public_key\":\"'\"${WG_PUB}\"'\"}')\n",
+    "\n",
     "PEER_IP=$(echo \"$RESPONSE\" | json_get ipv4_address)\n",
     "# Strip CIDR if present (Mullvad returns 10.xx.xx.xx/32)\n",
     "PEER_IP=${PEER_IP%%/*}\n",
@@ -399,9 +415,9 @@ pub(super) const SURFSHARK_WG_BODY_SH: &str = concat!(
     "    echo \"Surfshark: endpoint DNS unresolved — skipping static route (netifd installs its own)\"\n",
     "fi\n",
     "\n",
-    "# Pre-commit IP readback (AGENTS.md): the shared ops below commit\n",
-    "# and restart networking — refuse to reach commit with a tunnel\n",
-    "# address that is not a sane /32 (Codex #604 P1 round 3).\n",
+    "# Pre-commit IP readback (AGENTS.md): the shared ops below commit and\n",
+    "# restart networking — refuse to reach commit with a tunnel address\n",
+    "# that is not a sane /32 (Codex #604 P1 round 3).\n",
     "WG_ADDR=$(uci -q get network.wg0.addresses)\n",
     "case \"$WG_ADDR\" in\n",
     "    */32) ;;\n",
@@ -564,7 +580,7 @@ pub(super) const NORDVPN_IKE2_CA_PEM: &str = concat!(
     "wDBM1mJChneHt59Nh8Gah74+TM1jBsw4fhJPvoc7Atcg740JErb904mZfkIEmojC\n",
     "VPhBHVQ9LHBAdM8qFI2kRK0IynOmAZhexlP/aT/kpEsEPyaZQlnBn3An1CRz8h0S\n",
     "PApL8PytggYKeQmRhl499+6jLxcZ2IegLfqq41dzIjwHwTMplg+1pKIOVojpWA==\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----\n\n",
 );
 
 /// The IKEv2 swanctl connection config (byte-verbatim vs 1.x, with
@@ -1283,7 +1299,6 @@ pub(super) fn plan_vpn_surfshark(
 }
 
 pub(super) const PIA_WG_BODY_SH: &str = concat!(
-    "\n",
     "# Generate WireGuard keypair\n",
     "wg genkey > /tmp/vpn_private.key\n",
     "wg pubkey < /tmp/vpn_private.key > /tmp/vpn_public.key\n",
@@ -1449,7 +1464,7 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
     let url = doh.resolver_url().to_string();
     let port = doh.listen_port;
     let literal = |v: String| UciValue::Literal(v);
-    let ops = vec![
+    let mut ops = vec![
         PlanOp::EnsurePackage {
             name: "https-dns-proxy".into(),
         },
@@ -1528,6 +1543,10 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
             expect_contains: "yes".into(),
         },
     ];
+    // 1.x parity: trailing informational line (doh.py final status echo).
+    ops.push(PlanOp::Shell {
+        command: format!("echo \"DoH configured: {} on port {port}\"", doh.provider),
+    });
     Ok(Plan {
         profile_id: "doh".into(),
         model_id: model.id.clone(),
@@ -2490,10 +2509,18 @@ pub(super) fn plan_travelmate(
         action: ServiceAction::Restart,
     });
     ops.push(PlanOp::Shell {
-        command: format!(
-            "echo \"Travelmate configured: auto-connect on {}\"",
-            tm.radio
-        ),
+        command: if tm.uplinks.is_empty() {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {}\"",
+                tm.radio
+            )
+        } else {
+            format!(
+                "echo \"Travelmate configured: auto-connect on {} ({} uplinks)\"",
+                tm.radio,
+                tm.uplinks.len()
+            )
+        },
     });
     let verification = vec![
         VerificationCheck {
@@ -3347,7 +3374,7 @@ pub(super) const PIA_OPENVPN_CA: &str = concat!(
     "iyd1Fzx0yujuiXDROLhISLQDRjVVAvawrAtLZWYK31bY7KlezPlQnl/D9Asxe85l\n",
     "8jO5+0LdJ6VyOs/Hd4w52alDW/MFySDZSfQHMTIc30hLBJ8OnCEIvluVQQ2UQvoW\n",
     "+no177N9L2Y+M9TcTA62ZyMXShHQGeh20rb4kK8f+iFX8NxtdHVSkxMEFSfDDyQ=\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----",
 );
 
 /// The vpn-provider family's shared firewall-zone/DNS/verify tail —
@@ -3692,7 +3719,7 @@ pub(super) fn plan_vpn_nordvpn(
     // render safe
     let body = format!(
         concat!(
-            "{JSON_HELPER}\n",
+            "{JSON_HELPER}",
             "WG_PRIV=\"{PRIV}\"\n",
             "SERVER_KEY=\"{PUB}\"\n",
             "SERVER_IP=\"{HOST}\"\n",
@@ -3817,7 +3844,7 @@ pub(super) const NORDVPN_OPENVPN_CA: &str = concat!(
     "wDBM1mJChneHt59Nh8Gah74+TM1jBsw4fhJPvoc7Atcg740JErb904mZfkIEmojC\n",
     "VPhBHVQ9LHBAdM8qFI2kRK0IynOmAZhexlP/aT/kpEsEPyaZQlnBn3An1CRz8h0S\n",
     "PApL8PytggYKeQmRhl499+6jLxcZ2IegLfqq41dzIjwHwTMplg+1pKIOVojpWA==\n",
-    "-----END CERTIFICATE-----\n",
+    "-----END CERTIFICATE-----\n\n",
 );
 
 pub(super) const NORDVPN_OPENVPN_TLS_AUTH: &str = concat!(
@@ -3841,7 +3868,7 @@ pub(super) const NORDVPN_OPENVPN_TLS_AUTH: &str = concat!(
     "a196c9de96012090e333519ae18d3509\n",
     "9427e7b372d348d352dc4c85e18cd4b9\n",
     "3f8a56ddb2e64eb67adfc9b337157ff4\n",
-    "-----END OpenVPN Static key V1-----\n",
+    "-----END OpenVPN Static key V1-----\n\n",
 );
 
 pub(super) const NORDVPN_OPENVPN_PORTS: &str = "1231 1232 1233 1234";
@@ -3871,7 +3898,7 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
             "while uci -q get network.@wireguard_wg0[0] >/dev/null 2>&1; do\n",
             "    uci delete network.@wireguard_wg0[0]\n",
             "done\n",
-            "\n",
+            "\n\n",
             "# Tear down any previous OpenVPN instance\n",
             "uci -q delete openvpn.nordvpn\n",
             "\n",
@@ -4172,6 +4199,11 @@ pub(super) fn plan_mptcp_bonding(
                  --server-ipv4 {} --server-port {} --uuid {}",
                 mp.server_ipv4, mp.server_port, mp.uuid
             ),
+        },
+        // 1.x parity: blank line between the installer pipe and the
+        // usage echoes (mptcp.py's f-string keeps it).
+        PlanOp::Shell {
+            command: String::new(),
         },
         PlanOp::Shell {
             command: "echo \"BSBF installed. Verify: bsbf-bonding --status\"".into(),
@@ -4611,6 +4643,213 @@ pub(super) fn plan_tollgate(
     }
     Ok(Plan {
         profile_id: "tollgate".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// fleet-identity — 1.x port: ONE ash invocation for the MAC-derived
+/// derivations (variables must share a process), guarded AP block,
+/// optional rogue-DHCP disarm. Byte-verbatim with 1.x.
+pub(super) fn plan_fleet_identity(
+    model: &DeviceModel,
+    fi: &FleetIdentityProfile,
+) -> Result<Plan, Unsupported> {
+    fi.validate()?;
+    let salt = &fi.salt;
+    let prefix = &fi.hostname_prefix;
+    let ssid_prefix = if fi.ssid_prefix.is_empty() {
+        prefix
+    } else {
+        &fi.ssid_prefix
+    };
+    let length = fi.password_length;
+    let wifi_derivation = if fi.configure_ap {
+        format!(
+            "_wpw=$(printf '%s' \"conwrt-fleet-v1:wifi:{}:{salt}:$_m\" | sha256sum | cut -c1-{length}) && ",
+            fi.wifi_network
+        )
+    } else {
+        String::new()
+    };
+    let identity_cmd = format!(
+        "_mac=$(cat /sys/class/net/eth0/address) && \
+         _m=$(printf '%s' \"$_mac\" | tr -d ':') && \
+         _pw=$(printf '%s' \"conwrt-fleet-v1:root:{salt}:$_m\" | sha256sum | cut -c1-{length}) && \
+         {wifi_derivation}\
+         printf '%s\\n%s\\n' \"$_pw\" \"$_pw\" | passwd root && \
+         uci set system.@system[0].hostname=\"{prefix}-$_m\" && \
+         uci commit system && \
+         mkdir -p /etc/fleet && \
+         printf 'derivation=%s\\nmac=%s\\nhostname=%s-%s\\n' \
+         'conwrt-fleet-v1' '$_mac' '{prefix}' '$_m' > /etc/fleet/identity"
+    );
+    let mut ops = vec![PlanOp::Shell {
+        command: identity_cmd,
+    }];
+    if fi.configure_ap {
+        // Guarded by radio presence: skipped whole on radio-less models
+        // or when /etc/config/wireless is not generated yet (first-boot).
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "if uci -q get wireless.radio0 >/dev/null 2>&1 && \
+                 uci -q get wireless.default_radio0 >/dev/null 2>&1; then \
+                 uci set wireless.radio0.disabled=\"0\"; \
+                 uci set wireless.default_radio0.ssid=\"{ssid_prefix}_$_m\"; \
+                 uci set wireless.default_radio0.encryption=\"psk2\"; \
+                 uci set wireless.default_radio0.key=\"$_wpw\"; \
+                 uci set wireless.default_radio0.network=\"lan\"; \
+                 uci commit wireless; wifi reload 2>/dev/null || true; fi"
+            ),
+        });
+    }
+    if fi.disarm_dhcp {
+        ops.push(PlanOp::SetUciOptions {
+            config: "dhcp".into(),
+            section: "lan".into(),
+            options: vec![
+                ("ignore".into(), UciValue::Literal("1".into())),
+                ("ra".into(), UciValue::Literal("disabled".into())),
+                ("dhcpv6".into(), UciValue::Literal("disabled".into())),
+            ],
+        });
+        ops.push(PlanOp::CommitUci {
+            config: "dhcp".into(),
+        });
+        ops.push(PlanOp::Service {
+            name: "dnsmasq".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Service {
+            name: "odhcpd".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "echo fleet-identity dhcp.lan.ignore=$(uci get dhcp.lan.ignore)".into(),
+        });
+    }
+    let verification = vec![VerificationCheck {
+        description: "identity marker written".into(),
+        command: "test -f /etc/fleet/identity && echo ok".into(),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "fleet_identity".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification,
+        warnings: Vec::new(),
+    })
+}
+
+/// tollgate-cellular — 1.x port: ECM WAN + AT-port modem bring-up
+/// (bodies verbatim from `plan_cellular_bodies`), readback-gated uci,
+/// optional SIM tooling, hotplug re-up.
+pub(super) fn plan_tollgate_cellular(
+    model: &DeviceModel,
+    tc: &TollgateCellularProfile,
+) -> Result<Plan, Unsupported> {
+    tc.validate()?;
+    use super::plan_cellular_bodies::{HOTPLUG_SH, MODEM_SETUP_SH, SIM_BALANCE_SH};
+    let wan = &tc.wan_iface;
+    let usb = &tc.usb_iface;
+    let shell_quote_sq = |s: &str| s.replace('\'', "'\\''");
+    let mut ops = vec![PlanOp::Shell {
+        command: format!("uci -q revert network.{wan} || true"),
+    }];
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: "uci -q revert network.lan || true".into(),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: wan.clone(),
+        options: vec![
+            ("proto".into(), UciValue::Literal("dhcp".into())),
+            ("device".into(), UciValue::Literal(usb.clone())),
+            ("metric".into(), UciValue::Literal("5".into())),
+        ],
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: "lan".into(),
+            options: vec![("ipaddr".into(), UciValue::Literal(tc.management_ip.clone()))],
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "G1=\"$(uci -q get network.{wan}.proto)\"; G2=\"$(uci -q get network.{wan}.device)\"; \
+             [ \"$G1\" = dhcp ] && [ \"$G2\" = {usb} ] \
+             || {{ echo \"cellular: readback FAILED (proto=$G1 device=$G2)\"; exit 1; }}"
+        ),
+    });
+    if !tc.management_ip.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "G3=\"$(uci -q get network.lan.ipaddr)\"; [ \"$G3\" = {} ] \
+                 || {{ echo \"cellular: lan readback FAILED ($G3)\"; exit 1; }}",
+                tc.management_ip
+            ),
+        });
+    }
+    let setup = MODEM_SETUP_SH
+        .replace("{SIMSLOT}", &tc.sim_slot)
+        .replace("{APN}", &tc.apn)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /usr/bin && printf '%s' '{}' > /usr/bin/cellular-setup \
+             && chmod +x /usr/bin/cellular-setup \
+             && ( /usr/bin/cellular-setup || true )",
+            shell_quote_sq(&setup)
+        ),
+    });
+    if !tc.iccid.is_empty() {
+        let sim_json = format!(
+            "{{\"provider\":\"{}\",\"iccid\":\"{}\",\"eid\":\"{}\",\
+             \"balance_api\":\"{}\",\"modem_if\":\"{}\"}}",
+            tc.provider, tc.iccid, tc.eid, tc.balance_api, usb
+        );
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "mkdir -p /etc/tollgate && printf '%s' '{sim_json}' > /etc/tollgate/sim.json"
+            ),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "printf '%s' '{}' > /usr/bin/sim-balance && chmod +x /usr/bin/sim-balance",
+                shell_quote_sq(SIM_BALANCE_SH)
+            ),
+        });
+    }
+    let hotplug = HOTPLUG_SH
+        .replace("{USBIFACE}", usb)
+        .replace("{WANIFACE}", wan);
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "mkdir -p /etc/hotplug.d/iface && printf '%s' '{}' \
+             > /etc/hotplug.d/iface/96-cellular-up && chmod +x /etc/hotplug.d/iface/96-cellular-up",
+            shell_quote_sq(&hotplug)
+        ),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Reload,
+    });
+    let verification = vec![VerificationCheck {
+        description: "wan iface reads modem device".into(),
+        command: format!("[ \"$(uci -q get network.{wan}.device)\" = {usb} ] && echo ok"),
+        expect_contains: "ok".into(),
+    }];
+    Ok(Plan {
+        profile_id: "tollgate-cellular".into(),
         model_id: model.id.clone(),
         ops,
         verification,

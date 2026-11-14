@@ -1,0 +1,1 @@
+{"use_case": "fleet_identity", "params": {"salt": "benchsalt0123456789abcdef", "hostname_prefix": "nr7101", "ssid_prefix": "labap", "wifi_network": "bench", "password_length": 16, "disarm_dhcp": false, "configure_ap": false}}

@@ -18,6 +18,7 @@ use alloc::format;
 use alloc::string::ToString;
 use conwrt_types::DeviceModel;
 
+mod plan_cellular_bodies;
 mod planners;
 mod profiles;
 mod render;
@@ -122,6 +123,8 @@ pub fn plan_profile(
         Profile::FipsBluetoothRfcomm(fp) => plan_fips_bluetooth_rfcomm(model, fp),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
+        Profile::FleetIdentity(fi) => plan_fleet_identity(model, fi),
+        Profile::TollgateCellular(tc) => plan_tollgate_cellular(model, tc),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):

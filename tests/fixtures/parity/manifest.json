@@ -24,9 +24,237 @@
     "sqm_default": {
       "use_case": "sqm",
       "expect": "EQUAL"
+    },
+    "doh_default": {
+      "use_case": "doh",
+      "expect": "EQUAL"
+    },
+    "doh_custom_url": {
+      "use_case": "doh",
+      "expect": "EQUAL"
+    },
+    "adguard_default": {
+      "use_case": "adguard",
+      "expect": "EQUAL"
+    },
+    "adguard_custom": {
+      "use_case": "adguard",
+      "expect": "EQUAL"
+    },
+    "ssh_hardening_default": {
+      "use_case": "ssh-hardening",
+      "expect": "EQUAL"
+    },
+    "ssh_hardening_custom": {
+      "use_case": "ssh-hardening",
+      "expect": "EQUAL"
+    },
+    "mwan3_default": {
+      "use_case": "mwan3",
+      "expect": "EQUAL"
+    },
+    "mwan3_balanced": {
+      "use_case": "mwan3",
+      "expect": "EQUAL"
+    },
+    "mesh11sd_default": {
+      "use_case": "mesh11sd",
+      "expect": "EQUAL"
+    },
+    "mesh11sd_wpa3_key": {
+      "use_case": "mesh11sd",
+      "expect": "EQUAL"
+    },
+    "travelmate_default": {
+      "use_case": "travelmate",
+      "expect": "EQUAL"
+    },
+    "travelmate_uplinks": {
+      "use_case": "travelmate",
+      "expect": "EQUAL"
+    },
+    "ssl_default": {
+      "use_case": "ssl",
+      "expect": "EQUAL"
+    },
+    "ssl_qip": {
+      "use_case": "ssl",
+      "expect": "EQUAL"
+    },
+    "nodns_default": {
+      "use_case": "nodns",
+      "expect": "EQUAL"
+    },
+    "nodns_custom": {
+      "use_case": "nodns",
+      "expect": "EQUAL"
+    },
+    "pbr_default": {
+      "use_case": "pbr",
+      "expect": "EQUAL"
+    },
+    "pbr_custom": {
+      "use_case": "pbr",
+      "expect": "EQUAL"
+    },
+    "openclash_default": {
+      "use_case": "openclash",
+      "expect": "EQUAL"
+    },
+    "openclash_tun": {
+      "use_case": "openclash",
+      "expect": "EQUAL"
+    },
+    "guest_wifi_default": {
+      "use_case": "guest-wifi",
+      "expect": "EQUAL"
+    },
+    "guest_wifi_custom": {
+      "use_case": "guest-wifi",
+      "expect": "EQUAL"
+    },
+    "tollgate_default": {
+      "use_case": "tollgate",
+      "expect": "EQUAL"
+    },
+    "tollgate_security_default": {
+      "use_case": "tollgate-security",
+      "expect": "EQUAL"
+    },
+    "auto_sqm_static": {
+      "use_case": "auto-sqm",
+      "expect": "EQUAL"
+    },
+    "auto_sqm_iperf": {
+      "use_case": "auto-sqm",
+      "expect": "EQUAL"
+    },
+    "cashu_vpn_default": {
+      "use_case": "cashu-vpn-client",
+      "expect": "EQUAL"
+    },
+    "rescue_watchdog_default": {
+      "use_case": "rescue-watchdog",
+      "expect": "EQUAL"
+    },
+    "rescue_watchdog_bench": {
+      "use_case": "rescue-watchdog",
+      "expect": "EQUAL"
+    },
+    "tether_default": {
+      "use_case": "tether",
+      "expect": "EQUAL"
+    },
+    "tether-android_default": {
+      "use_case": "tether-android",
+      "expect": "EQUAL"
+    },
+    "tether-android-adb_default": {
+      "use_case": "tether-android-adb",
+      "expect": "EQUAL"
+    },
+    "tether-ios_default": {
+      "use_case": "tether-ios",
+      "expect": "EQUAL"
+    },
+    "ap_nostr_id_default": {
+      "use_case": "ap-nostr-id",
+      "expect": "EQUAL"
+    },
+    "vpn_node_default": {
+      "use_case": "vpn-node",
+      "expect": "EQUAL"
+    },
+    "openperf_client_default": {
+      "use_case": "openperf_client",
+      "expect": "EQUAL"
+    },
+    "openperf_client_custom": {
+      "use_case": "openperf_client",
+      "expect": "EQUAL"
+    },
+    "openperf_server_default": {
+      "use_case": "openperf_server",
+      "expect": "EQUAL"
+    },
+    "openperf_server_custom": {
+      "use_case": "openperf_server",
+      "expect": "EQUAL"
+    },
+    "configurationwizzard_default": {
+      "use_case": "configurationwizzard",
+      "expect": "EQUAL"
+    },
+    "fleet_identity_default": {
+      "use_case": "fleet_identity",
+      "expect": "EQUAL"
+    },
+    "fleet_identity_minimal": {
+      "use_case": "fleet_identity",
+      "expect": "EQUAL"
+    },
+    "tollgate_cellular_full": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+      ]
+    },
+    "tollgate_cellular_minimal": {
+      "use_case": "tollgate-cellular",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+      ]
+    },
+    "vpn_nordvpn_default": {
+      "use_case": "vpn-nordvpn",
+      "expect": "EQUAL",
+      "gap_reasons": []
+    },
+    "vpn_ivpn_default": {
+      "use_case": "vpn-ivpn",
+      "expect": "EQUAL"
+    },
+    "vpn_mullvad_default": {
+      "use_case": "vpn-mullvad",
+      "expect": "EQUAL"
+    },
+    "vpn_surfshark_default": {
+      "use_case": "vpn-surfshark",
+      "expect": "EQUAL"
+    },
+    "vpn_pia_default": {
+      "use_case": "vpn-pia",
+      "expect": "EQUAL"
+    },
+    "vpn_openvpn_default": {
+      "use_case": "vpn-openvpn",
+      "expect": "EQUAL"
+    },
+    "vpn_pia_openvpn_default": {
+      "use_case": "vpn-pia-openvpn",
+      "expect": "EQUAL"
+    },
+    "vpn_nordvpn_openvpn_default": {
+      "use_case": "vpn-nordvpn-openvpn",
+      "expect": "EQUAL"
+    },
+    "mptcp_bonding_default": {
+      "use_case": "mptcp-bonding",
+      "expect": "EQUAL"
+    },
+    "vpn_nordvpn_ikev2_default": {
+      "use_case": "vpn-nordvpn-ikev2",
+      "expect": "EQUAL"
+    },
+    "fips_rfcomm_default": {
+      "use_case": "fips-bluetooth-rfcomm",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [
-    "NONE \u2014 the \u00a74 typed-ops march completed 2026-11-02 (#620): every preset in the 43-entry registry is typed or classified. openperf_client/openperf_server remain \u00a78 permanent-Python BY CLASSIFICATION (2026-11-01, ports-d): the plan emits only a scaffold \u2014 the actual payload (sta_autostart.py etc.) arrives via install-openperf.sh, there is no fleet/batch-plan consumer (grep: prompts/recipes/firmware-manager/bench-tools all negative), and the preset is a bench-lab WiFi fixture. A Rust twin would parity-test a shell scaffold while the substance stays external Python."
+    "RESOLVED 2026-11-03: vpn-provider arms render OFFLINE (API calls ride the emitted apply-time script text; nordvpn/nordvpn-openvpn use the harness _VPN_PROVIDER_STUBS recipe) \u2014 all 9 provider presets wired EQUAL",
+    "tollgate-cellular GAP (quote+backslash literal wrapping divergence in 1.x render_shell) \u2014 documented, same logical commands"
   ]
 }

@@ -93,6 +93,10 @@ pub enum Profile {
     Tollgate(TollgateProfile),
     /// RFC 1918 isolation for TollGate public WiFi.
     TollgateSecurity(TollgateSecurityProfile),
+    /// Fleet identity from MAC (canonical derivations, see crate::identity).
+    FleetIdentity(FleetIdentityProfile),
+    /// TollGate cellular upstream (NR7101-class 5G modem as paid uplink).
+    TollgateCellular(TollgateCellularProfile),
 }
 
 impl Profile {
@@ -136,6 +140,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => "fips-bluetooth-rfcomm",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
+            Profile::FleetIdentity(_) => "fleet-identity",
+            Profile::TollgateCellular(_) => "tollgate-cellular",
         }
     }
 
@@ -181,6 +187,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => &["bluetooth"],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
+            Profile::FleetIdentity(_) => &["wifi"],
+            Profile::TollgateCellular(_) => &["usb"],
         }
     }
 
