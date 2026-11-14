@@ -401,7 +401,15 @@ def test_vm2_mesh_peering(fips_vms):
         if peers.get("peers"):
             break
         time.sleep(3)
-    assert peers.get("peers"), "VM2 never saw VM1 as a peer"
+    if not peers.get("peers"):
+        diag = vm2.ssh_out(
+            "logread | grep -i fips | tail -15; echo ---; netstat -ulnp 2>/dev/null | head -5; "
+            "echo ---VM1---; true", timeout=30)
+        vm1_diag = fips_vms["vm1"].ssh_out(
+            "netstat -ulnp 2>/dev/null | grep 2121; logread | grep -i fips | tail -8", timeout=30)
+        raise AssertionError(
+            f"VM2 never saw VM1 as a peer\n== vm2 diag:\n{diag}\n== vm1 diag:\n{vm1_diag}")
+    # assert peers.get("peers"), "VM2 never saw VM1 as a peer"
     peer = peers["peers"][0]
     _EVIDENCE["vm2_link"] = {
         "npub": peer["npub"], "connectivity": peer["connectivity"],
@@ -416,6 +424,11 @@ def test_vm2_mesh_peering(fips_vms):
     # VM1 sees the inbound side too
     vm1 = fips_vms["vm1"]
     inbound = json.loads(vm1.ssh_out("fipsctl show peers"))
+    if not (inbound.get("peers") and inbound["peers"][0]["connectivity"] == "connected"):
+        dump = vm1.ssh_out(
+            "for c in peers links connections sessions status; do "
+            "echo ===$c===; fipsctl show $c 2>&1 | head -30; done", timeout=60)
+        raise AssertionError(f"vm1 inbound peers empty. all-shows:\n{dump}")
     assert inbound["peers"] and inbound["peers"][0]["connectivity"] == "connected"
 
 
