@@ -1,0 +1,12 @@
+{
+  "use_case": "net-roles",
+  "params": {
+    "adaptive_vlans": [
+      10,
+      20
+    ],
+    "adaptive_serve_dhcp": true,
+    "adaptive_interval": 60,
+    "adaptive_base_port": "eth0"
+  }
+}

@@ -3100,17 +3100,52 @@ impl NetRolesProfile {
     /// 1.x `_resolve_params`/`_resolve_uplinks` validation, plus the
     /// Phase-1 daemon-subsystem gate (see struct docs).
     pub fn validate(&self) -> Result<(), Unsupported> {
-        // Phase-1 gate: the three staged-daemon subsystems are not ported
-        // yet (tollgate-mode / conn-adapter / metered-guard constants) —
-        // reject explicitly rather than render a partial daemon install.
-        if self.auto_switch
-            || self.metered_guard
-            || !self.adaptive_vlans.is_empty()
-            || self.adaptive_serve_dhcp
+        // daemon-combination validation (1.x _resolve_params; the Phase-2
+        // constant port made the subsystems renderable)
+        let prices = [
+            self.price_sim_sats_per_mib,
+            self.price_wifi_sats_per_mib,
+            self.price_eth_sats_per_mib,
+        ];
+        if prices.iter().any(|p| *p > 0) && !self.auto_switch {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: price params require auto_switch=true".into(),
+            ));
+        }
+        if self.auto_switch && self.uplinks.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: auto_switch requires at least one uplink".into(),
+            ));
+        }
+        if !(5..=120).contains(&self.switch_interval) {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: switch_interval must be in 5..120 seconds".into(),
+            ));
+        }
+        if self.metered_guard && self.uplinks.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: metered_guard requires uplinks (free/metered derive from them)".into(),
+            ));
+        }
+        if !(5..=300).contains(&self.adaptive_interval) {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: adaptive_interval must be in 5..300 seconds".into(),
+            ));
+        }
+        if !self
+            .adaptive_base_port
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+            || self.adaptive_base_port.is_empty()
         {
             return Err(Unsupported::InvalidParams(
-                "net-roles: auto_switch / adaptive / metered_guard subsystems                  pending the Phase-2 daemon-constant port (tracked on card \
-                 t_6d4959b3) — core uplink/mgmt surface is fully supported"
+                "net-roles: adaptive_base_port must be a plain interface name".into(),
+            ));
+        }
+        if !self.adaptive_vlans.is_empty() && self.uplinks.iter().any(|u| u.kind == "ethernet") {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: adaptive_vlans cannot be combined with a static ethernet uplink \
+                 (the adapter owns ethernet uplink discovery)"
                     .into(),
             ));
         }
@@ -3208,6 +3243,13 @@ impl NetRolesProfile {
                 return Err(Unsupported::InvalidParams(
                     "net-roles: mgmt_vlan must differ from the ethernet uplink vlan".into(),
                 ));
+            }
+        }
+        for (i, v) in self.adaptive_vlans.iter().enumerate() {
+            if !(2..=4094).contains(v) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: adaptive_vlans[{i}] must be an int in 2..4094"
+                )));
             }
         }
         if self.wifi_shared_radio && !self.uplinks.iter().any(|u| u.kind == "wifi") {

@@ -5779,6 +5779,8 @@ pub(super) fn plan_net_roles(
         ),
     });
 
+    net_roles_daemon_tail(nr, &mut ops);
+
     Ok(Plan {
         profile_id: "net-roles".into(),
         model_id: model.id.clone(),
@@ -5786,4 +5788,200 @@ pub(super) fn plan_net_roles(
         verification: Vec::new(),
         warnings: Vec::new(),
     })
+}
+
+/// 1.x `_stage_file_ops`: stage a file with printf + chmod in one shell op.
+fn stage_file(path: &str, content: &str, mode: &str) -> PlanOp {
+    let escaped = content.replace('\'', "'\\''");
+    PlanOp::Shell {
+        command: format!(
+            "mkdir -p \"$(dirname {path})\" && printf '%s' '{escaped}' > {path} && chmod {mode} {path}"
+        ),
+    }
+}
+
+/// net-roles Phase-2: the staged-daemon tail (tollgate-mode engine,
+/// conn-adapter ladder, metered-guard) — appends to `ops` per 1.x order.
+fn net_roles_daemon_tail(nr: &NetRolesProfile, ops: &mut Vec<PlanOp>) {
+    let uplinks = &nr.uplinks;
+    if nr.auto_switch {
+        let mut mode_conf_lines: Vec<String> = Vec::new();
+        for u in uplinks {
+            let price = match u.kind.as_str() {
+                "sim" => nr.price_sim_sats_per_mib,
+                "wifi" => nr.price_wifi_sats_per_mib,
+                _ => nr.price_eth_sats_per_mib,
+            };
+            mode_conf_lines.push(format!(
+                "{} {} {}",
+                u.iface,
+                u.metric,
+                if price > 0 {
+                    price.to_string()
+                } else {
+                    "-".into()
+                }
+            ));
+        }
+        if !nr.adaptive_vlans.is_empty() {
+            let slot = uplinks.last().map(|u| u.metric).unwrap_or(0);
+            const METRICS: [u32; 5] = [5, 100, 200, 300, 400];
+            let mut ad_metric = METRICS[uplinks.len().min(METRICS.len() - 1)];
+            if ad_metric <= slot {
+                ad_metric = slot + 100;
+            }
+            let ad_price = nr.price_eth_sats_per_mib;
+            mode_conf_lines.push(format!(
+                "waneth {ad_metric} {}",
+                if ad_price > 0 {
+                    ad_price.to_string()
+                } else {
+                    "-".into()
+                }
+            ));
+        }
+        let mode_conf = mode_conf_lines.join("\n") + "\n";
+        ops.push(stage_file("/etc/tollgate/mode.conf", &mode_conf, "600"));
+        ops.push(stage_file(
+            "/usr/bin/tollgate-mode",
+            super::net_roles_bodies::MODE_DAEMON_SH,
+            "755",
+        ));
+        ops.push(stage_file(
+            "/etc/init.d/tollgate-mode",
+            &super::net_roles_bodies::MODE_INIT_SH
+                .replace("__INTERVAL__", &nr.switch_interval.to_string()),
+            "755",
+        ));
+        ops.push(stage_file(
+            "/etc/hotplug.d/iface/90-tollgate-mode",
+            super::net_roles_bodies::MODE_HOTPLUG_SH,
+            "755",
+        ));
+        ops.push(stage_file(
+            "/etc/rc.button/wps",
+            super::net_roles_bodies::MODE_BUTTON_SH,
+            "755",
+        ));
+        ops.push(PlanOp::Shell {
+            command: "rm -f /etc/tollgate/mode.override /tmp/tollgate-mode.state".into(),
+        });
+        ops.push(PlanOp::Service {
+            name: "tollgate-mode".into(),
+            action: ServiceAction::Enable,
+        });
+        ops.push(PlanOp::Service {
+            name: "tollgate-mode".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "[ -x /usr/bin/tollgate-mode ] && [ -f /etc/tollgate/mode.conf ] \
+                      || { echo \"net-roles: tollgate-mode staging FAILED\"; exit 1; }"
+                .into(),
+        });
+    }
+
+    if !nr.adaptive_vlans.is_empty() || nr.adaptive_serve_dhcp {
+        let vlans = nr
+            .adaptive_vlans
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let conf_lines = [
+            format!("probe_vlans={vlans}"),
+            format!("serve_when_greenfield={}", u8::from(nr.adaptive_serve_dhcp)),
+            "serve_iface=br-lan".to_string(),
+            "wan_iface=waneth".to_string(),
+            format!("base_port={}", nr.adaptive_base_port),
+            format!("interval={}", nr.adaptive_interval),
+        ];
+        let conf = conf_lines.join("\n") + "\n";
+        ops.push(stage_file(
+            "/usr/share/conn-adapter/probe-noop.sh",
+            super::net_roles_bodies::CONN_NOOP_SH,
+            "755",
+        ));
+        ops.push(stage_file(
+            "/usr/bin/conn-adapter",
+            super::net_roles_bodies::CONN_ADAPTER_SH,
+            "755",
+        ));
+        ops.push(stage_file("/etc/tollgate/conn-adapter.conf", &conf, "600"));
+        ops.push(stage_file(
+            "/etc/init.d/conn-adapter",
+            super::net_roles_bodies::CONN_INIT_SH,
+            "755",
+        ));
+        ops.push(PlanOp::Shell {
+            command: "rm -f /tmp/conn-adapter.state.adopted /tmp/conn-adapter.state.yielded \
+                      /tmp/conn-adapter.state.silent"
+                .into(),
+        });
+        ops.push(PlanOp::Service {
+            name: "conn-adapter".into(),
+            action: ServiceAction::Enable,
+        });
+        ops.push(PlanOp::Service {
+            name: "conn-adapter".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "[ -x /usr/bin/conn-adapter ] && [ -f /etc/tollgate/conn-adapter.conf ] \
+                      || { echo \"net-roles: conn-adapter staging FAILED\"; exit 1; }"
+                .into(),
+        });
+    }
+
+    if nr.metered_guard {
+        let metered_iface = uplinks
+            .iter()
+            .find(|u| u.kind == "sim")
+            .map(|u| u.iface.clone())
+            .unwrap_or_else(|| "wan".into());
+        let mut free_ifaces: Vec<String> = uplinks
+            .iter()
+            .filter(|u| u.kind != "sim")
+            .map(|u| u.iface.clone())
+            .collect();
+        if !nr.adaptive_vlans.is_empty() && !free_ifaces.iter().any(|f| f == "waneth") {
+            free_ifaces.push("waneth".into());
+        }
+        let free_joined = free_ifaces.join(",");
+        let guard_conf = [
+            format!("metered_iface={metered_iface}"),
+            format!("free_ifaces={free_joined}"),
+            format!("interval={}", nr.adaptive_interval),
+        ]
+        .join("\n")
+            + "\n";
+        ops.push(stage_file(
+            "/usr/bin/metered-guard",
+            super::net_roles_bodies::GUARD_DAEMON_SH,
+            "755",
+        ));
+        ops.push(stage_file(
+            "/etc/tollgate/metered-guard.conf",
+            &guard_conf,
+            "600",
+        ));
+        ops.push(stage_file(
+            "/etc/init.d/metered-guard",
+            super::net_roles_bodies::GUARD_INIT_SH,
+            "755",
+        ));
+        ops.push(PlanOp::Service {
+            name: "metered-guard".into(),
+            action: ServiceAction::Enable,
+        });
+        ops.push(PlanOp::Service {
+            name: "metered-guard".into(),
+            action: ServiceAction::Restart,
+        });
+        ops.push(PlanOp::Shell {
+            command: "[ -x /usr/bin/metered-guard ] && [ -f /etc/tollgate/metered-guard.conf ] \
+                      || { echo \"net-roles: metered-guard staging FAILED\"; exit 1; }"
+                .into(),
+        });
+    }
 }

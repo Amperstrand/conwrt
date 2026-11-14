@@ -18,6 +18,7 @@ use alloc::format;
 use alloc::string::ToString;
 use conwrt_types::DeviceModel;
 
+mod net_roles_bodies;
 mod plan_cellular_bodies;
 mod planners;
 mod profiles;

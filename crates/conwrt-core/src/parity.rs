@@ -746,7 +746,30 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                     .unwrap_or_default(),
                 adaptive_base_port: get_str(&params, "adaptive_base_port")
                     .unwrap_or_else(|| "eth0".into()),
-                ..Default::default()
+                auto_switch: get_bool(&params, "auto_switch", false),
+                switch_interval: params
+                    .get("switch_interval")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as u32,
+                wifi_shared_radio: get_bool(&params, "wifi_shared_radio", false),
+                price_sim_sats_per_mib: params
+                    .get("price_sim_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                price_wifi_sats_per_mib: params
+                    .get("price_wifi_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                price_eth_sats_per_mib: params
+                    .get("price_eth_sats_per_mib")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                adaptive_serve_dhcp: get_bool(&params, "adaptive_serve_dhcp", false),
+                adaptive_interval: params
+                    .get("adaptive_interval")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(30) as u32,
+                metered_guard: get_bool(&params, "metered_guard", false),
             };
             Ok(Profile::NetRoles(p))
         }

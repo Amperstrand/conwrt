@@ -267,6 +267,24 @@
     "net_roles_mgmt_door": {
       "use_case": "net-roles",
       "expect": "EQUAL"
+    },
+    "net_roles_auto_switch": {
+      "use_case": "net-roles",
+      "expect": "EQUAL"
+    },
+    "net_roles_metered": {
+      "use_case": "net-roles",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer \u2014 the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
+      ]
+    },
+    "net_roles_adaptive": {
+      "use_case": "net-roles",
+      "expect": "GAP",
+      "gap_reasons": [
+        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer \u2014 the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
+      ]
     }
   },
   "pending_migration": [
