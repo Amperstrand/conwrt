@@ -13,24 +13,33 @@ corpus passes clean; the gate exists to keep it that way.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from test_parity_rust_plan import _fixtures, plan_render_bin as _bin_fixture
+from test_parity_rust_plan import _fixtures, REPO
 
 
 class TestCorpusShellSyntax:
     def test_every_fixture_renders_shell_clean(self):
-        plan_render_bin = _bin_fixture()
+        bin_path = Path(os.environ.get("CARGO_TARGET_DIR", str(REPO / "target"))) / "debug" / "conwrt-plan-render"
+        if not bin_path.exists():
+            build = subprocess.run(
+                [shutil.which("cargo") or "cargo", "build", "-q",
+                 "-p", "conwrt-cli", "--bin", "conwrt-plan-render"],
+                cwd=str(REPO), capture_output=True, text=True,
+            )
+            assert build.returncode == 0, f"render bin build failed: {build.stderr[-300:]}"
         checked = 0
         failures: list[str] = []
         for fixture in _fixtures():
             name = fixture["stem"]
             path = Path(fixture["path"])
             proc = subprocess.run(
-                [str(plan_render_bin), str(path)],
+                [str(bin_path), str(path)],
                 capture_output=True, text=True, timeout=120,
             )
             assert proc.returncode == 0, (
