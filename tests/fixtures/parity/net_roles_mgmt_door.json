@@ -1,0 +1,13 @@
+{
+  "use_case": "net-roles",
+  "params": {
+    "uplinks": [
+      {
+        "type": "ethernet",
+        "vlan": 10
+      }
+    ],
+    "mgmt_vlan": 20,
+    "mgmt_ip": "192.168.20.1"
+  }
+}

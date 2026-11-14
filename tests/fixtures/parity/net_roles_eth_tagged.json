@@ -1,0 +1,11 @@
+{
+  "use_case": "net-roles",
+  "params": {
+    "uplinks": [
+      {
+        "type": "ethernet",
+        "vlan": 10
+      }
+    ]
+  }
+}

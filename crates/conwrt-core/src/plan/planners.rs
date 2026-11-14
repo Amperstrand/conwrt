@@ -5510,3 +5510,280 @@ pub(super) fn plan_sqm(model: &DeviceModel, sqm: &SqmProfile) -> Result<Plan, Un
         warnings: Vec::new(),
     })
 }
+
+/// net-roles — 1.x `_build_net_roles_ops` Phase-1 port (core surface:
+/// uplinks, serving-bridge moves, mgmt door, metrics, readbacks, commits,
+/// reload). The tollgate-mode / conn-adapter / metered-guard daemon blocks
+/// are gated off in validate() pending the Phase-2 constant port.
+pub(super) fn plan_net_roles(
+    model: &DeviceModel,
+    nr: &NetRolesProfile,
+) -> Result<Plan, Unsupported> {
+    nr.validate()?;
+    let uplinks = &nr.uplinks;
+    let mut ops: Vec<PlanOp> = Vec::new();
+
+    let zone_add = |iface: &str, zone: &str| {
+        format!(
+            "for z in $(uci -q show firewall | sed -n 's/^firewall\\.\\([^.]*\\)=zone$/\\1/p'); do \
+             if [ \"$(uci -q get firewall.$z.name)\" = \"{zone}\" ]; then \
+             uci -q get firewall.$z.network 2>/dev/null | tr ' ' '\\n' | grep -qxF '{iface}' \
+             || uci add_list firewall.$z.network='{iface}'; fi; done"
+        )
+    };
+
+    for u in uplinks.iter().filter(|u| u.kind == "ethernet") {
+        let device = if u.vlan != 0 {
+            format!("eth0.{}", u.vlan)
+        } else {
+            "eth0".into()
+        };
+        if u.vlan != 0 {
+            ops.push(PlanOp::Shell {
+                command: format!("uci set network.dev_{}=device", u.iface),
+            });
+            ops.push(PlanOp::SetUciOptions {
+                config: "network".into(),
+                section: format!("dev_{}", u.iface),
+                options: vec![
+                    ("type".into(), UciValue::Literal("8021q".into())),
+                    ("name".into(), UciValue::Literal(device.clone())),
+                    ("ifname".into(), UciValue::Literal("eth0".into())),
+                    ("vid".into(), UciValue::Literal(u.vlan.to_string())),
+                ],
+            });
+        }
+        if !nr.serve_ethernet && u.vlan == 0 {
+            ops.push(PlanOp::Shell {
+                command: "for s in $(uci -q show network | sed -n 's/^network\\.\\([^.]*\\)=device$/\\1/p'); do \
+                          [ \"$(uci -q get network.$s.name)\" = \"br-lan\" ] \
+                          && uci -q del_list network.$s.ports='eth0'; done; true"
+                    .into(),
+            });
+        }
+        ops.push(PlanOp::Shell {
+            command: format!("uci set network.{}=interface", u.iface),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!("uci -q revert network.{} || true", u.iface),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: u.iface.clone(),
+            options: vec![
+                ("proto".into(), UciValue::Literal("dhcp".into())),
+                ("device".into(), UciValue::Literal(device.clone())),
+            ],
+        });
+        ops.push(PlanOp::Shell {
+            command: zone_add(&u.iface, "wan"),
+        });
+    }
+
+    for u in uplinks.iter().filter(|u| u.kind == "wifi") {
+        ops.push(PlanOp::Shell {
+            command: format!("uci set network.{}=interface", u.iface),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!("uci -q revert network.{} || true", u.iface),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: u.iface.clone(),
+            options: vec![("proto".into(), UciValue::Literal("dhcp".into()))],
+        });
+        let mut sta_values: Vec<(String, UciValue)> = vec![
+            ("device".into(), UciValue::Literal(u.radio.clone())),
+            ("mode".into(), UciValue::Literal("sta".into())),
+            ("network".into(), UciValue::Literal(u.iface.clone())),
+            ("ssid".into(), UciValue::Literal(u.ssid.clone())),
+            ("encryption".into(), UciValue::Literal(u.encryption.clone())),
+        ];
+        if u.encryption != "none" {
+            sta_values.push(("key".into(), UciValue::Literal(u.key.clone())));
+        }
+        ops.push(PlanOp::Shell {
+            command: format!("uci set wireless.{}sta=wifi-iface", u.iface),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!("uci -q revert wireless.{}sta || true", u.iface),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "wireless".into(),
+            section: format!("{}sta", u.iface),
+            options: sta_values,
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "wireless".into(),
+            section: u.radio.clone(),
+            options: vec![("disabled".into(), UciValue::Literal("0".into()))],
+        });
+        ops.push(PlanOp::Shell {
+            command: zone_add(&u.iface, "wan"),
+        });
+        if !nr.wifi_shared_radio {
+            ops.push(PlanOp::Shell {
+                command: format!(
+                    "for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do \
+                     [ \"$(uci -q get wireless.$w.device)\" = \"{radio}\" ] \
+                     && [ \"$w\" != \"{iface}sta\" ] && uci set wireless.$w.disabled=1; done; true",
+                    radio = u.radio,
+                    iface = u.iface
+                ),
+            });
+        }
+    }
+
+    if !nr.serve_wifi {
+        ops.push(PlanOp::Shell {
+            command: "for w in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.]*\\)=wifi-iface$/\\1/p'); do \
+                      [ \"$(uci -q get wireless.$w.mode)\" = \"ap\" ] && uci set wireless.$w.disabled=1; done; true"
+                .into(),
+        });
+    }
+
+    let untagged_eth_uplink = uplinks.iter().any(|u| u.kind == "ethernet" && u.vlan == 0);
+    if !nr.serve_ethernet && !untagged_eth_uplink {
+        ops.push(PlanOp::Shell {
+            command: "for s in $(uci -q show network | sed -n 's/^network\\.\\([^.]*\\)=device$/\\1/p'); do \
+                      [ \"$(uci -q get network.$s.name)\" = \"br-lan\" ] \
+                      && uci -q del_list network.$s.ports='eth0'; done; true"
+                .into(),
+        });
+    }
+
+    if nr.mgmt_vlan != 0 {
+        ops.push(PlanOp::Shell {
+            command: "uci set network.mgmtdev=device".into(),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: "mgmtdev".into(),
+            options: vec![
+                ("type".into(), UciValue::Literal("8021q".into())),
+                (
+                    "name".into(),
+                    UciValue::Literal(format!("eth0.{}", nr.mgmt_vlan)),
+                ),
+                ("ifname".into(), UciValue::Literal("eth0".into())),
+                ("vid".into(), UciValue::Literal(nr.mgmt_vlan.to_string())),
+            ],
+        });
+        ops.push(PlanOp::Shell {
+            command: "uci set network.mgmt=interface".into(),
+        });
+        ops.push(PlanOp::Shell {
+            command: "uci -q revert network.mgmt || true".into(),
+        });
+        ops.push(PlanOp::SetUciOptions {
+            config: "network".into(),
+            section: "mgmt".into(),
+            options: vec![
+                ("proto".into(), UciValue::Literal("static".into())),
+                (
+                    "device".into(),
+                    UciValue::Literal(format!("eth0.{}", nr.mgmt_vlan)),
+                ),
+                ("ipaddr".into(), UciValue::Literal(nr.mgmt_ip.clone())),
+                ("netmask".into(), UciValue::Literal(nr.mgmt_netmask.clone())),
+            ],
+        });
+        ops.push(PlanOp::Shell {
+            command: zone_add("mgmt", "lan"),
+        });
+    }
+
+    if !uplinks.is_empty() {
+        for u in uplinks {
+            ops.push(PlanOp::SetUciOptions {
+                config: "network".into(),
+                section: u.iface.clone(),
+                options: vec![("metric".into(), UciValue::Literal(u.metric.to_string()))],
+            });
+        }
+    }
+
+    for u in uplinks {
+        if u.kind == "ethernet" {
+            let device = if u.vlan != 0 {
+                format!("eth0.{}", u.vlan)
+            } else {
+                "eth0".into()
+            };
+            ops.push(PlanOp::Shell {
+                command: format!(
+                    "[ \"$(uci -q get network.{i}.device)\" = \"{device}\" ] \
+                     && [ \"$(uci -q get network.{i}.proto)\" = dhcp ] \
+                     || {{ echo \"net-roles: {i} readback FAILED\"; exit 1; }}",
+                    i = u.iface
+                ),
+            });
+        }
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "[ \"$(uci -q get network.{i}.metric)\" = \"{m}\" ] \
+                 || {{ echo \"net-roles: {i} metric readback FAILED\"; exit 1; }}",
+                i = u.iface,
+                m = u.metric
+            ),
+        });
+    }
+    if nr.mgmt_vlan != 0 {
+        ops.push(PlanOp::Shell {
+            command: format!(
+                "[ \"$(uci -q get network.mgmt.ipaddr)\" = \"{ip}\" ] \
+                 || {{ echo \"net-roles: mgmt readback FAILED\"; exit 1; }}",
+                ip = nr.mgmt_ip
+            ),
+        });
+    }
+
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    if uplinks.iter().any(|u| u.kind == "wifi") || !nr.serve_wifi {
+        ops.push(PlanOp::CommitUci {
+            config: "wireless".into(),
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+
+    let any_wifi = uplinks.iter().any(|u| u.kind == "wifi");
+    if any_wifi {
+        ops.push(PlanOp::Service {
+            name: "network".into(),
+            action: ServiceAction::Reload,
+        });
+        ops.push(PlanOp::Shell {
+            command: "wifi reload 2>/dev/null; true".into(),
+        });
+    } else {
+        ops.push(PlanOp::Service {
+            name: "network".into(),
+            action: ServiceAction::Reload,
+        });
+    }
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo \"net-roles applied: uplinks={} serve_eth={} serve_wifi={} mgmt={}\"",
+            uplinks.len(),
+            if nr.serve_ethernet { "True" } else { "False" },
+            if nr.serve_wifi { "True" } else { "False" },
+            if nr.mgmt_vlan != 0 {
+                nr.mgmt_vlan.to_string()
+            } else {
+                "lan".into()
+            }
+        ),
+    });
+
+    Ok(Plan {
+        profile_id: "net-roles".into(),
+        model_id: model.id.clone(),
+        ops,
+        verification: Vec::new(),
+        warnings: Vec::new(),
+    })
+}

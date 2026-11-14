@@ -114,6 +114,7 @@ pub fn plan_profile(
         Profile::VpnOpenvpn(vo) => plan_vpn_openvpn(model, vo),
         Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::VpnIvpn(iv) => plan_vpn_ivpn(model, iv),
+        Profile::NetRoles(nr) => plan_net_roles(model, nr),
         Profile::VpnMullvad(mu) => plan_vpn_mullvad(model, mu),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::VpnNordvpnIke2(i2) => plan_vpn_nordvpn_ike2(model, i2),

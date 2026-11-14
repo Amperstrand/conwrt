@@ -522,6 +522,7 @@ impl Default for SshHardeningProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TravelmateProfile {
     /// WiFi radio used for upstream scanning (1.x default `radio0`).
+    /// WiFi radio section (one STA per radio; default radio0).
     pub radio: String,
     /// Overall retry timeout in seconds (1.x default 60).
     pub timeout: u32,
@@ -588,11 +589,14 @@ pub struct Mesh11sdProfile {
     /// (1.x required-param gate).
     pub mesh_id: String,
     /// Base SSID for the mesh gate AP (1.x default `MeshNet`).
+    /// WiFi uplink SSID (required for kind=wifi).
     pub ssid: String,
     /// Mesh gate encryption: `0`=none, `1`=wpa3, `2`=wpa2, `3`=mixed
     /// (1.x default `1`; kept a string for parity).
+    /// none | psk2 | sae | sae-mixed (1.x `_WIFI_ENCRYPTIONS`).
     pub encryption: String,
     /// WiFi key for the mesh gate AP (empty = none).
+    /// WiFi PSK (required unless encryption=none).
     pub key: String,
     /// Auto-config mode: `0`=disabled, `1`=auto, `2`=auto+commit
     /// (1.x default `0`).
@@ -2603,6 +2607,7 @@ pub struct WifiUplink {
     pub radio: String,
     /// wifi-iface section name, e.g. `trm_uplink1` (stable across
     /// re-applies for idempotent reconfigure).
+    /// UCI network interface name (defaults per kind: wan/wwan/waneth).
     pub iface: String,
 }
 
@@ -2987,6 +2992,228 @@ impl TollgateCellularProfile {
         };
         if !iface_ok(&self.wan_iface) || !iface_ok(&self.usb_iface) {
             return Err(bad("wan_iface/usb_iface must be plain interface names"));
+        }
+        Ok(())
+    }
+}
+
+/// One net-roles uplink (1.x `_resolve_uplinks`). `metric` is positional:
+/// 1.x `_METRICS = (5, 100, 200, 300, 400)` assigned by list index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetUplink {
+    /// `sim` | `wifi` | `ethernet` (1.x `_UPLINK_TYPES`).
+    /// `sim` | `wifi` | `ethernet` (1.x `_UPLINK_TYPES`).
+    pub kind: String, // "sim" | "wifi" | "ethernet"
+    /// UCI network interface name (defaults per kind: wan/wwan/waneth).
+    pub iface: String,
+    /// Failover metric — positional `_METRICS` value (5, 100, 200, ...).
+    /// Failover metric — positional `_METRICS` value (5, 100, 200, ...).
+    pub metric: u32,
+    /// Ethernet tagging; 0 = untagged (2..4094 valid otherwise).
+    /// Ethernet tagging; 0 = untagged (2..4094 valid otherwise).
+    pub vlan: u16, // ethernet only; 0 = untagged
+    /// WiFi uplink SSID (required for kind=wifi).
+    pub ssid: String,
+    /// WiFi PSK (required unless encryption=none).
+    pub key: String,
+    /// none | psk2 | sae | sae-mixed (1.x `_WIFI_ENCRYPTIONS`).
+    pub encryption: String,
+    /// WiFi radio section (one STA per radio; default radio0).
+    pub radio: String,
+}
+
+/// Multi-uplink role assignment (1.x `net-roles`): serving bridge vs WAN
+/// uplinks, optional tagged management door, failover metrics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetRolesProfile {
+    /// Ordered uplinks (order fixes the metric).
+    /// Ordered uplinks (order fixes the metric).
+    pub uplinks: Vec<NetUplink>,
+    /// eth0 stays in the serving bridge (default true).
+    /// eth0 stays in the serving bridge (default true).
+    pub serve_ethernet: bool,
+    /// AP interfaces stay on air (default true).
+    /// AP interfaces stay on air (default true).
+    pub serve_wifi: bool,
+    /// Tagged management door on eth0 (0 = off; requires mgmt_ip).
+    /// Tagged management door on eth0 (0 = off; requires mgmt_ip).
+    pub mgmt_vlan: u16,
+    /// Static address for the management door.
+    /// Static address for the management door.
+    pub mgmt_ip: String,
+    /// Netmask for the management door (default /24).
+    /// Netmask for the management door (default /24).
+    pub mgmt_netmask: String,
+    /// tollgate-mode engine (Phase-2 port pending).
+    /// tollgate-mode engine (Phase-2 port pending).
+    pub auto_switch: bool,
+    /// tollgate-mode poll interval, 5..120s.
+    /// tollgate-mode poll interval, 5..120s.
+    pub switch_interval: u32,
+    /// Keep APs up alongside the STA on the same radio.
+    /// Keep APs up alongside the STA on the same radio.
+    pub wifi_shared_radio: bool,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_sim_sats_per_mib: u32,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_wifi_sats_per_mib: u32,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_eth_sats_per_mib: u32,
+    /// conn-adapter probe VLANs (Phase-2 port pending).
+    /// conn-adapter probe VLANs (Phase-2 port pending).
+    pub adaptive_vlans: Vec<u16>,
+    /// conn-adapter greenfield serving (Phase-2 pending).
+    /// conn-adapter greenfield serving (Phase-2 pending).
+    pub adaptive_serve_dhcp: bool,
+    /// conn-adapter/metered-guard poll interval, 5..300s.
+    /// conn-adapter/metered-guard poll interval, 5..300s.
+    pub adaptive_interval: u32,
+    /// conn-adapter base port (default eth0).
+    /// conn-adapter base port (default eth0).
+    pub adaptive_base_port: String,
+    /// metered-guard nft engine (Phase-2 port pending).
+    /// metered-guard nft engine (Phase-2 port pending).
+    pub metered_guard: bool,
+}
+
+impl Default for NetUplink {
+    fn default() -> Self {
+        Self {
+            kind: "ethernet".into(),
+            iface: "waneth".into(),
+            metric: 5,
+            vlan: 0,
+            ssid: String::new(),
+            key: String::new(),
+            encryption: "psk2".into(),
+            radio: "radio0".into(),
+        }
+    }
+}
+
+impl NetRolesProfile {
+    const METRICS: [u32; 5] = [5, 100, 200, 300, 400];
+
+    /// 1.x `_resolve_params`/`_resolve_uplinks` validation, plus the
+    /// Phase-1 daemon-subsystem gate (see struct docs).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        // Phase-1 gate: the three staged-daemon subsystems are not ported
+        // yet (tollgate-mode / conn-adapter / metered-guard constants) —
+        // reject explicitly rather than render a partial daemon install.
+        if self.auto_switch
+            || self.metered_guard
+            || !self.adaptive_vlans.is_empty()
+            || self.adaptive_serve_dhcp
+        {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: auto_switch / adaptive / metered_guard subsystems                  pending the Phase-2 daemon-constant port (tracked on card \
+                 t_6d4959b3) — core uplink/mgmt surface is fully supported"
+                    .into(),
+            ));
+        }
+        let mut seen_ifaces = std::collections::BTreeSet::new();
+        let mut seen_radios = std::collections::BTreeSet::new();
+        if self.uplinks.len() > Self::METRICS.len() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: at most 5 uplinks supported".into(),
+            ));
+        }
+        let untagged_eth = self
+            .uplinks
+            .iter()
+            .any(|u| u.kind == "ethernet" && u.vlan == 0);
+        if untagged_eth && self.serve_ethernet {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: untagged ethernet uplink consumes the only port — set \
+                 serve_ethernet=false, or give the uplink a vlan (tagged) so eth0 \
+                 can stay in the serving bridge"
+                    .into(),
+            ));
+        }
+        for (i, u) in self.uplinks.iter().enumerate() {
+            if !matches!(u.kind.as_str(), "sim" | "wifi" | "ethernet") {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}].type must be one of sim, wifi, ethernet"
+                )));
+            }
+            let iface_ok = !u.iface.is_empty()
+                && u.iface
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+            if !iface_ok {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}] interface"
+                )));
+            }
+            if !seen_ifaces.insert(u.iface.as_str()) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: duplicate interface '{}' in uplinks",
+                    u.iface
+                )));
+            }
+            if u.metric != Self::METRICS[i] {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: metric must be the positional _METRICS value".into(),
+                ));
+            }
+            if u.kind == "wifi" {
+                if u.ssid.is_empty() {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}] wifi requires ssid"
+                    )));
+                }
+                if !matches!(u.encryption.as_str(), "none" | "psk2" | "sae" | "sae-mixed") {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}].encryption must be one of none, psk2, sae, sae-mixed"
+                    )));
+                }
+                if u.encryption != "none" && u.key.is_empty() {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}] encryption '{}' requires key",
+                        u.encryption
+                    )));
+                }
+                if !seen_radios.insert(u.radio.as_str()) {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: radio '{}' used by two wifi uplinks (one STA per radio)",
+                        u.radio
+                    )));
+                }
+            }
+            if u.kind == "ethernet" && u.vlan != 0 && !(2..=4094).contains(&u.vlan) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}].vlan must be an int in 2..4094 or unset (untagged)"
+                )));
+            }
+        }
+        if self.mgmt_vlan != 0 {
+            if !(2..=4094).contains(&self.mgmt_vlan) {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan must be an int in 2..4094 (0 = off)".into(),
+                ));
+            }
+            if self.mgmt_ip.is_empty() {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan requires mgmt_ip".into(),
+                ));
+            }
+            if self
+                .uplinks
+                .iter()
+                .any(|u| u.kind == "ethernet" && u.vlan == self.mgmt_vlan)
+            {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan must differ from the ethernet uplink vlan".into(),
+                ));
+            }
+        }
+        if self.wifi_shared_radio && !self.uplinks.iter().any(|u| u.kind == "wifi") {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: wifi_shared_radio requires a wifi uplink".into(),
+            ));
         }
         Ok(())
     }
