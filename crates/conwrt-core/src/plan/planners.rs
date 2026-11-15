@@ -5561,11 +5561,13 @@ pub(super) fn plan_net_roles(
                     .into(),
             });
         }
-        ops.push(PlanOp::Shell {
-            command: format!("uci set network.{}=interface", u.iface),
-        });
+        // revert BEFORE create (apply-acceptance find 2026-11-14 — revert
+        // between create and populate deleted the fresh staged section)
         ops.push(PlanOp::Shell {
             command: format!("uci -q revert network.{} || true", u.iface),
+        });
+        ops.push(PlanOp::Shell {
+            command: format!("uci set network.{}=interface", u.iface),
         });
         ops.push(PlanOp::SetUciOptions {
             config: "network".into(),
@@ -5582,10 +5584,10 @@ pub(super) fn plan_net_roles(
 
     for u in uplinks.iter().filter(|u| u.kind == "wifi") {
         ops.push(PlanOp::Shell {
-            command: format!("uci set network.{}=interface", u.iface),
+            command: format!("uci -q revert network.{} || true", u.iface),
         });
         ops.push(PlanOp::Shell {
-            command: format!("uci -q revert network.{} || true", u.iface),
+            command: format!("uci set network.{}=interface", u.iface),
         });
         ops.push(PlanOp::SetUciOptions {
             config: "network".into(),
@@ -5603,10 +5605,10 @@ pub(super) fn plan_net_roles(
             sta_values.push(("key".into(), UciValue::Literal(u.key.clone())));
         }
         ops.push(PlanOp::Shell {
-            command: format!("uci set wireless.{}sta=wifi-iface", u.iface),
+            command: format!("uci -q revert wireless.{}sta || true", u.iface),
         });
         ops.push(PlanOp::Shell {
-            command: format!("uci -q revert wireless.{}sta || true", u.iface),
+            command: format!("uci set wireless.{}sta=wifi-iface", u.iface),
         });
         ops.push(PlanOp::SetUciOptions {
             config: "wireless".into(),
@@ -5670,10 +5672,10 @@ pub(super) fn plan_net_roles(
             ],
         });
         ops.push(PlanOp::Shell {
-            command: "uci set network.mgmt=interface".into(),
+            command: "uci -q revert network.mgmt || true".into(),
         });
         ops.push(PlanOp::Shell {
-            command: "uci -q revert network.mgmt || true".into(),
+            command: "uci set network.mgmt=interface".into(),
         });
         ops.push(PlanOp::SetUciOptions {
             config: "network".into(),

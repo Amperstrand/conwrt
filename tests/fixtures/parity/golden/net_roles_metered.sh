@@ -1,10 +1,10 @@
 # --- net-roles: uplinks=wwan(m5) wwan0(m100) serve_eth=True serve_wifi=True mgmt_vlan=off ---
 # --- net-roles: wifi uplink wwan (STA on radio0) ---
-uci set network.wwan=interface
 uci -q revert network.wwan || true
+uci set network.wwan=interface
 uci set network.wwan.proto='dhcp'
-uci set wireless.wwansta=wifi-iface
 uci -q revert wireless.wwansta || true
+uci set wireless.wwansta=wifi-iface
 uci set wireless.wwansta.device='radio0'
 uci set wireless.wwansta.mode='sta'
 uci set wireless.wwansta.network='wwan'
