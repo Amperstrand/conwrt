@@ -4870,10 +4870,13 @@ pub(super) fn plan_tollgate_security(
     ];
     let mut ops: Vec<PlanOp> = Vec::new();
     for (suffix, cidr) in ranges {
+        // UCI section ids reject hyphens (apply-acceptance find #3) —
+        // id sanitized; display .name keeps the readable form.
         let name = format!("Block-LAN-To-RFC1918-{suffix}");
+        let section = name.replace('-', "_");
         ops.push(PlanOp::SetUciSection {
             config: "firewall".into(),
-            section: name.clone(),
+            section: section.clone(),
             section_type: "rule".into(),
             options: vec![
                 ("name".into(), literal(name.clone())),
@@ -4916,7 +4919,7 @@ pub(super) fn plan_tollgate_security(
     let verification = vec![
         VerificationCheck {
             description: "ISP-LAN block rule persisted".into(),
-            command: "uci -q get firewall.Block-LAN-To-RFC1918-192.target".into(),
+            command: "uci -q get firewall.Block_LAN_To_RFC1918_192.target".into(),
             expect_contains: "DROP".into(),
         },
         VerificationCheck {

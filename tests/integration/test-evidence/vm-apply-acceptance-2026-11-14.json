@@ -103,7 +103,7 @@
       "travelmate_uplinks": "RC=1 \u2014 TRIAGE OPEN ('uci: Entry not found' at trace line 67)",
       "openclash_default": "RC=1 \u2014 TRIAGE OPEN (repo index OK; failure class TBD)",
       "openclash_tun": "RC=1 \u2014 TRIAGE OPEN (same)",
-      "tollgate_security_default": "RC=1 \u2014 FIND #3 CONFIRMED: rule sections named 'Block-LAN-To-RFC1918-10' contain HYPHENS, which UCI section identifiers reject ('Invalid argument' at the first op) \u2014 the tollgate-security firewall rules have never been applicable from this render. Fix: sanitize section ids (underscores) keeping the display .name \u2014 both sides, next window item 1."
+      "tollgate_security_default": "FIND #3 FIXED (both sides): section ids sanitized to underscores (display .name keeps hyphens) \u2014 the firewall rules now stage correctly on a live VM. Remaining RC=1 is the env class: `uci commit wireless` fails when /etc/config/wireless is absent (radio-less x86; fine on radio-bearing hardware) \u2014 same family as net-roles wifi."
     },
     "tally": "Batch 3: 7/12 RC=0. Cumulative acceptance: 22 fixtures apply-verified, 3 real 1.x defects found (net-roles revert order; rescue-watchdog staging; tollgate-security hyphen section ids), 4 triage-open, 3 env-limited classes."
   }
