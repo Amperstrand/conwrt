@@ -5,6 +5,7 @@ sh -n gate, ship via scp -O, apply, uci readbacks, kill VM. Verdicts are
 independent — no shared-state contamination (v1 correction, 2026-11-14).
 """
 import json
+import os
 import pathlib
 import socket
 import subprocess
@@ -107,12 +108,20 @@ def main():
             continue
         try:
             vm.boot()
+            if os.environ.get("APPLY_VM_SEED_WIRELESS") == "1":
+                vm.ssh("uci -q batch < dev/null 2>/dev/null; [ -f /etc/config/wireless ] || "
+                       "printf 'config wifi-device %s\n option type dummy\nconfig wifi-iface\n "
+                       "option device dummy_radio\n option mode ap\n option ssid seed\n' radio0 "
+                       "> /etc/config/wireless; uci commit wireless 2>/dev/null; true", 30)
             local = pathlib.Path(f"/tmp/{name}.sh"); local.write_text(script)
             subprocess.run(["scp", "-O", "-F", "/dev/null", "-P", str(vm.port),
                             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                             "-i", str(KEY), str(local), f"root@127.0.0.1:/tmp/{name}.sh"],
                            capture_output=True, timeout=60, check=True)
-            a = vm.ssh(f"sh /tmp/{name}.sh; echo APPLY_RC=$?", timeout=600)
+            a = vm.ssh(
+                f"sh -x /tmp/{name}.sh >/tmp/{name}.trace 2>&1; echo APPLY_RC=$?; "
+                f"grep -nE 'not found|Invalid arg|FAILED|No such' /tmp/{name}.trace | head -3",
+                timeout=600)
             rc = next((l for l in a.stdout.splitlines() if l.startswith("APPLY_RC=")), "APPLY_RC=?")
             # settle+retry: ssh-hardening restarts dropbear and the immediate
             # readback races it (empty uci output, found 2026-11-14)
