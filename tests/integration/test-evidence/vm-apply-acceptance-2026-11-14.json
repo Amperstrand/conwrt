@@ -67,5 +67,26 @@
       },
       "tally": "Acceptance attempted 12 fixtures: 9 APPLY_RC=0 (5 with verified uci side effects), 1 abort-gate design verified, 2 env-limited (radios/modem)."
     }
-  ]
+  ],
+  "extension_batch_2": {
+    "date": "2026-11-15",
+    "fixtures": {
+      "wireguard_server_default": "APPLY_RC=0",
+      "wireguard_client_extras": "APPLY_RC=0",
+      "ssl_default": "APPLY_RC=0",
+      "ssl_qip": "APPLY_RC=0",
+      "nodns_default": "APPLY_RC=0",
+      "mesh11sd_default": "APPLY_RC=0",
+      "travelmate_default": "APPLY_RC=0",
+      "pbr_default": "APPLY_RC=0",
+      "mwan3_balanced": "APPLY_RC=0, track_ip x5 COMMITTED",
+      "fleet_identity_default": "APPLY_RC=0",
+      "net_roles_default": "APPLY_RC=0",
+      "net_roles_eth_tagged": "APPLY_RC=0 AFTER BUGFIX (re-verified post-#699)",
+      "net_roles_wifi": "ENV-LIMITED: x86 VM has no /etc/config/wireless \u2014 `uci set wireless.<sta>=wifi-iface` fails 'Entry not found' (any radio-bearing device has the config); same class as guest-wifi",
+      "net_roles_auto_switch": "RC=1 pre-fix run; eth path fixed, wifi staging env-limited \u2014 rerun after wifi-config precondition is handled (pre-create empty wireless config) or classify env",
+      "rescue_watchdog_default": "APPLY_RC=0 AFTER BUGFIX #2 (was 127): the loop script was staged with a BARE path + heredoc ('/usr/bin/rescue-watchdog-loop << WDL_EOF') instead of 'cat > ...' \u2014 the shell EXECUTED the not-yet-existing binary (127) and the file was never written; the rescue-watchdog feature had never worked from this render. Fixed both sides, verified RC=0 live."
+    },
+    "headline_find": "1.x render BUG caught only by apply-testing (byte-parity structurally blind \u2014 both sides rendered the bug identically): net-roles placed `uci -q revert <section>` BETWEEN section-create and populate; reverting a freshly-staged (uncommitted) creation DELETES it, so `uci set network.<iface>.proto=dhcp` failed 'Invalid argument' \u2014 eth/wifi/mgmt paths were unapplyable. FIXED both sides (4 revert-before-create reorders, Python + Rust), goldens regenerated, parity 140/140, eth_tagged verified RC=0 on a fresh VM."
+  }
 }
