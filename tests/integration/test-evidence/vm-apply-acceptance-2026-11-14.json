@@ -88,5 +88,23 @@
       "rescue_watchdog_default": "APPLY_RC=0 AFTER BUGFIX #2 (was 127): the loop script was staged with a BARE path + heredoc ('/usr/bin/rescue-watchdog-loop << WDL_EOF') instead of 'cat > ...' \u2014 the shell EXECUTED the not-yet-existing binary (127) and the file was never written; the rescue-watchdog feature had never worked from this render. Fixed both sides, verified RC=0 live."
     },
     "headline_find": "1.x render BUG caught only by apply-testing (byte-parity structurally blind \u2014 both sides rendered the bug identically): net-roles placed `uci -q revert <section>` BETWEEN section-create and populate; reverting a freshly-staged (uncommitted) creation DELETES it, so `uci set network.<iface>.proto=dhcp` failed 'Invalid argument' \u2014 eth/wifi/mgmt paths were unapplyable. FIXED both sides (4 revert-before-create reorders, Python + Rust), goldens regenerated, parity 140/140, eth_tagged verified RC=0 on a fresh VM."
+  },
+  "extension_batch_3": {
+    "date": "2026-11-15",
+    "fixtures": {
+      "mesh11sd_wpa3_key": "APPLY_RC=0",
+      "nodns_custom": "APPLY_RC=0",
+      "adguard_custom": "APPLY_RC=0",
+      "ssh_hardening_custom": "APPLY_RC=0",
+      "auto_sqm_static": "APPLY_RC=0",
+      "pbr_custom": "APPLY_RC=0",
+      "tollgate_default": "APPLY_RC=0",
+      "auto_sqm_iperf": "RC=1 \u2014 TRIAGE OPEN (pkg install OK; no uci/not-found match in trace \u2014 different class)",
+      "travelmate_uplinks": "RC=1 \u2014 TRIAGE OPEN ('uci: Entry not found' at trace line 67)",
+      "openclash_default": "RC=1 \u2014 TRIAGE OPEN (repo index OK; failure class TBD)",
+      "openclash_tun": "RC=1 \u2014 TRIAGE OPEN (same)",
+      "tollgate_security_default": "FIND #3 FIXED (both sides): section ids sanitized to underscores (display .name keeps hyphens) \u2014 the firewall rules now stage correctly on a live VM. Remaining RC=1 is the env class: `uci commit wireless` fails when /etc/config/wireless is absent (radio-less x86; fine on radio-bearing hardware) \u2014 same family as net-roles wifi."
+    },
+    "tally": "Batch 3: 7/12 RC=0. Cumulative acceptance: 22 fixtures apply-verified, 3 real 1.x defects found (net-roles revert order; rescue-watchdog staging; tollgate-security hyphen section ids), 4 triage-open, 3 env-limited classes."
   }
 }

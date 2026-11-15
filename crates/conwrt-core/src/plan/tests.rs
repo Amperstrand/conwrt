@@ -1793,13 +1793,13 @@ fn tollgate_security_shape_matches_1x() {
         ("LL", "169.254.0.0/16"),
     ] {
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}=rule"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}=rule"
         )));
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}.dest_ip='{cidr}'"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}.dest_ip='{cidr}'"
         )));
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}.target='DROP'"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}.target='DROP'"
         )));
     }
     assert!(!script.contains("uci add firewall"));
@@ -1825,6 +1825,7 @@ fn tollgate_security_shape_matches_1x() {
         .expect("live-ruleset check");
     assert!(live.command.contains("nft list table inet fw4"));
     assert!(!live.command.contains("list chain"));
+    // the .name VALUE keeps the hyphenated display form
     assert!(live.command.contains("Block-LAN-To-RFC1918-192"));
     // the libustream TLS backend is presence-guarded (P2), never
     // unconditionally ensured
