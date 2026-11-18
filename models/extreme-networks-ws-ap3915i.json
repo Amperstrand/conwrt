@@ -349,11 +349,12 @@
   "Flash-boot capability is ENV-IDENTITY-DEPENDENT (issue #61 proven 2026-09-23; mechanism refined 2026-09-23 later from BootPRI embedded-env + boot-script extraction): a boot_net-dependent unit became flash-boot-capable after only CFG1 ver/CURR_VER were changed to the running bootloader's 2022-primary build identity. The boot script itself does NOT branch on these keys (CURR_VER is write-only, set when DEFAULT_SETTING=1) \u2014 the leading mechanism is bootloader env-ACCEPTANCE gating: a CFG1 ver that mismatches the running bootloader's identity appears to make it fall back to the embedded default env (bootcmd=bootx -> stock script -> the documented watchdog wedges), while a matching identity honors CFG1 (custom bootcmd runs). Multiple ARM32 literal-pool refs to the identity string support runtime use as a comparison constant. Definitive proof needs one serial session (env-import debug) or disasm xrefs. Either way the FIELD REPAIR is proven: 2-key CFG edit aligning ver/CURR_VER with the BootPRI-2022 identity; keep CFG2 pristine."
  ],
  "serial_console": {
-  "connector": "Cisco-pinout RJ-45 jack (not a bare header)",
-  "baud": "115200 8N1",
-  "voltage": "3.3V",
-  "rx_mod": "RX is shorted to ground through resistor R176 \u2014 REMOVE R176 to send console input (viewing boot output works without the mod). Source: AP3805i family forum thread (support lineage), verified against the fleet's console-prints-but-no-input experiences.",
-  "bootloader_credentials": "admin / new2day (same credentials as the stock SSH service shell)"
+  "baud": 115200,
+  "console_device": "ttyMSM0",
+  "parity": "n81",
+  "bootloader": "U-Boot 2012.07.x; bootloader console credentials = admin/new2day (same as stock SSH shell)",
+  "verified_from": "CFG1 bootargs + upstream commit e16a0e7 + fleet dumps, 2026-11-18",
+  "note": "Cisco-pinout RJ-45 JACK (not a bare header), 3.3V. RX is shorted to ground through resistor R176 \u2014 remove R176 to send console input (viewing boot output works without the mod)."
  },
  "bench_observations": [
   {
@@ -366,19 +367,11 @@
    "date": "2026-11-18 (evening)",
    "unit": "ap3915i-3893",
    "finding": "LOAD-ADDRESS FAMILY COMPLETED: in-place upgrade to 25.12.6 (wiki-current) flash-boots at 0x83600000, cold-verified with overlay \u2014 BOTH 24.10.8 (6.6) and 25.12.6 (6.12) flash-boot at 0x83600000; the Sept-2026 kernel-version framing is fully retired. Address provenance: upstream commit e16a0e7 introduced sf-read 0x88000000 (works for 23.05-era images, fails for 24.10.8+ FITs) and tftp 0x86000000 (ramboot, presumed good); stock boot_net tftp-loads 0x83600000 (proven); our flash boot uses 0x83600000 (proven both kernels)."
+  },
+  {
+   "date": "2026-11-18 (evening, research)",
+   "unit": "species-wide (wiki/upstream/forum audit)",
+   "finding": "DT declares keys/reset (tlmm 18, ACTIVE_LOW, KEY_RESTART) since e16a0e7, but on 25.12.6 NO input device materializes (gpio-keys never binds) \u2014 failsafe practically unreachable by button (corrects the \"no button in DTS\" lore; forum lineage suggests stuck/active-HIGH). NEW last-resort door: bootloader-resident failsafe webpage \u2014 from U-Boot run failsafe_boot (or bootm 0x9fd70000) serves an unauthenticated firmware-upload page at 192.168.1.1/index.htm; survives env corruption; needs serial (+R176 RX mod)."
   }
- ],
- "buttons": {
-  "reset": {
-   "dts": "keys/reset @ tlmm 18, GPIO_ACTIVE_LOW, KEY_RESTART (present since the original support commit e16a0e7)",
-   "live_state_25_12_6": "DT node exists but /sys/class/input never materializes (gpio-keys does not bind) \u2014 OpenWrt failsafe is PRACTICALLY unreachable by button. Forum lineage suggests a stuck or active-HIGH button.",
-   "verified": "2026-11-18 on ap3915i-3893 (25.12.6)"
-  }
- },
- "uboot_failsafe_webpage": {
-  "trigger": "from U-Boot: run failsafe_boot  (or bootm 0x9fd70000)",
-  "behavior": "boots a bootloader-resident image serving an UNAUTHENTICATED firmware-upload page at http://192.168.1.1/index.htm (upload factory.bin, ~3 min)",
-  "requires": "serial console (and the R176 RX mod for input); survives CFG1/env corruption \u2014 the last-resort door below the boot_net tail",
-  "source": "AP3805i family forum thread, 2026-11-18 research (docs in conwrt-bench: WIKI-RESEARCH-WS-AP3915I.md)"
- }
+ ]
 }
