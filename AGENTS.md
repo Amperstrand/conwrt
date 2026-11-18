@@ -958,3 +958,31 @@ Worktrees are the unit of cleanup.
    on device", STOP writing immediately — even `rm` through agent tooling
    may fail to run. Report the blocker with your reclaimable artifacts;
    do not thrash the host with retries.
+
+## AP391x Bring-Up Lessons (2026-11-18, ap3915i-3893 zero-serial bring-up)
+
+Field-proven during the first fully no-serial stock→OpenWrt bring-up of a
+brand-new unit. Full evidence: conwrt-bench sessions/2026-11-18-ap3915i-3893-bringup.md
+and docs/BOOT-SAFETY-AP3915I.md.
+
+1. **Flash-boot load address**: `boot_openwrt` must sf-read into
+   **0x83600000** (the stock boot_net destination), NOT 0x88000000 — same
+   image bytes, same flash offset; 0x88000000 + bootm fails (this was the
+   real cause behind the Sept-2026 "kernel-version-sensitive flash boot"
+   framing). Model JSON corrected; Rust codec tests pin the recipe.
+2. **`ubus poe manage` can be a silent no-op** (realtek-poe MCU-side wedge):
+   verify with `poe info` status + carrier_changes + rx counters around
+   every cycle. Recovery: `/etc/init.d/poe restart` (owner-ratified; PDs
+   hold through restart — 2/2 prior + 1/1 this session).
+3. **`nohup` long ops over ssh die with the session** (hit for real: a
+   sysupgrade "completed" without writing PriImg). Use `setsid` or keep
+   the command in the foreground of the SSH session.
+4. **Stock AP391x service shell absences**: no base64/od/uuencode/
+   chpasswd/hostname. Backup via raw `dd` over ssh stdout; passwords via
+   host-side `openssl passwd -6` + stdin-delivered `sed -f /dev/stdin`.
+5. **Unadopted stock firmware self-reboots every few minutes** (no
+   controller) — access windows ~3-5 min. Scripted retry loops make
+   forensics/backup/write flows reliable; never assume a session persists.
+6. **CFG writes are readback-gated, CFG1-only** (CFG2 pristine = fallback),
+   identity keys (BOOT_BOOTROM/CURR_VER) never modified, bootcmd only ever
+   the verified `run boot_openwrt; run boot_net` semicolon shape.
