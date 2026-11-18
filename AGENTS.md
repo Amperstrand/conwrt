@@ -986,3 +986,16 @@ and docs/BOOT-SAFETY-AP3915I.md.
 6. **CFG writes are readback-gated, CFG1-only** (CFG2 pristine = fallback),
    identity keys (BOOT_BOOTROM/CURR_VER) never modified, bootcmd only ever
    the verified `run boot_openwrt; run boot_net` semicolon shape.
+
+### Correction (2026-11-18 wiki research): the AP3915i DOES have a DT reset button
+
+The "no GPIO buttons in the DTS" lore was wrong in mechanism: the DTS has
+`keys/reset` (tlmm 18, ACTIVE_LOW, KEY_RESTART) since the original support
+commit. In practice the conclusion stands — on 25.12.6 no input device ever
+materializes (gpio-keys does not bind; the AP3805i-lineage forum suggests a
+stuck or active-HIGH button), so **failsafe remains practically unreachable
+by button**. True last-resort doors: serial console (Cisco-pinout RJ45 jack,
+115200 8N1, **RX requires removing R176** — RX is grounded through it) and
+the bootloader-resident failsafe webpage (`run failsafe_boot` /
+`bootm 0x9fd70000` → unauthenticated upload page at 192.168.1.1). Details:
+conwrt-bench docs/WIKI-RESEARCH-WS-AP3915I.md.
