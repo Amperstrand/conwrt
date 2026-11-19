@@ -29,7 +29,7 @@
     "power": "USB-C 5.1V/3A (official PSU). Bus-powered 2.5in HDDs can brown out weak PSUs \u2014 use externally powered disks",
     "serial": "GPIO14/15 UART, 115200 8N1, 3.3V. Silent unless BOOT_UART=1 (bootloader) or console enabled (kernel). Pi 5 uses a dedicated 3-pin debug connector instead",
     "eeprom": "64Mbit SPI flash (W25Q64) holds the bootloader. Update flows: SD/USB recovery files, network (TFTP), or on-device rpi-eeprom-update",
-    "note": "Board recovery: nRPIBOOT jumper (GPIO40) + rpiboot mass-storage gadget gives the host direct block-device access over USB-C \u2014 no boot media or network required"
+    "note": "There is NO nRPIBOOT jumper on the Pi 4B/400. USB device-mode rpiboot exists but must be enabled first by booting an SD card built with rpi-eeprom/imager/make-pi4-rpiboot-gpio-sd; that PERMANENTLY burns the chosen GPIO (2/4/5/6/7/8) into OTP and cannot be undone. An SD card is therefore the only non-destructive entry point on a stock board \u2014 rpiboot is not a free recovery rung here"
   },
   "mac_oui": [
     "B8:27:EB",
@@ -43,6 +43,22 @@
     "chain": "BCM2711 ROM -> EEPROM bootloader (SPI) -> boot medium. Bootloader reads config.txt / kernel from FAT boot partition (SD, USB) or fetches them over TFTP (network).",
     "boot_order": {
       "semantics": "BOOT_ORDER nibbles are tried RIGHT to LEFT. 0xf142 = network (2), usb (4), sd (1), then restart (f).",
+      "firmware_floors": {
+        "source": "raspberrypi/rpi-eeprom firmware-2711 release-notes.md",
+        "note": "beta = first bootloader containing the feature; stable = first release shipped as the DEFAULT production EEPROM. Capability is not configuration: stock BOOT_ORDER 0xf41 omits network, so a capable Pi never attempts a netboot.",
+        "sd": {
+          "beta": null,
+          "stable": null
+        },
+        "usb": {
+          "beta": "2020-05-15",
+          "stable": "2020-09-03"
+        },
+        "network": {
+          "beta": "2019-09-23",
+          "stable": "2020-04-16"
+        }
+      },
       "modes": {
         "0x1": "SD card",
         "0x2": "network (TFTP)",
@@ -54,7 +70,7 @@
         "0xf": "restart / loop"
       },
       "examples": {
-        "0xf41": "SD -> USB -> restart (old Pi 4 default)",
+        "0xf41": "SD -> USB -> restart (STOCK Pi 4 default - network is NOT included, so netboot is never attempted)",
         "0xf241": "SD -> USB -> network -> restart",
         "0xf142": "network -> USB -> SD -> restart (LAN-first management policy)"
       }
@@ -136,8 +152,8 @@
       ]
     },
     "rpiboot-usb": {
-      "description": "Physical recovery/provisioning over USB-C: set the nRPIBOOT jumper (GPIO40) before power-on and run rpiboot from the host; mass-storage-gadget64 exposes the Pi's disks as USB mass storage. No boot media or network needed. Untested in conwrt.",
-      "requires": "physical access, USB-C data cable, host rpiboot package",
+      "description": "Physical recovery/provisioning over USB-C, but NOT available on a stock unit: the Pi 4B/400 have no nRPIBOOT jumper, so rpiboot mode must first be enabled by booting an SD card produced by rpi-eeprom/imager/make-pi4-rpiboot-gpio-sd. Enabling it permanently burns the selected GPIO into OTP (irreversible), after which a data-capable USB-C cable plus rpiboot exposes the Pi's disks as USB mass storage. Untested in conwrt.",
+      "requires": "physical access, an SD card to enable rpiboot, IRREVERSIBLE OTP change, USB-C data cable, host rpiboot package",
       "resources_required": [
         "power",
         "physical-access",

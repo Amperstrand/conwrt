@@ -6,8 +6,11 @@ single-board computers, starting with the Raspberry Pi 4 family. The goal:
 run Ubuntu Server, Raspberry Pi OS, or OpenWrt.
 
 - Model definition: `models/raspberrypi-4b.json` (authoritative boot/netboot facts)
-- Tooling: `scripts/pi_netboot.py`, `scripts/pi_image.py`, `scripts/pi_eeprom.py`
+- Tooling: `scripts/pi_netboot.py`, `scripts/pi_image.py`, `scripts/pi_eeprom.py`,
+  `scripts/pi_boot.py`
 - Playbooks in this directory:
+  - [`boot-matrix.md`](boot-matrix.md) — probe and test SD / USB / network boot, and
+    why "can netboot" and "will netboot" are different questions
   - [`netboot-rescue.md`](netboot-rescue.md) — recover a netboot-looping Pi headlessly
   - [`ubuntu-server-provisioning.md`](ubuntu-server-provisioning.md) — Ubuntu Server onto a Pi-attached disk
   - [`eeprom-and-security.md`](eeprom-and-security.md) — BOOT_ORDER policy, the arm/disarm switch, secure-boot outlook, labgrid outlook
