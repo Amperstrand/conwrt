@@ -24,6 +24,28 @@ flash capabilities — TFTP, multicast (zycast), XMODEM, or direct memory write.
 - If the bootloader rejects the image, STOP — the image is wrong for this hardware
 - Kill any zycast/multicast sender immediately after successful flash
 
+### Boot-media write gates (irreversible writes — see AGENTS.md "Irreversible Write Discipline")
+
+- **NEVER synthesize a flash payload from memory.** If a prior session proved
+  an artifact (trigger image, UBI container, bootloader blob), transfer THAT
+  file and verify its sha256. Zeros/0xFF/"something blank" are NOT valid
+  substitutes — on many bootloaders a blank partition DISABLES the recovery
+  flow instead of triggering it (the recovery check sits behind a successful
+  format attach, not in front of it)
+- **Read back every boot-media write before rebooting.** Verify the invariant
+  the next boot checks: magic bytes (`UBI#`, uImage `27 05 19 56`, volume
+  table, CRC). Three different contents = three different boot outcomes
+- **Probe the device between write and reboot.** The running-OS window after
+  a write is the last easy fix. Confirm web/ping/readback answers BEFORE the
+  power-cycle that commits the change
+- **Know which condition your recovery path actually requires.** Before
+  writing a "trigger", re-read the RE note that defines it. Example (ZTE
+  ipq40xx): `UBI attaches but kernel volume missing` = recovery engages;
+  `UBI cannot attach` (zeros/erased) = device stuck at prompt, UART-only.
+  Same action, opposite outcomes
+- **Exfil/callback endpoints are tested end-to-end first** — including the
+  exact HTTP verb — before any device-side script relies on them
+
 ---
 
 ---

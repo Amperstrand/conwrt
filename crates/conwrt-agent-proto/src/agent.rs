@@ -273,8 +273,19 @@ async fn dispatch_request(
         }
         WireEndpoint::Heartbeat(hb) => {
             let mut s = state.lock().unwrap();
-            match s.leases.heartbeat(hb.lease_id, config.heartbeat_budget) {
+            // Owner-checked (#164 P1 4272448192, heartbeat half): a
+            // non-owner's heartbeat must not immortalize the lease.
+            match s
+                .leases
+                .heartbeat_by(hb.lease_id, controller_id, config.heartbeat_budget)
+            {
                 Ok(()) => WireResult::HeartbeatAcked,
+                Err(LeaseError::Denied(LeaseDenied::NotOwner(holder))) => {
+                    WireResult::Error(WireError::LeaseNotOwner {
+                        lease_id: hb.lease_id,
+                        holder,
+                    })
+                }
                 Err(_) => WireResult::Error(crate::dispatch::WireError::UnknownLease(hb.lease_id)),
             }
         }

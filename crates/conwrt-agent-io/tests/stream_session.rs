@@ -191,6 +191,63 @@ async fn queued_event_follows_the_reply_that_drained_it() {
 #[tokio::test]
 async fn write_all_stream_returns_on_zero_byte_write() {
     let mut stalled = ZeroWriter { calls: 0 };
-    write_all_stream(&mut stalled, b"any").await;
+    // #375: the failure is RETURNED (the session ends), not swallowed.
+    assert!(matches!(
+        write_all_stream(&mut stalled, b"any").await,
+        Err(conwrt_agent_io::WriteFailed::Stalled)
+    ));
     assert_eq!(stalled.calls, 1, "stalled peer ends the write loop");
+}
+
+// #375: a write failure ends the stream session — the loop must not keep
+// reading frames and buffering responses to a dead peer. The peer serves
+// the full handshake wire AND queues a follow-up frame: a correct session
+// ends at the first stalled WRITE (the follow-up stays unread), while the
+// pre-fix loop would have drained everything and "succeeded".
+struct StallWriter {
+    read_chunks: Vec<Vec<u8>>,
+    write_calls: usize,
+}
+impl StreamIo for StallWriter {
+    type Error = &'static str;
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        match self.read_chunks.first() {
+            Some(chunk) if chunk.len() <= buf.len() => {
+                let n = chunk.len();
+                buf[..n].copy_from_slice(chunk);
+                self.read_chunks.remove(0);
+                Ok(n)
+            }
+            Some(chunk) => {
+                let n = buf.len();
+                buf.copy_from_slice(&chunk[..n]);
+                self.read_chunks[0] = chunk[n..].to_vec();
+                Ok(n)
+            }
+            None => Err("disconnected"),
+        }
+    }
+    async fn write(&mut self, _data: &[u8]) -> Result<usize, Self::Error> {
+        self.write_calls += 1;
+        Ok(0) // stalled: the peer never accepts a byte
+    }
+}
+
+#[tokio::test]
+async fn stream_session_ends_on_failed_write_not_after_draining() {
+    let wire = handshake_and_caps_wire();
+    // a follow-up CHUNK the session must never read (a correct session
+    // ends at the first stalled write, mid-processing of the first chunk)
+    let followup = request_bytes(1, WireEndpoint::Capabilities);
+    let mut io = StallWriter {
+        read_chunks: vec![wire, followup],
+        write_calls: 0,
+    };
+    let mut core = server();
+    agent_session_stream(&mut io, &mut core).await;
+    assert!(io.write_calls >= 1, "the session attempted its reply write");
+    assert!(
+        !io.read_chunks.is_empty(),
+        "the session ended at the stalled write — the follow-up frame was not consumed"
+    );
 }

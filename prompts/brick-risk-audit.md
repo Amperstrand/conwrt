@@ -4,6 +4,14 @@ Prompt owner: bench/flash lanes. Born from the MF286D campaign close calls (conw
 issue #621, Nov 2026; full audit: EXP-022 in the bench evidence). Run every field.
 A single NO blocks the operation until resolved.
 
+**Item 0 — run the executable preflight**: `python3 scripts/preflight-flash.py
+--config <campaign>.json` (template: `scripts/preflight-flash.example.json`).
+It machine-verifies the assumptions this audit encodes: fence listener + ownership,
+recovery-IP uniqueness, routing, host firewall (udp/69!), payload sha/size/magic
+(zeros are not triggers), rollback pairing, specimen MAC, verify-alive, exfil
+verb end-to-end, watcher heartbeat, console/waiver. Exit 2 = BLOCKED. Fields 1-16
+below remain the human analysis layer on top of it.
+
 ## Device identity and image provenance
 1. Exact device identity verified live (board/`/proc/mtd`/labels) — not assumed from
    the package name or a sibling model.
@@ -53,6 +61,46 @@ A single NO blocks the operation until resolved.
      slot) → bootloader auto-TFTP recovery (server address!) → programmer/Sahara path
      → serial (note honestly if absent). If the ladder is empty for any failure stage,
      the operation is not idiot-proof: STOP.
+
+## Payload and write-verification gates (2026-11-08 brick, MF286D unit 2)
+
+The gates above audit what you stage BEFORE the operation. These audit the
+payload itself and the write AFTER it fires. Born from the incident where a
+trigger script wrote on-device-generated zeros to the rootfs partition
+instead of transferring the session-proven UBI trigger image: the bootloader
+failed at `ubi part fs`, the auto-TFTP recovery (which sits BEHIND a
+successful UBI attach) never engaged, and the device dropped to a UART-only
+prompt. The running-OS fix window stayed open ~14 minutes but was invisible:
+the exfil endpoint rejected the upload (501, untested verb) and the state
+monitor logged errors only.
+
+17. **Payload provenance — transferred artifact, never a synthesis.** Every
+     byte sequence written to boot media is either (a) a file staged on the
+     bench with a recorded sha256, or (b) the documented erase-state of the
+     medium (0xFF after flash_erase). Payloads GENERATED on the device
+     (`dd if=/dev/zero`, printf, heredoc) are FORBIDDEN. "The tool that
+     builds the artifact isn't on the device" means STOP and pre-build on
+     the bench — it never means improvise on the target.
+18. **Invariant spec before writing.** Write down what the NEXT boot checks
+     on the target partition (magic bytes, volume table, superblock, CRC)
+     and which content satisfies the intended boot outcome. Zeros, 0xFF, and
+     a valid header are three different outcomes. If you cannot state the
+     invariant from your own RE notes, re-read them before writing — the
+     note that defines "attach succeeds but kernel volume missing = recovery
+     engages" is the same note whose violation bricks the device.
+19. **Readback gate before the committing reboot.** After the write, read
+     the target back and verify the invariant (magic at offset, size).
+     On mismatch: abort and do NOT reboot — a device with a bad write but a
+     running OS is still fixable over the existing channel.
+20. **Probe-alive between write and reboot.** Before the power-cycle/reboot
+     that commits the change, confirm the management channel still answers
+     (web/ping/injection readback). The running-OS window after a
+     destructive write is the LAST easy recovery chance.
+21. **Observation channels tested, and they log success.** Exfil/callback
+     endpoints get an end-to-end upload test (including the exact HTTP
+     verb!) before the operation. State monitors log a heartbeat or
+     last-success timestamp on every poll — errors-only logging turns
+     "still alive and fixable" into "looks like nothing is happening".
 
 ## Recording
 16. Ledger row BEFORE firing (hypothesis, observer, reversibility), verdict + evidence

@@ -17,7 +17,8 @@ Per-model status:
 |---|---|---|---|
 | Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) |
 | GL.iNet GL-E750 | Quectel EM060K-GL | B (stub → #619) | in progress |
-| ZTE MF286D | ZTE cat.12 mPCIe | C (stub → #621) | not started |
+| ZTE MF286D | ZTE cat.12 mPCIe | C (filled) | negative species result (closed 2026-11-07 — no eUICC/SAP; classic reader only) |
+| Zyxel NR7302-class | Quectel RG520F (+soldered eUICC on some SKUs) | D (stub → ZYXEL-ESIM-RESEARCH.md) | research candidate — no unit owned |
 
 The deep evidence lives in Amperstrand/ifd-modemifd `docs/` (known-good
 toolchain, wire fingerprints, refresh policy, findings history). This playbook
@@ -166,3 +167,19 @@ transcript pointers, model JSON updates.
 - Full species record: `models/zte-mf286d.json`, flash + root runbook in
   `recipes/zte/mf286d/`, install/recovery in `docs/zte-mf286d-flashing.md`.
   Security-research follow-ups live in the private research repo.
+
+## Appendix D — Zyxel NR7302-class (stub — research candidate, no unit owned)
+
+- Vendor-native eSIM stack exists in this family: Zyxel Air app + a
+  **router-side LPA** (router downloads the profile itself after QR handoff),
+  with a **soldered eUICC on the RG520F modem** on A1/Telenor SKUs only
+  (DTAG SKUs ship chip-less). EID lives in the device's ROM-D config.
+- Recovery: **zycast** bootloader multicast flash (family-wide; no serial
+  needed) → soldered USB at J3 (fastboot/EDL; ADB/DIAG with VCC; beware
+  one-way `usb_composition` changes).
+- Relevance: prior art for the ZTE `-lpad` architecture (EXP-034/035) and a
+  possible LPAd capability question for our own NR7101 modules (Quectel
+  RG50xQ LPA application note — read-only probe documented).
+- Full findings + donor-buying guidance + sources:
+  `docs/ZYXEL-ESIM-RESEARCH.md`. Fill this appendix only after a unit is
+  acquired and the gates (§universal gates) are run against it.

@@ -286,6 +286,89 @@ async fn lease_release_is_owner_checked() {
 }
 
 #[tokio::test]
+async fn heartbeat_is_owner_checked() {
+    // #164 P1 4272448192 (heartbeat half): after the owner drops, an
+    // intruder's heartbeats must NOT immortalize the lease — each is
+    // refused with LeaseNotOwner, the budget still decays, and the
+    // expiry event fires for the lease the intruder kept prodding.
+    use conwrt_agent_proto::dispatch::{AgentEvent, WireError};
+
+    let addr = spawn_agent_tuned(vec![], 50, 5).await;
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    let lease_id = match owner
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+    drop(owner);
+
+    let mut intruder = AgentClient::connect(&addr).await.unwrap();
+    intruder.handshake("controller-intruder").await.unwrap();
+
+    // Heartbeat at twice the ticker rate for well past budget x
+    // interval. While the lease lives, every attempt is refused with
+    // LeaseNotOwner; once the budget hits 0 the lease vanishes and
+    // the refusal turns UnknownLease — with the LeaseExpired event
+    // trailing that same response on this connection.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(400);
+    let mut saw_expiry = false;
+    loop {
+        match intruder.heartbeat(lease_id).await {
+            Err(ClientError::Agent(WireError::LeaseNotOwner {
+                lease_id: lid,
+                holder,
+            })) => {
+                assert_eq!(lid, lease_id);
+                assert_eq!(holder, "controller-owner");
+            }
+            Err(ClientError::Agent(WireError::UnknownLease(id))) if id == lease_id => {}
+            other => panic!("non-owner heartbeat must be refused, got {other:?}"),
+        }
+        if let Some(AgentEvent::LeaseExpired(ev)) = intruder.try_recv_event() {
+            assert_eq!(ev.lease_id, lease_id);
+            saw_expiry = true;
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        saw_expiry,
+        "the lease must expire despite the intruder's refills"
+    );
+    drop(intruder);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The resource is free: a fresh controller acquires it.
+    let mut next = AgentClient::connect(&addr).await.unwrap();
+    next.handshake("controller-next").await.unwrap();
+    match next
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { .. } => {}
+        LeaseResponse::Denied { holder } => {
+            panic!("lease still held by {holder:?}: a non-owner's heartbeats immortalized it");
+        }
+    }
+}
+
+#[tokio::test]
 async fn heartbeat_expiry_frees_lease_via_ticker() {
     // Before #164 P1 4272448155 the tick() never ran on a timer: budgets
     // only moved on request traffic, and a silent controller's lease

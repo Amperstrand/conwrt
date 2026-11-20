@@ -1,359 +1,377 @@
 {
-  "id": "extreme-networks-ws-ap3915i",
-  "lan_subnet": "10.47.217.0/24",
-  "vendor": "Extreme Networks",
-  "description": "WS-AP3915i / AP391x Qualcomm IPQ4029 access point — no-serial TFTP flash via rdwr_boot_cfg",
-  "openwrt": {
-    "target": "ipq40xx/generic",
-    "device": "extreme-networks,ws-ap3915i",
-    "profile": "extreme-networks_ws-ap3915i",
-    "board_name": "extreme-networks,ws-ap3915i",
-    "version": "24",
-    "default_ip": "192.168.1.1"
-  },
-  "hardware": {
-    "soc": "Qualcomm IPQ4029 (4x Cortex-A7 @ 717 MHz)",
-    "flash": "SPI-NOR 32MB (Macronix MX25L25635E, verified from DTS and hardware)",
-    "ram": "512MB DDR3",
-    "ethernet_ports": "1x GbE (GE1 only, PoE+ data — single cable carries power and data)",
-    "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
-  },
-  "mac_oui": [
-    "dc:b8:08",
-    "b4:2d:56"
-  ],
-  "flash_methods": {
-    "extreme-rdwr-tftp-initramfs": {
-      "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
-      "stock_default_ip": "192.168.1.X",
-      "stock_default_user": "admin",
-      "stock_default_password": "new2day",
-      "stock_legacy_ssh_options": [
-        "-o",
-        "HostKeyAlgorithms=+ssh-rsa",
-        "-o",
-        "KexAlgorithms=+diffie-hellman-group1-sha1"
-      ],
-      "stock_ssh_timeout_disable_commands": [
-        "cset sshtimeout 0",
-        "capply",
-        "csave"
-      ],
-      "rdwr_boot_cfg_binary": "rdwr_boot_cfg",
-      "initramfs_tftp_name": "vmlinux.gz.uImage.3912",
-      "optional_alt_tftp_name": "vmlinux",
-      "bootcmd_tftp": "run boot_net",
-      "bootcmd_flash": "run boot_openwrt",
-      "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
-      "note": "run boot_flash is the STOCK boot command (source boot_kernel) — it does NOT work with OpenWrt FIT images. Use boot_openwrt instead.",
-      "required_uboot_vars": {
-        "AP_MODE": "0",
-        "MOSTRECENTKERNEL": "0",
-        "WATCHDOG_COUNT": "0",
-        "WATCHDOG_LIMIT": "0",
-        "AP_PERSONALITY": "identifi",
-        "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
-        "serverip": "<CONWRT_TFTP_SERVER_IP>",
-        "ipaddr": "<TEMP_AP_IP>",
-        "bootcmd": "run boot_net"
-      },
-      "final_uboot_vars": {
-        "MOSTRECENTKERNEL": "0",
-        "WATCHDOG_COUNT": "0",
-        "WATCHDOG_LIMIT": "0",
-        "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000",
-        "bootcmd": "run boot_openwrt; run boot_net",
-        "serverip": "<CONWRT_TFTP_SERVER_IP>"
-      },
-      "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon, NOT ||), NOT 'run boot_flash' or 'bootx'. boot_flash/bootx runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. Semicolon provides TFTP fallback: if bootm succeeds it doesn't return (kernel boots), if bootm fails it returns and run boot_net catches via TFTP. See commit e16a0e7 and SESSION-WRITEUP.md. NOTE: Prefer writing U-Boot env from STOCK firmware (not initramfs) because the OpenWrt DTS marks CFG partitions as read-only. If writing from initramfs is required, kmod-mtd-rw IS available in 24.10.x: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1.",
-      "openwrt_client_ip": "192.168.1.X",
-      "openwrt_ip": "192.168.1.1",
-      "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
-      "sysupgrade_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",
-      "flash_time_seconds": 300,
-      "silence_timeout": 60,
-      "backup_required": true,
-      "fw_env_warning": "fw_setenv does NOT work on this device — no /etc/fw_env.config for AP3915i in ipq40xx base-files. The AP3915i is missing from the uboot-envtools board list. Use rdwr_boot_cfg (from stock firmware), flashcp (from stock firmware), or raw MTD write to write U-Boot variables. MTD writes from OpenWrt initramfs require kmod-mtd-rw: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1.",
-      "dts_partition_layout": {
-        "note": "OpenWrt DTS partition table (qcom-ipq4029-ws-ap3915i.dts). ALL partitions except 'firmware' are marked read-only. Stock firmware MTD indices differ from OpenWrt MTD indices.",
-        "partitions": [
-          {
-            "name": "CFG1",
-            "offset": "0xe0000",
-            "size": "0x10000",
-            "label": "U-Boot env block 1",
-            "read_only": true,
-            "stock_mtd": "mtd1",
-            "openwrt_mtd": "mtd0"
-          },
-          {
-            "name": "BootBAK",
-            "offset": "0xf0000",
-            "size": "0x70000",
-            "label": "Backup U-Boot",
-            "read_only": true
-          },
-          {
-            "name": "WINGCFG1",
-            "offset": "0x160000",
-            "size": "0x10000",
-            "label": "WiNG config 1",
-            "read_only": true
-          },
-          {
-            "name": "ART",
-            "offset": "0x170000",
-            "size": "0x10000",
-            "label": "Radio calibration (IRREPLACEABLE)",
-            "read_only": true
-          },
-          {
-            "name": "BootPRI",
-            "offset": "0x180000",
-            "size": "0x70000",
-            "label": "Primary U-Boot + boot scripts",
-            "read_only": true
-          },
-          {
-            "name": "WINGCFG2",
-            "offset": "0x1f0000",
-            "size": "0x10000",
-            "label": "WiNG config 2",
-            "read_only": true
-          },
-          {
-            "name": "FS",
-            "offset": "0x200000",
-            "size": "0x80000",
-            "label": "JFFS2 filesystem",
-            "read_only": true
-          },
-          {
-            "name": "firmware",
-            "offset": "0x280000",
-            "size": "0x1d60000",
-            "label": "OpenWrt firmware (merged PriImg+SecImg)",
-            "read_only": false
-          },
-          {
-            "name": "CFG2",
-            "offset": "0x1fe0000",
-            "size": "0x10000",
-            "label": "U-Boot env block 2",
-            "read_only": true,
-            "stock_mtd": "mtd10",
-            "openwrt_mtd": "mtd8"
-          }
-        ],
-        "firmware_size_kb": 30080,
-        "ap391x_warning": "AP391x uses SPLIT firmware layout (firmware + firmware2, ~15MB each, IMAGE_SIZE=15040k). AP3915i uses MERGED layout (single firmware ~30MB, IMAGE_SIZE=30080k). Verify /proc/mtd firmware size from initramfs before sysupgrade."
-      },
-      "resources_required": [
-        "stock-ssh",
-        "bootenv-write",
-        "tftp-server",
-        "recovery-subnet"
-      ],
-      "envelope": [
-        "partition-backup",
-        "cfg2-pristine",
-        "tftp-lifeline-armed"
-      ]
-    },
-    "sysupgrade": {
-      "description": "SSH sysupgrade from existing OpenWrt on this device",
-      "command": "sysupgrade -n /tmp/firmware.bin",
-      "exit_code": 255,
-      "resources_required": [
-        "ssh-service"
-      ],
-      "envelope": [
-        "board-name-match"
-      ]
-    },
-    "tftp": {
-      "description": "U-Boot TFTP recovery (requires serial console or rdwr_boot_cfg for network boot setup)",
-      "recovery_ip": "192.168.1.1",
-      "client_ip": "192.168.1.2",
-      "client_subnet": "255.255.255.0",
-      "flash_time_seconds": 300,
-      "notes": "ESCAPE-HATCH INVENTORY (verified 2026-09-22): NO reset button (no GPIO buttons in DTS — OpenWrt failsafe unreachable), NO LuCI in stock downloads.openwrt.org images (:80 dead), TFTP fallback (boot_net) only runs when flash-boot FAILS (0 RRQs verified against a serving TFTP server on a flash-booting unit), no boot-counter/recovery logic in the 2012-era U-Boot. Serial console (RJ45, RS-232 levels, Cisco console cable compatible, 115200 8N1) is the ONLY escape hatch: keep a Cisco-style console cable on the bench before any destructive operation (AGENTS.md Escape-Hatch Discipline). For TFTP boot on units whose flash-boot fails: arm serverip 192.168.1.2 serving vmlinux.gz.uImage.3912 on the unit's VLAN, then PoE-cycle.",
-      "resources_required": [
-        "power",
-        "serial-console",
-        "recovery-subnet",
-        "tftp-server"
-      ],
-      "envelope": [
-        "image-type-factory",
-        "tftp-lifeline-armed"
-      ]
-    }
-  },
-  "signatures": {},
-  "capabilities": [
-    "ethernet",
-    "tftp",
-    "ssh",
-    "serial"
-  ],
-  "hardware_variants": {
-    "note": "Two known hardware variants with identical SPI-NOR partition layout but different flash configurations.",
-    "spi_nor_only": {
-      "description": "Unit 1 — SPI-NOR only (32MB Macronix MX25L25635E), no NAND. U-Boot 2012.07.22. rdwr_boot_cfg BROKEN (exit 255). bootcmd defaults to 'run boot_flash'.",
-      "serial_example": "Unit 1 (boot loop, offline)"
-    },
-    "spi_nor_plus_nand": {
-      "description": "Unit 2 (AP3915i-ROW) — SPI-NOR + 512MB NAND (UBIFS). U-Boot 2012.07.19-r00020.1. rdwr_boot_cfg EXISTS but read_all returns empty. bootcmd defaults to 'bootx' (equivalent to 'run boot_flash'). NAND holds WiNG rootfs/config — irrelevant for OpenWrt which uses SPI-NOR only.",
-      "serial_example": "1918Y-1083600000"
-    }
-  },
-  "uboot_commands": {
-    "bootx": "Custom QCA command — equivalent to 'run boot_flash'. Runs source boot_kernel. DO NOT USE as final bootcmd with OpenWrt.",
-    "boot_flash": "source boot_kernel — runs stock boot script with watchdog/dual-image failover. Incompatible with OpenWrt FIT images.",
-    "boot_net": "tftpboot 0x83600000 vmlinux.gz.uImage.3912; bootm 0x83600000 — TFTP boot. Safe to use.",
-    "boot_openwrt": "sf probe; sf read 0x88000000 0x280000 0xc00000; bootm 0x88000000 — Direct SPI-NOR read of OpenWrt FIT. The CORRECT final boot command.",
-    "bootipq": "Custom QCA command — boot from flash device with device tree handling."
-  },
-  "post_flash": {
-    "ssh": {
-      "description": "OpenWrt 24.10.2 on this device runs Dropbear 2025.89 SSH server. Several gotchas when configuring SSH from an OpenWrt host switch.",
-      "authorized_keys_path": "/etc/dropbear/authorized_keys",
-      "authorized_keys_note": "NOT ~/.ssh/authorized_keys. OpenWrt Dropbear reads from /etc/dropbear/ only. conwrt already handles this correctly in scripts/conwrt.py (line 3589) and scripts/profile/builder.py (line 32).",
-      "key_format": {
-        "openssh_private_key_incompatible": true,
-        "problem": "OpenWrt Dropbear dbclient cannot use OpenSSH-format private keys (error in libcrypto: unsupported). Use Dropbear-format keys or install openssh-client on the host.",
-        "workaround": "opkg install openssh-client on the host OpenWrt device, or use dropbearkey to generate Dropbear-format keys."
-      },
-      "password_env_var": {
-        "variable": "DROPBEAR_PASSWORD",
-        "description": "dbclient accepts the password via DROPBEAR_PASSWORD env var for non-interactive auth. Example: DROPBEAR_PASSWORD=mypass dbclient root@192.168.1.1"
-      },
-      "algorithm_negotiation": {
-        "problem": "Dropbear 2025.89 on AP3915i may lack ssh-rsa hostkey. openssh-client from an OpenWrt host needs explicit algorithm enablement.",
-        "required_options": [
-          "-o",
-          "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
-          "-o",
-          "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
-          "-o",
-          "Ciphers=+aes128-ctr,aes256-ctr"
-        ]
-      },
-      "ordering": {
-        "rule": "Set SSH authorized_keys BEFORE setting root password.",
-        "reason": "OpenWrt default allows passwordless root login. Once you set a password, passwordless login stops. If SSH keys aren't in place yet, you lose remote access."
-      }
-    }
-  },
-  "cfg_block_format": {
-    "description": "U-Boot environment block format for AP391x devices (CFG1/CFG2 partitions, 64KB each).",
-    "structure": {
-      "bytes_0_3": "CRC32 (little-endian) checksum",
-      "byte_4": "Active flag (0x01 = active)",
-      "bytes_5_end": "Null-separated KEY=VALUE pairs (U-Boot env format)",
-      "padding": "Remaining space filled with 0xFF"
-    },
-    "crc_scope": "CRC32 covers bytes[5:] to end of data (NOT including the CRC itself or the active flag byte). This differs from some U-Boot implementations where CRC covers byte[4:].",
-    "write_method": {
-      "stock_firmware": "flashcp /tmp/cfg_block.bin /dev/mtd1 (stock firmware has writable MTD)",
-      "openwrt_initramfs": "Requires kmod-mtd-rw (insmod mtd-rw.ko i_want_a_brick=1) to override DTS read-only flags, then flashcp or custom mtd_raw_write tool.",
-      "note": "Always use flashcp for NOR flash, never dd. flashcp handles erase+write cycles correctly."
-    },
-    "strategy": "Write CFG1 only first, verify boot, then mirror to CFG2. Leaving CFG2 untouched provides a fallback if CFG1 is corrupted."
-  },
-  "switch_initiated_flashing": {
-    "description": "Flash procedure orchestrated by an OpenWrt PoE switch (e.g. GS1900-8HP) — no laptop required.",
-    "poe_control": {
-      "package": "realtek-poe",
-      "disable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":false}'",
-      "enable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":true}'",
-      "re_enable_quirk": "After disabling and re-enabling PoE, the port may not power up immediately. Wait 5-10 seconds or toggle again. The BCM59121 PoE controller needs time to renegotiate."
-    },
-    "network": {
-      "secondary_ip": "ip addr add 192.168.1.2/24 dev br-lan — add a secondary IP on the same interface for the flash subnet",
-      "tftp_server": "dnsmasq --port=0 --no-daemon --tftp-root=/tmp/tftpboot --user=root --listen-address=192.168.1.2",
-      "note": "dnsmasq doubles as TFTP server on OpenWrt (already installed for DNS/DHCP). No extra package needed."
-    },
-    "workflow": [
-      "1. PoE disable target port (power off AP)",
-      "2. Stage firmware + TFTP config",
-      "3. PoE enable target port (AP boots)",
-      "4. AP U-Boot TFTP-boots initramfs",
-      "5. SSH to AP, backup partitions",
-      "6. SSH to AP, sysupgrade with permanent image",
-      "7. Post-flash: set SSH keys, then set password, then change IP"
+ "id": "extreme-networks-ws-ap3915i",
+ "lan_subnet": "10.47.217.0/24",
+ "vendor": "Extreme Networks",
+ "description": "WS-AP3915i / AP391x Qualcomm IPQ4029 access point \u2014 no-serial TFTP flash via rdwr_boot_cfg",
+ "openwrt": {
+  "target": "ipq40xx/generic",
+  "device": "extreme-networks,ws-ap3915i",
+  "profile": "extreme-networks_ws-ap3915i",
+  "board_name": "extreme-networks,ws-ap3915i",
+  "version": "24",
+  "default_ip": "192.168.1.1"
+ },
+ "hardware": {
+  "soc": "Qualcomm IPQ4029 (4x Cortex-A7 @ 717 MHz)",
+  "flash": "SPI-NOR 32MB (Macronix MX25L25635E, verified from DTS and hardware)",
+  "ram": "512MB DDR3",
+  "ethernet_ports": "1x GbE (GE1 only, PoE+ data \u2014 single cable carries power and data)",
+  "wifi": "2.4GHz 2x2 (IPQ4029 integrated) + 5GHz 2x2 (IPQ4029 integrated)"
+ },
+ "mac_oui": [
+  "dc:b8:08",
+  "b4:2d:56"
+ ],
+ "flash_methods": {
+  "extreme-rdwr-tftp-initramfs": {
+   "description": "Two-stage no-serial flash from stock Extreme firmware. SSH to stock, write U-Boot variables using rdwr_boot_cfg, TFTP boot OpenWrt initramfs, backup flash, then sysupgrade to permanent OpenWrt.",
+   "stock_default_ip": "192.168.1.X",
+   "stock_default_user": "admin",
+   "stock_default_password": "new2day",
+   "stock_legacy_ssh_options": [
+    "-o",
+    "HostKeyAlgorithms=+ssh-rsa",
+    "-o",
+    "KexAlgorithms=+diffie-hellman-group1-sha1"
+   ],
+   "stock_ssh_timeout_disable_commands": [
+    "cset sshtimeout 0",
+    "capply",
+    "csave"
+   ],
+   "rdwr_boot_cfg_binary": "rdwr_boot_cfg",
+   "initramfs_tftp_name": "vmlinux.gz.uImage.3912",
+   "optional_alt_tftp_name": "vmlinux",
+   "bootcmd_tftp": "run boot_net",
+   "bootcmd_flash": "run boot_openwrt",
+   "boot_openwrt": "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000",
+   "note": "run boot_flash is the STOCK boot command (source boot_kernel) \u2014 it does NOT work with OpenWrt FIT images. Use boot_openwrt instead.",
+   "required_uboot_vars": {
+    "AP_MODE": "0",
+    "MOSTRECENTKERNEL": "0",
+    "WATCHDOG_COUNT": "0",
+    "WATCHDOG_LIMIT": "0",
+    "AP_PERSONALITY": "identifi",
+    "boot_openwrt": "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000",
+    "serverip": "<CONWRT_TFTP_SERVER_IP>",
+    "ipaddr": "<TEMP_AP_IP>",
+    "bootcmd": "run boot_net"
+   },
+   "final_uboot_vars": {
+    "MOSTRECENTKERNEL": "0",
+    "WATCHDOG_COUNT": "0",
+    "WATCHDOG_LIMIT": "0",
+    "boot_openwrt": "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000",
+    "bootcmd": "run boot_openwrt; run boot_net",
+    "serverip": "<CONWRT_TFTP_SERVER_IP>"
+   },
+   "note_final_uboot_vars": "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon, NOT ||), NOT 'run boot_flash' or 'bootx'. boot_flash/bootx runs the stock boot_kernel script with watchdog/nboot/failover which is incompatible with OpenWrt FIT images. Semicolon provides TFTP fallback: if bootm succeeds it doesn't return (kernel boots), if bootm fails it returns and run boot_net catches via TFTP. See commit e16a0e7 and SESSION-WRITEUP.md. NOTE: Prefer writing U-Boot env from STOCK firmware (not initramfs) because the OpenWrt DTS marks CFG partitions as read-only. If writing from initramfs is required, kmod-mtd-rw IS available in 24.10.x: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1.",
+   "openwrt_client_ip": "192.168.1.X",
+   "openwrt_ip": "192.168.1.1",
+   "initramfs_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-initramfs-uImage.itb",
+   "sysupgrade_file": "openwrt-{version}-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin",
+   "flash_time_seconds": 300,
+   "silence_timeout": 60,
+   "backup_required": true,
+   "fw_env_warning": "fw_setenv does NOT work on this device \u2014 no /etc/fw_env.config for AP3915i in ipq40xx base-files. The AP3915i is missing from the uboot-envtools board list. Use rdwr_boot_cfg (from stock firmware), flashcp (from stock firmware), or raw MTD write to write U-Boot variables. MTD writes from OpenWrt initramfs require kmod-mtd-rw: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1.",
+   "dts_partition_layout": {
+    "note": "OpenWrt DTS partition table (qcom-ipq4029-ws-ap3915i.dts). ALL partitions except 'firmware' are marked read-only. Stock firmware MTD indices differ from OpenWrt MTD indices.",
+    "partitions": [
+     {
+      "name": "CFG1",
+      "offset": "0xe0000",
+      "size": "0x10000",
+      "label": "U-Boot env block 1",
+      "read_only": true,
+      "stock_mtd": "mtd1",
+      "openwrt_mtd": "mtd0"
+     },
+     {
+      "name": "BootBAK",
+      "offset": "0xf0000",
+      "size": "0x70000",
+      "label": "Backup U-Boot",
+      "read_only": true
+     },
+     {
+      "name": "WINGCFG1",
+      "offset": "0x160000",
+      "size": "0x10000",
+      "label": "WiNG config 1",
+      "read_only": true
+     },
+     {
+      "name": "ART",
+      "offset": "0x170000",
+      "size": "0x10000",
+      "label": "Radio calibration (IRREPLACEABLE)",
+      "read_only": true
+     },
+     {
+      "name": "BootPRI",
+      "offset": "0x180000",
+      "size": "0x70000",
+      "label": "Primary U-Boot + boot scripts",
+      "read_only": true
+     },
+     {
+      "name": "WINGCFG2",
+      "offset": "0x1f0000",
+      "size": "0x10000",
+      "label": "WiNG config 2",
+      "read_only": true
+     },
+     {
+      "name": "FS",
+      "offset": "0x200000",
+      "size": "0x80000",
+      "label": "JFFS2 filesystem",
+      "read_only": true
+     },
+     {
+      "name": "firmware",
+      "offset": "0x280000",
+      "size": "0x1d60000",
+      "label": "OpenWrt firmware (merged PriImg+SecImg)",
+      "read_only": false
+     },
+     {
+      "name": "CFG2",
+      "offset": "0x1fe0000",
+      "size": "0x10000",
+      "label": "U-Boot env block 2",
+      "read_only": true,
+      "stock_mtd": "mtd10",
+      "openwrt_mtd": "mtd8"
+     }
     ],
-    "port_isolation": {
-      "description": "When flashing from a DSA-capable OpenWrt switch (e.g. GS1900-8HP), the switch port can be isolated into a dedicated VLAN before powering on the AP. This prevents the AP's post-boot DHCP server from reaching other devices on the network.",
-      "switch_model": "zyxel-gs1900-8hp-a1",
-      "switch_port_isolation_docs": "See port_isolation section in models/zyxel-gs1900-8hp-a1.json for DSA topology, UCI commands, and gotchas.",
-      "vlan_id": 999,
-      "recommended_port": "lan5",
-      "workflow_with_isolation": [
-        "0. Switch isolates target port (lan5) into VLAN 999",
-        "0a. Switch adds IP 192.168.1.2/24 on br-lan.999",
-        "1. PoE disable target port (power off AP)",
-        "2. Stage firmware + TFTP config (serve from 192.168.1.2 on br-lan.999)",
-        "3. PoE enable target port — AP boots in ISOLATED VLAN (DHCP offers contained)",
-        "4. AP U-Boot TFTP-boots initramfs (switch serves TFTP via br-lan.999)",
-        "5. SSH to AP (via br-lan.999), backup partitions",
-        "6. SSH to AP, sysupgrade with permanent image",
-        "7. Post-flash: set SSH keys, then set password, then change IP",
-        "8. Switch restores port to default VLAN — AP joins production network"
-      ],
-      "note": "Port isolation makes the overlay DHCP-disable approach (scripts/profile/overlay.py) unnecessary when flashing from a DSA switch. The overlay remains useful as a fallback when flashing from macOS or non-DSA-capable hosts."
-    }
+    "firmware_size_kb": 30080,
+    "ap391x_warning": "AP391x uses SPLIT firmware layout (firmware + firmware2, ~15MB each, IMAGE_SIZE=15040k). AP3915i uses MERGED layout (single firmware ~30MB, IMAGE_SIZE=30080k). Verify /proc/mtd firmware size from initramfs before sysupgrade."
+   },
+   "resources_required": [
+    "stock-ssh",
+    "bootenv-write",
+    "tftp-server",
+    "recovery-subnet"
+   ],
+   "envelope": [
+    "partition-backup",
+    "cfg2-pristine",
+    "tftp-lifeline-armed"
+   ]
   },
-  "tested_hardware": {
-    "extreme-rdwr-tftp-initramfs": {
-      "tested": true,
-      "date": "2026-05-23",
-      "notes": "Switch-initiated flash via GS1900-8HP (OpenWrt 25.12.1). No laptop needed during flash. AP on switch port lan5 via PoE. rdwr_boot_cfg broken — used raw MTD write via kmod-mtd-rw + mtd_raw_write from initramfs. CFG blocks corrected with boot_openwrt command. Flash boot verified, overlay persisted through reboot. IP changed to 192.168.13.253 post-flash."
-    },
-    "sysupgrade": {
-      "tested": true,
-      "date": "2026-09-22",
-      "notes": "VALIDATED ON 25.12.5 AND 24.10.2 (lan5 + lan4). lan5 flash-boots 25.12.5 self-sufficiently (TFTP-down verified, 105s to HTTP). Healthy-slot units flash-boot BOTH release lines. lan3-class units (slot/hardware question) are run boot_net-dependent on any version. Full recipe: NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
-    },
-    "tftp": {
-      "tested": true,
-      "date": "2026-09-21",
-      "notes": "boot_net TFTP boot validated for both 24.10.2 and 25.12.2 initramfs + sysupgrade-FIT-as-bootfile (kernel-from-TFTP + flash-rootfs works on 25.12.2). Prerequisites: nft rule for unzoned bench VLANs (inbound UDP), per-port tftproot, 192.168.1.2 helper IP, file named vmlinux.gz.uImage.3912"
-    },
-    "serial-bridge": {
-      "tested": true,
-      "date": "2026-09-23",
-      "notes": "AP3915i-to-AP3915i 3-wire serial bridge, full boot captured via lan4 listener"
-    }
+  "sysupgrade": {
+   "description": "SSH sysupgrade from existing OpenWrt on this device",
+   "command": "sysupgrade -n /tmp/firmware.bin",
+   "exit_code": 255,
+   "resources_required": [
+    "ssh-service"
+   ],
+   "envelope": [
+    "board-name-match"
+   ]
   },
-  "warnings": [
-    "Misconfigured U-Boot environment may require serial recovery.",
-    "Stock Extreme shell may reboot periodically if no controller is present — disable SSH timeout with: cset sshtimeout 0 && capply && csave",
-    "Do not proceed without saving rdwr_boot_cfg read_all output.",
-    "Make a full MTD backup before permanent install.",
-    "Direct stock image_upgrade support is experimental unless signature/checksum status is proven.",
-    "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon) — NOT 'run boot_flash', NOT 'bootx', NOT '||'. boot_flash/bootx runs the stock boot_kernel script which is incompatible with OpenWrt FIT images. This mistake bricked Unit 1. Semicolon is safer than || because it doesn't depend on U-Boot operator support.",
-    "CRITICAL: Always include '; run boot_net' fallback in bootcmd. If flash boot fails, AP falls back to TFTP — permanent safety net.",
-    "CRITICAL: Write ALL U-Boot env changes from STOCK firmware, NOT from OpenWrt initramfs. The OpenWrt DTS marks CFG1/CFG2 as read-only. If writing from initramfs is required, install kmod-mtd-rw first: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1. Stock firmware's /dev/mtd1 (CFG1) is writable via flashcp without any extra modules.",
-    "CRITICAL: Write CFG1 only (leave CFG2 untouched as fallback). rdwr_boot_cfg writes BOTH blocks — use flashcp instead if single-block write is needed. See REVIEW-UNIT2-FLASH-PLAN.md v2.",
-    "CRITICAL: Remove 'ubi.mtd=0' from bootargs if present — it causes kernel UBI attach failure on OpenWrt. The CFG block should not contain this parameter.",
-    "CRITICAL: Set SSH authorized_keys BEFORE setting root password. OpenWrt default allows passwordless root — once password is set, passwordless login stops.",
-    "CRITICAL: Do NOT change bootcmd from a working state. If the AP is booting correctly, do not rewrite the CFG blocks. Only write if bootcmd is wrong or AP is in a boot loop.",
-    "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing — OpenWrt uses SPI-NOR only.",
-    "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
-    "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
-    "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot.",
-    "CORRECTED x2 (2026-09-22, comparative dump): all bench units carry BYTE-IDENTICAL BootPRI (2022 build) + BootBAK (Jul-2017) pairs, yet flash-boot differs per unit - the bootloader bytes are NOT the variable. Which slot executes is decided upstream (SBL1/selector, likely low-flash 0x0-0xe0000) or is unit hardware. Units that cannot sf-read-flash-boot any image are permanently run boot_net-dependent (keep per-port TFTP armed, 40s recovery). Env CURR_VER/ver/BOOT_BOOTROM are stale journals referencing builds absent from both slots.",
-    "WRONG-SUBNET VERDICT (2026-09-22, lan7/lan8 recovered zero-serial 4 months after 'network-dead' verdict): units carried operator static IPv4s (192.168.13.0/24) that September sweeps never covered, and were reachable via IPv6 link-local (EUI-64 from MAC) the whole time - both units send RAs (odhcpd ULA) continuously. Recovery door: DROPBEAR_PASSWORD + dbclient from the on-link switch to fe80::<EUI-64>%switch.100X. lan8's pubkey auth was dead since the May flash: /etc/dropbear was 1000:1000 group-writable and dropbear silently refuses keys - chown root:root fixes. Methodology: docs/DARK-DEVICE-PLAYBOOK.md, scripts/bench_discover.py.",
-    "Flash-boot capability is ENV-IDENTITY-DEPENDENT (issue #61 proven 2026-09-23; mechanism refined 2026-09-23 later from BootPRI embedded-env + boot-script extraction): a boot_net-dependent unit became flash-boot-capable after only CFG1 ver/CURR_VER were changed to the running bootloader's 2022-primary build identity. The boot script itself does NOT branch on these keys (CURR_VER is write-only, set when DEFAULT_SETTING=1) — the leading mechanism is bootloader env-ACCEPTANCE gating: a CFG1 ver that mismatches the running bootloader's identity appears to make it fall back to the embedded default env (bootcmd=bootx -> stock script -> the documented watchdog wedges), while a matching identity honors CFG1 (custom bootcmd runs). Multiple ARM32 literal-pool refs to the identity string support runtime use as a comparison constant. Definitive proof needs one serial session (env-import debug) or disasm xrefs. Either way the FIELD REPAIR is proven: 2-key CFG edit aligning ver/CURR_VER with the BootPRI-2022 identity; keep CFG2 pristine."
-  ],
-  "serial_console": {
-    "baud": 115200,
-    "console_device": "ttyMSM0",
-    "parity": "n81",
-    "bootloader": "U-Boot 2012.07.19-r00020.1 (Jul 17 2017, stock Extreme)",
-    "verified_from": "live unit kernel cmdline (console=ttyMSM0,115200n81), OpenWrt 24.10.2, 2026-09-21",
-    "note": "stdout-path empty in chosen node; cmdline is authoritative. Console is an RJ45 jack carrying RS-232 levels (NOT 3.3V TTL -- corrected 2026-09-23 after review): works with a standard Cisco USB/serial console cable (proven by the OpenWrt forum thread that added support; Extreme's published pinout is Cisco-style: pin3=TXD, pin6=RXD, pins4/5=GND, rest NC). The SoC UART (ttyMSM0) is TTL internally, but the external jack sits behind an RS-232 transceiver; the 4-pin TTL header is INSIDE the case. Validated 2026-09-23: two units bridge console-to-console with a 3-wire splice (blue pair straight = GND, green pair crossed = TX<->RX -- this is an RS-232 null-modem, which is why it works); either unit works as listener or target end. Never connect VCC (no VCC pin exists on the jack). Full method: recipes/extreme-networks/ws-ap3915i/SERIAL-VIA-AP3915I.md"
+  "tftp": {
+   "description": "U-Boot TFTP recovery (requires serial console or rdwr_boot_cfg for network boot setup)",
+   "recovery_ip": "192.168.1.1",
+   "client_ip": "192.168.1.2",
+   "client_subnet": "255.255.255.0",
+   "flash_time_seconds": 300,
+   "notes": "ESCAPE-HATCH INVENTORY (verified 2026-09-22): NO reset button (no GPIO buttons in DTS \u2014 OpenWrt failsafe unreachable), NO LuCI in stock downloads.openwrt.org images (:80 dead), TFTP fallback (boot_net) only runs when flash-boot FAILS (0 RRQs verified against a serving TFTP server on a flash-booting unit), no boot-counter/recovery logic in the 2012-era U-Boot. Serial console (RJ45, RS-232 levels, Cisco console cable compatible, 115200 8N1) is the ONLY escape hatch: keep a Cisco-style console cable on the bench before any destructive operation (AGENTS.md Escape-Hatch Discipline). For TFTP boot on units whose flash-boot fails: arm serverip 192.168.1.2 serving vmlinux.gz.uImage.3912 on the unit's VLAN, then PoE-cycle.",
+   "resources_required": [
+    "power",
+    "serial-console",
+    "recovery-subnet",
+    "tftp-server"
+   ],
+   "envelope": [
+    "image-type-factory",
+    "tftp-lifeline-armed"
+   ]
   }
+ },
+ "signatures": {},
+ "capabilities": [
+  "ethernet",
+  "tftp",
+  "ssh",
+  "serial"
+ ],
+ "hardware_variants": {
+  "note": "Two known hardware variants with identical SPI-NOR partition layout but different flash configurations.",
+  "spi_nor_only": {
+   "description": "Unit 1 \u2014 SPI-NOR only (32MB Macronix MX25L25635E), no NAND. U-Boot 2012.07.22. rdwr_boot_cfg BROKEN (exit 255). bootcmd defaults to 'run boot_flash'.",
+   "serial_example": "Unit 1 (boot loop, offline)"
+  },
+  "spi_nor_plus_nand": {
+   "description": "Unit 2 (AP3915i-ROW) \u2014 SPI-NOR + 512MB NAND (UBIFS). U-Boot 2012.07.19-r00020.1. rdwr_boot_cfg EXISTS but read_all returns empty. bootcmd defaults to 'bootx' (equivalent to 'run boot_flash'). NAND holds WiNG rootfs/config \u2014 irrelevant for OpenWrt which uses SPI-NOR only.",
+   "serial_example": "1918Y-1083600000"
+  }
+ },
+ "uboot_commands": {
+  "bootx": "Custom QCA command \u2014 equivalent to 'run boot_flash'. Runs source boot_kernel. DO NOT USE as final bootcmd with OpenWrt.",
+  "boot_flash": "source boot_kernel \u2014 runs stock boot script with watchdog/dual-image failover. Incompatible with OpenWrt FIT images.",
+  "boot_net": "tftpboot 0x83600000 vmlinux.gz.uImage.3912; bootm 0x83600000 \u2014 TFTP boot. Safe to use.",
+  "boot_openwrt": "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000 \u2014 Direct SPI-NOR read of OpenWrt FIT. The CORRECT final boot command.",
+  "bootipq": "Custom QCA command \u2014 boot from flash device with device tree handling."
+ },
+ "post_flash": {
+  "ssh": {
+   "description": "OpenWrt 24.10.2 on this device runs Dropbear 2025.89 SSH server. Several gotchas when configuring SSH from an OpenWrt host switch.",
+   "authorized_keys_path": "/etc/dropbear/authorized_keys",
+   "authorized_keys_note": "NOT ~/.ssh/authorized_keys. OpenWrt Dropbear reads from /etc/dropbear/ only. conwrt already handles this correctly in scripts/conwrt.py (line 3589) and scripts/profile/builder.py (line 32).",
+   "key_format": {
+    "openssh_private_key_incompatible": true,
+    "problem": "OpenWrt Dropbear dbclient cannot use OpenSSH-format private keys (error in libcrypto: unsupported). Use Dropbear-format keys or install openssh-client on the host.",
+    "workaround": "opkg install openssh-client on the host OpenWrt device, or use dropbearkey to generate Dropbear-format keys."
+   },
+   "password_env_var": {
+    "variable": "DROPBEAR_PASSWORD",
+    "description": "dbclient accepts the password via DROPBEAR_PASSWORD env var for non-interactive auth. Example: DROPBEAR_PASSWORD=mypass dbclient root@192.168.1.1"
+   },
+   "algorithm_negotiation": {
+    "problem": "Dropbear 2025.89 on AP3915i may lack ssh-rsa hostkey. openssh-client from an OpenWrt host needs explicit algorithm enablement.",
+    "required_options": [
+     "-o",
+     "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
+     "-o",
+     "KexAlgorithms=+curve25519-sha256,diffie-hellman-group14-sha256",
+     "-o",
+     "Ciphers=+aes128-ctr,aes256-ctr"
+    ]
+   },
+   "ordering": {
+    "rule": "Set SSH authorized_keys BEFORE setting root password.",
+    "reason": "OpenWrt default allows passwordless root login. Once you set a password, passwordless login stops. If SSH keys aren't in place yet, you lose remote access."
+   }
+  }
+ },
+ "cfg_block_format": {
+  "description": "U-Boot environment block format for AP391x devices (CFG1/CFG2 partitions, 64KB each).",
+  "structure": {
+   "bytes_0_3": "CRC32 (little-endian) checksum",
+   "byte_4": "Active flag (0x01 = active)",
+   "bytes_5_end": "Null-separated KEY=VALUE pairs (U-Boot env format)",
+   "padding": "Remaining space filled with 0xFF"
+  },
+  "crc_scope": "CRC32 covers bytes[5:] to end of data (NOT including the CRC itself or the active flag byte). This differs from some U-Boot implementations where CRC covers byte[4:].",
+  "write_method": {
+   "stock_firmware": "flashcp /tmp/cfg_block.bin /dev/mtd1 (stock firmware has writable MTD)",
+   "openwrt_initramfs": "Requires kmod-mtd-rw (insmod mtd-rw.ko i_want_a_brick=1) to override DTS read-only flags, then flashcp or custom mtd_raw_write tool.",
+   "note": "Always use flashcp for NOR flash, never dd. flashcp handles erase+write cycles correctly."
+  },
+  "strategy": "Write CFG1 only first, verify boot, then mirror to CFG2. Leaving CFG2 untouched provides a fallback if CFG1 is corrupted."
+ },
+ "switch_initiated_flashing": {
+  "description": "Flash procedure orchestrated by an OpenWrt PoE switch (e.g. GS1900-8HP) \u2014 no laptop required.",
+  "poe_control": {
+   "package": "realtek-poe",
+   "disable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":false}'",
+   "enable_port": "ubus call poe set_port_config '{\"port\":\"lan5\",\"enable\":true}'",
+   "re_enable_quirk": "After disabling and re-enabling PoE, the port may not power up immediately. Wait 5-10 seconds or toggle again. The BCM59121 PoE controller needs time to renegotiate."
+  },
+  "network": {
+   "secondary_ip": "ip addr add 192.168.1.2/24 dev br-lan \u2014 add a secondary IP on the same interface for the flash subnet",
+   "tftp_server": "dnsmasq --port=0 --no-daemon --tftp-root=/tmp/tftpboot --user=root --listen-address=192.168.1.2",
+   "note": "dnsmasq doubles as TFTP server on OpenWrt (already installed for DNS/DHCP). No extra package needed."
+  },
+  "workflow": [
+   "1. PoE disable target port (power off AP)",
+   "2. Stage firmware + TFTP config",
+   "3. PoE enable target port (AP boots)",
+   "4. AP U-Boot TFTP-boots initramfs",
+   "5. SSH to AP, backup partitions",
+   "6. SSH to AP, sysupgrade with permanent image",
+   "7. Post-flash: set SSH keys, then set password, then change IP"
+  ],
+  "port_isolation": {
+   "description": "When flashing from a DSA-capable OpenWrt switch (e.g. GS1900-8HP), the switch port can be isolated into a dedicated VLAN before powering on the AP. This prevents the AP's post-boot DHCP server from reaching other devices on the network.",
+   "switch_model": "zyxel-gs1900-8hp-a1",
+   "switch_port_isolation_docs": "See port_isolation section in models/zyxel-gs1900-8hp-a1.json for DSA topology, UCI commands, and gotchas.",
+   "vlan_id": 999,
+   "recommended_port": "lan5",
+   "workflow_with_isolation": [
+    "0. Switch isolates target port (lan5) into VLAN 999",
+    "0a. Switch adds IP 192.168.1.2/24 on br-lan.999",
+    "1. PoE disable target port (power off AP)",
+    "2. Stage firmware + TFTP config (serve from 192.168.1.2 on br-lan.999)",
+    "3. PoE enable target port \u2014 AP boots in ISOLATED VLAN (DHCP offers contained)",
+    "4. AP U-Boot TFTP-boots initramfs (switch serves TFTP via br-lan.999)",
+    "5. SSH to AP (via br-lan.999), backup partitions",
+    "6. SSH to AP, sysupgrade with permanent image",
+    "7. Post-flash: set SSH keys, then set password, then change IP",
+    "8. Switch restores port to default VLAN \u2014 AP joins production network"
+   ],
+   "note": "Port isolation makes the overlay DHCP-disable approach (scripts/profile/overlay.py) unnecessary when flashing from a DSA switch. The overlay remains useful as a fallback when flashing from macOS or non-DSA-capable hosts."
+  }
+ },
+ "tested_hardware": {
+  "extreme-rdwr-tftp-initramfs": {
+   "tested": true,
+   "date": "2026-05-23",
+   "notes": "Switch-initiated flash via GS1900-8HP (OpenWrt 25.12.1). No laptop needed during flash. AP on switch port lan5 via PoE. rdwr_boot_cfg broken \u2014 used raw MTD write via kmod-mtd-rw + mtd_raw_write from initramfs. CFG blocks corrected with boot_openwrt command. Flash boot verified, overlay persisted through reboot. IP changed to 192.168.13.253 post-flash."
+  },
+  "sysupgrade": {
+   "tested": true,
+   "date": "2026-09-22",
+   "notes": "VALIDATED ON 25.12.5 AND 24.10.2 (lan5 + lan4). lan5 flash-boots 25.12.5 self-sufficiently (TFTP-down verified, 105s to HTTP). Healthy-slot units flash-boot BOTH release lines. lan3-class units (slot/hardware question) are run boot_net-dependent on any version. Full recipe: NO-SERIAL-FLASH-24.10.2-VALIDATED.md"
+  },
+  "tftp": {
+   "tested": true,
+   "date": "2026-09-21",
+   "notes": "boot_net TFTP boot validated for both 24.10.2 and 25.12.2 initramfs + sysupgrade-FIT-as-bootfile (kernel-from-TFTP + flash-rootfs works on 25.12.2). Prerequisites: nft rule for unzoned bench VLANs (inbound UDP), per-port tftproot, 192.168.1.2 helper IP, file named vmlinux.gz.uImage.3912"
+  },
+  "serial-bridge": {
+   "tested": true,
+   "date": "2026-09-23",
+   "notes": "AP3915i-to-AP3915i 3-wire serial bridge, full boot captured via lan4 listener"
+  }
+ },
+ "warnings": [
+  "Misconfigured U-Boot environment may require serial recovery.",
+  "Stock Extreme shell may reboot periodically if no controller is present \u2014 disable SSH timeout with: cset sshtimeout 0 && capply && csave",
+  "Do not proceed without saving rdwr_boot_cfg read_all output.",
+  "Make a full MTD backup before permanent install.",
+  "Direct stock image_upgrade support is experimental unless signature/checksum status is proven.",
+  "CRITICAL: bootcmd must be 'run boot_openwrt; run boot_net' (semicolon) \u2014 NOT 'run boot_flash', NOT 'bootx', NOT '||'. boot_flash/bootx runs the stock boot_kernel script which is incompatible with OpenWrt FIT images. This mistake bricked Unit 1. Semicolon is safer than || because it doesn't depend on U-Boot operator support.",
+  "CRITICAL: Always include '; run boot_net' fallback in bootcmd. If flash boot fails, AP falls back to TFTP \u2014 permanent safety net.",
+  "CRITICAL: Write ALL U-Boot env changes from STOCK firmware, NOT from OpenWrt initramfs. The OpenWrt DTS marks CFG1/CFG2 as read-only. If writing from initramfs is required, install kmod-mtd-rw first: opkg update && opkg install kmod-mtd-rw && insmod mtd-rw i_want_a_brick=1. Stock firmware's /dev/mtd1 (CFG1) is writable via flashcp without any extra modules.",
+  "CRITICAL: Write CFG1 only (leave CFG2 untouched as fallback). rdwr_boot_cfg writes BOTH blocks \u2014 use flashcp instead if single-block write is needed. See REVIEW-UNIT2-FLASH-PLAN.md v2.",
+  "CRITICAL: Remove 'ubi.mtd=0' from bootargs if present \u2014 it causes kernel UBI attach failure on OpenWrt. The CFG block should not contain this parameter.",
+  "CRITICAL: Set SSH authorized_keys BEFORE setting root password. OpenWrt default allows passwordless root \u2014 once password is set, passwordless login stops.",
+  "CRITICAL: Do NOT change bootcmd from a working state. If the AP is booting correctly, do not rewrite the CFG blocks. Only write if bootcmd is wrong or AP is in a boot loop.",
+  "NOTE: Some units have NAND in addition to SPI-NOR. NAND is irrelevant for OpenWrt flashing \u2014 OpenWrt uses SPI-NOR only.",
+  "NOTE: Dropbear authorized_keys path is /etc/dropbear/authorized_keys, NOT ~/.ssh/authorized_keys.",
+  "NOTE: openssh-client on OpenWrt host cannot use Dropbear-format private keys. Use openssh-keygen or install openssh-client.",
+  "NOTE: After PoE disable/re-enable cycle, wait 5-10 seconds for the BCM59121 controller to renegotiate before expecting device boot.",
+  "CORRECTED x2 (2026-09-22, comparative dump): all bench units carry BYTE-IDENTICAL BootPRI (2022 build) + BootBAK (Jul-2017) pairs, yet flash-boot differs per unit - the bootloader bytes are NOT the variable. Which slot executes is decided upstream (SBL1/selector, likely low-flash 0x0-0xe0000) or is unit hardware. Units that cannot sf-read-flash-boot any image are permanently run boot_net-dependent (keep per-port TFTP armed, 40s recovery). Env CURR_VER/ver/BOOT_BOOTROM are stale journals referencing builds absent from both slots.",
+  "WRONG-SUBNET VERDICT (2026-09-22, lan7/lan8 recovered zero-serial 4 months after 'network-dead' verdict): units carried operator static IPv4s (192.168.13.0/24) that September sweeps never covered, and were reachable via IPv6 link-local (EUI-64 from MAC) the whole time - both units send RAs (odhcpd ULA) continuously. Recovery door: DROPBEAR_PASSWORD + dbclient from the on-link switch to fe80::<EUI-64>%switch.100X. lan8's pubkey auth was dead since the May flash: /etc/dropbear was 1000:1000 group-writable and dropbear silently refuses keys - chown root:root fixes. Methodology: docs/DARK-DEVICE-PLAYBOOK.md, scripts/bench_discover.py.",
+  "Flash-boot capability is ENV-IDENTITY-DEPENDENT (issue #61 proven 2026-09-23; mechanism refined 2026-09-23 later from BootPRI embedded-env + boot-script extraction): a boot_net-dependent unit became flash-boot-capable after only CFG1 ver/CURR_VER were changed to the running bootloader's 2022-primary build identity. The boot script itself does NOT branch on these keys (CURR_VER is write-only, set when DEFAULT_SETTING=1) \u2014 the leading mechanism is bootloader env-ACCEPTANCE gating: a CFG1 ver that mismatches the running bootloader's identity appears to make it fall back to the embedded default env (bootcmd=bootx -> stock script -> the documented watchdog wedges), while a matching identity honors CFG1 (custom bootcmd runs). Multiple ARM32 literal-pool refs to the identity string support runtime use as a comparison constant. Definitive proof needs one serial session (env-import debug) or disasm xrefs. Either way the FIELD REPAIR is proven: 2-key CFG edit aligning ver/CURR_VER with the BootPRI-2022 identity; keep CFG2 pristine."
+ ],
+ "serial_console": {
+  "baud": 115200,
+  "console_device": "ttyMSM0",
+  "parity": "n81",
+  "bootloader": "U-Boot 2012.07.x; bootloader console credentials = admin/new2day (same as stock SSH shell)",
+  "verified_from": "CFG1 bootargs + upstream commit e16a0e7 + fleet dumps, 2026-11-18",
+  "note": "Cisco-pinout RJ-45 JACK (not a bare header), 3.3V. RX is shorted to ground through resistor R176 \u2014 remove R176 to send console input (viewing boot output works without the mod)."
+ },
+ "bench_observations": [
+  {
+   "date": "2026-11-18",
+   "unit": "ap3915i-3893 (b4:2d:56:25:38:93, serial 1744Y-1081800000)",
+   "finding": "FLASH-BOOT LOAD ADDRESS: sf read to 0x88000000 + bootm FAILS on the 24.10.8 FIT (kernel 6.6.144) while sf read to 0x83600000 + bootm BOOTS \u2014 same image bytes, same flash offset 0x280000. The recipe destination 0x88000000 was the bug behind the Sept-2026 \"6.6-flash-boot-reliably / 6.12-fails\" mystery for this image class; 0x83600000 (the stock boot_net load address) is required. Cold-boot-verified 3x on hardware, zero serial.",
+   "evidence": "conwrt-bench sessions/2026-11-18-ap3915i-3893-bringup.md + docs/BOOT-SAFETY-AP3915I.md; full stock partition backups on ai-legion and ai-legion-small"
+  },
+  {
+   "date": "2026-11-18 (evening)",
+   "unit": "ap3915i-3893",
+   "finding": "LOAD-ADDRESS FAMILY COMPLETED: in-place upgrade to 25.12.6 (wiki-current) flash-boots at 0x83600000, cold-verified with overlay \u2014 BOTH 24.10.8 (6.6) and 25.12.6 (6.12) flash-boot at 0x83600000; the Sept-2026 kernel-version framing is fully retired. Address provenance: upstream commit e16a0e7 introduced sf-read 0x88000000 (works for 23.05-era images, fails for 24.10.8+ FITs) and tftp 0x86000000 (ramboot, presumed good); stock boot_net tftp-loads 0x83600000 (proven); our flash boot uses 0x83600000 (proven both kernels)."
+  },
+  {
+   "date": "2026-11-18 (evening, research)",
+   "unit": "species-wide (wiki/upstream/forum audit)",
+   "finding": "DT declares keys/reset (tlmm 18, ACTIVE_LOW, KEY_RESTART) since e16a0e7, but on 25.12.6 NO input device materializes (gpio-keys never binds) \u2014 failsafe practically unreachable by button (corrects the \"no button in DTS\" lore; forum lineage suggests stuck/active-HIGH). NEW last-resort door: bootloader-resident failsafe webpage \u2014 from U-Boot run failsafe_boot (or bootm 0x9fd70000) serves an unauthenticated firmware-upload page at 192.168.1.1/index.htm; survives env corruption; needs serial (+R176 RX mod)."
+  }
+ ]
 }

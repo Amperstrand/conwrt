@@ -256,6 +256,7 @@ def _download_prebake_packages() -> None:
     feed_urls = [PACKAGES_URL.rsplit("/", 1)[0] + "/" + feed
                  for feed in ("base", "luci", "packages", "routing")]
     available: dict[str, str] = {}  # apk filename -> full URL
+    feeds_reachable = 0
     for feed in feed_urls:
         listing = subprocess.run(
             ["curl", "-sfL", feed + "/"],
@@ -265,8 +266,20 @@ def _download_prebake_packages() -> None:
             print(f"  Warning: could not fetch feed listing {feed}: "
                   f"{listing.stderr.strip()[:80]}")
             continue
+        feeds_reachable += 1
         for name in re.findall(r'href="([^"]+\.apk)"', listing.stdout):
             available.setdefault(name, feed + "/" + name)
+    # Prebake gate (conwrt#374 item 3b — the "quiet skip" class): with NO
+    # feed listing reachable the image would bake with zero packages and
+    # the suite would proceed to red later for unrelated reasons. Fail
+    # HERE, naming the actual problem.
+    if feeds_reachable == 0:
+        import pytest
+        pytest.fail(
+            f"prebake: no package feed reachable ({', '.join(feed_urls)}) — "
+            f"cannot pre-bake {PREBAKE_PACKAGES}; fix network/feed config "
+            f"before preparing the image"
+        )
     for pkg in PREBAKE_PACKAGES:
         # Prefer the exact package: `pkg-<digit>...` (iperf3, not
         # iperf3-ssl — both start with "iperf3-").
@@ -280,11 +293,23 @@ def _download_prebake_packages() -> None:
             print(f"  Warning: {pkg} not found in any prebake feed")
             continue
         match = sorted(candidates)[0]
-        subprocess.run(
+        # Prebake gate (conwrt#374 item 3b): an ignored download failure
+        # left a missing or truncated apk that baked into the image (or
+        # silently skipped) — the suite then reds for unrelated reasons.
+        download = subprocess.run(
             ["curl", "-sfL", "-o", str(prebake_dir / match),
              available[match]],
             capture_output=True, timeout=120,
         )
+        out = prebake_dir / match
+        if download.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+            import pytest
+            pytest.fail(
+                f"prebake: download failed for {match} "
+                f"(rc={download.returncode}, "
+                f"size={out.stat().st_size if out.exists() else 'absent'}) — "
+                f"refusing to bake an incomplete image"
+            )
     print(f"  Pre-baked {len(list(prebake_dir.glob('*.apk')))} packages",
           flush=True)
 

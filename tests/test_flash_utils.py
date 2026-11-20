@@ -167,6 +167,18 @@ class TestFlashViaSysupgrade:
 
 
 class TestFlashViaMtdWrite:
+    # conwrt#374 item 3c (PR #45 review debt): the direct guard that a
+    # FAILED UPLOAD stops the flash — otherwise a regression could execute
+    # mtd against an absent or stale remote image. Every other test in
+    # this class patches the upload to succeed; this is the stop case.
+    @patch("conwrt.flash_utils.subprocess.run")
+    @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
+    @patch("conwrt.flash_utils._scp_upload", return_value=(False, None))
+    def test_failed_upload_stops_before_mtd(self, mock_upload, mock_ssh_cmd, mock_run):
+        from conwrt.flash_utils import _flash_via_mtd_write
+        assert _flash_via_mtd_write("1.2.3.4", "/fw.bin") is False
+        mock_run.assert_not_called()
+
     @patch("conwrt.flash_utils.subprocess.run")
     @patch("conwrt.flash_utils.ssh_cmd", return_value=["ssh", "cmd"])
     @patch("conwrt.flash_utils._scp_upload", return_value=(True, "/tmp/fw.bin"))

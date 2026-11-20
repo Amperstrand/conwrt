@@ -13,5 +13,11 @@
 pub mod serial_io;
 pub mod xmodem_transfer;
 pub mod zycast;
+/// RE-derived receive state machine + model-ID field reader. Host-side
+/// validation infrastructure (tests, the fake-Z-Loader simulator, sender
+/// preflights) — allocation-using, so gated to std builds; the no_std
+/// core keeps the encode/checksum half firmware needs.
+#[cfg(feature = "std")]
+pub mod zycast_receiver;
 
 pub use xmodem_transfer::{BlockLength, XmodemError, send_firmware};

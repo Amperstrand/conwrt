@@ -104,12 +104,39 @@ impl LeaseTable {
         Ok(id)
     }
 
-    /// Record a heartbeat: refills the budget.
+    /// Record a heartbeat: refills the budget. SYSTEM path (no owner
+    /// check — supervisor/keep-alive loops); controller requests must
+    /// use [`LeaseTable::heartbeat_by`].
     pub fn heartbeat(&mut self, lease_id: u64, refill_to: u32) -> Result<(), LeaseError> {
         let lease = self
             .leases
             .get_mut(&lease_id)
             .ok_or(LeaseError::UnknownLease(lease_id))?;
+        lease.heartbeat_budget = refill_to;
+        Ok(())
+    }
+
+    /// Record a heartbeat by its OWNING controller, OWNER-CHECKED
+    /// (#164 P1 4272448192 — the finding names heartbeats as carrying
+    /// "the same missing ownership validation" as release): any
+    /// connected controller could otherwise refill a dead owner's
+    /// lease budget forever, immortalizing it past every expiry tick
+    /// and denying the resource for the agent's lifetime.
+    pub fn heartbeat_by(
+        &mut self,
+        lease_id: u64,
+        controller: &str,
+        refill_to: u32,
+    ) -> Result<(), LeaseError> {
+        let lease = self
+            .leases
+            .get_mut(&lease_id)
+            .ok_or(LeaseError::UnknownLease(lease_id))?;
+        if lease.controller != controller {
+            return Err(LeaseError::Denied(LeaseDenied::NotOwner(
+                lease.controller.clone(),
+            )));
+        }
         lease.heartbeat_budget = refill_to;
         Ok(())
     }
@@ -260,6 +287,33 @@ mod tests {
         let expired = t.tick();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].lease_id, id);
+    }
+
+    #[test]
+    fn heartbeat_by_owner_restriction() {
+        // #164 P1 4272448192 (heartbeat half): a non-owner's heartbeat
+        // must not refill the budget — any controller could otherwise
+        // immortalize a dead owner's lease past every expiry tick.
+        let mut t = LeaseTable::new();
+        let id = t
+            .acquire("uart0", "laptop-a", true, DisconnectPolicy::Abort, 2)
+            .unwrap();
+        let _ = t.tick(); // 2→1
+        match t.heartbeat_by(id, "laptop-b", 2) {
+            Err(LeaseError::Denied(LeaseDenied::NotOwner(h))) => assert_eq!(h, "laptop-a"),
+            other => panic!("expected NotOwner, got {other:?}"),
+        }
+        // the refused heartbeat did NOT refill: the next tick expires
+        let expired = t.tick();
+        assert_eq!(expired.len(), 1, "budget must still reach 0");
+        assert_eq!(expired[0].lease_id, id);
+        // the owner's own heartbeat still refills
+        let id2 = t
+            .acquire("uart0", "laptop-a", true, DisconnectPolicy::Abort, 2)
+            .unwrap();
+        t.heartbeat_by(id2, "laptop-a", 2).unwrap();
+        let _ = t.tick(); // 2→1 with the refill
+        assert!(t.get(id2).is_some());
     }
 
     #[test]
