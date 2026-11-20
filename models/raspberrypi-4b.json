@@ -45,6 +45,7 @@
       "semantics": "BOOT_ORDER nibbles are tried RIGHT to LEFT. 0xf142 = network (2), usb (4), sd (1), then restart (f).",
       "firmware_floors": {
         "source": "raspberrypi/rpi-eeprom firmware-2711 release-notes.md",
+   "verified": "2026-11-20 against the primary source at rpi-eeprom @ 1a099a5a (last commit before 2020-09-20, where notes lived in firmware/release-notes.md + releases.md): '2019-09-23 (BETA) Add support for network boot'; 'Promote 2020-04-16 EEPROM release critical - Make this the default release for all users. This supports network boot'; '2020-05-15 Add pieeprom-2020-05-15 beta with USB boot'; releases.md: 'USB mass storage boot requires the 2020-09-03 EEPROM images'.",
         "note": "beta = first bootloader containing the feature; stable = first release shipped as the DEFAULT production EEPROM. Capability is not configuration: stock BOOT_ORDER 0xf41 omits network, so a capable Pi never attempts a netboot.",
         "sd": {
           "beta": null,

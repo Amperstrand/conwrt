@@ -22,7 +22,12 @@ Tooling: `scripts/pi_boot.py` (`probe`, `detect`, `capability`, `matrix`).
 
 Read that as: *USB boot implies netboot capability, but not the reverse.* A Pi
 4 from the 2020-04 → 2020-09 window netboots fine and cannot boot USB at all.
-Only 2019 / early-2020 firmware lacks both.
+Only 2019 / early-2020 firmware lacks both. Re-verified 2026-11-20 against
+the primary source (rpi-eeprom @ 1a099a5a, the historical
+`firmware/release-notes.md`): "2019-09-23 (BETA) Add support for network
+boot", "Promote 2020-04-16 … default release for all users … supports network
+boot", "2020-05-15 … beta with USB boot", and `releases.md`: "USB mass
+storage boot requires the 2020-09-03 EEPROM images".
 
 The second gate is `BOOT_ORDER`. The stock value is `0xf41`:
 
