@@ -11,12 +11,19 @@
 //! bridge swaps the byte pipe with zero code:
 //!
 //! ```text
-//! socat TCP-LISTEN:8400,reuseaddr,fork FILE:/dev/ttyACM0,b115200,raw,echo=0
+//! socat TCP-LISTEN:8400,reuseaddr,fork FILE:/dev/serial/by-id/<usb-id>,b115200,raw,echo=0
 //! ```
+//!
+//! Resolve the device by its stable USB serial id (`/dev/serial/by-id/…`),
+//! NEVER a literal `ttyACM<n>`: on a shared lab host ttyACM0 may be the
+//! ST-Link, another board, or a different node after re-enumeration
+//! (conwrt#374, PR #189 review debt). `ls /dev/serial/by-id/` names the
+//! board's id; for registry-managed fixtures resolve the place's
+//! resources through labgrid instead of any device node.
 //!
 //! …then every TCP client (these tests, the CLI) addresses the board
 //! unchanged. That is the on-device bring-up recipe for #110's bench stage;
-//! the ESP32-S3 agent (#111) enumerates as a CDC-ACM `ttyACM` device too —
+//! the ESP32-S3 agent (#111) enumerates as a CDC-ACM device too —
 //! same recipe, same frames (`s3_diag_mock` is its scripted peer).
 
 use alloc::string::String;
