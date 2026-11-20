@@ -181,12 +181,18 @@ def parse_boot_order(value: str) -> tuple[list[str], str | None]:
 
 
 def capability_rows(firmware: tuple[int, int, int] | None,
-                    modes: list[str]) -> list[dict]:
+                    modes: list[str], order_known: bool = True) -> list[dict]:
     """Per-mode capability/configuration verdict.
 
     ``supported`` is one of ``yes`` (shipping default contains the feature),
     ``beta`` (feature exists only in a beta bootloader of that date), ``no``,
     or ``unknown`` when the firmware date could not be read.
+
+    ``ordered`` is True/False, or **None when no BOOT_ORDER could be read**.
+    An unread config is not an empty config: collapsing the two would report
+    "the bootloader will never try network" for a Pi whose configuration was
+    simply unavailable (no vcgencmd, no sudo, not a Pi). That is a false
+    claim, not a conservative one.
     """
     rows = []
     for mode, medium, beta_floor, stable_floor in CAPABILITY:
@@ -204,11 +210,18 @@ def capability_rows(firmware: tuple[int, int, int] | None,
             "mode": mode,
             "medium": medium,
             "supported": supported,
-            "ordered": mode in modes,
+            "ordered": (mode in modes) if order_known else None,
             "stable_floor": _fmt_date(stable_floor),
             "beta_floor": _fmt_date(beta_floor),
         })
     return rows
+
+
+def ordered_cell(row: dict) -> str:
+    """Renderer cell for the tri-state ``ordered`` value."""
+    if row["ordered"] is None:
+        return "?"
+    return "yes" if row["ordered"] else "NO"
 
 
 def capability_notes(row: dict) -> str:
@@ -223,6 +236,9 @@ def capability_notes(row: dict) -> str:
     if row["supported"] == "beta":
         return (f"only in a BETA bootloader dated >= {row['beta_floor']} "
                 f"(default release {row['stable_floor']}) — update before relying on it")
+    if row["ordered"] is None:
+        return ("firmware supports it, but BOOT_ORDER could not be read — the "
+                "Pi never told us whether it will try this medium")
     if not row["ordered"]:
         nibble = BOOT_MODES.get(mode)
         hint = f" Add {nibble:#x} to BOOT_ORDER (e.g. 0xf241 for SD -> USB -> network)." \
@@ -331,6 +347,30 @@ def split_sections(text: str) -> dict[str, str]:
     return {name: "\n".join(lines).strip() for name, lines in sections.items()}
 
 
+_TFTP_SENT = re.compile(r"sent\s+(\S+)\s+to\s+(\S+)")
+
+
+def tftp_fetches(log_text: str) -> dict[str, int]:
+    """Count TFTP file deliveries per filename from dnsmasq-tftp log lines.
+
+    Sample line:
+        dnsmasq-tftp[1234]: sent /tmp/dnsmasq.cfg01411c.d/tftpboot/config.txt to 192.168.1.50
+
+    This separates the two net-leg failures that look identical from the
+    client side: a board that never asked for TFTP (power, cable, boot order,
+    or a still-present boot medium) versus one that fetched the kernel and
+    then died (bad kernel/dtb, or the TFTP tree is incomplete).
+    """
+    counts: dict[str, int] = {}
+    for line in (log_text or "").splitlines():
+        match = _TFTP_SENT.search(line)
+        if not match:
+            continue
+        name = match.group(1).rsplit("/", 1)[-1]
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def classify(tcp22: bool, tcp23: bool) -> str:
     """Classify a reachable address. Mirrors the netboot-rescue playbook table."""
     if tcp22:
@@ -423,6 +463,9 @@ def evaluate_leg(leg: str, medium: str | None = None,
             return "PASS", f"boot medium = {medium}"
         return ("FAIL", f"booted, but medium = {medium} "
                         f"(expected {spec['expect_medium']})")
+    if ssh_up:
+        return ("FAIL", "SSH is up: the board booted an installed OS, not the "
+                        "rescue shell — a boot medium is still attached")
     if telnet_up:
         return "PASS", "rescue shell reachable on tcp/23 (RAM boot over TFTP)"
     return "FAIL", "no telnet listener — no netboot fallback observed"
@@ -451,14 +494,14 @@ def wait_for(predicate, timeout: float, interval: float = 2.0) -> bool:
         time.sleep(interval)
 
 
-def probe_host(host: str, user: str = "root", key: str | None = None,
-               timeout: int = 30) -> dict:
-    """Read boot facts from a booted Pi over SSH."""
-    result = run_ssh(host, PROBE_SCRIPT, user=user, key=key, timeout=timeout)
-    if result.returncode != 0:
-        raise RuntimeError(f"ssh to {user}@{host} failed: "
-                           f"{(result.stderr or result.stdout).strip()[:200]}")
-    sections = split_sections(result.stdout)
+def parse_probe_output(text: str, host: str = "") -> dict:
+    """Parse a probe dump — live SSH output, or a saved one via --from-file.
+
+    Keeping the parser separate from the transport makes a field report
+    replayable: an operator can paste ``cat`` of a probe dump and get the same
+    verdict, and the test-suite can pin real output shapes without hardware.
+    """
+    sections = split_sections(text)
 
     firmware_text = sections.get("fw", "")
     firmware = parse_fw_date(firmware_text)
@@ -484,8 +527,25 @@ def probe_host(host: str, user: str = "root", key: str | None = None,
         "firmware_date": _fmt_date(firmware),
         "firmware_version": _first_version_line(firmware_text),
         "bootloader_config": config,
-        "capabilities": capability_rows(firmware, modes),
+        "capabilities": capability_rows(firmware, modes,
+                                        order_known=bool(order_text)),
     }
+
+
+def probe_host(host: str, user: str = "root", key: str | None = None,
+               timeout: int = 30, dump: str | Path | None = None) -> dict:
+    """Read boot facts from a booted Pi over SSH.
+
+    ``dump`` saves the raw output so the report is replayable elsewhere with
+    ``probe --from-file`` — a field report becomes evidence, not a paraphrase.
+    """
+    result = run_ssh(host, PROBE_SCRIPT, user=user, key=key, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"ssh to {user}@{host} failed: "
+                           f"{(result.stderr or result.stdout).strip()[:200]}")
+    if dump:
+        Path(dump).write_text(result.stdout)
+    return parse_probe_output(result.stdout, host)
 
 
 def _first_version_line(text: str) -> str:
@@ -502,21 +562,24 @@ def _first_version_line(text: str) -> str:
 def render_probe(report: dict) -> str:
     medium = report["boot_medium"]
     order = report["boot_order"] or "unknown"
-    modes = " -> ".join(report["boot_order_modes"]) or "unknown"
+    modes = " -> ".join(report["boot_order_modes"])
+    order_line = f"  boot order      {order}" + (f"   {modes}" if modes else "")
+    firmware = report["firmware_date"] or "unknown"
+    version = report["firmware_version"]
+    firmware_line = f"  bootloader      {firmware}" + (f"   {version}" if version else "")
     lines = [
         f"{report['model'] or 'unknown model'}  ({report['host']})",
         f"  serial          {report['serial'] or 'unknown'}",
         f"  os              {report['os'] or 'unknown'}",
         f"  boot medium     {medium}   (root={report['root'] or 'n/a'})",
-        f"  boot order      {order}   {modes}",
-        f"  bootloader      {report['firmware_date'] or 'unknown'}   "
-        f"{report['firmware_version']}",
+        order_line,
+        firmware_line,
         "",
         f"  {'mode':<8}{'firmware':<10}{'ordered':<9}verdict",
     ]
     for row in report["capabilities"]:
         lines.append(f"  {row['mode']:<8}{row['supported']:<10}"
-                     f"{'yes' if row['ordered'] else 'NO':<9}"
+                     f"{ordered_cell(row):<9}"
                      f"{capability_notes(row)}")
     if report["boot_order_error"]:
         lines.append(f"\n  ! BOOT_ORDER could not be decoded: {report['boot_order_error']}")
@@ -535,12 +598,22 @@ def render_matrix(results: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def cmd_probe(args: argparse.Namespace) -> int:
-    try:
-        report = probe_host(args.host, user=args.user, key=args.key,
-                            timeout=args.timeout)
-    except RuntimeError as exc:
-        print(f"probe failed: {exc}", file=sys.stderr)
-        return 1
+    from_file = getattr(args, "from_file", None)
+    if from_file:
+        report = parse_probe_output(Path(from_file).read_text(),
+                                    args.host or "fixture")
+    else:
+        if not args.host:
+            print("probe needs --host (or --from-file to replay a saved dump)",
+                  file=sys.stderr)
+            return 2
+        try:
+            report = probe_host(args.host, user=args.user, key=args.key,
+                                timeout=args.timeout,
+                                dump=getattr(args, "dump", None))
+        except RuntimeError as exc:
+            print(f"probe failed: {exc}", file=sys.stderr)
+            return 1
     print(render_probe(report))
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2) + "\n")
@@ -609,9 +682,9 @@ def cmd_capability(args: argparse.Namespace) -> int:
           f"BOOT_ORDER {args.boot_order or 'unknown'}"
           f"   {' -> '.join(modes) or ''}\n")
     print(f"{'mode':<8}{'firmware':<10}{'ordered':<9}verdict")
-    for row in capability_rows(firmware, modes):
+    for row in capability_rows(firmware, modes, order_known=bool(args.boot_order)):
         print(f"{row['mode']:<8}{row['supported']:<10}"
-              f"{'yes' if row['ordered'] else 'NO':<9}{capability_notes(row)}")
+              f"{ordered_cell(row):<9}{capability_notes(row)}")
     return 0
 
 
@@ -629,12 +702,43 @@ def _wait_for_leg(args: argparse.Namespace, leg: str) -> tuple[bool, bool]:
         ok = wait_for(lambda: tcp_open(args.host, 22, timeout=2.0),
                       args.boot_timeout)
         return ok, False
-    ok = wait_for(lambda: tcp_open(args.host, 23, timeout=2.0), args.boot_timeout)
-    return False, ok
+
+    # Net leg: tcp/23 is the pass signal, but SSH appearing means the board
+    # booted an installed OS instead (a medium was left in). Fail fast with
+    # that diagnosis rather than waiting out boot_timeout and reporting "no
+    # netboot", which would point the operator at TFTP when the real cause is
+    # a card still in the slot.
+    seen = {"kind": None}
+
+    def poll() -> bool:
+        if tcp_open(args.host, 23, timeout=2.0):
+            seen["kind"] = "telnet"
+            return True
+        if tcp_open(args.host, 22, timeout=2.0):
+            seen["kind"] = "ssh"
+            return True
+        return False
+
+    wait_for(poll, args.boot_timeout)
+    return seen["kind"] == "ssh", seen["kind"] == "telnet"
 
 
 def legs_evidence(leg: str) -> str:
     return LEGS[leg]["evidence"]
+
+
+def _net_tftp_summary(router: str) -> str:
+    """Best-effort: what the router's dnsmasq saw being fetched over TFTP."""
+    result = run_ssh(router, "logread | grep -i dnsmasq-tftp | tail -200",
+                     timeout=20)
+    if result.returncode != 0:
+        return f"router log unavailable ({result.stderr.strip()[:80]})"
+    counts = tftp_fetches(result.stdout)
+    if not counts:
+        return ("no TFTP fetches in the router log — the board never asked "
+                "(power, cable, boot order, or a medium is still present)")
+    summary = ", ".join(f"{name} x{count}" for name, count in sorted(counts.items()))
+    return f"router saw {summary}"
 
 
 def cmd_matrix(args: argparse.Namespace) -> int:
@@ -680,6 +784,12 @@ def cmd_matrix(args: argparse.Namespace) -> int:
 
         verdict, detail = evaluate_leg(leg, medium=medium, ssh_up=ssh_up,
                                        telnet_up=telnet_up)
+        tftp_note = ""
+        if leg == "net" and args.router:
+            tftp_note = _net_tftp_summary(args.router)
+            if tftp_note:
+                print(f"  tftp: {tftp_note}")
+                detail = f"{detail} [{tftp_note}]"
         print(f"  {verdict}: {detail}")
         if probe and leg != "net":
             print("  " + render_probe(probe).replace("\n", "\n  "))
@@ -687,6 +797,7 @@ def cmd_matrix(args: argparse.Namespace) -> int:
             "leg": leg,
             "verdict": verdict,
             "detail": detail,
+            "tftp": tftp_note,
             "probe": probe,
         })
 
@@ -703,8 +814,8 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    def add_target(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--host", required=True,
+    def add_target(sp: argparse.ArgumentParser, host_required: bool = True) -> None:
+        sp.add_argument("--host", required=host_required,
                         help="address the Pi has (or should get) on this L2")
         sp.add_argument("--user", default="root",
                         help="ssh user (pi / ubuntu / root; default root)")
@@ -722,7 +833,12 @@ def main(argv: list[str] | None = None) -> int:
     sp.set_defaults(func=cmd_scan)
 
     sp = sub.add_parser("probe", help="read boot facts from a booted Pi over SSH")
-    add_target(sp)
+    add_target(sp, host_required=False)
+    sp.add_argument("--from-file", default=None,
+                    help="replay a saved probe dump instead of using SSH "
+                         "(--host then only labels the report)")
+    sp.add_argument("--dump", default=None,
+                    help="save the raw probe output to this path for replay")
     sp.set_defaults(func=cmd_probe)
 
     sp = sub.add_parser("detect", help="classify an address: OS / rescue shell / silent")
@@ -741,6 +857,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="comma-separated legs to test (default sd,usb,net)")
     sp.add_argument("--power-cmd", default=None,
                     help="shell command that power-cycles the board")
+    sp.add_argument("--router", default=None,
+                    help="OpenWrt router running dnsmasq (root SSH); adds the "
+                         "TFTP-side view to the net leg")
     sp.add_argument("--boot-timeout", type=int, default=180,
                     help="seconds to wait for evidence after power-up")
     sp.add_argument("--yes", action="store_true",

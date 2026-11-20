@@ -20,6 +20,7 @@ from pi_boot import (
     capability_rows,
     classify,
     evaluate_leg,
+    ordered_cell,
     parse_boot_order,
     parse_bootloader_config,
     parse_fw_date,
@@ -140,6 +141,11 @@ class TestCapabilityMatrix(unittest.TestCase):
         self.assertFalse(rows["network"]["ordered"])
         self.assertTrue(rows["usb"]["ordered"])
 
+    def test_unknown_order_is_tri_state(self):
+        rows = capability_rows((2024, 1, 5), [], order_known=False)
+        self.assertTrue(all(row["ordered"] is None for row in rows))
+        self.assertEqual({ordered_cell(row) for row in rows}, {"?"})
+
 
 class TestCapabilityNotes(unittest.TestCase):
     def _row(self, **kwargs):
@@ -161,6 +167,13 @@ class TestCapabilityNotes(unittest.TestCase):
 
     def test_unknown_is_explicit(self):
         self.assertIn("unknown", capability_notes(self._row(supported="unknown")))
+
+    def test_unread_boot_order_is_not_a_negative(self):
+        # Regression: an unreadable BOOT_ORDER used to render as
+        # "NOT in BOOT_ORDER", asserting the opposite of what we know.
+        note = capability_notes(self._row(ordered=None))
+        self.assertIn("could not be read", note)
+        self.assertNotIn("NOT in BOOT_ORDER", note)
 
 
 class TestParseLsblk(unittest.TestCase):
@@ -260,6 +273,14 @@ class TestEvaluateLeg(unittest.TestCase):
         verdict, _ = evaluate_leg("net", telnet_up=False)
         self.assertEqual(verdict, "FAIL")
 
+    def test_net_leg_reports_the_real_cause_when_ssh_is_up(self):
+        # Waiting out boot_timeout and saying "no netboot" would send the
+        # operator to the TFTP server when a card is simply still inserted.
+        verdict, detail = evaluate_leg("net", ssh_up=True, telnet_up=False)
+        self.assertEqual(verdict, "FAIL")
+        self.assertIn("installed OS", detail)
+        self.assertNotIn("no netboot", detail.lower())
+
 
 class TestRenderProbe(unittest.TestCase):
     def _report(self, medium="usb", fw=(2020, 9, 3), order="0xf41"):
@@ -306,6 +327,37 @@ class TestWaitFor(unittest.TestCase):
                                side_effect=[0, 0, 0.05, 1.0]):
             with mock.patch.object(pi_boot.time, "sleep"):
                 self.assertFalse(wait_for(lambda: False, timeout=0.5))
+
+
+class TestTftpFetches(unittest.TestCase):
+    LOG = (
+        "Thu Nov 20 09:00:01 2026 daemon.info dnsmasq-tftp[1234]: "
+        "sent /tmp/dnsmasq.cfg01411c.d/tftpboot/config.txt to 192.168.1.50\n"
+        "Thu Nov 20 09:00:02 2026 daemon.info dnsmasq-tftp[1234]: "
+        "sent /tmp/dnsmasq.cfg01411c.d/tftpboot/kernel8.img to 192.168.1.50\n"
+        "Thu Nov 20 09:00:02 2026 daemon.info dnsmasq-tftp[1234]: "
+        "sent /tmp/dnsmasq.cfg01411c.d/tftpboot/start4.elf to 192.168.1.50\n"
+        "Thu Nov 20 09:00:05 2026 daemon.info dnsmasq-tftp[1234]: "
+        "sent /tmp/dnsmasq.cfg01411c.d/tftpboot/config.txt to 192.168.1.51\n"
+        "Thu Nov 20 09:00:09 2026 daemon.info dnsmasq-dhcp[1234]: "
+        "DHCPDISCOVER(br-lan) 192.168.1.50\n"
+    )
+
+    def test_counts_per_basename(self):
+        counts = pi_boot.tftp_fetches(self.LOG)
+        self.assertEqual(counts["config.txt"], 2)
+        self.assertEqual(counts["kernel8.img"], 1)
+        self.assertEqual(counts["start4.elf"], 1)
+
+    def test_dhcp_lines_are_not_fetches(self):
+        counts = pi_boot.tftp_fetches(self.LOG)
+        self.assertNotIn("DHCPDISCOVER", " ".join(counts))
+
+    def test_empty_log_yields_empty_counts(self):
+        # A count of zero must come from an empty parse, not a failed one;
+        # callers distinguish the two by the log being non-empty.
+        self.assertEqual(pi_boot.tftp_fetches(""), {})
+        self.assertEqual(pi_boot.tftp_fetches("no tftp here\n"), {})
 
 
 class TestNeighbourScan(unittest.TestCase):
@@ -360,6 +412,119 @@ class TestNeighbourScan(unittest.TestCase):
         self.assertIn("192.168.1.50", out)
         self.assertIn("22", out)
         self.assertNotIn("23", out.splitlines()[-1])
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pi"
+
+
+class TestProbeFixtures(unittest.TestCase):
+    """End-to-end probe parsing over the output shapes `probe` actually sees.
+
+    These run with no hardware: they are what makes the tool's verdicts
+    reviewable before a board is available.
+    """
+
+    def _load(self, name):
+        return pi_boot.parse_probe_output((FIXTURES / name).read_text(), "fixture")
+
+    def test_pi_os_on_usb_with_old_firmware(self):
+        report = self._load("probe-pios-usb-old-fw.txt")
+        self.assertEqual(report["boot_medium"], "usb")
+        self.assertEqual(report["firmware_date"], "2020-04-16")
+        caps = {row["mode"]: row for row in report["capabilities"]}
+        self.assertEqual(caps["usb"]["supported"], "no")
+        self.assertEqual(caps["network"]["supported"], "yes")
+        self.assertFalse(caps["network"]["ordered"])
+        self.assertIn("0x2", capability_notes(caps["network"]))
+
+    def test_pi_os_on_sd_with_modern_firmware(self):
+        report = self._load("probe-pios-sd-modern.txt")
+        self.assertEqual(report["boot_medium"], "sd")
+        self.assertEqual(report["boot_order_modes"],
+                         ["sd", "usb", "network", "restart"])
+        for row in report["capabilities"]:
+            self.assertEqual(row["supported"], "yes")
+            self.assertTrue(row["ordered"])
+
+    def test_ubuntu_on_usb(self):
+        report = self._load("probe-ubuntu-usb.txt")
+        self.assertEqual(report["boot_medium"], "usb")
+        self.assertIn("Ubuntu", report["os"])
+        caps = {row["mode"]: row for row in report["capabilities"]}
+        self.assertEqual(caps["usb"]["supported"], "yes")
+        self.assertFalse(caps["network"]["ordered"])
+
+    def test_netboot_initramfs_has_no_block_root(self):
+        report = self._load("probe-openwrt-netboot.txt")
+        self.assertEqual(report["boot_medium"], "net")
+        self.assertIsNone(report["firmware_date"])
+        caps = {row["mode"]: row for row in report["capabilities"]}
+        self.assertIsNone(caps["network"]["ordered"])
+
+    def test_missing_vcgencmd_is_unknown_not_false(self):
+        report = self._load("probe-no-vcgencmd.txt")
+        self.assertEqual(report["boot_medium"], "sd")
+        caps = {row["mode"]: row for row in report["capabilities"]}
+        self.assertIsNone(caps["usb"]["ordered"])
+        self.assertEqual(ordered_cell(caps["usb"]), "?")
+        out = render_probe(report)
+        self.assertIn("?", out)
+        self.assertNotIn("NOT in BOOT_ORDER", out)
+
+
+class TestProbeCli(unittest.TestCase):
+    def test_from_file_needs_no_network(self):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = pi_boot.main(["probe", "--from-file",
+                               str(FIXTURES / "probe-pios-usb-old-fw.txt")])
+        self.assertEqual(rc, 0)
+        self.assertIn("boot medium     usb", buf.getvalue())
+
+    def test_no_host_and_no_file_is_a_usage_error(self):
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(pi_boot.main(["probe"]), 2)
+
+    def test_unknown_order_does_not_duplicate_unknown(self):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            pi_boot.main(["probe", "--from-file",
+                          str(FIXTURES / "probe-no-vcgencmd.txt")])
+        self.assertIn("boot order      unknown\n", buf.getvalue())
+
+
+class TestProbeTransport(unittest.TestCase):
+    """The SSH path, mocked — the report must be replayable verbatim."""
+
+    def test_dump_is_written_and_parsed(self):
+        import tempfile
+
+        raw = (FIXTURES / "probe-pios-usb-old-fw.txt").read_text()
+        fake = mock.Mock(returncode=0, stdout=raw, stderr="")
+        with mock.patch.object(pi_boot, "run_ssh", return_value=fake) as run:
+            with tempfile.TemporaryDirectory() as tmp:
+                dump = Path(tmp) / "probe.txt"
+                report = pi_boot.probe_host("192.0.2.10", user="pi", dump=dump)
+                self.assertEqual(dump.read_text(), raw)
+        self.assertEqual(report["host"], "192.0.2.10")
+        self.assertEqual(report["boot_medium"], "usb")
+        self.assertEqual(run.call_args.kwargs["user"], "pi")
+
+    def test_ssh_failure_is_reported_not_parsed(self):
+        fake = mock.Mock(returncode=255, stdout="", stderr="Permission denied")
+        with mock.patch.object(pi_boot, "run_ssh", return_value=fake):
+            with self.assertRaises(RuntimeError) as ctx:
+                pi_boot.probe_host("192.0.2.10")
+        self.assertIn("Permission denied", str(ctx.exception))
 
 
 class TestModelAgreement(unittest.TestCase):

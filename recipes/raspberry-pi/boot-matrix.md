@@ -53,11 +53,27 @@ scripts/pi_boot.py probe --host 192.168.1.50 --user pi
 
 # Test all three media in turn (interactive media swaps, optional power hook)
 scripts/pi_boot.py matrix --host 192.168.1.50 --user pi \
+    --router 192.168.1.1 \
     --power-cmd 'labgrid-client -p <labgrid-place> power cycle' --json boot-matrix.json
 ```
 
 `matrix` is deliberately semi-manual: no tool can insert an SD card. Each leg
 prints its precondition and waits for Enter unless `--yes` is given.
+
+## Replaying a dump
+
+`probe --dump` saves the raw SSH output; `probe --from-file` renders it again
+anywhere. A report from another site becomes evidence rather than a
+paraphrase — and the parser can be exercised with no board attached:
+
+```bash
+scripts/pi_boot.py probe --host 192.168.1.50 --user pi --dump probe.txt
+scripts/pi_boot.py probe --from-file probe.txt
+```
+
+The fixture set under `tests/fixtures/pi/` is the same format (Pi OS on USB,
+Pi OS on SD, Ubuntu, a netboot initramfs with no block root, and a Pi whose
+`vcgencmd` is unavailable).
 
 ## What each leg proves
 
@@ -66,6 +82,13 @@ prints its precondition and waits for Enter unless `--yes` is given.
 | `sd` | microSD with a bootable OS, USB removed | SSH + `root=` resolves to a `mmc` device | the card booted **and** was the medium |
 | `usb` | USB device, SD removed | SSH + `root=` resolves to a `usb` device | the USB device booted |
 | `net` | neither medium present, rescue server armed for the Pi's MAC | telnet on tcp/23 | the bootloader fell through to TFTP and ran the RAM kernel |
+
+With `--router`, the net leg also reads the router's `dnsmasq-tftp` log. A
+failed net leg then reports which of two very different things happened:
+**"no TFTP fetches"** (the board never asked — power, cable, boot order, or a
+medium still in the slot) versus **"router saw config.txt, kernel8.img"**
+(it fetched and then died — bad kernel/dtb, or an incomplete tree). The two
+are indistinguishable from the client side and have opposite fixes.
 
 The leg verdict is on the **medium**, not on reachability. A Pi that answers
 SSH during the SD leg but reports `boot medium usb` is a **FAIL** — that is
@@ -99,6 +122,36 @@ Interpretation:
 | `boot order` has no `network` | Netboot will never be attempted regardless of firmware. |
 | `usb: no` but `network: yes` | Pre-2020-09 bootloader. Netboot is the only remote medium available. |
 | `firmware unknown` | `vcgencmd` failed (not a Pi, permissions, or `sudo -n` unavailable) — not evidence of old firmware. |
+
+## The SD bootstrap (a board nothing can reach)
+
+When `scan` and `detect` find nothing and the board has never booted an OS,
+the SD card is the only entry point (trap 2). One boot can make it
+network-manageable permanently:
+
+1. Write Raspberry Pi OS to the card (same image and headless seeding as any
+   Pi disk — `pi_image.py` documents the cloud-init layout).
+2. Build an EEPROM package with the boot order you want:
+
+   ```bash
+   scripts/pi_eeprom.py build --boot-order 0xf241 --boot-uart --out /tmp/pi-eeprom
+   ```
+
+3. Copy the three files to the card's FAT boot partition:
+   `recovery.bin`, `pieeprom.upd`, `pieeprom.sig`. The bootloader applies
+   them on the next power-up, before the OS matters.
+4. Boot, confirm with `probe`, then remove the package from the card. Leaving
+   it is harmless (version match → skip) but it is a stale artifact that
+   misleads the next person.
+
+Do **not** try to deliver the same package through the netboot TFTP root:
+without `ENABLE_SELF_UPDATE=1` in the *current* EEPROM the bootloader
+downloads `pieeprom.upd` and never applies it — hardware-verified
+2026-10-08. See `eeprom-and-security.md` § Delivering EEPROM updates.
+
+With `BOOT_UART=1`, a 3.3 V USB-UART on GPIO14/15 at 115200 prints the
+bootloader's boot-mode sequence. On a board that is otherwise silent, that is
+the cheapest evidence available and it costs one wire.
 
 ## Traps
 

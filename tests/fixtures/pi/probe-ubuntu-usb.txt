@@ -1,0 +1,25 @@
+@@model
+Raspberry Pi 4 Model B Rev 1.2
+@@serial
+10000000c0ffee01
+@@cmdline
+console=tty1 root=PARTUUID=11112222-03 rootfstype=ext4 rootwait fixrtc
+@@lsblk
+NAME="sda" TRAN="usb" TYPE="disk" PARTUUID="" SIZE="931.5G"
+NAME="sda1" TRAN="usb" TYPE="part" PARTUUID="11112222-01" SIZE="512M"
+NAME="sda2" TRAN="usb" TYPE="part" PARTUUID="11112222-02" SIZE="2G"
+NAME="sda3" TRAN="usb" TYPE="part" PARTUUID="11112222-03" SIZE="929G"
+@@mount
+/dev/sda3 ext4
+@@os
+Ubuntu 24.04.1 LTS
+@@fw
+Jun  7 2023 12:00:00
+version 9d1c4f00 (release)
+timestamp 1686139200
+@@conf
+BOOT_UART=0
+WAKE_ON_GPIO=0
+POWER_OFF_ON_HALT=1
+BOOT_ORDER=0xf41
+@@section-end
