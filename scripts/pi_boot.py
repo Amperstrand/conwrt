@@ -459,13 +459,23 @@ def evaluate_leg(leg: str, medium: str | None = None,
     if spec["evidence"] == "ssh":
         if not ssh_up:
             return "FAIL", "no SSH listener — the board did not reach an OS"
+        if medium is None:
+            return ("FAIL", "SSH answered but the boot medium could not be "
+                            "identified — the probe failed "
+                            "(check --user/--key)")
         if medium == spec["expect_medium"]:
             return "PASS", f"boot medium = {medium}"
         return ("FAIL", f"booted, but medium = {medium} "
                         f"(expected {spec['expect_medium']})")
     if ssh_up:
-        return ("FAIL", "SSH is up: the board booted an installed OS, not the "
-                        "rescue shell — a boot medium is still attached")
+        # SSH answered, so the board booted SOMETHING with sshd — even when
+        # the probe could not identify which OS (auth, wrong user, cloud-init
+        # still running). Reporting "no telnet listener" here would send the
+        # operator to the TFTP server on evidence we do not have.
+        identified = (f" (medium: {medium})" if medium
+                      else " (probe could not identify it — check --user/--key)")
+        return ("FAIL", "SSH is up: the board booted an installed OS, "
+                        "not the rescue shell" + identified)
     if telnet_up:
         return "PASS", "rescue shell reachable on tcp/23 (RAM boot over TFTP)"
     return "FAIL", "no telnet listener — no netboot fallback observed"
@@ -820,7 +830,9 @@ def cmd_matrix(args: argparse.Namespace) -> int:
                     last_error = str(exc)
                     time.sleep(5)
             if probe is None:
-                ssh_up = False
+                # Do NOT clear ssh_up: SSH answering is evidence, and
+                # evaluate_leg must say "SSH up but unidentified" rather than
+                # "no SSH listener" — the opposite of what we observed.
                 print(f"  ! ssh is open but the probe failed: {last_error}")
 
         verdict, detail = evaluate_leg(leg, medium=medium, ssh_up=ssh_up,

@@ -284,6 +284,23 @@ class TestEvaluateLeg(unittest.TestCase):
         self.assertIn("installed OS", detail)
         self.assertNotIn("no netboot", detail.lower())
 
+    def test_net_leg_ssh_but_probe_failed_still_names_ssh(self):
+        # Found live: sshd answered but the probe could not log in, and the
+        # verdict fell back to "no telnet listener" — pointing at TFTP on
+        # evidence we do not have. The headline must name SSH either way.
+        verdict, detail = evaluate_leg("net", medium=None, ssh_up=True,
+                                       telnet_up=False)
+        self.assertEqual(verdict, "FAIL")
+        self.assertIn("installed OS", detail)
+        self.assertIn("could not identify", detail)
+        self.assertNotIn("no telnet listener", detail)
+
+    def test_ssh_leg_with_failed_probe_does_not_claim_no_ssh(self):
+        verdict, detail = evaluate_leg("sd", medium=None, ssh_up=True)
+        self.assertEqual(verdict, "FAIL")
+        self.assertIn("could not be identified", detail)
+        self.assertNotIn("no SSH listener", detail)
+
 
 class TestRenderProbe(unittest.TestCase):
     def _report(self, medium="usb", fw=(2020, 9, 3), order="0xf41"):
