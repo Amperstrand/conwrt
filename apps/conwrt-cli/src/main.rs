@@ -33,6 +33,7 @@ use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
 use conwrt_local_std::fingerprint::fingerprint;
 
+mod blankdl;
 mod watch;
 mod zycast;
 use conwrt_local_std::ssh::{SshOptions, SshTarget, connect, resolve_auth};
@@ -279,6 +280,15 @@ enum Command {
     Maas {
         #[command(subcommand)]
         command: MaasCommand,
+    },
+    /// ZTE ipq40xx blank-download recovery (hardware-proven on the MF286D,
+    /// #621): `fence` serves ONE pinned image to the bootloader's
+    /// volume-not-found TFTP flow; `trigger` installs the UBI trigger
+    /// image over SSH with the full verify-before-write / read-back /
+    /// alive-probe gate ladder.
+    Blankdl {
+        #[command(subcommand)]
+        command: BlankdlCommand,
     },
     /// Manage the firmware images cache (1.x `conwrt.py cache` parity).
     Cache {
@@ -1056,6 +1066,80 @@ enum CacheCommand {
 }
 
 #[derive(Subcommand)]
+enum BlankdlCommand {
+    /// Serve ONE pinned image to the stock bootloader's blank-download
+    /// TFTP flow and exit on the fin packet. Refuses unpinned images,
+    /// non-uImage payloads (unless --allow-raw), and a busy UDP/69.
+    Fence {
+        /// Image path, optionally `path#sha256:<hex>`.
+        image: String,
+        /// Pinned sha256 (required unless the path carries `#sha256:`).
+        #[arg(long)]
+        expect_sha256: Option<String>,
+        /// Bind address (default 192.0.0.1, the protocol's fixed server;
+        /// overrides are for dress rehearsals and are flagged).
+        #[arg(long, default_value = conwrt_protocols::blankdl::PROTO_BIND_IP)]
+        bind: String,
+        /// Bind port.
+        #[arg(long, default_value_t = conwrt_protocols::blankdl::PROTO_PORT)]
+        port: u16,
+        /// Give up after N seconds without a fin packet.
+        #[arg(long, default_value_t = 600.0)]
+        timeout: f64,
+        /// Log only — never answer anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Write run.json + flash.log here.
+        #[arg(long)]
+        log_dir: Option<PathBuf>,
+        /// Check the iptables rule admitting the bootloader's TFTP on this
+        /// interface (the 2026-11-10 hidden blocker: netfilter silently
+        /// dropped UDP/69 while tcpdump still showed the requests).
+        #[arg(long)]
+        firewall_iface: Option<String>,
+        /// Insert the missing firewall rule instead of just reporting it.
+        #[arg(long)]
+        open_firewall: bool,
+        /// Attest that a non-uImage payload is deliberate (research
+        /// images). Without it the fence refuses to serve anything that
+        /// is not a uImage.
+        #[arg(long)]
+        allow_raw: bool,
+    },
+    /// Install the UBI trigger image over SSH: specimen gate (MAC),
+    /// sha256 at the target BEFORE writing, mtd erase + write, read-back
+    /// verification, alive probe — and only then (optionally) reboot
+    /// into the fence's flash window.
+    Trigger {
+        /// Target as `user@host`.
+        host: String,
+        /// Session-proven UBI trigger image (valid layout volumes, NO
+        /// kernel volume). Never synthesized on-device (the 2026-11-08
+        /// unit-2 brick class).
+        #[arg(long)]
+        trigger_image: PathBuf,
+        /// The exact unit's MAC — the specimen gate.
+        #[arg(long)]
+        expect_mac: String,
+        /// SSH identity file.
+        #[arg(long, short = 'i')]
+        identity: Option<PathBuf>,
+        /// SSH port.
+        #[arg(long, default_value_t = 22)]
+        ssh_port: u16,
+        /// MTD partition name (resolved BY NAME on the device).
+        #[arg(long, default_value = "rootfs")]
+        partition: String,
+        /// Reboot into the fence window after a verified write.
+        #[arg(long)]
+        reboot: bool,
+        /// Print the commands, touch nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum MaasCommand {
     /// Run the lab disk pipeline (verify → write → verify → inject) on a
     /// target file or device. The image is checksum-gated before ANY
@@ -1441,6 +1525,50 @@ fn main() -> ExitCode {
         Command::Models { dir } => cmd_models_validate(&dir),
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
+        Command::Blankdl { command } => match command {
+            BlankdlCommand::Fence {
+                image,
+                expect_sha256,
+                bind,
+                port,
+                timeout,
+                dry_run,
+                log_dir,
+                firewall_iface,
+                open_firewall,
+                allow_raw,
+            } => blankdl::run_fence(blankdl::FenceArgs {
+                image,
+                expect_sha256,
+                bind,
+                port,
+                timeout,
+                dry_run,
+                log_dir,
+                firewall_iface,
+                open_firewall,
+                allow_raw,
+            }),
+            BlankdlCommand::Trigger {
+                host,
+                trigger_image,
+                expect_mac,
+                identity,
+                ssh_port,
+                partition,
+                reboot,
+                dry_run,
+            } => blankdl::run_trigger(blankdl::TriggerArgs {
+                host,
+                trigger_image,
+                expect_mac,
+                identity,
+                ssh_port,
+                partition,
+                reboot,
+                dry_run,
+            }),
+        },
         Command::Cache { command } => cmd_cache(command),
         Command::FleetDerive {
             mac,
