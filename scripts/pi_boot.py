@@ -688,12 +688,29 @@ def cmd_capability(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_power(args: argparse.Namespace) -> None:
+def _run_power(args: argparse.Namespace) -> tuple[bool, str]:
+    """Run the power hook; return (trusted, error).
+
+    A power command that fails or hangs must not be swallowed: if the board
+    never actually cycled, the leg's evidence describes an unknown power
+    state, and a PASS would be a false green. The caller records ERROR and
+    skips the wait instead.
+    """
     if not args.power_cmd:
         print("  power-cycle the board now.")
-        return
+        return True, ""
     print(f"  power: {args.power_cmd}")
-    subprocess.run(args.power_cmd, shell=True, check=False)
+    timeout = getattr(args, "power_timeout", 120)
+    try:
+        proc = subprocess.run(args.power_cmd, shell=True, capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, f"power command timed out after {timeout}s"
+    if proc.returncode != 0:
+        output = (proc.stderr or proc.stdout).strip().splitlines()
+        tail = output[-1][:120] if output else "no output"
+        return False, f"power command exited {proc.returncode}: {tail}"
+    return True, ""
 
 
 def _wait_for_leg(args: argparse.Namespace, leg: str) -> tuple[bool, bool]:
@@ -760,7 +777,19 @@ def cmd_matrix(args: argparse.Namespace) -> int:
             except (EOFError, KeyboardInterrupt):
                 print("\naborted")
                 return 130
-        _run_power(args)
+        power_ok, power_error = _run_power(args)
+        if not power_ok:
+            # Without a confirmed power cycle the evidence below describes an
+            # unknown boot, so neither PASS nor FAIL is honest.
+            print(f"  ERROR: {power_error}")
+            results.append({
+                "leg": leg,
+                "verdict": "ERROR",
+                "detail": power_error,
+                "tftp": "",
+                "probe": None,
+            })
+            continue
 
         ssh_up, telnet_up = _wait_for_leg(args, leg)
         probe = None
@@ -857,6 +886,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="comma-separated legs to test (default sd,usb,net)")
     sp.add_argument("--power-cmd", default=None,
                     help="shell command that power-cycles the board")
+    sp.add_argument("--power-timeout", type=int, default=120,
+                    help="seconds to allow the power command (default 120)")
     sp.add_argument("--router", default=None,
                     help="OpenWrt router running dnsmasq (root SSH); adds the "
                          "TFTP-side view to the net leg")

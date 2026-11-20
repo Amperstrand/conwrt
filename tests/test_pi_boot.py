@@ -1,10 +1,13 @@
 """Tests for pi_boot.py — boot-medium classification and capability matrix.
 
-No hardware and no network I/O: every assertion runs against captured output
-shapes from a real Pi 4B (Raspberry Pi OS + OpenWrt initramfs) and the
-rpi-eeprom release notes.
+No hardware and no network I/O: assertions run against documented output
+shapes (Raspberry Pi OS / Ubuntu on a block root, an OpenWrt netboot
+initramfs, and a Pi without vcgencmd) plus the rpi-eeprom release notes. The
+files under fixtures/pi/ are synthesised shapes, not captures from a board —
+see the README there.
 """
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -588,6 +591,31 @@ class TestMatrixOrchestration(unittest.TestCase):
         rc, out = self._run(self._args("net"), [(True, False)], self._report("sd"))
         self.assertEqual(rc, 1)
         self.assertIn("booted an installed OS", out)
+
+    def test_failed_power_command_is_error_not_fail(self):
+        # If the board never cycled, the leg proves nothing: reporting FAIL
+        # would blame the boot medium for a broken power hook.
+        args = self._args("sd", power_cmd="sh -c 'exit 3'")
+        with mock.patch.object(pi_boot, "_wait_for_leg") as wait:
+            rc, out = self._run(args, [], self._report("sd"))
+        self.assertEqual(rc, 1)
+        self.assertIn("ERROR", out)
+        self.assertIn("exited 3", out)
+        wait.assert_not_called()
+
+    def test_hanging_power_command_times_out_instead_of_waiting(self):
+        args = self._args("sd", power_cmd="sleep 999", power_timeout=1)
+        expired = subprocess.TimeoutExpired("sleep 999", 1)
+        with mock.patch.object(pi_boot.subprocess, "run", side_effect=expired):
+            rc, out = self._run(args, [], self._report("sd"))
+        self.assertEqual(rc, 1)
+        self.assertIn("timed out", out)
+
+    def test_successful_power_command_proceeds(self):
+        args = self._args("sd", power_cmd="true")
+        rc, out = self._run(args, [(True, False)], self._report("sd"))
+        self.assertEqual(rc, 0)
+        self.assertIn("PASS", out)
 
 
 class TestModelAgreement(unittest.TestCase):
