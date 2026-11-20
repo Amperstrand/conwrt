@@ -24,7 +24,7 @@
 //! re-provisioned from a genuinely clean state.
 
 use conwrt_protocols::blankdl::{
-    self as wire, AckAction, Transfer, FIN_STRING, MAX_WIRE, OP_ACK, OP_ERROR, OP_RRQ,
+    self as wire, AckAction, FIN_STRING, MAX_WIRE, OP_ACK, OP_ERROR, OP_RRQ, Transfer,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -60,7 +60,8 @@ impl PinnedImage {
     /// Refusing unpinned and refusing mismatches are both hard errors —
     /// there is no force path.
     pub fn load(path: &Path, expect_sha: Option<&str>) -> Result<Self, FenceError> {
-        let bytes = fs::read(path).map_err(|e| FenceError::Image(format!("{}: {e}", path.display())))?;
+        let bytes =
+            fs::read(path).map_err(|e| FenceError::Image(format!("{}: {e}", path.display())))?;
         Self::from_bytes(bytes, expect_sha, Some(path))
     }
 
@@ -71,8 +72,7 @@ impl PinnedImage {
         path: Option<&Path>,
     ) -> Result<Self, FenceError> {
         let sha256_hex = hex_lower(&Sha256::digest(&bytes));
-        let expect = expect_sha
-            .ok_or(FenceError::Unpinned)?;
+        let expect = expect_sha.ok_or(FenceError::Unpinned)?;
         let expect = expect.trim().to_ascii_lowercase();
         if expect != sha256_hex {
             return Err(FenceError::ShaMismatch {
@@ -80,7 +80,11 @@ impl PinnedImage {
                 pinned: expect,
             });
         }
-        Ok(Self { bytes, sha256_hex, path: path.map(Path::to_path_buf).unwrap_or_default() })
+        Ok(Self {
+            bytes,
+            sha256_hex,
+            path: path.map(Path::to_path_buf).unwrap_or_default(),
+        })
     }
 
     fn len(&self) -> usize {
@@ -297,7 +301,10 @@ pub fn serve(config: &FenceConfig) -> (FenceOutcome, FenceExit) {
     let mut log = RunLog { file: None };
     if let Some(dir) = &config.log_dir {
         if let Err(e) = fs::create_dir_all(dir) {
-            log.line(&format!("warning: cannot create log dir {}: {e}", dir.display()));
+            log.line(&format!(
+                "warning: cannot create log dir {}: {e}",
+                dir.display()
+            ));
         } else {
             match fs::File::create(dir.join("flash.log")) {
                 Ok(f) => log.file = Some(f),
@@ -338,7 +345,9 @@ pub fn serve(config: &FenceConfig) -> (FenceOutcome, FenceExit) {
         // 4 MiB receive buffer, as the Python daemon: bursts of ACKs at
         // blksize 1468 must not overflow between polls.
         if let Err(e) = socket2::SockRef::from(&sock).set_recv_buffer_size(4 * 1024 * 1024) {
-            log.line(&format!("warning: SO_RCVBUF could not be enlarged (continuing): {e}"));
+            log.line(&format!(
+                "warning: SO_RCVBUF could not be enlarged (continuing): {e}"
+            ));
         }
     }
     log.line(&format!(
@@ -408,8 +417,7 @@ fn serve_loop(
         // ACK_DEADLINE is resent, up to RETRIES times, then we give up.
         if let Some(x) = &xfer {
             let in_flight = x.blocks_sent() > x.blocks_acked() && !x.is_completed();
-            if in_flight
-                && last_activity.elapsed() >= Duration::from_millis(wire::ACK_DEADLINE_MS)
+            if in_flight && last_activity.elapsed() >= Duration::from_millis(wire::ACK_DEADLINE_MS)
             {
                 if x.resends >= wire::RETRIES {
                     log.line(&format!(
@@ -420,8 +428,10 @@ fn serve_loop(
                     return FenceExit::Error;
                 }
                 let pkt = x.resend_packet(image, &mut pkt_buf);
-                let client =
-                    SocketAddr::new(xfer_client_ip.expect("in-flight implies client"), config.port);
+                let client = SocketAddr::new(
+                    xfer_client_ip.expect("in-flight implies client"),
+                    config.port,
+                );
                 let _ = sock.send_to(pkt, client);
                 if let Some(x) = xfer.as_mut() {
                     x.resends += 1;
@@ -433,9 +443,13 @@ fn serve_loop(
 
         let (n, addr) = match sock.recv_from(&mut rx) {
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 if let Some(created) = xfer_created {
-                    if Instant::now() > created + Duration::from_millis(wire::TRANSFER_DEADLINE_MS) {
+                    if Instant::now() > created + Duration::from_millis(wire::TRANSFER_DEADLINE_MS)
+                    {
                         log.line("transfer stalled past hard deadline");
                         break;
                     }
@@ -528,17 +542,16 @@ fn serve_loop(
                         t.resends += 1;
                         last_activity = Instant::now();
                     }
-                    (AckAction::Complete, None)
-                        if outcome.completed.is_none() => {
-                            outcome.transferred = Some(u64::try_from(image.len()).unwrap_or(0));
-                            outcome.completed = Some(SystemTime::now());
-                            log.line(&format!(
-                                "transfer complete: {} bytes, last block {} to {}",
-                                image.len(),
-                                t.last_block_number(),
-                                addr.ip()
-                            ));
-                        }
+                    (AckAction::Complete, None) if outcome.completed.is_none() => {
+                        outcome.transferred = Some(u64::try_from(image.len()).unwrap_or(0));
+                        outcome.completed = Some(SystemTime::now());
+                        log.line(&format!(
+                            "transfer complete: {} bytes, last block {} to {}",
+                            image.len(),
+                            t.last_block_number(),
+                            addr.ip()
+                        ));
+                    }
                     _ => {}
                 }
             }

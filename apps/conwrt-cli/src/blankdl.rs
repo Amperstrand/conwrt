@@ -90,13 +90,11 @@ fn fence_inner(a: FenceArgs) -> Result<ExitCode, String> {
         Some((p, s)) => (p.to_owned(), Some(s.to_owned())),
         None => (a.image.clone(), None),
     };
-    let expect = inline_sha
-        .or(a.expect_sha256.clone())
-        .ok_or_else(|| {
-            "refusing to serve unpinned image: pass --expect-sha256 or \
+    let expect = inline_sha.or(a.expect_sha256.clone()).ok_or_else(|| {
+        "refusing to serve unpinned image: pass --expect-sha256 or \
              path#sha256:<hex>"
-                .to_owned()
-        })?;
+            .to_owned()
+    })?;
 
     let bytes = std::fs::read(&path).map_err(|e| format!("read image {path}: {e}"))?;
 
@@ -154,8 +152,9 @@ fn fence_inner(a: FenceArgs) -> Result<ExitCode, String> {
         );
     }
 
-    let pinned = conwrt_blankdl::PinnedImage::from_bytes(bytes, Some(&expect), Some(Path::new(&path)))
-        .map_err(|e| e.to_string())?;
+    let pinned =
+        conwrt_blankdl::PinnedImage::from_bytes(bytes, Some(&expect), Some(Path::new(&path)))
+            .map_err(|e| e.to_string())?;
 
     let mut cfg = conwrt_blankdl::FenceConfig::new(pinned);
     cfg.bind = bind;
@@ -173,16 +172,16 @@ fn fence_inner(a: FenceArgs) -> Result<ExitCode, String> {
 /// BEFORE netfilter — a fence that "works locally" can still be deaf.
 fn firewall_gate(iface: &str, open: bool) -> Result<(), String> {
     let check = Command::new("iptables")
-        .args(["-C", "INPUT", "-i", iface, "-p", "udp", "--dport", "69", "-j", "ACCEPT"])
+        .args([
+            "-C", "INPUT", "-i", iface, "-p", "udp", "--dport", "69", "-j", "ACCEPT",
+        ])
         .output()
         .map_err(|e| format!("iptables check: {e} (is iptables installed?)"))?;
     if check.status.success() {
         eprintln!("blankdl: firewall OK — UDP/69 admitted on {iface}");
         return Ok(());
     }
-    let rule = format!(
-        "iptables -I INPUT -i {iface} -p udp --dport 69 -j ACCEPT"
-    );
+    let rule = format!("iptables -I INPUT -i {iface} -p udp --dport 69 -j ACCEPT");
     if !open {
         return Err(format!(
             "firewall: UDP/69 is NOT admitted on {iface} — the bootloader's \
@@ -306,7 +305,10 @@ fn trigger_inner(a: &TriggerArgs) -> Result<ExitCode, String> {
              name (numbering shifts between stock and OpenWrt)"
         ));
     }
-    eprintln!("blankdl trigger: partition resolved: {}", mtd.replace('\n', "; "));
+    eprintln!(
+        "blankdl trigger: partition resolved: {}",
+        mtd.replace('\n', "; ")
+    );
 
     // ---- 3. stage the artifact + verify sha AT THE TARGET ----------------
     // Reuse the proven artifact; never synthesize on-device (the 2026-11-08
@@ -403,7 +405,10 @@ fn trigger_inner(a: &TriggerArgs) -> Result<ExitCode, String> {
     if a.reboot {
         // Detached reboot: the command must not hold the SSH session open
         // against the device's shutdown.
-        ssh_exec(a, "setsid sh -c 'sleep 1 && reboot' >/dev/null 2>&1 & echo scheduled")?;
+        ssh_exec(
+            a,
+            "setsid sh -c 'sleep 1 && reboot' >/dev/null 2>&1 & echo scheduled",
+        )?;
         eprintln!(
             "blankdl trigger: reboot scheduled — the fence must be armed on \
              {}:69 BEFORE the bootloader reaches its volume-not-found handler",

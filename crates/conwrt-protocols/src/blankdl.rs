@@ -113,9 +113,20 @@ pub struct RrqInfo<'a> {
 #[must_use]
 pub fn parse_rrq(body: &[u8]) -> RrqInfo<'_> {
     let mut fields = body.split(|&b| b == 0).filter(|s| !s.is_empty());
-    let filename = fields.next().map(|s| core::str::from_utf8(s).unwrap_or("")).unwrap_or("");
-    let mode = fields.next().map(|s| core::str::from_utf8(s).unwrap_or("")).unwrap_or("");
-    let mut info = RrqInfo { filename, mode, blksize: None, timeout: None };
+    let filename = fields
+        .next()
+        .map(|s| core::str::from_utf8(s).unwrap_or(""))
+        .unwrap_or("");
+    let mode = fields
+        .next()
+        .map(|s| core::str::from_utf8(s).unwrap_or(""))
+        .unwrap_or("");
+    let mut info = RrqInfo {
+        filename,
+        mode,
+        blksize: None,
+        timeout: None,
+    };
     let mut key = fields.next();
     while let Some(k) = key {
         let Some(v) = fields.next() else { break };
@@ -163,12 +174,7 @@ pub fn data_packet<'a>(buf: &'a mut [u8], block: u16, chunk: &[u8]) -> &'a [u8] 
 /// an empty slice when the client sent no options (option-less clients
 /// get no OACK at all).
 #[must_use]
-pub fn oack_packet(
-    buf: &mut [u8],
-    blksize: usize,
-    timeout_secs: u32,
-    had_options: bool,
-) -> &[u8] {
+pub fn oack_packet(buf: &mut [u8], blksize: usize, timeout_secs: u32, had_options: bool) -> &[u8] {
     fn push_field(buf: &mut [u8], n: &mut usize, s: &[u8]) {
         buf[*n..*n + s.len()].copy_from_slice(s);
         *n += s.len();
@@ -331,7 +337,11 @@ impl Transfer {
         if off >= self.image_len {
             data_packet(buf, n, &[]) // EOF block
         } else {
-            data_packet(buf, n, &image[off..(off + self.blksize).min(self.image_len)])
+            data_packet(
+                buf,
+                n,
+                &image[off..(off + self.blksize).min(self.image_len)],
+            )
         }
     }
 

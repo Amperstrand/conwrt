@@ -57,7 +57,11 @@ fn free_port() -> u16 {
 
 /// Run the fence on a background thread; returns a join handle producing
 /// the outcome/exit plus the run-record JSON path.
-fn spawn_fence(image: Vec<u8>, sha: &str, port: u16) -> thread::JoinHandle<(conwrt_blankdl::FenceOutcome, FenceExit)> {
+fn spawn_fence(
+    image: Vec<u8>,
+    sha: &str,
+    port: u16,
+) -> thread::JoinHandle<(conwrt_blankdl::FenceOutcome, FenceExit)> {
     let pinned = PinnedImage::from_bytes(image, Some(sha), None).expect("pin");
     let mut cfg = FenceConfig::new(pinned);
     cfg.bind = "127.0.0.1".parse().expect("loopback");
@@ -89,15 +93,22 @@ impl MockBootloader {
     /// Drive the transfer. Returns (ok, received).
     fn run(&self, server: &str, port: u16, deadline: Duration) -> (bool, Vec<u8>) {
         let s = UdpSocket::bind("127.0.0.1:0").expect("client bind");
-        s.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+        s.set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
         let _ = socket2::SockRef::from(&s).set_recv_buffer_size(4 * 1024 * 1024);
         let srv = (server, port);
         let end = Instant::now() + deadline;
         let mut received: Vec<u8> = Vec::new();
 
         let name = match self.personality {
-            Personality::Live => format!("{:04x}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() & 0xFFFF),
+            Personality::Live => format!(
+                "{:04x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    & 0xFFFF
+            ),
             _ => "root_uImage".to_string(),
         };
         let opts = match self.personality {
@@ -325,15 +336,17 @@ fn exact_multiple_image_uses_eof_block() {
 fn unpinned_image_refused() {
     let image = make_image(1024);
     let err = PinnedImage::from_bytes(image, None, None).expect_err("must refuse");
-    assert!(err.to_string().to_lowercase().contains("refusing"), "got: {err}");
+    assert!(
+        err.to_string().to_lowercase().contains("refusing"),
+        "got: {err}"
+    );
 }
 
 #[test]
 fn wrong_sha_refused() {
     let image = make_image(1024);
     let pinned = "0".repeat(64);
-    let err =
-        PinnedImage::from_bytes(image, Some(&pinned), None).expect_err("must refuse");
+    let err = PinnedImage::from_bytes(image, Some(&pinned), None).expect_err("must refuse");
     assert!(err.to_string().contains("REFUSING"), "got: {err}");
 }
 
@@ -382,7 +395,8 @@ fn abandoned_transfer_then_new_rrq() {
     // the fence thread has bound — no startup race.)
     {
         let s = UdpSocket::bind("127.0.0.1:0").unwrap();
-        s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
         let mut rrq = vec![0, OP_RRQ as u8];
         rrq.extend_from_slice(b"aband\x00octet\x00blksize\x001468\x00timeout\x005\x00");
         let mut buf = [0u8; 1600];
