@@ -60,6 +60,12 @@ scripts/pi_boot.py matrix --host 192.168.1.50 --user pi \
 `matrix` is deliberately semi-manual: no tool can insert an SD card. Each leg
 prints its precondition and waits for Enter unless `--yes` is given.
 
+Exit codes are uniform across subcommands: `0` a positive answer (every leg
+PASS); `1` a negative answer — a FAIL **or an ERROR leg** is still evidence;
+`2` the question could not be asked at all (bad arguments, unreadable router
+log, empty neighbour table). Scripts must treat `2` as *inconclusive*, never
+as *not found* — the two have opposite follow-ups.
+
 ## Replaying a dump
 
 `probe --dump` saves the raw SSH output; `probe --from-file` renders it again
@@ -95,6 +101,13 @@ SSH during the SD leg but reports `boot medium usb` is a **FAIL** — that is
 exactly the false green this tool exists to prevent (you would otherwise
 certify "SD boot works" while the card was never read).
 
+There is a third verdict, **ERROR**: if `--power-cmd` exits nonzero or hangs
+(`--power-timeout`, default 120 s), the leg is recorded ERROR and the wait is
+skipped entirely. A board that never cycled proves nothing about any boot
+medium, so neither PASS nor FAIL is honest — and a swallowed power failure
+used to surface three minutes later as a believable FAIL that blamed the
+medium for a broken power hook.
+
 ## Reading the output
 
 `probe` prints:
@@ -120,8 +133,15 @@ Interpretation:
 | `detect` says `rescue-shell` | RAM boot over TFTP. Nothing persists; this is a boot, not an OS. |
 | `detect` says `silent` | No SSH, no telnet. Could be netboot-fallback (check the DHCP side) or no power. |
 | `boot order` has no `network` | Netboot will never be attempted regardless of firmware. |
+| `ordered` shows `?` | `BOOT_ORDER` could not be read. The tool claims nothing: an unread config is not an empty one, and "NOT in BOOT_ORDER" here sent people to reflash EEPROMs whose real fault was the reading. |
 | `usb: no` but `network: yes` | Pre-2020-09 bootloader. Netboot is the only remote medium available. |
 | `firmware unknown` | `vcgencmd` failed (not a Pi, permissions, or `sudo -n` unavailable) — not evidence of old firmware. |
+
+Every zero carries its numerator, so a count of zero cannot masquerade as
+evidence: `scan` prints `inspected N neighbour entries; M match a Raspberry
+Pi OUI` before any negative, and `detect` prints `among N MACs in the last L
+DHCP log lines`. If a tool ever reports a zero without saying what it
+inspected, treat that as a defect in the tool.
 
 ## The SD bootstrap (a board nothing can reach)
 
