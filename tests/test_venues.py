@@ -206,3 +206,63 @@ class TestSeparatorOnlyVenues:
                 venues_from_env(env={"CONWRT_VENUES": raw},
                                 place_list=lambda: "",
                                 protected_places=lambda: set())
+
+
+class TestAcquireQueue:
+    """#184: queue through sibling contention instead of instant skip."""
+
+    @staticmethod
+    def _proc(rc=0, stderr=""):
+        import types
+        return types.SimpleNamespace(returncode=rc, stderr=stderr, stdout="")
+
+    def test_immediate_success_single_attempt(self):
+        from venues import acquire_with_queue
+        sleeps = []
+        out = acquire_with_queue("p1", runner=lambda a: self._proc(0),
+                                 queue_timeout_s=300, poll_s=15, sleep=sleeps.append)
+        assert out.status == "acquired" and out.attempts == 1
+        assert sleeps == []
+
+    def test_contention_then_success_queues(self):
+        from venues import acquire_with_queue
+        state = {"n": 0}
+
+        def runner2(a):
+            state["n"] += 1
+            return (self._proc(1, "Error: place p1 is already acquired by other")
+                    if state["n"] <= 2 else self._proc(0))
+
+        sleeps = []
+        out = acquire_with_queue("p1", runner=runner2,
+                                 queue_timeout_s=300, poll_s=5, sleep=sleeps.append)
+        assert out.status == "acquired" and out.attempts == 3
+        assert sleeps == [5, 5] and out.waited_s == 10
+
+    def test_dead_coordinator_skips_fast(self):
+        from venues import acquire_with_queue
+        sleeps = []
+        out = acquire_with_queue(
+            "p1",
+            runner=lambda a: self._proc(1, "ConnectionRefusedError: [Errno 111]"),
+            queue_timeout_s=300, poll_s=15, sleep=sleeps.append)
+        assert out.status == "unavailable" and out.attempts == 1
+        assert sleeps == []
+
+    def test_deadline_expiry_reports_timeout(self):
+        from venues import acquire_with_queue
+        sleeps = []
+        out = acquire_with_queue(
+            "p1",
+            runner=lambda a: self._proc(1, "place p1 already acquired"),
+            queue_timeout_s=1, poll_s=15, sleep=sleeps.append)
+        assert out.status == "timeout" and out.attempts >= 1
+
+    def test_zero_timeout_restores_legacy_single_attempt(self):
+        from venues import acquire_with_queue
+        calls = []
+        out = acquire_with_queue(
+            "p1",
+            runner=lambda a: (calls.append(1), self._proc(1, "already acquired"))[1],
+            queue_timeout_s=0, poll_s=15, sleep=lambda s: None)
+        assert out.status == "timeout" and len(calls) == 1

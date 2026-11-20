@@ -1101,8 +1101,8 @@ Previously blocked by the stock switch password issue, now resolved (see above).
 
 | Device | PoE LEDs | Notes |
 |--------|----------|-------|
-| OpenWrt (192.168.13.2) | ALL OFF | Even when 4 ports are delivering power |
-| Stock V2.90 (192.168.13.3) | Working | PoE LED lights up on port 8 as soon as a device is plugged in |
+| OpenWrt (<switch-mgmt>) | ALL OFF | Even when 4 ports are delivering power |
+| Stock V2.90 (<stock-switch-mgmt>) | Working | PoE LED lights up on port 8 as soon as a device is plugged in |
 
 ### Stock Firmware RE (board_poe.ko)
 
@@ -1201,10 +1201,10 @@ gh run download <run-id> --repo Amperstrand/realtek-poe --dir /tmp/realtek-poe
 
 # Upload and install (pipe + apk)
 cat /tmp/realtek-poe/<artifact-dir>/realtek-poe-*.apk | \
-  ssh root@192.168.13.2 "cat > /tmp/realtek-poe.apk && apk add --allow-untrusted /tmp/realtek-poe.apk"
+  ssh root@$CONWRT_BENCH_SWITCH "cat > /tmp/realtek-poe.apk && apk add --allow-untrusted /tmp/realtek-poe.apk"
 
 # Restart daemon
-ssh root@192.168.13.2 "/etc/init.d/poe restart"
+ssh root@$CONWRT_BENCH_SWITCH "/etc/init.d/poe restart"
 ```
 
 ### Alternative: Manual Cross-Compile
@@ -1212,8 +1212,8 @@ ssh root@192.168.13.2 "/etc/init.d/poe restart"
 When CI isn't available or produces wrong SDK version:
 
 ```bash
-rsync -avz src/ ubuntu@192.168.13.218:/tmp/realtek-poe-build/src/
-ssh ubuntu@192.168.13.218 'export SDK=/tmp/openwrt-sdk-25.12.1-realtek-rtl838x_gcc-14.3.0_musl.Linux-x86_64
+rsync -avz src/ ubuntu@<build-host>:/tmp/realtek-poe-build/src/
+ssh ubuntu@<build-host> 'export SDK=/tmp/openwrt-sdk-25.12.1-realtek-rtl838x_gcc-14.3.0_musl.Linux-x86_64
   export TC=$SDK/staging_dir/toolchain-mips_24kc_gcc-14.3.0_musl
   export ST=$SDK/staging_dir/target-mips_24kc_musl
   export STAGING_DIR=$TC
@@ -1223,8 +1223,8 @@ ssh ubuntu@192.168.13.218 'export SDK=/tmp/openwrt-sdk-25.12.1-realtek-rtl838x_g
     -lubox -lubus -luci -o realtek-poe src/main.c src/dialect_bcm.c src/dialect_rtl.c'
 
 # Deploy via pipe
-ssh ubuntu@192.168.13.218 "cat /tmp/realtek-poe-build/realtek-poe" | \
-  ssh root@192.168.13.2 "cat > /usr/bin/realtek-poe && chmod +x /usr/bin/realtek-poe"
+ssh ubuntu@<build-host> "cat /tmp/realtek-poe-build/realtek-poe" | \
+  ssh root@$CONWRT_BENCH_SWITCH "cat > /usr/bin/realtek-poe && chmod +x /usr/bin/realtek-poe"
 ```
 
 The CI `.apk` is preferred — it's stripped (~65KB vs ~130KB manual build) and properly packaged.

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """DEPRECATED — use `conwrt fleet-derive` (Rust, conwrt-core::identity).
 
+REMOVAL SCHEDULED after 2026-12-15 (recorded in conwrt-bench BENCH-CANON.md
+2026-11-14). All bench consumers grep-verified absent 2026-11-14; new
+callers are forbidden.
+
 Deterministic per-device fleet secrets derived from MAC + fleet salt.
 The CANONICAL implementation now lives in Rust
 (``crates/conwrt-core/src/identity.rs``, exposed as

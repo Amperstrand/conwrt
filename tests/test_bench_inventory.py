@@ -13,6 +13,8 @@ import pytest
 
 import bench_inventory as bi
 
+TEST_SWITCH = "192.0.2.10"          # TEST-NET-1: never a real bench address
+
 POE_RAW = json.dumps({"ports": {
     "lan2": {"status": "Delivering power"},
     "lan3": {"status": "Delivering power"},
@@ -36,7 +38,7 @@ FDB_RAW = "\n".join([
 
 NEIGH_RAW = "\n".join([
     "--vlan 1002",
-    "192.168.102.51 dev switch.1002 lladdr dc:b8:08:6c:ea:7f  REACHABLE",
+    "192.0.2.51 dev switch.1002 lladdr dc:b8:08:6c:ea:7f  REACHABLE",
     "fe80::deb8:8ff:fe6c:ea7f dev switch.1002 lladdr dc:b8:08:6c:ea:7f router STALE",
     "--vlan 1004",
     "192.168.104.51 lladdr b4:2d:56:25:79:b1 ref 1 used 0/0/0 probes 1 REACHABLE",
@@ -50,15 +52,15 @@ NEIGH_RAW = "\n".join([
 PLACES = {
     "labgrid_host": "example-exporter",
     "places": [
-        {"name": "ap-lan2", "mac": "DC:B8:08:6C:EA:7F", "dut_ip": "192.168.102.51",
+        {"name": "ap-lan2", "mac": "DC:B8:08:6C:EA:7F", "dut_ip": "192.0.2.51",
          "reset_allowed": True, "password": "seekrit"},
-        {"name": "ap-lan3", "mac": "b4:2d:56:25:47:a2", "dut_ip": "192.168.103.51",
+        {"name": "ap-lan3", "mac": "b4:2d:56:25:47:a2", "dut_ip": "192.0.2.52",
          "reset_allowed": True},
         {"name": "ap-lan4", "mac": "b4:2d:56:25:79:b1", "dut_ip": "192.168.104.51",
          "reset_allowed": True},
         {"name": "ap-lan5", "mac": "b4:2d:56:24:ad:97", "dut_ip": "192.168.105.51",
          "reset_allowed": False, "power_export": False},
-        {"name": "ap-lan6", "mac": "11:22:33:44:55:66", "dut_ip": "192.168.106.51",
+        {"name": "ap-lan6", "mac": "11:22:33:44:55:66", "dut_ip": "192.0.2.53",
          "reset_allowed": False},
     ],
 }
@@ -97,7 +99,7 @@ def test_parse_fdb_filters_static_and_keeps_dynamic() -> None:
 
 def test_parse_neigh_skips_failed_and_maps_vlan() -> None:
     neigh = bi.parse_neigh(NEIGH_RAW)
-    assert ("192.168.102.51", "dc:b8:08:6c:ea:7f") in neigh[1002]
+    assert ("192.0.2.51", "dc:b8:08:6c:ea:7f") in neigh[1002]
     v6 = [ip for ip, _ in neigh[1002] if ip.startswith("fe80::")]
     assert v6, "link-locals must be captured for the identity probe"
     assert all(ip != "192.168.104.99" for ip, _ in neigh[1004])  # FAILED: no lladdr
@@ -194,10 +196,10 @@ def test_classify_never_seen_port_is_dark_baseline() -> None:
 # ------------------------------------------------ liveness probe plumbing
 
 def test_liveness_script_is_busybox_safe_and_bounded() -> None:
-    s = bi.liveness_script("192.168.106.51", "11:22:33:44:55:66", 1006)
-    assert "ping -c 1 -W 2 192.168.106.51" in s
-    assert "nc -w 3 192.168.106.51 22" in s
-    assert "nc -w 3 192.168.106.51 80" in s
+    s = bi.liveness_script("192.0.2.53", "11:22:33:44:55:66", 1006)
+    assert "ping -c 1 -W 2 192.0.2.53" in s
+    assert "nc -w 3 192.0.2.53 22" in s
+    assert "nc -w 3 192.0.2.53 80" in s
     # 3 ICMPv6 attempts: one echo can be lost to NDP re-resolution of a
     # cold/STALE neighbor (live-observed lan2 transient dark)
     assert "ping6 -c 3 -W 2 fe80::1322:33ff:fe44:5566%switch.1006" in s
@@ -209,7 +211,7 @@ def test_liveness_script_is_busybox_safe_and_bounded() -> None:
 
 
 def test_liveness_script_sends_real_http_request_on_80() -> None:
-    s = bi.liveness_script("192.168.102.51", "", 1002)
+    s = bi.liveness_script("192.0.2.51", "", 1002)
     assert "GET / HTTP/1.0" in s          # idle-holding HTTP server must close
     assert "P6" not in s                  # no MAC -> no ping6 candidate
 
@@ -242,8 +244,8 @@ def test_parse_liveness_full_batch_yields_liveness_partial_yields_none() -> None
 def test_probe_markers_match_script_emissions() -> None:
     """Drift lock: the markers parse_liveness demands are exactly the ones
     liveness_script emits, for every candidate combination."""
-    cases = (("192.168.106.51", "11:22:33:44:55:66"),
-             ("192.168.106.51", ""),
+    cases = (("192.0.2.53", "11:22:33:44:55:66"),
+             ("192.0.2.53", ""),
              ("", "11:22:33:44:55:66"),
              ("192.168.1.1; reboot", "zz:zz"),
              ("", ""))
@@ -262,7 +264,7 @@ def test_classify_stale_entries_with_failing_probes_is_dark() -> None:
     obs = observations()
     obs["lan6"].poe = "Delivering power"
     obs["lan6"].macs = {"11:22:33:44:55:66"}
-    obs["lan6"].ips = {"11:22:33:44:55:66": ["192.168.106.51"]}
+    obs["lan6"].ips = {"11:22:33:44:55:66": ["192.0.2.53"]}
     obs["lan6"].liveness = bi.Liveness()
     with tempfile.TemporaryDirectory() as td:
         findings = {f.port: f for f in bi.classify(registry_in(td), obs)}
@@ -383,7 +385,7 @@ def test_refresh_liveness_merges_neigh_so_live_unit_classifies_ok(
     """The 2026-09-23 lan4 incident, end to end: cache empty, unit answers
     TCP:22, the post-probe neigh read materializes the MAC -> ok, not dark."""
     probe_out = "P4:1\nT22:0\nT80:1\nP6:1\n"     # ICMP filtered, SSH answers
-    neigh_out = ("192.168.106.51 dev switch.1006 lladdr 11:22:33:44:55:66  REACHABLE\n")
+    neigh_out = ("192.0.2.53 dev switch.1006 lladdr 11:22:33:44:55:66  REACHABLE\n")
     fake_run, _ = _fake_ssh(probe_out, neigh_out)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
     obs = observations()
@@ -397,7 +399,7 @@ def test_refresh_liveness_merges_neigh_so_live_unit_classifies_ok(
     o = obs["lan6"]
     assert o.liveness is not None and o.liveness.ok
     assert o.macs == {"11:22:33:44:55:66"}
-    assert "192.168.106.51" in o.ips["11:22:33:44:55:66"]
+    assert "192.0.2.53" in o.ips["11:22:33:44:55:66"]
     f = findings["lan6"]
     assert f.status == "ok" and f.seen_mac == "11:22:33:44:55:66"
     assert "liveness ok" in f.detail
@@ -408,7 +410,7 @@ def test_refresh_liveness_arp_channel_counts_as_liveness(
     """All probes fail but a NEW neighbor entry materialized from the probe
     traffic itself: L2-alive, must not be darked."""
     probe_out = "P4:1\nT22:1\nT80:1\nP6:1\n"
-    neigh_out = ("192.168.106.51 dev switch.1006 lladdr de:ad:be:ef:00:01  REACHABLE\n")
+    neigh_out = ("192.0.2.53 dev switch.1006 lladdr de:ad:be:ef:00:01  REACHABLE\n")
     fake_run, _ = _fake_ssh(probe_out, neigh_out)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
     obs = observations()
@@ -427,13 +429,13 @@ def test_refresh_liveness_arp_channel_counts_as_liveness(
 def test_refresh_liveness_dead_unit_keeps_stale_macs_dark(
         monkeypatch: pytest.MonkeyPatch) -> None:
     probe_out = "P4:1\nT22:1\nT80:1\nP6:1\n"
-    stale_neigh = ("192.168.106.51 dev switch.1006 lladdr 11:22:33:44:55:66  STALE\n")
+    stale_neigh = ("192.0.2.53 dev switch.1006 lladdr 11:22:33:44:55:66  STALE\n")
     fake_run, _ = _fake_ssh(probe_out, stale_neigh)
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
     obs = observations()
     obs["lan6"].poe = "Delivering power"
     obs["lan6"].macs = {"11:22:33:44:55:66"}
-    obs["lan6"].ips = {"11:22:33:44:55:66": ["192.168.106.51"]}
+    obs["lan6"].ips = {"11:22:33:44:55:66": ["192.0.2.53"]}
     with tempfile.TemporaryDirectory() as td:
         r = registry_in(td)
         bi.refresh_liveness("switch", r, obs)
@@ -453,7 +455,7 @@ def test_emit_exporter_skips_power_export_false_and_unregistered() -> None:
     assert "index: 5" not in out, "one-way-trip port must get no power stanza"
     assert "power_export=false" in out
     assert "UNREGISTERED" in out and "lan7" in out
-    assert "address: 192.168.102.51" in out   # NetworkService from registry dut_ip
+    assert "address: 192.0.2.51" in out   # NetworkService from registry dut_ip
     assert out.count("NetworkPowerPort:") >= 3
     assert "\n# " not in out                  # only ## comments (Jinja rule)
 
@@ -527,9 +529,9 @@ def test_collect_pins_ssh_argv_and_remote_script(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(bi.subprocess, "run", fake_run)
     monkeypatch.setenv("CONWRT_BENCH", "direct")
-    obs = bi.collect("192.168.13.2", ("lan2", "lan4"))
+    obs = bi.collect(TEST_SWITCH, ("lan2", "lan4"))
     argv, kwargs = calls[0]
-    assert argv == ["ssh", *bs.SSH_OPTS, "root@192.168.13.2",
+    assert argv == ["ssh", *bs.SSH_OPTS, f"root@{TEST_SWITCH}",
                     bi.collect_script(("lan2", "lan4"))]
     assert kwargs["capture_output"] is True and kwargs["text"] is True
     assert obs["lan2"].poe == "Delivering power"
@@ -549,7 +551,7 @@ def test_collect_labgrid_without_lib_fails_typed_before_hardware(
 
     monkeypatch.setattr(bi.subprocess, "run", no_hardware)
     with pytest.raises(bi.ScanError, match="pip install labgrid"):
-        bi.collect("192.168.13.2", ("lan2",))
+        bi.collect(TEST_SWITCH, ("lan2",))
 
 
 def test_no_committed_coordinates() -> None:

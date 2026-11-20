@@ -19,6 +19,28 @@ The primary use case is flashing devices where serial access is available to tri
 
 The protocol was reverse-engineered by Bjorn Mork and published as `zycast.c` in OpenWrt's `firmware-utils` under GPL-2.0. Conwrt provides three implementations (Go, C, Python), all derived from this reference.
 
+## 1b. THE WRITE WINDOW IS SACRED (bench-proven 2026-11-09/10)
+
+The Multiboot client receives a full pass (~75-150 s at ~100 pkt/s),
+then WRITES the kernel for MINUTES. A power cycle inside that write
+window leaves the unit in a WEDGE state that neither boots nor accepts
+further multicast — three bench incidents, two units, all the same
+shape (recovery by serial only). Protocol that has now produced BOTH a
+clean flash and (when violated) a wedge:
+
+  1. sender streaming (bounded loops, >=15; ~25 min total)
+  2. ONE power cycle to enter the listen window
+  3. hands COMPLETELY off until the sender finishes + 10 min
+     (no probes that power-cycle, no second cycle "to check")
+  4. one final boot cycle
+
+Notes from the incident chain: a healthy unit's bootloader also writes
+silently during the stream and boots the NEW kernel on the next cycle
+(the 2026-11-09 Rust-sender flash of a production NR7101 booted its
+image only at the post-stream cycle); and the C reference tool sends a
+single pass per invocation — wrapper-looping it invites exactly the
+compressed timing that wedges units. Prefer the bounded-loop senders.
+
 ## 2. Implementations
 
 | Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) | Rust (`conwrt-protocols::zycast` core + `conwrt zycast` CLI) |
@@ -197,3 +219,29 @@ ip link set switch.1002 up
 **Device reflashes on every boot**: Kill the zycast process after a successful flash. If the device is in Z-Loader mode and zycast is running, the bootloader will reflash on every power cycle.
 
 **Wrong port assignment**: Verify which physical port the target is connected to. On the GS1900-8HP, `lan2` is PoE port 2. Check with `ubus call poe info` to see which ports show "Delivering power".
+
+## Receiver model and simulator (RE-derived)
+
+The NR7101 bootloader's zycast receive state machine is now encoded as
+`conwrt-protocols::zycast_receiver` — reverse-engineered from the STAGE-2
+blob (evidence-graded source: conwrt-bench `docs/research/2026-11-10-zloader-re-findings.md`):
+the gate chain (magic → type → dedup → strict in-order seq → folded checksum),
+rollback-to-chunk-0 on out-of-order, per-type completion mask, and stream
+completion when the mask equals the sender's declared total mask. The
+wrap dance's exact pointer choreography is [S]-grade in the source, so
+completion is modeled as block COVERAGE (behaviorally identical for any
+sender ordering).
+
+`conwrt-zycast::simulator` wraps the model in a real UDP socket: a
+faithful fake Z-Loader. The e2e suite runs the REAL sender against it —
+clean runs reconstruct byte-exact, a forced packet loss heals via loop
+restart (the bench-proven reason loops exist, now pinned as a test), and
+late joiners (bootloader entering its window mid-send) complete on the
+next loop.
+
+Sender-side gains from the RE: the magic gate now accepts the magics the
+bootloader actually validates (HDR0/HDR4 — the legacy 83 80 00 00 constant
+was from another ZyXEL family and would have refused real NR7101 images),
+and `--expect-model <hex>` refuses BEFORE multicast any image whose RAS
+model-ID field would be refused at flash-commit ("Wrong Model ID!!" —
+the wrong-unit class). For NR7101: `--expect-model 7101`.

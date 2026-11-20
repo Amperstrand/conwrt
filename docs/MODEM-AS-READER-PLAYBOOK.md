@@ -1,5 +1,10 @@
 # Modem-as-Reader Playbook — eSIM provisioning through a router's own modem
 
+> **Deployment counterpart:** [NR7101-SIM-MODES.md](NR7101-SIM-MODES.md)
+> covers the three supported SIM sources (local 9eSIM, physical card, phone
+> over Bluetooth SAP) and the `conwrt sim` plans. This playbook is the
+> provisioning mechanics; the deployment guide is where an operator starts.
+
 **The generalized process.** `NR7101-ESIM-PLAYBOOK.md` was the first full walk
 (one model, one modem, proven end-to-end). This document is the species-agnostic
 version: the gates, the two transport paths, the reference wire fingerprints,
@@ -12,7 +17,8 @@ Per-model status:
 |---|---|---|---|
 | Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) |
 | GL.iNet GL-E750 | Quectel EM060K-GL | B (stub → #619) | in progress |
-| ZTE MF286D | ZTE cat.12 mPCIe | C (stub → #621) | not started |
+| ZTE MF286D | ZTE cat.12 mPCIe | C (filled) | negative species result (closed 2026-11-07 — no eUICC/SAP; classic reader only) |
+| Zyxel NR7302-class | Quectel RG520F (+soldered eUICC on some SKUs) | D (stub → ZYXEL-ESIM-RESEARCH.md) | research candidate — no unit owned |
 
 The deep evidence lives in Amperstrand/ifd-modemifd `docs/` (known-good
 toolchain, wire fingerprints, refresh policy, findings history). This playbook
@@ -140,13 +146,40 @@ unit runs a QMI/MBIM composition on `/dev/cdc-wdm0`. Fill this appendix from
 the #619 results: port map, fingerprint diff vs §reference, rehearsal
 transcript pointers, model JSON updates.
 
-## Appendix C — ZTE MF286D (stub → #621)
+## Appendix C — ZTE MF286D (filled — species closed 2026-11-07)
 
-Task issue #621 (see its correction comment). Community-build OpenWrt only
-(currently a 25.12.4 ipq40xx build with QMI/MBIM + ModemManager) — record
-build provenance per the rules above. ZTE cat.12 mPCIe modem: a genuinely new
-firmware family for the fingerprint library; no CSIM behavior assumed either
-way. **Arch correction (2026-11-02): the MF286D is IPQ4019 — `ipq40xx/generic`,
-`arm_cortex-a7-neon-vfpv4` — NOT ath79/mips_24kc like the MF286C sibling and
-the E750.** It needs its own lpac artifact; the lpac-openwrt build script has
-the `ipq40xx/generic` case and the artifact is being prepared.
+- Unit: Nordic/Telia generation, now bench-flashed to official OpenWrt
+  25.12.6 (ipq40xx, arm_cortex-a7-neon-vfpv4 — NOT the E750's mips; needs
+  its own lpac artifact, which exists: lpac-openwrt ipq40xx-25.12.5-r1).
+- Modem: ZTE MF286DMODULE (MDM9650-class cat.12) on USB, QMI 19d2:1485;
+  AT port /dev/ttyUSB2 on the bench unit (re-detect per session per §3).
+- **Reader capability verdict (species-level):**
+  - `AT+CRSM` WORKS — the modem functions as a **classic-file SIM reader**
+    (read/write files via CRSM commands).
+  - **Remote-SIM/SAP lending: NOT POSSIBLE** on this ZTE modem firmware
+    (no SAP/remote-SIM support).
+  - `AT+CCHO` (logical channels) REFUSED → **no eUICC profile operations**
+    (no ISD-R access, no lpac `at_csim`-class passthrough).
+- Consequence for this playbook: the MF286D is a **negative species result**
+  for the eSIM/modem-as-reader program — usable as a classic SIM reader
+  only. The third-species slot for `AT+CSIM` generalization remains open;
+  ZTE modem firmware gates the smartcard passthrough that Quectel exposes.
+- Full species record: `models/zte-mf286d.json`, flash + root runbook in
+  `recipes/zte/mf286d/`, install/recovery in `docs/zte-mf286d-flashing.md`.
+  Security-research follow-ups live in the private research repo.
+
+## Appendix D — Zyxel NR7302-class (stub — research candidate, no unit owned)
+
+- Vendor-native eSIM stack exists in this family: Zyxel Air app + a
+  **router-side LPA** (router downloads the profile itself after QR handoff),
+  with a **soldered eUICC on the RG520F modem** on A1/Telenor SKUs only
+  (DTAG SKUs ship chip-less). EID lives in the device's ROM-D config.
+- Recovery: **zycast** bootloader multicast flash (family-wide; no serial
+  needed) → soldered USB at J3 (fastboot/EDL; ADB/DIAG with VCC; beware
+  one-way `usb_composition` changes).
+- Relevance: prior art for the ZTE `-lpad` architecture (EXP-034/035) and a
+  possible LPAd capability question for our own NR7101 modules (Quectel
+  RG50xQ LPA application note — read-only probe documented).
+- Full findings + donor-buying guidance + sources:
+  `docs/ZYXEL-ESIM-RESEARCH.md`. Fill this appendix only after a unit is
+  acquired and the gates (§universal gates) are run against it.

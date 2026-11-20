@@ -7,13 +7,18 @@
 # re-stage automatically from the Mac, then re-runs bench-arm so the dnsmasq
 # lifelines come back with it.
 #
-# Install (Mac crontab, every 10 minutes):
-#   crontab -l 2>/dev/null; echo '*/10 * * * * $HOME/src/conwrt/scripts/mac-lifeline-guard.sh >> $HOME/src/conwrt/data/bench/lifeline-guard.log 2>&1' | crontab -
+# Install (Mac crontab, every 10 minutes; set the switch in the cron
+# environment — the address lives in the private registry, never here):
+#   crontab -l 2>/dev/null; echo '*/10 * * * * CONWRT_BENCH_SWITCH=<switch-mgmt> $HOME/src/conwrt/scripts/mac-lifeline-guard.sh >> $HOME/src/conwrt/data/bench/lifeline-guard.log 2>&1' | crontab -
 #
 # Fails SOFT on unreachable switch (logs, exit 0) — a bench being physically
 # worked (cables moved) must not page anyone; it heals on the next pass.
 
-SWITCH=root@192.168.13.2
+: "${CONWRT_BENCH_SWITCH:?set CONWRT_BENCH_SWITCH to the bench switch management host (host or root@host)}"
+case "$CONWRT_BENCH_SWITCH" in
+    *@*) SWITCH="$CONWRT_BENCH_SWITCH" ;;
+    *)   SWITCH="root@$CONWRT_BENCH_SWITCH" ;;
+esac
 FIT_LOCAL="$HOME/src/conwrt/data/images/openwrt-24.10.2-ipq40xx-generic-extreme-networks_ws-ap3915i-squashfs-sysupgrade.bin"
 FIT_REMOTE="/tmp/bench-tftp/vmlinux.gz.uImage.3912"
 FIT_MD5=2242e9b7b31eec6251d8c168474a919d

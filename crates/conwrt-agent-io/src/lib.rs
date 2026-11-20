@@ -169,35 +169,68 @@ pub async fn agent_session_stream<T: StreamIo>(io: &mut T, server: &mut ServerCo
                 continue;
             };
             if let Ok(bytes) = encode_frame(&response) {
-                write_all_stream(io, &cobs_encode(&bytes)).await;
+                // #375: a failed write ends the session — responses are
+                // undeliverable; continuing would only buffer frames to a
+                // dead peer.
+                if write_all_stream(io, &cobs_encode(&bytes)).await.is_err() {
+                    return;
+                }
             }
-            send_pending_events(io, server).await;
+            if send_pending_events(io, server).await.is_err() {
+                return;
+            }
         }
     }
 }
 
 /// Stream-write `data` fully, looping over partial writes (the packet
 /// twin is [`write_packetized`]; streams have no packet discipline).
-/// Returns on the first transport error or a zero-byte write (stalled
-/// peer).
-pub async fn write_all_stream<T: StreamIo>(io: &mut T, data: &[u8]) {
+///
+/// # Errors
+/// The first transport error or zero-byte write (stalled peer) is
+/// RETURNED to the caller — a failed write means responses are
+/// undeliverable and the stream session must end, not continue
+/// buffering frames to a dead peer (issue #375: the session previously
+/// ran on after failed writes).
+pub async fn write_all_stream<T: StreamIo>(
+    io: &mut T,
+    data: &[u8],
+) -> Result<(), WriteFailed<T::Error>> {
     let mut sent = 0;
     while sent < data.len() {
         match io.write(&data[sent..]).await {
-            Ok(0) | Err(_) => return,
+            Ok(0) => return Err(WriteFailed::Stalled),
             Ok(n) => sent += n,
+            Err(e) => return Err(WriteFailed::Transport(e)),
         }
     }
+    Ok(())
+}
+
+/// Why a stream write failed — the session treats both variants as
+/// terminal (mirrors the read side's "transport failure ends the
+/// session" contract).
+#[derive(Debug, PartialEq, Eq)]
+pub enum WriteFailed<E> {
+    /// The peer accepted zero bytes (stalled/closed mid-write).
+    Stalled,
+    /// The transport reported an error.
+    Transport(E),
 }
 
 /// Drain events queued on `server` (e.g. UART RX pushed by another task)
 /// to the controller — after each reply, mirroring the std pump.
-async fn send_pending_events<T: StreamIo>(io: &mut T, server: &mut ServerCore) {
+/// A write failure is propagated: undeliverable events end the session.
+async fn send_pending_events<T: StreamIo>(
+    io: &mut T,
+    server: &mut ServerCore,
+) -> Result<(), WriteFailed<T::Error>> {
     for event in server.take_events() {
         if let Ok(bytes) = encode_frame(&WireFrame::Event(event)) {
-            write_all_stream(io, &cobs_encode(&bytes)).await;
+            write_all_stream(io, &cobs_encode(&bytes)).await?;
         }
     }
+    Ok(())
 }
 
 /// UART RX chunk size for [`agent_session_stream_events`] — console lines,
@@ -255,9 +288,14 @@ pub async fn agent_session_stream_events<T: StreamIo, E: EventSource>(
                         continue;
                     };
                     if let Ok(bytes) = encode_frame(&response) {
-                        write_all_stream(io, &cobs_encode(&bytes)).await;
+                        // #375: undeliverable responses end the session.
+                        if write_all_stream(io, &cobs_encode(&bytes)).await.is_err() {
+                            return;
+                        }
                     }
-                    send_pending_events(io, server).await;
+                    if send_pending_events(io, server).await.is_err() {
+                        return;
+                    }
                 }
             }
             Either::Second(ev) => {
@@ -268,7 +306,9 @@ pub async fn agent_session_stream_events<T: StreamIo, E: EventSource>(
                     return;
                 }
                 server.push_uart_data(0, &evbuf[..n]);
-                send_pending_events(io, server).await;
+                if send_pending_events(io, server).await.is_err() {
+                    return;
+                }
             }
         }
     }

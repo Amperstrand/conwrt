@@ -25,10 +25,10 @@ EXPORTER_FIXTURE = """\
 ap-lan2:
   NetworkPowerPort:
     model: conwrt_poe
-    host: 192.168.13.2
+    host: 192.0.2.10
     index: 2
   NetworkService:
-    address: 192.168.102.51
+    address: 192.0.2.51
     username: root
   NetworkSerialPort:
     host: 127.0.0.1        # forwarder listen addr on this exporter host
@@ -38,15 +38,15 @@ ap-lan2:
 ap-lan3:
   NetworkPowerPort:
     model: conwrt_poe
-    host: 192.168.13.2
+    host: 192.0.2.10
     index: 3
 """
 
 REGISTRY_FIXTURE = {
     "places": [
-        {"name": "ap-lan2", "mac": "dc:b8:08:6c:ea:7f", "dut_ip": "192.168.102.51",
+        {"name": "ap-lan2", "mac": "dc:b8:08:6c:ea:7f", "dut_ip": "192.0.2.51",
          "reset_allowed": True, "serial_console": "via ap-lan4 bridge", "password": "SECRETPW"},
-        {"name": "ap-lan3", "mac": "b4:2d:56:25:47:a2", "dut_ip": "192.168.103.51",
+        {"name": "ap-lan3", "mac": "b4:2d:56:25:47:a2", "dut_ip": "192.0.2.52",
          "reset_allowed": True},
     ]
 }
@@ -70,7 +70,7 @@ def _exporter(tmp_path: Path, text: str = EXPORTER_FIXTURE) -> Path:
 def test_parse_exporter_live_format() -> None:
     stanzas = bc.parse_exporter(EXPORTER_FIXTURE)
     assert stanzas["ap-lan2"]["NetworkPowerPort"] == {
-        "model": "conwrt_poe", "host": "192.168.13.2", "index": "2"}
+        "model": "conwrt_poe", "host": "192.0.2.10", "index": "2"}
     # inline '# ...' comments stripped from values
     assert stanzas["ap-lan2"]["NetworkSerialPort"] == {
         "host": "127.0.0.1", "port": "4002", "speed": "115200"}
@@ -100,11 +100,11 @@ def test_crosscheck_matching_registries_are_clean() -> None:
     clean, lines = bc.crosscheck(REGISTRY_FIXTURE, bc.parse_exporter(EXPORTER_FIXTURE))
     assert clean, lines
     assert not any(line.startswith("FAIL") for line in lines)
-    assert any("NetworkService 192.168.102.51" in line for line in lines)
+    assert any("NetworkService 192.0.2.51" in line for line in lines)
 
 
 def test_crosscheck_flags_powered_place_without_stanza() -> None:
-    places = [{"name": "ap-lan6", "mac": "", "dut_ip": "192.168.106.51", "reset_allowed": True}]
+    places = [{"name": "ap-lan6", "mac": "", "dut_ip": "192.0.2.53", "reset_allowed": True}]
     clean, lines = bc.crosscheck({"places": places}, {"ap-lan2": {}})
     assert not clean
     assert any("FAIL ap-lan6: powered place" in line for line in lines)
@@ -165,7 +165,7 @@ def test_level_coordinator_degraded_not_crash_when_unreachable(
     def refused(_endpoint, timeout=None):
         raise OSError(61, "connection refused")
     monkeypatch.setattr(bd.socket, "create_connection", refused)
-    result = bd.level_coordinator("192.168.13.221:20408", 5)
+    result = bd.level_coordinator("192.0.2.221:20408", 5)
     assert result.status == bd.DEGRADED
     assert "unreachable" in result.lines[0]
 
@@ -221,7 +221,7 @@ def test_level_bridges_remote_probe_silent_console_is_degraded(
 
 
 def test_level_bridges_direct_probe_non_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
-    stanzas = {"ap-lan2": {"NetworkSerialPort": {"host": "192.168.13.50", "port": "4002"}}}
+    stanzas = {"ap-lan2": {"NetworkSerialPort": {"host": "192.0.2.50", "port": "4002"}}}
     probed: list = []
 
     def fake_probe(host, port, timeout_s):
@@ -229,7 +229,7 @@ def test_level_bridges_direct_probe_non_loopback(monkeypatch: pytest.MonkeyPatch
         return True, "answered with 9 byte(s)"
     monkeypatch.setattr(bd, "tcp_console_probe", fake_probe)
     assert bd.level_bridges(stanzas, "", 10).status == bd.PASS
-    assert probed == [("192.168.13.50", 4002, 10)]
+    assert probed == [("192.0.2.50", 4002, 10)]
 
 
 def test_level_registry_reports_protected_and_missing_fields() -> None:
@@ -275,7 +275,7 @@ def test_doctor_degraded_coordinator_exits_one(
     monkeypatch.setattr(bd.socket, "create_connection", refused)
     code = bd.run_doctor(bd.Options(places=tmp_path / "none.json",
                                     exporter=tmp_path / "none.yaml",
-                                    coordinator="192.168.13.221:20408"))
+                                    coordinator="192.0.2.221:20408"))
     out = capsys.readouterr().out
     assert code == 1
     assert "L1 coordinator: DEGRADED" in out

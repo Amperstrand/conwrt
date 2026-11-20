@@ -24,10 +24,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Callable, Iterator, NamedTuple, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAB_YAML = REPO_ROOT / "data" / "lab.yaml"
@@ -47,6 +48,77 @@ class Venue:
         """Place/device name for labgrid:/direct: venues, else None."""
         _, _, rest = self.key.partition(":")
         return rest or None
+
+
+# --- venue acquire queue (#184 / bolty-rs#271 theme) -----------------------
+#
+# Contentions on a labgrid place were an instant SKIP: on a multi-agent
+# host every sibling session holding the place turned the whole venue
+# into "not acquirable" for everyone else. The queue: bounded wait with
+# contention classification — retry while the failure says "held by a
+# sibling", skip fast when the coordinator itself is unreachable.
+
+#: stderr fragments labgrid-client emits when the place is HELD (queue
+#: these) — anything else (refused connection, no route, unknown place)
+#: is an environment failure: skip immediately, waiting cannot help.
+_CONTENTION_MARKERS = (
+    "already acquired",
+    "is acquired",
+    "acquired by",
+    "occupied",
+    "resource busy",
+)
+
+
+class AcquireOutcome(NamedTuple):
+    status: str        # "acquired" | "timeout" | "unavailable"
+    attempts: int
+    waited_s: float
+    last_stderr: str
+
+
+def _is_contention(stderr: str) -> bool:
+    low = stderr.lower()
+    return any(m in low for m in _CONTENTION_MARKERS)
+
+
+def acquire_with_queue(
+    place: str,
+    runner: Optional[Runner] = None,
+    *,
+    queue_timeout_s: Optional[float] = None,
+    poll_s: Optional[float] = None,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+) -> AcquireOutcome:
+    """Acquire `place`, QUEUEING through sibling contention.
+
+    Retries every `poll_s` while the place is held and the cumulative
+    wait stays under `queue_timeout_s` (env: CONWRT_VENUE_QUEUE_TIMEOUT,
+    default 300; <= 0 restores the single-attempt legacy behavior).
+    Non-contention failures return immediately — a coordinator that is
+    down will not come back because we waited.
+    """
+    runner = runner or default_runner
+    if queue_timeout_s is None:
+        queue_timeout_s = float(os.environ.get("CONWRT_VENUE_QUEUE_TIMEOUT", "300"))
+    if poll_s is None:
+        poll_s = float(os.environ.get("CONWRT_VENUE_QUEUE_POLL", "15"))
+
+    deadline = monotonic() + queue_timeout_s
+    attempts = 0
+    waited = 0.0
+    while True:
+        attempts += 1
+        r = runner(["-p", place, "acquire"])
+        if r.returncode == 0:
+            return AcquireOutcome("acquired", attempts, waited, "")
+        if not _is_contention(r.stderr or ""):
+            return AcquireOutcome("unavailable", attempts, waited, (r.stderr or ""))
+        if monotonic() >= deadline:
+            return AcquireOutcome("timeout", attempts, waited, (r.stderr or ""))
+        sleep(poll_s)
+        waited += poll_s
 
 
 def default_runner(args: list[str]) -> "subprocess.CompletedProcess[str]":

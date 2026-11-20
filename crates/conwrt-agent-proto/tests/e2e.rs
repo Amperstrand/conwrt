@@ -215,3 +215,279 @@ async fn lease_survives_disconnect_and_denies_next_controller() {
         other => panic!("expected Denied with holder, got {other:?}"),
     }
 }
+
+// --- #164 P1 residuals: owner-checked release + the expiry ticker ---
+
+async fn spawn_agent_tuned(
+    capabilities: Vec<CapabilityInfo>,
+    heartbeat_ms: u32,
+    budget: u32,
+) -> String {
+    use conwrt_agent_proto::agent::run_agent_on;
+    use std::sync::{Arc, Mutex};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let state = Arc::new(Mutex::new(conwrt_agent_proto::agent::AgentState::default()));
+    let config = Arc::new(AgentConfig {
+        listen: addr.clone(),
+        capabilities,
+        heartbeat_ms,
+        heartbeat_budget: budget,
+        ..Default::default()
+    });
+    tokio::spawn(async move {
+        run_agent_on(listener, state, config).await;
+    });
+    addr
+}
+
+#[tokio::test]
+async fn lease_release_is_owner_checked() {
+    let addr = spawn_agent(vec![]).await;
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    let lease_id = match owner
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+
+    // The agent serves ONE connection at a time (per-connection state
+    // model) — the intruder gets the socket only after the owner drops
+    // it. The lease SURVIVES the disconnect (state outlives connections).
+    drop(owner);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // A DIFFERENT controller must not free it: the wire bool says false
+    // and the lease stays alive for the owner's reconnect.
+    let mut intruder = AgentClient::connect(&addr).await.unwrap();
+    intruder.handshake("controller-intruder").await.unwrap();
+    let stolen = intruder.release_lease(lease_id).await.unwrap();
+    assert!(
+        !stolen,
+        "a non-owning controller must not release the lease"
+    );
+    drop(intruder);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The owner reconnects: still holds the lease (heartbeat acks), and
+    // ITS release succeeds.
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    owner.heartbeat(lease_id).await.unwrap();
+    assert!(owner.release_lease(lease_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn heartbeat_is_owner_checked() {
+    // #164 P1 4272448192 (heartbeat half): after the owner drops, an
+    // intruder's heartbeats must NOT immortalize the lease — each is
+    // refused with LeaseNotOwner, the budget still decays, and the
+    // expiry event fires for the lease the intruder kept prodding.
+    use conwrt_agent_proto::dispatch::{AgentEvent, WireError};
+
+    let addr = spawn_agent_tuned(vec![], 50, 5).await;
+    let mut owner = AgentClient::connect(&addr).await.unwrap();
+    owner.handshake("controller-owner").await.unwrap();
+    let lease_id = match owner
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+    drop(owner);
+
+    let mut intruder = AgentClient::connect(&addr).await.unwrap();
+    intruder.handshake("controller-intruder").await.unwrap();
+
+    // Heartbeat at twice the ticker rate for well past budget x
+    // interval. While the lease lives, every attempt is refused with
+    // LeaseNotOwner; once the budget hits 0 the lease vanishes and
+    // the refusal turns UnknownLease — with the LeaseExpired event
+    // trailing that same response on this connection.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(400);
+    let mut saw_expiry = false;
+    loop {
+        match intruder.heartbeat(lease_id).await {
+            Err(ClientError::Agent(WireError::LeaseNotOwner {
+                lease_id: lid,
+                holder,
+            })) => {
+                assert_eq!(lid, lease_id);
+                assert_eq!(holder, "controller-owner");
+            }
+            Err(ClientError::Agent(WireError::UnknownLease(id))) if id == lease_id => {}
+            other => panic!("non-owner heartbeat must be refused, got {other:?}"),
+        }
+        if let Some(AgentEvent::LeaseExpired(ev)) = intruder.try_recv_event() {
+            assert_eq!(ev.lease_id, lease_id);
+            saw_expiry = true;
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        saw_expiry,
+        "the lease must expire despite the intruder's refills"
+    );
+    drop(intruder);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The resource is free: a fresh controller acquires it.
+    let mut next = AgentClient::connect(&addr).await.unwrap();
+    next.handshake("controller-next").await.unwrap();
+    match next
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { .. } => {}
+        LeaseResponse::Denied { holder } => {
+            panic!("lease still held by {holder:?}: a non-owner's heartbeats immortalized it");
+        }
+    }
+}
+
+#[tokio::test]
+async fn heartbeat_expiry_frees_lease_via_ticker() {
+    // Before #164 P1 4272448155 the tick() never ran on a timer: budgets
+    // only moved on request traffic, and a silent controller's lease
+    // NEVER expired. With the ticker, a lease whose heartbeats stop is
+    // freed after budget x interval — the re-acquire GRANTS.
+    let addr = spawn_agent_tuned(vec![], 50, 2).await;
+    let mut client = AgentClient::connect(&addr).await.unwrap();
+    client.handshake("silent-controller").await.unwrap();
+    let first = match client
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => lease_id,
+        other => panic!("expected Granted, got {other:?}"),
+    };
+
+    // Go silent: budget 2 x 50 ms + slack. No heartbeats sent.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The same controller re-acquires: Granted (a NEW id) — the expired
+    // lease no longer blocks, which is only true if the ticker ran.
+    match client
+        .acquire_lease(conwrt_agent_proto::protocol::LeaseRequest {
+            resource: "uart0".into(),
+            exclusive: true,
+            on_disconnect: DisconnectPolicy::Abort,
+        })
+        .await
+        .unwrap()
+    {
+        LeaseResponse::Granted { lease_id, .. } => {
+            assert_ne!(
+                lease_id, first,
+                "expiry must free the old lease for a fresh grant"
+            );
+        }
+        LeaseResponse::Denied { holder } => {
+            panic!("lease {first} still held by {holder:?}: the expiry ticker did not run");
+        }
+    }
+}
+
+#[tokio::test]
+async fn transfer_claims_end_with_connection() {
+    // #164 P1 4272448227: transfer ids are agent-global. The guarantee
+    // boundary: no LIVE cross-controller interleave (sequential serving
+    // + the ownership map), while a takeover AFTER the owner's
+    // disconnect is the documented resume pattern. Here: a's bytes
+    // persist, b re-claims the id post-drop and completes the stream.
+    use conwrt_agent_proto::protocol::StreamChunk;
+
+    let addr = spawn_agent(vec![]).await;
+    let mut a = AgentClient::connect(&addr).await.unwrap();
+    a.handshake("controller-a").await.unwrap();
+    let ack = a
+        .send_chunk(StreamChunk {
+            transfer_id: 42,
+            offset: 0,
+            total: Some(2048),
+            data: vec![0xAA; 1024],
+        })
+        .await
+        .unwrap();
+    assert_eq!(ack.contiguous, 1024);
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Post-disconnect: the claim ended with a's connection; b re-claims
+    // (resume shape) and the PRIOR bytes persist — contiguous continues
+    // from 1024, not from 0.
+    let mut b = AgentClient::connect(&addr).await.unwrap();
+    b.handshake("controller-b").await.unwrap();
+    let st = b.stream_status(42).await.unwrap();
+    assert_eq!(st.contiguous, 1024, "a's bytes must survive the disconnect");
+    let ack2 = b
+        .send_chunk(StreamChunk {
+            transfer_id: 42,
+            offset: 1024,
+            total: None,
+            data: vec![0xBB; 1024],
+        })
+        .await
+        .unwrap();
+    assert_eq!(ack2.contiguous, 2048);
+    assert!(ack2.done);
+}
+
+#[tokio::test]
+async fn oversized_chunk_refused_client_side() {
+    // #164 P2 4272448213: chunks whose encoded frame exceeds the agent's
+    // 8192B COBS accumulator are dropped silently by the receiver — the
+    // controller now refuses them before the wire, naming the limit.
+    use conwrt_agent_proto::controller::ClientError;
+    use conwrt_agent_proto::protocol::StreamChunk;
+
+    let addr = spawn_agent(vec![]).await;
+    let mut c = AgentClient::connect(&addr).await.unwrap();
+    c.handshake("chunky").await.unwrap();
+    match c
+        .send_chunk(StreamChunk {
+            transfer_id: 7,
+            offset: 0,
+            total: None,
+            data: vec![0u8; 9000],
+        })
+        .await
+    {
+        Err(ClientError::ChunkTooLarge { len, max }) => {
+            assert_eq!(len, 9000);
+            assert_eq!(max, 8192 - 512);
+        }
+        other => panic!("expected ChunkTooLarge, got {other:?}"),
+    }
+    // the connection stays usable afterwards (no half-sent frame)
+    let st = c.stream_status(7).await.unwrap();
+    assert_eq!(st.contiguous, 0);
+}

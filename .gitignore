@@ -100,3 +100,6 @@ config.toml
 # pi_image break-glass password files (mode 0600, never commit)
 *.credentials.txt
 tests/integration/.openwrt.img.sha256
+
+# Test fixtures are real device-derived bytes, not build artifacts.
+!crates/conwrt-core/tests/fixtures/*.bin

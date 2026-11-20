@@ -47,8 +47,17 @@ pub trait HttpIo {
     /// [`retain_verdict_bytes`] — drain past the cap, never grow
     /// past it (firmware heap safety after the irreversible POST).
     ///
+    /// Implementations MUST bound the read with a deadline (the
+    /// reference `TcpHttpIo` uses 30 s per read): a verdict server
+    /// always FINs promptly, and an unbounded loop converts a burned
+    /// window into a hung task loop — the socket-abort cleanup path
+    /// never runs (#232 P2 4298093594; the Python uploader twin
+    /// bounds its POST at `curl -m 400`).
+    ///
     /// # Errors
-    /// Transport failure before EOF.
+    /// Transport failure before EOF, or the read deadline expired
+    /// (surfaced as the transport error — the window is burned
+    /// either way).
     async fn read_response(&mut self, out: &mut Vec<u8>) -> Result<(), Self::Error>;
 }
 
@@ -57,7 +66,8 @@ pub trait HttpIo {
 pub enum PostError {
     /// Transport failure while writing (`op` names the stage).
     Write {
-        /// Stage that failed: `"head"`, `"body"` or `"footer"`.
+        /// Stage that failed: `"head"`, `"body"`, `"footer"` (upload
+        /// POST) or `"trigger"` (flash-trigger GET, [`crate::trigger`]).
         op: &'static str,
     },
     /// Transport failure reading the verdict.
@@ -159,6 +169,19 @@ pub fn retain_verdict_bytes(out: &mut Vec<u8>, segment: &[u8]) -> usize {
     let take = segment.len().min(room);
     out.extend_from_slice(&segment[..take]);
     take
+}
+
+/// Response BODY text: skip real HTTP response headers when present
+/// (U-Boot sends status headers before its HTML/size-line verdict),
+/// falling back to the whole stream when no `\r\n\r\n` separator
+/// exists. Shared by the upload verdict ([`RecoveryPost::finish`]),
+/// the flash-trigger verdict ([`crate::trigger::TriggerRequest`]) and
+/// host twins recovering partial bodies after transport failures.
+pub fn body_after_headers(raw: &str) -> &str {
+    match raw.find("\r\n\r\n") {
+        Some(at) => &raw[at + 4..],
+        None => raw,
+    }
 }
 
 /// The staged recovery POST.
@@ -318,13 +341,10 @@ impl<'a> RecoveryPost<'a> {
                 // status headers before the HTML/size line — skip them
                 // (fall back to the whole stream when absent).
                 let raw = String::from_utf8_lossy(&response).into_owned();
-                let text = match raw.find("\r\n\r\n") {
-                    Some(at) => String::from(&raw[at + 4..]),
-                    None => raw,
-                };
+                let text = body_after_headers(&raw);
                 let verdict = if text.contains(self.accept_pattern.as_str()) {
                     Verdict::Accepted
-                } else if is_size_md5_shape(&text) {
+                } else if is_size_md5_shape(text) {
                     // GL.iNet / MediaTek U-Boot: "<size> <md5>" plain
                     // text (scripts/flash/upload.py::parse_uboot_response)
                     Verdict::Accepted

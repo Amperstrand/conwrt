@@ -1,6 +1,7 @@
 import argparse
 
 from model_loader import list_models
+from conwrt import sim_modes
 from conwrt._version import __version__
 from flash.context import DEFAULT_IP, SILENCE_TIMEOUT_DEFAULT
 from bench_doctor import add_doctor_arguments
@@ -129,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show compatibility for a specific model")
 
     esim_parser = subparsers.add_parser("esim",
-        help="eSIM provisioning and management")
+        help="DEPRECATED: legacy MBIM eSIM provisioning; use `sim` (docs/NR7101-SIM-MODES.md)")
     esim_sub = esim_parser.add_subparsers(dest="esim_command")
     esim_sub.add_parser("status", help="Current serving cell, signal, band, operator")
     esim_sub.add_parser("profiles", help="List eUICC profiles (requires MBIM mode)")
@@ -359,5 +360,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bw_parser.add_argument("--duration", type=int, default=300)
     bw_parser.add_argument("--poll-interval", type=float, default=2.0)
     bw_parser.add_argument("--max-packets", type=int, default=2000)
+
+    sim_modes.add_parser(subparsers)
 
     return parser

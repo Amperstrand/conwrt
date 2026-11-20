@@ -127,6 +127,17 @@ preparation. The VM fixture boots a per-session qcow2 overlay over a pristine
 base, so every run starts from clean state. A full integration run including
 the flash lifecycle takes ~7 minutes.
 
+Two caveats on that "clean state" claim (conwrt#374):
+
+- **First run is not clean:** the flash-lifecycle tests skip until the
+  integration suite has run once (the fixture prepares the VM image and
+  state on the first pass — the skip message in `test_flash_lifecycle.py`
+  hints this). Budget one warm-up run before expecting the full suite.
+- **Bench mode is NOT overlay-isolated:** `make bench` boots the raw disk
+  directly — mutations persist across bench runs (that is the point of
+  bench evidence collection). The per-session overlay isolation described
+  above applies to the QEMU integration fixture only.
+
 ### Conwrt 2.0 (Rust foundation)
 
 A portable Rust implementation is growing beside the Python code

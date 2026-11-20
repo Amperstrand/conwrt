@@ -1,0 +1,18 @@
+{
+  "use_case": "net-roles",
+  "params": {
+    "uplinks": [
+      {
+        "type": "wifi",
+        "ssid": "BenchAP",
+        "key": "benchpass1"
+      },
+      {
+        "type": "sim",
+        "iface": "wwan0"
+      }
+    ],
+    "metered_guard": true,
+    "adaptive_interval": 45
+  }
+}

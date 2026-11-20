@@ -10,7 +10,7 @@
 > 2026-09-23 via this bridge. The lan6 dark unit remains the open case this
 > bridge now addresses.
 
-Three WS-AP3915i units (labels confirmed) sit on the home GS1900-8HP (192.168.13.2)
+Three WS-AP3915i units (labels confirmed) sit on the home GS1900-8HP (<bench-switch>)
 with network-dead states. This is the pilot-first rescue plan: prove the flow on one
 unit, then batch the rest. Prepared 2026-09-21; all remote diagnosis already done.
 
@@ -62,7 +62,7 @@ conwrt `scripts/gs1900-portmap.sh`):
 1. **Clip serial to the lan8 unit**, loopback-test the adapter, wire, then:
    `python3 scripts/serial-console.py /dev/cu.XXXX --baud 115200`
 2. **Power cycle from the switch** (keeps hands off PoE hot-plug):
-   `ssh root@192.168.13.2 'ubus call poe manage "{\"port\":\"lan8\",\"action\":\"disable\"}"; sleep 6; ubus call poe manage "{\"port\":\"lan8\",\"action\":\"enable\"}"'`
+   `ssh root@$CONWRT_BENCH_SWITCH 'ubus call poe manage "{\"port\":\"lan8\",\"action\":\"disable\"}"; sleep 6; ubus call poe manage "{\"port\":\"lan8\",\"action\":\"enable\"}"'`
 3. **Read the boot** — branch on what appears:
    - **`root@OpenWrt:~#`** (expected): diagnose network:
      `uci show network; logread | grep -i netifd; ip -4 addr; ip link`
@@ -78,7 +78,7 @@ conwrt `scripts/gs1900-portmap.sh`):
      `run boot_net` from U-Boot after all.
 4. **Verify network**: after fix, from the switch:
    `ping -c2 -I switch.1008 192.168.1.1` then SSH with the Mac key via jump:
-   `ssh -J root@192.168.13.2 root@192.168.1.1` (route-pin switch.1008 first).
+   `ssh -J root@$CONWRT_BENCH_SWITCH root@192.168.1.1` (route-pin switch.1008 first).
 5. **Record**: `python3 scripts/inventory.py add ...` with recovered state,
    then decide sysupgrade vs keep.
 

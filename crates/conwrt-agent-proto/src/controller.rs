@@ -36,6 +36,15 @@ pub enum ClientError {
     Agent(crate::dispatch::WireError),
     /// Handshake version mismatch.
     Handshake(HandshakeError),
+    /// A stream chunk whose encoded frame cannot fit the agent's COBS
+    /// receive accumulator (#164 P2 4272448213): the agent would drop
+    /// the frame silently — refuse client-side before the wire.
+    ChunkTooLarge {
+        /// The chunk's data length.
+        len: usize,
+        /// The enforced maximum data length.
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for ClientError {
@@ -48,6 +57,9 @@ impl std::fmt::Display for ClientError {
             ClientError::Io(e) => write!(f, "io: {e}"),
             ClientError::Agent(e) => write!(f, "agent error: {e:?}"),
             ClientError::Handshake(e) => write!(f, "handshake: {e:?}"),
+            ClientError::ChunkTooLarge { len, max } => {
+                write!(f, "chunk data {len}B exceeds the {max}B agent frame budget")
+            }
         }
     }
 }
@@ -222,6 +234,19 @@ impl AgentClient {
     /// # Errors
     /// Transport failure or agent error.
     pub async fn send_chunk(&mut self, chunk: StreamChunk) -> Result<StreamAck, ClientError> {
+        // #164 P2 4272448213: the agent's COBS accumulator is 8192B
+        // total (frame + COBS + postcard overhead). A chunk bigger than
+        // this budget is dropped SILENTLY on the receive side — reject
+        // it here with the limit named. 512B headroom covers framing.
+        const FRAME_BUDGET: usize = crate::cobs::ACCUMULATOR_CAPACITY;
+        const OVERHEAD_HEADROOM: usize = 512;
+        let max = FRAME_BUDGET - OVERHEAD_HEADROOM;
+        if chunk.data.len() > max {
+            return Err(ClientError::ChunkTooLarge {
+                len: chunk.data.len(),
+                max,
+            });
+        }
         match self.round_trip(WireEndpoint::StreamChunk(chunk)).await? {
             WireResult::StreamAck(ack) => Ok(ack),
             WireResult::Error(e) => Err(ClientError::Agent(e)),

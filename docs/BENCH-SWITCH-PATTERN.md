@@ -11,7 +11,7 @@ Amperstrand realtek-poe fork — then reboot-verified unattended.
 ```
 ERX (house router) ──eth2──→ switch lan1      uplink: VLAN 1 untagged
                               lan1 also tags VLANs 100N (trunk flexibility)
-switch management: 192.168.13.2 on switch.1 (static, gw 192.168.13.1)
+switch management: <switch-mgmt-ip> on switch.1 (static, gw <mgmt-gateway>)
 DUT bay: lan2..lan8, each port isolated in bridge-vlan 100N
   switch L3:  192.168.10N.1/24 (mnemonic: VLAN 1003 → 192.168.103.1)
   DUT DHCP:   192.168.10N.50-150 (dnsmasq per VLAN; rogue-DHCP-safe:
@@ -42,43 +42,51 @@ Prereqs: serial adapter on the deploy host (`pyserial`), the switch's PoE
 backup artifacts (`bench_switch.py backup` output), the deploy host's pubkey.
 
 ```bash
+# The switch address and gateway live in the operator's private registry;
+# this public repo has no bench IPs.
+export CONWRT_BENCH_SWITCH=<switch-mgmt-ip>
+export CONWRT_BENCH_GATEWAY=<mgmt-gateway>
+
 # 0. backup the CURRENT state (never skip; the artifacts also carry the fork)
-python3 scripts/bench_switch.py backup --host <ip> --out data/backups/<switch>
+python3 scripts/bench_switch.py backup --host "$CONWRT_BENCH_SWITCH" \
+    --out data/backups/<switch>
 
 # 1. factory reset (firstboot) — via SSH if reachable, else serial
-python3 scripts/bench_switch.py reset --host <ip> --i-know
+python3 scripts/bench_switch.py reset --host "$CONWRT_BENCH_SWITCH" --i-know
 python3 scripts/bench_switch.py reset --serial /dev/serial/by-id/<dev> --i-know
 
 # 2. after the factory reboot, deploy over serial (console = askfirst root)
-python3 scripts/bench_switch.py deploy --host x --serial /dev/serial/by-id/<dev> \
-    --pubkey ~/.ssh/id_ed25519.pub
+python3 scripts/bench_switch.py deploy --host "$CONWRT_BENCH_SWITCH" \
+    --mgmt-ip "$CONWRT_BENCH_SWITCH" --mgmt-gw "$CONWRT_BENCH_GATEWAY" \
+    --serial /dev/serial/by-id/<dev> --pubkey ~/.ssh/id_ed25519.pub
 
 # 3. apply + verify (reload was not run by deploy; reload then check)
 #    over serial: ubus call network reload
-python3 scripts/bench_switch.py verify --host <dut-vlan-ip or mgmt-ip>
+python3 scripts/bench_switch.py verify --host "$CONWRT_BENCH_SWITCH"
 
 # 4. restore the PoE fork from the backup artifacts (md5-gated)
-python3 scripts/bench_switch.py install-poe --host <ip> --artifacts <backup-dir>
+python3 scripts/bench_switch.py install-poe --host "$CONWRT_BENCH_SWITCH" \
+    --artifacts <backup-dir>
 
 # 5. reboot-verify — the box MUST come back fully autonomous
 #    reboot, wait ~150s, then:
-python3 scripts/bench_switch.py verify --host <ip>
+python3 scripts/bench_switch.py verify --host "$CONWRT_BENCH_SWITCH"
 ```
 
-Post-deploy contact IPs: management 192.168.13.2 (via router uplink), or
-any dut VLAN L3 (e.g. 192.168.102.1) reached via a tagged VLAN 1002
+Post-deploy contact IPs: management `<switch-mgmt-ip>` (via router uplink),
+or any DUT VLAN L3 (e.g. `<dut-vlan-ip>`) reached via a tagged VLAN 1002
 interface on the deploy host (`ip link add <if>.1002 link <if> type vlan
-id 1002; ip addr add 192.168.102.10/24 dev <if>.1002`).
+id 1002; ip addr add <deploy-host-ip>/24 dev <if>.1002`).
 
 ## labgrid integration
 
 - Power: labgrid `ExternalPowerDriver` with cmd_on/cmd_off =
-  `ssh root@192.168.13.2 "ubus call poe manage '{\"port\":\"lanN\",\"action\":\"enable|disable\"}'"`
+  `ssh root@<switch-mgmt-ip> "ubus call poe manage '{\"port\":\"lanN\",\"action\":\"enable|disable\"}'"`
   (our fork speaks `action:` strings; labgrid's native `ubus` backend sends
   `enable:` booleans — patch the fork to accept both, or keep the driver).
 - Console: serial adapters on the exporter host (NetworkSerialPort / raw).
 - DUT network: SSHDriver / NetworkService against DUT addresses, or
-  jump via the switch (`-J root@192.168.13.2`).
+  jump via the switch (`-J root@<switch-mgmt-ip>`).
 - Follow-up hardening: uhttpd-mod-ubus + ACL for unauthenticated
   poe.info/poe.manage → native labgrid `model: ubus` backend, no SSH in the
   power path.
@@ -116,15 +124,15 @@ id 1002; ip addr add 192.168.102.10/24 dev <if>.1002`).
 ## Addendum 2026-09-28 (issue #28 arc — read before bench work)
 
 - **ERX eth1 is the stock-ZyXel lab island** (VLAN 12 since the segmentation
-  re-home): stock GS1900 at static **192.168.12.3** (flash-saved), NR7101
-  DUT at 192.168.12.124, two AP3915i at 192.168.102.51/.104.51 (rogue
-  DHCP/RA disarmed). The mgmt-untagged-into-VLAN-13 leak this doc's
-  architecture implied is closed — see docs/NETWORK-SEGMENTATION.md.
-- **ERX eth4 is the ER-6P DUT rig** (OpenWrt 25.12.4, static 192.168.13.4,
-  tagged VLAN 13 uplink): per-port bays lan1-5 = VLAN 400-404, rig L3
-  192.168.40-44.1, staged DUT-client aliases on br-lan.401. Recovery-flash
-  runbook: prompts/recovery-01-flash-via-rig.md, tool:
-  scripts/dut_recover.py.
+  re-home): stock GS1900 at a static address (flash-saved), a NR7101 DUT,
+  and two AP3915i units (rogue DHCP/RA disarmed). The specific addresses
+  live in the operator's private registry. The mgmt-untagged-into-VLAN-13
+  leak this doc's architecture implied is closed — see
+  docs/NETWORK-SEGMENTATION.md.
+- **ERX eth4 is the ER-6P DUT rig** (OpenWrt 25.12.4, tagged VLAN 13
+  uplink): per-port bays lan1-5 = VLAN 400-404, rig L3 on the matching
+  /24s, staged DUT-client aliases on br-lan.401. Recovery-flash runbook:
+  prompts/recovery-01-flash-via-rig.md, tool: scripts/dut_recover.py.
 - **Bench switch runtime failsafes die on every reboot** — re-run
   `scripts/gs1900-bench-arm.sh` (from any host that can ssh it). It needs
   the dnsmasq PACKAGE present and `dhcp.lan.ignore=1` committed; after the

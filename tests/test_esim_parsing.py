@@ -24,15 +24,15 @@ QENG_5G_SAMPLE = (
 COPS_SAMPLE = 'AT+COPS?\r\n+COPS: 0,0,"Telia N IMSIM",13\r\nOK'
 COPS_MANUAL_SAMPLE = '+COPS: 1,0,"Telenor",7'
 
-QCCID_SAMPLE = 'AT+QCCID\r\n+QCCID: 8948010010098742686\r\nOK'
+QCCID_SAMPLE = 'AT+QCCID\r\n+QCCID: 89470000000000000004\r\nOK'
 
 CEREG_SAMPLE = '+CEREG: 0,5'
 CEREG_DENIED_SAMPLE = '+CEREG: 2,3'
 
 PROFILE_LIST_SAMPLE = '''{"type":"lpa","payload":{"code":0,"message":"success","data":[
-  {"iccid":"89353082711108402322","profileState":"enabled","serviceProviderName":"nadanada","profileNickname":"nadanada-production"},
-  {"iccid":"8944476500021393355","profileState":"disabled","serviceProviderName":"Speedtest Travel","profileNickname":"speedtest-dryrun"},
-  {"iccid":"8948010010098742686","profileState":"enabled","serviceProviderName":"IMSIM","profileNickname":"silentlink-production"}
+  {"iccid":"89470000000000000003","profileState":"enabled","serviceProviderName":"nadanada","profileNickname":"nadanada-production"},
+  {"iccid":"89470000000000000002","profileState":"disabled","serviceProviderName":"Speedtest Travel","profileNickname":"speedtest-dryrun"},
+  {"iccid":"89470000000000000004","profileState":"enabled","serviceProviderName":"IMSIM","profileNickname":"silentlink-production"}
 ]}}'''
 
 
@@ -85,7 +85,7 @@ class TestParseCOPS:
 
 class TestParseQCCID:
     def test_valid(self):
-        assert parse_qccid(QCCID_SAMPLE) == "8948010010098742686"
+        assert parse_qccid(QCCID_SAMPLE) == "89470000000000000004"
 
     def test_no_match(self):
         assert parse_qccid("ERROR") is None
@@ -109,7 +109,7 @@ class TestParseProfileList:
     def test_three_profiles(self):
         profiles = parse_profile_list(PROFILE_LIST_SAMPLE)
         assert len(profiles) == 3
-        assert profiles[0]["iccid"] == "89353082711108402322"
+        assert profiles[0]["iccid"] == "89470000000000000003"
         assert profiles[0]["profileState"] == "enabled"
         assert profiles[2]["profileNickname"] == "silentlink-production"
 

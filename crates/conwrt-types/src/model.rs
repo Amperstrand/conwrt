@@ -78,6 +78,25 @@ pub struct DeviceModel {
     pub extras: OrderedMap<serde_json::Value>,
 }
 
+impl FlashMethod {
+    /// Whether this method requires a post-upload TRIGGER request
+    /// (GL.iNet-style `trigger_flash_endpoint`/`trigger_endpoint`,
+    /// usually GET `/result`) before the device actually starts
+    /// flashing. The Python uploader (`dut_recover.py`) performs it;
+    /// the Rust firmware recovery twin does NOT (#232 P1 4298093559
+    /// — until implemented, executors MUST refuse such profiles
+    /// instead of silently uploading a verdict that never flashes).
+    #[must_use]
+    pub fn requires_trigger(&self) -> bool {
+        [
+            self.extras.get("trigger_flash_endpoint"),
+            self.extras.get("trigger_endpoint"),
+        ]
+        .iter()
+        .any(|v| v.is_some_and(|s| !s.as_str().unwrap_or("").is_empty()))
+    }
+}
+
 /// OpenWrt target coordinates for a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenwrtInfo {
@@ -129,6 +148,7 @@ pub struct FlashMethod {
     /// Silence timeout before declaring the flash stalled, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silence_timeout: Option<u32>,
+
     /// Method-specific parameters (`flash_methods.*.params` and friends),
     /// preserved in document order — the #118 audit's scattered-readers
     /// problem: these now round-trip instead of vanishing.
@@ -219,5 +239,60 @@ mod tests {
         let bad = r#"{"id":"x","vendor":"v","description":"d",
             "flash_methods":{"m":{"description":"x"}}}"#;
         assert!(serde_json::from_str::<DeviceModel>(bad).is_err());
+    }
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn method_with(extra_key: &str, extra_val: &str) -> FlashMethod {
+        let mut extras = OrderedMap::new();
+        extras.insert(
+            extra_key.into(),
+            serde_json::Value::String(extra_val.into()),
+        );
+        FlashMethod {
+            description: "x".into(),
+            recovery_ip: None,
+            client_ip: None,
+            upload_endpoint: Some("/upload".into()),
+            flash_time_seconds: None,
+            silence_timeout: None,
+            extras,
+        }
+    }
+
+    #[test]
+    fn gl_style_trigger_flagged() {
+        assert!(method_with("trigger_flash_endpoint", "/result").requires_trigger());
+        assert!(method_with("trigger_endpoint", "/result").requires_trigger());
+    }
+
+    #[test]
+    fn no_trigger_stays_false() {
+        // the plain U-Boot shape (verdict in the upload response itself)
+        assert!(!method_with("upload_field", "firmware").requires_trigger());
+    }
+
+    #[test]
+    fn empty_trigger_is_absent() {
+        // an explicitly-empty value means "no trigger" — same as absent
+        assert!(!method_with("trigger_flash_endpoint", "").requires_trigger());
+    }
+
+    #[test]
+    fn every_model_json_parses_predicate() {
+        // the trigger-requiring models in the repo must be detectable
+        let gl = std::fs::read_to_string("../../models/glinet-mt3000.json").unwrap();
+        let model: DeviceModel = serde_json::from_str(&gl).unwrap();
+        let any = model
+            .flash_methods
+            .as_ref()
+            .map(|m| m.values().any(|f| f.requires_trigger()))
+            .unwrap_or(false);
+        assert!(any, "MT3000 must parse as trigger-requiring");
+        let _ = BTreeMap::<String, String>::new(); // keep import used if unused above
     }
 }

@@ -10,10 +10,14 @@ Test markers:
   @pytest.mark.one_shot    — consumes a matching-id (run deliberately)
 
 Speedtest profile test data:
-  ICCID:     8944476500021393355
+  ICCID:     CONWRT_E2E_SPEEDTEST_ICCID (private inventory; unset skips the suite)
   Provider:  Speedtest Travel (BetterRoaming)
   APN:       truphone.com
   Carrier:   Truphone/1Global
+
+Hardware-test ICCIDs are never committed: export
+CONWRT_E2E_SPEEDTEST_ICCID, CONWRT_E2E_NADANADA_ICCID and
+CONWRT_E2E_SILENTLINK_ICCID from the private inventory before running.
 """
 from __future__ import annotations
 
@@ -25,12 +29,18 @@ import time
 
 import pytest
 
-SPEEDTEST_ICCID = "8944476500021393355"
+SPEEDTEST_ICCID = os.environ.get("CONWRT_E2E_SPEEDTEST_ICCID", "")
 SPEEDTEST_APN = "truphone.com"
-NADANADA_ICCID = "89353082711108402322"
-SILENTLINK_ICCID = "8948010010098742686"
+NADANADA_ICCID = os.environ.get("CONWRT_E2E_NADANADA_ICCID", "")
+SILENTLINK_ICCID = os.environ.get("CONWRT_E2E_SILENTLINK_ICCID", "")
 
-pytestmark = pytest.mark.hardware
+pytestmark = [
+    pytest.mark.hardware,
+    pytest.mark.skipif(
+        not (SPEEDTEST_ICCID and NADANADA_ICCID and SILENTLINK_ICCID),
+        reason="set CONWRT_E2E_SPEEDTEST_ICCID, CONWRT_E2E_NADANADA_ICCID "
+               "and CONWRT_E2E_SILENTLINK_ICCID from the private inventory"),
+]
 
 
 def _ssh(ip: str, cmd: str) -> str:

@@ -1,0 +1,23 @@
+{
+  "_notice": "TEMPLATE — replace every value with YOUR campaign's specifics. Never commit real unit MACs/bench identifiers (species-level only; keep unit data in your private inventory). Linux-only tool (ip/ss/ethtool//proc).",
+  "nic": "enx<your-usb-adapter>",
+  "recovery_ip": "192.0.0.1",
+  "device_ip": "192.168.32.1",
+  "device_mac": "00:00:00:00:00:01",
+  "payload": {
+    "path": "/path/to/proven-trigger.img",
+    "sha256": "<pin from the session that proved it>",
+    "size": 393216,
+    "expect_magic": {"offset": 0, "hex": "55424923", "what": "UBI# EC header"}
+  },
+  "rollback": {
+    "path": "/path/to/known-good-root_uImage",
+    "sha256": "<pin>"
+  },
+  "fence": {"port": 69, "rrq_probe": true},
+  "exfil": {"url": "http://<bench-host>:8080/preflight-probe", "verb": "PUT", "test_payload": "preflight"},
+  "serial": {"attached": false, "waiver_reason": "state the real justification, or attach the console"},
+  "watch_proc": "watch-all.py",
+  "watch_log": "/tmp/<campaign>/watch-all.log",
+  "watch_max_age_s": 300
+}

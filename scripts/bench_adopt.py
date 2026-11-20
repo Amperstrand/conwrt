@@ -34,13 +34,14 @@ Design rules from that session's audit — every one is an assertion here:
 
 Places registry (local-only, data/bench/places.json):
   {"places": [{"name": "ap-lan4", "mac": "b4:2d:56:25:79:b1",
-               "dut_ip": "192.168.104.51", "reset_allowed": true}]}
+               "dut_ip": "192.0.2.51", "reset_allowed": true}]}
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -642,7 +643,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--place", required=True)
     ap.add_argument("--places", type=Path, default=REPO_ROOT / "data/bench/places.json")
-    ap.add_argument("--switch", default="192.168.13.2")
+    ap.add_argument("--switch", default=os.environ.get("CONWRT_BENCH_SWITCH", ""),
+                    help="bench switch management host (default: CONWRT_BENCH_SWITCH)")
     ap.add_argument("--stages", default="all", help="comma list or 'all'")
     ap.add_argument("--method", choices=["firstboot", "flash"], default="firstboot",
                     help="deployment path: factory reset keeps the flashed "
@@ -662,10 +664,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.place not in places:
         print(f"unknown place {args.place}; known: {sorted(places)}"); return 2
     place = places[args.place]
-
-    # lazy import: bench_session imports bench_adopt at module level (Place)
-    import bench_session
-    session = bench_session.get_session(switch_host=args.switch)
 
     plan: list[tuple[str, Place, Callable[[Runner], None]]]
     envelope_receipt: EnvelopeReceipt | None = None
@@ -717,6 +715,14 @@ def main(argv: list[str] | None = None) -> int:
         print("refusing reset without the recovery envelope: the rom-audit and "
               "envelope stages must run in the same invocation (AGENTS.md: the "
               "envelope must exist BEFORE the reset, not after)"); return 2
+
+    # The switch address lives in the operator's private registry; fail with
+    # a clear exit 2 only after the cheap argument gates above have passed.
+    import bench_session
+    try:
+        session = bench_session.get_session(switch_host=args.switch)
+    except bench_session.BenchError as err:
+        print(f"bench session unavailable: {err}"); return 2
 
     evidence = REPO_ROOT / "data" / "bench" / place.name / time.strftime("%Y%m%d-%H%M%S")
     for stage, stage_place, fn in plan:

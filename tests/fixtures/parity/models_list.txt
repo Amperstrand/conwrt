@@ -18,6 +18,7 @@ raspberrypi-4b                            Raspberry Pi Ltd  bcm27xx/bcm2711     
 ubnt-edgerouter-6p                        Ubiquiti      octeon/generic          [edgeos-kernel-swap, sysupgrade, tftp]  EdgeRouter 6P (ER-e300) — Cavium Octeon III, 5x GbE + SFP, no WiFi
 ubnt-edgerouter-x                         Ubiquiti      ramips/mt7621           [sysupgrade]  EdgeRouter X (ER-X) — MediaTek MT7621A, 5x GbE, no WiFi
 virtual-x86-64                            QEMU          x86/64                  [sysupgrade]  Virtual x86_64 OpenWrt instance (QEMU/KVM) for CI testing
+zte-mf286d                                ZTE           ipq40xx/generic         [sysupgrade, tftp-blank-download, zte-suf-root-uimage]  MF286D LTE cat.12 router (IPQ4019 + MDM9650 modem, Nordic/Telia carrier family)
 zyxel-ex5700-telenor                      Zyxel         mediatek/filogic        [sysupgrade]  EX5700 (Telenor) — MediaTek MT7986B, WiFi 6 tri-band
 zyxel-gs1900-24e                          Zyxel         realtek/rtl838x         [mtd-write, oem-http, serial-tftp-openwrt, sysupgrade]  GS1900-24E 24-port managed gigabit switch, Realtek RTL8382M
 zyxel-gs1900-8hp-a1                       Zyxel         realtek/rtl838x         [mtd-write, oem-http, serial-tftp-openwrt, sysupgrade]  GS1900-8HP A1 (formerly v2) 8-port PoE+ managed gigabit switch, Realtek RTL8380M, 70W PoE budget
@@ -26,4 +27,4 @@ zyxel-gs1920-24                           Zyxel         realtek/rtl839x         
 zyxel-nr7101                              Zyxel         ramips/mt7621           [sysupgrade, zycast]  NR7101 — 5G/NR outdoor router, MediaTek MT7621
 zyxel-wx5600-t0                           Zyxel         mediatek/filogic        [serial-tftp-openwrt, serial-tftp-stock-restore, sysupgrade]  WX5600-T0 (AX6000) — Altibox/Lyse ISP build, MediaTek MT7986B
 
-25 model(s) valid in models
+26 model(s) valid in models

@@ -1,74 +1,120 @@
-# ZTE MF286D — dload-mode bring-up notes (session 2026-11-03)
+# ZTE MF286D — species notes (flash, boot, recovery)
 
-Species-level only (unit identifiers → private project). Sources: live bench
-session on a Telia B09 unit (BD_TELIAMF286DV1.0.0B09, B10/Nordic matrix),
-real ZAS tool in a WinPE/KVM oracle, full wire capture. Evidence bundle and
-the oracle analysis live on the bench host (`mf286d-vm/ORACLE-ANALYSIS.md`).
+Status: species-level facts from the Nov 2026 bring-up campaign (conwrt issue #621,
+ledger EXP-001..022 on the bench host). Unit-specific data lives in the private
+registry + bench evidence, not here.
 
-## Environments (empirical state taxonomy)
+## Architecture (rootfs A/B volumes + NOR chain)
 
-| Env | How entered | Network | Services |
-|---|---|---|---|
-| E1 stock | normal boot | `192.168.0.1` (carrier config), DHCP **server**, answers ICMP | full goahead web |
-| E2 factory-goform | stock-side `SwitchFactoryMode&Open` + `REBOOT_DEVICE` (fresh AD), or any power-cycle while the flag is armed — **flag is sticky across power cycles** | DHCP **client**, wants `192.168.32.1` | goform: Open/Query/Close only (all other verbs → `{"result":"failure"}`) |
-| E3 download-env | **hardware factory-reset** (hold RESET ~10–15 s) | DHCP **server** + DNS + HTTP at `192.168.32.1` | goform cycles `FactoryResult: Closed`↔`Opened`; DNS resolves `cndms.ztems.com` → `192.168.82.3` |
+- SoC IPQ4019 (ipq40xx/generic), NAND 128 MB + NOR 2 MB, mPCIe Cat-12 modem (do not
+  touch its firmware as part of router flashing).
+- **MAIN system region**: `web` (8 MiB @ NAND 0x1000000) + `rootfs` (29 MiB @
+  0x1800000). The `rootfs` partition holds a UBI layout with the `kernel` and
+  `ubi_rootfs` (and `ubi_rootfs_data`) **volumes** — the live /proc/mtd names
+  `kernel`/`ubi_rootfs` refer to these volumes, NOT to a separate partition or an
+  independent second OS slot.
+- **A/B root fallback**: bootipq conditionally selects between `rootfs` and
+  `rootfs_1` volume names (disasm: `rootfsname=rootfs`/`rootfs_1`, validity-gated).
+  `rootfs_1` is written by the FOTA/OTA delta flow (`lrb`/zdu into data/fota space);
+  `lr` overwrites the primary rootfs and blanks `web`. After `lr` the primary wins;
+  do NOT count `rootfs_1` as a managed fallback (it may be absent or stale).
+- **Factory/download mode** (`fac_mode` flag, persists across reboots): boots the ZTE
+  download environment with its GoAhead web (ZTE-Webs/2.5.0) at 192.168.32.1
+  (observed live; carries an update UI). Its independence from the rootfs region is
+  NOT established — when planning a rootfs rewrite, do not rely on it as a fallback.
+- **NOR chain** (mtd12-19 on the live unit): SBL1/MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/
+  APPSBL — the no-serial brick zone. Never write. Secure boot is fuse-gated and
+  fuse-off on this SKU (community images boot; see docs/ZTE-MF286D-ROUND3-AUDIT.md).
 
-Per-port source MACs: the switch presents a different adjacent MAC per physical
-LAN port (observed two adjacent addresses in the OUI block, same last bytes).
-The dload-family environments only brought up **LAN port 1** on our bench —
-bench the unit from port 1.
+## Boot / flash modes (verified)
 
-## Proven entry mechanics (native, no Windows)
+1. Normal boot (main slot).
+2. Factory/download boot (`fac_mode`), incl. its web-upload flash path.
+3. U-Boot TFTP client macros: `lr` (system: web+rootfs), `lw`/`lrs` (single region),
+   `lrb` (delta), `lu` (**U-Boot into NOR — brick class**), `lp`/`lc` (partition table/
+   cdt into NOR — brick class). Factory boot sets `serverip` = **192.0.0.1** (literal,
+   from disasm) — the PC must own that address to be the TFTP peer.
+4. **U-Boot auto-recovery TFTP** (documented on the MF286 sibling; consistent with this
+   bootloader's RE): if the main kernel is unbootable, U-Boot pulls `root_uImage` from
+   a TFTP server at 192.0.0.1/8 and flashes it — **a no-serial recovery door**. Keep a
+   known-good `root_uImage` + TFTP server recipe staged for this.
+5. Sahara/Firehose via armprg (raw partition read/write) — the tool path; read gives
+   partition-level backup.
 
-```
-pw_hash = sha256hex(base64(web_password)).upper()          # LOGIN (goform_set_cmd_process)
-AD      = md5hex_lower(md5hex_lower(wa_inner_version + cr_version) + RD)
-# fetch wa_inner_version,cr_version,RD via goform_get_cmd_process (multi_data=1)
-# stock side: SwitchFactoryMode&SwitchCMD=Open&AD=... -> FactoryResult:Success
-# RD ROTATES after Open — re-fetch and recompute for REBOOT_DEVICE
-# REBOOT_DEVICE with fresh AD -> reboots into E2
-# E2 side: same AD recipe; Query -> FactoryResult:Opened; Close -> Success
-```
+## Known species gotchas
 
-Version matrix via `goformId=ONLINE_UPGRADE_TOOL&command=get_current_version`
-(`$$PRODUCT;;wa;cr;Nordic_x;hw;IMEI` — GoAhead-Webs, HTTP/1.0).
+- The community update kit's manifests describe the MODEM SoC chain — do NOT use them
+  as the router's partition truth (see AGENTS.md Brick-Zone Audit).
+- Stock web on Telia B09 has no exec sink for the MF286R CVE family; the FACTORY web
+  build carries a vulnerable `SET_DEVICE_LED` handler (root RCE in download mode).
+- Fresh `RD` rotates after factory-Open: recompute the AD token after every Open.
+- Units in the wild show NAND bad blocks (documented on mtd11/fota) — check flash
+  health before/after writes; the bootloader skips/warns bad blocks.
+- Power-supply sensitivity: unstable PSU causes spontaneous reboots (forum-reported) —
+  use a clean supply during flash windows.
+- MAC derivation: single factory MAC; WAN/WLAN derive by +1/+2/+3 — ART/config
+  partitions are irreplaceable per-unit data.
 
-## Transport (the open problem)
+## Recovery ladder (no serial available)
 
-The real ZAS tool (BL_DL_LTE_QualComm_Net plugin), after its goform phase,
-sends a **440-byte ISAKMP-framed proprietary opener** (vendor payload types
-0x85/0x87, replayable hex captured) to **udp/500** at the device ~1/s with
-backoff, and also probes udp/69 (E2 answers those with ICMP-unreachable).
-Observed in E2 and E3: **nothing answers**. The responder and/or the final
-device-side transition has not been identified. The tool's Start UI action
-(right-click row → "Start Update.") was never conclusively engaged through
-the oracle's input channel — that experiment is first in line next session.
+1. Factory slot web UI at 192.168.32.1 (upload/update) — while `fac_mode` reachable.
+2. U-Boot auto-TFTP recovery at 192.0.0.1 (root_uImage) — while NOR/U-Boot intact.
+3. armprg/Sahara-Firehose read+program — while the download-mode chain is reachable.
+4. Serial console (X8, 115200 8N1) — requires opening the case; NOT available to us.
 
-Tool-side transport targeting rule (L3): the dload subnet must contain ONLY
-the tool host and the device — the tool adopts any third address (including
-a DHCP server-id) as a transport target. Do not run a DHCP server on `.32.x`
-while the tool is active; the tool host leases from the device in E3.
+## Modem / eSIM (B12 modem firmware)
 
-## Oracle (WinPE/KVM) operational recipe
+- QMI UIM service: functional (SIM state, PIN, APDU infrastructure)
+- **ISD-R (eSIM management applet) BLOCKED** by modem firmware policy via both
+  AT and QMI UIM ("Access denied" ≠ "not found" — the applet exists on the card
+  but the modem denies access). AT+CSIM: "not supported."
+- eSIM profile management IN-DEVICE: **not possible** on this firmware.
+- AT CCHO/CGLA/CCHC/CSIM: commands IMPLEMENTED in baseband (response strings in
+  firmware binary) but blocked by carrier policy. No community workaround for
+  MF286D. Same Qualcomm AMSS-level block (QMI error 82) seen on other carrier
+  modems (qmi-sim-bridge project). AT+CCHO="" (empty AID) trick from CellPort
+  (Quectel EG25-G) worth testing — may bypass if block is at AID-comparison level.
+- ifd-modemifd QMI UIM backend: would work for SIM file ops (pySim/OpenSC) but
+  NOT for ISD-R (block is upstream). See ifd-modemifd issue #10 for the
+  CCHO/CGLA fallback design.
+- MF286D hardware: physical 2FF SIM slot only, NO embedded/soldered eUICC.
+- Alternatives: USB CCID reader + lpac ipq40xx artifact (deterministic, no
+  firmware risk), or a device without the carrier lock (bench comparison).
+- Router firmware B10/B12: CVE-2023-25649 live (close_all_led exec).
+  B14: close_all_led fixed but NIGHT_MODE_INFO_SETTINGS end_time still
+  unvalidated. Full matrix: bench evidence/firmware-matrix.md.
+- Modem firmware B14: documented as "the breaker" — do not update to it.
 
-- OVMF boot, **3072 MB RAM minimum** (boot.wim = 1.9 GB loaded to RAM; 1.5 GB
-  VMs die with "Windows failed to start")
-- `systemd-run --property=MemoryMax=5G` to escape session memcg/earlyoom
-- Hot-add absolute pointer via monitor: `device_add qemu-xhci` + `device_add
-  usb-tablet` — vncdotool clicks only land after this
-- Drive keys via QEMU monitor `sendkey`; **write .bat files into the FAT kit
-  image instead of typing long commands** (keystroke injection is lossy)
-- Kit: `APP_CONFIG_NAME=MF287+-DL-BackUpNV-N-01_DL.config` is the
-  field-proven choice (matches the community kit's own ini); `root_uImage`
-  sha256 per kit SHA256SUMS; SW PATH must match the drive letter PE assigns
-  (C:, not D:)
+## OpenWrt install path (once main slot is rewritten)
 
-## Post-flash planning notes
+Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
+plain `sysupgrade` (never `-F`); keep `sysupgrade -b` config backups; do not touch the
+modem firmware. Verify against downloads.openwrt.org checksums.
 
-- OpenWrt default LAN = `192.168.1.1` — collides with other bench routers;
-  first-boot re-IP the unit from its isolated bridge before merging onto any
-  shared bench network.
-- Field post-flash config (eko.one.pl thread 24403): WAN proto qmi
-  (`/dev/cdc-wdm0`), carrier APN, **PAP auth for T-Mobile-class SIMs**;
-  eko.one.pl serves ipq40xx zte_mf286d images; 4IceG/Modem-extras for band
-  management.
+## Modem architecture correction + ISD-R policy (EXP-034/035, 2026-11-09)
+
+The live B12 modem card is a **Qualcomm MDM9650** (soc 283), not the Marvell
+PXA1826 of the 2019 kit FBF — two modem generations share this chassis.
+Full corrected architecture, the B02-kit container RE, and the live probe
+tooling live in `recipes/zte/mf286d/modem/` (ANALYSIS-b02-kit-marvell.md,
+TESTPLAN-live-b12.md, qmiuim.c) and `prompts/modem-fw-0{1,2,3}-*.md`.
+
+Key live facts (all on B12, differential-verified):
+
+- **ADB**: no-auth root on modem Linux (adbd 5.0.2, `adb-enablemodem` kept
+  enabled) — standing research surface, survives reboots.
+- **ISD-R (eSIM) block = three-layer MPSS policy**: (L1) channel-open deny
+  for ISD-R AID ≥7 bytes; (L2) fabricated card responses on any channel
+  whose open-FCI revealed the ISD-R; (L3) APDU payload scanner dropping
+  SELECTs carrying the GSMA RSP RID (≥4B). Basic channel host-APDUs rejected
+  entirely; AT layer separately cauterized (CSIM/CCHO).
+- Consequence: no in-device eSIM management via AT/QMI on stock B12 without
+  an NV flip or MPSS patch (offline RE of the banked mtd9 image is the next
+  step; see prompt modem-fw-02). NR7101 / USB-CCID reader remain the proven
+  management paths.
+- **mtd9 (MPSS) image banked** on bench x280:
+  `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd9.img`
+  sha256 55848f96b695c3470546d87b8b107ba12b01f4fc722317707a568689ab17ea15 —
+  also serves as the BSDIFF40 base for the B14 `.up` package line.
+- efs2 (NV) reads destabilize adb when the modem is warm: one cold attempt
+  per boot max; never hammer (device-health rule).

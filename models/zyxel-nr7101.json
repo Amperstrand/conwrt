@@ -2,7 +2,7 @@
   "id": "zyxel-nr7101",
   "lan_subnet": "10.63.178.0/24",
   "vendor": "Zyxel",
-  "description": "NR7101 — 5G/NR outdoor router, MediaTek MT7621",
+  "description": "NR7101 \u2014 5G/NR outdoor router, MediaTek MT7621",
   "openwrt": {
     "target": "ramips/mt7621",
     "device": "zyxel,nr7101",
@@ -15,7 +15,7 @@
     "flash": "SPI NAND 256MB",
     "ram": "256MB DDR3",
     "ethernet_ports": "1x GigE (PoE 802.3at)",
-    "wifi": "MT7603 2.4GHz 802.11n (PCIe0, mt76 driver). Enabled in the OpenWrt DTS (mt7621_zyxel_nr7101.dts: wifi@0,0 on pcie0, 0x400-byte EEPROM from Factory@0x0) and kmod-mt7603 ships in the official image (mt7621.mk DEVICE_PACKAGES). WLAN GPIO key present. CORRECTED 2026-10-27 — earlier sessions wrongly recorded 'none' (operator + OpenWrt source both confirm the radio). Live-verified 2026-10-30 on the 919c-role unit: radio0 + phy0-sta0/phy0-ap0 present.",
+    "wifi": "MT7603 2.4GHz 802.11n (PCIe0, mt76 driver). Enabled in the OpenWrt DTS (mt7621_zyxel_nr7101.dts: wifi@0,0 on pcie0, 0x400-byte EEPROM from Factory@0x0) and kmod-mt7603 ships in the official image (mt7621.mk DEVICE_PACKAGES). WLAN GPIO key present. CORRECTED 2026-10-27 \u2014 earlier sessions wrongly recorded 'none' (operator + OpenWrt source both confirm the radio). Live-verified 2026-10-30 on the 919c-role unit: radio0 + phy0-sta0/phy0-ap0 present.",
     "modem": {
       "model": "Quectel RG502Q-EA",
       "usb_vendor_id": "2c7c",
@@ -26,10 +26,10 @@
       "qmi_device": "/dev/cdc-wdm0",
       "note": "AT commands via /dev/ttyUSB2 at 115200 baud. uqmi via /dev/cdc-wdm0. Modem firmware queryable via AT+GMR or sysfs /sys/bus/usb/devices/2-1/product."
     },
-    "serial": "UART, 57600 8N1, internal header J5 (Pin1=GND, Pin2=key/empty, Pin3=RX, Pin4=TX, Pin5=3.3V). Source: OpenWrt patch by Bjørn Mork (2021-06). Note: NOT 115200 — confirmed from OpenWrt device tree.",
+    "serial": "UART, 57600 8N1, internal header J5 (Pin1=GND, Pin2=key/empty, Pin3=RX, Pin4=TX, Pin5=3.3V). Source: OpenWrt patch by Bj\u00f8rn Mork (2021-06). Note: NOT 115200 \u2014 confirmed from OpenWrt device tree.",
     "board_revision": "A1 (verified: board_name=zyxel,nr7101)",
     "enclosure": "IP68 outdoor, PoE powered",
-    "note": "2.4GHz WiFi (MT7603) + 5G modem + single PoE ethernet port. PCIe0 carries the WiFi card, NOT the modem (the modem is USB 2c7c:0800) — boot-time mt7621-pci init hangs are the WiFi card enumerating."
+    "note": "2.4GHz WiFi (MT7603) + 5G modem + single PoE ethernet port. PCIe0 carries the WiFi card, NOT the modem (the modem is USB 2c7c:0800) \u2014 boot-time mt7621-pci init hangs are the WiFi card enumerating."
   },
   "mac_oui": [
     "4C:C5:3E",
@@ -54,8 +54,8 @@
       "flash_both_partitions": true,
       "flash_time_seconds": 180,
       "silence_timeout": 30,
-      "reset_instructions": "Power cycle the device. Z-Loader enters Multiboot Listening automatically on EVERY boot for ~7 seconds (1s ESC prompt + 6s countdown). Serial interrupt NOT required — just start zycast before power cycle and the bootloader picks it up. Serial-verified 2026-06-27.",
-      "led_pattern": "no specific LED — watch console or multicast traffic",
+      "reset_instructions": "Power cycle the device. Z-Loader enters Multiboot Listening automatically on EVERY boot for ~7 seconds (1s ESC prompt + 6s countdown). Serial interrupt NOT required \u2014 just start zycast before power cycle and the bootloader picks it up. Serial-verified 2026-06-27.",
+      "led_pattern": "no specific LED \u2014 watch console or multicast traffic",
       "firmware_type": "initramfs-recovery",
       "images": {
         "initramfs": {
@@ -74,14 +74,14 @@
         "board-name-match"
       ],
       "command": "sysupgrade -n /tmp/firmware.bin",
-      "scp_note": "Use scp -O flag — OpenWrt dropbear lacks /usr/libexec/sftp-server",
+      "scp_note": "Use scp -O flag \u2014 OpenWrt dropbear lacks /usr/libexec/sftp-server",
       "boot_time_seconds": 60
     }
   },
   "signatures": {
     "stock_firmware": {
       "source": "zytrx header format from zytrx.c (openwrt/firmware-utils), bmork mailing list posts",
-      "http_redirect": "NOT LuCI — stock firmware uses Zyxel proprietary web UI",
+      "http_redirect": "NOT LuCI \u2014 stock firmware uses Zyxel proprietary web UI",
       "kernel_magic": "0x30524448 (HDR0) at offset 0 of Kernel partition",
       "board_id": "NR7101 (16-byte string at zytrx offset 0x48)",
       "model_id": "0x07010001 (at zytrx offset 0x58)",
@@ -111,7 +111,7 @@
       "console_message": "Multiboot Listening...",
       "enters_automatically": true,
       "listen_window_seconds": 7,
-      "boot_sequence": "DDR3 cal → U-Boot 1.1.3 → Ralink UBoot 5.0.0.0 → Z-Loader V1.30 → 'Hit ESC key' (1s) → 'Multiboot Listening...' (6s countdown) → firmware handoff",
+      "boot_sequence": "DDR3 cal \u2192 U-Boot 1.1.3 \u2192 Ralink UBoot 5.0.0.0 \u2192 Z-Loader V1.30 \u2192 'Hit ESC key' (1s) \u2192 'Multiboot Listening...' (6s countdown) \u2192 firmware handoff",
       "note": "SERIAL-VERIFIED: Z-Loader enters Multiboot Listening on EVERY boot automatically for ~7 seconds. Serial interrupt NOT required. Just start zycast before power cycle."
     },
     "openwrt_booting": {
@@ -126,7 +126,7 @@
     "openwrt_ready": {
       "ssh_port": 22,
       "http_port": 80,
-      "http_redirect": "/ → /cgi-bin/luci/",
+      "http_redirect": "/ \u2192 /cgi-bin/luci/",
       "ssh_ready_after_boot_seconds": 60
     }
   },
@@ -147,7 +147,7 @@
       "size": "256KB",
       "erasesize": "128KB",
       "irreplaceable": true,
-      "note": "Serial, certs, calibration — MUST backup before zycast"
+      "note": "Serial, certs, calibration \u2014 MUST backup before zycast"
     },
     "mtd3": {
       "name": "Kernel",
@@ -165,7 +165,7 @@
       "name": "Kernel2",
       "size": "~31MB",
       "erasesize": "128KB",
-      "note": "Backup/recovery firmware partition — ALSO overwritten by zycast"
+      "note": "Backup/recovery firmware partition \u2014 ALSO overwritten by zycast"
     },
     "mtd6": {
       "name": "wwan",
@@ -236,7 +236,7 @@
       },
       "imei": {
         "cmd": "AT+GSN",
-        "example": "35435111XXXXXXX (IMEI — never publish a real one)"
+        "example": "35435111XXXXXXX (IMEI \u2014 never publish a real one)"
       },
       "sim_status": {
         "cmd": "AT+QSIMDET?",
@@ -244,7 +244,7 @@
       },
       "iccid": {
         "cmd": "AT+QCCID",
-        "example": "89470000220307144371"
+        "example": "89470000000000000001"
       },
       "usb_mode": {
         "cmd": "AT+QCFG=\"usbnet\"",
@@ -273,14 +273,14 @@
       "tested": true,
       "date": "2026-05-19",
       "commit": "5b45579",
-      "verified_with": "sysupgrade -n 24.10.5→25.12.4, SSH key auth after ~60s boot",
+      "verified_with": "sysupgrade -n 24.10.5\u219225.12.4, SSH key auth after ~60s boot",
       "notes": "sysupgrade -n from 24.10.5 to 25.12.4. SCP required -O flag (legacy SCP protocol) because dropbear lacks SFTP server. Boot took ~60s. SSH key auth worked immediately after boot. LuCI available on port 80."
     },
     "zycast": {
       "tested": true,
       "date": "2026-05-26",
-      "verified_with": "Go zycast binary on MIPS OpenWrt switch, NR7101 Telenor (MAC 78:c5:7d:xx:xx:xx — OUI kept, unit redacted #290), PoE power cycle, initramfs-recovery image",
-      "notes": "Flashed via Go zycast binary cross-compiled for MIPS. Sent on switch.1002 (VLAN 1002, lan2 untagged) to multicast 225.0.0.0:5631. PoE power cycle with 7-10s off delay. Device boots OpenWrt at 192.168.1.1 after ~20s. Header format verified byte-for-byte against C zycast.c reference. Overwrites BOTH Kernel and Kernel2 partitions — stock firmware gone. IMPORTANT: monitor BOTH the old stock IP (<last-known IP>) and the OpenWrt IP (192.168.1.1) after flashing — the IP changes and if 192.168.1.0/24 conflicts with your local network, you must SSH through the switch."
+      "verified_with": "Go zycast binary on MIPS OpenWrt switch, NR7101 Telenor (MAC 78:c5:7d:xx:xx:xx \u2014 OUI kept, unit redacted #290), PoE power cycle, initramfs-recovery image",
+      "notes": "Flashed via Go zycast binary cross-compiled for MIPS. Sent on switch.1002 (VLAN 1002, lan2 untagged) to multicast 225.0.0.0:5631. PoE power cycle with 7-10s off delay. Device boots OpenWrt at 192.168.1.1 after ~20s. Header format verified byte-for-byte against C zycast.c reference. Overwrites BOTH Kernel and Kernel2 partitions \u2014 stock firmware gone. IMPORTANT: monitor BOTH the old stock IP (<last-known IP>) and the OpenWrt IP (192.168.1.1) after flashing \u2014 the IP changes and if 192.168.1.0/24 conflicts with your local network, you must SSH through the switch."
     },
     "modem_inventory": {
       "tested": true,
@@ -301,54 +301,216 @@
       "download_speed_mbps": 56,
       "latency_ms": 43,
       "signal_rsrp_dbm": -74,
-      "notes": "uci set network.wan.apn=ice.net && uqmi ifup wan. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Only APN change needed. Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+      "notes": "Historical QMI-era test (2026-05-19): uci set network.wan.apn=ice.net && uqmi ifup wan. The current wwand stack uses network.wwan0 (see cellular.sim_modes); do not copy the wan interface name. OpenWrt ships with QMI WAN pre-configured (proto=qmi, device=/dev/cdc-wdm0). Modem registers as home (not roaming). DNS: XXX.XXX.XXX.X, XXX.XXX.XXX.X. Connection comes up in ~15s after ifup wan."
+    },
+    "cellular_data_esim": {
+      "tested": true,
+      "date": "2026-11-05",
+      "verified_with": "silent.link 9eSIM (Telia roaming profile), bench cold boot through a PoE switch",
+      "carrier": "Telia Norway (MCC 242, MNC 02), roaming",
+      "apn": "internet",
+      "network": "5G NSA",
+      "download_speed_mbps": 92.3,
+      "upload_speed_mbps": 12.2,
+      "notes": "PoE-on to first ping 63.7 s. Telenor is an RX blackhole at this location; select Telia if needed. The local card is the QMI-visible identity; use AT for a remote-SAP card only."
+    },
+    "cellular_data_remote_sap": {
+      "tested": true,
+      "date": "2026-11-05",
+      "verified_with": "Android phone SIM over Bluetooth SAP (wwand + wwand-rsim), bench cold boot through a PoE switch",
+      "carrier": "Telia Norway (MCC 242, MNC 02)",
+      "apn": "telia",
+      "network": "5G NSA",
+      "download_speed_mbps": 86.8,
+      "upload_speed_mbps": 12.2,
+      "download_speed_v6_mbps": 77.4,
+      "notes": "PoE-on to first ping 113.9 s (SAP helper + PIN + APDU). Phone: airplane mode off, Bluetooth on, Wi-Fi off; keep the phone's own mobile data off (one registration per SIM). QMI UIM reports the local slot; use AT for the remote card. A stale helper holds the RFCOMM channel after a donor power-off."
     },
     "wifi_ap": {
       "tested": true,
       "date": "2026-10-24",
-      "notes": "3 AP vifs beaconing on radio0 (2g ch1 HT20 country=DE) on the ice+ bench unit; TollGate E2E served over WiFi (moto g client, -56 dBm). Concurrent STA+AP on the single radio untested — treat as exclusive."
+      "notes": "3 AP vifs beaconing on radio0 (2g ch1 HT20 country=DE) on the ice+ bench unit; TollGate E2E served over WiFi (moto g client, -56 dBm). Concurrent STA+AP on the single radio untested \u2014 treat as exclusive."
     }
   },
   "cellular": {
-    "default_wan_config": {
-      "proto": "qmi",
-      "device": "/dev/cdc-wdm0",
-      "default_apn": "auto",
-      "note": "OpenWrt 25.12.4 ships with QMI WAN pre-configured. Only APN needs to be set per carrier."
+    "modem": "Quectel RG502Q-EA (RG502QEAACR13A03M4G_ZYXEL)",
+    "modes": {
+      "ecm": {
+        "usbnet": 1,
+        "interface": "usb0",
+        "proto": "dhcp",
+        "proven": "57.1 Mbit/s 100MB, 24h+ stable"
+      },
+      "qmi_stock": {
+        "usbnet": 0,
+        "note": "uqmi CTL dead on this firmware \u2014 client-level, not fixable in config"
+      },
+      "qmi_vendor": {
+        "usbnet": 0,
+        "packages": [
+          "kmod-qmi_wwan_q",
+          "quectel-cm",
+          "luci-proto-quectelcm"
+        ],
+        "proto": "quectelcm",
+        "note": "bind-race: hotplug must rebind qmi_wwan_q; uqmi still dead; QMAP mux wwan0_1; routed /27 + 19-36ms flat ping"
+      }
+    },
+    "sim": {
+      "slots": 2,
+      "single_active": true,
+      "select": "AT+QUIMSLOT=n; then power-cycle the router (PoE). A modem-only reset (CFUN) is not a host power cycle and can wedge the wwand bring-up.",
+      "verify": "AT+QCCID / AT+CPIN? for the local slot; the remote-SAP card is visible on AT only",
+      "remote_sap": "QMI UIM stays bound to the modem's local slot; use AT for the phone card's PIN/ICCID/IMSI"
     },
     "carrier_profiles": {
       "ice_no": {
-        "carrier": "ice+ Norway",
-        "mcc": 242,
-        "mnc": 14,
+        "label": "ice+ Norway (physical card)",
+        "carrier": "ice+ Norway (MCC 242, MNC 14)",
         "apn": "ice.net",
-        "auth": "none",
         "pdp_type": "ipv4",
-        "verified": true,
-        "date": "2026-05-19"
+        "roaming": false,
+        "verified": "2026-05-19",
+        "notes": "Home registration; LTE B3 at 56 Mbit/s. The bench card has no PIN; pass --pin-env if yours is PIN-protected."
       },
       "silentlink_roaming_no": {
-        "carrier": "silent.link eSIM (roaming, Norway)",
+        "label": "silent.link 9eSIM (Telia Norway roaming)",
+        "carrier": "Telia Norway (MCC 242, MNC 02), roaming",
         "apn": "internet",
-        "auth": "none",
         "pdp_type": "ipv4",
-        "verified": true,
-        "date": "2026-10-30",
-        "networks": {
-          "Telia (242/2)": "WORKS — data + UDP (wg passes) + TCP/443",
-          "Telenor (242/1)": "RX-BLACKHOLE — PDP gets an address but zero forwarding (TX climbs, RX 0). Auto-selection camps here when signal favors it; looks like a modem/account fault but is not (balance verified fine mid-incident)"
-        },
-        "fix_recipe": "AT+COPS=1,0,\"Telia\",7 via /dev/ttyUSB2 (attach takes 3+ min; +CME 30 on a follow-up attempt means already-registering); then ONE `ifup wan` to drop the stale PDP; verify with a wwan0-PINNED HTTP-204 (unpinned checks false-positive over WiFi)",
-        "note": "Documented from the 2026-10-30 incident on the nr7101-919c-role unit (bench evidence in conwrt-bench registry/devices/nr7101-919c.yaml)"
+        "roaming": true,
+        "verified": "2026-10-30 (profile) / 2026-11-05 (5G-NSA cold boot)",
+        "notes": "Telenor is an RX blackhole at this location; if the profile lands on Telenor, select Telia: AT+COPS=1,0,\"Telia\",7. 5G NSA is position-dependent; a 5G-capable profile can still land on LTE."
+      },
+      "phone_sap_telia": {
+        "label": "Android phone SIM over Bluetooth SAP",
+        "carrier": "Telia Norway (MCC 242, MNC 02)",
+        "apn": "telia",
+        "pdp_type": "ipv4v6",
+        "roaming": false,
+        "verified": "2026-11-05",
+        "notes": "The carrier follows the SIM in the phone; the bench profile is Telia. Set --apn for a different carrier. Keep the phone's own mobile data off while the NR7101 uses the SAP (one registration per SIM)."
       }
     },
-    "setup_commands": {
-      "set_apn": "uci set network.wan.apn='ice.net'",
-      "commit": "uci commit network",
-      "bring_up": "ifup wan",
-      "verify": "ifstatus wan && ping -c 3 8.8.8.8",
-      "note": "Wait ~15s after ifup for connection. uqmi returns 'connected' when data session is active."
-    }
+    "sim_modes": {
+      "local_esim_silentlink": {
+        "label": "Local 9eSIM - silent.link/nadanada profile",
+        "location": "modem SIM slot (local card)",
+        "carrier_profile": "silentlink_roaming_no",
+        "requires": [
+          "9eSIM (ECP3 eUICC) in the modem SIM slot; the desired profile installed and enabled",
+          "lpac APDU transport over AT (LPAC_APDU=at LPAC_APDU_AT_DEVICE=/dev/ttyUSB2); MBIM is deprecated",
+          "wwand stack installed; network.wwan0 present"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": null,
+          "network.wwmodem_auto.pincode": null,
+          "network.wwan0.apn": "internet",
+          "network.wwan0.pdp_type": "ipv4"
+        },
+        "verify": [
+          "AT+CPIN? -> READY (local slot)",
+          "AT+QCCID and lpac profile list show the intended profile",
+          "wwandctl status: SIM is local; no remote-SAP line",
+          "AT+COPS? -> Telia 242/02; if Telenor, AT+COPS=1,0,\"Telia\",7"
+        ],
+        "notes": [
+          "The local slot is the card the modem QMI UIM sees; this is the only mode where QMI identity is authoritative.",
+          "Do not use a modem-only reset to force a profile change; power-cycle the router instead.",
+          "Record the RAT at measurement time; 5G NSA is position-dependent."
+        ]
+      },
+      "local_physical_ice": {
+        "label": "Local physical ICE card",
+        "location": "modem SIM slot (physical card)",
+        "carrier_profile": "ice_no",
+        "requires": [
+          "Physical ice+ Norway SIM card in the modem SIM slot",
+          "wwand stack installed; network.wwan0 present",
+          "eSIM profile tools are not involved in this mode"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": null,
+          "network.wwmodem_auto.pincode": null,
+          "network.wwan0.apn": "ice.net",
+          "network.wwan0.pdp_type": "ipv4"
+        },
+        "verify": [
+          "AT+CPIN? -> READY (local slot; no PIN on the bench card)",
+          "AT+COPS? -> ice+ 242/14 (home), not roaming",
+          "wwandctl status: SIM is local; no remote-SAP line",
+          "ping -I wwan0 -c 3 1.1.1.1"
+        ],
+        "notes": [
+          "The physical card and the 9eSIM use the same local-slot path; only the carrier profile (APN/PDP) differs.",
+          "If the card is PIN-protected, pass --pin-env and set network.wwmodem_auto.pincode; never commit the PIN."
+        ]
+      },
+      "remote_android_sap": {
+        "label": "Android phone SIM over Bluetooth SAP",
+        "location": "phone SIM slot, presented to the modem via a Bluetooth SAP helper",
+        "carrier_profile": "phone_sap_telia",
+        "requires": [
+          "Phone: SIM in the phone; airplane mode OFF; Bluetooth ON; Wi-Fi OFF; phone unlocked and SAP permission granted",
+          "A paired helper host running rsim (wwand-rsim) with the phone RFCOMM channel free",
+          "wwand rsim_reader spec ssh:<user>@<helper-host>:bt:<phone-bt-address> (private value)",
+          "Phone SIM PIN known if enabled (keep the value private; do not commit it)",
+          "Only one modem registration per SIM: keep the phone's own mobile data off while the NR7101 uses the SAP"
+        ],
+        "uci": {
+          "network.wwmodem_auto.rsim_reader": "<ssh:user@helper-host:bt:phone-bt-address>",
+          "network.wwmodem_auto.pincode": "<phone-sim-pin>",
+          "network.wwan0.apn": "telia",
+          "network.wwan0.pdp_type": "ipv4v6"
+        },
+        "secrets": [
+          "rsim_reader",
+          "pincode"
+        ],
+        "verify": [
+          "Phone Bluetooth settings show the SAP connection active; the helper process is alive",
+          "wwandctl status: remote SIM in use; AT+CPIN? -> READY (QMI UIM still reports the local slot)",
+          "AT+COPS? -> the phone carrier; ping -I wwan0 -c 3 1.1.1.1"
+        ],
+        "notes": [
+          "QMI UIM is bound to the modem local slot: its PIN state/ICCID/IMSI describe the local card, not the phone. Use AT for the remote card.",
+          "If the helper dies or the donor reboots, a stale rsim-card process can hold the phone RFCOMM channel; check the parent sshd and stop only the stale process before retrying.",
+          "The SAP chain costs about 50 s of extra cold-boot latency; throughput is comparable to a local SIM.",
+          "On a two-slot unit with a physical card in the non-default slot, set network.wwmodem_auto.sim_slot to the slot the remote card should bind to (bench: 1 with a physical card in slot 2); without it the modem can keep serving the local card.",
+          "Switching from a local card to the remote SIM is most reliable as a cold boot; a warm restart can leave the modem SIM_BLOCKED when the remote card arrives after the init chain's SIM_UNLOCK step."
+        ]
+      }
+    },
+    "esim": {
+      "tool": "lpac",
+      "apdu_transport_priority": [
+        "qmi-uim",
+        "mbim-uicc",
+        "at"
+      ],
+      "proven_transport": "at (LPAC_APDU=at LPAC_APDU_AT_DEVICE=/dev/ttyUSB2)",
+      "layout": "/usr/local/lib/lpac/driver/ + RPATH (flat /usr/lib copies break the loader)",
+      "card_as_state": "profile nickname carries provider creds (sl|T=<token>)"
+    },
+    "bands": {
+      "number_format": "colon-separated LTE band numbers (Quectel QNWPREFCFG lte_band; not a bitmask)",
+      "common": {
+        "B3": "3",
+        "B7": "7",
+        "B8": "8",
+        "B20": "20"
+      },
+      "lock": "AT+QNWPREFCFG=\"lte_band\",3 or \"3:7\" (band numbers; verify landing via AT+QNWINFO before spending data); prefer a full power cycle over a modem-only reset",
+      "ca_note": "band lock disables carrier aggregation"
+    },
+    "hazards": [
+      "never set MTU explicitly (Quectel QMI fragmentation bug)",
+      "timelock all modem ops; retry loops are the outage class",
+      "mode switches are PoE-class events",
+      "never use a modem-only reset (CFUN) to force a SIM or profile change; power-cycle the router",
+      "sysupgrade never resets the modem",
+      "speed tests: curl -4 only unless the PDN is IPv6"
+    ]
   },
   "capabilities": [
     "ethernet",
@@ -361,11 +523,11 @@
     "date": "2026-06-28",
     "method": "Serial console after OpenWrt initramfs boot",
     "operations": [
-      "uci set network.lan.ipaddr — change LAN IP via serial",
-      "uci set dropbear PasswordAuth — enable/disable password SSH",
-      "echo key > /etc/dropbear/authorized_keys — install SSH key",
-      "cat /proc/mtd — read partition layout",
-      "cat /etc/openwrt_release — verify firmware version"
+      "uci set network.lan.ipaddr \u2014 change LAN IP via serial",
+      "uci set dropbear PasswordAuth \u2014 enable/disable password SSH",
+      "echo key > /etc/dropbear/authorized_keys \u2014 install SSH key",
+      "cat /proc/mtd \u2014 read partition layout",
+      "cat /etc/openwrt_release \u2014 verify firmware version"
     ],
     "note": "Serial console provides full root shell after OpenWrt boot. Essential when device IP conflicts with another router on the network. Use scripts/serial-configure.py for structured configuration."
   },
@@ -416,7 +578,8 @@
         "delay_after_handoff_s": 60
       }
     ],
-    "pcie_note": "PCIe init (MT7603 WiFi on pcie0 — NOT the modem, which is USB) is timing-sensitive — may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
+    "pcie_note": "PCIe init (MT7603 WiFi on pcie0 \u2014 NOT the modem, which is USB) is timing-sensitive \u2014 may hang on some boots. If kernel hangs at mt7621-pci, power cycle and retry. PCIe init succeeds on subsequent attempts.",
     "uart_break_note": "FT232R serial adapter gets stuck after UART break during power cycle. Use serial-boot-capture.py with --recovery-wait to auto-recover."
-  }
+  },
+  "_comment": "Merge into conwrt/models/zyxel-nr7101.json (cellular section). Bench-proven 2026-11, conwrt-bench evidence."
 }

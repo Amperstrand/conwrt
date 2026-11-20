@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shlex
 import subprocess
 import sys
 import time
@@ -38,13 +40,18 @@ SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
 
 
 def switch_ssh(switch_host: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
-    proc = subprocess.run(["ssh", *SSH_OPTS, f"root@{switch_host}", cmd],
+    target = switch_host if "@" in switch_host else f"root@{switch_host}"
+    proc = subprocess.run(["ssh", *SSH_OPTS, target, cmd],
                           capture_output=True, text=True, timeout=timeout)
     return proc.returncode, proc.stdout + proc.stderr
 
 
-def labgrid_power(place: str, state: str, labgrid_host: str = "ai-legion") -> bool:
-    cmd = (f'C=~/.local/bin/labgrid-client; X="-x 192.168.13.221:20408"; '
+def labgrid_power(place: str, state: str, labgrid_host: str = "ai-legion",
+                  coordinator: str | None = None) -> bool:
+    coord = (coordinator or os.environ.get("LG_COORDINATOR", "")).strip()
+    if not coord:
+        return False
+    cmd = (f'C=~/.local/bin/labgrid-client; X="-x {shlex.quote(coord)}"; '
            f"$C $X -p {place} acquire >/dev/null 2>&1 && "
            f"$C $X -p {place} power {state} && "
            f"$C $X -p {place} release >/dev/null 2>&1 && echo POWER-{state.upper()}-OK")
@@ -131,7 +138,11 @@ def run_cut_experiment(place: "Place", switch_host: str, t_cut: int,
         return row
 
     # Step 2: hard power cut (kills the session, expected)
-    labgrid_power(place.name, "off")
+    if not labgrid_power(place.name, "off"):
+        row["outcome"] = "power-off-failed"
+        row["detail"] = ("labgrid power off failed after firstboot; "
+                         "recover the DUT manually before continuing")
+        return row
     time.sleep(3)
 
     # Step 3: power on, wait t_cut seconds, then hard cut
@@ -159,10 +170,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--place", required=True)
     ap.add_argument("--places", type=Path,
                     default=REPO_ROOT / "data/bench/places.json")
-    ap.add_argument("--switch", default="192.168.13.2")
+    ap.add_argument("--switch", default=os.environ.get("CONWRT_BENCH_SWITCH", ""),
+                    help="bench switch management host (default: CONWRT_BENCH_SWITCH)")
     ap.add_argument("--cuts", default="8,25,45", help="cut timings in seconds")
     ap.add_argument("--runs", type=int, default=1)
     args = ap.parse_args(argv)
+    if not args.switch:
+        ap.error("set CONWRT_BENCH_SWITCH or --switch to the bench switch management host")
+    if not os.environ.get("LG_COORDINATOR", "").strip():
+        ap.error("LG_COORDINATOR is required: the cut experiment must control "
+                 "labgrid power (a missing cut is a silent no-op)")
 
     places = load_places(args.places)
     if args.place not in places:

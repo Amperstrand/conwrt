@@ -659,8 +659,11 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
                 "[ \"$(uci -q get network.$s.name)\" = \"br-lan\" ] "
                 "&& uci -q del_list network.$s.ports='eth0'; done; true"
             )))
-        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
+        # revert BEFORE create: reverting between create and populate deleted
+        # the freshly-staged section (apply-acceptance find 2026-11-14:
+        # `uci set network.waneth.proto=dhcp` -> Invalid argument)
         ops.append(ShellCommand(command=f"uci -q revert network.{u['iface']} || true"))
+        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
         ops.append(UciSet(config="network", section=u["iface"], values={"proto": "dhcp", "device": device}))
         ops.append(ShellCommand(command=_zone_add(u["iface"], "wan")))
 
@@ -668,8 +671,8 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         if u["type"] != "wifi":
             continue
         ops.append(Comment(text=f"--- net-roles: wifi uplink {u['iface']} (STA on {u['radio']}) ---"))
-        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
         ops.append(ShellCommand(command=f"uci -q revert network.{u['iface']} || true"))
+        ops.append(ShellCommand(command=f"uci set network.{u['iface']}=interface"))
         ops.append(UciSet(config="network", section=u["iface"], values={"proto": "dhcp"}))
         sta_values: dict[str, str] = {
             "device": u["radio"], "mode": "sta", "network": u["iface"],
@@ -677,8 +680,8 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         }
         if u["encryption"] != "none":
             sta_values["key"] = u["key"]
-        ops.append(ShellCommand(command=f"uci set wireless.{u['iface']}sta=wifi-iface"))
         ops.append(ShellCommand(command=f"uci -q revert wireless.{u['iface']}sta || true"))
+        ops.append(ShellCommand(command=f"uci set wireless.{u['iface']}sta=wifi-iface"))
         ops.append(UciSet(config="wireless", section=f"{u['iface']}sta", values=sta_values))
         ops.append(UciSet(config="wireless", section=u["radio"], values={"disabled": "0"}))
         ops.append(ShellCommand(command=_zone_add(u["iface"], "wan")))
@@ -716,8 +719,8 @@ def _build_net_roles_ops(params: dict[str, Any]) -> list[Op]:
         ops.append(UciSet(config="network", section="mgmtdev", values={
             "type": "8021q", "name": f"eth0.{mgmt_vlan}", "ifname": "eth0", "vid": str(mgmt_vlan),
         }))
-        ops.append(ShellCommand(command="uci set network.mgmt=interface"))
         ops.append(ShellCommand(command="uci -q revert network.mgmt || true"))
+        ops.append(ShellCommand(command="uci set network.mgmt=interface"))
         ops.append(UciSet(config="network", section="mgmt", values={
             "proto": "static", "device": f"eth0.{mgmt_vlan}",
             "ipaddr": r["mgmt_ip"], "netmask": r["mgmt_netmask"],

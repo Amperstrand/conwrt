@@ -14,6 +14,30 @@ way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
 - If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
 - Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
 
+## Decode Before Probe — mandatory RE gates for undocumented interfaces (L-PROBE-01)
+
+**No test, probe, or command shall be sent to any undocumented or
+partially-understood modem/router interface until ALL of these gates pass:**
+
+1. **Protocol Structure Decode**: All message/command structures decoded
+   from firmware (IDL extraction, disassembly, or protocol analysis).
+   Mandatory parameters identified. State-modifying vs. read-only classified.
+   Cannot decode → probe does not proceed.
+
+2. **Adversarial Safety Review** (by an agent OTHER than the proposer):
+   - Worst case if this probe executes? (crash / persistent corruption / full brick)
+   - Recovery path for each failure mode? (reboot / EDL reflash / serial / JTAG)
+   - Backups exist? (flash dump, QCN, verified recovery image)
+   - Any empty recovery rung → probe does not proceed.
+
+3. **New Parameters = New Risk Class**: Never classify a probe with new
+   parameters as "same safety class" as a previous probe. Adding a real
+   parameter crosses from "does this exist?" to "execute the handler."
+
+**Full lesson**: conwrt-bench/lessons/L-PROBE-01-decode-before-probe.md
+**Evidence**: MF286D modem crash loop (2026-11-11) — 0x67-with-token probe
+wrote corrupted EFS state → permanent boot crash loop → EDL reflash required.
+
 ## NEVER Force Sysupgrade
 
 **`sysupgrade -F` is FORBIDDEN.** No exceptions.
@@ -96,6 +120,62 @@ Any shell script that modifies device state (uci set, network config, IP changes
 - Python-side hash algorithms MUST match what BusyBox provides (sha256, matching on-device `sha256sum`)
 - For UBIFS overlay devices: `uci commit` is permanent after reboot — there is no "undo" after reboot
 
+## Irreversible Write Discipline (Boot-Media / Self-Flash Operations)
+
+The section above protects config; this one protects boot media. A bad config
+reverts; a bad boot-media write can leave a device whose only remaining
+console is a UART header. **These rules apply to ANY write that the next boot
+will depend on or validate: raw `nand write`, `mtd write`, `dd` to
+`/dev/mtdX`, trigger-image installation, bootloader/env writes.** Enforced by
+`prompts/brick-risk-audit.md` §"Payload and write-verification gates".
+
+1. **Reuse the proven artifact — never synthesize a payload from memory.** If
+   a prior session produced a working image (trigger, UBI container, firmware,
+   bootloader), transfer THAT artifact and verify its sha256 at the target.
+   "Reimplementing the concept" with on-the-spot `dd`/zero-fill is how a
+   valid recovery trigger becomes a brick. If the artifact cannot be
+   transferred, STOP — do not improvise a substitute on the device.
+2. **A write is not done until it is read back.** After writing, read the
+   target and verify the invariant the NEXT BOOT will check (magic bytes,
+   volume table, superblock, CRC). Zeros, erased 0xFF, and a valid header are
+   THREE DIFFERENT boot outcomes — verify you got the one you intended. On
+   mismatch: abort, do NOT reboot — a device with a bad write but a running
+   OS is still fixable over the existing channel.
+3. **Probe the device between the write and the reboot.** The running-OS
+   window after a destructive write is the LAST easy recovery chance. Confirm
+   the management channel still answers (ping/web/readback) before issuing
+   the reboot that commits the change. If the runbook says "power-cycle to
+   engage recovery", insert a verify-alive step immediately before it.
+4. **Attach (or physically verify) the console BEFORE any boot-breaking
+   procedure.** Procedures whose intent is "make normal boot fail so recovery
+   engages" leave the device single-path by design. Serial must be proven
+   working before the first such write — not requested after it fails.
+5. **Pair the destructive write with its corrective in the same runbook
+   step.** The known-good/rollback image is staged and served alongside the
+   write; the undo command is written next to the write command.
+6. **Observation channels must be tested end-to-end AND log success.**
+   Exfil/callback endpoints get a real upload test (including the HTTP verb!)
+   before the operation starts. State monitors log heartbeats or
+   last-success timestamps on every poll — never errors only. A silent
+   monitor is indistinguishable from a healthy device; errors-only logging
+   turns "still alive and fixable" into "looks like nothing is happening".
+
+**Case study (2026-11-08, ZTE MF286D unit 2)**: a flash-trigger script wrote
+zeros to the rootfs partition instead of transferring the session-proven UBI
+trigger image (valid layout volume, no kernel volume). The bootloader failed
+at `ubi part fs` — and the TFTP self-recovery path sits BEHIND a successful
+UBI attach, so the device dropped to a UART-only prompt: no web, no TFTP, no
+button fallback (all verified compiled-out or empty in that bootloader
+build). The running-OS fix window stayed open ~14 minutes, but the exfil
+endpoint rejected the log upload (501, untested verb) and the state monitor
+logged errors only — so nobody probed before the planned power-cycle. Rules
+1-6 each map to a step that would have caught it. Post-mortem: the
+distinction "UBI attaches but kernel volume missing (= recovery engages)"
+vs "UBI cannot attach (= brick at prompt)" is the single most important
+invariant of that species' self-flash path — and it was documented in our own
+RE notes before the write happened. The knowledge existed; the execution
+gate did not.
+
 ## Inventory and Access Hardening After First Access
 
 **The first time you get SSH access to a device, immediately inventory it and install an SSH key.** The COMFAST CF-WR632AX was explored and a model JSON was created, but no specimen-level inventory was recorded and no SSH key was installed. A factory reset wiped the overlay (including the `95-random-lan-ip.done` marker), the device randomized its LAN IP, and the device became permanently inaccessible. The empty-password dropbear config was useless because we couldn't find the device on the network.
@@ -162,6 +242,47 @@ working uplink with a dead one and kill the session mid-task.
    how to get back (nmcli/route commands written down before the switch).
 4. DHCP timeouts and "connected, no internet" states on the AI host are an
    immediate abort: restore the last working connection before continuing.
+
+## Brick-Zone Audit — never flash another SoC's manifest; kill auto-reboot loops first (2026-11-08)
+
+Motivating incidents (MF286D campaign, issue #621; full audit in the bench evidence,
+EXP-022): **four lockout-class close calls, all survived by luck or stalling, not by
+design.**
+
+1. **Wrong-SoC manifest nearly flashed**: the community update package's manifests
+   (`partition_nand.xml`, `zte_dload_boot.xml`, `partition.mbn`) describe the *modem*
+   SoC's NOR chain (SBL/TZ/RPM, mdm9650), not the router's actual NOR (live: SBL1/
+   MIBIB/QSEE/CDT/DDRPARAMS/APPSBLENV/APPSBL — no TZ/RPM). The vendor Windows tool with
+   "update boot" enabled would have written a wrong-SoC partition set into the router
+   NOR — brick class, no serial. The tool stalling on adapter enumeration was the only
+   thing that prevented it.
+2. **Armed auto-reboot loop**: an unattended watcher fired factory-mode-Open + REBOOT
+   whenever the device appeared in normal mode. Left alive during another lane's flash
+   it means an interrupted NAND write mid-flight. It stayed "inert" only because the
+   device never stabilized.
+3. **Persisted boot-mode flag**: the factory-mode nvram flag persists across reboots;
+   the device cycled normal↔factory every ~40 s for hours. One timing coincidence away
+   from an interrupted write into a slot that was being modified.
+4. **Un-enumerated destructive variant**: the bootloader's mode-switch surface includes
+   a `clean` variant that wipes the boot-handoff area (ZTE's own strings: "extremely
+   dangerous"). Multiple lanes probed that handler family blind over days; nobody fired
+   `clean` — partly discipline, partly luck.
+
+**Rules** (enforced by `prompts/brick-risk-audit.md`, run before any flash/bootloader
+write/destructive goform):
+
+- **Verify the image's partition set against the DEVICE'S OWN live partition table**,
+  never against the vendor package manifest. A mismatched chain = wrong SoC = STOP.
+- **NOR/boot-chain partitions are never in the write set** without an explicit human
+  brick-acknowledgment; on no-serial devices treat them as unrecoverable.
+- **Kill and verify-dead every auto-retry/auto-reboot watcher before a write window**;
+  one device owner for the whole window.
+- **Enumerate destructive variants of a surface from disassembly BEFORE probing it.**
+- **Know the two-slot/fallback topology and write down the recovery ladder before
+  starting** (recovery slot → bootloader auto-TFTP → programmer → serial), with each
+  door's preconditions. An empty rung = the operation is not idiot-proof = STOP.
+- **Boot-mode flags are write-set members too**: list their post-operation value and
+  the return path (including "the flag lives in a partition we hold a backup of").
 
 ## Related Projects
 
@@ -861,3 +982,44 @@ Worktrees are the unit of cleanup.
    on device", STOP writing immediately — even `rm` through agent tooling
    may fail to run. Report the blocker with your reclaimable artifacts;
    do not thrash the host with retries.
+
+## AP391x Bring-Up Lessons (2026-11-18, ap3915i-3893 zero-serial bring-up)
+
+Field-proven during the first fully no-serial stock→OpenWrt bring-up of a
+brand-new unit. Full evidence: conwrt-bench sessions/2026-11-18-ap3915i-3893-bringup.md
+and docs/BOOT-SAFETY-AP3915I.md.
+
+1. **Flash-boot load address**: `boot_openwrt` must sf-read into
+   **0x83600000** (the stock boot_net destination), NOT 0x88000000 — same
+   image bytes, same flash offset; 0x88000000 + bootm fails (this was the
+   real cause behind the Sept-2026 "kernel-version-sensitive flash boot"
+   framing). Model JSON corrected; Rust codec tests pin the recipe.
+2. **`ubus poe manage` can be a silent no-op** (realtek-poe MCU-side wedge):
+   verify with `poe info` status + carrier_changes + rx counters around
+   every cycle. Recovery: `/etc/init.d/poe restart` (owner-ratified; PDs
+   hold through restart — 2/2 prior + 1/1 this session).
+3. **`nohup` long ops over ssh die with the session** (hit for real: a
+   sysupgrade "completed" without writing PriImg). Use `setsid` or keep
+   the command in the foreground of the SSH session.
+4. **Stock AP391x service shell absences**: no base64/od/uuencode/
+   chpasswd/hostname. Backup via raw `dd` over ssh stdout; passwords via
+   host-side `openssl passwd -6` + stdin-delivered `sed -f /dev/stdin`.
+5. **Unadopted stock firmware self-reboots every few minutes** (no
+   controller) — access windows ~3-5 min. Scripted retry loops make
+   forensics/backup/write flows reliable; never assume a session persists.
+6. **CFG writes are readback-gated, CFG1-only** (CFG2 pristine = fallback),
+   identity keys (BOOT_BOOTROM/CURR_VER) never modified, bootcmd only ever
+   the verified `run boot_openwrt; run boot_net` semicolon shape.
+
+### Correction (2026-11-18 wiki research): the AP3915i DOES have a DT reset button
+
+The "no GPIO buttons in the DTS" lore was wrong in mechanism: the DTS has
+`keys/reset` (tlmm 18, ACTIVE_LOW, KEY_RESTART) since the original support
+commit. In practice the conclusion stands — on 25.12.6 no input device ever
+materializes (gpio-keys does not bind; the AP3805i-lineage forum suggests a
+stuck or active-HIGH button), so **failsafe remains practically unreachable
+by button**. True last-resort doors: serial console (Cisco-pinout RJ45 jack,
+115200 8N1, **RX requires removing R176** — RX is grounded through it) and
+the bootloader-resident failsafe webpage (`run failsafe_boot` /
+`bootm 0x9fd70000` → unauthenticated upload page at 192.168.1.1). Details:
+conwrt-bench docs/WIKI-RESEARCH-WS-AP3915I.md.

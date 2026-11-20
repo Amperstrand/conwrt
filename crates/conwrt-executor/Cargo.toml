@@ -19,12 +19,15 @@ std = ["conwrt-agent-proto/std"]
 # impl calls resolve against the same copy the socket implements.
 # embassy-net has NO default smoltcp feature set: tcp + proto-ipv4 +
 # medium-ethernet is the minimal Ethernet-attached profile.
-embassy-net = ["dep:embassy-net", "dep:embedded-io-async"]
+embassy-net = ["dep:embassy-net", "dep:embedded-io-async", "dep:embassy-time", "dep:embassy-futures"]
 
 [dependencies]
 conwrt-agent-proto = { path = "../conwrt-agent-proto", default-features = false }
 embassy-net = { version = "0.9", default-features = false, features = ["tcp", "proto-ipv4", "medium-ethernet"], optional = true }
 embedded-io-async = { version = "0.7.0", optional = true }
+# response-read deadline (#232 P2): version-matched to the F746 app.
+embassy-time = { version = "0.5.1", default-features = false, optional = true }
+embassy-futures = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

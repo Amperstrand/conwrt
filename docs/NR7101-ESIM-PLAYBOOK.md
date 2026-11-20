@@ -1,5 +1,11 @@
 # NR7101 eSIM Playbook — OpenWrt + silent.link/nadanada on a 9eSIM, reader-free
 
+> **Deployment counterparts:** the supported SIM modes — local 9eSIM,
+> physical ice+ card, and an Android phone over Bluetooth SAP — are in
+> [NR7101-SIM-MODES.md](NR7101-SIM-MODES.md). That guide owns the UCI plans,
+> the phone pairing/permissions and the recovery steps; this playbook is the
+> eSIM download/enable deep dive.
+
 **The pitch:** provision a current OpenWrt image on the Zyxel NR7101, then buy
 and provision eSIM profiles (silent.link, nadanada) onto a physical **9eSIM
 (ECP3 eUICC)** seated in the NR7101's SIM slot — **using only the NR7101's own

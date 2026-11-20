@@ -1,0 +1,10 @@
+{
+  "use_case": "vpn-mullvad",
+  "params": {
+    "account_token": "mulltoken0123456789",
+    "country": "se",
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wwan",
+    "kill_switch": true
+  }
+}

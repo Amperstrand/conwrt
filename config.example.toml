@@ -274,7 +274,7 @@ wan_ssh = false
 #
 # [labgrid]
 # enabled = true                     # false/absent = direct backend (default)
-# coordinator = "192.168.13.221:20408"  # labgrid coordinator address
+# coordinator = "<labgrid-coordinator>:20408"  # labgrid coordinator address
 # exporter_host = "my-exporter-host" # ssh alias of the labgrid exporter host
 #                                    # (bench_doctor probes loopback-bound
 #                                    # serial bridges through it; the session

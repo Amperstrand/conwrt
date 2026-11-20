@@ -69,7 +69,25 @@ from bench_adopt import Place  # noqa: E402
 from bench_flash import lifeline_lines  # noqa: E402
 from config import LabgridConfig, load_config  # noqa: E402
 
-DEFAULT_SWITCH = "192.168.13.2"
+def switch_hostname(value: str) -> str:
+    """Accept "host" or "root@host"; return the bare host."""
+    return value.split("@", 1)[1] if "@" in value else value
+
+
+def default_switch() -> str:
+    """Bench switch management host from CONWRT_BENCH_SWITCH.
+
+    The public repo carries no bench address; the operator's private
+    registry exports it (host or root@host).
+    """
+    value = os.environ.get("CONWRT_BENCH_SWITCH", "").strip()
+    if not value:
+        raise BenchError(
+            "CONWRT_BENCH_SWITCH is not set; export it to the bench switch "
+            "management host (host or root@host)")
+    return switch_hostname(value)
+
+
 DEFAULT_TFTPROOT = "/tmp/bench-tftp"
 CYCLE_OFF_S = 8
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -173,10 +191,10 @@ class DirectBench:
     """Today's bench paths, verbatim: switch SSH + ubus PoE, dbclient/ssh-jump
     coordinates, dnsmasq TFTP staging, TCP serial bridge for consoles."""
 
-    def __init__(self, switch_host: str = DEFAULT_SWITCH,
+    def __init__(self, switch_host: str | None = None,
                  serial_endpoints: Mapping[str, tuple[str, int]] | None = None,
                  cycle_off_s: int = CYCLE_OFF_S) -> None:
-        self.switch_host = switch_host
+        self.switch_host = switch_hostname(switch_host) if switch_host else default_switch()
         self.serial_endpoints = dict(serial_endpoints or {})
         self.cycle_off_s = cycle_off_s
 
@@ -268,7 +286,7 @@ class LabgridBench:
 
     def __init__(self, coordinator: str = "",
                  session_factory=None, target_factory=None,
-                 switch_host: str = DEFAULT_SWITCH) -> None:
+                 switch_host: str | None = None) -> None:
         try:
             import labgrid  # noqa: F401 — fail fast, typed, before any use
         except ImportError as e:
@@ -280,7 +298,7 @@ class LabgridBench:
             raise BackendError("labgrid backend needs a coordinator address: "
                                "[labgrid] coordinator in config.toml or LG_COORDINATOR")
         self.coordinator = coordinator
-        self.switch_host = switch_host
+        self.switch_host = switch_hostname(switch_host) if switch_host else default_switch()
         self._session = None
         self._acquired: set[str] = set()
         self._session_factory = session_factory or self._start_session
@@ -408,10 +426,10 @@ def get_session(backend: str | None = None, switch_host: str | None = None,
         name = "labgrid" if (lg_cfg and lg_cfg.enabled) else "direct"
 
     if name == "direct":
-        return DirectBench(switch_host=switch_host or DEFAULT_SWITCH)
+        return DirectBench(switch_host=switch_host or default_switch())
     if name == "labgrid":
         coord = coordinator or (lg_cfg.coordinator if lg_cfg else "") \
             or os.environ.get("LG_COORDINATOR", "")
-        return LabgridBench(coordinator=coord, switch_host=switch_host or DEFAULT_SWITCH)
+        return LabgridBench(coordinator=coord, switch_host=switch_host or default_switch())
     raise BackendError(f"unknown bench backend {name!r}; expected 'direct' or 'labgrid' "
                        "(CONWRT_BENCH or [labgrid] config)")

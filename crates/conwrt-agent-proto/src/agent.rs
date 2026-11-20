@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::dispatch::{WireEndpoint, WireFrame, WireResult, decode_frame, encode_frame};
+use crate::dispatch::AgentEvent;
+use crate::dispatch::{WireEndpoint, WireError, WireFrame, WireResult, decode_frame, encode_frame};
 use crate::leases::{LeaseDenied, LeaseError, LeaseTable};
 use crate::protocol::{
     CapabilityInfo, HandshakeError, HandshakeOk, HandshakeRequest, LeaseResponse, PROTOCOL_VERSION,
@@ -56,6 +57,22 @@ pub struct AgentState {
     pub streams: BTreeMap<u64, Vec<u8>>,
     /// Expected total sizes per transfer.
     pub stream_totals: BTreeMap<u64, u64>,
+    /// Owning controller per transfer id (#164 P1 4272448227): first
+    /// chunk claims the id; chunks from a DIFFERENT controller while
+    /// the owner is still connected are refused (TransferConflict).
+    /// The claim ends with the owner's CONNECTION (not the transfer):
+    /// a takeover after a disconnect is the documented resume pattern
+    /// (the e2e kill-and-resume reconnects under a new controller id
+    /// and continues from the contiguous offset) — resume and hostile
+    /// takeover are indistinguishable at the wire, so the guarantee is
+    /// "no LIVE cross-controller interleave", enforced by sequential
+    /// connection serving + this map.
+    pub stream_owners: BTreeMap<u64, String>,
+    /// Expiry events produced by the heartbeat ticker, drained by the
+    /// active connection after each response (#164 P1 4272448155 —
+    /// before the ticker existed, lease budgets NEVER decremented at
+    /// runtime: a dead controller's lease outlived the agent).
+    pub pending_events: Vec<crate::protocol::LeaseExpired>,
 }
 
 /// Errors from running the agent.
@@ -95,6 +112,29 @@ pub async fn run_agent_on(
     state: Arc<Mutex<AgentState>>,
     config: Arc<AgentConfig>,
 ) {
+    // Heartbeat ticker (#164 P1 4272448155): lease budgets decrement on
+    // a TIMER, not on request traffic — expiry is what frees a dead
+    // controller's lease. Events land in pending_events; the active
+    // connection drains them after each response it sends.
+    {
+        let state = Arc::clone(&state);
+        let period = core::time::Duration::from_millis(config.heartbeat_ms.max(1).into());
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period);
+            loop {
+                ticker.tick().await;
+                let expired = {
+                    let mut s = state.lock().unwrap();
+                    s.leases.tick()
+                };
+                if !expired.is_empty() {
+                    let mut s = state.lock().unwrap();
+                    s.pending_events.extend(expired);
+                }
+            }
+        });
+    }
+
     loop {
         let (socket, _peer) = match listener.accept().await {
             Ok(x) => x,
@@ -148,7 +188,24 @@ async fn handle_connection(
             handshaked = true;
         }
         send_response(&mut sender, id, result).await?;
+        // Deliver any expiry events the ticker produced since the last
+        // frame (unsolicited, one event frame each).
+        let pending = std::mem::take(&mut state.lock().unwrap().pending_events);
+        for ev in pending {
+            let frame = WireFrame::Event(AgentEvent::LeaseExpired(ev));
+            sender
+                .send(&encode_frame(&frame).map_err(std::io::Error::other)?)
+                .await?;
+        }
     }
+    // Connection end: this controller's transfer CLAIMS end with it —
+    // streams/bytes persist (resume semantics), but a fresh connection
+    // may re-claim the ids (#164 4272448227 boundary).
+    state
+        .lock()
+        .unwrap()
+        .stream_owners
+        .retain(|_, owner| owner != &controller_id);
     Ok(())
 }
 
@@ -209,17 +266,47 @@ async fn dispatch_request(
         }
         WireEndpoint::LeaseRelease { lease_id } => {
             let mut s = state.lock().unwrap();
-            WireResult::LeaseReleased(s.leases.release(lease_id).is_ok())
+            // Owner-checked (#164 P1 4272448192): a controller may only
+            // free its OWN lease; the refused case reads as Released(false)
+            // (the wire bool carries no reason — the controller can query).
+            WireResult::LeaseReleased(s.leases.release_by(lease_id, controller_id).is_ok())
         }
         WireEndpoint::Heartbeat(hb) => {
             let mut s = state.lock().unwrap();
-            match s.leases.heartbeat(hb.lease_id, config.heartbeat_budget) {
+            // Owner-checked (#164 P1 4272448192, heartbeat half): a
+            // non-owner's heartbeat must not immortalize the lease.
+            match s
+                .leases
+                .heartbeat_by(hb.lease_id, controller_id, config.heartbeat_budget)
+            {
                 Ok(()) => WireResult::HeartbeatAcked,
+                Err(LeaseError::Denied(LeaseDenied::NotOwner(holder))) => {
+                    WireResult::Error(WireError::LeaseNotOwner {
+                        lease_id: hb.lease_id,
+                        holder,
+                    })
+                }
                 Err(_) => WireResult::Error(crate::dispatch::WireError::UnknownLease(hb.lease_id)),
             }
         }
         WireEndpoint::StreamChunk(chunk) => {
             let mut s = state.lock().unwrap();
+            // Transfer-id ownership (#164 P1 4272448227): the first chunk
+            // claims the id; a different controller's chunk with the same
+            // id is a CONFLICT, not data — refusing beats interleaving.
+            match s.stream_owners.get(&chunk.transfer_id) {
+                Some(owner) if owner != controller_id => {
+                    return WireResult::Error(WireError::TransferConflict {
+                        transfer_id: chunk.transfer_id,
+                        holder: owner.clone(),
+                    });
+                }
+                None => {
+                    s.stream_owners
+                        .insert(chunk.transfer_id, controller_id.to_string());
+                }
+                _ => {}
+            }
             // Idempotent contiguous-append (same semantics as the spike).
             let contiguous = {
                 let entry = s.streams.entry(chunk.transfer_id).or_default();
