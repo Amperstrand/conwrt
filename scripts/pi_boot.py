@@ -654,8 +654,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if neigh.returncode != 0:
         print(f"ip neigh failed: {neigh.stderr.strip()}", file=sys.stderr)
         return 1
-    hits = [row for row in parse_ip_neigh(neigh.stdout)
-            if is_pi_mac(row["mac"], prefixes)]
+    rows = parse_ip_neigh(neigh.stdout)
+    if not rows:
+        # An empty table is not "no Pi on this L2" — it is "nothing has been
+        # learned yet". Reporting the former would be a count-zero false
+        # negative on a host that has not talked to anything since boot.
+        print("the neighbour table is empty: no L2 address has been learned, "
+              "so this scan proves nothing about the Pi." +
+              ("" if args.sweep else " Run with --sweep <cidr> first."),
+              file=sys.stderr)
+        return 2
+    hits = [row for row in rows if is_pi_mac(row["mac"], prefixes)]
+    print(f"inspected {len(rows)} neighbour entr"
+          f"{'y' if len(rows) == 1 else 'ies'}; {len(hits)} match a "
+          f"Raspberry Pi OUI\n", flush=True)
     for hit in hits:
         hit["ssh"] = tcp_open(hit["ip"], 22, timeout=args.timeout)
         hit["telnet"] = tcp_open(hit["ip"], 23, timeout=args.timeout)

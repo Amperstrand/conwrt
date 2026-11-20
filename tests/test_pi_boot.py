@@ -332,6 +332,41 @@ class TestWaitFor(unittest.TestCase):
                 self.assertFalse(wait_for(lambda: False, timeout=0.5))
 
 
+class TestScanHonesty(unittest.TestCase):
+    """A scan must show what it inspected before it reports a zero."""
+
+    def _args(self, **over):
+        import argparse
+
+        base = dict(sweep=None, timeout=1, json=None)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def _run(self, stdout):
+        import contextlib
+        import io
+
+        fake = mock.Mock(returncode=0, stdout=stdout, stderr="")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(pi_boot.subprocess, "run", return_value=fake):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = pi_boot.cmd_scan(self._args())
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_empty_neighbour_table_is_inconclusive_not_a_negative(self):
+        rc, _, err = self._run("")
+        self.assertEqual(rc, 2)
+        self.assertIn("proves nothing", err)
+        self.assertIn("--sweep", err)
+
+    def test_non_pi_table_reports_what_it_inspected(self):
+        line = "192.0.2.5 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\n"
+        rc, out, _ = self._run(line)
+        self.assertEqual(rc, 1)
+        self.assertIn("inspected 1 neighbour entry; 0 match", out)
+        self.assertIn("no Raspberry Pi MAC prefixes", out)
+
+
 class TestTftpFetches(unittest.TestCase):
     LOG = (
         "Thu Nov 20 09:00:01 2026 daemon.info dnsmasq-tftp[1234]: "
