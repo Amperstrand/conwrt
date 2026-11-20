@@ -156,10 +156,10 @@ network-manageable permanently:
 
 1. Write Raspberry Pi OS to the card and seed it — `scripts/pi_media_flash.sh`
    does write + verify + inject in one pass (or `pi_image.py` documents the
-   cloud-init layout if you prefer manual steps). **The image ships its own
-   cloud-init seed** (`user-data`/`meta-data`/`network-config` on the boot
-   FAT) — overwrite `user-data` or the board boots the appliance config that
-   came with the image, not yours.
+   cloud-init layout if you prefer manual steps). **The image ships only a
+   stock, commented-out cloud-init template on its boot FAT** — booting it
+   unseeded leaves a headless board with no login path; overwrite
+   `user-data` with yours.
 2. Build an EEPROM package with the boot order you want:
 
    ```bash

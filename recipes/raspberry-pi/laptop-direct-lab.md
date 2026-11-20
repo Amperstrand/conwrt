@@ -121,11 +121,12 @@ Traps, each earned in the live run:
 3. **`mcopy -n` still prompts** when the target exists — and the prompt
    hangs forever on a closed stdin. `mdel` the targets first. This mtools
    (4.0.49) `mdel` has **no `-s` flag**; guard the rc instead.
-4. **The raspios image ships its own cloud-init seed** (`user-data`,
-   `meta-data`, `network-config` on the boot FAT — 3.2 KB of appliance
-   config in the seedling image). Overwrite `user-data` with yours or the
-   board boots someone else's appliance: wrong hostname, wrong user, wrong
-   unlock flow.
+4. **The raspios image ships a cloud-init seed on its boot FAT** — but it is
+   the *stock commented-out template* (verified in the pristine image), not
+   a working config: booting unseeded means cloud-init does nothing and a
+   headless raspios comes up with **no login path at all**. Overwrite
+   `user-data` with yours (user, key, hostname) — that is what makes the
+   board reachable.
 5. **dd success ≠ byte correctness.** Verify cache-evicted
    (`blockdev --flushbufs` then hash) against the image hash. On mismatch,
    repair at 4K: scan in 16 MiB chunks, refine bad chunks to 4K blocks,
