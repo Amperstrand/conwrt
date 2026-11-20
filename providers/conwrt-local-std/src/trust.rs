@@ -266,6 +266,20 @@ truncated-host
         use conwrt_core::ssh::TrustStore;
         let dir = std::env::temp_dir().join(format!("conwrt-trust-ro-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // Mode bits do not bind uid 0: root writes straight through 0o500,
+        // so the Unwritable error this test asserts can never surface.
+        // Skip under root (agent dev boxes) instead of false-failing;
+        // CI runners are non-root and exercise the real path.
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(meta) = std::fs::metadata(&dir) {
+                if meta.uid() == 0 {
+                    eprintln!("skip: running as root — dir mode bits don't apply (uid 0)");
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return;
+                }
+            }
+        }
         use std::os::unix::fs::PermissionsExt;
         let ro = {
             let mut p = std::fs::metadata(&dir).unwrap().permissions();
