@@ -527,6 +527,69 @@ class TestProbeTransport(unittest.TestCase):
         self.assertIn("Permission denied", str(ctx.exception))
 
 
+class TestMatrixOrchestration(unittest.TestCase):
+    """cmd_matrix end-to-end with the transport mocked: verdicts, exit code,
+    and the JSON record. None of this needs a board."""
+
+    def _args(self, legs, **over):
+        import argparse
+
+        base = dict(host="192.0.2.10", user="pi", key=None, timeout=1,
+                    json=None, legs=legs, power_cmd=None, boot_timeout=1,
+                    yes=True, router=None)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def _report(self, medium):
+        report = pi_boot.parse_probe_output(
+            (FIXTURES / "probe-pios-sd-modern.txt").read_text(), "192.0.2.10")
+        report["boot_medium"] = medium
+        return report
+
+    def _run(self, args, waits, report):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with mock.patch.object(pi_boot, "_wait_for_leg", side_effect=waits):
+            with mock.patch.object(pi_boot, "probe_host", return_value=report):
+                with contextlib.redirect_stdout(buf):
+                    rc = pi_boot.cmd_matrix(args)
+        return rc, buf.getvalue()
+
+    def test_pass_when_the_expected_medium_booted(self):
+        rc, out = self._run(self._args("sd"), [(True, False)], self._report("sd"))
+        self.assertEqual(rc, 0)
+        self.assertIn("PASS", out)
+
+    def test_fail_when_a_different_medium_booted(self):
+        rc, out = self._run(self._args("sd"), [(True, False)], self._report("usb"))
+        self.assertEqual(rc, 1)
+        self.assertIn("expected sd", out)
+
+    def test_unknown_leg_is_a_usage_error(self):
+        rc, _ = self._run(self._args("sd,nope"), [], self._report("sd"))
+        self.assertEqual(rc, 2)
+
+    def test_json_record_carries_each_verdict(self):
+        import json as _json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run.json"
+            rc, _ = self._run(self._args("sd,net", json=str(path)),
+                              [(True, False), (False, True)], self._report("sd"))
+            record = _json.loads(path.read_text())
+        self.assertEqual(rc, 0)
+        self.assertEqual([r["leg"] for r in record["results"]], ["sd", "net"])
+        self.assertEqual([r["verdict"] for r in record["results"]], ["PASS", "PASS"])
+
+    def test_net_leg_ips_up_when_a_medium_was_left_in(self):
+        rc, out = self._run(self._args("net"), [(True, False)], self._report("sd"))
+        self.assertEqual(rc, 1)
+        self.assertIn("booted an installed OS", out)
+
+
 class TestModelAgreement(unittest.TestCase):
     """models/raspberrypi-4b.json is the SSOT for boot facts; pi_boot.py
     encodes the same firmware floors. Editing one without the other is drift,
