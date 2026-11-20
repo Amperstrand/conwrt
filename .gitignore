@@ -23,6 +23,10 @@ scripts/data/
 captures/
 scripts/captures/
 *.pcap
+
+# Local stock-firmware artifact cache (public dump references, too large for git;
+# sha256s recorded in recipes/zte/mf286d/notes.md)
+data/zte-mf286d/
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub
