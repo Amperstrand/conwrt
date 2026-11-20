@@ -239,7 +239,10 @@ async fn stream_session_ends_on_failed_write_not_after_draining() {
     // a follow-up CHUNK the session must never read (a correct session
     // ends at the first stalled write, mid-processing of the first chunk)
     let followup = request_bytes(1, WireEndpoint::Capabilities);
-    let mut io = StallWriter { read_chunks: vec![wire, followup], write_calls: 0 };
+    let mut io = StallWriter {
+        read_chunks: vec![wire, followup],
+        write_calls: 0,
+    };
     let mut core = server();
     agent_session_stream(&mut io, &mut core).await;
     assert!(io.write_calls >= 1, "the session attempted its reply write");
