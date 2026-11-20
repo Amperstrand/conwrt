@@ -120,7 +120,7 @@ class TestFlashHappyPath:
         _no_time(monkeypatch, [0, 20, 40])
         fake = FakeSession()
         spy = _Spy([
-            f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}",   # flash-target
+            f"FLASH-TARGET-OK\nextreme-networks,ws-ap3915i",  # flash-target: the DEVICE comma form (#270)
             "LIFELINE-OK",                               # flash-lifeline
             digest,                                      # flash-push readback
             "",                                          # flash-go
@@ -149,7 +149,7 @@ class TestFlashRecoveryPolicy:
     def test_broken_lifeline_never_flashes(self, tmp_path: Path) -> None:
         entry, img = _image_entry(tmp_path)
         fake = FakeSession()
-        spy = _Spy(["FLASH-TARGET-OK\n" + bf.EXPECTED_PROFILE, "LIFELINE-BROKEN"])
+        spy = _Spy(["FLASH-TARGET-OK\nextreme-networks,ws-ap3915i", "LIFELINE-BROKEN"])  # comma form (#270)
         r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
         with pytest.raises(ba.AdoptError, match="lifeline"):
             bf.stage_flash(r, entry, img, "/tmp/t", fake)
@@ -165,7 +165,7 @@ class TestFlashRecoveryPolicy:
         digest = entry["sha256"]
         fake = FakeSession()
         _no_time(monkeypatch, [0, 200, 220, 240, 260, 280, 300, 320, 340])
-        preamble = [f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}", "LIFELINE-OK", digest, ""]
+        preamble = [f"FLASH-TARGET-OK\nextreme-networks,ws-ap3915i", "LIFELINE-OK", digest, ""]  # comma form (#270)
 
         def sequenced() -> str:
             if preamble:
