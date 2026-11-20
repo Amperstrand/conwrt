@@ -11,6 +11,9 @@ run Ubuntu Server, Raspberry Pi OS, or OpenWrt.
 - Playbooks in this directory:
   - [`boot-matrix.md`](boot-matrix.md) — probe and test SD / USB / network boot, and
     why "can netboot" and "will netboot" are different questions
+  - [`laptop-direct-lab.md`](laptop-direct-lab.md) — no router needed: the laptop itself
+    serves DHCP+TFTP over a direct cable, media flashed + seeded on the same
+    laptop (`scripts/pi_media_flash.sh`), one power-cycle tests both paths
   - [`netboot-rescue.md`](netboot-rescue.md) — recover a netboot-looping Pi headlessly
   - [`ubuntu-server-provisioning.md`](ubuntu-server-provisioning.md) — Ubuntu Server onto a Pi-attached disk
   - [`eeprom-and-security.md`](eeprom-and-security.md) — BOOT_ORDER policy, the arm/disarm switch, secure-boot outlook, labgrid outlook
