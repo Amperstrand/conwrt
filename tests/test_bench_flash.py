@@ -29,14 +29,22 @@ def _image_entry(tmp_path: Path, content: bytes = b"firmware-image-bytes") -> tu
 
 
 class TestImageGates:
-    def test_stock_24_and_25_pass(self, tmp_path: Path) -> None:
+    def test_stock_24_10_passes(self, tmp_path: Path) -> None:
         entry, img = _image_entry(tmp_path)
-        assert bf.check_image({**entry, "version": "25.12.5"}, img)
+        assert bf.check_image({**entry, "version": "24.10.2"}, img)
+
+    def test_25_12_refused_for_flash_boot_path(self, tmp_path: Path) -> None:
+        # #272: 25.12.x matches sysupgrade but the AP3915i flash-boot
+        # bring-up is 24.10.x-only (AGENTS.md:570 rule 2) — the previous
+        # test asserted the defective wide gate.
+        entry, img = _image_entry(tmp_path)
+        with pytest.raises(ba.AdoptError, match="24.10.x"):
+            bf.check_image({**entry, "version": "25.12.5"}, img)
 
     @pytest.mark.parametrize("version", ["23.05.5", "26.3.0", "24-snapshot", ""])
     def test_non_stock_refused(self, tmp_path: Path, version: str) -> None:
         entry, img = _image_entry(tmp_path)
-        with pytest.raises(ba.AdoptError, match="not stock"):
+        with pytest.raises(ba.AdoptError, match="24.10.x"):
             bf.check_image({**entry, "version": version}, img)
 
     def test_wrong_profile_refused(self, tmp_path: Path) -> None:
