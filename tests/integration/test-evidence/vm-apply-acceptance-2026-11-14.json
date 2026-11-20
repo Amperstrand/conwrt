@@ -1,0 +1,110 @@
+{
+  "date": "2026-11-14",
+  "runner": "tests/integration/vm_apply_acceptance.py",
+  "vm": "OpenWrt 25.12.5 x86_64 QEMU/KVM (dedicated :2226, fresh overlay of the integration base)",
+  "results": {
+    "doh_default": {
+      "apply_rc": 0,
+      "checks": {
+        "resolver_url": "https://cloudflare-dns.com/dns-query",
+        "dnsmasq_fwd": "127.0.0.1#5053"
+      },
+      "verdict": "APPLY-ACCEPTED (side effects verified via uci readback)"
+    },
+    "mwan3_default": {
+      "apply_rc": 0,
+      "checks": {
+        "track_ip_committed": "5"
+      },
+      "verdict": "APPLY-ACCEPTED \u2014 the 1.x track_ip bug fix (#628) verified live: track IPs commit (1.x never committed them)"
+    },
+    "ssh_hardening_default": {
+      "apply_rc": 0,
+      "checks": {
+        "dropbear_port": "(empty \u2014 readback key TBD against 2.x config naming)"
+      },
+      "verdict": "APPLY-ACCEPTED, readback key needs alignment"
+    },
+    "vpn_ivpn_default": {
+      "apply_rc": 1,
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
+    },
+    "tollgate_cellular_minimal": {
+      "apply_rc": 1,
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
+    },
+    "guest_wifi_default": {
+      "apply_rc": null,
+      "verdict": "CONTAMINATED (shared-VM order effects \u2014 see correction_2026-11-14); rerun isolated"
+    }
+  },
+  "summary": "2 of 6 fully ACCEPTED with verified side effects (doh, mwan3 \u2014 the latter validating the #628 bugfix live); 2 accepted with readback caveats; 2 environment-limited (hardware/API deps the VM cannot satisfy). Raw logs: /tmp/apply-run{1..5}.log.",
+  "correction_2026-11-14": "RETRACTION/CORRECTION: the vpn_ivpn/tollgate_cellular RC=1 and guest-wifi timeout verdicts are CONTAMINATED \u2014 all fixtures ran sequentially on ONE shared VM, and earlier applies (mwan3 policy routing/firewall hooks, doh dnsmasq norev, ssh-hardening) mutate guest network state; the ivpn trace shows 'wget: Operation not permitted' (egress blocked by previously applied policy, not by the ivpn render itself). Only the FIRST fixture on a fresh VM (doh) and order-independent uci asserts (mwan3 track_ip readback) are clean evidence. Next runner revision: fresh overlay per fixture (the fips fixture pattern).",
+  "isolated_rerun_2026-11-14": {
+    "runner": "tests/integration/vm_apply_acceptance_iso.py (fresh overlay VM per fixture, ephemeral port, scp -O, -F /dev/null)",
+    "results": {
+      "doh_default": "APPLY_RC=0, resolver_url + dnsmasq_fwd VERIFIED (reproduces isolated)",
+      "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (reproduces isolated \u2014 #628 fix stands)",
+      "ssh_hardening_default": "RESOLVED: APPLY_RC=0 + readbacks VERIFIED with post-apply settle \u2014 RootPasswordAuth=off, PasswordAuth=off, MaxAuthTries=3 (the earlier empty readback was a race with the dropbear restart, not a commit/config defect). Runner now settles+retries readbacks.",
+      "vpn_ivpn_default": "APPLY_RC=1 = DESIGNED ABORT GATE: package install OK (20.8 MiB/197 pkgs \u2014 egress works), keypair OK, api.ivpn.net key registration returns no peer IP from this bench -> 'aborting before wg0 cleanup' fires exactly as designed (#604-P2 class). APPLY-CORRECT, external-API-limited. NOT a render defect.",
+      "tollgate_cellular_minimal": "CLOSED AS GAP-BY-ENVIRONMENT: the x86 QEMU VM lacks the hardware the fixture's readback gates check (cellular: no modem/ECM iface; guest-wifi: no radios). Render parity for both is EQUAL in the 61-fixture corpus; apply-acceptance would need hardware-in-the-loop (bench DUT) \u2014 out of scope for the VM layer by design.",
+      "guest_wifi_default": "CLOSED AS GAP-BY-ENVIRONMENT: the x86 QEMU VM lacks the hardware the fixture's readback gates check (cellular: no modem/ECM iface; guest-wifi: no radios). Render parity for both is EQUAL in the 61-fixture corpus; apply-acceptance would need hardware-in-the-loop (bench DUT) \u2014 out of scope for the VM layer by design."
+    },
+    "verdict": "3 of 6 FULL ACCEPT with verified side effects (doh, mwan3, ssh-hardening); ivpn verifies its abort-gate design (external-API-limited); cellular/guest-wifi hardware-limited. All verdicts from isolated fresh-overlay VMs."
+  },
+  "closed_2026-11-14": "cellular + guest-wifi closed as GAP-by-environment (owner disposition 2026-11-14); no open items remain in this evidence file.",
+  "extension_batches": [
+    {
+      "date": "2026-11-14",
+      "batch": "post-approval extension #1 (approved via merged proposal PR #695)",
+      "fixtures": {
+        "guest_wifi_default": "APPLY_RC=1 \u2014 x86 VM lacks radios (known env class)",
+        "mwan3_default": "APPLY_RC=0, track_ip x5 COMMITTED (third independent reproduction)",
+        "sqm_default": "APPLY_RC=0",
+        "wireguard_client_default": "APPLY_RC=0",
+        "doh_custom_url": "APPLY_RC=0, custom resolver_url + 127.0.0.1#5353 forward VERIFIED",
+        "adguard_default": "APPLY_RC=0"
+      },
+      "tally": "Acceptance attempted 12 fixtures: 9 APPLY_RC=0 (5 with verified uci side effects), 1 abort-gate design verified, 2 env-limited (radios/modem)."
+    }
+  ],
+  "extension_batch_2": {
+    "date": "2026-11-15",
+    "fixtures": {
+      "wireguard_server_default": "APPLY_RC=0",
+      "wireguard_client_extras": "APPLY_RC=0",
+      "ssl_default": "APPLY_RC=0",
+      "ssl_qip": "APPLY_RC=0",
+      "nodns_default": "APPLY_RC=0",
+      "mesh11sd_default": "APPLY_RC=0",
+      "travelmate_default": "APPLY_RC=0",
+      "pbr_default": "APPLY_RC=0",
+      "mwan3_balanced": "APPLY_RC=0, track_ip x5 COMMITTED",
+      "fleet_identity_default": "APPLY_RC=0",
+      "net_roles_default": "APPLY_RC=0",
+      "net_roles_eth_tagged": "APPLY_RC=0 AFTER BUGFIX (re-verified post-#699)",
+      "net_roles_wifi": "ENV-LIMITED: x86 VM has no /etc/config/wireless \u2014 `uci set wireless.<sta>=wifi-iface` fails 'Entry not found' (any radio-bearing device has the config); same class as guest-wifi",
+      "net_roles_auto_switch": "RC=1 pre-fix run; eth path fixed, wifi staging env-limited \u2014 rerun after wifi-config precondition is handled (pre-create empty wireless config) or classify env",
+      "rescue_watchdog_default": "APPLY_RC=0 AFTER BUGFIX #2 (was 127): the loop script was staged with a BARE path + heredoc ('/usr/bin/rescue-watchdog-loop << WDL_EOF') instead of 'cat > ...' \u2014 the shell EXECUTED the not-yet-existing binary (127) and the file was never written; the rescue-watchdog feature had never worked from this render. Fixed both sides, verified RC=0 live."
+    },
+    "headline_find": "1.x render BUG caught only by apply-testing (byte-parity structurally blind \u2014 both sides rendered the bug identically): net-roles placed `uci -q revert <section>` BETWEEN section-create and populate; reverting a freshly-staged (uncommitted) creation DELETES it, so `uci set network.<iface>.proto=dhcp` failed 'Invalid argument' \u2014 eth/wifi/mgmt paths were unapplyable. FIXED both sides (4 revert-before-create reorders, Python + Rust), goldens regenerated, parity 140/140, eth_tagged verified RC=0 on a fresh VM."
+  },
+  "extension_batch_3": {
+    "date": "2026-11-15",
+    "fixtures": {
+      "mesh11sd_wpa3_key": "APPLY_RC=0",
+      "nodns_custom": "APPLY_RC=0",
+      "adguard_custom": "APPLY_RC=0",
+      "ssh_hardening_custom": "APPLY_RC=0",
+      "auto_sqm_static": "APPLY_RC=0",
+      "pbr_custom": "APPLY_RC=0",
+      "tollgate_default": "APPLY_RC=0",
+      "auto_sqm_iperf": "RC=1 \u2014 TRIAGE OPEN (pkg install OK; no uci/not-found match in trace \u2014 different class)",
+      "travelmate_uplinks": "RC=1 \u2014 TRIAGE OPEN ('uci: Entry not found' at trace line 67)",
+      "openclash_default": "RC=1 \u2014 TRIAGE OPEN (repo index OK; failure class TBD)",
+      "openclash_tun": "RC=1 \u2014 TRIAGE OPEN (same)",
+      "tollgate_security_default": "FIND #3 FIXED (both sides): section ids sanitized to underscores (display .name keeps hyphens) \u2014 the firewall rules now stage correctly on a live VM. Remaining RC=1 is the env class: `uci commit wireless` fails when /etc/config/wireless is absent (radio-less x86; fine on radio-bearing hardware) \u2014 same family as net-roles wifi."
+    },
+    "tally": "Batch 3: 7/12 RC=0. Cumulative acceptance: 22 fixtures apply-verified, 3 real 1.x defects found (net-roles revert order; rescue-watchdog staging; tollgate-security hyphen section ids), 4 triage-open, 3 env-limited classes."
+  }
+}

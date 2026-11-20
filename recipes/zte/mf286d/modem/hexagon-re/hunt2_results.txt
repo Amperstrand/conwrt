@@ -1,0 +1,18 @@
+
+==== refs to UIM IDL service object (0xc32c0650) ====
+  total 0
+
+==== refs to REQ msgid_to_msg table (0xc2316358) ====
+  total 0
+
+==== refs to RESP msgid_to_msg table (0xc2316508) ====
+  total 0
+
+==== refs to svc obj field idl_version (0xc32c0654) ====
+  total 0
+
+==== refs to qmi_uim_m2m_euicc.c string (0xc2023698) ====
+  total 0
+
+==== refs to UIM type table object (0xc2316774) ====
+  total 0

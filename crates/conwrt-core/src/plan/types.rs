@@ -71,6 +71,8 @@ pub enum Profile {
     /// IVPN WireGuard VPN (runtime-API script; 1.x marks the preset
     /// untested).
     VpnIvpn(VpnIvpnProfile),
+    /// Multi-uplink role assignment (serving bridge vs WAN uplinks).
+    NetRoles(NetRolesProfile),
     /// Mullvad WireGuard VPN (runtime-API script; 1.x marks the
     /// preset untested).
     VpnMullvad(VpnMullvadProfile),
@@ -93,6 +95,10 @@ pub enum Profile {
     Tollgate(TollgateProfile),
     /// RFC 1918 isolation for TollGate public WiFi.
     TollgateSecurity(TollgateSecurityProfile),
+    /// Fleet identity from MAC (canonical derivations, see crate::identity).
+    FleetIdentity(FleetIdentityProfile),
+    /// TollGate cellular upstream (NR7101-class 5G modem as paid uplink).
+    TollgateCellular(TollgateCellularProfile),
 }
 
 impl Profile {
@@ -127,6 +133,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => "vpn-openvpn",
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::VpnIvpn(_) => "vpn-ivpn",
+            Profile::NetRoles(_) => "net-roles",
             Profile::VpnMullvad(_) => "vpn-mullvad",
             Profile::VpnNode(_) => "vpn-node",
             Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
@@ -136,6 +143,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => "fips-bluetooth-rfcomm",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
+            Profile::FleetIdentity(_) => "fleet-identity",
+            Profile::TollgateCellular(_) => "tollgate-cellular",
         }
     }
 
@@ -172,6 +181,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => &[],
             Profile::VpnSurfshark(_) => &[],
             Profile::VpnIvpn(_) => &[],
+            Profile::NetRoles(_) => &[],
             Profile::VpnMullvad(_) => &[],
             Profile::VpnNode(_) => &[],
             Profile::VpnNordvpnIke2(_) => &[],
@@ -181,6 +191,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => &["bluetooth"],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
+            Profile::FleetIdentity(_) => &["wifi"],
+            Profile::TollgateCellular(_) => &["usb"],
         }
     }
 

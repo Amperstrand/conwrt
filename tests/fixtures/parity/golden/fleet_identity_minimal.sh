@@ -1,0 +1,2 @@
+# --- fleet identity (MAC-derived, deterministic) ---
+_mac=$(cat /sys/class/net/eth0/address) && _m=$(printf '%s' "$_mac" | tr -d ':') && _pw=$(printf '%s' "conwrt-fleet-v1:root:benchsalt0123456789abcdef:$_m" | sha256sum | cut -c1-16) && printf '%s\n%s\n' "$_pw" "$_pw" | passwd root && uci set system.@system[0].hostname="nr7101-$_m" && uci commit system && mkdir -p /etc/fleet && printf 'derivation=%s\nmac=%s\nhostname=%s-%s\n' 'conwrt-fleet-v1' '$_mac' 'nr7101' '$_m' > /etc/fleet/identity

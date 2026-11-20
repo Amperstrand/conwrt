@@ -1560,6 +1560,20 @@ fn vpn_nordvpn_shape_gates_and_branches_match_1x() {
     assert!(script.contains("WG_PRIV=\"STUBPRIVKEYbase64filledfortestonly0000=\""));
     // the endpoint /32 pin uses the RESOLVED route target, not the hostname
     assert!(script.contains("nordvpn_server_route.target='193.29.107.10'"));
+    // post-API-change contract: a HOSTNAME route target is valid (1.x pins
+    // de500.nordvpn.com and lets the router resolve) — PR #629
+    {
+        let host = VpnNordvpnProfile {
+            route_target: "de500.nordvpn.com".into(),
+            ..base.clone()
+        };
+        assert!(
+            host.validate().is_ok(),
+            "hostname route_target must be accepted"
+        );
+        let hs = render_shell(&plan_for(Profile::VpnNordvpn(host)));
+        assert!(hs.contains("nordvpn_server_route.target='de500.nordvpn.com'"));
+    }
     // wg tunnel + 30s handshake verify tail
     assert!(script.contains("uci set network.wg0.proto='wireguard'"));
     assert!(script.contains("wg show wg0 2>/dev/null | grep -q 'latest handshake'"));
@@ -1595,7 +1609,7 @@ fn vpn_nordvpn_shape_gates_and_branches_match_1x() {
             ..base.clone()
         },
         VpnNordvpnProfile {
-            route_target: "not-an-ip".into(),
+            route_target: "not an ip".into(),
             ..base.clone()
         },
         VpnNordvpnProfile {
@@ -1779,13 +1793,13 @@ fn tollgate_security_shape_matches_1x() {
         ("LL", "169.254.0.0/16"),
     ] {
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}=rule"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}=rule"
         )));
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}.dest_ip='{cidr}'"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}.dest_ip='{cidr}'"
         )));
         assert!(script.contains(&format!(
-            "uci set firewall.Block-LAN-To-RFC1918-{suffix}.target='DROP'"
+            "uci set firewall.Block_LAN_To_RFC1918_{suffix}.target='DROP'"
         )));
     }
     assert!(!script.contains("uci add firewall"));
@@ -1811,6 +1825,7 @@ fn tollgate_security_shape_matches_1x() {
         .expect("live-ruleset check");
     assert!(live.command.contains("nft list table inet fw4"));
     assert!(!live.command.contains("list chain"));
+    // the .name VALUE keeps the hyphenated display form
     assert!(live.command.contains("Block-LAN-To-RFC1918-192"));
     // the libustream TLS backend is presence-guarded (P2), never
     // unconditionally ensured

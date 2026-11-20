@@ -1,0 +1,9 @@
+{
+  "use_case": "vpn-nordvpn",
+  "params": {
+    "access_token": "stub-token",
+    "server": "de500.nordvpn.com",
+    "upstream_gateway": "192.168.8.1",
+    "upstream_iface": "wwan"
+  }
+}

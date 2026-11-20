@@ -17,7 +17,7 @@ start_service() {
 WD_EOF
 chmod +x /etc/init.d/rescue-watchdog
 
-/usr/bin/rescue-watchdog-loop << 'WDL_EOF'
+cat > /usr/bin/rescue-watchdog-loop << 'WDL_EOF'
 #!/bin/sh
 TARGET="${WATCHDOG_TARGET:-192.168.105.10}"
 GRACE=600

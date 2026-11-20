@@ -40,9 +40,13 @@ def _build_security_ops(params: dict[str, Any]) -> list[Op]:
     ]
 
     for suffix, cidr, description in rfc1918_ranges:
+        # UCI section ids reject hyphens ('uci: Invalid argument' — apply
+        # acceptance find #3, 2026-11-15: the rules had never applied).
+        # Display .name keeps the readable hyphenated form.
         name = f"Block-LAN-To-RFC1918-{suffix}"
-        ops.append(ShellCommand(command=f"uci set firewall.{name}=rule"))
-        ops.append(UciSet(config="firewall", section=name, values={
+        section = name.replace("-", "_")
+        ops.append(ShellCommand(command=f"uci set firewall.{section}=rule"))
+        ops.append(UciSet(config="firewall", section=section, values={
             "name": name,
             "src": "lan",
             "dest": "wan",

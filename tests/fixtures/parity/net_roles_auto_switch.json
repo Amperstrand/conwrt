@@ -1,0 +1,14 @@
+{
+  "use_case": "net-roles",
+  "params": {
+    "uplinks": [
+      {
+        "type": "ethernet",
+        "vlan": 10
+      }
+    ],
+    "auto_switch": true,
+    "switch_interval": 15,
+    "price_eth_sats_per_mib": 3
+  }
+}

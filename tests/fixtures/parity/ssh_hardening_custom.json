@@ -1,0 +1,1 @@
+{"use_case": "ssh-hardening", "params": {"disable_password_auth": false, "idle_timeout": 600, "max_auth_tries": 2, "port": 2222, "restrict_gateway_ports": false}}

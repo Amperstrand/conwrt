@@ -32,6 +32,9 @@ pub struct ZycastArgs {
     /// bootloader in its listen window on the segment — without this flag
     /// the command refuses to send.
     pub confirm_specimen: bool,
+    /// Expected RAS model-ID (hex string) — preflight vs the bootloader's
+    /// flash-commit model gate (RE: field @img+0x11c, "%x" == flash model).
+    pub expect_model: Option<String>,
     /// Operator attestation: the payload is a non-RAS raw image sent
     /// deliberately (research payloads). Without it, kernel-slot sends
     /// must carry the ZyXEL RAS magic — a tar/sysupgrade container or any
@@ -50,29 +53,6 @@ pub fn run(a: ZycastArgs) -> ExitCode {
     }
 }
 
-fn validate_image(image: &[u8]) -> Result<(), String> {
-    // RE #167 (Z-Loader stage-2 decode): HDR0 ("0RDH") images are validated
-    // by the bootloader (model-ID @+0x11c must equal "7101", header+data
-    // checksums, size caps); plain-RAS (8380xxxx) images SKIP validation and
-    // write anyway. Both classes are flash-legal; anything else is refused.
-    let ok =
-        image.len() > 4 && (image[0..4] == [0x30, 0x52, 0x44, 0x48] || image[0..2] == [0x83, 0x80]);
-    if !ok {
-        return Err("image pre-validation (RE #167): neither HDR0 nor RAS magic — bootloader will refuse/brick-class payload".into());
-    }
-    if image[0..4] == [0x30, 0x52, 0x44, 0x48] {
-        if image.len() < 0x120 {
-            return Err("HDR0 image truncated before model-ID field".into());
-        }
-        if &image[0x11c..0x11f] != b"710" {
-            return Err(format!(
-                "HDR0 model-ID gate (the 2026-11-10 refusal class): image model {:?} != flash model \"7101\" — bootloader drops silently (RE #167)",
-                &image[0x11c..0x120]
-            ));
-        }
-    }
-    Ok(())
-}
 fn enforce_flash_mutex() -> Result<(), String> {
     let out = std::process::Command::new("sh")
         .args(["-c", "ss -ulnp 2>/dev/null | grep -c ':5631 ' || true"])
@@ -111,23 +91,51 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
     // the Rust CLI happily accepted an ASU sysupgrade .bin as "type=ras"
     // (that field is the PARTITION selector, not a format check).
     if matches!(ty, ImageType::Ras | ImageType::Backup) && !a.allow_raw {
-        const RAS_MAGIC: [u8; 4] = [0x83, 0x80, 0x00, 0x00];
-        if image.len() < 4 || image[0..4] != RAS_MAGIC {
+        // Magic per the RE'd flash-commit gate (conwrt-bench
+        // docs/research/2026-11-10-zloader-re-findings.md §2 [P]):
+        // firmware images carry "HDR0", bootloader images "HDR4". (The
+        // legacy 83 80 00 00 constant was from a different ZyXEL family;
+        // NR7101 images would have tripped it — masked so far only
+        // because real runs used --allow-raw.)
+        const RAS_MAGICS: [[u8; 4]; 3] = [*b"HDR0", *b"HDR4", [0x83, 0x80, 0x00, 0x00]];
+        if image.len() < 4 || !RAS_MAGICS.iter().any(|m| image.starts_with(m)) {
             return Err(
-                "refusing to send: payload does not carry the ZyXEL RAS magic \
-                 (83 80 00 00). Kernel-slot multicast of a non-RAS file (tar/sysupgrade \
-                 container, squashfs, arbitrary data) bricks every listening unit. If \
-                 this is a deliberate raw research payload, re-run with --allow-raw."
+                "refusing to send: payload does not carry a ZyXEL RAS magic \
+                 (HDR0/HDR4; or 83 80 00 00 legacy). Kernel-slot multicast of a non-RAS \
+                 file (tar/sysupgrade container, squashfs, arbitrary data) bricks every \
+                 listening unit. If this is a deliberate raw research payload, re-run \
+                 with --allow-raw."
                     .into(),
             );
         }
     }
-    if !a.allow_raw {
-        validate_image(&image)?;
-    }
     enforce_flash_mutex()?;
     if a.delay_ms < 10 {
         return Err("pacing clamp (2026-11-10 lesson): <10ms (477pps class) never accepted — bootloader poll-loop drops chunks. Use the proven 10ms.".into());
+    }
+    // Model-ID preflight: the bootloader refuses mismatches AFTER
+    // receiving the whole stream ("Wrong Model ID!! Skip upgrade." [P]);
+    // refuse here, before any unit spends its listen window.
+    if let Some(expected) = &a.expect_model {
+        match conwrt_zycast::ras_model_id(&image) {
+            Some(actual) => {
+                let actual_hex = format!("{actual:x}");
+                if &actual_hex != expected {
+                    return Err(format!(
+                        "refusing to send: image model-ID is {actual_hex}, expected \
+                         {expected} — the bootloader's flash-commit gate would refuse it \
+                         (\"Wrong Model ID!! Skip upgrade.\")"
+                    ));
+                }
+            }
+            None => {
+                return Err(
+                    "refusing to send: --expect-model given but the image carries no \
+                     RAS header to check (no HDR0/HDR4 magic) — cannot attest the model"
+                        .into(),
+                );
+            }
+        }
     }
     let chunks = chunk_count(image.len());
     let est = Duration::from_millis(chunks as u64 * a.delay_ms * a.loops as u64);
@@ -156,21 +164,72 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
 }
 
 #[cfg(test)]
-mod magic_gate_tests {
-    use super::*;
+fn args(image: &str, allow_raw: bool) -> ZycastArgs {
+    ZycastArgs {
+        image: image.into(),
+        interface: "lo".into(),
+        image_type: "ras".into(),
+        loops: 1,
+        delay_ms: 1000,
+        group: "225.0.0.0".into(),
+        port: 5631,
+        confirm_specimen: true,
+        allow_raw,
+        expect_model: None,
+    }
+}
 
-    fn args(image: &str, allow_raw: bool) -> ZycastArgs {
-        ZycastArgs {
-            image: image.into(),
-            interface: "lo".into(),
-            image_type: "ras".into(),
-            loops: 1,
-            delay_ms: 1000,
-            group: "225.0.0.0".into(),
-            port: 5631,
-            confirm_specimen: true,
-            allow_raw,
-        }
+#[cfg(test)]
+mod magic_gate_tests {
+    use super::{args, inner};
+
+    #[test]
+    fn hdr0_image_passes_the_magic_gate() {
+        // NR7101 reality: ZyXEL RAS files start "HDR0" (RE §2 [P]);
+        // the old 83 80 00 00 constant would have refused them.
+        let p = std::env::temp_dir().join("zycast-gate-test-ras.bin");
+        let mut img = vec![0u8; 0x120];
+        img[0..4].copy_from_slice(b"HDR0");
+        std::fs::write(&p, &img).unwrap();
+        // Interface "nonexistent-zycast-test" so a PASSING gate then fails
+        // at socket-bind — proving we got past the magic check.
+        let mut a = args(p.to_str().unwrap(), false);
+        a.interface = "nonexistent-zycast-test".into();
+        let msg = inner(a).unwrap_err();
+        assert!(!msg.contains("RAS magic"), "HDR0 must pass: {msg}");
+    }
+
+    #[test]
+    fn model_id_mismatch_is_refused_before_send() {
+        let p = std::env::temp_dir().join("zycast-model-test.bin");
+        let mut img = vec![0u8; 0x120];
+        img[0..4].copy_from_slice(b"HDR0");
+        img[0x11c..0x120].copy_from_slice(&0x0000_7101u32.to_be_bytes());
+        std::fs::write(&p, &img).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.expect_model = Some("6101".into());
+        let msg = inner(a).unwrap_err();
+        assert!(
+            msg.contains("model-ID is 7101") && msg.contains("expected 6101"),
+            "message should state the mismatch: {msg}"
+        );
+    }
+
+    #[test]
+    fn model_id_match_proceeds_past_the_preflight() {
+        let p = std::env::temp_dir().join("zycast-model-ok.bin");
+        let mut img = vec![0u8; 0x120];
+        img[0..4].copy_from_slice(b"HDR0");
+        img[0x11c..0x120].copy_from_slice(&0x0000_7101u32.to_be_bytes());
+        std::fs::write(&p, &img).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.expect_model = Some("7101".into());
+        a.interface = "nonexistent-zycast-test".into();
+        let msg = inner(a).unwrap_err();
+        assert!(
+            !msg.contains("model"),
+            "matching model must not refuse: {msg}"
+        );
     }
 
     #[test]
@@ -232,37 +291,49 @@ mod magic_gate_tests {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod hardening_tests {
+    // Corrected versions of the #680 tests: the RE (conwrt-bench
+    // docs/research/2026-11-10-zloader-re-findings.md §2 [P]) specifies
+    // ASCII "HDR0" as the file magic ("0RDH" bytes was a byte-order
+    // misread of the LE word compare) and a NUMERIC u32 model-ID at
+    // +0x11c (%x-printed == "7101" for NR7101), not ASCII.
     use super::*;
-    #[test]
-    fn hdr0_wrong_model_refused_with_the_refusal_class_named() {
-        let mut img = vec![0x30, 0x52, 0x44, 0x48];
-        img.resize(0x120, 0);
-        img[0x11c..0x120].copy_from_slice(b"7605");
-        let e = validate_image(&img).unwrap_err();
-        assert!(e.contains("model") && e.contains("710"), "{e}");
-    }
-    #[test]
-    fn hdr0_nr7101_model_passes() {
-        let mut img = vec![0x30, 0x52, 0x44, 0x48];
-        img.resize(0x140, 0);
-        img[0x11c..0x120].copy_from_slice(b"7101");
-        assert!(validate_image(&img).is_ok());
-    }
-    #[test]
-    fn hdr0_truncated_before_model_field_refused() {
-        let mut img = vec![0u8; 0x40];
-        img[..4].copy_from_slice(&[0x30, 0x52, 0x44, 0x48]);
-        assert!(validate_image(&img).is_err());
-    }
+
     #[test]
     fn plain_ras_magic_passes_unvalidated_class() {
         let mut img = vec![0xAAu8; 64];
         img[..4].copy_from_slice(&[0x83, 0x80, 0, 0]);
-        assert!(validate_image(&img).is_ok()); // RE #167: writes without bootloader validation
+        // 83 80 legacy files skip bootloader validation and still write [P].
+        let p = std::env::temp_dir().join("zycast-plain-ras.bin");
+        std::fs::write(&p, &img).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.interface = "nonexistent-zycast-test".into();
+        let msg = inner(a).unwrap_err();
+        assert!(!msg.contains("RAS magic"), "83 80 must pass: {msg}");
     }
+
     #[test]
-    fn garbage_refused() {
-        assert!(validate_image(b"sysupgrade-zyxel_nr7101/ garbage").is_err());
+    fn hdr0_truncated_before_model_field_refused_when_model_expected() {
+        let mut img = vec![0u8; 0x40];
+        img[..4].copy_from_slice(b"HDR0");
+        let p = std::env::temp_dir().join("zycast-trunc.bin");
+        std::fs::write(&p, &img).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.expect_model = Some("7101".into());
+        let msg = inner(a).unwrap_err();
+        assert!(msg.contains("no RAS header"), "truncated HDR0: {msg}");
+    }
+
+    #[test]
+    fn sub_10ms_pacing_is_refused() {
+        // 2026-11-10 bench lesson (477pps class): the bootloader's poll
+        // loop drops chunks at <10ms inter-packet delay.
+        let p = std::env::temp_dir().join("zycast-pace.bin");
+        std::fs::write(&p, b"\x83\x80\x00\x00rest").unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.delay_ms = 1;
+        let msg = inner(a).unwrap_err();
+        assert!(msg.contains("pacing clamp"), "{msg}");
     }
 }
