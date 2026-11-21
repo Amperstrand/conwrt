@@ -30,7 +30,7 @@ class TestVpnApTeardown311:
         import inspect
         import use_cases.vpn_providers.nordvpn as nv
         src = inspect.getsource(nv)
-        wg = re.search(r"def build_wireguard_ops.*?return ops", src, re.S)
+        wg = re.search(r"def _build_nordvpn_ops.*?return ops", src, re.S)
         assert wg, "wireguard builder found"
         import re as _re
         block = wg.group(0)
