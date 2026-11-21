@@ -84,6 +84,7 @@ pub mod lint;
 pub mod monitor;
 pub mod profile;
 pub mod recovery;
+pub mod rescue;
 pub mod tftp;
 pub mod uboot;
 pub mod watch;
