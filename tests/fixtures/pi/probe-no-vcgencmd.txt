@@ -1,0 +1,17 @@
+@@model
+Raspberry Pi 4 Model B Rev 1.1
+@@serial
+10000000dead0001
+@@cmdline
+coherent_pool=1M 8250.nr_uarts=1 console=tty1 root=PARTUUID=cafe0001-02 rootfstype=ext4 rootwait
+@@lsblk
+NAME="mmcblk0" TRAN="mmc" TYPE="disk" PARTUUID="" SIZE="7.4G"
+NAME="mmcblk0p1" TRAN="mmc" TYPE="part" PARTUUID="cafe0001-01" SIZE="256M"
+NAME="mmcblk0p2" TRAN="mmc" TYPE="part" PARTUUID="cafe0001-02" SIZE="7.1G"
+@@mount
+/dev/mmcblk0p2 ext4
+@@os
+Debian GNU/Linux 11 (bullseye)
+@@fw
+@@conf
+@@section-end

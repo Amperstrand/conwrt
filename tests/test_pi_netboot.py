@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
+import pi_netboot
 from pi_netboot import (
     DEFAULT_CMDLINE,
     MARKER_END,
@@ -141,10 +142,6 @@ Thu Oct  8 09:47:00 2026 daemon.info dnsmasq[1]: unrelated non-dhcp line
     def test_no_candidates_when_all_complete(self):
         counts = parse_dhcp_log(self.LOG)
         self.assertEqual(netboot_loop_candidates(counts, min_discover=99), [])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestRenderBlockPins(unittest.TestCase):
@@ -303,3 +300,65 @@ class TestArmTransitionOrder(unittest.TestCase):
         writes = [e for e in events if e[0] == "write"]
         self.assertEqual(writes[-1], ("write", True),
                          "tree untouched — restore the still-consistent old config")
+
+
+class TestDetectHonesty(unittest.TestCase):
+    """`detect` must not turn an unreadable log into "no candidates"."""
+
+    LOG_LINE = ("Thu Oct  8 09:46:00 2026 daemon.info dnsmasq-dhcp[1]: "
+                "456 DHCPDISCOVER(br-lan) dc:a6:32:11:22:33")
+
+    def _args(self, **over):
+        import argparse
+
+        base = dict(router="192.0.2.1", tftp_root=None, min_discover=3,
+                    lines=400)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def _run(self, ssh_result, **over):
+        import contextlib
+        import io
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(pi_netboot, "_ssh", return_value=ssh_result):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = pi_netboot.cmd_detect(self._args(**over))
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_ssh_failure_is_not_a_verdict(self):
+        rc, _, err = self._run((255, "", "Permission denied"))
+        self.assertEqual(rc, 2)
+        self.assertIn("unavailable", err)
+
+    def test_empty_window_is_not_a_verdict(self):
+        rc, _, err = self._run((0, "", ""))
+        self.assertEqual(rc, 2)
+        self.assertIn("no DHCP lines", err)
+
+    def test_quiet_but_readable_window_reports_what_it_saw(self):
+        line = "Thu Oct  8 09:45:05 2026 daemon.info dnsmasq-dhcp[1]: 1 DHCPACK(br-lan) 192.168.1.9 e4:5f:01:aa:bb:cc x"
+        rc, out, _ = self._run((0, line + "\n", ""))
+        self.assertEqual(rc, 0)
+        self.assertIn("among 1 MACs", out)
+
+    def test_full_window_warns_about_truncation(self):
+        log = "\n".join([self.LOG_LINE] * 5) + "\n"
+        rc, _, err = self._run((0, log, ""), lines=5)
+        self.assertEqual(rc, 0)
+        self.assertIn("truncated", err)
+
+    def test_short_window_does_not_warn(self):
+        log = "\n".join([self.LOG_LINE] * 5) + "\n"
+        _, _, err = self._run((0, log, ""), lines=400)
+        self.assertNotIn("truncated", err)
+
+    def test_candidate_is_listed(self):
+        log = "\n".join([self.LOG_LINE] * 3) + "\n"
+        rc, out, _ = self._run((0, log, ""))
+        self.assertEqual(rc, 0)
+        self.assertIn("dc:a6:32:11:22:33", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,25 @@
+@@model
+Raspberry Pi 4 Model B Rev 1.5
+@@serial
+10000000e5f60114
+@@cmdline
+coherent_pool=1M 8250.nr_uarts=1 console=tty1 root=PARTUUID=abcd1234-02 rootfstype=ext4 fsck.repair=yes rootwait
+@@lsblk
+NAME="mmcblk0" TRAN="mmc" TYPE="disk" PARTUUID="" SIZE="29.7G"
+NAME="mmcblk0p1" TRAN="mmc" TYPE="part" PARTUUID="abcd1234-01" SIZE="512M"
+NAME="mmcblk0p2" TRAN="mmc" TYPE="part" PARTUUID="abcd1234-02" SIZE="29.2G"
+NAME="sda" TRAN="usb" TYPE="disk" PARTUUID="" SIZE="0B"
+@@mount
+/dev/mmcblk0p2 ext4
+@@os
+Debian GNU/Linux 12 (bookworm)
+@@fw
+2024-01-05 10:30:00
+version 3f0a1b2c (release)
+timestamp 1704450600
+@@conf
+BOOT_UART=0
+WAKE_ON_GPIO=0
+POWER_OFF_ON_HALT=1
+BOOT_ORDER=0xf241
+@@section-end

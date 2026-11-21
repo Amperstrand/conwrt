@@ -1,0 +1,14 @@
+@@model
+Raspberry Pi 4 Model B Rev 1.4
+@@serial
+10000000b00b1e5
+@@cmdline
+console=ttyAMA0,115200
+@@lsblk
+@@mount
+rootfs rootfs
+@@os
+OpenWrt 25.12.5
+@@fw
+@@conf
+@@section-end

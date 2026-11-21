@@ -41,9 +41,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pi_netboot import armed_macs, is_armed, read_remote_config  # noqa: E402
 
-DEFAULT_BASE = ("https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/"
-                "master/firmware-2711/default")
+# Upstream is pinned by COMMIT, not by a moving branch. The defaults land in
+# SPI flash; `master` meant two builds of one tool version could package
+# different firmware bytes, and find_tool could fetch a different helper
+# between builds. Bump the pin deliberately — a new bootloader re-proves the
+# boot stages — and update KNOWN_DIGESTS in the same commit.
+EEPROM_UPSTREAM_COMMIT = "439fc2e934737cb6b718b837ec0870ac85bf7409"
+
+
+def _pinned(path: str) -> str:
+    return (f"https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/"
+            f"{EEPROM_UPSTREAM_COMMIT}/{path}")
+
+
 DEFAULT_PIEEPROM = "pieeprom-2026-09-23.bin"
+DEFAULT_BASE = _pinned("firmware-2711/default")
+
+# Digests captured when the pin was set (rpi-eeprom @ EEPROM_UPSTREAM_COMMIT,
+# fetched 2026-11-20). Only the DEFAULTS are pinned; an explicit --pieeprom /
+# --recovery choice is recorded, never second-guessed. A mismatch on a pinned
+# URL means upstream amended the commit or something rewrote the bytes in
+# transit: refuse — firmware that no build has ever seen must not reach flash.
+KNOWN_DIGESTS: dict[str, str] = {
+    _pinned(f"firmware-2711/default/{DEFAULT_PIEEPROM}"):
+        "e7f0cf6f5fb50c68042e59af0a2c0d8b51a41e44e182ce33b5aeb9e05a19316f",
+    _pinned("firmware-2711/default/recovery.bin"):
+        "d2496ef5dd106f250197f1cdf9fc2eecda90acdc0fc420a63b20940c06130ce1",
+    _pinned("rpi-eeprom-config"):
+        "1374a5ac161fca898b1010a882c71e10153ac2723258c3b9d2e34d5cc1a7ee74",
+}
 
 BOOT_MODES: dict[str, int] = {
     "sd": 0x1,
@@ -133,6 +159,23 @@ def parse_boot_order_arg(value: str) -> list[str]:
 # I/O helpers
 # ---------------------------------------------------------------------------
 
+def _sha256(dest: Path) -> str:
+    return hashlib.sha256(dest.read_bytes()).hexdigest()
+
+
+def _verify_pinned(dest: Path, url: str, digest: str) -> None:
+    expected = KNOWN_DIGESTS.get(url)
+    if expected is None or digest == expected:
+        return
+    dest.unlink(missing_ok=True)
+    raise SystemExit(
+        f"{dest.name}: fetched bytes do not match the digest recorded at pin "
+        f"time ({digest} != {expected}). Refusing to package firmware no "
+        "build has ever seen. If upstream amended the pinned commit or a "
+        "proxy rewrote the bytes, investigate; to accept new bytes, bump "
+        "EEPROM_UPSTREAM_COMMIT and update KNOWN_DIGESTS.")
+
+
 def fetch(url: str, dest: Path) -> Path:
     """Cache-aware download keyed by ORIGIN URL, not just filename.
 
@@ -140,10 +183,27 @@ def fetch(url: str, dest: Path) -> Path:
     reusing --out with a different --pieeprom silently built and later flashed
     STALE firmware (#263). A sidecar `<name>.origin` records the source URL;
     a cached file fetched from a different URL is refetched.
+
+    Integrity is layered, never assumed:
+    - every fetch records `<name>.sha256` (printed, and written into the
+      package dir) so builds are comparable across time;
+    - a pinned default URL is checked against KNOWN_DIGESTS at fetch time;
+    - a cache hit is re-hashed against its recorded digest, so a truncated
+      or rewritten cache file is caught before it reaches a package.
     """
     origin = dest.with_name(dest.name + ".origin")
+    digest_file = dest.with_name(dest.name + ".sha256")
     if dest.is_file() and dest.stat().st_size > 0:
         if origin.is_file() and origin.read_text().strip() == url:
+            if digest_file.is_file():
+                recorded = digest_file.read_text().split()[0]
+                actual = _sha256(dest)
+                if actual != recorded:
+                    dest.unlink(missing_ok=True)
+                    raise SystemExit(
+                        f"{dest.name}: cached copy no longer matches its "
+                        f"recorded digest ({actual} != {recorded}) — deleted; "
+                        "re-run to refetch")
             return dest
         print(f"cache: {dest.name} holds a different origin — refetching")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +212,10 @@ def fetch(url: str, dest: Path) -> Path:
             dest.open("wb") as fh:
         while chunk := resp.read(1 << 16):
             fh.write(chunk)
+    digest = _sha256(dest)
+    _verify_pinned(dest, url, digest)
+    digest_file.write_text(f"{digest}  {dest.name}\n")
+    print(f"  sha256 {digest}  ({dest.name})")
     origin.write_text(url + "\n")
     return dest
 
@@ -175,10 +239,12 @@ def resolve_recovery(recovery_arg: str | None, out_dir: Path) -> Path:
             raise SystemExit(f"recovery image not found: {local}")
         dest = out_dir / "recovery.bin"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # The local copy is NOT a URL fetch: drop any stale .origin sidecar
-        # (review of #294), or a later default/URL build would treat the
-        # custom binary as an origin hit and silently package it (#263).
+        # The local copy is NOT a URL fetch: drop any stale sidecars (.origin,
+        # review of #294; .sha256 same reasoning) or a later default build
+        # would treat the custom binary as an origin hit (#263) or trust a
+        # digest recorded for different bytes.
         dest.with_name(dest.name + ".origin").unlink(missing_ok=True)
+        dest.with_name(dest.name + ".sha256").unlink(missing_ok=True)
         if local.resolve() != dest.resolve():
             shutil.copyfile(local, dest)
         return dest
@@ -194,8 +260,7 @@ def find_tool(out_dir: Path, name: str) -> Path:
     cached = out_dir / name
     if cached.is_file():
         return cached
-    return fetch(f"https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/"
-                 f"master/{name}", cached)
+    return fetch(_pinned(name), cached)
 
 
 # ---------------------------------------------------------------------------
