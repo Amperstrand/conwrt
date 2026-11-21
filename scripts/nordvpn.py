@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -135,8 +136,14 @@ def cmd_config(args: argparse.Namespace) -> int:
         "PersistentKeepalive = 25\n"
     )
     if args.out:
-        Path(args.out).write_text(conf)
-        print(f"wrote {args.out} (endpoint {host}:{port})")
+        # #309: the file carries the account's WireGuard PrivateKey —
+        # create it 0600 (atomic O_EXCL create), never the umask default
+        # (commonly 0644 = readable by every local user).
+        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(conf)
+        os.chmod(args.out, 0o600)  # O_CREAT mode is masked by umask; enforce
+        print(f"wrote {args.out} (mode 0600, endpoint {host}:{port})")
     else:
         print(conf, end="")
     return 0
