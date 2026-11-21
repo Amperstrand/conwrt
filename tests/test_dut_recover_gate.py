@@ -47,3 +47,4 @@ def test_interactive_path_uses_expected_status():
 def test_defaults_fill_when_model_has_no_probe_config():
     assert '.replace("__EXPECT__", str(r.get("probe_expect_status", 200)))' in SCRIPT
     assert '"probe_page_signature"' in SCRIPT
+
