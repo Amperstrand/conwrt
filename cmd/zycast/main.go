@@ -57,14 +57,25 @@ var imageTypes = map[string]byte{
 
 
 func poeSetPort(port string, enable bool) error {
-	action := "enable"
-	if !enable {
-		action = "disable"
-	}
-	payload := fmt.Sprintf(`{"port":"%s","action":"%s"}`, port, action)
+	// The Amperstrand realtek-poe fork's ubus schema is
+	// {"port":..., "enable":bool} — the upstream-style {"action":...}
+	// form is accepted silently and does nothing (Invalid argument at
+	// the daemon), which aborts recovery with the power never cut.
+	// Live-found 2026-11-21 during the a6e4 revival.
+	payload := fmt.Sprintf(`{"port":%q,"enable":%t}`, port, enable)
 	out, err := exec.Command("ubus", "call", "poe", "manage", payload).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("ubus poe manage: %s: %w", strings.TrimSpace(string(out)), err)
+		// Fallback for switches running the upstream action-style schema.
+		action := "enable"
+		if !enable {
+			action = "disable"
+		}
+		payload2 := fmt.Sprintf(`{"port":%q,"action":"%s"}`, port, action)
+		out2, err2 := exec.Command("ubus", "call", "poe", "manage", payload2).CombinedOutput()
+		if err2 != nil {
+			return fmt.Errorf("ubus poe manage: %s / %s: %w / %w",
+				strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)), err, err2)
+		}
 	}
 	return nil
 }
