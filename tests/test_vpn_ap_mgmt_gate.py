@@ -21,3 +21,32 @@ class TestVpnApMgmtGate:
         import use_cases.vpn_providers.nordvpn as nv
         src = inspect.getsource(nv)
         assert "_build_vpn_ap_ops(ap_ssid, ap_key, allow_management)" in src
+
+
+class TestVpnApTeardown311:
+    def test_wg_transition_commits_openvpn_deletion(self):
+        """#310: the WireGuard path commits openvpn after deleting
+        openvpn.nordvpn — an uncommitted delete returns at reboot."""
+        import inspect
+        import use_cases.vpn_providers.nordvpn as nv
+        src = inspect.getsource(nv)
+        wg = re.search(r"def build_wireguard_ops.*?return ops", src, re.S)
+        assert wg, "wireguard builder found"
+        import re as _re
+        block = wg.group(0)
+        assert "uci -q delete openvpn.nordvpn" in block
+        assert "uci commit openvpn" in block, (
+            "the delete must be committed or the section returns at reboot")
+
+    def test_teardown_ops_generated_when_ap_ssid_cleared(self):
+        """#311: no ap_ssid ⇒ teardown ops (deletes + commits)."""
+        from profile.ops import render_shell
+        from use_cases.vpn_providers.nordvpn import _vpn_ap_teardown_ops
+        rendered = render_shell(_vpn_ap_teardown_ops())
+        for frag in ("delete wireless.wifinet_vpn_ap", "delete network.vpnlan",
+                     "delete firewall.vpn_ap_mgmt", "uci commit wireless",
+                     "wifi reload"):
+            assert frag in rendered, frag
+
+
+import re  # noqa: E402  (used above)
