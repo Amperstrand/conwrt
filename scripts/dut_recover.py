@@ -49,16 +49,30 @@ ENDPOINT="__ENDPOINT__"
 FIELD="__FIELD__"
 IMG=/tmp/dut-recovery.bin
 LOG=/tmp/dut-flash.log
-echo "$(date) watcher armed: polling http://$RIP/" >> $LOG
+# Recovery gate (#273): accept ONLY the model's expected status (default
+# 200) and, when configured, the recovery-page signature in the body —
+# ANY non-000 code used to count as "recovery up", so a 404 from stock
+# firmware or another server at the recovery IP (the D-Link model shares
+# 192.168.0.1 across modes) triggered a firmware upload to the wrong
+# handler that still logged UPLOAD DONE.
+EXPECT="__EXPECT__"
+SIGNATURE="__SIGNATURE__"
+echo "$(date) watcher armed: polling http://$RIP/ (expect HTTP $EXPECT)" >> $LOG
 i=0
 while [ $i -lt __LOOPS__ ]; do
-  code=$(curl -m 2 -s -o /dev/null -w '%{http_code}' http://$RIP/ 2>/dev/null)
-  if [ -n "$code" ] && [ "$code" != "000" ]; then
-    echo "$(date) RECOVERY UP (HTTP $code) - uploading $IMG" >> $LOG
-    curl -m 400 -s -F "$FIELD=@$IMG" -o /tmp/dut-upload-result \
-         -w 'upload HTTP %{http_code}' http://$RIP$ENDPOINT >> $LOG 2>&1
-    echo "" >> $LOG; echo "$(date) UPLOAD DONE" >> $LOG
-    exit 0
+  code=$(curl -m 2 -s -o /tmp/dut-probe-body -w '%{http_code}' http://$RIP/ 2>/dev/null)
+  if [ "$code" = "$EXPECT" ]; then
+    if [ -n "$SIGNATURE" ] && ! grep -q "$SIGNATURE" /tmp/dut-probe-body 2>/dev/null; then
+      echo "$(date) probe: HTTP $code but signature '$SIGNATURE' absent - not the recovery page, waiting" >> $LOG
+    else
+      echo "$(date) RECOVERY UP (HTTP $code, signature ok) - uploading $IMG" >> $LOG
+      curl -m 400 -s -F "$FIELD=@$IMG" -o /tmp/dut-upload-result \
+           -w 'upload HTTP %{http_code}' http://$RIP$ENDPOINT >> $LOG 2>&1
+      echo "" >> $LOG; echo "$(date) UPLOAD DONE" >> $LOG
+      exit 0
+    fi
+  elif [ -n "$code" ] && [ "$code" != "000" ]; then
+    echo "$(date) probe: HTTP $code != $EXPECT - not the recovery server, waiting" >> $LOG
   fi
   sleep 2
   i=$((i+1))
@@ -144,8 +158,12 @@ def main():
     ssh(args.rig, f"ip addr add {oip}/24 dev {args.bay} 2>/dev/null; true")
 
     # 3. Recovery server already live? (blinking red = someone already did the dance)
+    expect = str(r.get("probe_expect_status", 200))
+    signature = str(r.get("probe_page_signature", "") or "")
+    # Same #273 gate on the interactive path: the expected status (and
+    # signature, when configured) — not any non-000 response.
     live = ssh(args.rig, f"curl -m 2 -s -o /dev/null -w '%{{http_code}}' http://{rip}/")
-    if live not in ("000", ""):
+    if live == expect:
         print(f"[3/6] recovery server ALREADY LIVE (HTTP {live}) — flashing now")
     else:
         print("[3/6] recovery server not responding (normal while wedged)")
@@ -160,6 +178,8 @@ def main():
     script = (WATCHER.replace("__RIP__", rip)
                      .replace("__ENDPOINT__", r["upload_endpoint"])
                      .replace("__FIELD__", r["upload_field"])
+                     .replace("__EXPECT__", str(r.get("probe_expect_status", 200)))
+                     .replace("__SIGNATURE__", str(r.get("probe_page_signature", "") or ""))
                      .replace("__LOOPS__", "600"))  # 20 min
     run(["ssh", "-o", "BatchMode=yes", args.rig,
          f"cat > /tmp/dut-autoflash.sh <<'WEOF'\n{script}WEOF\n"
