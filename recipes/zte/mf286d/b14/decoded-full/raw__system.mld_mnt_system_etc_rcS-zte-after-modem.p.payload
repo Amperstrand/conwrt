@@ -1,0 +1,36 @@
+#!/bin/sh
+
+################rcS-zte run after modem online################################
+date -s "2014-06-01 00:00:00"
+
+sh /usr/zte/zte_conf/scripts/restart_qcmap.sh
+
+# qcmap_cli need to be server for adapter ppp
+QCMAP_CLI &
+
+zte_adapter_gps &
+
+# zte_topsw_adapter_mgr will cal zte_topsw_cfg
+zte_topsw_adapter_mgr 
+#cfg will start zte_topsw_daemon
+#zte_topsw_cfg &
+
+prestartdua &
+#zte_topsw_sleep &
+#sh /usr/ui/startdui.sh &
+
+# install SERIAL ko, should be closed in release version
+sleep 10 && insmod /usr/lib/modules/`uname -r`/kernel/drivers/tty/serial/msm_serial_hs_lite.ko &
+#find /usr/lib/ -name msm_serial_hs_lite.ko|xargs insmod
+
+#reboot instead of turn to download mode when kernel panic
+if [ x`cat /sys/class/android_usb/android0/download` = x"NORMAL" ]; then
+    echo "default process for crash: reboot"
+    echo 1 > /proc/sys/kernel/panic
+    echo 0 > /sys/module/msm_poweroff/parameters/download_mode
+	cat /proc/driver/codec_id
+else
+    echo "default process for crash: download"
+	cat /proc/driver/sensor_id
+fi
+

@@ -1,14 +1,43 @@
 # conwrt
 
+**Flash any old router with OpenWrt, apply a profile, verify health. All from Linux.**
+
+conwrt autodetects what a router is (any state: stock, carrier-locked, half-bricked), flashes it with OpenWrt, configures it with your chosen profile, and verifies everything works. The profile system is pluggable — from a plain OpenWrt router to a VPN gateway to a cellular tollgate with eSIM provisioning.
+
 **[→ Device Support Matrix](https://amperstrand.github.io/conwrt/)** — supported devices, flash methods, and tested hardware.
-**[→ Use Case Test Results](https://tests.tollgate.me/)** — live test evidence from Nostr/Blossom (select "conwrt" tab).
+**[→ Use Case Test Results](https://tests.tollgate.me/)** — live test evidence (select "conwrt" tab).
 
-A framework for flashing routers with OpenWrt, with a 2-stage workflow:
+## How it works
 
-1. **AI-assisted discovery** (`prompts/`): Encounter an unknown router, identify it, fingerprint its attack surface, plan a capture strategy, and analyze pcap artifacts to determine flash methods and boot signatures. This is how new router models get onboarded into conwrt.
-2. **Automated flashing** (`scripts/` + `models/`): Once a model is defined with its flash method and boot signatures, subsequent flashes of that model are fully automated -- detect recovery mode, upload firmware, verify, and collect inventory.
+```
+Any old router → detect → backup → flash/recover → configure profile → verify
+                    │         │           │              │              │
+              MAC OUI,   full flash  bootloader    profile YAML:    QMI/AT/DM
+              USB IDs,   + NV + EFS  trigger,      network, SSH,    health
+              firmware   (safety-    TFTP fence,   packages,        checks
+              probes     gated)      sysupgrade    modem, eSIM
+```
 
-> **DISCLAIMER**: conwrt flashes firmware onto real hardware. You must have legal authority to modify any device you use it on. Verify model definitions and firmware images before every flash. The authors accept no liability for bricked devices or data loss.
+## The three stages
+
+### 1. AI-assisted discovery (`prompts/`)
+Encounter an unknown router → identify it → fingerprint its attack surface → determine flash methods and boot signatures. This is how new router models get onboarded into conwrt.
+
+### 2. Automated flashing + recovery (`scripts/` + `models/`)
+Once a species is defined, flashing is fully automated: detect recovery mode, upload firmware, verify, inventory. Full backup first (router + modem flash, NV items, EFS tree — all sha256-verified). Recovery from bricked/locked units via bootloader triggers, TFTP fences, and sysupgrade.
+
+### 3. Profile configuration
+After flash, apply a profile:
+- **Plain router**: IP plan, SSH keys, hostname, DHCP policy
+- **VPN router**: WireGuard/OpenVPN, kill switch, DNS
+- **Cellular tollgate**: modem bring-up (QMI/AT), APN, band config, eSIM profile provisioning (lpac integration for providers like nadanada, silent.link)
+- **Your own**: profiles are YAML — define what you need
+
+## Species models (the "any router" part)
+
+Each supported router is defined as structured JSON in `models/`. The engine is generic; the knowledge is data. Adding a new species = writing a JSON file, not code.
+
+See [models/zte-mf286d-v2.json](models/zte-mf286d-v2.json) for a full example — every lesson from a 48-hour reverse-engineering campaign captured as structured data: partition safety maps, recovery strategies, modem interfaces, diagnostics, and eSIM capabilities.
 
 ## Quick Start
 
@@ -18,43 +47,37 @@ Plug the router into this machine's ethernet port and run:
 python3 scripts/conwrt.py watch
 ```
 
-conwrt scans for routers in recovery mode (and running OpenWrt), identifies the model by probe evidence, and asks before it flashes. Confirm, and it builds a fresh image with your SSH keys and config baked in (from `config.toml`), flashes, and verifies over SSH:
+conwrt scans for routers in recovery mode (and running OpenWrt), identifies the model by probe evidence, and asks before it flashes. Confirm, and it builds a fresh image with your SSH keys and config baked in (from `config.toml`), flashes, and verifies over SSH.
 
-```
-$ conwrt watch
-Watching enp5s0 — probing 4 addresses every 5.0s (Ctrl-C to stop)
-  · 192.168.0.1 — uboot
-=======================================================
-  Device found: 192.168.0.1  (uboot)
-  MAC:      AA:BB:CC:12:34:56
-  Model:    COVR-X1860 A1 mesh WiFi
-  Model ID: dlink-covr-x1860-a1
-=======================================================
-  → flash this device with a fresh ASU image (latest OpenWrt, your keys baked in)? [y/N]: y
-```
+> **DISCLAIMER**: conwrt flashes firmware onto real hardware. You must have legal authority to modify any device you use it on. Verify model definitions and firmware images before every flash. The authors accept no liability for bricked devices or data loss.
 
-A router already running OpenWrt is detected via SSH board fingerprint and offered an in-place upgrade instead.
+## Proven on real hardware
 
-Other entry points:
+| Device | Flash | Recovery | Modem | Notes |
+|---|---|---|---|---|
+| ZTE MF286D | ✅ | ✅ full backup + bootloader trigger | ✅ QMI + AT + DM | eSIM LPA interface mapped ([#682](https://github.com/Amperstrand/conwrt/issues/682)) |
+| Zyxel NR7101 | ✅ | ✅ | ✅ | eSIM via lpac |
+| D-Link COVR X1860 | ✅ | ✅ | n/a | |
+| Zyxel GS1900-8HP | ✅ | ✅ | n/a | |
+| Extreme WS-AP3915i | ✅ | ✅ | n/a | |
 
-| Command | What it does |
-|---------|--------------|
-| `conwrt watch` | Scan loop: detect → prompt → flash (the just-works path) |
-| `conwrt probe` | One-shot table of what's on the wire (IP, state, model candidates) |
-| `conwrt auto` | Deep 5-phase detection (passive listen, LLDP, DHCP, ARP, probing) with menu |
-| `python3 scripts/conwrt_tui.py` | Interactive discovery TUI (preview/dry-run by design) |
-| `conwrt flash --model-id ID --request-image` | Direct flash of a known model |
+## What makes this different
 
-Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
+- **No Windows tools** — replaces vendor-specific Windows-only flashing utilities (ZTE, others) with pure Linux
+- **Safety-first** — partition safety maps, canary protocols, flight checklists, fail-closed gates
+- **Full backup before any write** — router + modem + NV + EFS, sha256-verified
+- **Recovery from any state** — bootloader triggers, TFTP fences, DM-protocol resets
+- **Modem management** — QMI/AT/DM/ADB abstraction for cellular routers
+- **eSIM provisioning** — lpac integration for eSIM profile management; on ZTE MF286D we proved the modem's internal LPA is externally reachable ([#682](https://github.com/Amperstrand/conwrt/issues/682))
 
-## Requirements
+## Documentation
 
-- Linux or macOS (Ubuntu 22.04+/Debian and macOS tested; passwordless `sudo -n` is used for interface aliases and packet capture — without it, scanning and flashing still work, with fewer live events)
-- `curl` and `ssh` on PATH
-- Python 3.10+
-- An ethernet cable and a router to flash
+- [AI-assisted RE methodology](docs/AI-ASSISTED-RE-METHODOLOGY.md) — how we use coordinated AI agents + Ghidra for firmware research
+- [Brick-risk audit checklist](prompts/brick-risk-audit.md) — the 23-item pre-flight safety gate
+- [Species recovery prompts](prompts/) — continuation prompts for research threads
+- [MF286D recovery documentation](recipes/zte/mf286d/RECOVERY-2026-11-10.md) — bootloader trigger + TFTP fence recovery path
 
-## Development setup
+## Roadmap
 
 Hardware-safe development and CI do not require a router:
 
@@ -987,7 +1010,10 @@ Standard PR-based workflow. Device contributions should include:
 2. Recipe notes in `recipes/`
 3. Boot signatures from pcap analysis
 4. Tested on real hardware
+→ [Issue #676](https://github.com/Amperstrand/conwrt/issues/676): Rust engine, data-driven species models, built-in diagnostics, flight checklists as code.
+→ [Issue #677](https://github.com/Amperstrand/conwrt/issues/677): eSIM profile download via modem's internal LPA.
+→ [Issue #675](https://github.com/Amperstrand/conwrt/issues/675): Stock firmware modem communication research.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE).

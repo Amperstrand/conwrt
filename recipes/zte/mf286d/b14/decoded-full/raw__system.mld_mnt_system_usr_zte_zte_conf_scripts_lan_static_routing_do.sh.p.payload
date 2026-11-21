@@ -1,0 +1,49 @@
+#!/bin/sh
+# 
+# Created by tfc
+# static routing forward to lan
+# apn type: data,data1,data2
+#
+
+if [ "$1" == "data1" ]; then
+	/usr/zte/zte_conf/scripts/multi_vlan_and_pdns.sh lan_routing data1
+	exit 0
+fi
+
+if [ "$1" == "data2" ]; then
+	/usr/zte/zte_conf/scripts/multi_vlan_and_pdns.sh lan_routing data2
+	exit 0
+fi
+
+routing_lan_enable=`cfg get routing_lan_enable`
+routing_lan_subnet=`cfg get routing_lan_subnet`
+routing_lan_netmask=`cfg get routing_lan_netmask`
+wan_mode=`cfg get opms_wan_mode`
+wan_ip=`cfg get wan_ipaddr`
+
+if [ "$wan_mode" != "LTE_BRIDGE" ]; then
+	exit 0
+fi
+
+if [ "$routing_lan_enable" == "1" ]; then
+	want_row=`ip rule show| grep -E ^100:`
+	if [ -z "$want_row" ]; then
+		ip rule add pref 100 table 2
+	fi
+	ip route flush table 2
+	for i in `seq 1 5`
+	do
+		lan_subnet=`echo $routing_lan_subnet | cut -d ';' -f $i`
+		lan_netmask=`echo $routing_lan_netmask | cut -d ';' -f $i`
+		if [ "$lan_subnet" == "" -o "$lan_netmask" == "" ]; then
+			continue
+		fi
+		prefix=`ipcalc $lan_subnet $lan_netmask -p | awk -F '=' '{print $2}'`
+		#if routing_lan_subnet is not net segment
+		subnet=`ipcalc $lan_subnet $lan_netmask -n | awk -F '=' '{print $2}'`
+		ip route add table 2 ${subnet}/${prefix} via $wan_ip dev bridge0
+	done
+elif [ "$routing_lan_enable" == "0" ]; then
+	ip rule delete pref 100 table 2
+	ip route flush table 2
+fi

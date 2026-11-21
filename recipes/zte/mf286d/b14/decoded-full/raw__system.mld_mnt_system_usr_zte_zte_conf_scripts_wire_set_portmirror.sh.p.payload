@@ -1,0 +1,48 @@
+#!/bin/sh
+# ===========================================================
+# 
+ethernet_port_specified=`cfg get ethernet_port_specified`
+opms_wan_mode=`cfg get opms_wan_mode`
+net_mirror_enable=`cfg get net_mirror_enable`
+
+LOG_ERR="logger -s -t script_router -p 0 $0:"
+LOG_INFO="logger -s -t script_router -p 6 $0:"
+
+${LOG_INFO} "net_mirror_enable=[$net_mirror_enable] enter"
+
+if [ "$opms_wan_mode" != "PPP" ] ; then
+	if [ "$net_mirror_enable" == "1" ] ; then
+		if [ "$opms_wan_mode" == "AUTO" ] ; then
+			if [ -f "/tmp/vlan2_port" ] ; then	
+				vlan2_port=`cat /tmp/vlan2_port` 
+				vlan1_port=`cat /tmp/vlan1_port` 
+				if [ "$vlan2_port" != "x" ] ; then
+					ssdk_sh mirror analyPt set $vlan1_port
+					ssdk_sh mirror ptIngress set $vlan2_port enable
+					ssdk_sh mirror ptEgress set $vlan2_port enable
+					${LOG_INFO} "set mirror Port $vlan2_port to Port $vlan1_port "
+				fi
+			fi
+		else
+			if [ "$ethernet_port_specified" == "0" ] ; then
+				ssdk_sh mirror analyPt set 4
+				ssdk_sh mirror ptIngress set 5 enable
+				ssdk_sh mirror ptEgress set 5 enable
+				${LOG_INFO} "ethernet_port_specified=[$ethernet_port_specified],set mirror Port 5 to Port 4 "
+			else
+				ssdk_sh mirror analyPt set 5
+				ssdk_sh mirror ptIngress set 4 enable
+				ssdk_sh mirror ptEgress set 4 enable
+				${LOG_INFO} "ethernet_port_specified=[$ethernet_port_specified],set mirror Port 4 to Port 5 "
+			fi
+		fi
+	elif [ "$net_mirror_enable" == "0" ] ; then
+		ssdk_sh mirror ptIngress set 4 disable
+		ssdk_sh mirror ptEgress set 4 disable	
+		ssdk_sh mirror ptIngress set 5 disable
+		ssdk_sh mirror ptEgress set 5 disable	
+	fi
+	ssdk_sh debug reg set 0x624 0x7f7f7f 4
+fi
+
+
