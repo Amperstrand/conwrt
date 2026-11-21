@@ -445,7 +445,10 @@ uci -q delete network.nordvpn_server_route
     ops.extend(build_firewall_ops(kill_switch=kill_switch, allow_management=allow_management))
     ops.extend(build_dns_ops(NORDVPN_DNS))
     if ap_ssid:
-        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key))
+        # #308: the AP-side management rule honors allow_management too —
+        # omitting only the main zone's rule left vpn_ap_mgmt accepting
+        # 22/80/443 from every VPN-AP client.
+        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key, allow_management))
     ops.extend(build_verify_ops(kill_switch=kill_switch))
     return ops
 
@@ -461,7 +464,7 @@ def _sq(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def _build_vpn_ap_ops(ap_ssid: str, ap_key: str) -> list[Op]:
+def _build_vpn_ap_ops(ap_ssid: str, ap_key: str, allow_management: bool = True) -> list[Op]:
     """2.4GHz AP whose WiFi clients exit through the VPN tunnel.
 
     Hardware-verified design (2026-10-08, x1860 + Android client):
@@ -479,6 +482,17 @@ def _build_vpn_ap_ops(ap_ssid: str, ap_key: str) -> list[Op]:
     - dnsmasq only registers dhcp ranges for interfaces that are up when it
       (re)starts, so wait for vpnlan ifup and restart dnsmasq once more.
     """
+    # #308: generated only when allow_management — see the script body.
+    mgmt_rule = (
+        "\n".join([
+            "    uci set firewall.vpn_ap_mgmt=rule",
+            "    uci set firewall.vpn_ap_mgmt.name='Allow-VPNAP-Management'",
+            "    uci set firewall.vpn_ap_mgmt.src='vpnap'",
+            "    uci set firewall.vpn_ap_mgmt.proto='tcp'",
+            "    uci set firewall.vpn_ap_mgmt.dest_port='22 80 443'",
+            "    uci set firewall.vpn_ap_mgmt.target='ACCEPT'",
+        ]) + "\n"
+    ) if allow_management else ""
     ap_script = f"""# --- VPN-exit AP ({_sq(ap_ssid)} on 2.4GHz) ---
 VPN_AP_RADIO=""
 for radio in $(uci show wireless 2>/dev/null | grep "=wifi-device" | cut -d. -f2 | cut -d= -f1); do
@@ -548,13 +562,12 @@ else
     uci set firewall.vpn_ap_dns.dest_port='53'
     uci set firewall.vpn_ap_dns.target='ACCEPT'
 
-    uci set firewall.vpn_ap_mgmt=rule
-    uci set firewall.vpn_ap_mgmt.name='Allow-VPNAP-Management'
-    uci set firewall.vpn_ap_mgmt.src='vpnap'
-    uci set firewall.vpn_ap_mgmt.proto='tcp'
-    uci set firewall.vpn_ap_mgmt.dest_port='22 80 443'
-    uci set firewall.vpn_ap_mgmt.target='ACCEPT'
-
+    # #308: stale rule from a previous config is always removed; the
+    # management ACCEPT is only generated when allow_management is true
+    # (build-time omission — a VPN-AP client must not reach 22/80/443
+    # when the control is advertised as disabled).
+    uci -q delete firewall.vpn_ap_mgmt
+{mgmt_rule}
     uci -q del_list firewall.vpn_zone.network='vpnlan'
 
     uci commit network
@@ -679,7 +692,10 @@ uci -q add_list firewall.vpn_zone.network='tun0'
                                   allow_management=allow_management))
     ops.extend(build_dns_ops(NORDVPN_DNS))
     if ap_ssid:
-        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key))
+        # #308: the AP-side management rule honors allow_management too —
+        # omitting only the main zone's rule left vpn_ap_mgmt accepting
+        # 22/80/443 from every VPN-AP client.
+        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key, allow_management))
     ops.extend(build_verify_ops(iface="tun0", kill_switch=kill_switch, kind="openvpn"))
     return ops
 
@@ -948,7 +964,10 @@ echo "NordVPN IKEv2 staged: server {srv['hostname']} ({srv['station']}), hw_acce
     )))
     ops.extend(build_dns_ops(NORDVPN_DNS))
     if ap_ssid:
-        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key))
+        # #308: the AP-side management rule honors allow_management too —
+        # omitting only the main zone's rule left vpn_ap_mgmt accepting
+        # 22/80/443 from every VPN-AP client.
+        ops.extend(_build_vpn_ap_ops(ap_ssid, ap_key, allow_management))
     return ops
 
 
