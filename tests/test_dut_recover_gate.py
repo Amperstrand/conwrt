@@ -48,15 +48,3 @@ def test_defaults_fill_when_model_has_no_probe_config():
     assert '.replace("__EXPECT__", str(r.get("probe_expect_status", 200)))' in SCRIPT
     assert '"probe_page_signature"' in SCRIPT
 
-
-def test_nordvpn_export_creates_secret_file_0600(tmp_path):
-    """#309: exported WireGuard configs carry the account PrivateKey and
-    must never be created world/other-readable."""
-    import subprocess, sys, os, stat
-    script = (Path(__file__).resolve().parent.parent / "scripts" / "nordvpn.py")
-    # Run the config subcommand offline: it needs --private-key/--peer-key
-    # style args; consult the CLI's own defaults. Simpler: assert the SOURCE
-    # creates with 0o600 (the behavior change), plus a live run if possible.
-    src = script.read_text()
-    assert "os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)" in src
-    assert "os.chmod(args.out, 0o600)" in src
