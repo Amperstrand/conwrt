@@ -209,8 +209,11 @@
     },
     "vpn_nordvpn_default": {
       "use_case": "vpn-nordvpn",
-      "expect": "EQUAL",
-      "gap_reasons": []
+      "expect": "GAP",
+      "gap_reasons": [
+        "conwrt#310: WireGuard transition now commits the openvpn deletion (Python side landed; Rust plan renderer twin pending)",
+        "conwrt#311: cleared ap_ssid now emits _vpn_ap_teardown_ops (Python side landed; Rust twin pending)"
+      ]
     },
     "vpn_ivpn_default": {
       "use_case": "vpn-ivpn",
@@ -238,7 +241,11 @@
     },
     "vpn_nordvpn_openvpn_default": {
       "use_case": "vpn-nordvpn-openvpn",
-      "expect": "EQUAL"
+      "expect": "GAP",
+      "gap_reasons": [
+        "conwrt#310: WireGuard transition now commits the openvpn deletion (Python side landed; Rust plan renderer twin pending)",
+        "conwrt#311: cleared ap_ssid now emits _vpn_ap_teardown_ops (Python side landed; Rust twin pending)"
+      ]
     },
     "mptcp_bonding_default": {
       "use_case": "mptcp-bonding",
@@ -246,7 +253,11 @@
     },
     "vpn_nordvpn_ikev2_default": {
       "use_case": "vpn-nordvpn-ikev2",
-      "expect": "EQUAL"
+      "expect": "GAP",
+      "gap_reasons": [
+        "conwrt#310: WireGuard transition now commits the openvpn deletion (Python side landed; Rust plan renderer twin pending)",
+        "conwrt#311: cleared ap_ssid now emits _vpn_ap_teardown_ops (Python side landed; Rust twin pending)"
+      ]
     },
     "fips_rfcomm_default": {
       "use_case": "fips-bluetooth-rfcomm",
