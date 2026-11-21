@@ -107,3 +107,6 @@ tests/integration/.openwrt.img.sha256
 
 # Test fixtures are real device-derived bytes, not build artifacts.
 !crates/conwrt-core/tests/fixtures/*.bin
+
+# Rust VM-test build artifacts (accidentally tracked since #429)
+.target-rustvm/
