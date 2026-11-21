@@ -113,6 +113,18 @@ def _nobody_wrap(tmp_path: Path, logs_dir: Path) -> list[str] | None:
     resolved = tmp_path.resolve()
     if chain_top != resolved and chain_top not in resolved.parents:
         return None  # basetemp outside the system temp root — do not touch
+    # The chmod walk below only opens the chain from chain_top DOWN. If the
+    # ancestors ABOVE chain_top are not world-traversable (agent boxes
+    # exporting TMPDIR under a 0700 $HOME), nobody still cannot enter and
+    # every test false-fails with 126 Permission denied — skip instead
+    # (hit 2026-11-20; CI's /tmp chain is world-traversable).
+    import stat as _stat
+    for anc in chain_top.parents:
+        try:
+            if not _stat.S_IMODE(anc.stat().st_mode) & _stat.S_IXOTH:
+                return None  # TMPDIR under a private root — root-run lane skips
+        except OSError:
+            return None
     for anc in [resolved, *resolved.parents]:
         os.chmod(anc, 0o755)
         if anc == chain_top:
@@ -162,7 +174,8 @@ def rig(tmp_path: Path):
         if os.geteuid() == 0 and prefix is None:
             pytest.skip(
                 "root-run harness needs setpriv + a nobody account + "
-                "basetemp under the system temp root (#299)")
+                "basetemp under a world-traversable temp root (#299; "
+                "on agent boxes: TMPDIR=/tmp)")
         if prefix is not None:
             # flash-recovery.sh refuses root BY DESIGN (it sudo's as
             # needed); execute the whole hermetic harness unprivileged so
@@ -304,33 +317,51 @@ class TestNobodyWrapBoundaries:
     temp root, and the unprivileged gid must be resolved, not assumed."""
 
     def test_walk_never_escapes_the_temp_root(self, tmp_path, monkeypatch):
-        import stat
-        # a private dir OUTSIDE the (faked) temp root must stay 0700
-        private = tmp_path / "private-root"
-        private.mkdir(mode=0o700)
-        inside = private / "basetemp" / "case"
-        inside.mkdir(parents=True)
-        monkeypatch.setattr(
-            "tempfile.gettempdir", lambda: str(inside / "temproot"))
-        (inside / "temproot").mkdir()
-        case = inside / "temproot" / "pytest-of-root" / "case"
-        case.mkdir(parents=True)
-        monkeypatch.setattr(
-            "test_flash_recovery_arp_probe.os.geteuid", lambda: 0)
+        import tempfile
         import test_flash_recovery_arp_probe as mod
-        # run twice: once under the temp root (opens chain), once outside
-        # (must be a no-op)
-        self._mode_is(private, 0o700)
-        prefix = mod._nobody_wrap(case, case / "logs")
-        assert prefix is not None
-        # every ancestor up to the faked temp root is now 0755...
-        assert (case.stat().st_mode & 0o777) == 0o755
-        assert (inside / "temproot").stat().st_mode & 0o777 == 0o755
-        # ...but nothing ABOVE the temp root was touched
-        assert private.stat().st_mode & 0o777 == 0o700
-        outside = mod._nobody_wrap(private / "elsewhere", private / "l")
-        assert outside is None  # outside the temp root ⇒ no wrap, no chmod
-        assert private.stat().st_mode & 0o777 == 0o700
+        # Hermetic base with a world-open ancestor chain, independent of the
+        # runner's TMPDIR (agent boxes point it under a 0700 $HOME).
+        base = Path(tempfile.mkdtemp(dir="/tmp",
+                                     prefix="conwrt-nobody-boundary-"))
+        base.chmod(0o755)
+        try:
+            chain = base / "open-root"
+            basetemp = chain / "basetemp"
+            inside = basetemp / "case"
+            inside.mkdir(parents=True)
+            basetemp.chmod(0o755)
+            private = base / "private-sibling"
+            private.mkdir(mode=0o700)
+            temproot = inside / "temproot"
+            temproot.mkdir()
+            case = temproot / "pytest-of-root" / "case"
+            case.mkdir(parents=True)
+            monkeypatch.setattr(
+                "tempfile.gettempdir", lambda: str(temproot))
+            monkeypatch.setattr(
+                "test_flash_recovery_arp_probe.os.geteuid", lambda: 0)
+            # traversable ancestors ⇒ wrap; the walk opens case..temproot only
+            prefix = mod._nobody_wrap(case, case / "logs")
+            assert prefix is not None
+            # every ancestor up to the faked temp root is now 0755...
+            assert (case.stat().st_mode & 0o777) == 0o755
+            assert (inside / "temproot").stat().st_mode & 0o777 == 0o755
+            # ...but nothing ABOVE the temp root was touched
+            assert private.stat().st_mode & 0o777 == 0o700
+            # private ancestor chain (agent-box TMPDIR under a 0700 $HOME) ⇒
+            # no wrap at all and nothing chmodded (2026-11-20 guard)
+            private_root = private / "temproot"
+            case2 = private_root / "pytest-of-root" / "case"
+            case2.mkdir(parents=True, mode=0o700)
+            monkeypatch.setattr(
+                "tempfile.gettempdir", lambda: str(private_root))
+            assert mod._nobody_wrap(case2, case2 / "logs") is None
+            assert case2.stat().st_mode & 0o777 == 0o700
+            # and a path outside the temp root entirely is still a no-op
+            assert mod._nobody_wrap(
+                private / "elsewhere", private / "l") is None
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
 
     @staticmethod
     def _mode_is(p: Path, mode: int) -> None:
