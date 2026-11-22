@@ -102,6 +102,8 @@ pub struct MockMaas {
     pub calls: Vec<String>,
     /// system_ids that never advance (timeout tests).
     pub stuck: Vec<String>,
+    /// When set, the next `release` call fails server-side (#337 seam).
+    pub fail_next_release: bool,
     next_id: usize,
 }
 
@@ -184,9 +186,24 @@ impl MaasClient for MockMaas {
 
     async fn release(&mut self, system_id: &str) -> Result<(), Self::Error> {
         self.record("release", system_id);
+        if self.fail_next_release {
+            // Test seam: simulate a server-side release failure (the #337
+            // fallthrough path — destroy must still delete).
+            self.fail_next_release = false;
+            return Err("500 simulated release failure".into());
+        }
         if let Some(m) = self.machines.iter_mut().find(|m| m.system_id == system_id) {
             if m.state.can_allocate() {
                 return Ok(()); // already in the pool; releasing is a no-op
+            }
+            if !m.state.release_required() {
+                // Mirror MAAS: releasing from New/Broken/Retired-class
+                // states is a 409 Conflict (#337) — the destroy path must
+                // tolerate this and still delete.
+                return Err(format!(
+                    "409 Conflict: cannot release from state {}",
+                    m.state
+                ));
             }
             m.state = MachineState::Releasing;
         }
