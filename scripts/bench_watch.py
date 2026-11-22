@@ -92,7 +92,13 @@ class WatchConfig:
 
 
 def load_config(path: Path) -> WatchConfig:
-    raw = json.loads(path.read_text())
+    # The shipped *.json.example templates carry `##` doc headers (and the
+    # gitignored live copies often keep them) — strip whole-line comments
+    # before parsing instead of choking with a JSONDecodeError (#281).
+    text = "\n".join(
+        ln for ln in path.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+    raw = json.loads(text)
     devices = []
     names: set[str] = set()
     for d in raw.get("devices", []):
