@@ -159,6 +159,7 @@ dependencies = [
  "conwrt-agent-proto",
  "embassy-futures",
  "embassy-net",
+ "embassy-time",
  "embedded-io-async 0.7.0",
 ]
 
@@ -178,7 +179,9 @@ name = "conwrt-executor"
 version = "0.1.0"
 dependencies = [
  "conwrt-agent-proto",
+ "embassy-futures",
  "embassy-net",
+ "embassy-time",
  "embedded-io-async 0.7.0",
 ]
 

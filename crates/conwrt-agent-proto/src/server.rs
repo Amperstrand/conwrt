@@ -132,6 +132,10 @@ impl DetectSession {
     }
 }
 
+/// Bounded parking for pre-handshake console bytes (#362): the newest
+/// chunks survive; older ones are dropped rather than growing unbounded.
+const PRE_HANDSHAKE_UART_LIMIT: usize = 16;
+
 /// The protocol state machine: what an agent IS, independent of how bytes
 /// arrive (tokio TCP, USB CDC, …).
 pub struct ServerCore {
@@ -144,6 +148,11 @@ pub struct ServerCore {
     transfer: Option<Box<dyn TransferSink>>,
     detect: Option<DetectSession>,
     outbound_events: VecDeque<AgentEvent>,
+    /// #362: UART bytes arriving with no handshaked controller park here
+    /// (bounded) and flush to outbound ON handshake — a connecting but
+    /// unauthenticated host gets nothing, while the legitimate controller
+    /// still receives the boot banner.
+    pre_handshake_uart: VecDeque<AgentEvent>,
 }
 
 impl ServerCore {
@@ -160,6 +169,7 @@ impl ServerCore {
             transfer: None,
             detect: None,
             outbound_events: VecDeque::new(),
+            pre_handshake_uart: VecDeque::new(),
         }
     }
 
@@ -225,6 +235,10 @@ impl ServerCore {
         self.handshaked = false;
         self.controller = None;
         self.leases = LeaseTable::new();
+        // #362: parked bytes SURVIVE the reset — they are agent output
+        // (a boot banner), and delivery stays gated on the NEXT session's
+        // handshake, so no unauthenticated host ever receives them. The
+        // PRE_HANDSHAKE_UART_LIMIT bound keeps the parking finite.
     }
 
     /// Handle one decoded frame; `Some(response)` when the frame was a
@@ -257,6 +271,9 @@ impl ServerCore {
                 }
                 self.handshaked = true;
                 self.controller = Some(controller_id);
+                // #362: parked console bytes now flush to the AUTHENTICATED
+                // controller (boot banner etc.).
+                self.outbound_events.append(&mut self.pre_handshake_uart);
                 WireResult::Handshake(Ok(HandshakeOk {
                     protocol_version: PROTOCOL_VERSION,
                     agent_version: self.agent_version.clone(),
@@ -448,6 +465,12 @@ impl ServerCore {
         })
     }
 
+    /// Queue an agent-side event (e.g. the expiry events [`tick`]
+    /// returns) for delivery on the transport's next drain.
+    pub fn queue_event(&mut self, event: AgentEvent) {
+        self.outbound_events.push_back(event);
+    }
+
     /// Advance lease expiry by one heartbeat interval; returns the expiry
     /// events to emit. The caller owns the clock (ADR-0002: time is a
     /// capability).
@@ -474,6 +497,23 @@ impl ServerCore {
                         .push_back(AgentEvent::DetectFinding(finding));
                 }
             }
+        }
+        // #362 (r4294815050): console bytes only flow to a session that
+        // completed the handshake — an unauthenticated host that merely
+        // reaches the port no longer passively reads the boot/root
+        // console. (Detect findings are agent-internal observations and
+        // still queue; full transport auth per ADR-0004 remains the
+        // owner-tracked follow-up.)
+        if !self.handshaked {
+            // Park (bounded): flush on handshake, never to a stranger.
+            self.pre_handshake_uart.push_back(AgentEvent::UartData {
+                port,
+                data: Vec::from(data),
+            });
+            while self.pre_handshake_uart.len() > PRE_HANDSHAKE_UART_LIMIT {
+                self.pre_handshake_uart.pop_front();
+            }
+            return;
         }
         self.outbound_events.push_back(AgentEvent::UartData {
             port,
@@ -895,6 +935,7 @@ mod tests {
     #[test]
     fn uart_events_queue_drain_and_survive_reset() {
         let (mut c, _written) = uart_core();
+        handshake(&mut c);
         c.push_uart_data(0, b"boot banner");
         c.reset_session();
         let events = c.take_events();
@@ -906,6 +947,21 @@ mod tests {
         assert!(
             c.take_events().is_empty(),
             "drain must empty the queue exactly once"
+        );
+    }
+
+    #[test]
+    fn uart_data_before_handshake_is_not_queued() {
+        // #362 (r4294815050): console bytes only flow to a handshaked
+        // session — an unauthenticated host that reaches the port must
+        // not passively read the console.
+        let (mut c, _written) = uart_core();
+        c.push_uart_data(0, b"root console");
+        assert!(
+            c.take_events()
+                .iter()
+                .all(|e| !matches!(e, AgentEvent::UartData { .. })),
+            "pre-handshake UART data must not queue"
         );
     }
 
