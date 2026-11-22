@@ -85,7 +85,9 @@ def _router_alive() -> bool:
     return False
 
 
-def bench_venue(venues: list[Venue] | None = None) -> tuple[str | None, str]:
+def bench_venue(
+    venues: list[Venue] | None = None,
+) -> tuple[dict[str, object] | None, str]:
     """(router_ip_override, venue_label) from CONWRT_VENUES, else (None, "").
 
     Exactly one non-qemu venue feeds the bench router axis (its address
@@ -96,7 +98,7 @@ def bench_venue(venues: list[Venue] | None = None) -> tuple[str | None, str]:
     vs = venues if venues is not None else venues_from_env()
     hw = [v for v in vs if v.kind != "qemu-session"]
     if not hw:
-        return None, ""
+        return None, ""  # qemu-only: the bench axis keeps CONWRT_BENCH_ROUTER
     if len(hw) > 1:
         raise ValueError(
             "bench venue axis takes ONE hardware venue per run "
