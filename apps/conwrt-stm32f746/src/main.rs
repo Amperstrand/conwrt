@@ -63,14 +63,7 @@ bind_interrupts!(struct Irqs {
 /// changes for a given silicon.
 fn agent_mac() -> [u8; 6] {
     let uid = embassy_stm32::uid::uid();
-    [
-        0x02,
-        uid[0],
-        uid[1],
-        uid[2],
-        uid[3],
-        uid[4],
-    ]
+    [0x02, uid[0], uid[1], uid[2], uid[3], uid[4]]
 }
 
 /// Bench DUT VLAN address. Species-level placeholder only: resolve the
@@ -301,11 +294,7 @@ async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: 
         // #362: bind the agent address (the configured DUT-bay address),
         // not every interface — the console agent is reachable only on
         // its own segment.
-        if socket
-            .accept((agent_ipv4(), AGENT_PORT))
-            .await
-            .is_err()
-        {
+        if socket.accept((agent_ipv4(), AGENT_PORT)).await.is_err() {
             continue;
         }
         defmt::info!("controller connected (tcp)");
