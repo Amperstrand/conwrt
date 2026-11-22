@@ -769,7 +769,7 @@ per-port budget=15.4W. Priorities: lan7 (camera)=1, lan4/lan5 (delivering)=2, re
 Memory leak monitoring: cron job logs realtek-poe RSS to syslog every 6 hours via
 `/usr/sbin/poe-memcheck` (Issue #55 mitigation). No persistent storage writes.
 
-Stock firmware switch (192.168.13.3) is unreachable as of 2026-05-27 — needs physical
+Stock firmware switch (<bench-switch-ip>) is unreachable as of 2026-05-27 — needs physical
 investigation (powered off, wrong VLAN, or disconnected).
 
 Theoretical maximum draw: 8 × 15.4W = **123.2W vs 70W budget** — the MCU handles

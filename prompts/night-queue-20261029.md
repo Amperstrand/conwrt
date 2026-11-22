@@ -66,9 +66,9 @@ fit Phase 4; push Phase 4 back instead.
 
 1. **Dossier corrections from the 2026-10-28 seat-truth sweep** (evidence
    on conwrt-bench #68 comment 6482171958): bay2 occupant = **ea7f**
-   (dc:b8:08:6c:ea:7f, .12.113) not a6e4; lan7 = **47a2**
-   (b4:2d:56:25:47:a2) alive — seed's "empty bay" wrong; lan6 = unknown
-   device a8:63:7d:8f:61:a1; **a6e4 never left stock-p8** (powered off
+   (dc:b8:08:<unit>, <bench-ip>) not a6e4; lan7 = **47a2**
+   (b4:2d:56:<unit>) alive — seed's "empty bay" wrong; lan6 = unknown
+   device a8:63:7d:<unit>; **a6e4 never left stock-p8** (powered off
    there — the recorded moves never executed). Update
    registry/devices/*.yaml accordingly, re-render docs/port-map.md per
    docs/inventory-management.md (a dossier change without re-render is a
