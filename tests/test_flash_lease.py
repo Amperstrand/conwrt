@@ -29,6 +29,13 @@ class FakeRunner:
                 return subprocess.CompletedProcess(
                     args, 1, stdout="", stderr=stderr
                 )
+        # #348: `reserve --shell` emits the coordinator's token snippet
+        if args and args[0] == "reserve":
+            return subprocess.CompletedProcess(
+                args, 0,
+                stdout="export LG_RESERVATION=res-7f3a2b\n",
+                stderr="",
+            )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
 
@@ -97,11 +104,11 @@ class TestFlashLease:
             assert isinstance(lease, FlashLease)
             assert lease.place == "x1860-1"
             assert not lease.dry
-            assert lease.reservation == "conwrt-ses1-sysupgrade"
+            # #348: the coordinator's token, not a caller-chosen label
+            assert lease.reservation == "res-7f3a2b"
             assert runner.calls == [
-                ["reserve", "name=x1860-1", "--name",
-                 "conwrt-ses1-sysupgrade", "--wait"],
-                ["-p", "x1860-1", "acquire"],
+                ["reserve", "--shell", "--wait", "name=x1860-1"],
+                ["acquire", "--reservation", "res-7f3a2b"],
             ]
         assert runner.calls[-1] == ["-p", "x1860-1", "release"]
 
@@ -134,17 +141,34 @@ class TestFlashLease:
 
     def test_reserve_failure_never_yields(self, empty_registry):
         runner = FakeRunner(failures={"reserve": "place is already reserved"})
-        with pytest.raises(RuntimeError, match="cancel-reservation"), \
+        with pytest.raises(RuntimeError, match="reservations"), \
                 flash_lease("x1860-1", session="s", story="t", runner=runner):
             pass
         assert len(runner.calls) == 1  # no acquire, no release after failed reserve
+
+    def test_failed_release_raises_loudly(self, empty_registry):
+        """#351: a failed release must raise naming the place and the
+        manual command — silent clean exits block sibling sessions."""
+        runner = FakeRunner(failures={"release": "coordinator unreachable"})
+        with pytest.raises(RuntimeError, match="RELEASE of 'x1860-1' FAILED"), \
+                flash_lease("x1860-1", session="s", story="t", runner=runner):
+            pass
+        assert runner.calls[-1] == ["-p", "x1860-1", "release"]
+
+    def test_acquire_failure_cancels_by_token(self, empty_registry):
+        """#348: cancel-reservation uses the coordinator token."""
+        runner = FakeRunner(failures={"acquire": "not acquired"})
+        with pytest.raises(RuntimeError, match="res-7f3a2b. canceled"), \
+                flash_lease("x1860-1", session="s", story="t", runner=runner):
+            pass
+        assert ["cancel-reservation", "res-7f3a2b"] in runner.calls
 
     def test_acquire_failure_cancels_reservation(self, empty_registry):
         runner = FakeRunner(failures={"acquire": "place acquired by sibling"})
         with pytest.raises(RuntimeError, match="canceled"), \
                 flash_lease("x1860-1", session="s", story="t", runner=runner):
             pass
-        assert runner.calls[-1] == ["cancel-reservation", "conwrt-s-t"]
+        assert runner.calls[-1] == ["cancel-reservation", "res-7f3a2b"]
         assert ["-p", "x1860-1", "release"] not in runner.calls
 
     def test_unsafe_tokens_sanitized_in_reservation_name(self, empty_registry):
@@ -153,5 +177,9 @@ class TestFlashLease:
             "x1860-1", session="my session/2026", story="flash: [keep]",
             runner=runner,
         ) as lease:
-            assert lease.reservation == "conwrt-my-session-2026-flash---keep-"
-        assert runner.calls[0][3] == lease.reservation
+            # #348: the lease reports the coordinator's token; the
+            # sanitized session label is only the human fallback when the
+            # client emits no token.
+            assert lease.reservation == "res-7f3a2b"
+        # #348: the token is sourced from the reserve --shell snippet —
+        # no caller-chosen label rides the wire at all

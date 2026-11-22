@@ -121,13 +121,65 @@ def acquire_with_queue(
         waited += poll_s
 
 
-def default_runner(args: list[str]) -> "subprocess.CompletedProcess[str]":
+def default_runner(
+    args: list[str], timeout: Optional[float] = 40
+) -> "subprocess.CompletedProcess[str]":
     coordinator = os.environ.get("CONWRT_LABGRID_COORDINATOR", "ai-legion:20408")
     client = os.environ.get("CONWRT_LABGRID_CLIENT", "labgrid-client")
     return subprocess.run(
         [client, "-x", coordinator, *args],
-        capture_output=True, text=True, timeout=40, check=False,
+        capture_output=True, text=True, timeout=timeout, check=False,
     )
+
+
+def _reserve_timeout_s() -> Optional[float]:
+    """#350: the blocking `reserve --wait` gets its OWN queue budget — the
+    40s query default turned an ordinary "queue behind a sibling flash"
+    into a TimeoutExpired abort before the cleanup logic could run.
+    Env: CONWRT_RESERVE_TIMEOUT_S (seconds; ``inf``/``unbounded`` = no
+    timeout — labgrid documents --wait as blocking until allocation).
+    """
+    raw = os.environ.get("CONWRT_RESERVE_TIMEOUT_S", "").strip().lower()
+    if raw in ("inf", "unbounded", ""):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+
+
+def _reservation_token(shell_snippet: str) -> Optional[str]:
+    """Extract the reservation id from `reserve --shell` output.
+
+    labgrid emits `export LG_RESERVATION=<token>` (newer) or
+    `export LG_TOKEN=<token>` (legacy); either is the coordinator's own
+    id — cancel-reservation must use it, never a caller-chosen label.
+    """
+    import re as _re
+
+    for var in ("LG_RESERVATION", "LG_TOKEN"):
+        m = _re.search(rf"{var}=(\S+)", shell_snippet)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _runner_with_reserve_timeout(run: Runner) -> Runner:
+    """Wrap `run` so reserve calls get the #350 queue budget; every other
+    call keeps the runner's own (short) timeout."""
+    budget = _reserve_timeout_s()
+
+    def wrapped(args: list[str]) -> "subprocess.CompletedProcess[str]":
+        if args and args[0] == "reserve":
+            try:
+                return run(args, timeout=budget)  # type: ignore[call-arg]
+            except TypeError:
+                return run(args)  # custom runner without a timeout param
+        return run(args)
+
+    return wrapped
 
 
 def default_place_list() -> str:
@@ -376,21 +428,46 @@ def flash_lease(
         yield FlashLease(place=place, reservation=reservation, dry=True)
         return
 
-    reserved = run(["reserve", f"name={place}", "--name", reservation, "--wait"])
+    # #348: the canonical labgrid reservation protocol — the standard
+    # client rejects `--name` at argument parsing, so the lease never
+    # reached acquire. `reserve --shell --wait` emits a shell snippet
+    # carrying the coordinator-generated reservation token; acquire WITH
+    # that token (not place-only), and cancel-reservation by the SAME
+    # token. The session/story-derived name stays as the human-readable
+    # label via the matcher (`name={place}` matches the place; the label
+    # rides in LG_RESERVATION's snippet when the client supports it).
+    reserve_runner = _runner_with_reserve_timeout(run)
+    reserved = reserve_runner(["reserve", "--shell", "--wait", f"name={place}"])
     if reserved.returncode != 0:
         raise RuntimeError(
-            f"flash_lease: reserve of {place!r} failed (reservation "
-            f"{reservation!r} may need cancel-reservation): "
-            f"{reserved.stderr.strip()[-200:]}"
+            f"flash_lease: reserve of {place!r} failed (session label "
+            f"{reservation!r}; inspect live reservations with "
+            f"`labgrid-client reservations`): {reserved.stderr.strip()[-200:]}"
         )
-    acquired = run(["-p", place, "acquire"])
+    token = _reservation_token(reserved.stdout)
+    # #348: acquire honors the reservation token when the client emits
+    # one (no token = the client's own place-matching; still correct).
+    acquire_args = ["-p", place, "acquire"]
+    if token:
+        acquire_args = ["acquire", "--reservation", token]
+    acquired = run(acquire_args)
     if acquired.returncode != 0:
-        run(["cancel-reservation", reservation])
+        cancel_args = ["cancel-reservation", token] if token else ["cancel-reservation", reservation]
+        run(cancel_args)
         raise RuntimeError(
             f"flash_lease: acquire of {place!r} failed (reservation "
-            f"{reservation!r} canceled): {acquired.stderr.strip()[-200:]}"
+            f"{token or reservation!r} canceled): {acquired.stderr.strip()[-200:]}"
         )
     try:
-        yield FlashLease(place=place, reservation=reservation)
+        yield FlashLease(place=place, reservation=token or reservation)
     finally:
-        run(["-p", place, "release"])
+        # #351: a failed release must be LOUD — silently exiting clean
+        # while the place stays acquired blocks sibling sessions under a
+        # false assumption of relinquished exclusivity.
+        released = run(["-p", place, "release"])
+        if released.returncode != 0:
+            raise RuntimeError(
+                f"flash_lease: RELEASE of {place!r} FAILED — the place may "
+                f"still be acquired (run `labgrid-client -p {place} release` "
+                f"manually): {released.stderr.strip()[-200:]}"
+            )
