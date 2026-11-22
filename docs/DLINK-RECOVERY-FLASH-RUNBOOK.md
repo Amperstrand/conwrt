@@ -86,8 +86,13 @@ serial path exists: AGENTS.md "Serial-First Recovery Principle".
       `ssh-keygen -lf <keyfile>` compared with the key you will SSH from.
       (AGENTS.md rule 5; issue #228)
 - [ ] **Image flavour**: `squashfs-recovery.bin` for the recovery path
-      (rule 6 above). Sourced via `conwrt image --model-id dlink-covr-x1860-a1`
-      or ASU profile `dlink_covr-x1860-a1` (rule 4).
+      (rule 6 above). Sourced via `conwrt image --model-id
+      dlink-covr-x1860-a1 --image-suffix squashfs-recovery.bin` — the
+      suffix flag is REQUIRED here: the model's default suffix is
+      `squashfs-factory.bin` (the sysupgrade-path flavour), so the
+      suffix-less command downloads exactly the format rule 6 warns
+      about (#360). ASU profile `dlink_covr-x1860-a1` (rule 4) serves
+      the recovery flavour for this path.
 - [ ] **Image boots**: if the image build is unproven, flash a known-healthy
       unit first or use a cached verified image. (issue #230 body;
       `docs/process.md` "Verify recovery path before starting")
@@ -121,13 +126,31 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
       recovery server uses the model-wide soft MAC `3e:85:be:87:55:42`
       (locally administered). NEVER GET the page (rule 1).
       (`bench_switch_recovery_rig_2026_10_14`)
+- [ ] **Specimen-identity gate BEFORE the upload** (#360): the recovery
+      server's soft MAC is model-wide, so ARP arming proves the SPECIES,
+      never the UNIT — and on a bench with several X1860s the wrong unit
+      can be overwritten before identity is established. Before firing
+      the POST: confirm exactly ONE X1860 is in recovery arming on this
+      segment (one `192.168.0.1` ARP entry, no other recovery-soft-MAC
+      neighbors), power-isolate or physically verify the target unit's
+      label/real MAC against the specimen record (AGENTS.md L45-L54),
+      and STOP on any ambiguity — a recovery flash is a bootloader-class
+      write, not a guess.
 - [ ] `scripts/flash-recovery.sh` now probes ARP-only by default
       (`FORCE_HTTP_PROBE=1` restores the GET probe for GL.iNet-class
       multi-request servers) — still NEEDS-BENCH-VERIFY on this species
       (§8 reg#1) before it replaces the manual `ip neigh` check above.
 - [ ] Fire headless Chromium (Playwright) against a LOCAL form so the multipart
       POST is the first and only HTTP request (rule 2). Post the
-      `squashfs-recovery.bin` to the upload endpoint.
+      `squashfs-recovery.bin` to the upload endpoint. NOTE (#360): no
+      Playwright helper is checked in — drive an ad-hoc local-form
+      script (pytest-playwright is in the dev environment), and record
+      the exact script in the session evidence. The one-request rule is
+      about the wire (first and only POST), not about which client
+      binary; curl with a correct multipart framing is acceptable ONLY
+      if a pcap proves the single-request shape (the 2026-10-14 matrix
+      showed even byte-perfect Chromium can yield accepted-but-no-boot —
+      suspect flash-write timing before blaming the client).
 - [ ] **Verify delivery**: HTTP 200 + pcap byte count == image size on the wire
       (issue #230 body). HAR + pcap recorded to the bench evidence dir
       (`recovery_flash_matrix_2026_10_14`).
@@ -228,9 +251,10 @@ image (rule 5; `recovery_flash_matrix_2026_10_14`).
 | Locked out after successful boot | See §6 #229 pitfall — new flash cycle; serial only by opening the case |
 | Wrong image accepted | No rollback on this species — the flash already happened; re-enter recovery and flash the correct `squashfs-recovery.bin` (rule 6) |
 
-Serial last resort: `scripts/serial-flash.py` bypasses the recovery HTTP
-server entirely IF NAND is healthy — **NEEDS-BENCH-VERIFY on this species**
-(discriminator named in `upload_client_sensitivity`, never exercised).
+Serial last resort: `scripts/serial-flash.py` — see §9 for the #360
+correction: it requires a RUNNING OpenWrt shell (sysupgrade + echo/base64
+transfer), so it is a post-flash reflash helper, not a rescue for the
+never-boots red-LED state. The honest never-boots ladder is §9.
 Serial procedure: `docs/serial-console.md`, prompts `serial-01`…`serial-06`.
 
 ## 8. NEEDS-BENCH-VERIFY register
@@ -256,3 +280,21 @@ Serial procedure: `docs/serial-console.md`, prompts `serial-01`…`serial-06`.
   `docs/DARK-DEVICE-PLAYBOOK.md` (adjacent methodology)
 - Operator-private rig specifics: bench repo AGENTS.md + bench session logs
   (referenced from `bench_observations.evidence`)
+
+## 9. Correction: the serial fallback ladder (#360)
+
+`scripts/serial-flash.py` transfers via serial `echo`+`base64` and
+flashes with `sysupgrade` — it needs a RUNNING OpenWrt shell, which the
+red-LED recovery scenario never reaches. It is NOT a valid last-resort
+for this species' never-boots state. The honest ladder for a
+never-boots X1860:
+
+1. Re-arm recovery and retry the HTTP upload (the dual-image first boot
+   takes 15-20+ minutes — do not verdict failure before ~25 min silence).
+2. Serial console at the bootloader (if the unit's UART pads are
+   accessible) — the only true initramfs-over-serial path today.
+3. Console-attached NAND read/write tooling — owner-gated (needs the
+   bench serial rig and the bootloader's command surface).
+
+Treat `serial-flash.py` as what it is: a post-flash OpenWrt-shell
+reflash helper, not a recovery rescue.
