@@ -11,9 +11,17 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-lint: ## Run ruff and shell script syntax checks
+lint: ## Run ruff, severity-gated shellcheck (when installed), and shell syntax checks
 	@echo "Running ruff..."
 	@ruff check scripts tests
+	@echo "Running shellcheck (severity=error) over scripts/*.sh..."
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck --severity=error $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh 2>/dev/null \
+			|| { echo "FAIL: shellcheck findings at severity=error (see above)"; exit 1; }; \
+		echo "  OK: no severity=error findings"; \
+	else \
+		echo "  SKIP: shellcheck not installed (CI installs it; local boxes may not have it)"; \
+	fi
 	@echo "Linting shell scripts..."
 	@FAIL=0; \
 	for f in $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh; do \
