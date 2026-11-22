@@ -132,12 +132,12 @@ impl DetectSession {
     }
 }
 
-/// The protocol state machine: what an agent IS, independent of how bytes
-/// arrive (tokio TCP, USB CDC, …).
 /// Bounded parking for pre-handshake console bytes (#362): the newest
 /// chunks survive; older ones are dropped rather than growing unbounded.
 const PRE_HANDSHAKE_UART_LIMIT: usize = 16;
 
+/// The protocol state machine: what an agent IS, independent of how bytes
+/// arrive (tokio TCP, USB CDC, …).
 pub struct ServerCore {
     agent_version: String,
     capabilities: Vec<CapabilityInfo>,
