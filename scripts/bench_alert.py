@@ -201,7 +201,10 @@ def main(argv: list[str] | None = None) -> int:
     alerts_path = events_path.parent / "alerts.jsonl"
     cooldowns: dict[tuple[str, str], float] = {}
     history: list[dict] = []
-    last_switch_snap: dict | None = None
+    # #292: per-device prev-snap — a single slot gets evicted by interleaved
+    # snaps from other switches, silently dropping that device's leak-slope
+    # comparison (poe_rss_growth's device guard blocks the cross-compare).
+    last_switch_snaps: dict[str, dict] = {}
 
     if args.test:
         payload = {"ts": "test", "device": "bench-alert", "rule": "synthetic",
@@ -211,13 +214,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if results["file"] else 1
 
     def _handle(event: dict) -> None:
-        nonlocal last_switch_snap
         event.setdefault("ts_epoch", time.time())
         history.append(event)
-        growth = poe_rss_growth(last_switch_snap if last_switch_snap and
-                                str(last_switch_snap.get("event")) == "snap" else None,
+        dev = str(event.get("device", ""))
+        prev_snap = last_switch_snaps.get(dev)
+        growth = poe_rss_growth(prev_snap if prev_snap and
+                                str(prev_snap.get("event")) == "snap" else None,
                                 event) if str(event.get("event")) == "snap" else None
-        last_switch_snap = event if str(event.get("event")) == "snap" else last_switch_snap
+        if str(event.get("event")) == "snap":
+            last_switch_snaps[dev] = event
         fired = process_event(event, history, cooldowns, alerts_path, cfg)
         if growth:
             growth["ts"] = event.get("ts", "")
