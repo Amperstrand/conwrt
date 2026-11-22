@@ -95,7 +95,16 @@ def enroll(device: str, code: str, pubkey_line: str, interface: Optional[str] = 
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+        body = resp.read().decode().strip()
+    # #347: accept both the current JSON response and the legacy bare
+    # "enrolled" text — automation must not see a JSONDecodeError after a
+    # successful hardening.
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        if body == "enrolled":
+            return {"status": "enrolled"}
+        raise
 
 
 def main(argv: Optional[list[str]] = None) -> int:
