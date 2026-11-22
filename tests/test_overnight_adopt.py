@@ -27,6 +27,10 @@ def fake_switch_ssh(monkeypatch: pytest.MonkeyPatch, switch_has_key: bool):
             return (0, SWITCH_KEY + "\n") if switch_has_key else (1, "")
         if "KEYS-OK" in cmd:
             return (0, "KEYS-OK")
+        if "---READBACK---" in cmd:
+            # #284 staged values verified before any commit
+            return (0, "---READBACK---\nstatic\n192.168.104.51/24\n"
+                       "192.168.104.1\n192.168.104.1\n")
         if "ADOPT-OK" in cmd:
             return (0, "ADOPT-OK")
         return (0, "")
@@ -71,3 +75,25 @@ class TestAdoptUnitSwitchKey:
         installed = (dut_etc / "authorized_keys").read_text()
         assert installed.count(SWITCH_KEY) == 1, \
             "switch key must land exactly once, not duplicate across runs"
+
+
+class TestAdoptReadbackGate:
+    """#284: a staged-value readback mismatch must refuse the commit."""
+
+    def test_bad_readback_never_commits(self, monkeypatch, capsys) -> None:
+        calls = fake_switch_ssh(monkeypatch, switch_has_key=True)
+
+        real = overnight.switch_ssh
+
+        def lying_ssh(cmd: str, timeout: int = 60) -> tuple[int, str]:
+            if "---READBACK---" in cmd:
+                # e.g. single-quote/staging bug: values did not take
+                return (0, "---READBACK---\ndhcp\n\n\n\n")
+            return real(cmd, timeout)
+
+        monkeypatch.setattr(overnight, "switch_ssh", lying_ssh)
+        assert overnight.adopt_unit("192.168.104.51", "b4:2d:56:25:79:c1", 1004) is False
+        assert "readback mismatch" in capsys.readouterr().out
+        committed = [c for c in calls if "uci commit network" in c and "echo" not in c]
+        assert not any("ADOPT-OK" in c for c in calls if "uci commit" in c), \
+            "a mismatched stage must never reach the commit call"
