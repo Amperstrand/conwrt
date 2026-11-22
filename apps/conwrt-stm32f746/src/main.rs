@@ -540,7 +540,12 @@ fn capabilities() -> Vec<CapabilityInfo> {
         CapabilityInfo {
             name: String::from("executor"),
             detail: Vec::from([
-                (String::from("window_bytes"), String::from("8192")),
+                (String::from("window_bytes"), {
+                    // #456: advertise the SAFE window (a full-window frame
+                    // must fit the accumulator after COBS/postcard overhead),
+                    // not the accumulator capacity itself.
+                    String::from(conwrt_agent_proto::cobs::MAX_WINDOW_BYTES_STR)
+                }),
                 (
                     String::from("wire"),
                     // #226 wiring slice: the pump task drains the
