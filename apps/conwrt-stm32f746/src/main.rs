@@ -44,7 +44,7 @@ use embassy_sync::mutex::Mutex;
 use panic_probe as _;
 use static_cell::StaticCell;
 
-use conwrt_agent_io::{EventSource, agent_session_stream_events};
+use conwrt_agent_io::{EventSource, SessionOpts, agent_session_stream_events_opts};
 use conwrt_agent_proto::dispatch::WireError;
 use conwrt_agent_proto::protocol::{CapabilityInfo, StreamAck, StreamChunk};
 use conwrt_agent_proto::server::{ServerCore, TransferSink, UartSink};
@@ -55,9 +55,23 @@ bind_interrupts!(struct Irqs {
     USART6 => usart::BufferedInterruptHandler<peripherals::USART6>;
 });
 
-/// Locally administered, firmware-stable (a per-boot random MAC would
-/// poison the controller's ARP cache).
-const AGENT_MAC: [u8; 6] = [0x02, 0x43, 0x57, 0x46, 0x37, 0x34];
+/// Locally administered, derived from the MCU's 96-bit device UID:
+/// unique AND stable per board (#363 r4294815071 — the compile-time
+/// constant made two agents on one L2 contend for the same MAC+IP).
+/// Byte 0: 0x02 (locally administered, unicast); bytes 1..5: the first
+/// 5 UID bytes. A per-boot random MAC would poison ARP; the UID never
+/// changes for a given silicon.
+fn agent_mac() -> [u8; 6] {
+    let uid = embassy_stm32::uid::uid();
+    [
+        0x02,
+        uid[0],
+        uid[1],
+        uid[2],
+        uid[3],
+        uid[4],
+    ]
+}
 
 /// Bench DUT VLAN address. Species-level placeholder only: resolve the
 /// actual bay VLAN/address/gateway from the lab registry and set them at
@@ -215,7 +229,7 @@ async fn main(spawner: Spawner) {
         p.PG13,
         p.PG14,
         p.PG11,
-        AGENT_MAC,
+        agent_mac(),
         p.ETH_SMA,
         p.PA2,
         p.PC1,
@@ -284,8 +298,11 @@ async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: 
         TCP_RX_BUF.uninit().write([0u8; 4096]),
     );
     loop {
+        // #362: bind the agent address (the configured DUT-bay address),
+        // not every interface — the console agent is reachable only on
+        // its own segment.
         if socket
-            .accept((Ipv4Address::UNSPECIFIED, AGENT_PORT))
+            .accept((agent_ipv4(), AGENT_PORT))
             .await
             .is_err()
         {
@@ -293,7 +310,20 @@ async fn agent_task(stack: Stack<'static>, mut server: ServerCore, mut uart_rx: 
         }
         defmt::info!("controller connected (tcp)");
         server.reset_session();
-        agent_session_stream_events(&mut socket, &mut uart_rx, &mut server).await;
+        // #362 (tick) + #363 (idle): the heartbeat budget decrements at
+        // the advertised interval while the transport is up, and a
+        // connected-but-silent controller loses the session after the
+        // idle deadline instead of monopolizing the single socket.
+        agent_session_stream_events_opts(
+            &mut socket,
+            &mut uart_rx,
+            &mut server,
+            SessionOpts {
+                tick: Some(embassy_time::Duration::from_secs(1)),
+                idle_timeout: Some(embassy_time::Duration::from_secs(90)),
+            },
+        )
+        .await;
         defmt::info!("controller disconnected — leases expired");
         socket.abort();
     }
