@@ -16,7 +16,6 @@
 
 extern crate alloc;
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use defmt_rtt as _;
@@ -28,8 +27,7 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbDevConfig};
 use panic_probe as _;
 
-use conwrt_agent_io::{CDC_FS_PACKET, agent_session};
-use conwrt_agent_proto::protocol::CapabilityInfo;
+use conwrt_agent_io::{CDC_FS_PACKET, SessionOpts, agent_session_opts};
 use conwrt_agent_proto::server::ServerCore;
 
 bind_interrupts!(struct Irqs {
@@ -54,13 +52,11 @@ async fn main(_spawner: Spawner) {
     let p: Peripherals = embassy_stm32::init(usb_clock_config());
     defmt::info!("conwrt-stm32 agent up");
 
-    let mut server = ServerCore::new(
-        "conwrt-stm32 0.1.0",
-        Vec::from([CapabilityInfo {
-            name: String::from("serial"),
-            detail: Vec::from([(String::from("uarts"), String::from("1"))]),
-        }]),
-    );
+    // #361: the `serial` capability was advertised while UART passthrough
+    // does not exist in this app (the module doc's 'lands next') — a
+    // controller keying on it gets a dead endpoint. Advertise nothing
+    // until the passthrough lands; re-add with the real UART detail then.
+    let mut server = ServerCore::new("conwrt-stm32 0.1.0", Vec::new());
 
     let mut ep_out_buffer = [0u8; 256];
     let mut usb_cfg = usb::Config::default();
@@ -137,7 +133,19 @@ async fn session_loop<'d, T: Instance + 'd>(
         class.wait_connection().await;
         defmt::info!("controller connected");
         server.reset_session();
-        agent_session(class, server, CDC_FS_PACKET).await;
+        // #361/#362/#363: tick drives lease-budget expiry, idle ends a
+        // connected-but-silent controller (the legacy 3-arg call kept
+        // heartbeat budgets frozen forever while USB was up).
+        agent_session_opts(
+            class,
+            server,
+            CDC_FS_PACKET,
+            SessionOpts {
+                tick: Some(embassy_time::Duration::from_secs(1)),
+                idle_timeout: Some(embassy_time::Duration::from_secs(90)),
+            },
+        )
+        .await;
         defmt::info!("controller disconnected — leases expired");
     }
 }

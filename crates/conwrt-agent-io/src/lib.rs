@@ -110,6 +110,96 @@ pub async fn write_packetized<T: PacketIo>(io: &mut T, data: &[u8], max_packet: 
     }
 }
 
+/// The PacketIo session with explicit [`SessionOpts`] — the CDC-ACM twin of
+/// [`agent_session_stream_events_opts`]. `None` everywhere reproduces
+/// [`agent_session`] exactly; `tick: Some(..)` drives lease-budget expiry
+/// (#362) and `idle_timeout: Some(..)` ends a connected-but-silent session
+/// (#363) instead of letting it monopolize the device.
+pub async fn agent_session_opts<T: PacketIo>(
+    io: &mut T,
+    server: &mut ServerCore,
+    max_packet: usize,
+    opts: SessionOpts,
+) {
+    debug_assert!(
+        (1..=CDC_HS_PACKET).contains(&max_packet),
+        "max_packet must be 1..={CDC_HS_PACKET}"
+    );
+    let mut storage = [0u8; CDC_HS_PACKET];
+    let (buf, _) = storage.split_at_mut(max_packet.min(CDC_HS_PACKET));
+    let mut pump = CobsPump::new();
+    let mut tick_timer = opts.tick.map(embassy_time::Timer::after);
+    let mut idle_timer = opts.idle_timeout.map(embassy_time::Timer::after);
+    loop {
+        // Same select idiom as the stream variant: a disabled timer is a
+        // pending future (never completes); read_packet is documented
+        // cancel-safe, so recreating it per iteration is correct.
+        let timers = async {
+            let tick = async {
+                match tick_timer.as_mut() {
+                    Some(t) => {
+                        t.await;
+                        true
+                    }
+                    None => core::future::pending::<bool>().await,
+                }
+            };
+            let idle = async {
+                match idle_timer.as_mut() {
+                    Some(i) => {
+                        i.await;
+                        false
+                    }
+                    None => core::future::pending::<bool>().await,
+                }
+            };
+            match select(tick, idle).await {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        };
+        match select(io.read_packet(buf), timers).await {
+            Either::First(read) => {
+                // Activity resets the idle deadline.
+                if let Some(d) = opts.idle_timeout {
+                    idle_timer = Some(embassy_time::Timer::after(d));
+                }
+                let Ok(n) = read else {
+                    return;
+                };
+                pump.feed(&buf[..n]);
+                while let Some(frame) = pump.pop_frame() {
+                    let Some(response) = decode_frame(&frame)
+                        .ok()
+                        .and_then(|decoded| server.handle_frame(decoded))
+                    else {
+                        continue;
+                    };
+                    if let Ok(bytes) = encode_frame(&response) {
+                        write_packetized(io, &cobs_encode(&bytes), max_packet).await;
+                    }
+                }
+            }
+            Either::Second(is_tick) => {
+                if is_tick {
+                    // #362: decrement lease budgets; expiry events ride
+                    // the next response's drain.
+                    for expired in server.tick() {
+                        server.queue_event(expired);
+                    }
+                    if let Some(d) = opts.tick {
+                        tick_timer = Some(embassy_time::Timer::after(d));
+                    }
+                } else {
+                    // #363: idle deadline — end the session; the caller
+                    // owns reconnection and session reset.
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Read chunk size for [`agent_session_stream`]. Streams impose no packet
 /// shape, so any size works; 256 keeps the session's stack footprint
 /// trivial on MCU while amortizing syscall/socket reads on hosts.
