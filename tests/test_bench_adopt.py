@@ -864,3 +864,27 @@ class TestCliEnvelopeGate:
         out = capsys.readouterr().out
         assert rc == 0, out
         assert "[PASS] envelope" in out and "[PASS] reset" in out
+
+
+class TestBackupSha256Gate:
+    """#276: the backup integrity gate is sha256 (64 hex), not md5."""
+
+    def _runner(self, tmp_path: Path, digest: str):
+        seen: list[str] = []
+
+        def serve(script: str) -> str:
+            seen.append(script)
+            return f"{digest}  /tmp/bench-adopt-backup.tar.gz\n"
+
+        return ba.Runner(serve, PLACE, tmp_path / "ev"), seen
+
+    def test_uses_sha256sum_on_both_sides(self, tmp_path: Path) -> None:
+        r, seen = self._runner(tmp_path, "a" * 64)
+        ba.stage_backup(r)
+        assert any("sha256sum" in s for s in seen)
+        assert not any("md5sum" in s for s in seen)
+
+    def test_md5_length_digest_refused(self, tmp_path: Path) -> None:
+        r, _ = self._runner(tmp_path, "a" * 32)
+        with pytest.raises(ba.AdoptError, match="no sha256"):
+            ba.stage_backup(r)
