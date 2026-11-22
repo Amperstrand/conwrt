@@ -105,8 +105,19 @@ trap on_terminate TERM INT
 # stream drop (bridge side closed the channel -> cat EOF -> normal exit):
 # reap helpers but do NOT restore the getty (see comment above REMOTE_SH)
 trap '[ "$INTENTIONAL" = 1 ] || { kill $TXPID $RXPID 2>/dev/null; rm -f "$FIFO"; }' EXIT
-# hold the channel open on stdin; when the bridge drops us, stdin EOF -> exit
-cat > "$FIFO"
+# hold the channel open on stdin; a lone STOP token means the bridge is
+# stopping us deliberately (systemctl stop) — restore the getty (#279);
+# every other line forwards to the tty fifo as before.
+while IFS= read -r line; do
+  if [ "$line" = "___CONWRT-BRIDGE-STOP___" ]; then
+    INTENTIONAL=1
+    restore_tty
+    kill $TXPID $RXPID 2>/dev/null
+    rm -f "$FIFO"
+    exit 0
+  fi
+  printf '%s\n' "$line" > "$FIFO"
+done
 """
 
 
@@ -170,6 +181,18 @@ class SSHStream:
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
+            # #279: tell the REMOTE script this stop is intentional so it
+            # restores the console getty — a local terminate() only drops
+            # the channel, and the remote EXIT trap skips restore_tty.
+            try:
+                if self.proc.stdin and not self.proc.stdin.closed:
+                    self.proc.stdin.write(b"___CONWRT-BRIDGE-STOP___\n")
+                    self.proc.stdin.flush()
+                    self.proc.wait(timeout=5)
+                    self.proc = None
+                    return
+            except Exception:
+                pass
             try:
                 self.proc.terminate()
                 self.proc.wait(timeout=5)
