@@ -2892,19 +2892,26 @@ fn cmd_maas_flash(
             );
             return ExitCode::from(2);
         }
-        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
-            Ok(id) => println!(
-                "verified:  {} usb serial={} {}GB rw",
-                target.display(),
-                id.serial.as_deref().unwrap_or("?"),
-                id.size_bytes.unwrap_or(0) / 1_000_000_000
-            ),
+        let writer = match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => {
+                println!(
+                    "verified:  {} usb serial={} {}GB rw",
+                    target.display(),
+                    id.serial.as_deref().unwrap_or("?"),
+                    id.size_bytes.unwrap_or(0) / 1_000_000_000
+                );
+                // #200: the verified serial is the library-level specimen
+                // evidence for the write handle (cross-checked against the
+                // live sysfs identity at open time).
+                let serial = id.serial.clone().unwrap_or_default();
+                FileBlockWriter::open_device_specimen(target, &serial)
+            }
             Err(msg) => {
                 eprintln!("flash refused: {msg}");
                 return ExitCode::from(2);
             }
-        }
-        match FileBlockWriter::open_device(target) {
+        };
+        match writer {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("cannot pin target {}: {e}", target.display());
