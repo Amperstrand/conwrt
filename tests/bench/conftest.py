@@ -103,16 +103,29 @@ def bench_venue(venues: list[Venue] | None = None) -> tuple[str | None, str]:
             f"(got: {', '.join(v.key for v in hw)}); loop runs per venue")
     v = hw[0]
     if v.kind == "direct":
+        # #329 (r4278462650): the registry's ssh_port/ssh_key ride along —
+        # dropping them made non-default-port or keyed devices fail/skip
+        # despite valid registry details.
         from venues import direct_device
-        return direct_device(v.place or "")["host"], v.key
-    return None, v.key  # labgrid: exporter-proxied — bench keeps its own ROUTER
+        return direct_device(v.place or ""), v.key
+    # #330 (r4278462635): a labgrid selection on the bench ROUTER axis used
+    # to silently fall back to CONWRT_BENCH_ROUTER while labeling results
+    # with the requested place. Refuse instead — exporter-proxied bench
+    # execution is not implemented; a direct: venue or an explicit
+    # CONWRT_BENCH_ROUTER is the honest selection.
+    raise ValueError(
+        f"labgrid venue {v.key!r} cannot drive the bench router axis "
+        "(exporter-proxied execution not implemented) — use a direct: "
+        "venue from data/lab.yaml, or run without CONWRT_VENUES and set "
+        "CONWRT_BENCH_ROUTER deliberately")
 
 
 def pytest_collection_modifyitems(config, items):
     venue_ip = ""
     if os.environ.get("CONWRT_VENUES"):
         try:
-            venue_ip, _ = bench_venue()
+            venue_dev, _ = bench_venue()
+            venue_ip = venue_dev["host"] if venue_dev else ""
         except ValueError:
             venue_ip = ""  # a bad venue axis fails loudly at fixture time
     if not ROUTER and not venue_ip:
@@ -135,10 +148,17 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def router() -> dict[str, object]:
-    venue_ip, venue_label = bench_venue()
-    if venue_ip:
-        globals()["ROUTER"] = venue_ip
-        globals()["SSH"] = SSH[:-1] + [f"root@{venue_ip}"]
+    venue_dev, venue_label = bench_venue()
+    if venue_dev:
+        # #329: port and key from the registry are honored, not just host
+        globals()["ROUTER"] = venue_dev["host"]
+        ssh_cmd = list(SSH)
+        ssh_cmd[-1] = f"root@{venue_dev['host']}"
+        if venue_dev.get("port") and int(venue_dev["port"]) != 22:
+            ssh_cmd += ["-p", str(venue_dev["port"])]
+        if venue_dev.get("key"):
+            ssh_cmd += ["-i", str(Path(venue_dev["key"]).expanduser())]
+        globals()["SSH"] = ssh_cmd
     r = ssh_run(". /etc/openwrt_release; echo $DISTRIB_RELEASE; "
                 "cat /tmp/sysinfo/board_name; grep -c ^processor /proc/cpuinfo")
     assert r.returncode == 0, f"router {ROUTER} unreachable over SSH"
@@ -364,7 +384,7 @@ def _flash(image: str) -> bool:
     r = subprocess.run(
         ["python3", "scripts/conwrt.py", "flash", "--model-id",
          _bench_model_id(), "--image", variant, "--interface", IFACE,
-         "--no-voice"],
+         "--no-voice", "--ip", str(ROUTER)],  # #330: the venue address, not a re-detect
         cwd=str(REPO), capture_output=True, text=True, timeout=1800,
         check=False,
     )
