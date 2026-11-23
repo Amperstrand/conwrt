@@ -38,7 +38,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in (
         "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
-        "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch",
+        "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch", "listen",
         "sim", "esim", "adopt", "v6door",
         "-h", "--help", "--version", "-V",
     ):
@@ -107,6 +107,7 @@ def main() -> int:
         "bench-doctor": ("bench_doctor", "cmd_bench_doctor"),
         "recovery-probe": ("conwrt.cmd_recovery_probe", "cmd_recovery_probe"),
         "boot-watch": ("conwrt.cmd_boot_watch", "cmd_boot_watch"),
+        "listen": ("conwrt.bootlisten", "cmd_listen"),
         "adopt": ("conwrt.adopt", "cmd_adopt"),
         "v6door": ("conwrt.v6door", "cmd_v6door"),
         }
