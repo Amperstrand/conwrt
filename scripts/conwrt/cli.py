@@ -380,4 +380,18 @@ def _build_parser() -> argparse.ArgumentParser:
     listen_parser.add_argument("--json", action="store_true")
     listen_parser.set_defaults(func=listen_mod.cmd_listen)
 
+    from conwrt import discover as discover_mod
+    discover_parser = subparsers.add_parser(
+        "discover", help="dark-unit discovery ladder (#323): control -> v6 -> v4 -> banners")
+    discover_parser.add_argument("mode", choices=("plan", "run"), nargs="?", default="plan",
+                                 help="plan prints the ladder (hardware-safe); run executes via the probe host")
+    discover_parser.add_argument("--mac", required=True, help="source MAC observed in any frame")
+    discover_parser.add_argument("--iface", required=True, help="on-link iface on the probe host")
+    discover_parser.add_argument("--probe-host", help="SSH alias of an on-link probe host (required for run)")
+    discover_parser.add_argument("--control-ip", required=True, help="known-good host for the positive control")
+    discover_parser.add_argument("--probe-subnets", default="", help="comma list of probe-host subnets")
+    discover_parser.add_argument("--inventory", default="", help="inventory.jsonl for v4 archaeology")
+    discover_parser.add_argument("--json", default="", help="write ladder+results as JSON")
+    discover_parser.set_defaults(func=discover_mod.cmd_discover)
+
     return parser

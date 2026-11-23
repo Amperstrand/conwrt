@@ -39,7 +39,7 @@ def main() -> int:
         "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch", "listen",
-        "sim", "esim", "adopt", "v6door",
+        "sim", "esim", "adopt", "v6door", "discover",
         "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
@@ -108,6 +108,7 @@ def main() -> int:
         "recovery-probe": ("conwrt.cmd_recovery_probe", "cmd_recovery_probe"),
         "boot-watch": ("conwrt.cmd_boot_watch", "cmd_boot_watch"),
         "listen": ("conwrt.bootlisten", "cmd_listen"),
+        "discover": ("conwrt.discover", "cmd_discover"),
         "adopt": ("conwrt.adopt", "cmd_adopt"),
         "v6door": ("conwrt.v6door", "cmd_v6door"),
         }
