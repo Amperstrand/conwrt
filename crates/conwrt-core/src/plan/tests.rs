@@ -1197,6 +1197,86 @@ fn pbr_shape_gates_and_strict_branch_match_1x() {
 }
 
 #[test]
+fn ddns_param_bounds_match_1x_validators() {
+    let good = DdnsProfile {
+        domain: "home.example.org".into(),
+        password: "tok123".into(),
+        ..DdnsProfile::default()
+    };
+    assert!(good.validate().is_ok());
+    // domain: empty / hostile chars
+    assert!(matches!(
+        DdnsProfile {
+            domain: String::new(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a b".into(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // password: quoting hazards rejected
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a.io".into(),
+            password: "q uote".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // interval floor
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a.io".into(),
+            password: "p".into(),
+            check_interval: 5,
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // custom provider requires an https update_url
+    assert!(matches!(
+        DdnsProfile {
+            provider: "custom".into(),
+            domain: "a.io".into(),
+            password: "p".into(),
+            update_url: "http://x/".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // unknown provider
+    assert!(matches!(
+        DdnsProfile {
+            provider: "nope".into(),
+            domain: "a.io".into(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // render carries the staging-debris guard and the section
+    let plan = plan_for(Profile::Ddns(good));
+    let script = render_shell(&plan);
+    assert!(script.contains("uci -q delete ddns.myddns >/dev/null 2>&1 || true"));
+    assert!(script.contains("uci set ddns.myddns=service"));
+    assert!(script.contains("ddns.myddns.service_name='cloudflare.com/v4'"));
+    assert!(script.contains("uci set ddns.myddns.check_interval='300'"));
+}
+
+#[test]
 fn openclash_shape_gates_and_branches_match_1x() {
     let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
     let script = render_shell(&plan);

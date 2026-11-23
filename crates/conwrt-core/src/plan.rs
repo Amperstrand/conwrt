@@ -90,6 +90,7 @@ pub fn plan_profile(
     let mut plan = match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
         Profile::Doh(doh) => plan_doh(model, doh),
+        Profile::Ddns(ddns) => plan_ddns(model, ddns),
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
