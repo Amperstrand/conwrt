@@ -792,10 +792,11 @@ impl PbrProfile {
 /// NOT official OpenWrt packages (1.x shares this gap — its
 /// `packages_via="auto"` list fails to resolve on stock devices and
 /// the public ASU alike). The intended delivery is a baked image or a
-/// preinstalled device, where the leading `EnsurePackage`
-/// short-circuits on `opkg list-installed`; on a stock device the
-/// apply aborts loudly at the FIRST op — before any configuration is
-/// touched — rather than leaving dangling config for absent software.
+/// preinstalled device, where the gate's `opkg list-installed` arm
+/// no-ops; when the feed IS configured it installs; on a stock device
+/// it refuses WITH THE REASON (#59: the vernesong feed requirement and
+/// the bake-into-image path) — before any configuration is touched —
+/// rather than leaving dangling config for absent software.
 /// An acquisition phase (feed setup / release-IPK download) is M7
 /// image-pipeline work, not a plan op. The 1.x `packages_remove:
 /// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build

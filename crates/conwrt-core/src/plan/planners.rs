@@ -3230,8 +3230,31 @@ pub(super) fn plan_openclash(
         PlanOp::EnsurePackage {
             name: "dnsmasq-full".into(),
         },
-        PlanOp::EnsurePackage {
-            name: "luci-app-openclash".into(),
+        // #59: luci-app-openclash ships from the third-party vernesong
+        // feed, NOT official OpenWrt packages — a bare EnsurePackage
+        // aborted with a generic install failure on stock feeds (the
+        // issue's opaque verify-empty-output). The gate (byte-identical
+        // to openclash.py's op, after dnsmasq-full which the package
+        // depends on): no-op when installed, install when the feed is
+        // configured, refuse WITH THE REASON before any configuration
+        // is touched. Starts with the parity drop prefix
+        // ('if [ -n "$(opkg list-installed ') so normalized command
+        // streams stay aligned (parity.rs command_lines mirrors the
+        // pytest _DROP_LINE_PREFIXES).
+        PlanOp::Shell {
+            command: concat!(
+                "if [ -n \"$(opkg list-installed luci-app-openclash 2>/dev/null)\" ]; then ",
+                "echo 'openclash: luci-app-openclash already installed'; ",
+                "elif [ -n \"$(opkg list luci-app-openclash 2>/dev/null)\" ]; then ",
+                "opkg update >/dev/null 2>&1; opkg install luci-app-openclash; ",
+                "else ",
+                "echo 'PRECONDITION-FAIL (#59): luci-app-openclash ships from the ",
+                "third-party vernesong feed (github.com/vernesong/OpenClash), not the ",
+                "official OpenWrt package feeds - bake it into the image ",
+                "(packages_via=image) or configure the feed first; refusing before any ",
+                "configuration is touched'; exit 1; fi",
+            )
+            .into(),
         },
         PlanOp::EnsurePackage {
             name: "coreutils-nohup".into(),

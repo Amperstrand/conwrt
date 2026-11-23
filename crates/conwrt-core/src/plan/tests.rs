@@ -1216,15 +1216,22 @@ fn openclash_shape_gates_and_branches_match_1x() {
         .iter()
         .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "dnsmasq-full"))
         .expect("dnsmasq-full install present");
+    // #59: luci-app-openclash rides a gated Shell op (not a bare
+    // EnsurePackage) — third-party vernesong feed, refuses WITH THE
+    // REASON before any configuration is touched when absent.
     let luci = plan
         .ops
         .iter()
-        .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "luci-app-openclash"))
-        .expect("luci-app-openclash install present");
+        .position(|op| {
+            matches!(op, PlanOp::Shell { command }
+                if command.starts_with("if [ -n \"$(opkg list-installed luci-app-openclash"))
+        })
+        .expect("luci-app-openclash feed gate present");
     assert!(
         swap < full && full < luci,
-        "swap must precede dnsmasq-full, which must precede luci-app-openclash"
+        "swap must precede dnsmasq-full, which must precede the luci-app-openclash gate"
     );
+    assert!(render_shell(&plan).contains("PRECONDITION-FAIL (#59)"));
     assert!(script.contains("opkg download dnsmasq-full) && opkg remove dnsmasq"));
     // staged /tmp/.uci debris reverted before the first mutation
     assert!(script.contains("uci -q revert openclash 2>/dev/null || true"));
