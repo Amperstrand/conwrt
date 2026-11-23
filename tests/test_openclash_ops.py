@@ -6,14 +6,19 @@ If ops change, these tests must be updated to match.
 import pytest
 
 from profile.ops import render_shell
+from use_cases import get as get_use_case
 from use_cases.openclash import _build_openclash_ops
 
 
 DEFAULT_PARAMS = {}
 CUSTOM_PARAMS = {"proxy_type": "vmess", "core_type": "Dev", "dns_mode": "fake-ip"}
 
+GATE = (
+    'if [ -n "$(opkg list-installed luci-app-openclash 2>/dev/null)" ]; then echo \'openclash: luci-app-openclash already installed\'; elif [ -n "$(opkg list luci-app-openclash 2>/dev/null)" ]; then opkg update >/dev/null 2>&1; opkg install luci-app-openclash; else echo \'PRECONDITION-FAIL (#59): luci-app-openclash ships from the third-party vernesong feed (github.com/vernesong/OpenClash), not the official OpenWrt package feeds - bake it into the image (packages_via=image) or configure the feed first; refusing before any configuration is touched\'; exit 1; fi'
+)
+
 EXPECTED_DEFAULT = (
-    "# --- OpenClash transparent proxy ---\n"
+    "# --- OpenClash transparent proxy ---\n" + GATE + "\n"
     "mkdir -p /etc/openclash/config\n"
     "uci -q revert openclash 2>/dev/null || true\n"
     "uci set openclash.config.enable='1'\n"
@@ -30,7 +35,7 @@ EXPECTED_DEFAULT = (
 )
 
 EXPECTED_CUSTOM = (
-    "# --- OpenClash transparent proxy ---\n"
+    "# --- OpenClash transparent proxy ---\n" + GATE + "\n"
     "mkdir -p /etc/openclash/config\n"
     "uci -q revert openclash 2>/dev/null || true\n"
     "uci set openclash.config.enable='1'\n"
@@ -53,6 +58,20 @@ class TestOpenclashOps:
 
     def test_custom_params(self):
         assert render_shell(_build_openclash_ops(CUSTOM_PARAMS)) == EXPECTED_CUSTOM
+
+    def test_feed_gate_leads_before_any_config(self):
+        rendered = render_shell(_build_openclash_ops(DEFAULT_PARAMS))
+        assert "PRECONDITION-FAIL (#59)" in rendered
+        assert rendered.index(GATE) < rendered.index("mkdir -p /etc/openclash/config")
+        assert rendered.index(GATE) < rendered.index("uci set openclash.config.enable")
+
+    def test_luci_not_in_auto_packages(self):
+        # #59: the third-party-feed package must NOT ride the auto
+        # packages list (that install fails opaquely on stock feeds) —
+        # the gate owns its delivery.
+        uc = get_use_case("openclash")
+        assert uc is not None
+        assert "luci-app-openclash" not in uc.packages
 
     def test_fake_ip_dns(self):
         rendered = render_shell(_build_openclash_ops({"dns_mode": "fake-ip"}))
