@@ -54,7 +54,7 @@ same steps run manually over telnet — this is what was actually done
    # rescue shell
    setsid sh -c 'nc -l -p 9999 > /tmp/u.img.xz' < /dev/null > /tmp/dl.log 2>&1 &
    # workstation
-   nc 192.168.13.240 9999 < ubuntu-image.img.xz     # or python socket sender
+   nc <bench-host-ip> 9999 < ubuntu-image.img.xz     # or python socket sender
    ```
 2. Verify: `stat -c %s` matches, `sha256sum` matches SHA256SUMS.
 3. Write: `xzcat /tmp/u.img.xz | dd of=/dev/sda bs=4M && sync`

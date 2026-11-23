@@ -109,6 +109,12 @@ password works but keys never do).
   prioritization, credential-ladder generation, and the control gate.
 - `scripts/gs1900-portmap.sh` — per-port identity/PoE map on the bench switch.
 - `scripts/router-probe.py` — boot-state identification once an address exists.
+- `scripts/pi_boot.py` — the ladder for a dark **Raspberry Pi**, where the
+  ordering is different: its firmware never reaches a network stack, so
+  credential and IP probing are wasted until the boot medium is proven
+  (`scan` / `probe`), the firmware floors and `BOOT_ORDER` are read
+  (`capability`), and each medium is exercised (`matrix`). The playbook for
+  that ladder is `recipes/raspberry-pi/boot-matrix.md`.
 - `prompts/bench-forensics-01-dark-device.md` — session template for a dark
   device; `prompts/bench-forensics-02-session-archaeology.md` — mining past
   agent transcripts for a device's historical IPs/credentials (the technique

@@ -255,6 +255,109 @@ class TestFetchOriginRecord(unittest.TestCase):
         self.assertEqual(self.fetched_urls, ["http://x/pieeprom.bin"])
 
 
+class TestFetchIntegrity(unittest.TestCase):
+    """Downloads that end up in SPI flash are pinned and digest-checked."""
+
+    def setUp(self):
+        import tempfile
+        import pi_eeprom
+        self.pi = pi_eeprom
+        self.fetched_urls = []
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+        class Resp:
+            def __init__(self, data):
+                self._data = data
+                self._done = False
+
+            def read(self, n=-1):
+                if self._done:
+                    return b""
+                self._done = True
+                return self._data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(url, timeout=0):
+            self.fetched_urls.append(url)
+            return Resp(b"FRESH-" + url.encode())
+
+        self.patcher = mock.patch.object(self.pi.urllib.request,
+                                         "urlopen", fake_urlopen)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self._tmp.cleanup()
+
+    def test_defaults_are_commit_pinned_not_branch(self):
+        self.assertNotIn("master", self.pi.DEFAULT_BASE)
+        self.assertRegex(self.pi.EEPROM_UPSTREAM_COMMIT, r"^[0-9a-f]{40}$")
+        # find_tool's fallback must be pinned too — it executes at build time.
+        self.assertIn(self.pi._pinned("rpi-eeprom-config"), self.pi.KNOWN_DIGESTS)
+
+    def test_pinned_fetch_with_unexpected_bytes_refuses(self):
+        url = f"{self.pi.DEFAULT_BASE}/{self.pi.DEFAULT_PIEEPROM}"
+        dest = self.dir / self.pi.DEFAULT_PIEEPROM
+        with self.assertRaises(SystemExit) as ctx:
+            self.pi.fetch(url, dest)
+        self.assertIn("digest recorded at pin time", str(ctx.exception))
+        self.assertFalse(dest.exists(), "refused bytes must not stay cached")
+        self.assertFalse(dest.with_name(dest.name + ".origin").exists())
+
+    def test_pinned_fetch_with_expected_bytes_passes(self):
+        url = f"{self.pi.DEFAULT_BASE}/{self.pi.DEFAULT_PIEEPROM}"
+        payload = b"FRESH-" + url.encode()
+        with mock.patch.dict(self.pi.KNOWN_DIGESTS,
+                             {url: hashlib.sha256(payload).hexdigest()}):
+            dest = self.dir / self.pi.DEFAULT_PIEEPROM
+            self.pi.fetch(url, dest)
+        self.assertTrue(dest.is_file())
+        sidecar = dest.with_name(dest.name + ".sha256")
+        self.assertTrue(sidecar.read_text().startswith(
+            hashlib.sha256(payload).hexdigest()))
+
+    def test_unpinned_url_is_recorded_not_second_guessed(self):
+        dest = self.dir / "custom.bin"
+        self.pi.fetch("http://x/custom.bin", dest)
+        self.assertTrue(dest.is_file())
+        digest = dest.with_name(dest.name + ".sha256").read_text()
+        self.assertTrue(digest.startswith(
+            hashlib.sha256(b"FRESH-http://x/custom.bin").hexdigest()))
+
+    def test_cache_hit_with_tampered_bytes_refuses(self):
+        dest = self.dir / "pieeprom.bin"
+        self.pi.fetch("http://x/pieeprom.bin", dest)
+        dest.write_bytes(b"TAMPERED")
+        with self.assertRaises(SystemExit) as ctx:
+            self.pi.fetch("http://x/pieeprom.bin", dest)
+        self.assertIn("no longer matches its recorded digest", str(ctx.exception))
+        self.assertFalse(dest.exists())
+
+    def test_cache_hit_with_intact_bytes_reuses(self):
+        dest = self.dir / "pieeprom.bin"
+        self.pi.fetch("http://x/pieeprom.bin", dest)
+        self.pi.fetch("http://x/pieeprom.bin", dest)
+        self.assertEqual(self.fetched_urls, ["http://x/pieeprom.bin"])
+        self.assertEqual(dest.read_bytes(), b"FRESH-http://x/pieeprom.bin")
+
+    def test_local_recovery_copy_clears_stale_digest_sidecar(self):
+        out_dir = self.dir / "pkg"
+        dest = out_dir / "recovery.bin"
+        dest.parent.mkdir(parents=True)
+        dest.write_bytes(b"from-url")
+        dest.with_name(dest.name + ".sha256").write_text("deadbeef\n")
+        src = self.dir / "custom.bin"
+        src.write_bytes(b"CUSTOM")
+        self.pi.resolve_recovery(str(src), out_dir)
+        self.assertFalse(dest.with_name(dest.name + ".sha256").exists())
+
+
 class TestPushSpecimenGate(unittest.TestCase):
     def setUp(self):
         import tempfile

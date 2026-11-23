@@ -56,6 +56,23 @@ class TestSshCmd(TestCase):
         self.assertIn("StrictHostKeyChecking=no", cmd)
         self.assertIn("UserKnownHostsFile=/dev/null", cmd)
 
+    def test_default_user_is_root(self):
+        # OpenWrt and the Pi rescue shell are root-only; the default must not
+        # change when a target-specific user is not requested.
+        self.assertIn("root@192.168.1.1", ssh_cmd("192.168.1.1", "ls"))
+
+    def test_user_override(self):
+        # Raspberry Pi OS / Ubuntu images log in as pi / ubuntu.
+        cmd = ssh_cmd("192.168.1.1", "ls", user="pi")
+        self.assertIn("pi@192.168.1.1", cmd)
+        self.assertNotIn("root@192.168.1.1", cmd)
+
+    def test_run_ssh_threads_user_through(self):
+        with patch("ssh_utils.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run_ssh("192.168.1.1", "ls", user="ubuntu")
+        self.assertIn("ubuntu@192.168.1.1", run.call_args[0][0])
+
 
 class TestScpCmd(TestCase):
     def test_basic_scp(self):

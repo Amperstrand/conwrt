@@ -305,3 +305,51 @@ fn vm_name_must_be_a_real_dns_label() {
         assert!(spec(good).validate().is_ok(), "{good:?} must be accepted");
     }
 }
+
+#[test]
+fn destroy_broken_vm_deletes_despite_release_conflict() {
+    // #337: a machine stuck Broken (or New/Retired-class) answers release
+    // with 409 — destroy must still delete instead of leaking the VM.
+    let mut maas = MockMaas::new();
+    use conwrt_maas::provider::MaasClient;
+    pollster::block_on(maas.compose(&spec("broken-vm"))).unwrap();
+    pollster::block_on(maas.machine("sys-1")).unwrap(); // New → Commissioning
+    // Force the machine into Broken (operator-marked).
+    if let Some(m) = maas.machines.iter_mut().find(|m| m.system_id == "sys-1") {
+        m.state = MachineState::Broken;
+    }
+
+    let mut provider = MaasProvider::new(maas, NoTime::default());
+    pollster::block_on(provider.destroy_vm("sys-1")).unwrap();
+
+    let calls = &provider.client().calls;
+    // release WAS attempted... (Broken is not release-required, so with the
+    // gate it is not even attempted — the leak was the abort, not the skip)
+    assert!(
+        !calls.iter().any(|c| c.starts_with("release")),
+        "Broken must not attempt release (409 class)"
+    );
+    assert!(calls.iter().any(|c| c == "delete sys-1"));
+    assert!(provider.client().machines.is_empty());
+}
+
+#[test]
+fn destroy_deployed_vm_tolerates_release_failure_and_still_deletes() {
+    // The belt-and-braces half of #337: even when a releaseable state's
+    // release call errors, delete still runs (delete is the stronger
+    // cleanup) instead of aborting with the machine stranded.
+    let mut maas = MockMaas::new();
+    use conwrt_maas::provider::MaasClient;
+    pollster::block_on(maas.compose(&spec("held-vm"))).unwrap();
+    pollster::block_on(maas.machine("sys-1")).unwrap(); // New → Commissioning
+    pollster::block_on(maas.machine("sys-1")).unwrap(); // → Ready
+    pollster::block_on(maas.allocate("sys-1")).unwrap(); // → Allocated
+    maas.fail_next_release = true; // release will 500
+
+    let mut provider = MaasProvider::new(maas, NoTime::default());
+    pollster::block_on(provider.destroy_vm("sys-1")).unwrap();
+    let calls = &provider.client().calls;
+    assert!(calls.iter().any(|c| c == "release sys-1"));
+    assert!(calls.iter().any(|c| c == "delete sys-1"));
+    assert!(provider.client().machines.is_empty());
+}

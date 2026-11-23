@@ -29,14 +29,22 @@ def _image_entry(tmp_path: Path, content: bytes = b"firmware-image-bytes") -> tu
 
 
 class TestImageGates:
-    def test_stock_24_and_25_pass(self, tmp_path: Path) -> None:
+    def test_stock_24_10_passes(self, tmp_path: Path) -> None:
         entry, img = _image_entry(tmp_path)
-        assert bf.check_image({**entry, "version": "25.12.5"}, img)
+        assert bf.check_image({**entry, "version": "24.10.2"}, img)
+
+    def test_25_12_refused_for_flash_boot_path(self, tmp_path: Path) -> None:
+        # #272: 25.12.x matches sysupgrade but the AP3915i flash-boot
+        # bring-up is 24.10.x-only (AGENTS.md:570 rule 2) — the previous
+        # test asserted the defective wide gate.
+        entry, img = _image_entry(tmp_path)
+        with pytest.raises(ba.AdoptError, match="24.10.x"):
+            bf.check_image({**entry, "version": "25.12.5"}, img)
 
     @pytest.mark.parametrize("version", ["23.05.5", "26.3.0", "24-snapshot", ""])
     def test_non_stock_refused(self, tmp_path: Path, version: str) -> None:
         entry, img = _image_entry(tmp_path)
-        with pytest.raises(ba.AdoptError, match="not stock"):
+        with pytest.raises(ba.AdoptError, match="24.10.x"):
             bf.check_image({**entry, "version": version}, img)
 
     def test_wrong_profile_refused(self, tmp_path: Path) -> None:
@@ -112,7 +120,7 @@ class TestFlashHappyPath:
         _no_time(monkeypatch, [0, 20, 40])
         fake = FakeSession()
         spy = _Spy([
-            f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}",   # flash-target
+            f"FLASH-TARGET-OK\nextreme-networks,ws-ap3915i",  # flash-target: the DEVICE comma form (#270)
             "LIFELINE-OK",                               # flash-lifeline
             digest,                                      # flash-push readback
             "",                                          # flash-go
@@ -141,7 +149,7 @@ class TestFlashRecoveryPolicy:
     def test_broken_lifeline_never_flashes(self, tmp_path: Path) -> None:
         entry, img = _image_entry(tmp_path)
         fake = FakeSession()
-        spy = _Spy(["FLASH-TARGET-OK\n" + bf.EXPECTED_PROFILE, "LIFELINE-BROKEN"])
+        spy = _Spy(["FLASH-TARGET-OK\nextreme-networks,ws-ap3915i", "LIFELINE-BROKEN"])  # comma form (#270)
         r = ba.Runner(spy, PLACE, tmp_path / "ev")  # type: ignore[arg-type]
         with pytest.raises(ba.AdoptError, match="lifeline"):
             bf.stage_flash(r, entry, img, "/tmp/t", fake)
@@ -157,7 +165,7 @@ class TestFlashRecoveryPolicy:
         digest = entry["sha256"]
         fake = FakeSession()
         _no_time(monkeypatch, [0, 200, 220, 240, 260, 280, 300, 320, 340])
-        preamble = [f"FLASH-TARGET-OK\n{bf.EXPECTED_PROFILE}", "LIFELINE-OK", digest, ""]
+        preamble = [f"FLASH-TARGET-OK\nextreme-networks,ws-ap3915i", "LIFELINE-OK", digest, ""]  # comma form (#270)
 
         def sequenced() -> str:
             if preamble:

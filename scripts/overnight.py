@@ -166,14 +166,29 @@ def adopt_unit(dut_ip: str, mac: str, vlan: int) -> bool:
     if "KEYS-OK" not in out:
         return False
 
+    # #284: mirror bench_adopt's proven stage shape — clean baseline first
+    # (aborted runs leave /tmp/.uci staging that poisons diffs), then stage
+    # WITHOUT committing, then VALUE READBACKS; only a verified stage commits.
     rc, out = switch_ssh(
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
-        f"'uci set network.lan.proto=\"static\"; "
+        f"'uci revert network 2>/dev/null; "
+        f"uci set network.lan.proto=\"static\"; "
         f"uci delete network.lan.ipaddr 2>/dev/null; "
         f"uci add_list network.lan.ipaddr=\"{dut_ip}/24\"; "
         f"uci set network.lan.gateway=\"{gw}\"; "
         f"uci set network.lan.dns=\"{gw}\"; "
-        f"uci commit network; echo ADOPT-OK' </dev/null 2>&1 | grep -v Caution")
+        f"echo ---READBACK---; "
+        f"uci get network.lan.proto; uci get network.lan.ipaddr; "
+        f"uci get network.lan.gateway; uci get network.lan.dns' </dev/null 2>&1 | grep -v Caution")
+    got = out.split("---READBACK---")[-1].split()
+    want = ["static", f"{dut_ip}/24", gw, gw]
+    if got != want:
+        print(f"adopt stage readback mismatch: {got} != {want}")
+        return False
+
+    rc, out = switch_ssh(
+        f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
+        f"'uci commit network; echo ADOPT-OK' </dev/null 2>&1 | grep -v Caution")
     if "ADOPT-OK" not in out:
         return False
 

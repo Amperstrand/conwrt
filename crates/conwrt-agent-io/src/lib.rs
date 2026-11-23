@@ -66,6 +66,21 @@ pub trait PacketIo {
 /// errors (host unplug, port close) — the caller owns reconnection and
 /// session reset (connection lifecycle drives lease lifecycle, #110).
 pub async fn agent_session<T: PacketIo>(io: &mut T, server: &mut ServerCore, max_packet: usize) {
+    agent_session_opts(io, server, max_packet, SessionOpts::default()).await
+}
+
+/// The packet session with explicit [`SessionOpts`] (see the stream twin).
+///
+/// #361: firmware callers pass \`tick\` so lease budgets decrement while the
+/// USB session is up — a controller that acquires a lease and stops
+/// heartbeating (without disconnecting) must not pin the resource forever.
+/// Expiry events are written to the wire as they occur.
+pub async fn agent_session_opts<T: PacketIo>(
+    io: &mut T,
+    server: &mut ServerCore,
+    max_packet: usize,
+    opts: SessionOpts,
+) {
     // #475: the receive buffer must match the caller's packet size — a
     // high-speed CDC session (max_packet up to 512) with a fixed 64-byte
     // buffer truncates packet reads. Bounded stack storage (no_std, no
@@ -77,20 +92,72 @@ pub async fn agent_session<T: PacketIo>(io: &mut T, server: &mut ServerCore, max
     let mut storage = [0u8; CDC_HS_PACKET];
     let (buf, _) = storage.split_at_mut(max_packet.min(CDC_HS_PACKET));
     let mut pump = CobsPump::new();
+    let mut tick_timer = opts.tick.map(embassy_time::Timer::after);
+    let mut idle_timer = opts.idle_timeout.map(embassy_time::Timer::after);
     loop {
-        let Ok(n) = io.read_packet(buf).await else {
-            return;
-        };
-        pump.feed(&buf[..n]);
-        while let Some(frame) = pump.pop_frame() {
-            let Some(response) = decode_frame(&frame)
-                .ok()
-                .and_then(|decoded| server.handle_frame(decoded))
-            else {
-                continue;
+        let timers = async {
+            let tick = async {
+                match tick_timer.as_mut() {
+                    Some(t) => {
+                        t.await;
+                        true
+                    }
+                    None => core::future::pending::<bool>().await,
+                }
             };
-            if let Ok(bytes) = encode_frame(&response) {
-                write_packetized(io, &cobs_encode(&bytes), max_packet).await;
+            let idle = async {
+                match idle_timer.as_mut() {
+                    Some(i) => {
+                        i.await;
+                        false
+                    }
+                    None => core::future::pending::<bool>().await,
+                }
+            };
+            match select(tick, idle).await {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        };
+        match select(io.read_packet(buf), timers).await {
+            Either::First(read) => {
+                if let Some(d) = opts.idle_timeout {
+                    idle_timer = Some(embassy_time::Timer::after(d));
+                }
+                let Ok(n) = read else {
+                    return;
+                };
+                pump.feed(&buf[..n]);
+                while let Some(frame) = pump.pop_frame() {
+                    let Some(response) = decode_frame(&frame)
+                        .ok()
+                        .and_then(|decoded| server.handle_frame(decoded))
+                    else {
+                        continue;
+                    };
+                    if let Ok(bytes) = encode_frame(&response) {
+                        write_packetized(io, &cobs_encode(&bytes), max_packet).await;
+                    }
+                }
+            }
+            Either::Second(is_tick) => {
+                if is_tick {
+                    for expired in server.tick() {
+                        server.queue_event(expired);
+                    }
+                    // Flush any queued events (expiry notices) to the wire.
+                    for event in server.take_events() {
+                        if let Ok(bytes) = encode_frame(&WireFrame::Event(event)) {
+                            write_packetized(io, &cobs_encode(&bytes), max_packet).await;
+                        }
+                    }
+                    if let Some(d) = opts.tick {
+                        tick_timer = Some(embassy_time::Timer::after(d));
+                    }
+                } else {
+                    // Idle deadline: end the session; the caller re-runs it.
+                    return;
+                }
             }
         }
     }
@@ -267,46 +334,129 @@ pub async fn agent_session_stream_events<T: StreamIo, E: EventSource>(
     events: &mut E,
     server: &mut ServerCore,
 ) {
+    agent_session_stream_events_opts(io, events, server, SessionOpts::default()).await
+}
+
+/// Session tunables; `None` everywhere reproduces the legacy semantics.
+#[derive(Clone, Copy, Default)]
+pub struct SessionOpts {
+    /// #362 (r4294815059): drive [`ServerCore::tick`] at this interval and
+    /// emit the returned lease-expiry events — without a timer the
+    /// advertised heartbeat budget never decrements while the transport
+    /// is up, and a silent controller keeps lease privileges forever.
+    pub tick: Option<embassy_time::Duration>,
+    /// #363 (r4294815081): end the session when no frame or event arrives
+    /// for this long (a connected-but-silent client monopolizes the
+    /// single-socket agent otherwise). Reset on every read/event.
+    pub idle_timeout: Option<embassy_time::Duration>,
+}
+
+/// The session loop with explicit [`SessionOpts`].
+pub async fn agent_session_stream_events_opts<T: StreamIo, E: EventSource>(
+    io: &mut T,
+    events: &mut E,
+    server: &mut ServerCore,
+    opts: SessionOpts,
+) {
     let mut buf = [0u8; STREAM_READ_BUF];
     let mut evbuf = [0u8; EVENT_BUF];
     let mut pump = CobsPump::new();
+    let mut tick_timer = opts.tick.map(embassy_time::Timer::after);
+    let mut idle_timer = opts.idle_timeout.map(embassy_time::Timer::after);
     loop {
-        match select(io.read(&mut buf), events.wait_data(&mut evbuf)).await {
-            Either::First(read) => {
-                let Ok(n) = read else {
-                    return;
-                };
-                if n == 0 {
-                    return;
+        // The timers join the select as one arm; a disabled timer is a
+        // pending future (never completes). io.read/wait_data are
+        // documented cancel-safe, so recreating them per iteration is
+        // correct.
+        let timers = async {
+            let tick = async {
+                match tick_timer.as_mut() {
+                    Some(t) => {
+                        t.await;
+                        true
+                    }
+                    None => core::future::pending::<bool>().await,
                 }
-                pump.feed(&buf[..n]);
-                while let Some(frame) = pump.pop_frame() {
-                    let Some(response) = decode_frame(&frame)
-                        .ok()
-                        .and_then(|decoded| server.handle_frame(decoded))
-                    else {
-                        continue;
-                    };
-                    if let Ok(bytes) = encode_frame(&response) {
-                        // #375: undeliverable responses end the session.
-                        if write_all_stream(io, &cobs_encode(&bytes)).await.is_err() {
+            };
+            let idle = async {
+                match idle_timer.as_mut() {
+                    Some(i) => {
+                        i.await;
+                        false
+                    }
+                    None => core::future::pending::<bool>().await,
+                }
+            };
+            match select(tick, idle).await {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        };
+        match select(
+            select(io.read(&mut buf), events.wait_data(&mut evbuf)),
+            timers,
+        )
+        .await
+        {
+            Either::First(io_or_ev) => {
+                // Activity resets the idle deadline.
+                if let Some(d) = opts.idle_timeout {
+                    idle_timer = Some(embassy_time::Timer::after(d));
+                }
+                match io_or_ev {
+                    Either::First(read) => {
+                        let Ok(n) = read else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        pump.feed(&buf[..n]);
+                        while let Some(frame) = pump.pop_frame() {
+                            let Some(response) = decode_frame(&frame)
+                                .ok()
+                                .and_then(|decoded| server.handle_frame(decoded))
+                            else {
+                                continue;
+                            };
+                            if let Ok(bytes) = encode_frame(&response) {
+                                // #375: undeliverable responses end the session.
+                                if write_all_stream(io, &cobs_encode(&bytes)).await.is_err() {
+                                    return;
+                                }
+                            }
+                            if send_pending_events(io, server).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Either::Second(ev) => {
+                        let Ok(n) = ev else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        server.push_uart_data(0, &evbuf[..n]);
+                        if send_pending_events(io, server).await.is_err() {
                             return;
                         }
                     }
-                    if send_pending_events(io, server).await.is_err() {
-                        return;
-                    }
                 }
             }
-            Either::Second(ev) => {
-                let Ok(n) = ev else {
-                    return;
-                };
-                if n == 0 {
-                    return;
-                }
-                server.push_uart_data(0, &evbuf[..n]);
-                if send_pending_events(io, server).await.is_err() {
+            Either::Second(is_tick) => {
+                if is_tick {
+                    // #362: decrement lease budgets; expiry events ride
+                    // the next drain.
+                    for expired in server.tick() {
+                        server.queue_event(expired);
+                    }
+                    if let Some(d) = opts.tick {
+                        tick_timer = Some(embassy_time::Timer::after(d));
+                    }
+                } else {
+                    // #363: idle deadline — end the session; the caller
+                    // aborts the socket and re-accepts.
                     return;
                 }
             }

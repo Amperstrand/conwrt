@@ -35,19 +35,24 @@ class TestBenchVenue:
     def test_qemu_only_is_not_a_bench_router(self):
         assert bench_venue([Venue("qemu-session", "qemu-session")]) == (None, "")
 
-    def test_single_direct_venue_resolves_host(self, monkeypatch, tmp_path):
+    def test_single_direct_venue_resolves_full_device(self, monkeypatch, tmp_path):
+        # #329: the registry's port/key ride along, not just the host
         lab = tmp_path / "lab.yaml"
-        lab.write_text("devices:\n  x1860-desk: {mgmt: 192.168.104.52}\n")
+        lab.write_text(
+            "devices:\n  x1860-desk: {mgmt: 192.168.104.52,"
+            " ssh_port: 2222, ssh_key: /home/op/.ssh/bench}\n")
         import venues as vmod
         monkeypatch.setattr(vmod, "LAB_YAML", lab)
-        ip, label = bench_venue([Venue("direct:x1860-desk", "direct")])
-        assert ip == "192.168.104.52"
+        dev, label = bench_venue([Venue("direct:x1860-desk", "direct")])
+        assert dev == {"host": "192.168.104.52", "port": 2222,
+                       "key": "/home/op/.ssh/bench", "model": None}
         assert label == "direct:x1860-desk"
 
-    def test_labgrid_venue_keeps_own_router(self):
-        ip, label = bench_venue([Venue("labgrid:ap-lan4", "labgrid")])
-        assert ip is None
-        assert label == "labgrid:ap-lan4"
+    def test_labgrid_venue_refused_on_router_axis(self):
+        # #330: a labgrid selection must not silently fall back to
+        # CONWRT_BENCH_ROUTER while labeling results with the place.
+        with pytest.raises(ValueError, match="exporter-proxied execution not implemented"):
+            bench_venue([Venue("labgrid:ap-lan4", "labgrid")])
 
     def test_two_hardware_venues_refused(self):
         with pytest.raises(ValueError, match="ONE hardware venue"):

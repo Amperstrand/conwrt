@@ -140,3 +140,6 @@ class TestConfigRender:
         assert "Endpoint = 187.40.55.102:51820" in body
         assert "Address = 10.5.0.2/32" in body
         assert "PersistentKeepalive = 25" in body
+        # #309: the export carries the account PrivateKey — 0600, never
+        # the umask default (0644 exposes it to every local user).
+        assert out.stat().st_mode & 0o777 == 0o600, oct(out.stat().st_mode & 0o777)

@@ -186,12 +186,35 @@ def _render_tokens(lines: list[list[str]]) -> list[str]:
     return [" ".join(t) for t in lines]
 
 
+def _resolve_target_dir(cargo: str, repo: Path) -> Path:
+    """The EFFECTIVE cargo target directory (#432): the host's global
+    ~/.cargo/config.toml can pin build.target-dir (disk consolidation,
+    2026-10-19), which silently redirects builds away from the repo's
+    ./target while this harness kept looking there — 6 wireguard_server
+    parity cases ERRORed locally with 'missing after cargo build' while
+    CI (no redirect) stayed green. cargo metadata reports the effective
+    directory (config + env + defaults), so ask the source of truth
+    instead of reconstructing the rules."""
+    proc = subprocess.run(
+        [cargo, "metadata", "--format-version", "1", "--no-deps"],
+        cwd=repo, capture_output=True, text=True, timeout=60,
+    )
+    if proc.returncode == 0:
+        try:
+            return Path(json.loads(proc.stdout)["target_directory"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # metadata unavailable (exotic toolchain): fall back to the old
+    # env-or-repo guess rather than failing the whole session
+    return Path(os.environ.get("CARGO_TARGET_DIR", str(repo / "target")))
+
+
 @pytest.fixture(scope="session")
 def plan_render_bin() -> Path:
     cargo = shutil.which("cargo")
     if cargo is None:
         pytest.skip("cargo toolchain not available for the Rust parity renderer")
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target"))
+    target_dir = _resolve_target_dir(cargo, REPO)
     bin_path = target_dir / "debug" / "conwrt-plan-render"
     if not bin_path.exists():
         build = subprocess.run(
@@ -364,3 +387,33 @@ class TestPlanRendererParity:
         assert golden.read_text() == _python_render(fx["fixture"]), (
             f"{fx['stem']}: golden out of date — run scripts/update_parity_golden.py"
         )
+
+
+class TestTargetDirResolution:
+    """#432: the render-bin path must follow the EFFECTIVE cargo target
+    dir (config pins, env overrides), not a hardcoded ./target guess."""
+
+    def _fake_cargo(self, tmp_path: Path, target_dir: str) -> str:
+        shim = tmp_path / "cargo"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'printf \'{"target_directory": "%s"}\' "' + target_dir + '"\n'
+            'case "$1" in metadata) exit 0;; esac\n exit 1\n'
+        )
+        shim.chmod(0o755)
+        return str(shim)
+
+    def test_metadata_target_dir_is_used(self, tmp_path):
+        from test_parity_rust_plan import _resolve_target_dir
+        cargo = self._fake_cargo(tmp_path, "/opt/shared-target")
+        assert _resolve_target_dir(cargo, REPO) == Path("/opt/shared-target")
+
+    def test_broken_metadata_falls_back_to_env_or_repo(self, tmp_path, monkeypatch):
+        from test_parity_rust_plan import _resolve_target_dir
+        bad = tmp_path / "cargo"
+        bad.write_text("#!/bin/sh\nexit 1\n")
+        bad.chmod(0o755)
+        monkeypatch.setenv("CARGO_TARGET_DIR", "/tmp/env-target")
+        assert _resolve_target_dir(str(bad), REPO) == Path("/tmp/env-target")
+        monkeypatch.delenv("CARGO_TARGET_DIR")
+        assert _resolve_target_dir(str(bad), REPO) == REPO / "target"

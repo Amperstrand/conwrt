@@ -105,3 +105,22 @@ def test_deadman_cancel() -> None:
 
 def test_vlan_name() -> None:
     assert bs.vlan_name(bs.BenchProfile(), "lan7") == "vlan1007"
+
+
+class TestDeployOverSshStdin:
+    """#282: the SSH deploy branch must feed the script via stdin (`sh -s`),
+    never wrapped in sh -c '<script>' — the deadman line alone contains
+    single quotes that terminate the outer quoting."""
+
+    def test_ssh_branch_uses_sh_s_with_stdin_script(self, monkeypatch) -> None:
+        seen = {}
+
+        def fake_ssh(host, cmd, timeout=60, stdin_text=None):
+            seen["cmd"], seen["stdin_text"] = cmd, stdin_text
+            return 0, "DEPLOY-COMMITTED"
+
+        monkeypatch.setattr(bs, "ssh", fake_ssh)
+        rc = bs.cmd_deploy("192.0.2.9", None, bs.BenchProfile(), None)
+        assert rc == 0
+        assert seen["cmd"] == "sh -s"
+        assert seen["stdin_text"] and "nohup sh -c 'sleep 600 && reboot'" in seen["stdin_text"]

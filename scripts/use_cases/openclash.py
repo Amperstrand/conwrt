@@ -34,6 +34,27 @@ def _build_openclash_ops(params: dict[str, Any]) -> list[Op]:
     r = _resolve_params(params)
     return [
         Comment(text="--- OpenClash transparent proxy ---"),
+        # #59: luci-app-openclash ships from the third-party vernesong
+        # feed, NOT official OpenWrt packages — the stock-feed install
+        # failed with an opaque verify-empty-output. It is NOT in the
+        # auto packages list: this gate (before any configuration is
+        # touched) installs it when the feed is configured, no-ops when
+        # the image bakes it, and refuses WITH THE REASON otherwise.
+        # Byte-identical on the Rust side (planners.rs plan_openclash);
+        # starts with the parity drop prefix so normalized streams stay
+        # aligned (tests/test_parity_rust_plan.py _DROP_LINE_PREFIXES /
+        # parity.rs command_lines).
+        ShellCommand(command=(
+            "if [ -n \"$(opkg list-installed luci-app-openclash 2>/dev/null)\" ]; then "
+            "echo 'openclash: luci-app-openclash already installed'; "
+            "elif [ -n \"$(opkg list luci-app-openclash 2>/dev/null)\" ]; then "
+            "opkg update >/dev/null 2>&1; opkg install luci-app-openclash; "
+            "else "
+            "echo 'PRECONDITION-FAIL (#59): luci-app-openclash ships from the "
+            "third-party vernesong feed (github.com/vernesong/OpenClash), not the "
+            "official OpenWrt package feeds - bake it into the image "
+            "(packages_via=image) or configure the feed first; refusing before any "
+            "configuration is touched'; exit 1; fi")),
         ShellCommand(command="mkdir -p /etc/openclash/config"),
         # AGENTS.md staging-debris rule: an aborted earlier session may
         # have left uncommitted /tmp/.uci changes for openclash — the
@@ -59,7 +80,6 @@ register(UseCase(
     name="openclash",
     description="Transparent proxy via Clash/Mihomo for censorship bypass (post-flash config)",
     packages=[
-        "luci-app-openclash",
         "coreutils-nohup",
         "bash",
         "iptables",

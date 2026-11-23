@@ -34,6 +34,8 @@ REQUIRED_PARAMS = {
         "uplink_key": "benchpass",
         "uplink_password": "benchpass",
     },
+    "ddns": {"domain": "home.example.org", "password": "tok123"},
+    "iot": {"key": "iotpass123"},
     "mesh11sd": {"mesh_id": "testmesh"},
     "fleet_identity": {"salt": "sweep-salt-0123456789"},
     "mptcp-bonding": {

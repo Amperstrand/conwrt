@@ -14,6 +14,10 @@ from typing import Optional
 
 
 def _dhcp_lan_ignore_config() -> bytes:
+    # conwrt#307: the rogue-DHCP triple, not ignore alone — odhcpd keeps
+    # advertising RA/DHCPv6 on a shared segment without ra/dhcpv6 disabled
+    # (same shape as the builder's _DHCP_DISABLE_SCRIPT and the bench
+    # utilities' read-back-gated triple).
     return b"""config dnsmasq
 \toption domainneeded '1'
 \toption localise_queries '1'
@@ -30,6 +34,8 @@ def _dhcp_lan_ignore_config() -> bytes:
 config dhcp 'lan'
 \toption interface 'lan'
 \toption ignore '1'
+\toption ra 'disabled'
+\toption dhcpv6 'disabled'
 
 config dhcp 'wan'
 \toption interface 'wan'

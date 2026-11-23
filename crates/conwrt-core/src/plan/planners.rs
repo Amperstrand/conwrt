@@ -813,6 +813,11 @@ pub(super) fn plan_vpn_nordvpn_ike2(
     ops.push(PlanOp::Shell {
         command: "uci set dhcp.@dnsmasq[0].noresolv='1'".into(),
     });
+    // #311: VPN-AP teardown on the default (no ap_ssid) render — the
+    // Python twin's _vpn_ap_teardown_ops (see push_vpn_shared_ops).
+    ops.push(PlanOp::Shell {
+        command: "# --- VPN-AP teardown (ap_ssid cleared) ---\nuci -q delete wireless.wifinet_vpn_ap\nuci -q delete network.vpnlan_dev\nuci -q delete network.vpnlan\nuci -q delete dhcp.vpnlan\nuci -q delete firewall.vpn_ap_dns\nuci -q delete firewall.vpn_ap_mgmt\nuci -q delete firewall.vpnap_zone\nuci -q del_list firewall.vpn_zone.network='vpnlan'\nuci commit wireless\nuci commit network\nuci commit dhcp\nuci commit firewall\nwifi reload >/dev/null 2>&1 || true".into(),
+    });
     let verification = vec![
         VerificationCheck {
             description: "swanctl config present".into(),
@@ -1100,6 +1105,7 @@ pub(super) fn plan_vpn_ivpn(model: &DeviceModel, iv: &VpnIvpnProfile) -> Result<
         iv.kill_switch,
         true,
         VERIFY_WG_30S,
+        false, // #311: only nordvpn's twin emits the AP teardown
     );
     let verification = vec![
         VerificationCheck {
@@ -1181,6 +1187,7 @@ pub(super) fn plan_vpn_mullvad(
         mu.kill_switch,
         true,
         VERIFY_WG_30S,
+        false, // #311: only nordvpn's twin emits the AP teardown
     );
     let verification = vec![
         VerificationCheck {
@@ -1275,6 +1282,7 @@ pub(super) fn plan_vpn_surfshark(
         ss.kill_switch,
         true,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     let verification = vec![
         VerificationCheck {
@@ -1420,6 +1428,7 @@ pub(super) fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<P
         pia.kill_switch,
         pia.allow_management,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     let verification = vec![
         VerificationCheck {
@@ -1552,6 +1561,302 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
         model_id: model.id.clone(),
         ops,
         verification,
+        warnings: Vec::new(),
+    })
+}
+
+pub(super) fn plan_ddns(_model: &DeviceModel, ddns: &DdnsProfile) -> Result<Plan, Unsupported> {
+    ddns.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // Byte-parity with open ddns.py `_build_ddns_ops`: the delete
+    // guards AGENTS.md staging debris; the section line renders
+    // unquoted (uci_token) so both renderers agree; comments/blank
+    // lines are filtered by the parity normalizers on both sides.
+    let mut options: Vec<(String, UciValue)> = vec![
+        ("enabled".into(), literal("1".into())),
+        ("domain".into(), literal(ddns.domain.clone())),
+        ("username".into(), literal(ddns.username.clone())),
+        ("password".into(), literal(ddns.password.clone())),
+        ("use_https".into(), literal("1".into())),
+        ("lookup_host".into(), literal(ddns.domain.clone())),
+        (
+            "check_interval".into(),
+            literal(ddns.check_interval.to_string()),
+        ),
+        ("check_unit".into(), literal("seconds".into())),
+        (
+            "force_interval".into(),
+            literal(ddns.force_interval.to_string()),
+        ),
+        ("force_unit".into(), literal("seconds".into())),
+    ];
+    if ddns.provider == "custom" {
+        options.push(("update_url".into(), literal(ddns.update_url.clone())));
+    } else {
+        let svc = DDNS_PROVIDERS
+            .iter()
+            .find(|(n, _)| *n == ddns.provider)
+            .map(|(_, s)| (*s).to_string())
+            .unwrap_or_default();
+        options.push(("service_name".into(), literal(svc)));
+    }
+    let ops = vec![
+        PlanOp::Shell {
+            command: "uci -q delete ddns.myddns >/dev/null 2>&1 || true".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "ddns".into(),
+            section: "myddns".into(),
+            section_type: "service".into(),
+            options,
+        },
+        PlanOp::CommitUci {
+            config: "ddns".into(),
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Restart,
+        },
+    ];
+    Ok(Plan {
+        profile_id: "ddns".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "ddns section committed with the target domain".into(),
+            command: "uci -q get ddns.myddns.domain".into(),
+            expect_contains: ddns.domain.clone(),
+        }],
+        warnings: Vec::new(),
+    })
+}
+
+pub(super) fn plan_ipv6_wan(
+    _model: &DeviceModel,
+    v6: &Ipv6WanProfile,
+) -> Result<Plan, Unsupported> {
+    v6.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![PlanOp::SetUciSection {
+        config: "network".into(),
+        section: "wan6".into(),
+        section_type: "interface".into(),
+        options: vec![
+            ("proto".into(), literal("dhcpv6".into())),
+            ("device".into(), literal("@wan".into())),
+            ("reqprefix".into(), literal(v6.reqprefix.clone())),
+        ],
+    }];
+    if v6.ula_prefix.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: "ula=$(uci -q get network.globals.ula_prefix) || ula=''; [ -n \"$ula\" ] || { mac=$(cat /sys/class/net/eth0/address); m1=$(echo $mac | cut -d: -f1); m2=$(echo $mac | cut -d: -f2); m3=$(echo $mac | cut -d: -f3); m4=$(echo $mac | cut -d: -f4); m5=$(echo $mac | cut -d: -f5); uci set network.globals.ula_prefix=\"fd$(printf %02x $((0x$m1 ^ 2))):${m2}ff:fe${m3}:${m4}${m5}::/64\"; }".into(),
+        });
+    } else {
+        ops.push(PlanOp::Shell {
+            command: format!("uci set network.globals.ula_prefix='{}'", v6.ula_prefix),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: "lan".into(),
+        options: vec![("ip6assign".into(), literal(v6.lan_ip6assign.clone()))],
+    });
+    if v6.masq6 {
+        ops.push(PlanOp::Shell {
+            command: "z=$(uci show firewall | grep \"=zone\" | grep \"name='wan'\" | cut -d. -f2 | cut -d= -f1); [ -z \"$z\" ] || uci set firewall.$z.masq6='1'".into(),
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Reload,
+    });
+    ops.push(PlanOp::Service {
+        name: "firewall".into(),
+        action: ServiceAction::Reload,
+    });
+    Ok(Plan {
+        profile_id: "ipv6-wan".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "wan6 committed as dhcpv6".into(),
+            command: "uci -q get network.wan6.proto".into(),
+            expect_contains: "dhcpv6".into(),
+        }],
+        warnings: Vec::new(),
+    })
+}
+
+pub(super) fn plan_iot(_model: &DeviceModel, iot: &IotProfile) -> Result<Plan, Unsupported> {
+    iot.validate()?;
+    let net = iot.network_name.clone();
+    let ssid_q = shell_quote(&iot.ssid);
+    let key_q = shell_quote(&iot.key);
+    let band_short = format!("{}g", iot.band.chars().next().unwrap_or('2'));
+    let isolated = if iot.isolation { "1" } else { "0" };
+    let wan = if iot.wan_access { "1" } else { "0" };
+    let literal = |v: String| UciValue::Literal(v);
+    let section = |config: &str,
+                   section: &str,
+                   section_type: &str,
+                   options: Vec<(&str, String)>| PlanOp::SetUciSection {
+        config: config.into(),
+        section: section.into(),
+        section_type: section_type.into(),
+        options: options
+            .into_iter()
+            .map(|(k, v)| (k.into(), literal(v)))
+            .collect(),
+    };
+    // Fixed /24 subnet splits deterministically to uci ipaddr/netmask
+    // (validate() guarantees the a.b.c.d/24 shape).
+    let ipaddr = iot.subnet.split('/').next().unwrap_or("").to_string();
+    let netmask = "255.255.255.0".to_string();
+
+    // Radio discovery + HARD GATE before any section is written (#454
+    // class) — byte-identical to the 1.x op (braces escaped for
+    // format!, band substituted).
+    let gate = format!(
+        "_radio=\"\"; for _r in radio0 radio1 radio2 radio3; do _b=$(uci get wireless.${{_r}}.band 2>/dev/null || true); if [ \"$_b\" = \"{band_short}\" ]; then _radio=$_r; break; fi; done; if [ -z \"$_radio\" ]; then echo 'iot: no {band_short} radio found — aborting before any config changes' >&2; exit 1; fi",
+        band_short = band_short
+    );
+    let mut ops = vec![
+        PlanOp::Shell { command: gate },
+        section(
+            "network",
+            &net,
+            "interface",
+            vec![
+                ("proto", "static".into()),
+                ("ipaddr", ipaddr),
+                ("netmask", netmask),
+            ],
+        ),
+        PlanOp::CommitUci {
+            config: "network".into(),
+        },
+        section(
+            "dhcp",
+            &net,
+            "dhcp",
+            vec![
+                ("interface", net.clone()),
+                ("start", "100".into()),
+                ("limit", "150".into()),
+                ("leasetime", "12h".into()),
+            ],
+        ),
+        PlanOp::CommitUci {
+            config: "dhcp".into(),
+        },
+        section(
+            "firewall",
+            &net,
+            "zone",
+            vec![
+                ("name", net.clone()),
+                ("network", net.clone()),
+                ("input", "REJECT".into()),
+                ("output", "ACCEPT".into()),
+                ("forward", "REJECT".into()),
+            ],
+        ),
+    ];
+    if iot.wan_access {
+        ops.push(section(
+            "firewall",
+            &format!("{}_fwd", net),
+            "forwarding",
+            vec![("src", net.clone()), ("dest", "wan".into())],
+        ));
+    }
+    ops.push(section(
+        "firewall",
+        &format!("{}_dns", net),
+        "rule",
+        vec![
+            ("name", format!("Allow-DNS-{}", net)),
+            ("src", net.clone()),
+            ("dest_port", "53".into()),
+            ("proto", "tcpudp".into()),
+            ("target", "ACCEPT".into()),
+        ],
+    ));
+    ops.push(section(
+        "firewall",
+        &format!("{}_dhcp", net),
+        "rule",
+        vec![
+            ("name", format!("Allow-DHCP-{}", net)),
+            ("src", net.clone()),
+            ("dest_port", "67-68".into()),
+            ("proto", "udp".into()),
+            ("target", "ACCEPT".into()),
+        ],
+    ));
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    // Cleanup old anonymous VAPs bound to this network, then the named
+    // idempotent VAP — both byte-identical to the 1.x ops.
+    ops.push(PlanOp::Shell { command: "while uci show wireless 2>/dev/null | grep -q \"network='iot'\"; do _s=$(uci show wireless 2>/dev/null | grep \"network='iot'\" | head -1 | cut -d. -f2 | cut -d= -f1); uci delete \"wireless.$_s\" 2>/dev/null; done; true".into() });
+    let vap = format!(
+        concat!(
+            "uci set wireless.iot_ap=wifi-iface; ",
+            "uci set wireless.iot_ap.device=$_radio; ",
+            "uci set wireless.iot_ap.mode=ap; ",
+            "uci set wireless.iot_ap.ssid={}; ",
+            "uci set wireless.iot_ap.encryption={}; {}",
+            "uci set wireless.iot_ap.network={}; ",
+            "uci set wireless.iot_ap.isolate={}"
+        ),
+        ssid_q,
+        iot.encryption,
+        if iot.key.is_empty() {
+            String::new()
+        } else {
+            format!("uci set wireless.iot_ap.key={}; ", key_q)
+        },
+        net,
+        isolated
+    );
+    ops.push(PlanOp::Shell { command: vap });
+    ops.push(PlanOp::CommitUci {
+        config: "wireless".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Service {
+        name: "firewall".into(),
+        action: ServiceAction::Restart,
+    });
+    ops.push(PlanOp::Shell {
+        command: format!(
+            "echo \"IoT network configured: SSID={} network={} wan_access={} isolated={}\"",
+            ssid_q, net, wan, isolated
+        ),
+    });
+    Ok(Plan {
+        profile_id: "iot".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "iot firewall zone committed".into(),
+            command: format!("uci -q get firewall.{}.name", net),
+            expect_contains: net.clone(),
+        }],
         warnings: Vec::new(),
     })
 }
@@ -3230,8 +3535,31 @@ pub(super) fn plan_openclash(
         PlanOp::EnsurePackage {
             name: "dnsmasq-full".into(),
         },
-        PlanOp::EnsurePackage {
-            name: "luci-app-openclash".into(),
+        // #59: luci-app-openclash ships from the third-party vernesong
+        // feed, NOT official OpenWrt packages — a bare EnsurePackage
+        // aborted with a generic install failure on stock feeds (the
+        // issue's opaque verify-empty-output). The gate (byte-identical
+        // to openclash.py's op, after dnsmasq-full which the package
+        // depends on): no-op when installed, install when the feed is
+        // configured, refuse WITH THE REASON before any configuration
+        // is touched. Starts with the parity drop prefix
+        // ('if [ -n "$(opkg list-installed ') so normalized command
+        // streams stay aligned (parity.rs command_lines mirrors the
+        // pytest _DROP_LINE_PREFIXES).
+        PlanOp::Shell {
+            command: concat!(
+                "if [ -n \"$(opkg list-installed luci-app-openclash 2>/dev/null)\" ]; then ",
+                "echo 'openclash: luci-app-openclash already installed'; ",
+                "elif [ -n \"$(opkg list luci-app-openclash 2>/dev/null)\" ]; then ",
+                "opkg update >/dev/null 2>&1; opkg install luci-app-openclash; ",
+                "else ",
+                "echo 'PRECONDITION-FAIL (#59): luci-app-openclash ships from the ",
+                "third-party vernesong feed (github.com/vernesong/OpenClash), not the ",
+                "official OpenWrt package feeds - bake it into the image ",
+                "(packages_via=image) or configure the feed first; refusing before any ",
+                "configuration is touched'; exit 1; fi",
+            )
+            .into(),
         },
         PlanOp::EnsurePackage {
             name: "coreutils-nohup".into(),
@@ -3386,6 +3714,16 @@ pub(super) const PIA_OPENVPN_CA: &str = concat!(
 /// tun-address probe) that removes the kill switch when the tunnel
 /// never comes up.
 #[allow(clippy::too_many_arguments)]
+/// #311: cleared ap_ssid TEARS DOWN a previously configured VPN AP
+/// (idempotent deletes + commits + wifi reload). Emitted by the three
+/// NORDVPN planners only — the Python twin's _vpn_ap_teardown_ops rides
+/// nordvpn.py, not the other providers.
+pub(super) fn push_vpn_ap_teardown(ops: &mut Vec<PlanOp>) {
+    ops.push(PlanOp::Shell {
+        command: "# --- VPN-AP teardown (ap_ssid cleared) ---\nuci -q delete wireless.wifinet_vpn_ap\nuci -q delete network.vpnlan_dev\nuci -q delete network.vpnlan\nuci -q delete dhcp.vpnlan\nuci -q delete firewall.vpn_ap_dns\nuci -q delete firewall.vpn_ap_mgmt\nuci -q delete firewall.vpnap_zone\nuci -q del_list firewall.vpn_zone.network='vpnlan'\nuci commit wireless\nuci commit network\nuci commit dhcp\nuci commit firewall\nwifi reload >/dev/null 2>&1 || true".into(),
+    });
+}
+
 pub(super) fn push_vpn_shared_ops(
     ops: &mut Vec<PlanOp>,
     iface: &str,
@@ -3393,6 +3731,7 @@ pub(super) fn push_vpn_shared_ops(
     kill_switch: bool,
     allow_management: bool,
     verify_line: &str,
+    vpn_ap_teardown: bool,
 ) {
     let literal = |v: String| UciValue::Literal(v);
     for (config, pattern) in [
@@ -3473,6 +3812,9 @@ pub(super) fn push_vpn_shared_ops(
         section: "@dnsmasq[0]".into(),
         options: vec![("noresolv".into(), literal("1".into()))],
     });
+    if vpn_ap_teardown {
+        push_vpn_ap_teardown(ops);
+    }
     ops.push(PlanOp::CommitUci {
         config: "network".into(),
     });
@@ -3611,6 +3953,7 @@ pub(super) fn plan_vpn_pia_openvpn(
         pia.kill_switch,
         pia.allow_management,
         "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     // the 45s tail restores WAN on failure and exits 0 by design —
     // this check is what makes the apply HONEST about the outcome:
@@ -3732,6 +4075,10 @@ pub(super) fn plan_vpn_nordvpn(
             "\n",
             "\n",
             "uci -q delete openvpn.nordvpn\n",
+            "# #310: commit the deletion — without it the delete lives only in UCI's\n",
+            "# pending state and the enabled OpenVPN section returns at reboot to run\n",
+            "# alongside WireGuard (route/DNS interference).\n",
+            "uci commit openvpn\n",
             "/etc/init.d/openvpn stop >/dev/null 2>&1 || true\n",
             "\n",
             "# WireGuard tunnel (NordLynx)\n",
@@ -3780,8 +4127,9 @@ pub(super) fn plan_vpn_nordvpn(
         },
         PlanOp::Shell { command: payload },
     ];
-    // shared vpn composition (byte-identical tail) + the 30s wg
-    // handshake verify TAIL that removes the kill switch on failure
+    // shared vpn composition (byte-identical tail; vpn_ap_teardown=true
+    // emits the #311 teardown at the Python twin's position) + the 30s
+    // wg handshake verify TAIL that removes the kill switch on failure
     push_vpn_shared_ops(
         &mut ops,
         "wg0",
@@ -3789,6 +4137,7 @@ pub(super) fn plan_vpn_nordvpn(
         nv.kill_switch,
         nv.allow_management,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        true, // #311: nordvpn's Python twin emits the AP teardown
     );
     // honest outcome (the #514/#520 pattern): verified requires the
     // tunnel to actually hold a handshake — config-applied-but-dead
@@ -3965,7 +4314,8 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
         },
         PlanOp::Shell { command: payload },
     ];
-    // shared vpn composition + the 45s tun-address verify TAIL
+    // shared vpn composition (vpn_ap_teardown=true — the #311 teardown at
+    // the Python twin's position) + the 45s tun-address verify TAIL
     push_vpn_shared_ops(
         &mut ops,
         "tun0",
@@ -3973,6 +4323,7 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
         nv.kill_switch,
         nv.allow_management,
         "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        true, // #311: nordvpn's Python twin emits the AP teardown
     );
     // honest outcome: verified requires tun0 to hold an address
     let verification = vec![
@@ -4554,7 +4905,7 @@ pub(super) fn plan_tollgate(
         action: ServiceAction::Restart,
     });
     if tg.install_hotplug {
-        // 1.x _HOTPLUG_SCRIPT, byte-verbatim (the \u2014 in the logger
+        // 1.x _HOTPLUG_SCRIPT, byte-verbatim (the — in the logger
         // line is a LITERAL escape sequence in the 1.x source, kept)
         let iface = &tg.hotplug_interface;
         ops.push(PlanOp::Shell {

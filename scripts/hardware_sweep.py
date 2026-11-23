@@ -186,6 +186,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unknown place {args.place}; known: {sorted(places)}")
         return 2
     place = places[args.place]
+    if not place.reset_allowed:
+        # #278: this sweep firstbooks + power-cuts the unit — refuse places
+        # recorded reset_allowed=false (the same registry gate the serial
+        # harness enforces); a deliberate cut on a protected unit is exactly
+        # the class that registry opt-out exists for.
+        print(f"REFUSED: place {args.place} is reset_allowed=false in "
+              f"{args.places} — the sweep deliberately power-cuts the unit")
+        return 2
     labgrid_host = load_labgrid_host(args.places)
 
     RESULTS.parent.mkdir(parents=True, exist_ok=True)

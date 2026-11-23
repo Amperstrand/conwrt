@@ -497,11 +497,30 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_detect(args: argparse.Namespace) -> int:
-    _, out, _ = _ssh(args.router, "logread | grep dnsmasq-dhcp | tail -400")
+    rc, out, err = _ssh(args.router,
+                        f"logread | grep dnsmasq-dhcp | tail -{args.lines}")
+    if rc != 0:
+        print(f"router log unavailable: {(err or out).strip()[:200]}",
+              file=sys.stderr)
+        return 2
+    lines = [line for line in out.splitlines() if line.strip()]
     counts = parse_dhcp_log(out)
+    if not lines:
+        # An empty window is not a verdict: it means we could not see the
+        # DHCP log at all (logging off, wrong router, quiet boot). Reporting
+        # "no candidates" here would be a count-zero false negative.
+        print("the log window contained no DHCP lines at all — that says "
+              "nothing about the Pi. Check that dnsmasq logs DHCP on this "
+              "router and that --router is right.", file=sys.stderr)
+        return 2
+    if len(lines) >= args.lines:
+        print(f"note: the window was full ({args.lines} lines) and may be "
+              f"truncated; re-run with --lines {args.lines * 4} if the Pi is "
+              f"not listed", file=sys.stderr)
     loops = netboot_loop_candidates(counts, args.min_discover)
     if not loops:
-        print("no netboot-loop candidates found")
+        print(f"no netboot-loop candidates among {len(counts)} MACs in the "
+              f"last {len(lines)} DHCP log lines")
         return 0
     print("netboot-loop candidates (DISCOVERing but never REQUESTing):")
     for mac in loops:
@@ -575,6 +594,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="find MACs stuck in a netboot DISCOVER loop")
     add_common(sp)
     sp.add_argument("--min-discover", type=int, default=3)
+    sp.add_argument("--lines", type=int, default=400,
+                    help="DHCP log lines to inspect (default 400; raise on a "
+                         "busy LAN where the Pi's DISCOVERs scroll away)")
     sp.set_defaults(func=cmd_detect)
 
     args = p.parse_args(argv)

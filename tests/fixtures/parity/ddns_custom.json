@@ -1,0 +1,11 @@
+{
+  "use_case": "ddns",
+  "params": {
+    "provider": "custom",
+    "domain": "router.example.net",
+    "username": "svc",
+    "password": "s3cr3t",
+    "update_url": "https://upd.example.com/nic/update?hostname=",
+    "check_interval": 600
+  }
+}

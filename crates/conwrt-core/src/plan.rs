@@ -90,6 +90,8 @@ pub fn plan_profile(
     let mut plan = match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
         Profile::Doh(doh) => plan_doh(model, doh),
+        Profile::Ipv6Wan(v6) => plan_ipv6_wan(model, v6),
+        Profile::Ddns(ddns) => plan_ddns(model, ddns),
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
@@ -104,6 +106,7 @@ pub fn plan_profile(
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
+        Profile::Iot(iot) => plan_iot(model, iot),
         Profile::OpenClash(oc) => plan_openclash(model, oc),
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),

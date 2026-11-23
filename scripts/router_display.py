@@ -97,6 +97,24 @@ def _run_flash(extra_args: list[str]) -> None:
         print(f"\n  ✗ flash exited with code {rc}")
 
 
+def _specimen_args(router) -> list[str]:
+    """#306: pass the DETECTED address through to `conwrt flash` — the
+    child process otherwise re-detects an interface and probes the
+    model's default addresses, missing the selected router or hitting a
+    different same-model unit on a multi-unit bench (the AGENTS.md
+    specimen-identity rule; the watch path got its gate in a75af71 —
+    this is the display/auto path's equivalent)."""
+    args = []
+    if router.model_id:
+        args += ["--model-id", router.model_id]
+    if getattr(router, "ip", ""):
+        args += ["--ip", router.ip]
+    iface = getattr(router, "interface", None) or getattr(router, "iface", None)
+    if iface:
+        args += ["--interface", str(iface)]
+    return args
+
+
 def interactive_menu(routers: list) -> None:
     """Interactive menu for selecting and acting on detected routers."""
     if not routers:
@@ -138,24 +156,15 @@ def interactive_menu(routers: list) -> None:
         choice = input("Choice: ").strip().lower()
 
         if choice == "1":
-            args = []
-            if router.model_id:
-                args += ["--model-id", router.model_id]
-            _run_flash(args + ["--request-image"])
+            _run_flash(_specimen_args(router) + ["--request-image"])
 
         elif choice == "2":
             image_path = input("Path to firmware image: ").strip()
             if image_path:
-                args = []
-                if router.model_id:
-                    args += ["--model-id", router.model_id]
-                _run_flash(args + ["--image", image_path])
+                _run_flash(_specimen_args(router) + ["--image", image_path])
 
         elif choice == "3":
-            args = []
-            if router.model_id:
-                args += ["--model-id", router.model_id]
-            _run_flash(args + ["--force-uboot", "--request-image"])
+            _run_flash(_specimen_args(router) + ["--force-uboot", "--request-image"])
 
         elif choice == "4":
             print(f"\n{'─' * 45}")

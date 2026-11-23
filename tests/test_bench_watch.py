@@ -233,3 +233,19 @@ def test_validate_config_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 def test_no_committed_coordinates() -> None:
     source = Path(bw.__file__).read_text()
     assert "192.168.13." not in source and ":20408" not in source
+
+
+def test_load_config_strips_comment_lines(tmp_path: Path) -> None:
+    """#281: the shipped *.json.example headers must not break loading."""
+    p = tmp_path / "watch.json"
+    p.write_text(
+        "## bench_watch config — copy and fill\n"
+        "## real hosts. Comments are stripped by the loader.\n"
+        "{\n"
+        '  "devices": [{"name": "sw1", "host": "192.0.2.1",\n'
+        '               "snapshots_dir": "/tmp/snaps"}],\n'
+        '  "outputs_dir": "/tmp/out", "max_dir_mb": 10\n'
+        "}\n"
+    )
+    cfg = bw.load_config(p)
+    assert [d.name for d in cfg.devices] == ["sw1"]

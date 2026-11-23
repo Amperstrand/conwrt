@@ -1197,6 +1197,171 @@ fn pbr_shape_gates_and_strict_branch_match_1x() {
 }
 
 #[test]
+fn ddns_param_bounds_match_1x_validators() {
+    let good = DdnsProfile {
+        domain: "home.example.org".into(),
+        password: "tok123".into(),
+        ..DdnsProfile::default()
+    };
+    assert!(good.validate().is_ok());
+    // domain: empty / hostile chars
+    assert!(matches!(
+        DdnsProfile {
+            domain: String::new(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a b".into(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // password: quoting hazards rejected
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a.io".into(),
+            password: "q uote".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // interval floor
+    assert!(matches!(
+        DdnsProfile {
+            domain: "a.io".into(),
+            password: "p".into(),
+            check_interval: 5,
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // custom provider requires an https update_url
+    assert!(matches!(
+        DdnsProfile {
+            provider: "custom".into(),
+            domain: "a.io".into(),
+            password: "p".into(),
+            update_url: "http://x/".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // unknown provider
+    assert!(matches!(
+        DdnsProfile {
+            provider: "nope".into(),
+            domain: "a.io".into(),
+            password: "p".into(),
+            ..DdnsProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    // render carries the staging-debris guard and the section
+    let plan = plan_for(Profile::Ddns(good));
+    let script = render_shell(&plan);
+    assert!(script.contains("uci -q delete ddns.myddns >/dev/null 2>&1 || true"));
+    assert!(script.contains("uci set ddns.myddns=service"));
+    assert!(script.contains("ddns.myddns.service_name='cloudflare.com/v4'"));
+    assert!(script.contains("uci set ddns.myddns.check_interval='300'"));
+}
+
+#[test]
+fn ipv6_wan_param_bounds_and_shape_match_1x() {
+    assert!(Ipv6WanProfile::default().validate().is_ok());
+    for p in [
+        Ipv6WanProfile {
+            reqprefix: "x".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            ula_prefix: "fd00::/48".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            ula_prefix: "a b".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            lan_ip6assign: "32".into(),
+            ..Ipv6WanProfile::default()
+        },
+    ] {
+        assert!(matches!(p.validate(), Err(Unsupported::InvalidParams(_))));
+    }
+    let plan = plan_for(Profile::Ipv6Wan(Ipv6WanProfile::default()));
+    let script = render_shell(&plan);
+    assert!(script.contains("uci -q get network.globals.ula_prefix) || ula=''"));
+    assert!(script.contains("grep \"name='wan'\""));
+    assert!(!script.contains("uci revert"));
+    assert!(!script.contains("uci -q delete"));
+}
+
+#[test]
+fn iot_param_bounds_and_shape_match_1x() {
+    assert!(
+        IotProfile {
+            key: "k".into(),
+            ..IotProfile::default()
+        }
+        .validate()
+        .is_ok()
+    );
+    for p in [
+        IotProfile {
+            key: String::new(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            subnet: "10.0.0.0/8".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            subnet: "nope".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            band: "6ghz".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            encryption: "wep".into(),
+            ..IotProfile::default()
+        },
+    ] {
+        assert!(matches!(p.validate(), Err(Unsupported::InvalidParams(_))));
+    }
+    // radio hard-gate leads; wan cutoff drops the forwarding rule
+    let plan = plan_for(Profile::Iot(IotProfile {
+        key: "k".into(),
+        ..IotProfile::default()
+    }));
+    let script = render_shell(&plan);
+    assert!(script.contains("echo 'iot: no 2g radio found"));
+    assert!(script.contains("firewall.iot_fwd.dest='wan'"));
+    let cut = plan_for(Profile::Iot(IotProfile {
+        key: "k".into(),
+        wan_access: false,
+        ..IotProfile::default()
+    }));
+    assert!(!render_shell(&cut).contains("_fwd"));
+}
+
+#[test]
 fn openclash_shape_gates_and_branches_match_1x() {
     let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
     let script = render_shell(&plan);
@@ -1216,15 +1381,22 @@ fn openclash_shape_gates_and_branches_match_1x() {
         .iter()
         .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "dnsmasq-full"))
         .expect("dnsmasq-full install present");
+    // #59: luci-app-openclash rides a gated Shell op (not a bare
+    // EnsurePackage) — third-party vernesong feed, refuses WITH THE
+    // REASON before any configuration is touched when absent.
     let luci = plan
         .ops
         .iter()
-        .position(|op| matches!(op, PlanOp::EnsurePackage { name } if name == "luci-app-openclash"))
-        .expect("luci-app-openclash install present");
+        .position(|op| {
+            matches!(op, PlanOp::Shell { command }
+                if command.starts_with("if [ -n \"$(opkg list-installed luci-app-openclash"))
+        })
+        .expect("luci-app-openclash feed gate present");
     assert!(
         swap < full && full < luci,
-        "swap must precede dnsmasq-full, which must precede luci-app-openclash"
+        "swap must precede dnsmasq-full, which must precede the luci-app-openclash gate"
     );
+    assert!(render_shell(&plan).contains("PRECONDITION-FAIL (#59)"));
     assert!(script.contains("opkg download dnsmasq-full) && opkg remove dnsmasq"));
     // staged /tmp/.uci debris reverted before the first mutation
     assert!(script.contains("uci -q revert openclash 2>/dev/null || true"));

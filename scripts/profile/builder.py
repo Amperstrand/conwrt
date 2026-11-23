@@ -257,13 +257,25 @@ def _firstboot_for_mode(uc, resolved: dict, mode: ProfileMode) -> str:
     return ""
 
 
+# conwrt#307: the full rogue-DHCP triple with restart + read-back —
+# ignore alone left odhcpd advertising RA/DHCPv6 on the shared segment
+# (the bench utilities' proven shape: dut_recover.py:209-211,
+# er6p_redeploy.py:175).
 _DHCP_DISABLE_SCRIPT = "\n".join([
     "uci set dhcp.lan.ignore='1'",
+    "uci set dhcp.lan.ra='disabled'",
+    "uci set dhcp.lan.dhcpv6='disabled'",
     "uci commit dhcp",
+    "/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true",
+    "/etc/init.d/odhcpd restart >/dev/null 2>&1 || true",
+    "uci -q get dhcp.lan.ignore | grep -q '^1$'",
+    "uci -q get dhcp.lan.ra | grep -q '^disabled$'",
+    "uci -q get dhcp.lan.dhcpv6 | grep -q '^disabled$'",
 ])
 
 _DHCP_DISABLE_OPS: list[Op] = [
-    UciSet(config="dhcp", section="lan", values={"ignore": "1"}),
+    UciSet(config="dhcp", section="lan",
+           values={"ignore": "1", "ra": "disabled", "dhcpv6": "disabled"}),
     UciCommit(config="dhcp"),
 ]
 

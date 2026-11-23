@@ -191,6 +191,9 @@
   }
  },
  "signatures": {},
+ "detection": {
+  "vendor_subnets": ["192.168.1.0/24"]
+ },
  "capabilities": [
   "ethernet",
   "tftp",
@@ -359,7 +362,7 @@
  "bench_observations": [
   {
    "date": "2026-11-18",
-   "unit": "ap3915i-3893 (b4:2d:56:25:38:93, serial 1744Y-1081800000)",
+   "unit": "ap3915i-3893 (b4:2d:56:<unit>, serial <unit> — full values in the private registry; redacted #508)",
    "finding": "FLASH-BOOT LOAD ADDRESS: sf read to 0x88000000 + bootm FAILS on the 24.10.8 FIT (kernel 6.6.144) while sf read to 0x83600000 + bootm BOOTS \u2014 same image bytes, same flash offset 0x280000. The recipe destination 0x88000000 was the bug behind the Sept-2026 \"6.6-flash-boot-reliably / 6.12-fails\" mystery for this image class; 0x83600000 (the stock boot_net load address) is required. Cold-boot-verified 3x on hardware, zero serial.",
    "evidence": "conwrt-bench sessions/2026-11-18-ap3915i-3893-bringup.md + docs/BOOT-SAFETY-AP3915I.md; full stock partition backups on ai-legion and ai-legion-small"
   },

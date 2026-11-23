@@ -80,6 +80,23 @@ impl MachineState {
             Self::FailedCommissioning | Self::FailedTesting | Self::FailedDeployment | Self::Broken
         )
     }
+
+    /// Whether `release` is the valid transition toward the pool. Only
+    /// held/deployed-class states accept it: for New/Commissioning/Broken/
+    /// Missing/Retired-class states MAAS answers 409 Conflict, and the
+    /// destroy path used to abort on that error before `delete` ever ran —
+    /// the VM leaked (#337).
+    #[must_use]
+    pub fn release_required(&self) -> bool {
+        matches!(
+            self,
+            Self::Allocated
+                | Self::Deploying
+                | Self::Deployed
+                | Self::Releasing
+                | Self::Maintenance
+        )
+    }
 }
 
 impl fmt::Display for MachineState {
@@ -439,11 +456,10 @@ impl<C: MaasClient, T: Time> ComputeProvider for MaasProvider<C, T> {
             .machine(system_id)
             .await
             .map_err(|e| ComputeError::Client(e.to_string()))?;
-        if !m.state.can_allocate() {
-            self.client
-                .release(system_id)
-                .await
-                .map_err(|e| ComputeError::Client(e.to_string()))?;
+        // Release ONLY states where MAAS accepts it; a 409 on release must
+        // not strand the machine — delete is the stronger cleanup, so a
+        // failed release falls through instead of aborting (#337).
+        if m.state.release_required() && self.client.release(system_id).await.is_ok() {
             self.await_state(system_id, "Ready", MachineState::can_allocate)
                 .await?;
         }
