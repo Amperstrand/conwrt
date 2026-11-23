@@ -45,13 +45,17 @@ def resolve_ipk_gh(
         dest = os.path.join(os.environ.get("TMPDIR", "/tmp"), "conwrt-tollgate")
     os.makedirs(dest, exist_ok=True)
 
-    run_query = (
-        f"gh run list --repo {_REPO} --workflow {_WORKFLOW!r}"
-        f" --branch main --status success --limit 50"
-        f" --json databaseId,runNumber,headSha --jq '.[]'"
-    )
+    # argv form, never shell=True: every argument is a literal or an
+    # API-validated value — the old shell-string + !r quoting was an
+    # injection surface through param-sourced `dest` (audit A3, the
+    # mwan3/#448 class on the host side)
+    run_query = [
+        "gh", "run", "list", "--repo", _REPO, "--workflow", _WORKFLOW,
+        "--branch", "main", "--status", "success", "--limit", "50",
+        "--json", "databaseId,runNumber,headSha", "--jq", ".[]",
+    ]
 
-    result = subprocess.run(run_query, shell=True, capture_output=True, text=True, check=True)
+    result = subprocess.run(run_query, capture_output=True, text=True, check=True)
     runs = json.loads(result.stdout)
 
     # Match by CI run number or by commit hash
@@ -71,11 +75,11 @@ def resolve_ipk_gh(
     run_number = run_info["runNumber"]
     short_sha = run_info["headSha"][:7]
 
-    art_cmd = (
-        f"gh run view {run_id} --repo {_REPO} --json artifacts"
-        f" --jq '.artifacts[].name'"
-    )
-    art_result = subprocess.run(art_cmd, shell=True, capture_output=True, text=True, check=True)
+    art_cmd = [
+        "gh", "run", "view", str(run_id), "--repo", _REPO,
+        "--json", "artifacts", "--jq", ".artifacts[].name",
+    ]
+    art_result = subprocess.run(art_cmd, capture_output=True, text=True, check=True)
     artifact_names = art_result.stdout.strip().splitlines()
 
     target_name = f"_{arch}.ipk"
@@ -97,11 +101,11 @@ def resolve_ipk_gh(
     print(f"    commit:   {short_sha}")
     print(f"    artifact: {artifact_name}")
 
-    dl_cmd = (
-        f"gh run download {run_id} --repo {_REPO}"
-        f" -n {artifact_name!r} -D {dest!r}"
-    )
-    subprocess.run(dl_cmd, shell=True, check=True)
+    dl_cmd = [
+        "gh", "run", "download", str(run_id), "--repo", _REPO,
+        "-n", artifact_name, "-D", dest,
+    ]
+    subprocess.run(dl_cmd, check=True)
 
     ipk_path = os.path.join(dest, artifact_name)
     if not os.path.exists(ipk_path):
