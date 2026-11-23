@@ -10,7 +10,7 @@ the design choices with their rationale.
 
 | #323 item | Status | Where |
 |---|---|---|
-| 1. `conwrt probe` — L2 alias probing, MAC-matched | Engine landed; CLI promotion next | scripts/bench_discover.py (plan/run ladder) |
+| 1. `conwrt probe` — L2 alias probing, MAC-matched | **Landed** (as `conwrt discover`) | scripts/conwrt/discover.py wrapping scripts/bench_discover.py |
 | 2. `conwrt listen` — boot-capture classifier, JSON verdict + next action | **Landed** | scripts/conwrt/bootlisten.py (`conwrt listen`) |
 | 3. `conwrt adopt-door` — MAC-pinned lease seat | Superseded by the v6 door | `conwrt v6door` + `conwrt adopt` (PR #751) |
 | 4. Model-JSON detection hints | **Landed (schema + first species)** | schemas/model.schema.json `detection`, models/extreme-networks-ws-ap3915i.json |
@@ -51,7 +51,7 @@ untestable without a bench window.
 Verdict JSON carries `next_action` + `next_action_reason` so sweeps can
 act without parsing prose.
 
-## Choice C — `conwrt probe` promotes bench_discover, it does not rewrite it
+## Choice C — the ladder ships as `conwrt discover`, promoting bench_discover verbatim
 
 scripts/bench_discover.py already encodes the methodology the hard way:
 layer-0 positive control (refuse negatives when the control fails),
@@ -62,7 +62,10 @@ not a `conwrt` subcommand, so the default first move still requires
 knowing where it lives. Promotion = a thin CLI wrapper over
 `build_ladder`/`run_ladder`, not a second implementation — the ladder's
 invariants (control gate, never-auto-exec credentials) are the parts
-worth keeping verbatim.
+worth keeping verbatim. Naming: the existing `conwrt probe`
+(cmd_probe.py, the active v4 model-IP prober) keeps its name and
+behavior; the ladder ships as `conwrt discover` so no script breaks
+and the first-move chain reads listen -> discover -> v6door/adopt.
 
 ## Choice D — model hints are an OPTIONAL schema'd `detection` block
 
