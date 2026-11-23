@@ -135,15 +135,15 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DohProfile,
-    FipsBluetoothRfcommProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile,
-    Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile,
-    PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
-    TetherProfile, TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile, render_shell,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DdnsProfile,
+    DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile, IotProfile, Ipv6WanProfile,
+    Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
+    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -226,6 +226,83 @@ fn assert_plan_matches_golden(profile: Profile, golden: &str) {
     assert_eq!(
         want, got,
         "rendered command lines must equal the 1.x golden byte-for-byte"
+    );
+}
+
+#[test]
+fn ddns_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ddns(DdnsProfile {
+            provider: "cloudflare".into(),
+            domain: "home.example.org".into(),
+            username: String::new(),
+            password: "tok123".into(),
+            ..DdnsProfile::default()
+        }),
+        include_str!("goldens/ddns.sh"),
+    );
+}
+
+#[test]
+fn ddns_custom_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ddns(DdnsProfile {
+            provider: "custom".into(),
+            domain: "router.example.net".into(),
+            username: "svc".into(),
+            password: "s3cr3t".into(),
+            update_url: "https://upd.example.com/nic/update?hostname=".into(),
+            check_interval: 600,
+            ..DdnsProfile::default()
+        }),
+        include_str!("goldens/ddns-custom.sh"),
+    );
+}
+
+#[test]
+fn ipv6_wan_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ipv6Wan(Ipv6WanProfile::default()),
+        include_str!("goldens/ipv6-wan.sh"),
+    );
+}
+
+#[test]
+fn ipv6_wan_custom_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ipv6Wan(Ipv6WanProfile {
+            reqprefix: "56".into(),
+            ula_prefix: "fd12:3456:789a::/64".into(),
+            masq6: false,
+            ..Ipv6WanProfile::default()
+        }),
+        include_str!("goldens/ipv6-wan-custom.sh"),
+    );
+}
+
+#[test]
+fn iot_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Iot(IotProfile {
+            key: "iotpass123".into(),
+            ..IotProfile::default()
+        }),
+        include_str!("goldens/iot.sh"),
+    );
+}
+
+#[test]
+fn iot_wan_cutoff_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Iot(IotProfile {
+            key: "k2".into(),
+            ssid: "Sensors".into(),
+            band: "5ghz".into(),
+            subnet: "10.90.0.1/24".into(),
+            wan_access: false,
+            ..IotProfile::default()
+        }),
+        include_str!("goldens/iot-wan-cutoff.sh"),
     );
 }
 

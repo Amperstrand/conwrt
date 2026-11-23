@@ -92,7 +92,13 @@ class WatchConfig:
 
 
 def load_config(path: Path) -> WatchConfig:
-    raw = json.loads(path.read_text())
+    # The shipped *.json.example templates carry `##` doc headers (and the
+    # gitignored live copies often keep them) — strip whole-line comments
+    # before parsing instead of choking with a JSONDecodeError (#281).
+    text = "\n".join(
+        ln for ln in path.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+    raw = json.loads(text)
     devices = []
     names: set[str] = set()
     for d in raw.get("devices", []):
@@ -268,7 +274,11 @@ class DeviceWatcher(threading.Thread):
             self.events.emit(self.cfg.name, "connected")
             assert proc.stdout is not None
             self._proc = proc
+            # #292: re-evaluate the quota on a time interval inside the
+            # stream loop — a once-per-connection snapshot lets a long-lived
+            # logread -f write past a mid-stream breach.
             quota = self._quota_exceeded()
+            next_quota_check = time.monotonic() + 30
             with raw_path.open("a") as raw:
                 raw.write(f"=== connected {utcnow()} ===\n")
                 for line in proc.stdout:
@@ -276,6 +286,10 @@ class DeviceWatcher(threading.Thread):
                         proc.kill()
                         break
                     ring.extend(line.encode())
+                    now = time.monotonic()
+                    if now >= next_quota_check:
+                        quota = self._quota_exceeded()
+                        next_quota_check = now + 30
                     if quota:
                         if time.monotonic() - self._quota_warned_at > 3600:
                             self.events.emit(self.cfg.name, "quota_warning",

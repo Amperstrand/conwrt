@@ -64,6 +64,229 @@ impl SqmProfile {
     }
 }
 
+/// Dynamic DNS via `ddns-scripts` — port of the 1.x `ddns` use case
+/// (`scripts/use_cases/ddns.py`, issue #5). Keeps a hostname pointed
+/// at the router's dynamic WAN address: provider map to ddns-scripts
+/// `service_name` values, token-charset validation on everything that
+/// rides uci values (the mwan3/#448 injection class), HTTPS-only
+/// updates, and the standard check/force interval pair (300 s / 30 d
+/// defaults mirror the LuCI defaults). Custom providers take an
+/// `update_url` instead of a mapped service name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DdnsProfile {
+    /// Provider name from [`DDNS_PROVIDERS`] or `custom` (with
+    /// `update_url`).
+    pub provider: String,
+    /// FQDN to keep updated (also the lookup host).
+    pub domain: String,
+    /// Account username (empty for token providers).
+    pub username: String,
+    /// Account password / API token.
+    pub password: String,
+    /// Custom-provider update URL (https only).
+    pub update_url: String,
+    /// IP check interval, seconds (30 s floor).
+    pub check_interval: u32,
+    /// Forced update interval, seconds (30 s floor).
+    pub force_interval: u32,
+}
+
+/// ddns-scripts `service_name` values for the mapped providers.
+pub const DDNS_PROVIDERS: &[(&str, &str)] = &[
+    ("cloudflare", "cloudflare.com/v4"),
+    ("duckdns", "duckdns.org"),
+    ("noip", "noip.com"),
+    ("dynu", "dynu.com"),
+    ("desec", "desec.io"),
+];
+
+impl Default for DdnsProfile {
+    fn default() -> Self {
+        Self {
+            provider: "cloudflare".into(),
+            domain: String::new(),
+            username: String::new(),
+            password: String::new(),
+            update_url: String::new(),
+            check_interval: 300,
+            force_interval: 2_592_000,
+        }
+    }
+}
+
+impl DdnsProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.provider != "custom" && !DDNS_PROVIDERS.iter().any(|(n, _)| *n == self.provider) {
+            return Err(Unsupported::InvalidParams(format!(
+                "unknown ddns provider: {}",
+                self.provider
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '@' | '/' | '-')
+                })
+        };
+        let secret = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | ':'
+                                | '@'
+                                | '/'
+                                | '!'
+                                | '#'
+                                | '$'
+                                | '%'
+                                | '^'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | '='
+                                | '~'
+                                | '?'
+                                | '<'
+                                | '>'
+                                | '|'
+                                | '\\'
+                                | '-'
+                        )
+                })
+        };
+        if !token(&self.domain) {
+            return Err(Unsupported::InvalidParams(
+                "domain is required and must be a hostname token".into(),
+            ));
+        }
+        if !self.username.is_empty() && !token(&self.username) {
+            return Err(Unsupported::InvalidParams(
+                "username contains unsafe characters".into(),
+            ));
+        }
+        if !secret(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "password contains unsafe characters".into(),
+            ));
+        }
+        if self.provider == "custom" {
+            let ok = self.update_url.starts_with("https://")
+                && self.update_url.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | '~'
+                                | ':'
+                                | '/'
+                                | '?'
+                                | '#'
+                                | '@'
+                                | '!'
+                                | '$'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | ','
+                                | ';'
+                                | '='
+                                | '%'
+                                | '-'
+                        )
+                });
+            if !ok {
+                return Err(Unsupported::InvalidParams(
+                    "update_url must be an https URL token".into(),
+                ));
+            }
+        }
+        for (name, v) in [
+            ("check_interval", self.check_interval),
+            ("force_interval", self.force_interval),
+        ] {
+            if v < 30 {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{name} below the 30-second floor: {v}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// IPv6 WAN with NAT66/ULA for stable LAN addressing — port of the 1.x
+/// `ipv6-wan` use case (`scripts/use_cases/ipv6_wan.py`, issue #3).
+/// ISP prefixes churn (DHCPv6-PD reassignment) and take every
+/// prefix-pinned address/rule with them; this recipe keeps a STABLE
+/// ULA on the LAN (param wins, the device's existing one wins, else a
+/// deterministic MAC-derived derive — the OpenWrt generate_ula shape,
+/// BusyBox-safe), runs DHCPv6-PD on wan6, and opts into masq6 on the
+/// zone NAMED wan (index-based @zone[1] breaks on customized
+/// firewalls) so ULA-sourced traffic still egresses. Config touches
+/// are idempotent sets only — never a blanket uci revert on
+/// network/firewall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ipv6WanProfile {
+    /// Requested delegated prefix length.
+    pub reqprefix: String,
+    /// Stable ULA /64; empty = keep existing / derive from MAC.
+    pub ula_prefix: String,
+    /// NAT66 masquerade on the wan zone for ULA egress.
+    pub masq6: bool,
+    /// LAN prefix assignment size.
+    pub lan_ip6assign: String,
+}
+
+impl Default for Ipv6WanProfile {
+    fn default() -> Self {
+        Self {
+            reqprefix: "auto".into(),
+            ula_prefix: String::new(),
+            masq6: true,
+            lan_ip6assign: "64".into(),
+        }
+    }
+}
+
+impl Ipv6WanProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(
+            self.reqprefix.as_str(),
+            "auto" | "no" | "48" | "56" | "60" | "64"
+        ) {
+            return Err(Unsupported::InvalidParams(format!(
+                "reqprefix must be auto/no/48/56/60/64: {}",
+                self.reqprefix
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '/' | '_' | '-'))
+        };
+        if !self.ula_prefix.is_empty() && !token(&self.ula_prefix) {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix contains unsafe characters".into(),
+            ));
+        }
+        if !self.ula_prefix.is_empty() && !self.ula_prefix.ends_with("/64") {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix must be a /64 (stable LAN addressing)".into(),
+            ));
+        }
+        if !matches!(self.lan_ip6assign.as_str(), "56" | "60" | "64") {
+            return Err(Unsupported::InvalidParams(format!(
+                "lan_ip6assign must be 56/60/64: {}",
+                self.lan_ip6assign
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// DNS-over-HTTPS via `https-dns-proxy` — port of the tested 1.x `doh`
 /// use case (`scripts/use_cases/doh.py`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -792,10 +1015,11 @@ impl PbrProfile {
 /// NOT official OpenWrt packages (1.x shares this gap — its
 /// `packages_via="auto"` list fails to resolve on stock devices and
 /// the public ASU alike). The intended delivery is a baked image or a
-/// preinstalled device, where the leading `EnsurePackage`
-/// short-circuits on `opkg list-installed`; on a stock device the
-/// apply aborts loudly at the FIRST op — before any configuration is
-/// touched — rather than leaving dangling config for absent software.
+/// preinstalled device, where the gate's `opkg list-installed` arm
+/// no-ops; when the feed IS configured it installs; on a stock device
+/// it refuses WITH THE REASON (#59: the vernesong feed requirement and
+/// the bake-into-image path) — before any configuration is touched —
+/// rather than leaving dangling config for absent software.
 /// An acquisition phase (feed setup / release-IPK download) is M7
 /// image-pipeline work, not a plan op. The 1.x `packages_remove:
 /// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build
@@ -2613,6 +2837,96 @@ pub struct WifiUplink {
 
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
+/// IoT isolated network — port of the 1.x `iot` use case
+/// (`scripts/use_cases/iot.py`, issue #4). Same machinery as
+/// guest-wifi (radio hard-gate #454, named firewall sections, VAP
+/// cleanup) with IoT-grade semantics: a FIXED configurable /24
+/// subnet (deterministic — no derive-from-LAN), client isolation on
+/// by default, 12 h leases, and an optional WAN cut-off
+/// (`wan_access=false` drops the forwarding rule entirely — the
+/// "devices never phone home" posture; DNS+DHCP to the router stay
+/// allowed either way). VLAN trunk delivery is a deliberate non-goal:
+/// the separate-AP variant is the issue's other arm and rides the
+/// tested guest-wifi machinery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IotProfile {
+    /// IoT SSID (same contract as guest-wifi).
+    pub ssid: String,
+    /// WiFi password; REQUIRED unless encryption=none.
+    pub key: String,
+    /// Encryption mode (psk2, psk-mixed, none).
+    pub encryption: String,
+    /// WiFi band (2.4ghz, 5ghz).
+    pub band: String,
+    /// Client isolation (default on).
+    pub isolation: bool,
+    /// UCI network/interface name.
+    pub network_name: String,
+    /// Fixed subnet, a.b.c.d/24 (split to uci ipaddr/netmask).
+    pub subnet: String,
+    /// Allow iot -> wan forwarding (default on).
+    pub wan_access: bool,
+}
+
+impl Default for IotProfile {
+    fn default() -> Self {
+        Self {
+            ssid: "IoT".into(),
+            key: String::new(),
+            encryption: "psk2".into(),
+            band: "2.4ghz".into(),
+            isolation: true,
+            network_name: "iot".into(),
+            subnet: "192.168.9.1/24".into(),
+            wan_access: true,
+        }
+    }
+}
+
+impl IotProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.ssid.is_empty() || self.ssid.len() > 32 || self.ssid.chars().any(|c| c.is_control())
+        {
+            return Err(Unsupported::InvalidParams(
+                "ssid must be non-empty, <=32 bytes, no control characters".into(),
+            ));
+        }
+        if self.encryption != "none" && self.key.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "key is required unless encryption=none (IoT nets are never open)".into(),
+            ));
+        }
+        if !matches!(self.encryption.as_str(), "psk2" | "psk-mixed" | "none") {
+            return Err(Unsupported::InvalidParams(format!(
+                "encryption must be psk2/psk-mixed/none: {}",
+                self.encryption
+            )));
+        }
+        if !matches!(self.band.as_str(), "2.4ghz" | "5ghz") {
+            return Err(Unsupported::InvalidParams(format!(
+                "band must be 2.4ghz/5ghz: {}",
+                self.band
+            )));
+        }
+        let parts: Vec<&str> = self.subnet.split('/').collect();
+        let octets: Vec<u32> = parts
+            .first()
+            .map(|p| p.split('.').filter_map(|o| o.parse::<u32>().ok()).collect())
+            .unwrap_or_default();
+        if parts.len() != 2
+            || parts[1] != "24"
+            || octets.len() != 4
+            || octets.iter().any(|o| *o > 255)
+        {
+            return Err(Unsupported::InvalidParams(format!(
+                "subnet must be a.b.c.d/24: {}",
+                self.subnet
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// apply time from the live LAN IP (third octet + 1), so the address
 /// lines render as shell ops exactly like 1.x.
 #[derive(Debug, Clone, PartialEq, Eq)]

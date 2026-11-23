@@ -21,13 +21,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile,
-    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
-    OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile,
-    SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile,
-    VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile,
-    VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile,
-    WireguardClientProfile, WireguardServerProfile,
+    ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile,
+    GuestWifiProfile, IotProfile, Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile,
+    OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -69,6 +70,24 @@ enum Command {
     /// List or dump /dev/mtd partitions over serial (Rust port of
     /// scripts/serial-backup.py).
 
+    /// Bench rescue: classify the console state of a wedged/dark box and
+    /// run the action ladder (field-validated 2026-10-23): U-Boot prompt ->
+    /// `reset` (remote reboot); livelock -> BREAK+b probe (shallow recovers,
+    /// deep ignores); pre-U-Boot stall / silence -> report needs-mains.
+    BenchRescue {
+        /// Serial port spec (/dev path or tcp://HOST:PORT).
+        #[arg(long)]
+        port: String,
+        /// Baud rate.
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Seconds to watch before each classification.
+        #[arg(long, default_value_t = 10)]
+        watch_secs: u32,
+        /// Number of classify-act cycles (default 1 = single verdict).
+        #[arg(long, default_value_t = 1)]
+        cycles: u32,
+    },
     /// Detect the likely baud rate of a serial console: opens the port at
     /// each candidate rate, scores received data (ComScope/baudowl
     /// scoring; Rust port of scripts/serial_baud.py).
@@ -557,12 +576,15 @@ impl ScenarioChoice {
 enum ProfileChoice {
     Sqm,
     Doh,
+    Ipv6Wan,
+    Ddns,
     SshHardening,
     Adguard,
     RescueWatchdog,
     WireguardClient,
     WireguardServer,
     GuestWifi,
+    Iot,
     Travelmate,
     Pbr,
     Mwan3,
@@ -624,6 +646,42 @@ struct ProfileArgs {
     /// wireguard-server UDP listen port.
     #[arg(long)]
     listen_port: Option<u16>,
+    /// iot: fixed subnet a.b.c.d/24
+    #[arg(long)]
+    iot_subnet: Option<String>,
+    /// iot: allow iot->wan forwarding
+    #[arg(long)]
+    iot_wan_access: Option<bool>,
+    /// ipv6-wan: requested delegated prefix length
+    #[arg(long)]
+    v6_reqprefix: Option<String>,
+    /// ipv6-wan: stable ULA /64 (default: keep or derive from MAC)
+    #[arg(long)]
+    v6_ula_prefix: Option<String>,
+    /// ipv6-wan: NAT66 masquerade on the wan zone
+    #[arg(long, default_value_t = true)]
+    v6_masq6: bool,
+    /// ipv6-wan: LAN prefix assignment size
+    #[arg(long)]
+    v6_lan_assign: Option<String>,
+    /// ddns: FQDN to keep updated
+    #[arg(long)]
+    ddns_domain: Option<String>,
+    /// ddns: account username
+    #[arg(long)]
+    ddns_username: Option<String>,
+    /// ddns: account password / API token
+    #[arg(long)]
+    ddns_password: Option<String>,
+    /// ddns: custom-provider update URL (https only)
+    #[arg(long)]
+    ddns_update_url: Option<String>,
+    /// ddns: IP check interval, seconds
+    #[arg(long)]
+    ddns_check_interval: Option<u32>,
+    /// ddns: forced update interval, seconds
+    #[arg(long)]
+    ddns_force_interval: Option<u32>,
     /// ssh-hardening: idle disconnect timeout in seconds.
     #[arg(long)]
     idle_timeout: Option<u32>,
@@ -1272,6 +1330,61 @@ enum AgentCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Command::BenchRescue {
+            port,
+            baud,
+            watch_secs,
+            cycles,
+        } => {
+            use conwrt_serial::io::{ConsoleIo, SerialPortIo};
+            use conwrt_serial::rescue::{RescueAction, action_for, classify};
+            use std::time::Duration;
+
+            let mut io = match SerialPortIo::open(&port, baud, Duration::from_millis(200)) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("conwrt: open {port}: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            for cycle in 0..cycles.max(1) {
+                let _ = cycle;
+                // drain-then-watch: collect fresh bytes for the window
+                let mut buf = vec![0u8; 8192];
+                let mut tail = Vec::new();
+                let deadline = std::time::Instant::now() + Duration::from_secs(watch_secs as u64);
+                while std::time::Instant::now() < deadline {
+                    match ConsoleIo::read(&mut io, &mut buf) {
+                        Ok(0) | Err(_) => {}
+                        Ok(n) => tail.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let text = String::from_utf8_lossy(&tail).into_owned();
+                let state = classify(&text);
+                match action_for(&state) {
+                    RescueAction::Wait => {
+                        println!("state: {state:?} — progressing, wait");
+                        continue;
+                    }
+                    RescueAction::SendReset => {
+                        println!("state: {state:?} — sending U-Boot reset");
+                        let _ = io.write_all_bytes(b"reset\r");
+                    }
+                    RescueAction::ProbeBreakRecover => {
+                        println!("state: {state:?} — BREAK+b probe");
+                        use conwrt_serial::recovery::BreakIo;
+                        let _ = io.send_break_for(Duration::from_millis(300));
+                        let _ = io.write_all_bytes(b"b");
+                    }
+                    RescueAction::NeedsMains { why } => {
+                        eprintln!("state: {state:?} — NEEDS MAINS: {why}");
+                        return ExitCode::from(3);
+                    }
+                }
+            }
+            println!("cycles complete");
+            ExitCode::SUCCESS
+        }
         Command::SerialBaud { port, listen_secs } => {
             use conwrt_serial::baud::{COMMON_BAUDS, score_baud_data};
             use conwrt_serial::io::open_port;
@@ -2309,6 +2422,27 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
             listen_port: args.listen_port.unwrap_or(5053),
         })),
+        ProfileChoice::Ipv6Wan => Ok(Profile::Ipv6Wan(Ipv6WanProfile {
+            reqprefix: args.v6_reqprefix.clone().unwrap_or_else(|| "auto".into()),
+            ula_prefix: args.v6_ula_prefix.clone().unwrap_or_default(),
+            masq6: args.v6_masq6,
+            lan_ip6assign: args.v6_lan_assign.clone().unwrap_or_else(|| "64".into()),
+        })),
+        ProfileChoice::Ddns => {
+            let domain = args.ddns_domain.clone().unwrap_or_default();
+            if domain.is_empty() {
+                return Err("--ddns-domain is required for ddns".into());
+            }
+            Ok(Profile::Ddns(DdnsProfile {
+                provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
+                domain,
+                username: args.ddns_username.clone().unwrap_or_default(),
+                password: args.ddns_password.clone().unwrap_or_default(),
+                update_url: args.ddns_update_url.clone().unwrap_or_default(),
+                check_interval: args.ddns_check_interval.unwrap_or(300),
+                force_interval: args.ddns_force_interval.unwrap_or(2_592_000),
+            }))
+        }
         ProfileChoice::SshHardening => Ok(Profile::SshHardening(SshHardeningProfile {
             disable_password_auth: !args.password_auth,
             idle_timeout: args.idle_timeout.unwrap_or(300),
@@ -2360,6 +2494,31 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             peer1_psk: args.peer1_psk.clone().unwrap_or_default(),
             ..WireguardServerProfile::default()
         })),
+        ProfileChoice::Iot => {
+            // Same foot-gun refusal as guest-wifi: a psk2/sae profile
+            // without a key renders fine and hostapd refuses to start.
+            let encryption = args.ap_encryption.clone().unwrap_or_else(|| "psk2".into());
+            let key = args.ap_key.clone().unwrap_or_default();
+            if key.is_empty() && encryption != "none" {
+                return Err(
+                    "iot requires --ap-key (IoT nets are never open; use --ap-encryption none explicitly for an open lab net)"
+                        .into(),
+                );
+            }
+            Ok(Profile::Iot(IotProfile {
+                ssid: args.ap_ssid.clone().unwrap_or_else(|| "IoT".into()),
+                key,
+                encryption,
+                band: args.ap_band.clone().unwrap_or_else(|| "2.4ghz".into()),
+                isolation: true,
+                network_name: "iot".into(),
+                subnet: args
+                    .iot_subnet
+                    .clone()
+                    .unwrap_or_else(|| "192.168.9.1/24".into()),
+                wan_access: args.iot_wan_access.unwrap_or(true),
+            }))
+        }
         ProfileChoice::GuestWifi => {
             // 1.x validate_ssid + WIFI_* choice gates fire at plan time;
             // the omitted-flag defaults are the valid 1.x defaults.
@@ -2947,19 +3106,26 @@ fn cmd_maas_flash(
             );
             return ExitCode::from(2);
         }
-        match conwrt_local_std::specimen::verify_disk(target, whitelist) {
-            Ok(id) => println!(
-                "verified:  {} usb serial={} {}GB rw",
-                target.display(),
-                id.serial.as_deref().unwrap_or("?"),
-                id.size_bytes.unwrap_or(0) / 1_000_000_000
-            ),
+        let writer = match conwrt_local_std::specimen::verify_disk(target, whitelist) {
+            Ok(id) => {
+                println!(
+                    "verified:  {} usb serial={} {}GB rw",
+                    target.display(),
+                    id.serial.as_deref().unwrap_or("?"),
+                    id.size_bytes.unwrap_or(0) / 1_000_000_000
+                );
+                // #200: the verified serial is the library-level specimen
+                // evidence for the write handle (cross-checked against the
+                // live sysfs identity at open time).
+                let serial = id.serial.clone().unwrap_or_default();
+                FileBlockWriter::open_device_specimen(target, &serial)
+            }
             Err(msg) => {
                 eprintln!("flash refused: {msg}");
                 return ExitCode::from(2);
             }
-        }
-        match FileBlockWriter::open_device(target) {
+        };
+        match writer {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("cannot pin target {}: {e}", target.display());
@@ -3786,11 +3952,23 @@ mod tests {
             profile,
             ap_nostr_npub: None,
             ap_nostr_nsec: None,
+            ddns_domain: None,
+            ddns_username: None,
+            ddns_password: None,
+            ddns_update_url: None,
+            ddns_check_interval: None,
+            ddns_force_interval: None,
             download_kbps: None,
             upload_kbps: None,
             interface: "wan".into(),
             provider: None,
             listen_port: None,
+            iot_subnet: None,
+            iot_wan_access: None,
+            v6_reqprefix: None,
+            v6_ula_prefix: None,
+            v6_masq6: false,
+            v6_lan_assign: None,
             idle_timeout: None,
             max_auth_tries: None,
             password_auth: false,

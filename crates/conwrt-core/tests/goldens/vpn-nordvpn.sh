@@ -26,6 +26,7 @@ done
 
 
 uci -q delete openvpn.nordvpn
+uci commit openvpn
 /etc/init.d/openvpn stop >/dev/null 2>&1 || true
 
 # WireGuard tunnel (NordLynx)
@@ -92,6 +93,20 @@ uci add_list dhcp.@dnsmasq[0].server='103.86.96.100'
 uci del_list dhcp.@dnsmasq[0].server='103.86.99.100' 2>/dev/null; true
 uci add_list dhcp.@dnsmasq[0].server='103.86.99.100'
 uci set dhcp.@dnsmasq[0].noresolv='1'
+# --- VPN-AP teardown (ap_ssid cleared) ---
+uci -q delete wireless.wifinet_vpn_ap
+uci -q delete network.vpnlan_dev
+uci -q delete network.vpnlan
+uci -q delete dhcp.vpnlan
+uci -q delete firewall.vpn_ap_dns
+uci -q delete firewall.vpn_ap_mgmt
+uci -q delete firewall.vpnap_zone
+uci -q del_list firewall.vpn_zone.network='vpnlan'
+uci commit wireless
+uci commit network
+uci commit dhcp
+uci commit firewall
+wifi reload >/dev/null 2>&1 || true
 uci commit network
 uci commit firewall
 uci commit dhcp

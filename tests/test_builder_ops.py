@@ -14,7 +14,10 @@ class TestBuilderInlineOps:
         assert len(step.ops) == 2
         assert isinstance(step.ops[0], UciSet)
         assert step.ops[0].config == "dhcp"
-        assert step.ops[0].values == {"ignore": "1"}
+        # conwrt#307: the rogue-DHCP triple — ignore alone left odhcpd
+        # advertising RA/DHCPv6 on the shared segment.
+        assert step.ops[0].values == {
+            "ignore": "1", "ra": "disabled", "dhcpv6": "disabled"}
         assert isinstance(step.ops[1], UciCommit)
 
     def test_static_hostname_step_has_ops(self):

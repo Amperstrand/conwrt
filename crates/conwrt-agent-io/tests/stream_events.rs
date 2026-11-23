@@ -97,15 +97,19 @@ async fn uart_event_flows_without_any_request() {
         agent_session_stream_events(&mut io, &mut ev, &mut core).await;
         io.written
     });
+    // #362: console bytes flow only to a handshaked session — handshake
+    // first (the parked banner flushes on success).
+    stx.send(handshake_request()).await.unwrap();
     // Let the live session serve the queued event, then close the stream
     // to end it deterministically.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     drop(stx);
     let written = session.await.unwrap();
     let frames = decode_frames(&written);
-    assert_eq!(frames.len(), 1, "one unsolicited event, zero responses");
+    assert_eq!(frames.len(), 2, "handshake reply + one unsolicited event");
+    assert!(matches!(&frames[0], WireFrame::Response { .. }));
     assert!(matches!(
-        &frames[0],
+        &frames[1],
         WireFrame::Event(AgentEvent::UartData { port: 0, data }) if data == b"boot banner"
     ));
 }

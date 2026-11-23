@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPTS_DIR := scripts
 SCHEMAS_DIR := schemas
 
-.PHONY: help lint typecheck validate-schemas validate-models check-pins gen-status init run-step redact validate commit-run test check-bats test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity
+.PHONY: help lint typecheck validate-schemas validate-models check-pins gen-status init run-step redact validate commit-run test check-bats test-live smoke ci ipk clean integration bench e2e labgrid-check labgrid-test MODEL ?= RELEASE ?= detect flash flash-uboot source-image recovery sta rust-ci rust-test rust-nostd-parity openwrt-toolchain-check
 
 help: ## Show this help
 	@echo "Usage: make [target] [ARGS='...']"
@@ -11,9 +11,17 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-lint: ## Run ruff and shell script syntax checks
+lint: ## Run ruff, severity-gated shellcheck (when installed), and shell syntax checks
 	@echo "Running ruff..."
 	@ruff check scripts tests
+	@echo "Running shellcheck (severity=error) over scripts/*.sh..."
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck --severity=error $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh 2>/dev/null \
+			|| { echo "FAIL: shellcheck findings at severity=error (see above)"; exit 1; }; \
+		echo "  OK: no severity=error findings"; \
+	else \
+		echo "  SKIP: shellcheck not installed (CI installs it; local boxes may not have it)"; \
+	fi
 	@echo "Linting shell scripts..."
 	@FAIL=0; \
 	for f in $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh; do \
@@ -190,6 +198,10 @@ test-live: ## Live VPN provider API contract tests (read-only; credential-gated 
 rust-nostd-parity: ## #227: Makefile and rust.yml must list the SAME -p crates for the no_std cross-check (guard + self-test)
 	@python3 scripts/rust_nostd_parity.py
 	@python3 scripts/rust_nostd_parity.py --self-test
+
+openwrt-toolchain-check: ## Audit scripts/openwrt-toolchain.json rust pins against the live openwrt/packages feed (network) + seeded-drift self-test
+	@python3 scripts/sdk_rust_version.py check
+	@python3 scripts/sdk_rust_version.py --self-test
 
 rust-ci: ## Rust workspace: fmt + clippy + tests + no_std cross-check (ADR-0011)
 	@$(MAKE) --no-print-directory rust-nostd-parity

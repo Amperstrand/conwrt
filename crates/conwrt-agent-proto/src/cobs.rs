@@ -13,6 +13,24 @@ use postcard_rpc::accumulator::raw::{CobsAccumulator, FeedResult};
 /// Max buffered bytes per undecoded frame (matches the M3 TCP pump).
 pub const ACCUMULATOR_CAPACITY: usize = 8192;
 
+/// The largest payload window an agent may advertise (`window_bytes`
+/// capability): a full-window frame must ALWAYS fit the accumulator after
+/// postcard + COBS overhead. COBS worst case adds 1 + n/254 bytes plus the
+/// trailing delimiter; +16 covers the postcard envelope. Advertising
+/// ACCUMULATOR_CAPACITY itself (the #456 bug: window_bytes=8192 vs a
+/// 8192-byte accumulator) means every full-size StreamChunk overflows and
+/// the frame is dropped.
+pub const MAX_WINDOW_BYTES: usize = 8128;
+
+/// Stringified [`MAX_WINDOW_BYTES`] for capability advertisements — no_std
+/// firmware has no formatting in const contexts; kept in lockstep by test.
+pub const MAX_WINDOW_BYTES_STR: &str = "8128";
+
+const _: () = assert!(
+    ACCUMULATOR_CAPACITY > MAX_WINDOW_BYTES + MAX_WINDOW_BYTES / 254 + 16,
+    "a full-window frame must fit the accumulator with COBS/postcard overhead"
+);
+
 /// COBS deframer over arbitrary byte transports.
 ///
 /// Transport-agnostic by design: the caller owns how bytes arrive
@@ -21,6 +39,11 @@ pub const ACCUMULATOR_CAPACITY: usize = 8192;
 pub struct CobsPump {
     acc: CobsAccumulator<ACCUMULATOR_CAPACITY>,
     pending: VecDeque<Vec<u8>>,
+    /// Frames lost to accumulator overflow (#456): a sender that ignores
+    /// the advertised window can produce frames larger than the pump can
+    /// deframe. They were dropped SILENTLY — now they are counted so
+    /// callers can surface the contract violation.
+    overfull_drops: u32,
 }
 
 impl CobsPump {
@@ -30,7 +53,16 @@ impl CobsPump {
         Self {
             acc: CobsAccumulator::new(),
             pending: VecDeque::new(),
+            overfull_drops: 0,
         }
+    }
+
+    /// Frames dropped to accumulator overflow since construction — a
+    /// non-zero count means the sender violated the advertised window
+    /// (#456): those frames were silently lost before this counter.
+    #[must_use]
+    pub fn overfull_drops(&self) -> u32 {
+        self.overfull_drops
     }
 
     /// Feed raw transport bytes; returns the number of complete frames
@@ -43,7 +75,12 @@ impl CobsPump {
         while !window.is_empty() {
             window = match self.acc.feed(window) {
                 FeedResult::Consumed => break,
-                FeedResult::OverFull(w) => w,
+                FeedResult::OverFull(w) => {
+                    // #456: the frame exceeded the accumulator — dropped,
+                    // never silently: counted for the caller to surface.
+                    self.overfull_drops = self.overfull_drops.saturating_add(1);
+                    w
+                }
                 FeedResult::DeserError(w) => w,
                 FeedResult::Success { data, remaining } => {
                     self.pending.push_back(data.to_vec());
@@ -136,5 +173,46 @@ mod tests {
         let mut pump = CobsPump::new();
         assert_eq!(pump.feed(&wire), 1);
         assert_eq!(pump.pop_frame().as_deref(), Some(&[][..]));
+    }
+
+    #[test]
+    fn window_str_matches_constant() {
+        // #456: the stringified advertisement must equal the real constant.
+        assert_eq!(
+            MAX_WINDOW_BYTES_STR.parse::<usize>().unwrap(),
+            MAX_WINDOW_BYTES
+        );
+    }
+
+    #[test]
+    fn full_window_frame_deframes_without_drop() {
+        // #456 contract: a sender honoring the advertised window NEVER
+        // overflows the accumulator — even a worst-case (zero-dense)
+        // full-window payload fits after COBS/postcard overhead.
+        let payload: Vec<u8> = vec![0u8; MAX_WINDOW_BYTES];
+        let wire = encode_frame(&payload);
+        assert!(
+            wire.len() <= ACCUMULATOR_CAPACITY,
+            "encoded full-window frame {} > accumulator {}",
+            wire.len(),
+            ACCUMULATOR_CAPACITY
+        );
+        let mut pump = CobsPump::new();
+        assert_eq!(pump.feed(&wire), 1);
+        assert_eq!(pump.overfull_drops(), 0);
+        assert_eq!(pump.pop_frame().as_deref(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn oversized_frame_is_counted_not_silent() {
+        // A sender violating the window produces a frame the accumulator
+        // cannot hold: it is dropped, but now COUNTED (#456) — the old
+        // behavior lost it silently with no observable trace.
+        let payload: Vec<u8> = vec![0u8; ACCUMULATOR_CAPACITY + 128];
+        let wire = encode_frame(&payload);
+        let mut pump = CobsPump::new();
+        assert_eq!(pump.feed(&wire), 0);
+        assert!(pump.overfull_drops() >= 1);
+        assert!(pump.pop_frame().is_none());
     }
 }

@@ -106,8 +106,10 @@ def cmd_emit_exporter(cfg: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def sh(cmd: list[str], timeout=60) -> str:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+def sh(cmd: list[str], timeout=60) -> subprocess.CompletedProcess[str]:
+    """Run and return the FULL result — rc/stderr must not be discarded
+    (#277: callers silently reported success through failed commands)."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
 def cmd_deploy_exporter(cfg: dict) -> int:
@@ -117,12 +119,17 @@ def cmd_deploy_exporter(cfg: dict) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         f.write(cmd_emit_exporter(cfg))
         tmp = f.name
-    print(sh(["scp", "-q", tmp, f"{host}:{remote_path}.new"]))
-    print(sh(["ssh", host, f"cp {remote_path} {remote_path}.bak && mv {remote_path}.new {remote_path} && "
+    put = sh(["scp", "-q", tmp, f"{host}:{remote_path}.new"])
+    print(put.stdout.strip() or put.stderr.strip())
+    activated = sh(["ssh", host, f"cp {remote_path} {remote_path}.bak && mv {remote_path}.new {remote_path} && "
                             "(systemctl --user restart conwrt-exporter 2>/dev/null || "
                             "systemctl restart conwrt-exporter 2>/dev/null || "
-                            "pkill -f labgrid-exporter) && sleep 3 && pgrep -af labgrid-exporter | head -1"]))
+                            "pkill -f labgrid-exporter) && sleep 3 && pgrep -af labgrid-exporter | head -1"])
+    print(activated.stdout.strip() or activated.stderr.strip())
     os.unlink(tmp)
+    if put.returncode != 0 or activated.returncode != 0 or "labgrid-exporter" not in activated.stdout:
+        print("FAIL: exporter deploy — scp/activate failed or no running exporter afterwards")
+        return 1
     return 0
 
 
@@ -132,7 +139,7 @@ def cmd_reconcile(cfg: dict) -> int:
     switch = cfg["devices"]["gs1900-bench"]["mgmt"]
     # 1. bench switch uptime (self-reboot detection)
     up = sh(["ssh", "-o", "BatchMode=yes", f"root@{switch}", "uptime"])
-    m = re.search(r"up (\d+) min", up)
+    m = re.search(r"up (\d+) min", up.stdout)
     if m and int(m.group(1)) < 30:
         drift.append(f"gs1900-bench: uptime {m.group(1)}min — REBOOTED, failsafes likely DISARMED "
                      f"(re-run scripts/gs1900-bench-arm.sh)")
@@ -152,7 +159,8 @@ def cmd_reconcile(cfg: dict) -> int:
             continue
         r = sh(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", f"root@{via}",
                 f"ip neigh show {mg} 2>/dev/null | head -1"], timeout=15)
-        status = "REACHABLE" if ("lladdr" in r and "FAILED" not in r) else "STALE" if "STALE" in r else "NOT-SEEN"
+        neigh = r.stdout
+        status = "REACHABLE" if ("lladdr" in neigh and "FAILED" not in neigh) else "STALE" if "STALE" in neigh else "NOT-SEEN"
         if status == "NOT-SEEN":
             drift.append(f"{name}: {mg} NOT-SEEN via root@{via}")
         print(f"{'DRIFT' if status == 'NOT-SEEN' else status:8} {name}: {mg}")
@@ -160,7 +168,7 @@ def cmd_reconcile(cfg: dict) -> int:
     coord = cfg["labgrid"]["coordinator"]
     places_out = sh(["ssh", "-o", "BatchMode=yes", "ai-legion",
                      f"labgrid-client -x {coord} places 2>/dev/null"], timeout=20)
-    live = {ln.split()[0] for ln in places_out.splitlines() if ln.strip() and ln.split()[0] not in ("Place", "Name", "—")}
+    live = {ln.split()[0] for ln in places_out.stdout.splitlines() if ln.strip() and ln.split()[0] not in ("Place", "Name", "—")}
     want = {p for p, pd in cfg["labgrid"]["places"].items() if not pd.get("disabled")}
     for p in sorted(want - live):
         drift.append(f"labgrid: place {p} in registry but NOT on coordinator")

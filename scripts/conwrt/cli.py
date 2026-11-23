@@ -363,4 +363,35 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sim_modes.add_parser(subparsers)
 
+    from conwrt import adopt as adopt_mod
+    from conwrt import bootlisten as listen_mod
+    from conwrt import v6door as v6door_mod
+    adopt_mod.add_parser(subparsers)
+    v6door_mod.add_parser(subparsers)
+    listen_parser = subparsers.add_parser(
+        "listen", help="classify a boot capture into a recovery verdict (#323)")
+    listen_parser.add_argument("--pcap-text", help="saved tcpdump -ne transcript")
+    listen_parser.add_argument("--iface", help="capture live on this interface")
+    listen_parser.add_argument("--seconds", type=int, default=60)
+    listen_parser.add_argument("--beacon-port", type=int, action="append", default=[],
+                               help="vendor fallback beacon port (repeatable)")
+    listen_parser.add_argument("--exclude-mac", action="append", default=[],
+                               help="ignore frames from this MAC (own fixture/probes)")
+    listen_parser.add_argument("--json", action="store_true")
+    listen_parser.set_defaults(func=listen_mod.cmd_listen)
+
+    from conwrt import discover as discover_mod
+    discover_parser = subparsers.add_parser(
+        "discover", help="dark-unit discovery ladder (#323): control -> v6 -> v4 -> banners")
+    discover_parser.add_argument("mode", choices=("plan", "run"), nargs="?", default="plan",
+                                 help="plan prints the ladder (hardware-safe); run executes via the probe host")
+    discover_parser.add_argument("--mac", required=True, help="source MAC observed in any frame")
+    discover_parser.add_argument("--iface", required=True, help="on-link iface on the probe host")
+    discover_parser.add_argument("--probe-host", help="SSH alias of an on-link probe host (required for run)")
+    discover_parser.add_argument("--control-ip", required=True, help="known-good host for the positive control")
+    discover_parser.add_argument("--probe-subnets", default="", help="comma list of probe-host subnets")
+    discover_parser.add_argument("--inventory", default="", help="inventory.jsonl for v4 archaeology")
+    discover_parser.add_argument("--json", default="", help="write ladder+results as JSON")
+    discover_parser.set_defaults(func=discover_mod.cmd_discover)
+
     return parser

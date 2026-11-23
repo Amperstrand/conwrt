@@ -21,15 +21,16 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
-    FleetIdentityProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile,
-    NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
-    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WifiUplink,
-    WireguardClientProfile, WireguardServerProfile, render_shell,
+    ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
+    FleetIdentityProfile, GuestWifiProfile, IotProfile, Ipv6WanProfile, Mesh11sdProfile,
+    MptcpBondingProfile, Mwan3Profile, NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile,
+    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant,
+    TollgateCellularProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
+    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile, WireguardServerProfile,
+    render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -67,6 +68,14 @@ fn get_str(params: &serde_json::Value, key: &str) -> Option<String> {
             None
         }
     })
+}
+
+fn get_u32(params: &serde_json::Value, key: &str, default: u32) -> u32 {
+    params
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(default)
 }
 
 fn get_u16(params: &serde_json::Value, key: &str, default: u16) -> u16 {
@@ -180,6 +189,27 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 listen_port: get_u16(&params, "listen_port", 5053),
             };
             Ok(Profile::Doh(p))
+        }
+        "ddns" => {
+            let p = DdnsProfile {
+                provider: get_str(&params, "provider").unwrap_or_else(|| "cloudflare".into()),
+                domain: get_str(&params, "domain").unwrap_or_default(),
+                username: get_str(&params, "username").unwrap_or_default(),
+                password: get_str(&params, "password").unwrap_or_default(),
+                update_url: get_str(&params, "update_url").unwrap_or_default(),
+                check_interval: get_u32(&params, "check_interval", 300),
+                force_interval: get_u32(&params, "force_interval", 2_592_000),
+            };
+            Ok(Profile::Ddns(p))
+        }
+        "ipv6-wan" => {
+            let p = Ipv6WanProfile {
+                reqprefix: get_str(&params, "reqprefix").unwrap_or_else(|| "auto".into()),
+                ula_prefix: get_str(&params, "ula_prefix").unwrap_or_default(),
+                masq6: get_bool(&params, "masq6", true),
+                lan_ip6assign: get_str(&params, "lan_ip6assign").unwrap_or_else(|| "64".into()),
+            };
+            Ok(Profile::Ipv6Wan(p))
         }
         "adguard" => {
             let p = AdguardProfile {
@@ -320,6 +350,19 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 network_name: get_str(&params, "network_name").unwrap_or_else(|| "guest".into()),
             };
             Ok(Profile::GuestWifi(p))
+        }
+        "iot" => {
+            let p = IotProfile {
+                ssid: get_str(&params, "ssid").unwrap_or_else(|| "IoT".into()),
+                key: get_str(&params, "key").unwrap_or_default(),
+                encryption: get_str(&params, "encryption").unwrap_or_else(|| "psk2".into()),
+                band: get_str(&params, "band").unwrap_or_else(|| "2.4ghz".into()),
+                isolation: get_bool(&params, "isolation", true),
+                network_name: get_str(&params, "network_name").unwrap_or_else(|| "iot".into()),
+                subnet: get_str(&params, "subnet").unwrap_or_else(|| "192.168.9.1/24".into()),
+                wan_access: get_bool(&params, "wan_access", true),
+            };
+            Ok(Profile::Iot(p))
         }
         "tollgate" => {
             let mut p = TollgateProfile::default();

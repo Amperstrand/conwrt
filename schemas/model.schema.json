@@ -215,7 +215,7 @@
     },
     "signatures": {
       "type": "object",
-      "description": "Evidence-shaped boot/traffic signatures: categories map to prose, scalars, or nested evidence objects. Deliberately loose (corpus-honest, 2026-10-15 audit: bare ints, nested dicts, bools all occur) — preserved-extra in the Rust projection, never dropped (#118).",
+      "description": "Evidence-shaped boot/traffic signatures: categories map to prose, scalars, or nested evidence objects. Deliberately loose (corpus-honest, 2026-10-15 audit: bare ints, nested dicts, bools all occur) \u2014 preserved-extra in the Rust projection, never dropped (#118).",
       "additionalProperties": true
     },
     "hardware": {
@@ -299,6 +299,41 @@
       "type": "object",
       "description": "Flashing orchestrated from an OpenWrt switch (loose; preserved-extra in Rust).",
       "additionalProperties": true
+    },
+    "detection": {
+      "type": "object",
+      "description": "Optional detection hints for conwrt listen/probe (#323): species-level signatures that automate dark-unit first moves.",
+      "properties": {
+        "watts": {
+          "type": "object",
+          "properties": {
+            "typical": {
+              "type": "number"
+            },
+            "stall": {
+              "type": "number"
+            },
+            "fallback": {
+              "type": "number"
+            }
+          }
+        },
+        "vendor_subnets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CIDRs to alias-probe when the vendor fallback profile is seen"
+        },
+        "beacon_ports": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "UDP beacon ports flagged by conwrt listen (4919-class)"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

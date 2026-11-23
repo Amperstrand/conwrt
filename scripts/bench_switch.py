@@ -53,12 +53,13 @@ class BenchProfile:
     dut_subnet_tpl: str = "192.168.10{v}.1"
 
 
-def ssh(host: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
+def ssh(host: str, cmd: str, timeout: int = 60, stdin_text: str | None = None) -> tuple[int, str]:
     proc = subprocess.run(
         ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
          "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
          f"root@{host}", cmd],
         capture_output=True, text=True, timeout=timeout,
+        input=stdin_text,
     )
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
@@ -213,7 +214,10 @@ def cmd_deploy(host: str, serial_port: str | None, profile: BenchProfile,
             return 1
     else:
         script = "\n".join(lines)
-        rc, out = ssh(host, f"sh -c '{script}'", timeout=180)
+        # Feed the script over stdin (`sh -s`): wrapping it in
+        # sh -c '<script>' breaks on any single quote inside — the deadman
+        # line alone contains them (#282).
+        rc, out = ssh(host, "sh -s", timeout=180, stdin_text=script)
         print(out[-400:])
         if rc != 0 or "DEPLOY-COMMITTED" not in out:
             print("FAIL: deploy over ssh")

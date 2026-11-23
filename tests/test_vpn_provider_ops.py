@@ -330,8 +330,12 @@ class TestNordvpnOps:
     def test_vpn_ap_absent_without_params(self, tmp_path):
         params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path))
         r = render_shell(_build_nordvpn_ops(params))
-        assert "wifinet_vpn_ap" not in r
-        assert "vpnlan" not in r
+        # #311: no AP is CONFIGURED (no uci set), and the teardown may
+        # legitimately mention the sections in idempotent DELETE lines.
+        assert "uci set wireless.wifinet_vpn_ap" not in r
+        assert "network.vpnlan=" not in r
+        assert "delete wireless.wifinet_vpn_ap" in r, (
+            "cleared ap_ssid must tear the AP down (#311)")
 
     def test_ap_password_quoting(self, tmp_path):
         params = dict(NORDVPN_PARAMS, config_file=_write_nordvpn_conf(tmp_path),

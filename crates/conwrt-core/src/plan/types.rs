@@ -12,6 +12,10 @@ pub enum Profile {
     Sqm(SqmProfile),
     /// Encrypted DNS resolution for the whole LAN.
     Doh(DohProfile),
+    /// IPv6 WAN with NAT66/ULA stable LAN addressing.
+    Ipv6Wan(Ipv6WanProfile),
+    /// Dynamic DNS client keeping a hostname on a dynamic WAN.
+    Ddns(DdnsProfile),
     /// USB WAN from a phone (all four 1.x tether presets).
     Tether(TetherProfile),
     /// Route traffic through a WireGuard VPN tunnel.
@@ -39,6 +43,8 @@ pub enum Profile {
     AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
+    /// Isolated IoT network (separate AP + firewall zone, optional WAN cutoff).
+    Iot(IotProfile),
     /// Transparent proxy via Clash/Mihomo (flash-time config only —
     /// subscription import is post-flash via the LuCI web UI).
     OpenClash(OpenClashProfile),
@@ -108,6 +114,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => "sqm",
             Profile::Doh(_) => "doh",
+            Profile::Ipv6Wan(_) => "ipv6-wan",
+            Profile::Ddns(_) => "ddns",
             Profile::Tether(t) => t.variant.id(),
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
@@ -121,6 +129,7 @@ impl Profile {
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
+            Profile::Iot(_) => "iot",
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
@@ -156,6 +165,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => &[],
             Profile::Doh(_) => &[],
+            Profile::Ipv6Wan(_) => &[],
+            Profile::Ddns(_) => &[],
             Profile::Tether(_) => &["usb"],
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
@@ -169,6 +180,7 @@ impl Profile {
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
+            Profile::Iot(_) => &["wifi"],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],

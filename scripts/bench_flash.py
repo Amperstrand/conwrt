@@ -43,7 +43,11 @@ if TYPE_CHECKING:
     from bench_session import BenchSession
 
 EXPECTED_PROFILE = "extreme-networks_ws-ap3915i"
-STOCK_VERSION_RE = re.compile(r"^(24|25)\.")
+# The AP3915i sysupgrade-from-flash path is a 24.10.x FACTORY-BASE gate
+# (AGENTS.md:570 rule 2): 25.12.x is accepted by sysupgrade but the
+# flash-boot bring-up is only proven for the 24.10 series — a 25.12
+# registry entry must be refused for --method flash (#272).
+STOCK_VERSION_RE = re.compile(r"^24\.10\.")
 FLASH_POLL_S = 360
 POWER_CYCLE_AT_S = 180
 
@@ -57,7 +61,10 @@ def check_image(entry: dict[str, str], image_path: Path) -> str:
         if field not in entry:
             raise AdoptError(f"image registry entry missing {field!r}")
     if not STOCK_VERSION_RE.match(entry["version"]):
-        raise AdoptError(f"image version {entry['version']!r} is not stock 24.x/25.x — refusing")
+        raise AdoptError(
+            f"image version {entry['version']!r} is not 24.10.x — the "
+            f"AP3915i flash-boot path is proven for 24.10.x only "
+            f"(AGENTS.md:570 rule 2; #272) — refusing")
     if entry["profile"] != EXPECTED_PROFILE:
         raise AdoptError(f"image profile {entry['profile']!r} != {EXPECTED_PROFILE} — refusing")
     if not image_path.exists():
@@ -98,7 +105,13 @@ def stage_flash(r: Runner, entry: dict[str, str], image_path: Path, tftproot: st
     target = r.sh("flash-target", [
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
         "'echo FLASH-TARGET-OK; cat /tmp/sysinfo/board_name' </dev/null || echo TARGET-FAIL"])
-    for required in ("FLASH-TARGET-OK", EXPECTED_PROFILE.split(",")[-1]):
+    # #270: the DEVICE reports the comma-form board_name
+    # ("extreme-networks,ws-ap3915i"); EXPECTED_PROFILE is the REGISTRY
+    # spelling (underscore form) — comparing the output against it
+    # rejected every valid AP3915i. Gate on the per-place board exactly
+    # as bench_adopt.assert_expected_state() does; check_image() keeps
+    # the registry-profile spelling for the IMAGE side.
+    for required in ("FLASH-TARGET-OK", p.board):
         if required not in target:
             raise AdoptError(f"flash target not reachable/verified at {p.dut_ip}:\n{target[:300]}")
 
@@ -112,7 +125,10 @@ def stage_flash(r: Runner, entry: dict[str, str], image_path: Path, tftproot: st
     out = r.sh("flash-push", [
         f"sha256sum {tftproot}/{image_path.name} | grep -q {digest} || echo SWITCH-SHA-FAIL",
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
-        f"'cat > {remote_img}' < {tftproot}/{image_path.name} </dev/null",
+        # #271: exactly ONE stdin redirect — a trailing </dev/null would
+        # WIN the redirect race and feed dbclient's remote cat an empty
+        # stdin: zero-byte upload, sha256 gate aborts every real flash.
+        f"'cat > {remote_img}' < {tftproot}/{image_path.name}",
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{p.dut_ip} "
         f"'sha256sum {remote_img}' </dev/null"])
     if digest not in out or "SWITCH-SHA-FAIL" in out:

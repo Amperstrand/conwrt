@@ -37,6 +37,7 @@ def ssh_cmd(
     connect_timeout: int = 10,
     dropbear_target: bool = False,
     port: int | None = None,
+    user: str = "root",
 ) -> list[str]:
     cmd: list[str] = [
         "ssh",
@@ -53,7 +54,7 @@ def ssh_cmd(
         cmd += ["-p", str(resolved)]
     if key:
         cmd += ["-i", key]
-    cmd.append(f"root@{ip}")
+    cmd.append(f"{user}@{ip}")
     if isinstance(command, str):
         cmd.append(command)
     else:
@@ -89,12 +90,18 @@ def scp_cmd(
     return cmd
 
 
-def run_ssh(ip, command, key=None, connect_timeout=10, timeout=30, **kwargs):
-    """Run SSH command and return subprocess.CompletedProcess."""
+def run_ssh(ip, command, key=None, connect_timeout=10, timeout=30, user="root",
+            **kwargs):
+    """Run SSH command and return subprocess.CompletedProcess.
+
+    ``user`` defaults to root (the netboot rescue shell and every OpenWrt
+    target). Raspberry Pi OS / Ubuntu images use ``pi`` / ``ubuntu``; pass
+    ``user=`` rather than embedding it in ``ip``.
+    """
     ssh_options = kwargs.pop("ssh_options", None)
     dropbear_target = kwargs.pop("dropbear_target", False)
     cmd = ssh_cmd(ip, command, key=key, connect_timeout=connect_timeout,
-                  dropbear_target=dropbear_target)
+                  dropbear_target=dropbear_target, user=user)
     if ssh_options:
         cmd[1:1] = list(ssh_options)
     return subprocess.run(

@@ -174,18 +174,22 @@ async fn queued_event_follows_the_reply_that_drained_it() {
     // send_events ordering.
     let mut core = server();
     core.push_uart_data(0, b"boot banner");
+    // #362: console bytes only flow post-handshake — the parked banner
+    // flushes when the handshake succeeds, then follows the reply out.
     let mut io = MockStream {
-        read_chunks: vec![request_bytes(0, WireEndpoint::Capabilities)],
+        read_chunks: vec![handshake_and_caps_wire()],
         written: Vec::new(),
         write_cap: 0,
     };
     agent_session_stream(&mut io, &mut core).await;
     let frames = decode_replies(&io.written);
-    assert_eq!(frames.len(), 2, "capabilities response + uart event");
-    assert!(matches!(
-        frames[1],
+    assert!(frames.len() >= 3, "handshake+caps responses + uart event");
+    // the parked banner flushes on handshake and rides out with the
+    // handshake reply's drain (before the caps response)
+    assert!(frames.iter().any(|f| matches!(
+        f,
         WireFrame::Event(conwrt_agent_proto::dispatch::AgentEvent::UartData { port: 0, .. })
-    ));
+    )));
 }
 
 #[tokio::test]

@@ -1,0 +1,8 @@
+{
+  "use_case": "ipv6-wan",
+  "params": {
+    "reqprefix": "56",
+    "ula_prefix": "fd12:3456:789a::/64",
+    "masq6": false
+  }
+}
