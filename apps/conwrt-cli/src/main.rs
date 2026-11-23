@@ -22,7 +22,7 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
     ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile,
-    GuestWifiProfile, Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile,
+    GuestWifiProfile, IotProfile, Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile,
     OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
     RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
@@ -574,6 +574,7 @@ enum ProfileChoice {
     WireguardClient,
     WireguardServer,
     GuestWifi,
+    Iot,
     Travelmate,
     Pbr,
     Mwan3,
@@ -635,6 +636,12 @@ struct ProfileArgs {
     /// wireguard-server UDP listen port.
     #[arg(long)]
     listen_port: Option<u16>,
+    /// iot: fixed subnet a.b.c.d/24
+    #[arg(long)]
+    iot_subnet: Option<String>,
+    /// iot: allow iot->wan forwarding
+    #[arg(long)]
+    iot_wan_access: Option<bool>,
     /// ipv6-wan: requested delegated prefix length
     #[arg(long)]
     v6_reqprefix: Option<String>,
@@ -2359,6 +2366,31 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             peer1_psk: args.peer1_psk.clone().unwrap_or_default(),
             ..WireguardServerProfile::default()
         })),
+        ProfileChoice::Iot => {
+            // Same foot-gun refusal as guest-wifi: a psk2/sae profile
+            // without a key renders fine and hostapd refuses to start.
+            let encryption = args.ap_encryption.clone().unwrap_or_else(|| "psk2".into());
+            let key = args.ap_key.clone().unwrap_or_default();
+            if key.is_empty() && encryption != "none" {
+                return Err(
+                    "iot requires --ap-key (IoT nets are never open; use --ap-encryption none explicitly for an open lab net)"
+                        .into(),
+                );
+            }
+            Ok(Profile::Iot(IotProfile {
+                ssid: args.ap_ssid.clone().unwrap_or_else(|| "IoT".into()),
+                key,
+                encryption,
+                band: args.ap_band.clone().unwrap_or_else(|| "2.4ghz".into()),
+                isolation: true,
+                network_name: "iot".into(),
+                subnet: args
+                    .iot_subnet
+                    .clone()
+                    .unwrap_or_else(|| "192.168.9.1/24".into()),
+                wan_access: args.iot_wan_access.unwrap_or(true),
+            }))
+        }
         ProfileChoice::GuestWifi => {
             // 1.x validate_ssid + WIFI_* choice gates fire at plan time;
             // the omitted-flag defaults are the valid 1.x defaults.
@@ -3803,6 +3835,8 @@ mod tests {
             interface: "wan".into(),
             provider: None,
             listen_port: None,
+            iot_subnet: None,
+            iot_wan_access: None,
             v6_reqprefix: None,
             v6_ula_prefix: None,
             v6_masq6: false,

@@ -303,6 +303,14 @@
     "ipv6_wan_custom": {
       "use_case": "ipv6-wan",
       "expect": "EQUAL"
+    },
+    "iot_default": {
+      "use_case": "iot",
+      "expect": "EQUAL"
+    },
+    "iot_wan_cutoff": {
+      "use_case": "iot",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

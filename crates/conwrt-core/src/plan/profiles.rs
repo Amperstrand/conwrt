@@ -2837,6 +2837,96 @@ pub struct WifiUplink {
 
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
+/// IoT isolated network — port of the 1.x `iot` use case
+/// (`scripts/use_cases/iot.py`, issue #4). Same machinery as
+/// guest-wifi (radio hard-gate #454, named firewall sections, VAP
+/// cleanup) with IoT-grade semantics: a FIXED configurable /24
+/// subnet (deterministic — no derive-from-LAN), client isolation on
+/// by default, 12 h leases, and an optional WAN cut-off
+/// (`wan_access=false` drops the forwarding rule entirely — the
+/// "devices never phone home" posture; DNS+DHCP to the router stay
+/// allowed either way). VLAN trunk delivery is a deliberate non-goal:
+/// the separate-AP variant is the issue's other arm and rides the
+/// tested guest-wifi machinery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IotProfile {
+    /// IoT SSID (same contract as guest-wifi).
+    pub ssid: String,
+    /// WiFi password; REQUIRED unless encryption=none.
+    pub key: String,
+    /// Encryption mode (psk2, psk-mixed, none).
+    pub encryption: String,
+    /// WiFi band (2.4ghz, 5ghz).
+    pub band: String,
+    /// Client isolation (default on).
+    pub isolation: bool,
+    /// UCI network/interface name.
+    pub network_name: String,
+    /// Fixed subnet, a.b.c.d/24 (split to uci ipaddr/netmask).
+    pub subnet: String,
+    /// Allow iot -> wan forwarding (default on).
+    pub wan_access: bool,
+}
+
+impl Default for IotProfile {
+    fn default() -> Self {
+        Self {
+            ssid: "IoT".into(),
+            key: String::new(),
+            encryption: "psk2".into(),
+            band: "2.4ghz".into(),
+            isolation: true,
+            network_name: "iot".into(),
+            subnet: "192.168.9.1/24".into(),
+            wan_access: true,
+        }
+    }
+}
+
+impl IotProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.ssid.is_empty() || self.ssid.len() > 32 || self.ssid.chars().any(|c| c.is_control())
+        {
+            return Err(Unsupported::InvalidParams(
+                "ssid must be non-empty, <=32 bytes, no control characters".into(),
+            ));
+        }
+        if self.encryption != "none" && self.key.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "key is required unless encryption=none (IoT nets are never open)".into(),
+            ));
+        }
+        if !matches!(self.encryption.as_str(), "psk2" | "psk-mixed" | "none") {
+            return Err(Unsupported::InvalidParams(format!(
+                "encryption must be psk2/psk-mixed/none: {}",
+                self.encryption
+            )));
+        }
+        if !matches!(self.band.as_str(), "2.4ghz" | "5ghz") {
+            return Err(Unsupported::InvalidParams(format!(
+                "band must be 2.4ghz/5ghz: {}",
+                self.band
+            )));
+        }
+        let parts: Vec<&str> = self.subnet.split('/').collect();
+        let octets: Vec<u32> = parts
+            .first()
+            .map(|p| p.split('.').filter_map(|o| o.parse::<u32>().ok()).collect())
+            .unwrap_or_default();
+        if parts.len() != 2
+            || parts[1] != "24"
+            || octets.len() != 4
+            || octets.iter().any(|o| *o > 255)
+        {
+            return Err(Unsupported::InvalidParams(format!(
+                "subnet must be a.b.c.d/24: {}",
+                self.subnet
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// apply time from the live LAN IP (third octet + 1), so the address
 /// lines render as shell ops exactly like 1.x.
 #[derive(Debug, Clone, PartialEq, Eq)]
