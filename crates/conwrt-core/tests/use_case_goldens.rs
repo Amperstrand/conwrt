@@ -136,10 +136,10 @@
 
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DdnsProfile,
-    DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile,
-    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
-    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile, IotProfile, Ipv6WanProfile,
+    Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
+    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
     TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
     VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
     VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
@@ -277,6 +277,32 @@ fn ipv6_wan_custom_matches_1x_golden() {
             ..Ipv6WanProfile::default()
         }),
         include_str!("goldens/ipv6-wan-custom.sh"),
+    );
+}
+
+#[test]
+fn iot_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Iot(IotProfile {
+            key: "iotpass123".into(),
+            ..IotProfile::default()
+        }),
+        include_str!("goldens/iot.sh"),
+    );
+}
+
+#[test]
+fn iot_wan_cutoff_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Iot(IotProfile {
+            key: "k2".into(),
+            ssid: "Sensors".into(),
+            band: "5ghz".into(),
+            subnet: "10.90.0.1/24".into(),
+            wan_access: false,
+            ..IotProfile::default()
+        }),
+        include_str!("goldens/iot-wan-cutoff.sh"),
     );
 }
 

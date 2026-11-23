@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
     ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
-    FleetIdentityProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile, MptcpBondingProfile,
-    Mwan3Profile, NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile,
+    FleetIdentityProfile, GuestWifiProfile, IotProfile, Ipv6WanProfile, Mesh11sdProfile,
+    MptcpBondingProfile, Mwan3Profile, NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile,
     OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
     SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant,
     TollgateCellularProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
@@ -350,6 +350,19 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 network_name: get_str(&params, "network_name").unwrap_or_else(|| "guest".into()),
             };
             Ok(Profile::GuestWifi(p))
+        }
+        "iot" => {
+            let p = IotProfile {
+                ssid: get_str(&params, "ssid").unwrap_or_else(|| "IoT".into()),
+                key: get_str(&params, "key").unwrap_or_default(),
+                encryption: get_str(&params, "encryption").unwrap_or_else(|| "psk2".into()),
+                band: get_str(&params, "band").unwrap_or_else(|| "2.4ghz".into()),
+                isolation: get_bool(&params, "isolation", true),
+                network_name: get_str(&params, "network_name").unwrap_or_else(|| "iot".into()),
+                subnet: get_str(&params, "subnet").unwrap_or_else(|| "192.168.9.1/24".into()),
+                wan_access: get_bool(&params, "wan_access", true),
+            };
+            Ok(Profile::Iot(p))
         }
         "tollgate" => {
             let mut p = TollgateProfile::default();

@@ -106,6 +106,7 @@ pub fn plan_profile(
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
+        Profile::Iot(iot) => plan_iot(model, iot),
         Profile::OpenClash(oc) => plan_openclash(model, oc),
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),

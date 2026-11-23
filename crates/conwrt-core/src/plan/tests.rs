@@ -1308,6 +1308,60 @@ fn ipv6_wan_param_bounds_and_shape_match_1x() {
 }
 
 #[test]
+fn iot_param_bounds_and_shape_match_1x() {
+    assert!(
+        IotProfile {
+            key: "k".into(),
+            ..IotProfile::default()
+        }
+        .validate()
+        .is_ok()
+    );
+    for p in [
+        IotProfile {
+            key: String::new(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            subnet: "10.0.0.0/8".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            subnet: "nope".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            band: "6ghz".into(),
+            ..IotProfile::default()
+        },
+        IotProfile {
+            key: "k".into(),
+            encryption: "wep".into(),
+            ..IotProfile::default()
+        },
+    ] {
+        assert!(matches!(p.validate(), Err(Unsupported::InvalidParams(_))));
+    }
+    // radio hard-gate leads; wan cutoff drops the forwarding rule
+    let plan = plan_for(Profile::Iot(IotProfile {
+        key: "k".into(),
+        ..IotProfile::default()
+    }));
+    let script = render_shell(&plan);
+    assert!(script.contains("echo 'iot: no 2g radio found"));
+    assert!(script.contains("firewall.iot_fwd.dest='wan'"));
+    let cut = plan_for(Profile::Iot(IotProfile {
+        key: "k".into(),
+        wan_access: false,
+        ..IotProfile::default()
+    }));
+    assert!(!render_shell(&cut).contains("_fwd"));
+}
+
+#[test]
 fn openclash_shape_gates_and_branches_match_1x() {
     let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
     let script = render_shell(&plan);

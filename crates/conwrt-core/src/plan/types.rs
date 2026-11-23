@@ -43,6 +43,8 @@ pub enum Profile {
     AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
+    /// Isolated IoT network (separate AP + firewall zone, optional WAN cutoff).
+    Iot(IotProfile),
     /// Transparent proxy via Clash/Mihomo (flash-time config only —
     /// subscription import is post-flash via the LuCI web UI).
     OpenClash(OpenClashProfile),
@@ -127,6 +129,7 @@ impl Profile {
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
+            Profile::Iot(_) => "iot",
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
@@ -177,6 +180,7 @@ impl Profile {
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
+            Profile::Iot(_) => &["wifi"],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
