@@ -204,3 +204,41 @@ class TestShippingContract:
         )
         assert m is not None
         assert base64.b64decode(m.group(1)) == self.read().encode()
+
+
+class Test345to347:
+    def test_high_bit_digest_reduces_unsigned(self):
+        """#345: digest hex with the high bit set — the awk limb reduction
+        must equal Python's unsigned int(hex,16) % 10**6 (the old BusyBox
+        $((0x...)) went signed-64 negative for ~half of keys)."""
+        for h in ("fffffffffffffffe", "f000000000000001",
+                  "8000000000000000", "deadbeefdeadbeef"):
+            limb = 0
+            for ch in h:
+                limb = (limb * 16 + int(ch, 16)) % 1_000_000
+            assert limb == int(h, 16) % 1_000_000
+
+    def test_enroll_accepts_legacy_text_response(self):
+        """#347: the bare 'enrolled' text must not raise — automation
+        reading a successful hardening as JSONDecodeError is the bug."""
+        import json as _json
+        from unittest.mock import patch, MagicMock
+        from tofb import enroll
+        resp = MagicMock()
+        resp.read.return_value = b"enrolled"
+        # context-manager protocol for the `with urlopen(...) as resp` shape
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with patch("tofb.urllib.request.urlopen", return_value=resp):
+            assert enroll("fe80::1", "123456", "ssh-ed25519 AAAA op@b") == {
+                "status": "enrolled"}
+
+    def test_device_script_shapes(self):
+        """#345/#346/#347 shape pins on the device script."""
+        src = open("scripts/tofb-device.sh").read()
+        assert "0x$CODE % 1000000" not in src, "#345: signed reduction gone"
+        assert 'for (i = 1; i <= length($1); i++)' in src
+        assert 'uci -q get dropbear.@dropbear[0].PasswordAuth' in src, (
+            "#346: readback gate present")
+        assert '"status":"enrolled"' in src, "#347: JSON response"
+        assert '"reason":"auth hardening readback mismatch' in src

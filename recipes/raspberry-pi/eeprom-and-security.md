@@ -70,6 +70,15 @@ NOT re-download `pieeprom.upd` (version match → skip). Visible in
 
 Build packages with `scripts/pi_eeprom.py build --boot-order 0xf142 --boot-uart`.
 
+**What lands in flash is pinned.** The default EEPROM image, `recovery.bin`,
+and the `rpi-eeprom-config` helper are fetched from one pinned rpi-eeprom
+commit and checked against digests recorded when the pin was set
+(`EEPROM_UPSTREAM_COMMIT` / `KNOWN_DIGESTS` in the script). A download whose
+bytes were never seen by any build — upstream amend, proxy rewrite, cache
+rot — is refused, not packaged; every fetch prints and records its sha256 so
+builds are comparable across time. Bumping the pin is a deliberate act: new
+bootloader, re-prove the boot stages.
+
 ## Network boot security (outlook)
 
 Plain TFTP netboot has **no authentication**: whoever controls DHCP/TFTP on

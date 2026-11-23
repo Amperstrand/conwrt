@@ -231,17 +231,17 @@ def stage_preflight(r: Runner) -> None:
 
 def stage_backup(r: Runner) -> None:
     out = r.dut("backup", "sysupgrade -b /tmp/bench-adopt-backup.tar.gz >/dev/null 2>&1; "
-                          "md5sum /tmp/bench-adopt-backup.tar.gz")
+                          "sha256sum /tmp/bench-adopt-backup.tar.gz")
     digest = parse_field(out, "bench-adopt-backup.tar.gz").split()[0]
-    if len(digest) != 32:
-        raise AdoptError(f"backup: no md5 in output:\n{out[:300]}")
+    if len(digest) != 64:
+        raise AdoptError(f"backup: no sha256 in output:\n{out[:300]}")
     pulled = r.sh("backup-pull", [
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{r.place.linklocal}%switch.{r.place.vlan} "
         f"'cat /tmp/bench-adopt-backup.tar.gz' </dev/null > /tmp/bench-adopt-backup.tar.gz 2>/dev/null",
-        "md5sum /tmp/bench-adopt-backup.tar.gz"])
+        "sha256sum /tmp/bench-adopt-backup.tar.gz"])
     if digest not in pulled:
-        raise AdoptError("backup: md5 mismatch DUT vs switch — refusing to continue")
-    print(f"[PASS] backup {r.place.name}: md5 {digest} verified end-to-end")
+        raise AdoptError("backup: sha256 mismatch DUT vs switch — refusing to continue")
+    print(f"[PASS] backup {r.place.name}: sha256 {digest} verified end-to-end")
 
 
 def stage_overlay(r: Runner) -> None:
@@ -509,11 +509,15 @@ def stage_reset(r: Runner, envelope: EnvelopeReceipt | None = None) -> None:
                         # re-runs the replay (ap-lan2 + ap-lan5 both cured
                         # by exactly one cycle). Bounded at 2 per AGENTS.md.
                         port = p.name.removeprefix("ap-")
+                        # #274: the JSON args are SINGLE-quoted (the
+                        # double-quoted form lost its quotes through the
+                        # sh -s layer; ubus saw invalid JSON and both
+                        # cycles no-op'd) — same shape as bench_session.power.
                         print(f"[HEAL] reset {p.name}: auth-dead (jffs2 replay race) — "
                               f"deliberate PoE cycle {poe_cycles + 1}/2 on {port}")
                         r.sh("reset-poecycle", [
-                            f'ubus call poe manage "{{\"port\":\"{port}\",\"action\":\"disable\"}}"; sleep 8; '
-                            f'ubus call poe manage "{{\"port\":\"{port}\",\"action\":\"enable\"}}"',
+                            f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"disable\"}}'; sleep 8; "
+                            f"ubus call poe manage '{{\"port\":\"{port}\",\"action\":\"enable\"}}'",
                         ], timeout_s=60)
                         poe_cycles += 1
                         consecutive_auth_dead = 0

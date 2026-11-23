@@ -18,6 +18,8 @@ use alloc::format;
 use alloc::string::ToString;
 use conwrt_types::DeviceModel;
 
+mod net_roles_bodies;
+mod plan_cellular_bodies;
 mod planners;
 mod profiles;
 mod render;
@@ -88,6 +90,8 @@ pub fn plan_profile(
     let mut plan = match profile {
         Profile::Sqm(sqm) => plan_sqm(model, sqm),
         Profile::Doh(doh) => plan_doh(model, doh),
+        Profile::Ipv6Wan(v6) => plan_ipv6_wan(model, v6),
+        Profile::Ddns(ddns) => plan_ddns(model, ddns),
         Profile::Tether(tether) => plan_tether(model, tether),
         Profile::WireguardClient(wg) => plan_wireguard_client(model, wg),
         Profile::WireguardServer(wg) => plan_wireguard_server(model, wg),
@@ -102,6 +106,7 @@ pub fn plan_profile(
         Profile::Nodns(nd) => plan_nodns(model, nd),
         Profile::AutoSqm(asq) => plan_auto_sqm(model, asq),
         Profile::GuestWifi(gw) => plan_guest_wifi(model, gw),
+        Profile::Iot(iot) => plan_iot(model, iot),
         Profile::OpenClash(oc) => plan_openclash(model, oc),
         Profile::Ssl(ssl) => plan_ssl(model, ssl),
         Profile::VpnPiaOpenvpn(pia) => plan_vpn_pia_openvpn(model, pia),
@@ -113,6 +118,7 @@ pub fn plan_profile(
         Profile::VpnOpenvpn(vo) => plan_vpn_openvpn(model, vo),
         Profile::VpnSurfshark(ss) => plan_vpn_surfshark(model, ss),
         Profile::VpnIvpn(iv) => plan_vpn_ivpn(model, iv),
+        Profile::NetRoles(nr) => plan_net_roles(model, nr),
         Profile::VpnMullvad(mu) => plan_vpn_mullvad(model, mu),
         Profile::VpnNode(vn) => plan_vpn_node(model, vn),
         Profile::VpnNordvpnIke2(i2) => plan_vpn_nordvpn_ike2(model, i2),
@@ -122,6 +128,8 @@ pub fn plan_profile(
         Profile::FipsBluetoothRfcomm(fp) => plan_fips_bluetooth_rfcomm(model, fp),
         Profile::Tollgate(tg) => plan_tollgate(model, tg),
         Profile::TollgateSecurity(ts) => plan_tollgate_security(model, ts),
+        Profile::FleetIdentity(fi) => plan_fleet_identity(model, fi),
+        Profile::TollgateCellular(tc) => plan_tollgate_cellular(model, tc),
     }?;
     // 24.x deprecation advisory (warning, not refusal — policy: warn
     // and plan the upgrade; see the deprecation tracking issue):

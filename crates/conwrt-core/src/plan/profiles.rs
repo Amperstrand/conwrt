@@ -64,6 +64,229 @@ impl SqmProfile {
     }
 }
 
+/// Dynamic DNS via `ddns-scripts` — port of the 1.x `ddns` use case
+/// (`scripts/use_cases/ddns.py`, issue #5). Keeps a hostname pointed
+/// at the router's dynamic WAN address: provider map to ddns-scripts
+/// `service_name` values, token-charset validation on everything that
+/// rides uci values (the mwan3/#448 injection class), HTTPS-only
+/// updates, and the standard check/force interval pair (300 s / 30 d
+/// defaults mirror the LuCI defaults). Custom providers take an
+/// `update_url` instead of a mapped service name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DdnsProfile {
+    /// Provider name from [`DDNS_PROVIDERS`] or `custom` (with
+    /// `update_url`).
+    pub provider: String,
+    /// FQDN to keep updated (also the lookup host).
+    pub domain: String,
+    /// Account username (empty for token providers).
+    pub username: String,
+    /// Account password / API token.
+    pub password: String,
+    /// Custom-provider update URL (https only).
+    pub update_url: String,
+    /// IP check interval, seconds (30 s floor).
+    pub check_interval: u32,
+    /// Forced update interval, seconds (30 s floor).
+    pub force_interval: u32,
+}
+
+/// ddns-scripts `service_name` values for the mapped providers.
+pub const DDNS_PROVIDERS: &[(&str, &str)] = &[
+    ("cloudflare", "cloudflare.com/v4"),
+    ("duckdns", "duckdns.org"),
+    ("noip", "noip.com"),
+    ("dynu", "dynu.com"),
+    ("desec", "desec.io"),
+];
+
+impl Default for DdnsProfile {
+    fn default() -> Self {
+        Self {
+            provider: "cloudflare".into(),
+            domain: String::new(),
+            username: String::new(),
+            password: String::new(),
+            update_url: String::new(),
+            check_interval: 300,
+            force_interval: 2_592_000,
+        }
+    }
+}
+
+impl DdnsProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.provider != "custom" && !DDNS_PROVIDERS.iter().any(|(n, _)| *n == self.provider) {
+            return Err(Unsupported::InvalidParams(format!(
+                "unknown ddns provider: {}",
+                self.provider
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '@' | '/' | '-')
+                })
+        };
+        let secret = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | ':'
+                                | '@'
+                                | '/'
+                                | '!'
+                                | '#'
+                                | '$'
+                                | '%'
+                                | '^'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | '='
+                                | '~'
+                                | '?'
+                                | '<'
+                                | '>'
+                                | '|'
+                                | '\\'
+                                | '-'
+                        )
+                })
+        };
+        if !token(&self.domain) {
+            return Err(Unsupported::InvalidParams(
+                "domain is required and must be a hostname token".into(),
+            ));
+        }
+        if !self.username.is_empty() && !token(&self.username) {
+            return Err(Unsupported::InvalidParams(
+                "username contains unsafe characters".into(),
+            ));
+        }
+        if !secret(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "password contains unsafe characters".into(),
+            ));
+        }
+        if self.provider == "custom" {
+            let ok = self.update_url.starts_with("https://")
+                && self.update_url.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | '~'
+                                | ':'
+                                | '/'
+                                | '?'
+                                | '#'
+                                | '@'
+                                | '!'
+                                | '$'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | ','
+                                | ';'
+                                | '='
+                                | '%'
+                                | '-'
+                        )
+                });
+            if !ok {
+                return Err(Unsupported::InvalidParams(
+                    "update_url must be an https URL token".into(),
+                ));
+            }
+        }
+        for (name, v) in [
+            ("check_interval", self.check_interval),
+            ("force_interval", self.force_interval),
+        ] {
+            if v < 30 {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{name} below the 30-second floor: {v}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// IPv6 WAN with NAT66/ULA for stable LAN addressing — port of the 1.x
+/// `ipv6-wan` use case (`scripts/use_cases/ipv6_wan.py`, issue #3).
+/// ISP prefixes churn (DHCPv6-PD reassignment) and take every
+/// prefix-pinned address/rule with them; this recipe keeps a STABLE
+/// ULA on the LAN (param wins, the device's existing one wins, else a
+/// deterministic MAC-derived derive — the OpenWrt generate_ula shape,
+/// BusyBox-safe), runs DHCPv6-PD on wan6, and opts into masq6 on the
+/// zone NAMED wan (index-based @zone[1] breaks on customized
+/// firewalls) so ULA-sourced traffic still egresses. Config touches
+/// are idempotent sets only — never a blanket uci revert on
+/// network/firewall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ipv6WanProfile {
+    /// Requested delegated prefix length.
+    pub reqprefix: String,
+    /// Stable ULA /64; empty = keep existing / derive from MAC.
+    pub ula_prefix: String,
+    /// NAT66 masquerade on the wan zone for ULA egress.
+    pub masq6: bool,
+    /// LAN prefix assignment size.
+    pub lan_ip6assign: String,
+}
+
+impl Default for Ipv6WanProfile {
+    fn default() -> Self {
+        Self {
+            reqprefix: "auto".into(),
+            ula_prefix: String::new(),
+            masq6: true,
+            lan_ip6assign: "64".into(),
+        }
+    }
+}
+
+impl Ipv6WanProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(
+            self.reqprefix.as_str(),
+            "auto" | "no" | "48" | "56" | "60" | "64"
+        ) {
+            return Err(Unsupported::InvalidParams(format!(
+                "reqprefix must be auto/no/48/56/60/64: {}",
+                self.reqprefix
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '/' | '_' | '-'))
+        };
+        if !self.ula_prefix.is_empty() && !token(&self.ula_prefix) {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix contains unsafe characters".into(),
+            ));
+        }
+        if !self.ula_prefix.is_empty() && !self.ula_prefix.ends_with("/64") {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix must be a /64 (stable LAN addressing)".into(),
+            ));
+        }
+        if !matches!(self.lan_ip6assign.as_str(), "56" | "60" | "64") {
+            return Err(Unsupported::InvalidParams(format!(
+                "lan_ip6assign must be 56/60/64: {}",
+                self.lan_ip6assign
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// DNS-over-HTTPS via `https-dns-proxy` — port of the tested 1.x `doh`
 /// use case (`scripts/use_cases/doh.py`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,6 +745,7 @@ impl Default for SshHardeningProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TravelmateProfile {
     /// WiFi radio used for upstream scanning (1.x default `radio0`).
+    /// WiFi radio section (one STA per radio; default radio0).
     pub radio: String,
     /// Overall retry timeout in seconds (1.x default 60).
     pub timeout: u32,
@@ -588,11 +812,14 @@ pub struct Mesh11sdProfile {
     /// (1.x required-param gate).
     pub mesh_id: String,
     /// Base SSID for the mesh gate AP (1.x default `MeshNet`).
+    /// WiFi uplink SSID (required for kind=wifi).
     pub ssid: String,
     /// Mesh gate encryption: `0`=none, `1`=wpa3, `2`=wpa2, `3`=mixed
     /// (1.x default `1`; kept a string for parity).
+    /// none | psk2 | sae | sae-mixed (1.x `_WIFI_ENCRYPTIONS`).
     pub encryption: String,
     /// WiFi key for the mesh gate AP (empty = none).
+    /// WiFi PSK (required unless encryption=none).
     pub key: String,
     /// Auto-config mode: `0`=disabled, `1`=auto, `2`=auto+commit
     /// (1.x default `0`).
@@ -788,10 +1015,11 @@ impl PbrProfile {
 /// NOT official OpenWrt packages (1.x shares this gap — its
 /// `packages_via="auto"` list fails to resolve on stock devices and
 /// the public ASU alike). The intended delivery is a baked image or a
-/// preinstalled device, where the leading `EnsurePackage`
-/// short-circuits on `opkg list-installed`; on a stock device the
-/// apply aborts loudly at the FIRST op — before any configuration is
-/// touched — rather than leaving dangling config for absent software.
+/// preinstalled device, where the gate's `opkg list-installed` arm
+/// no-ops; when the feed IS configured it installs; on a stock device
+/// it refuses WITH THE REASON (#59: the vernesong feed requirement and
+/// the bake-into-image path) — before any configuration is touched —
+/// rather than leaving dangling config for absent software.
 /// An acquisition phase (feed setup / release-IPK download) is M7
 /// image-pipeline work, not a plan op. The 1.x `packages_remove:
 /// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build
@@ -2314,12 +2542,17 @@ impl VpnNordvpnProfile {
         }
         if self.route_target.is_empty() {
             return Err(Unsupported::InvalidParams(
-                "route_target is required (the resolved endpoint IP)".into(),
+                "route_target is required (the resolved endpoint IP — or, post the
+                NordVPN API change, the server hostname; 1.x pins
+                `de500.nordvpn.com`-style targets and lets the ROUTER resolve)"
+                    .into(),
             ));
         }
-        if !ipv4(&self.route_target) {
+        // route_target: IPv4 OR hostname (1.x post-API-change pins hostnames;
+        // semantic drift found by the cross-implementation parity corpus, PR #629).
+        if !host_ok(&self.route_target) {
             return Err(Unsupported::InvalidParams(
-                "route_target must be an IPv4 address".into(),
+                "route_target must be an IPv4 address or a hostname".into(),
             ));
         }
         for (field, value) in [
@@ -2598,11 +2831,102 @@ pub struct WifiUplink {
     pub radio: String,
     /// wifi-iface section name, e.g. `trm_uplink1` (stable across
     /// re-applies for idempotent reconfigure).
+    /// UCI network interface name (defaults per kind: wan/wwan/waneth).
     pub iface: String,
 }
 
 /// Isolated guest WiFi — port of the tested 1.x `guest-wifi` preset
 /// (`scripts/use_cases/guest_wifi.py`). The guest subnet is derived at
+/// IoT isolated network — port of the 1.x `iot` use case
+/// (`scripts/use_cases/iot.py`, issue #4). Same machinery as
+/// guest-wifi (radio hard-gate #454, named firewall sections, VAP
+/// cleanup) with IoT-grade semantics: a FIXED configurable /24
+/// subnet (deterministic — no derive-from-LAN), client isolation on
+/// by default, 12 h leases, and an optional WAN cut-off
+/// (`wan_access=false` drops the forwarding rule entirely — the
+/// "devices never phone home" posture; DNS+DHCP to the router stay
+/// allowed either way). VLAN trunk delivery is a deliberate non-goal:
+/// the separate-AP variant is the issue's other arm and rides the
+/// tested guest-wifi machinery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IotProfile {
+    /// IoT SSID (same contract as guest-wifi).
+    pub ssid: String,
+    /// WiFi password; REQUIRED unless encryption=none.
+    pub key: String,
+    /// Encryption mode (psk2, psk-mixed, none).
+    pub encryption: String,
+    /// WiFi band (2.4ghz, 5ghz).
+    pub band: String,
+    /// Client isolation (default on).
+    pub isolation: bool,
+    /// UCI network/interface name.
+    pub network_name: String,
+    /// Fixed subnet, a.b.c.d/24 (split to uci ipaddr/netmask).
+    pub subnet: String,
+    /// Allow iot -> wan forwarding (default on).
+    pub wan_access: bool,
+}
+
+impl Default for IotProfile {
+    fn default() -> Self {
+        Self {
+            ssid: "IoT".into(),
+            key: String::new(),
+            encryption: "psk2".into(),
+            band: "2.4ghz".into(),
+            isolation: true,
+            network_name: "iot".into(),
+            subnet: "192.168.9.1/24".into(),
+            wan_access: true,
+        }
+    }
+}
+
+impl IotProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.ssid.is_empty() || self.ssid.len() > 32 || self.ssid.chars().any(|c| c.is_control())
+        {
+            return Err(Unsupported::InvalidParams(
+                "ssid must be non-empty, <=32 bytes, no control characters".into(),
+            ));
+        }
+        if self.encryption != "none" && self.key.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "key is required unless encryption=none (IoT nets are never open)".into(),
+            ));
+        }
+        if !matches!(self.encryption.as_str(), "psk2" | "psk-mixed" | "none") {
+            return Err(Unsupported::InvalidParams(format!(
+                "encryption must be psk2/psk-mixed/none: {}",
+                self.encryption
+            )));
+        }
+        if !matches!(self.band.as_str(), "2.4ghz" | "5ghz") {
+            return Err(Unsupported::InvalidParams(format!(
+                "band must be 2.4ghz/5ghz: {}",
+                self.band
+            )));
+        }
+        let parts: Vec<&str> = self.subnet.split('/').collect();
+        let octets: Vec<u32> = parts
+            .first()
+            .map(|p| p.split('.').filter_map(|o| o.parse::<u32>().ok()).collect())
+            .unwrap_or_default();
+        if parts.len() != 2
+            || parts[1] != "24"
+            || octets.len() != 4
+            || octets.iter().any(|o| *o > 255)
+        {
+            return Err(Unsupported::InvalidParams(format!(
+                "subnet must be a.b.c.d/24: {}",
+                self.subnet
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// apply time from the live LAN IP (third octet + 1), so the address
 /// lines render as shell ops exactly like 1.x.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2824,6 +3148,427 @@ impl AutoSqmProfile {
         if !iface_ok(&self.device) {
             return Err(Unsupported::InvalidParams(
                 "SQM device contains unsafe characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Deterministic per-device identity — port of the 1.x `fleet_identity`
+/// use case (`scripts/use_cases/fleet_identity.py`; host twin
+/// `scripts/fleet_secrets.py`): MAC-derived root password + hostname +
+/// optional management AP + rogue-DHCP disarm, in ONE ash invocation
+/// (the derivations must share a process).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetIdentityProfile {
+    /// Fleet salt, 8-128 chars of `[A-Za-z0-9_-]` (single-quote-safe).
+    pub salt: String,
+    /// Hostname prefix (`[a-z0-9][a-z0-9-]{0,19}`).
+    pub hostname_prefix: String,
+    /// Management-AP SSID prefix (defaults to the hostname prefix).
+    pub ssid_prefix: String,
+    /// Wifi domain name for the AP key derivation.
+    pub wifi_network: String,
+    /// Derived-password length, 8..=32 (1.x default 20).
+    pub password_length: u32,
+    /// Disarm rogue DHCP (dhcp.lan.ignore + ra/dhcpv6 disabled).
+    pub disarm_dhcp: bool,
+    /// Configure the guarded management AP block.
+    pub configure_ap: bool,
+}
+
+impl Default for FleetIdentityProfile {
+    fn default() -> Self {
+        Self {
+            salt: String::new(),
+            hostname_prefix: "fleet".into(),
+            ssid_prefix: String::new(),
+            wifi_network: "fleet".into(),
+            password_length: 20,
+            disarm_dhcp: true,
+            configure_ap: true,
+        }
+    }
+}
+
+impl FleetIdentityProfile {
+    pub(crate) fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        let salt_ok = (8..=128).contains(&self.salt.len())
+            && self
+                .salt
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+        if !salt_ok {
+            return Err(bad(
+                "salt must be 8-128 chars of [A-Za-z0-9_-] (openssl rand -hex 16)",
+            ));
+        }
+        let prefix_ok = |v: &str| {
+            (1..=20).contains(&v.len())
+                && v.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                && v.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        };
+        if !prefix_ok(&self.hostname_prefix) {
+            return Err(bad("hostname_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        if !self.ssid_prefix.is_empty() && !prefix_ok(&self.ssid_prefix) {
+            // empty = "use hostname_prefix" (1.x `or` fallback); the
+            // resolved value is then the already-validated prefix.
+            return Err(bad("ssid_prefix must match [a-z0-9][a-z0-9-]{0,19}"));
+        }
+        let net_ok = (1..=16).contains(&self.wifi_network.len())
+            && self
+                .wifi_network
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !net_ok {
+            return Err(bad("wifi_network must match [a-z0-9][a-z0-9-]{0,15}"));
+        }
+        if !(8..=32).contains(&self.password_length) {
+            return Err(bad("password_length must be 8..=32"));
+        }
+        Ok(())
+    }
+}
+
+/// TollGate cellular upstream — port of the 1.x `tollgate-cellular`
+/// use case (`scripts/use_cases/tollgate_cellular.py`, bench-validated
+/// on the NR7101 2026-10-24): Quectel-class modem as ECM WAN with SIM
+/// slot and APN via the AT port (NEVER uqmi — the hang class), one-shot
+/// idempotent modem setup, optional SIM balance tooling, and hotplug
+/// re-up.
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TollgateCellularProfile {
+    /// APN for cid 1 (modem auto-dial in ECM mode).
+    pub apn: String,
+    /// Dual-slot modems: slot holding the profile card ("" = skip).
+    pub sim_slot: String,
+    /// UCI network iface for the modem WAN (1.x default `wan`).
+    pub wan_iface: String,
+    /// USB ECM interface the modem enumerates (1.x default `usb0`).
+    pub usb_iface: String,
+    /// SIM ICCID — non-empty stages sim.json + the balance tooling.
+    pub iccid: String,
+    /// Provider label for sim.json.
+    pub provider: String,
+    /// SIM EID for sim.json.
+    pub eid: String,
+    /// Provider balance API URL template ({{iccid}} substituted on-device).
+    pub balance_api: String,
+    /// Optional wired-side management IP (also configures network.lan).
+    pub management_ip: String,
+}
+
+impl Default for TollgateCellularProfile {
+    fn default() -> Self {
+        Self {
+            apn: String::new(),
+            sim_slot: String::new(),
+            wan_iface: "wan".into(),
+            usb_iface: "usb0".into(),
+            iccid: String::new(),
+            provider: String::new(),
+            eid: String::new(),
+            balance_api: String::new(),
+            management_ip: String::new(),
+        }
+    }
+}
+
+impl TollgateCellularProfile {
+    pub(crate) fn validate(&self) -> Result<(), Unsupported> {
+        let bad = |why: &str| Unsupported::InvalidParams(why.into());
+        // Every string lands in single-quoted shell or uci values.
+        for v in [
+            &self.apn,
+            &self.sim_slot,
+            &self.iccid,
+            &self.provider,
+            &self.eid,
+            &self.balance_api,
+            &self.management_ip,
+        ] {
+            if v.contains('\'') || v.contains('\\') || v.contains('"') {
+                return Err(bad(
+                    "tollgate-cellular string params must not contain quotes/backslashes",
+                ));
+            }
+        }
+        let iface_ok = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        };
+        if !iface_ok(&self.wan_iface) || !iface_ok(&self.usb_iface) {
+            return Err(bad("wan_iface/usb_iface must be plain interface names"));
+        }
+        Ok(())
+    }
+}
+
+/// One net-roles uplink (1.x `_resolve_uplinks`). `metric` is positional:
+/// 1.x `_METRICS = (5, 100, 200, 300, 400)` assigned by list index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetUplink {
+    /// `sim` | `wifi` | `ethernet` (1.x `_UPLINK_TYPES`).
+    /// `sim` | `wifi` | `ethernet` (1.x `_UPLINK_TYPES`).
+    pub kind: String, // "sim" | "wifi" | "ethernet"
+    /// UCI network interface name (defaults per kind: wan/wwan/waneth).
+    pub iface: String,
+    /// Failover metric — positional `_METRICS` value (5, 100, 200, ...).
+    /// Failover metric — positional `_METRICS` value (5, 100, 200, ...).
+    pub metric: u32,
+    /// Ethernet tagging; 0 = untagged (2..4094 valid otherwise).
+    /// Ethernet tagging; 0 = untagged (2..4094 valid otherwise).
+    pub vlan: u16, // ethernet only; 0 = untagged
+    /// WiFi uplink SSID (required for kind=wifi).
+    pub ssid: String,
+    /// WiFi PSK (required unless encryption=none).
+    pub key: String,
+    /// none | psk2 | sae | sae-mixed (1.x `_WIFI_ENCRYPTIONS`).
+    pub encryption: String,
+    /// WiFi radio section (one STA per radio; default radio0).
+    pub radio: String,
+}
+
+/// Multi-uplink role assignment (1.x `net-roles`): serving bridge vs WAN
+/// uplinks, optional tagged management door, failover metrics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetRolesProfile {
+    /// Ordered uplinks (order fixes the metric).
+    /// Ordered uplinks (order fixes the metric).
+    pub uplinks: Vec<NetUplink>,
+    /// eth0 stays in the serving bridge (default true).
+    /// eth0 stays in the serving bridge (default true).
+    pub serve_ethernet: bool,
+    /// AP interfaces stay on air (default true).
+    /// AP interfaces stay on air (default true).
+    pub serve_wifi: bool,
+    /// Tagged management door on eth0 (0 = off; requires mgmt_ip).
+    /// Tagged management door on eth0 (0 = off; requires mgmt_ip).
+    pub mgmt_vlan: u16,
+    /// Static address for the management door.
+    /// Static address for the management door.
+    pub mgmt_ip: String,
+    /// Netmask for the management door (default /24).
+    /// Netmask for the management door (default /24).
+    pub mgmt_netmask: String,
+    /// tollgate-mode engine (Phase-2 port pending).
+    /// tollgate-mode engine (Phase-2 port pending).
+    pub auto_switch: bool,
+    /// tollgate-mode poll interval, 5..120s.
+    /// tollgate-mode poll interval, 5..120s.
+    pub switch_interval: u32,
+    /// Keep APs up alongside the STA on the same radio.
+    /// Keep APs up alongside the STA on the same radio.
+    pub wifi_shared_radio: bool,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_sim_sats_per_mib: u32,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_wifi_sats_per_mib: u32,
+    /// Pricing (requires auto_switch).
+    /// Pricing (requires auto_switch).
+    pub price_eth_sats_per_mib: u32,
+    /// conn-adapter probe VLANs (Phase-2 port pending).
+    /// conn-adapter probe VLANs (Phase-2 port pending).
+    pub adaptive_vlans: Vec<u16>,
+    /// conn-adapter greenfield serving (Phase-2 pending).
+    /// conn-adapter greenfield serving (Phase-2 pending).
+    pub adaptive_serve_dhcp: bool,
+    /// conn-adapter/metered-guard poll interval, 5..300s.
+    /// conn-adapter/metered-guard poll interval, 5..300s.
+    pub adaptive_interval: u32,
+    /// conn-adapter base port (default eth0).
+    /// conn-adapter base port (default eth0).
+    pub adaptive_base_port: String,
+    /// metered-guard nft engine (Phase-2 port pending).
+    /// metered-guard nft engine (Phase-2 port pending).
+    pub metered_guard: bool,
+}
+
+impl Default for NetUplink {
+    fn default() -> Self {
+        Self {
+            kind: "ethernet".into(),
+            iface: "waneth".into(),
+            metric: 5,
+            vlan: 0,
+            ssid: String::new(),
+            key: String::new(),
+            encryption: "psk2".into(),
+            radio: "radio0".into(),
+        }
+    }
+}
+
+impl NetRolesProfile {
+    const METRICS: [u32; 5] = [5, 100, 200, 300, 400];
+
+    /// 1.x `_resolve_params`/`_resolve_uplinks` validation, plus the
+    /// Phase-1 daemon-subsystem gate (see struct docs).
+    pub fn validate(&self) -> Result<(), Unsupported> {
+        // daemon-combination validation (1.x _resolve_params; the Phase-2
+        // constant port made the subsystems renderable)
+        let prices = [
+            self.price_sim_sats_per_mib,
+            self.price_wifi_sats_per_mib,
+            self.price_eth_sats_per_mib,
+        ];
+        if prices.iter().any(|p| *p > 0) && !self.auto_switch {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: price params require auto_switch=true".into(),
+            ));
+        }
+        if self.auto_switch && self.uplinks.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: auto_switch requires at least one uplink".into(),
+            ));
+        }
+        if !(5..=120).contains(&self.switch_interval) {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: switch_interval must be in 5..120 seconds".into(),
+            ));
+        }
+        if self.metered_guard && self.uplinks.is_empty() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: metered_guard requires uplinks (free/metered derive from them)".into(),
+            ));
+        }
+        if !(5..=300).contains(&self.adaptive_interval) {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: adaptive_interval must be in 5..300 seconds".into(),
+            ));
+        }
+        if !self
+            .adaptive_base_port
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+            || self.adaptive_base_port.is_empty()
+        {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: adaptive_base_port must be a plain interface name".into(),
+            ));
+        }
+        if !self.adaptive_vlans.is_empty() && self.uplinks.iter().any(|u| u.kind == "ethernet") {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: adaptive_vlans cannot be combined with a static ethernet uplink \
+                 (the adapter owns ethernet uplink discovery)"
+                    .into(),
+            ));
+        }
+        let mut seen_ifaces = alloc::collections::BTreeSet::new();
+        let mut seen_radios = alloc::collections::BTreeSet::new();
+        if self.uplinks.len() > Self::METRICS.len() {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: at most 5 uplinks supported".into(),
+            ));
+        }
+        let untagged_eth = self
+            .uplinks
+            .iter()
+            .any(|u| u.kind == "ethernet" && u.vlan == 0);
+        if untagged_eth && self.serve_ethernet {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: untagged ethernet uplink consumes the only port — set \
+                 serve_ethernet=false, or give the uplink a vlan (tagged) so eth0 \
+                 can stay in the serving bridge"
+                    .into(),
+            ));
+        }
+        for (i, u) in self.uplinks.iter().enumerate() {
+            if !matches!(u.kind.as_str(), "sim" | "wifi" | "ethernet") {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}].type must be one of sim, wifi, ethernet"
+                )));
+            }
+            let iface_ok = !u.iface.is_empty()
+                && u.iface
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+            if !iface_ok {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}] interface"
+                )));
+            }
+            if !seen_ifaces.insert(u.iface.as_str()) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: duplicate interface '{}' in uplinks",
+                    u.iface
+                )));
+            }
+            if u.metric != Self::METRICS[i] {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: metric must be the positional _METRICS value".into(),
+                ));
+            }
+            if u.kind == "wifi" {
+                if u.ssid.is_empty() {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}] wifi requires ssid"
+                    )));
+                }
+                if !matches!(u.encryption.as_str(), "none" | "psk2" | "sae" | "sae-mixed") {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}].encryption must be one of none, psk2, sae, sae-mixed"
+                    )));
+                }
+                if u.encryption != "none" && u.key.is_empty() {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: uplinks[{i}] encryption '{}' requires key",
+                        u.encryption
+                    )));
+                }
+                if !seen_radios.insert(u.radio.as_str()) {
+                    return Err(Unsupported::InvalidParams(format!(
+                        "net-roles: radio '{}' used by two wifi uplinks (one STA per radio)",
+                        u.radio
+                    )));
+                }
+            }
+            if u.kind == "ethernet" && u.vlan != 0 && !(2..=4094).contains(&u.vlan) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: uplinks[{i}].vlan must be an int in 2..4094 or unset (untagged)"
+                )));
+            }
+        }
+        if self.mgmt_vlan != 0 {
+            if !(2..=4094).contains(&self.mgmt_vlan) {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan must be an int in 2..4094 (0 = off)".into(),
+                ));
+            }
+            if self.mgmt_ip.is_empty() {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan requires mgmt_ip".into(),
+                ));
+            }
+            if self
+                .uplinks
+                .iter()
+                .any(|u| u.kind == "ethernet" && u.vlan == self.mgmt_vlan)
+            {
+                return Err(Unsupported::InvalidParams(
+                    "net-roles: mgmt_vlan must differ from the ethernet uplink vlan".into(),
+                ));
+            }
+        }
+        for (i, v) in self.adaptive_vlans.iter().enumerate() {
+            if !(2..=4094).contains(v) {
+                return Err(Unsupported::InvalidParams(format!(
+                    "net-roles: adaptive_vlans[{i}] must be an int in 2..4094"
+                )));
+            }
+        }
+        if self.wifi_shared_radio && !self.uplinks.iter().any(|u| u.kind == "wifi") {
+            return Err(Unsupported::InvalidParams(
+                "net-roles: wifi_shared_radio requires a wifi uplink".into(),
             ));
         }
         Ok(())

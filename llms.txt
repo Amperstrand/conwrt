@@ -70,6 +70,17 @@ Available presets: tether (Android/iPhone USB WAN), sqm (bufferbloat fix), wireg
 | extreme-rdwr-tftp | SSH to stock, rdwr_boot_cfg, TFTP boot initramfs, sysupgrade | Stock Extreme firmware, SSH access |
 | zycast | Multicast to many devices simultaneously | Network broadcast domain |
 
+## Raspberry Pi lab tooling
+
+The Pi 4/5 lab family boots differently (EEPROM bootloader + BOOT_ORDER, not
+U-Boot), so it has its own tooling under `recipes/raspberry-pi/`:
+
+- [pi_boot.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/pi_boot.py): Boot-medium matrix — `scan` (find Pis on L2 by OUI), `probe` (what is this board running, what can it boot, what will it try), `capability` (firmware floors vs BOOT_ORDER offline), `matrix` (test SD / USB / netboot on one board). `probe --dump/--from-file` makes reports replayable offline.
+- [pi_netboot.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/pi_netboot.py): Arm/disarm the netboot rescue server (dnsmasq TFTP + per-MAC allowlist), `deploy` a RAM-only OpenWrt initramfs, `detect` boards stuck in a netboot DISCOVER loop.
+- [pi_eeprom.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/pi_eeprom.py): Build EEPROM update packages (BOOT_ORDER changes) — upstream pinned by commit, digest-checked; `push` stages into the armed TFTP root behind a specimen gate.
+- [pi_image.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/pi_image.py): Provision an OS image onto a Pi-ATTACHED disk over SSH — xz-integrity pre-check, default-ON read-back verification with cache eviction.
+- [pi_overlay.py](https://raw.githubusercontent.com/Amperstrand/conwrt/master/scripts/pi_overlay.py): Generate the OpenWrt buildroot overlay for RAM-netboot images (DHCP lan, key-only dropbear, optional baked host keys).
+
 ## User Stories
 
 - [User Stories](https://amperstrand.github.io/conwrt/user-stories.html): 5 real-world deployment scenarios — traveler (USB tether + VPN), homelab operator (AdGuard + guest WiFi), mesh builder, developer (Python API), device rescuer (recovery mode flashing).

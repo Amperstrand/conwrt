@@ -23,6 +23,10 @@ scripts/data/
 captures/
 scripts/captures/
 *.pcap
+
+# Local stock-firmware artifact cache (public dump references, too large for git;
+# sha256s recorded in recipes/zte/mf286d/notes.md)
+data/zte-mf286d/
 tests/integration/.serial.log
 tests/integration/.vm_ssh_key
 tests/integration/.vm_ssh_key.pub
@@ -100,3 +104,9 @@ config.toml
 # pi_image break-glass password files (mode 0600, never commit)
 *.credentials.txt
 tests/integration/.openwrt.img.sha256
+
+# Test fixtures are real device-derived bytes, not build artifacts.
+!crates/conwrt-core/tests/fixtures/*.bin
+
+# Rust VM-test build artifacts (accidentally tracked since #429)
+.target-rustvm/

@@ -1,0 +1,24 @@
+@@model
+Raspberry Pi 4 Model B Rev 1.4
+@@serial
+10000000a1b2c3d4
+@@cmdline
+coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 console=tty1 root=PARTUUID=deadbeef-02 rootfstype=ext4 fsck.repair=yes rootwait
+@@lsblk
+NAME="sda" TRAN="usb" TYPE="disk" PARTUUID="" SIZE="28.7G"
+NAME="sda1" TRAN="usb" TYPE="part" PARTUUID="deadbeef-01" SIZE="512M"
+NAME="sda2" TRAN="usb" TYPE="part" PARTUUID="deadbeef-02" SIZE="28.2G"
+@@mount
+/dev/sda2 ext4
+@@os
+Debian GNU/Linux 12 (bookworm)
+@@fw
+Apr 16 2020 12:00:00
+version 5a4a8b3c (release)
+timestamp 1587038400
+@@conf
+BOOT_UART=0
+WAKE_ON_GPIO=1
+POWER_OFF_ON_HALT=0
+BOOT_ORDER=0xf41
+@@section-end

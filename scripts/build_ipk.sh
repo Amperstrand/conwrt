@@ -138,10 +138,10 @@ chmod 755 "$CTRL_DIR/postinst"
 echo "2.0" > "$STAGING/debian-binary"
 
 # control.tar.gz
-(cd "$STAGING" && tar czf control.tar.gz -C "$CTRL_DIR" .)
+(cd "$STAGING" && tar cf - -C "$CTRL_DIR" . | gzip -9n > control.tar.gz)
 
 # data.tar.gz
-(cd "$STAGING" && tar czf data.tar.gz -C "$DATA_DIR" .)
+(cd "$STAGING" && tar cf - -C "$DATA_DIR" . | gzip -9n > data.tar.gz)
 
 # Assemble ipk (ar archive)
 IPK_PATH="$OUTPUT_DIR/$IPK_FILENAME"

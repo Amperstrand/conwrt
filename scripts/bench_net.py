@@ -110,8 +110,14 @@ def plan(cfg: dict, dev: dict, name: str) -> list[str]:
         if have is None:
             steps.append(f"CREATE bridge-vlan {vlan} ports='{want_str}'")
         elif have != want:
-            steps.append(f"UPDATE bridge-vlan {vlan}: have '{' '.join(have)}' want '{want_str}' "
-                         f"(uci set network.{live['sections'][vlan]}.ports='{want_str}')")
+            sec = live["sections"][vlan]
+            # ports is a LIST option: the scalar `uci set` form is rejected by
+            # modern uci/ubus rendering — delete then add_list per port (#287)
+            fix = "; ".join(
+                [f"uci delete network.{sec}.ports"]
+                + [f"uci add_list network.{sec}.ports='{p}'" for p in want]
+            )
+            steps.append(f"UPDATE bridge-vlan {vlan}: have '{' '.join(have)}' want '{want_str}' ({fix})")
         subnet = subnet_for(cfg, vlan)
         ifname = f"{bridge}.{vlan}"
         if subnet and ifname not in live["ifaces"]:

@@ -87,6 +87,12 @@ def stage_preflight():
         time.sleep(3)
         o = erx("uci get dhcp.lan_guest.ignore")
     ok("lan_guest DHCP armed") if o.strip() == "0" else die(f"lan_guest ignore={o!r}")
+    # #283: the value stuck, but the service must also be ALIVE — a restarted
+    # dnsmasq that died leaves the catch stage silently DHCP-less.
+    o = erx("pidof dnsmasq")
+    if not o.strip():
+        die("preflight: dnsmasq not running after lan_guest arm — DHCP path dead")
+    ok("dnsmasq alive after arm")
     o = erx("ip route show 192.168.1.1")
     if "br-lan.14" not in o:
         o2 = erx("ip route change 192.168.1.1/32 dev br-lan.14 src 192.168.1.250 2>/dev/null || ip route add 192.168.1.1/32 dev br-lan.14 src 192.168.1.250; ip route show 192.168.1.1")

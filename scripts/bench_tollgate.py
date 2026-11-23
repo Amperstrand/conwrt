@@ -149,14 +149,32 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def wait_for_dut(place: Place, cfg: Config, timeout_s: int) -> bool:
+def _boot_id(place: Place) -> str | None:
+    try:
+        proc = subprocess.run(_dut_ssh(place, "cat /proc/sys/kernel/random/boot_id"),
+                              capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
+def wait_for_dut(place: Place, cfg: Config, timeout_s: int,
+                 *, old_boot_id: str | None = None) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
             proc = subprocess.run(_dut_ssh(place, "echo up"), capture_output=True,
                                   text=True, timeout=15)
             if proc.returncode == 0:
-                return True
+                if old_boot_id is None:
+                    return True
+                # #280: an answering SSH daemon may still be the PRE-flash
+                # system (sysupgrade rejected at once) — require a fresh boot.
+                new_id = _boot_id(place)
+                if new_id and new_id != old_boot_id:
+                    return True
         except subprocess.TimeoutExpired:
             pass
         time.sleep(10)
@@ -255,18 +273,22 @@ def main(argv: list[str] | None = None) -> int:
         run_cmds([_labgrid(cfg, place.name, "power", "on")], timeout=60)
         if not wait_for_dut(place, cfg, RECOVERY_WAIT_S):
             print("FAIL: DUT did not come back after power cycle"); return 1
+        pre_boot_id = _boot_id(place)  # #280: post-flash must show a NEW boot
         for cmd in flash_sequence(place, args.image):
             if "sysupgrade" in " ".join(cmd):
                 continue  # run last, connection dies mid-command
             if run_cmds([cmd]) != 0:
                 return 1
         try:
-            subprocess.run(flash_sequence(place, args.image)[-1], capture_output=True,
-                           text=True, timeout=30)
+            proc = subprocess.run(flash_sequence(place, args.image)[-1], capture_output=True,
+                                  text=True, timeout=30)
+            # The connection dies mid-sysupgrade (expected), but keep the
+            # captured output as evidence instead of discarding it (#280).
+            print(f"sysupgrade tail: {(proc.stdout + proc.stderr).strip()[-200:] or '(no output)'}")
         except subprocess.TimeoutExpired:
             pass  # expected: sysupgrade drops the connection
         print(f"flash started; polling SSH up to {RECOVERY_WAIT_S}s")
-        if not wait_for_dut(place, cfg, RECOVERY_WAIT_S):
+        if not wait_for_dut(place, cfg, RECOVERY_WAIT_S, old_boot_id=pre_boot_id):
             print("FAIL: DUT did not return after sysupgrade — check lifeline log")
             return 1
         print("DUT back — run `logs` to capture evidence")

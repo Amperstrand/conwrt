@@ -50,10 +50,22 @@ def send_wol(mac: str, interface: str = "") -> bool:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         if interface:
+            # #367 item 2: a requested interface that cannot be bound
+            # (missing, or SO_BINDTODEVICE needs privileges the service
+            # lacks) must FAIL loudly — silently falling back to the
+            # default route sends the broadcast out the wrong interface
+            # on a multihomed MAAS controller while reporting success.
             try:
                 sock.setsockopt(socket.SOL_SOCKET, 25, interface.encode())  # SO_BINDTODEVICE
-            except (OSError, AttributeError):
-                pass  # Not all platforms support SO_BINDTODEVICE
+            except OSError as e:
+                print(
+                    f"WoL send error: cannot bind interface '{interface}' "
+                    f"(SO_BINDTODEVICE: {e}) — refusing to broadcast via "
+                    f"the default route",
+                    file=sys.stderr,
+                )
+                sock.close()
+                return False
         sock.sendto(magic, ("255.255.255.255", 9))
         sock.sendto(magic, ("255.255.255.255", 7))  # Alternate port
         sock.close()
@@ -63,16 +75,33 @@ def send_wol(mac: str, interface: str = "") -> bool:
         return False
 
 
-def ping_host(ip: str) -> bool:
-    """Check if a host is reachable via ping."""
-    try:
-        result = subprocess.run(
-            ["ping", "-c", "1", "-W", "2", ip],
-            capture_output=True, timeout=5
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+def ping_host(ip: str, attempts: int = 3, per_attempt_timeout_s: int = 2) -> str:
+    """Probe reachability with retries; return a verdict STRING.
+
+    #367 item 1: a single dropped ICMP echo (transient loss, host
+    firewall, unhealthy probe path) must not produce a "stopped" verdict
+    that makes MAAS issue unnecessary wakes or fail dependent workflows.
+    Retry and only report "stopped" when EVERY attempt fails; report
+    "degraded" when some but not all fail, so callers can see a flaky
+    probe path instead of a confident wrong answer. "running" requires a
+    clean majority.
+    """
+    successes = 0
+    for _ in range(attempts):
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", str(per_attempt_timeout_s), ip],
+                capture_output=True, timeout=per_attempt_timeout_s + 3,
+            )
+            if result.returncode == 0:
+                successes += 1
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    if successes == attempts:
+        return "running"
+    if successes > 0:
+        return "degraded"
+    return "stopped"
 
 
 class WoLHandler(BaseHTTPRequestHandler):
@@ -121,8 +150,7 @@ class WoLHandler(BaseHTTPRequestHandler):
             if not ip:
                 self._send_json({"error": "missing ip parameter"}, 400)
                 return
-            alive = ping_host(ip)
-            status = "running" if alive else "stopped"
+            status = ping_host(ip)  # running | degraded | stopped (#367)
             self._send_json({"status": status, "mac": mac, "ip": ip})
 
         elif parsed.path == "/health":
@@ -144,15 +172,31 @@ class WoLHandler(BaseHTTPRequestHandler):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    # #367 item 3: the webhook is UNAUTHENTICATED — bind it only where it
+    # is meant to be reachable. Default to the loopback address; an
+    # explicit --interface/--bind names the bench VLAN address. Never
+    # 0.0.0.0 (that exposes it on every controller address: management
+    # and production interfaces included, on a multihomed host).
     p.add_argument("--port", type=int, default=8081,
                    help="HTTP port to listen on (default: 8081)")
     p.add_argument("--interface", default="",
                    help="Network interface to send WoL packets from (default: all)")
+    p.add_argument("--bind", default="127.0.0.1",
+                   help="Address the webhook binds to (default: 127.0.0.1 — the "
+                        "service is unauthenticated; name the bench VLAN address "
+                        "explicitly, never 0.0.0.0)")
     args = p.parse_args()
 
-    server = HTTPServer(("0.0.0.0", args.port), WoLHandler)
+    bind_addr = args.bind
+    if bind_addr == "0.0.0.0":
+        print("refusing to bind 0.0.0.0: this webhook is unauthenticated — "
+              "bind a specific address (default 127.0.0.1, or the bench VLAN "
+              "address via --bind)", file=sys.stderr)
+        sys.exit(2)
+
+    server = HTTPServer((bind_addr, args.port), WoLHandler)
     server.wol_interface = args.interface
-    print(f"MAAS WoL webhook server listening on :{args.port}")
+    print(f"MAAS WoL webhook server listening on {bind_addr}:{args.port}")
     if args.interface:
         print(f"Sending WoL packets from interface: {args.interface}")
     print(f"Endpoints: POST /power/on?mac=<MAC>, POST /power/off?mac=<MAC>, GET /power/query?mac=<MAC>&ip=<IP>")

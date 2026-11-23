@@ -1,0 +1,1 @@
+{"use_case": "cashu-vpn-client", "params": {"peer_public_key": "pub0123456789abcdef0123456789abcdef01234567=", "peer_ip": "10.99.0.1/32", "server_host": "66.92.204.237", "server_port": 51820, "allowed_ips": "0.0.0.0/0", "dns": "1.1.1.1", "kill_switch": true}}

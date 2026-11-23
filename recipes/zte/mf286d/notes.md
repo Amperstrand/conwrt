@@ -90,3 +90,65 @@ registry + bench evidence, not here.
 Official 25.12.x `ipq40xx/generic zte_mf286d` sysupgrade; from a running OpenWrt use
 plain `sysupgrade` (never `-F`); keep `sysupgrade -b` config backups; do not touch the
 modem firmware. Verify against downloads.openwrt.org checksums.
+
+## Modem architecture correction + ISD-R policy (EXP-034/035, 2026-11-09)
+
+The live B12 modem card is a **Qualcomm MDM9650** (soc 283), not the Marvell
+PXA1826 of the 2019 kit FBF — two modem generations share this chassis.
+Full corrected architecture, the B02-kit container RE, and the live probe
+tooling live in `recipes/zte/mf286d/modem/` (ANALYSIS-b02-kit-marvell.md,
+TESTPLAN-live-b12.md, qmiuim.c) and `prompts/modem-fw-0{1,2,3}-*.md`.
+
+Key live facts (all on B12, differential-verified):
+
+- **ADB**: no-auth root on modem Linux (adbd 5.0.2, `adb-enablemodem` kept
+  enabled) — standing research surface, survives reboots.
+- **ISD-R (eSIM) block = three-layer MPSS policy**: (L1) channel-open deny
+  for ISD-R AID ≥7 bytes; (L2) fabricated card responses on any channel
+  whose open-FCI revealed the ISD-R; (L3) APDU payload scanner dropping
+  SELECTs carrying the GSMA RSP RID (≥4B). Basic channel host-APDUs rejected
+  entirely; AT layer separately cauterized (CSIM/CCHO).
+- Consequence: no in-device eSIM management via AT/QMI on stock B12 without
+  an NV flip or MPSS patch (offline RE of the banked mtd9 image is the next
+  step; see prompt modem-fw-02). NR7101 / USB-CCID reader remain the proven
+  management paths.
+- **mtd9 (MPSS) image banked** on bench x280:
+  `~/mf286d-work/evidence/modem-fw-re/live-b12/dumps/mtd9.img`
+  sha256 55848f96b695c3470546d87b8b107ba12b01f4fc722317707a568689ab17ea15 —
+  also serves as the BSDIFF40 base for the B14 `.up` package line.
+- efs2 (NV) reads destabilize adb when the modem is warm: one cold attempt
+  per boot max; never hammer (device-health rule).
+
+- OpenWrt default LAN = `192.168.1.1` — collides with other bench routers;
+  first-boot re-IP the unit from its isolated bridge before merging onto any
+  shared bench network.
+- Field post-flash config (eko.one.pl thread 24403): WAN proto qmi
+  (`/dev/cdc-wdm0`), carrier APN, **PAP auth for T-Mobile-class SIMs**;
+  eko.one.pl serves ipq40xx zte_mf286d images; 4IceG/Modem-extras for band
+  management.
+
+## Session 2026-11-06 update — OpenWrt installed, Ethernet-only
+
+**Outcome: OpenWrt 22.03 install completed on the bench unit with the case
+never opened and no serial connection at any point.** Full runbook:
+[openwrt-install-no-serial.md](openwrt-install-no-serial.md). Facts that
+supersede or extend the session-2026-11-03 material above:
+
+- The U-Boot recovery flow (`lr` TFTP reflash) is reachable without the ZAS
+  tool and without serial: any boot where rootfs UBI attaches but the
+  `kernel` volume is missing runs it. Cold-boot recovery windows open
+  **~8 minutes** after power-on (update-path timeout ladder); warm-reset
+  windows in under a minute. The recovery client's identity is **derived
+  per boot** (IP `192.x.y.z`, MAC `00:aa:bb:x:y:z`) — never assume
+  `192.0.0.2`.
+- The B10→B12 field updates rewrote the web partition and patched rootfs in
+  place but never touched the bootloader or NOR boot chain; a unit can run
+  a hybrid component matrix (rootfs wa tag ≠ web partition config ≠ modem
+  version). Trust partition contents, not version strings.
+- Community dump provenance matters: a 2021-07 dump set and our unit
+  differed in every generation-tagged component (U-Boot build 2020-03 vs
+  2021-07) while the NOR boot chain and static partitions were
+  byte-identical.
+- Post-install: the unit-unique partitions (ART/mac/cfg-param) survive the
+  OpenWrt flow untouched; modem firmware is untouched (B12 continues to
+  register; QMI works under OpenWrt).

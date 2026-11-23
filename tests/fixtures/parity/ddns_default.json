@@ -1,0 +1,9 @@
+{
+  "use_case": "ddns",
+  "params": {
+    "provider": "cloudflare",
+    "domain": "home.example.org",
+    "username": "",
+    "password": "tok123"
+  }
+}

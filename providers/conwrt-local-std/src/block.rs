@@ -59,6 +59,32 @@ pub enum BlockWriterError {
         /// What the specimen gate verified.
         expected: PathBuf,
     },
+    /// #200: a whole-disk write was attempted without specimen evidence.
+    /// The gate is mandatory by default; the explicit escape is
+    /// CONWRT_ALLOW_UNVERIFIED_TARGET=1 (or `open_device_specimen` with
+    /// the expected serial).
+    #[error(
+        "refusing to write {path}: no specimen evidence for this device. Pass the \
+         expected serial via open_device_specimen, or set \
+         CONWRT_ALLOW_UNVERIFIED_TARGET=1 to accept the wrong-unit risk"
+    )]
+    UnverifiedTarget {
+        /// The device path that was refused.
+        path: PathBuf,
+    },
+    /// #200: the live device identity does not match the expected specimen.
+    #[error(
+        "specimen mismatch on {path}: live serial/WWN {actual:?} != expected \
+         {expected:?} — refusing to write the wrong unit"
+    )]
+    SpecimenMismatch {
+        /// The device path.
+        path: PathBuf,
+        /// What the caller expects (specimen record).
+        expected: String,
+        /// What the live device reports (sysfs serial/WWN).
+        actual: String,
+    },
 }
 
 /// File-backed [`BlockWriter`]: the image target is a regular file (or a
@@ -90,6 +116,66 @@ impl FileBlockWriter {
         }
     }
 
+    /// #200: does this path need the specimen gate? Block-device nodes
+    /// (anything under /dev/) rewrite real hardware; plain files (CI
+    /// temp files, loop images) do not.
+    fn needs_specimen_gate(path: &Path) -> bool {
+        path.starts_with("/dev/")
+    }
+
+    /// #200: the live identity of a block device from sysfs — serial,
+    /// falling back to WWN then device/serial (NVMe/SATA shapes).
+    fn live_device_identity(sysfs: &Path, dev: &Path) -> Option<String> {
+        let name = dev.file_name()?.to_str()?;
+        for rel in ["serial", "wwn", "device/serial"] {
+            if let Ok(s) = std::fs::read_to_string(sysfs.join("class/block").join(name).join(rel)) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    return Some(s.to_ascii_lowercase());
+                }
+            }
+        }
+        None
+    }
+
+    /// #200: `open_device` with the mandatory specimen evidence — the live
+    /// device's sysfs serial/WWN must equal `expected_serial` (ASCII
+    /// case-insensitive) before the write handle is created.
+    pub fn open_device_specimen(
+        path: impl Into<PathBuf>,
+        expected_serial: &str,
+    ) -> Result<Self, BlockWriterError> {
+        let path = path.into();
+        Self::specimen_check(Path::new("/sys"), &path, expected_serial)?;
+        // The specimen evidence IS the gate — open directly, not via
+        // open_device's env check.
+        Self::open_device_ungated(path)
+    }
+
+    /// #200 core: compare the live sysfs identity against the expectation.
+    fn specimen_check(
+        sysfs: &Path,
+        path: &Path,
+        expected_serial: &str,
+    ) -> Result<(), BlockWriterError> {
+        let expected = expected_serial.trim().to_ascii_lowercase();
+        let live = Self::live_device_identity(sysfs, path).ok_or_else(|| {
+            BlockWriterError::SpecimenMismatch {
+                path: path.to_path_buf(),
+                expected: expected.clone(),
+                actual: String::from("<no sysfs serial/wwn for device>"),
+            }
+        })?;
+        if live != expected {
+            return Err(BlockWriterError::SpecimenMismatch {
+                path: path.to_path_buf(),
+                expected,
+                actual: live,
+            });
+        }
+        Ok(())
+    }
+
     /// Open the block device at `path` read+write NOW and pin it: every
     /// later write and verification read goes through this handle, so an
     /// unplug/reassign of `/dev/sdX` between the specimen gate and the
@@ -97,8 +183,33 @@ impl FileBlockWriter {
     /// never-verified device (the held inode just starts erroring).
     /// On Linux the opened node's name is cross-checked against `path`
     /// to close the verify-open race itself.
+    ///
+    /// #200: block-device targets REQUIRE specimen evidence — use
+    /// [`FileBlockWriter::open_device_specimen`] with the expected serial,
+    /// or set CONWRT_ALLOW_UNVERIFIED_TARGET=1 to accept the wrong-unit
+    /// risk explicitly. Plain-file targets are ungated (CI/lab images).
     pub fn open_device(path: impl Into<PathBuf>) -> Result<Self, BlockWriterError> {
+        let escape = std::env::var("CONWRT_ALLOW_UNVERIFIED_TARGET").ok();
+        Self::open_device_with_escape(path, escape.as_deref())
+    }
+
+    /// #200 core: the open gate with the escape value injected (tests use
+    /// this; the env read lives only in the [`FileBlockWriter::open_device`]
+    /// wrapper so the crate stays unsafe-free).
+    fn open_device_with_escape(
+        path: impl Into<PathBuf>,
+        escape: Option<&str>,
+    ) -> Result<Self, BlockWriterError> {
         let path = path.into();
+        if Self::needs_specimen_gate(&path) && escape != Some("1") {
+            return Err(BlockWriterError::UnverifiedTarget { path });
+        }
+        Self::open_device_ungated(path)
+    }
+
+    /// The open+pin core without the #200 evidence gate (specimen-verified
+    /// and env-escaped callers land here).
+    fn open_device_ungated(path: PathBuf) -> Result<Self, BlockWriterError> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -498,5 +609,79 @@ mod tests {
             FileBlockWriter::new(tmp.path()).with_growpart(1, "/nonexistent-growpart-binary");
         let err = w.grow_partition().await.unwrap_err();
         assert!(matches!(err, BlockWriterError::GrowpartMissing));
+    }
+}
+
+#[cfg(test)]
+mod specimen_gate_tests {
+    use super::*;
+
+    #[test]
+    fn dev_paths_are_gated_plain_files_are_not() {
+        assert!(FileBlockWriter::needs_specimen_gate(Path::new("/dev/sda")));
+        assert!(FileBlockWriter::needs_specimen_gate(Path::new(
+            "/dev/disk/by-id/usb-JetFlash_1.0"
+        )));
+        assert!(!FileBlockWriter::needs_specimen_gate(Path::new(
+            "/tmp/lab-image.img"
+        )));
+    }
+
+    fn fake_sysfs(tmp: &std::path::Path, dev: &str, serial: Option<&str>) -> std::path::PathBuf {
+        let base = tmp.join("class/block").join(dev);
+        std::fs::create_dir_all(&base).unwrap();
+        if let Some(s) = serial {
+            std::fs::write(base.join("serial"), s).unwrap();
+        }
+        tmp.to_path_buf()
+    }
+
+    #[test]
+    fn live_identity_reads_serial_lowercased_with_wwn_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sys = fake_sysfs(tmp.path(), "sda", Some("AB-12-CD"));
+        assert_eq!(
+            FileBlockWriter::live_device_identity(&sys, Path::new("/dev/sda")),
+            Some("ab-12-cd".to_string())
+        );
+        // no serial -> wwn fallback -> None when neither exists
+        let tmp2 = tempfile::tempdir().unwrap();
+        let sys2 = fake_sysfs(tmp2.path(), "sdb", None);
+        std::fs::create_dir_all(tmp2.path().join("class/block/sdb/wwn")).unwrap();
+        std::fs::write(tmp2.path().join("class/block/sdb/wwn/wwn"), "").ok();
+        assert_eq!(
+            FileBlockWriter::live_device_identity(&sys2, Path::new("/dev/sdb")),
+            None
+        );
+    }
+
+    #[test]
+    fn specimen_check_requires_exact_caseinsensitive_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sys = fake_sysfs(tmp.path(), "sda", Some("SER-42"));
+        assert!(FileBlockWriter::specimen_check(&sys, Path::new("/dev/sda"), "ser-42 ").is_ok());
+        let err =
+            FileBlockWriter::specimen_check(&sys, Path::new("/dev/sda"), "ser-99").unwrap_err();
+        assert!(matches!(err, BlockWriterError::SpecimenMismatch { .. }));
+    }
+
+    #[test]
+    fn dev_open_refuses_without_evidence_and_honors_escape() {
+        // No escape value -> refusal BEFORE any open attempt (the device
+        // path need not exist: the gate fires first).
+        let err = FileBlockWriter::open_device_with_escape(Path::new("/dev/nonexistent-zz"), None)
+            .unwrap_err();
+        assert!(matches!(err, BlockWriterError::UnverifiedTarget { .. }));
+        // A non-"1" escape is not an escape.
+        let err =
+            FileBlockWriter::open_device_with_escape(Path::new("/dev/nonexistent-zz"), Some("0"))
+                .unwrap_err();
+        assert!(matches!(err, BlockWriterError::UnverifiedTarget { .. }));
+        // The explicit escape passes the gate; the open then fails
+        // normally on the (nonexistent) device — proving gate ordering.
+        let err2 =
+            FileBlockWriter::open_device_with_escape(Path::new("/dev/nonexistent-zz"), Some("1"))
+                .unwrap_err();
+        assert!(matches!(err2, BlockWriterError::Io { .. }));
     }
 }

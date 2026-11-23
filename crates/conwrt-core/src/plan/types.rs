@@ -12,6 +12,10 @@ pub enum Profile {
     Sqm(SqmProfile),
     /// Encrypted DNS resolution for the whole LAN.
     Doh(DohProfile),
+    /// IPv6 WAN with NAT66/ULA stable LAN addressing.
+    Ipv6Wan(Ipv6WanProfile),
+    /// Dynamic DNS client keeping a hostname on a dynamic WAN.
+    Ddns(DdnsProfile),
     /// USB WAN from a phone (all four 1.x tether presets).
     Tether(TetherProfile),
     /// Route traffic through a WireGuard VPN tunnel.
@@ -39,6 +43,8 @@ pub enum Profile {
     AutoSqm(AutoSqmProfile),
     /// Isolated guest WiFi network.
     GuestWifi(GuestWifiProfile),
+    /// Isolated IoT network (separate AP + firewall zone, optional WAN cutoff).
+    Iot(IotProfile),
     /// Transparent proxy via Clash/Mihomo (flash-time config only —
     /// subscription import is post-flash via the LuCI web UI).
     OpenClash(OpenClashProfile),
@@ -71,6 +77,8 @@ pub enum Profile {
     /// IVPN WireGuard VPN (runtime-API script; 1.x marks the preset
     /// untested).
     VpnIvpn(VpnIvpnProfile),
+    /// Multi-uplink role assignment (serving bridge vs WAN uplinks).
+    NetRoles(NetRolesProfile),
     /// Mullvad WireGuard VPN (runtime-API script; 1.x marks the
     /// preset untested).
     VpnMullvad(VpnMullvadProfile),
@@ -93,6 +101,10 @@ pub enum Profile {
     Tollgate(TollgateProfile),
     /// RFC 1918 isolation for TollGate public WiFi.
     TollgateSecurity(TollgateSecurityProfile),
+    /// Fleet identity from MAC (canonical derivations, see crate::identity).
+    FleetIdentity(FleetIdentityProfile),
+    /// TollGate cellular upstream (NR7101-class 5G modem as paid uplink).
+    TollgateCellular(TollgateCellularProfile),
 }
 
 impl Profile {
@@ -102,6 +114,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => "sqm",
             Profile::Doh(_) => "doh",
+            Profile::Ipv6Wan(_) => "ipv6-wan",
+            Profile::Ddns(_) => "ddns",
             Profile::Tether(t) => t.variant.id(),
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
@@ -115,6 +129,7 @@ impl Profile {
             Profile::Nodns(_) => "nodns",
             Profile::AutoSqm(_) => "auto-sqm",
             Profile::GuestWifi(_) => "guest-wifi",
+            Profile::Iot(_) => "iot",
             Profile::OpenClash(_) => "openclash",
             Profile::Ssl(_) => "ssl",
             Profile::VpnPiaOpenvpn(_) => "vpn-pia-openvpn",
@@ -127,6 +142,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => "vpn-openvpn",
             Profile::VpnSurfshark(_) => "vpn-surfshark",
             Profile::VpnIvpn(_) => "vpn-ivpn",
+            Profile::NetRoles(_) => "net-roles",
             Profile::VpnMullvad(_) => "vpn-mullvad",
             Profile::VpnNode(_) => "vpn-node",
             Profile::VpnNordvpnIke2(_) => "vpn-nordvpn-ikev2",
@@ -136,6 +152,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => "fips-bluetooth-rfcomm",
             Profile::Tollgate(_) => "tollgate",
             Profile::TollgateSecurity(_) => "tollgate-security",
+            Profile::FleetIdentity(_) => "fleet-identity",
+            Profile::TollgateCellular(_) => "tollgate-cellular",
         }
     }
 
@@ -147,6 +165,8 @@ impl Profile {
         match self {
             Profile::Sqm(_) => &[],
             Profile::Doh(_) => &[],
+            Profile::Ipv6Wan(_) => &[],
+            Profile::Ddns(_) => &[],
             Profile::Tether(_) => &["usb"],
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
@@ -160,6 +180,7 @@ impl Profile {
             Profile::Nodns(_) => &[],
             Profile::AutoSqm(_) => &[],
             Profile::GuestWifi(_) => &["wifi"],
+            Profile::Iot(_) => &["wifi"],
             Profile::OpenClash(_) => &[],
             Profile::Ssl(_) => &[],
             Profile::VpnPiaOpenvpn(_) => &[],
@@ -172,6 +193,7 @@ impl Profile {
             Profile::VpnOpenvpn(_) => &[],
             Profile::VpnSurfshark(_) => &[],
             Profile::VpnIvpn(_) => &[],
+            Profile::NetRoles(_) => &[],
             Profile::VpnMullvad(_) => &[],
             Profile::VpnNode(_) => &[],
             Profile::VpnNordvpnIke2(_) => &[],
@@ -181,6 +203,8 @@ impl Profile {
             Profile::FipsBluetoothRfcomm(_) => &["bluetooth"],
             Profile::Tollgate(_) => &[],
             Profile::TollgateSecurity(_) => &["wifi"],
+            Profile::FleetIdentity(_) => &["wifi"],
+            Profile::TollgateCellular(_) => &["usb"],
         }
     }
 

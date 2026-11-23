@@ -14,6 +14,30 @@ way — 66 changed files, red Python CI, and a multi-hour cleanup rebase
 - If your local master has stray commits, branch with `git checkout -B <branch> origin/master`
 - Unrelated changes found in a PR diff get moved to their own PR, never "ridden along"
 
+## Decode Before Probe — mandatory RE gates for undocumented interfaces (L-PROBE-01)
+
+**No test, probe, or command shall be sent to any undocumented or
+partially-understood modem/router interface until ALL of these gates pass:**
+
+1. **Protocol Structure Decode**: All message/command structures decoded
+   from firmware (IDL extraction, disassembly, or protocol analysis).
+   Mandatory parameters identified. State-modifying vs. read-only classified.
+   Cannot decode → probe does not proceed.
+
+2. **Adversarial Safety Review** (by an agent OTHER than the proposer):
+   - Worst case if this probe executes? (crash / persistent corruption / full brick)
+   - Recovery path for each failure mode? (reboot / EDL reflash / serial / JTAG)
+   - Backups exist? (flash dump, QCN, verified recovery image)
+   - Any empty recovery rung → probe does not proceed.
+
+3. **New Parameters = New Risk Class**: Never classify a probe with new
+   parameters as "same safety class" as a previous probe. Adding a real
+   parameter crosses from "does this exist?" to "execute the handler."
+
+**Full lesson**: conwrt-bench/lessons/L-PROBE-01-decode-before-probe.md
+**Evidence**: MF286D modem crash loop (2026-11-11) — 0x67-with-token probe
+wrote corrupted EFS state → permanent boot crash loop → EDL reflash required.
+
 ## NEVER Force Sysupgrade
 
 **`sysupgrade -F` is FORBIDDEN.** No exceptions.
@@ -958,3 +982,44 @@ Worktrees are the unit of cleanup.
    on device", STOP writing immediately — even `rm` through agent tooling
    may fail to run. Report the blocker with your reclaimable artifacts;
    do not thrash the host with retries.
+
+## AP391x Bring-Up Lessons (2026-11-18, ap3915i-3893 zero-serial bring-up)
+
+Field-proven during the first fully no-serial stock→OpenWrt bring-up of a
+brand-new unit. Full evidence: conwrt-bench sessions/2026-11-18-ap3915i-3893-bringup.md
+and docs/BOOT-SAFETY-AP3915I.md.
+
+1. **Flash-boot load address**: `boot_openwrt` must sf-read into
+   **0x83600000** (the stock boot_net destination), NOT 0x88000000 — same
+   image bytes, same flash offset; 0x88000000 + bootm fails (this was the
+   real cause behind the Sept-2026 "kernel-version-sensitive flash boot"
+   framing). Model JSON corrected; Rust codec tests pin the recipe.
+2. **`ubus poe manage` can be a silent no-op** (realtek-poe MCU-side wedge):
+   verify with `poe info` status + carrier_changes + rx counters around
+   every cycle. Recovery: `/etc/init.d/poe restart` (owner-ratified; PDs
+   hold through restart — 2/2 prior + 1/1 this session).
+3. **`nohup` long ops over ssh die with the session** (hit for real: a
+   sysupgrade "completed" without writing PriImg). Use `setsid` or keep
+   the command in the foreground of the SSH session.
+4. **Stock AP391x service shell absences**: no base64/od/uuencode/
+   chpasswd/hostname. Backup via raw `dd` over ssh stdout; passwords via
+   host-side `openssl passwd -6` + stdin-delivered `sed -f /dev/stdin`.
+5. **Unadopted stock firmware self-reboots every few minutes** (no
+   controller) — access windows ~3-5 min. Scripted retry loops make
+   forensics/backup/write flows reliable; never assume a session persists.
+6. **CFG writes are readback-gated, CFG1-only** (CFG2 pristine = fallback),
+   identity keys (BOOT_BOOTROM/CURR_VER) never modified, bootcmd only ever
+   the verified `run boot_openwrt; run boot_net` semicolon shape.
+
+### Correction (2026-11-18 wiki research): the AP3915i DOES have a DT reset button
+
+The "no GPIO buttons in the DTS" lore was wrong in mechanism: the DTS has
+`keys/reset` (tlmm 18, ACTIVE_LOW, KEY_RESTART) since the original support
+commit. In practice the conclusion stands — on 25.12.6 no input device ever
+materializes (gpio-keys does not bind; the AP3805i-lineage forum suggests a
+stuck or active-HIGH button), so **failsafe remains practically unreachable
+by button**. True last-resort doors: serial console (Cisco-pinout RJ45 jack,
+115200 8N1, **RX requires removing R176** — RX is grounded through it) and
+the bootloader-resident failsafe webpage (`run failsafe_boot` /
+`bootm 0x9fd70000` → unauthenticated upload page at 192.168.1.1). Details:
+conwrt-bench docs/WIKI-RESEARCH-WS-AP3915I.md.

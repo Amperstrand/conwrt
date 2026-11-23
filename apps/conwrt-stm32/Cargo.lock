@@ -158,6 +158,7 @@ version = "0.1.0"
 dependencies = [
  "conwrt-agent-proto",
  "embassy-futures",
+ "embassy-time",
  "embassy-usb",
 ]
 
@@ -166,8 +167,16 @@ name = "conwrt-agent-proto"
 version = "0.1.0"
 dependencies = [
  "cobs 0.4.0",
+ "conwrt-probe-core",
  "postcard",
  "postcard-rpc",
+ "serde",
+]
+
+[[package]]
+name = "conwrt-probe-core"
+version = "0.1.0"
+dependencies = [
  "serde",
 ]
 
