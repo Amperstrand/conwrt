@@ -364,8 +364,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sim_modes.add_parser(subparsers)
 
     from conwrt import adopt as adopt_mod
+    from conwrt import bootlisten as listen_mod
     from conwrt import v6door as v6door_mod
     adopt_mod.add_parser(subparsers)
     v6door_mod.add_parser(subparsers)
+    listen_parser = subparsers.add_parser(
+        "listen", help="classify a boot capture into a recovery verdict (#323)")
+    listen_parser.add_argument("--pcap-text", help="saved tcpdump -ne transcript")
+    listen_parser.add_argument("--iface", help="capture live on this interface")
+    listen_parser.add_argument("--seconds", type=int, default=60)
+    listen_parser.add_argument("--beacon-port", type=int, action="append", default=[],
+                               help="vendor fallback beacon port (repeatable)")
+    listen_parser.add_argument("--exclude-mac", action="append", default=[],
+                               help="ignore frames from this MAC (own fixture/probes)")
+    listen_parser.add_argument("--json", action="store_true")
+    listen_parser.set_defaults(func=listen_mod.cmd_listen)
 
     return parser
