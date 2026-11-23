@@ -22,14 +22,15 @@ use alloc::vec::Vec;
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
     ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
-    FleetIdentityProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile, Mwan3Profile,
-    NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
-    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateCellularProfile,
-    TollgateProfile, TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile,
-    VpnNodeProfile, VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile,
-    VpnOpenvpnProfile, VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WifiUplink,
-    WireguardClientProfile, WireguardServerProfile, render_shell,
+    FleetIdentityProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile, MptcpBondingProfile,
+    Mwan3Profile, NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile,
+    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
+    SqmProfile, SshHardeningProfile, SslProfile, TetherProfile, TetherVariant,
+    TollgateCellularProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
+    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
+    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
+    VpnPiaProfile, VpnSurfsharkProfile, WifiUplink, WireguardClientProfile, WireguardServerProfile,
+    render_shell,
 };
 use crate::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -200,6 +201,15 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 force_interval: get_u32(&params, "force_interval", 2_592_000),
             };
             Ok(Profile::Ddns(p))
+        }
+        "ipv6-wan" => {
+            let p = Ipv6WanProfile {
+                reqprefix: get_str(&params, "reqprefix").unwrap_or_else(|| "auto".into()),
+                ula_prefix: get_str(&params, "ula_prefix").unwrap_or_default(),
+                masq6: get_bool(&params, "masq6", true),
+                lan_ip6assign: get_str(&params, "lan_ip6assign").unwrap_or_else(|| "64".into()),
+            };
+            Ok(Profile::Ipv6Wan(p))
         }
         "adguard" => {
             let p = AdguardProfile {

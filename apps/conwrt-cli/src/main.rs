@@ -22,12 +22,13 @@ use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
     ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile,
-    GuestWifiProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    GuestWifiProfile, Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile,
+    OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -565,6 +566,7 @@ impl ScenarioChoice {
 enum ProfileChoice {
     Sqm,
     Doh,
+    Ipv6Wan,
     Ddns,
     SshHardening,
     Adguard,
@@ -633,6 +635,18 @@ struct ProfileArgs {
     /// wireguard-server UDP listen port.
     #[arg(long)]
     listen_port: Option<u16>,
+    /// ipv6-wan: requested delegated prefix length
+    #[arg(long)]
+    v6_reqprefix: Option<String>,
+    /// ipv6-wan: stable ULA /64 (default: keep or derive from MAC)
+    #[arg(long)]
+    v6_ula_prefix: Option<String>,
+    /// ipv6-wan: NAT66 masquerade on the wan zone
+    #[arg(long, default_value_t = true)]
+    v6_masq6: bool,
+    /// ipv6-wan: LAN prefix assignment size
+    #[arg(long)]
+    v6_lan_assign: Option<String>,
     /// ddns: FQDN to keep updated
     #[arg(long)]
     ddns_domain: Option<String>,
@@ -2273,6 +2287,12 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
             listen_port: args.listen_port.unwrap_or(5053),
         })),
+        ProfileChoice::Ipv6Wan => Ok(Profile::Ipv6Wan(Ipv6WanProfile {
+            reqprefix: args.v6_reqprefix.clone().unwrap_or_else(|| "auto".into()),
+            ula_prefix: args.v6_ula_prefix.clone().unwrap_or_default(),
+            masq6: args.v6_masq6,
+            lan_ip6assign: args.v6_lan_assign.clone().unwrap_or_else(|| "64".into()),
+        })),
         ProfileChoice::Ddns => {
             let domain = args.ddns_domain.clone().unwrap_or_default();
             if domain.is_empty() {
@@ -3783,6 +3803,10 @@ mod tests {
             interface: "wan".into(),
             provider: None,
             listen_port: None,
+            v6_reqprefix: None,
+            v6_ula_prefix: None,
+            v6_masq6: false,
+            v6_lan_assign: None,
             idle_timeout: None,
             max_auth_tries: None,
             password_auth: false,

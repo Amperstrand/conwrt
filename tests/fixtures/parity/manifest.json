@@ -295,6 +295,14 @@
     "ddns_custom": {
       "use_case": "ddns",
       "expect": "EQUAL"
+    },
+    "ipv6_wan_default": {
+      "use_case": "ipv6-wan",
+      "expect": "EQUAL"
+    },
+    "ipv6_wan_custom": {
+      "use_case": "ipv6-wan",
+      "expect": "EQUAL"
     }
   },
   "pending_migration": [

@@ -217,6 +217,76 @@ impl DdnsProfile {
     }
 }
 
+/// IPv6 WAN with NAT66/ULA for stable LAN addressing — port of the 1.x
+/// `ipv6-wan` use case (`scripts/use_cases/ipv6_wan.py`, issue #3).
+/// ISP prefixes churn (DHCPv6-PD reassignment) and take every
+/// prefix-pinned address/rule with them; this recipe keeps a STABLE
+/// ULA on the LAN (param wins, the device's existing one wins, else a
+/// deterministic MAC-derived derive — the OpenWrt generate_ula shape,
+/// BusyBox-safe), runs DHCPv6-PD on wan6, and opts into masq6 on the
+/// zone NAMED wan (index-based @zone[1] breaks on customized
+/// firewalls) so ULA-sourced traffic still egresses. Config touches
+/// are idempotent sets only — never a blanket uci revert on
+/// network/firewall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ipv6WanProfile {
+    /// Requested delegated prefix length.
+    pub reqprefix: String,
+    /// Stable ULA /64; empty = keep existing / derive from MAC.
+    pub ula_prefix: String,
+    /// NAT66 masquerade on the wan zone for ULA egress.
+    pub masq6: bool,
+    /// LAN prefix assignment size.
+    pub lan_ip6assign: String,
+}
+
+impl Default for Ipv6WanProfile {
+    fn default() -> Self {
+        Self {
+            reqprefix: "auto".into(),
+            ula_prefix: String::new(),
+            masq6: true,
+            lan_ip6assign: "64".into(),
+        }
+    }
+}
+
+impl Ipv6WanProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if !matches!(
+            self.reqprefix.as_str(),
+            "auto" | "no" | "48" | "56" | "60" | "64"
+        ) {
+            return Err(Unsupported::InvalidParams(format!(
+                "reqprefix must be auto/no/48/56/60/64: {}",
+                self.reqprefix
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '/' | '_' | '-'))
+        };
+        if !self.ula_prefix.is_empty() && !token(&self.ula_prefix) {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix contains unsafe characters".into(),
+            ));
+        }
+        if !self.ula_prefix.is_empty() && !self.ula_prefix.ends_with("/64") {
+            return Err(Unsupported::InvalidParams(
+                "ula_prefix must be a /64 (stable LAN addressing)".into(),
+            ));
+        }
+        if !matches!(self.lan_ip6assign.as_str(), "56" | "60" | "64") {
+            return Err(Unsupported::InvalidParams(format!(
+                "lan_ip6assign must be 56/60/64: {}",
+                self.lan_ip6assign
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// DNS-over-HTTPS via `https-dns-proxy` — port of the tested 1.x `doh`
 /// use case (`scripts/use_cases/doh.py`).
 #[derive(Debug, Clone, PartialEq, Eq)]

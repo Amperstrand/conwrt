@@ -1635,6 +1635,68 @@ pub(super) fn plan_ddns(_model: &DeviceModel, ddns: &DdnsProfile) -> Result<Plan
     })
 }
 
+pub(super) fn plan_ipv6_wan(
+    _model: &DeviceModel,
+    v6: &Ipv6WanProfile,
+) -> Result<Plan, Unsupported> {
+    v6.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    let mut ops = vec![PlanOp::SetUciSection {
+        config: "network".into(),
+        section: "wan6".into(),
+        section_type: "interface".into(),
+        options: vec![
+            ("proto".into(), literal("dhcpv6".into())),
+            ("device".into(), literal("@wan".into())),
+            ("reqprefix".into(), literal(v6.reqprefix.clone())),
+        ],
+    }];
+    if v6.ula_prefix.is_empty() {
+        ops.push(PlanOp::Shell {
+            command: "ula=$(uci -q get network.globals.ula_prefix) || ula=''; [ -n \"$ula\" ] || { mac=$(cat /sys/class/net/eth0/address); m1=$(echo $mac | cut -d: -f1); m2=$(echo $mac | cut -d: -f2); m3=$(echo $mac | cut -d: -f3); m4=$(echo $mac | cut -d: -f4); m5=$(echo $mac | cut -d: -f5); uci set network.globals.ula_prefix=\"fd$(printf %02x $((0x$m1 ^ 2))):${m2}ff:fe${m3}:${m4}${m5}::/64\"; }".into(),
+        });
+    } else {
+        ops.push(PlanOp::Shell {
+            command: format!("uci set network.globals.ula_prefix='{}'", v6.ula_prefix),
+        });
+    }
+    ops.push(PlanOp::SetUciOptions {
+        config: "network".into(),
+        section: "lan".into(),
+        options: vec![("ip6assign".into(), literal(v6.lan_ip6assign.clone()))],
+    });
+    if v6.masq6 {
+        ops.push(PlanOp::Shell {
+            command: "z=$(uci show firewall | grep \"=zone\" | grep \"name='wan'\" | cut -d. -f2 | cut -d= -f1); [ -z \"$z\" ] || uci set firewall.$z.masq6='1'".into(),
+        });
+    }
+    ops.push(PlanOp::CommitUci {
+        config: "network".into(),
+    });
+    ops.push(PlanOp::CommitUci {
+        config: "firewall".into(),
+    });
+    ops.push(PlanOp::Service {
+        name: "network".into(),
+        action: ServiceAction::Reload,
+    });
+    ops.push(PlanOp::Service {
+        name: "firewall".into(),
+        action: ServiceAction::Reload,
+    });
+    Ok(Plan {
+        profile_id: "ipv6-wan".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "wan6 committed as dhcpv6".into(),
+            command: "uci -q get network.wan6.proto".into(),
+            expect_contains: "dhcpv6".into(),
+        }],
+        warnings: Vec::new(),
+    })
+}
+
 /// Single-quote a literal for POSIX shells (`'` → `'\''`).
 pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\''"))

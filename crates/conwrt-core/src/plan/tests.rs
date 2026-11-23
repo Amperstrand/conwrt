@@ -1277,6 +1277,37 @@ fn ddns_param_bounds_match_1x_validators() {
 }
 
 #[test]
+fn ipv6_wan_param_bounds_and_shape_match_1x() {
+    assert!(Ipv6WanProfile::default().validate().is_ok());
+    for p in [
+        Ipv6WanProfile {
+            reqprefix: "x".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            ula_prefix: "fd00::/48".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            ula_prefix: "a b".into(),
+            ..Ipv6WanProfile::default()
+        },
+        Ipv6WanProfile {
+            lan_ip6assign: "32".into(),
+            ..Ipv6WanProfile::default()
+        },
+    ] {
+        assert!(matches!(p.validate(), Err(Unsupported::InvalidParams(_))));
+    }
+    let plan = plan_for(Profile::Ipv6Wan(Ipv6WanProfile::default()));
+    let script = render_shell(&plan);
+    assert!(script.contains("uci -q get network.globals.ula_prefix) || ula=''"));
+    assert!(script.contains("grep \"name='wan'\""));
+    assert!(!script.contains("uci revert"));
+    assert!(!script.contains("uci -q delete"));
+}
+
+#[test]
 fn openclash_shape_gates_and_branches_match_1x() {
     let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
     let script = render_shell(&plan);
