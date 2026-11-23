@@ -813,6 +813,11 @@ pub(super) fn plan_vpn_nordvpn_ike2(
     ops.push(PlanOp::Shell {
         command: "uci set dhcp.@dnsmasq[0].noresolv='1'".into(),
     });
+    // #311: VPN-AP teardown on the default (no ap_ssid) render — the
+    // Python twin's _vpn_ap_teardown_ops (see push_vpn_shared_ops).
+    ops.push(PlanOp::Shell {
+        command: "# --- VPN-AP teardown (ap_ssid cleared) ---\nuci -q delete wireless.wifinet_vpn_ap\nuci -q delete network.vpnlan_dev\nuci -q delete network.vpnlan\nuci -q delete dhcp.vpnlan\nuci -q delete firewall.vpn_ap_dns\nuci -q delete firewall.vpn_ap_mgmt\nuci -q delete firewall.vpnap_zone\nuci -q del_list firewall.vpn_zone.network='vpnlan'\nuci commit wireless\nuci commit network\nuci commit dhcp\nuci commit firewall\nwifi reload >/dev/null 2>&1 || true".into(),
+    });
     let verification = vec![
         VerificationCheck {
             description: "swanctl config present".into(),
@@ -1100,6 +1105,7 @@ pub(super) fn plan_vpn_ivpn(model: &DeviceModel, iv: &VpnIvpnProfile) -> Result<
         iv.kill_switch,
         true,
         VERIFY_WG_30S,
+        false, // #311: only nordvpn's twin emits the AP teardown
     );
     let verification = vec![
         VerificationCheck {
@@ -1181,6 +1187,7 @@ pub(super) fn plan_vpn_mullvad(
         mu.kill_switch,
         true,
         VERIFY_WG_30S,
+        false, // #311: only nordvpn's twin emits the AP teardown
     );
     let verification = vec![
         VerificationCheck {
@@ -1275,6 +1282,7 @@ pub(super) fn plan_vpn_surfshark(
         ss.kill_switch,
         true,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     let verification = vec![
         VerificationCheck {
@@ -1420,6 +1428,7 @@ pub(super) fn plan_vpn_pia(model: &DeviceModel, pia: &VpnPiaProfile) -> Result<P
         pia.kill_switch,
         pia.allow_management,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     let verification = vec![
         VerificationCheck {
@@ -3409,6 +3418,16 @@ pub(super) const PIA_OPENVPN_CA: &str = concat!(
 /// tun-address probe) that removes the kill switch when the tunnel
 /// never comes up.
 #[allow(clippy::too_many_arguments)]
+/// #311: cleared ap_ssid TEARS DOWN a previously configured VPN AP
+/// (idempotent deletes + commits + wifi reload). Emitted by the three
+/// NORDVPN planners only — the Python twin's _vpn_ap_teardown_ops rides
+/// nordvpn.py, not the other providers.
+pub(super) fn push_vpn_ap_teardown(ops: &mut Vec<PlanOp>) {
+    ops.push(PlanOp::Shell {
+        command: "# --- VPN-AP teardown (ap_ssid cleared) ---\nuci -q delete wireless.wifinet_vpn_ap\nuci -q delete network.vpnlan_dev\nuci -q delete network.vpnlan\nuci -q delete dhcp.vpnlan\nuci -q delete firewall.vpn_ap_dns\nuci -q delete firewall.vpn_ap_mgmt\nuci -q delete firewall.vpnap_zone\nuci -q del_list firewall.vpn_zone.network='vpnlan'\nuci commit wireless\nuci commit network\nuci commit dhcp\nuci commit firewall\nwifi reload >/dev/null 2>&1 || true".into(),
+    });
+}
+
 pub(super) fn push_vpn_shared_ops(
     ops: &mut Vec<PlanOp>,
     iface: &str,
@@ -3416,6 +3435,7 @@ pub(super) fn push_vpn_shared_ops(
     kill_switch: bool,
     allow_management: bool,
     verify_line: &str,
+    vpn_ap_teardown: bool,
 ) {
     let literal = |v: String| UciValue::Literal(v);
     for (config, pattern) in [
@@ -3496,6 +3516,9 @@ pub(super) fn push_vpn_shared_ops(
         section: "@dnsmasq[0]".into(),
         options: vec![("noresolv".into(), literal("1".into()))],
     });
+    if vpn_ap_teardown {
+        push_vpn_ap_teardown(ops);
+    }
     ops.push(PlanOp::CommitUci {
         config: "network".into(),
     });
@@ -3634,6 +3657,7 @@ pub(super) fn plan_vpn_pia_openvpn(
         pia.kill_switch,
         pia.allow_management,
         "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        false,
     );
     // the 45s tail restores WAN on failure and exits 0 by design —
     // this check is what makes the apply HONEST about the outcome:
@@ -3755,6 +3779,10 @@ pub(super) fn plan_vpn_nordvpn(
             "\n",
             "\n",
             "uci -q delete openvpn.nordvpn\n",
+            "# #310: commit the deletion — without it the delete lives only in UCI's\n",
+            "# pending state and the enabled OpenVPN section returns at reboot to run\n",
+            "# alongside WireGuard (route/DNS interference).\n",
+            "uci commit openvpn\n",
             "/etc/init.d/openvpn stop >/dev/null 2>&1 || true\n",
             "\n",
             "# WireGuard tunnel (NordLynx)\n",
@@ -3803,8 +3831,9 @@ pub(super) fn plan_vpn_nordvpn(
         },
         PlanOp::Shell { command: payload },
     ];
-    // shared vpn composition (byte-identical tail) + the 30s wg
-    // handshake verify TAIL that removes the kill switch on failure
+    // shared vpn composition (byte-identical tail; vpn_ap_teardown=true
+    // emits the #311 teardown at the Python twin's position) + the 30s
+    // wg handshake verify TAIL that removes the kill switch on failure
     push_vpn_shared_ops(
         &mut ops,
         "wg0",
@@ -3812,6 +3841,7 @@ pub(super) fn plan_vpn_nordvpn(
         nv.kill_switch,
         nv.allow_management,
         "i=0; while [ $i -lt 30 ]; do if wg show wg0 2>/dev/null | grep -q 'latest handshake'; then echo 'VPN: tunnel verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tunnel failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        true, // #311: nordvpn's Python twin emits the AP teardown
     );
     // honest outcome (the #514/#520 pattern): verified requires the
     // tunnel to actually hold a handshake — config-applied-but-dead
@@ -3988,7 +4018,8 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
         },
         PlanOp::Shell { command: payload },
     ];
-    // shared vpn composition + the 45s tun-address verify TAIL
+    // shared vpn composition (vpn_ap_teardown=true — the #311 teardown at
+    // the Python twin's position) + the 45s tun-address verify TAIL
     push_vpn_shared_ops(
         &mut ops,
         "tun0",
@@ -3996,6 +4027,7 @@ pub(super) fn plan_vpn_nordvpn_openvpn(
         nv.kill_switch,
         nv.allow_management,
         "i=0; while [ $i -lt 45 ]; do if ip -4 addr show dev tun0 2>/dev/null | grep -q inet; then echo 'VPN: tun interface verified'; exit 0; fi; sleep 1; i=$((i+1)); done; echo 'VPN: tun interface failed — removing kill switch to restore WAN'; uci delete firewall.vpn_killswitch; uci commit firewall; fw4 restart",
+        true, // #311: nordvpn's Python twin emits the AP teardown
     );
     // honest outcome: verified requires tun0 to hold an address
     let verification = vec![
