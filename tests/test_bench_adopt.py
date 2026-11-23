@@ -96,7 +96,7 @@ class TestAdoptFullFlow:
             SWITCH_KEY,                                            # adopt-switchkey
             "KEYS-PUSHED\nKEY-AUTH-OK\n3 /etc/dropbear/authorized_keys",  # adopt-keys
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED\nRESTARTED",
+            "DEADMAN-ARMED\nCOMMITTED\nRESTARTED",
         ]
         ba.stage_adopt(_runner(canned, tmp_path))
 
@@ -117,7 +117,7 @@ class TestAdoptFullFlow:
             SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED",
+            "DEADMAN-ARMED\nCOMMITTED",
         ])
 
         def capture(script: str) -> str:
@@ -342,7 +342,7 @@ class TestKeyAuthProof:
             SWITCH_KEY,
             "KEYS-PUSHED\nKEY-AUTH-OK\n3",
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED",
+            "DEADMAN-ARMED\nCOMMITTED",
         ])
 
         def capture(script: str) -> str:
@@ -474,7 +474,7 @@ class TestSwitchKeyInstalledSwitchSide:
             SWITCH_KEY,                          # adopt-switchkey
             "KEYS-PUSHED\nKEY-AUTH-OK\n1",       # adopt-keys
             "---READBACK---\nstatic\n192.168.104.51/24\n192.168.104.1\n192.168.104.1",
-            "COMMITTED\nRESTARTED",
+            "DEADMAN-ARMED\nCOMMITTED\nRESTARTED",
         ])
 
         def capture(script: str) -> str:

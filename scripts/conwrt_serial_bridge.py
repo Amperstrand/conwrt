@@ -105,8 +105,16 @@ trap on_terminate TERM INT
 # stream drop (bridge side closed the channel -> cat EOF -> normal exit):
 # reap helpers but do NOT restore the getty (see comment above REMOTE_SH)
 trap '[ "$INTENTIONAL" = 1 ] || { kill $TXPID $RXPID 2>/dev/null; rm -f "$FIFO"; }' EXIT
-# hold the channel open on stdin; when the bridge drops us, stdin EOF -> exit
-cat > "$FIFO"
+# hold the channel open on stdin; when the bridge drops us, stdin EOF -> exit.
+# #279: the STOP token from a graceful bridge stop routes to on_terminate
+# (inittab/getty restore) BEFORE the channel drops — distinguishable from a
+# dropped connection, which must NOT restore (reconnect path re-frees).
+while IFS= read -r line; do
+  if [ "$line" = "CONWRT-BRIDGE-STOP" ]; then
+    on_terminate
+  fi
+  printf '%s\n' "$line" > "$FIFO"
+done
 """
 
 
@@ -169,15 +177,30 @@ class SSHStream:
         return self.proc is not None and self.proc.poll() is None
 
     def stop(self) -> None:
+        """Graceful stop (#279): send the STOP-TOKEN via stdin FIRST.
+
+        The remote script reads stdin into the TX fifo; a line holding the
+        token routes it to on_terminate (restore inittab + getty), which a
+        bare terminate() never reaches — the old shape left the listener's
+        console getty commented out after every intentional service stop.
+        The kill remains the fallback for a wedged stream.
+        """
         if self.proc and self.proc.poll() is None:
             try:
-                self.proc.terminate()
-                self.proc.wait(timeout=5)
+                self.proc.communicate(
+                    input=b"CONWRT-BRIDGE-STOP\n", timeout=5
+                )
             except Exception:
+                pass
+            if self.proc.poll() is None:
                 try:
-                    self.proc.kill()
+                    self.proc.terminate()
+                    self.proc.wait(timeout=5)
                 except Exception:
-                    pass
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
         self.proc = None
 
 

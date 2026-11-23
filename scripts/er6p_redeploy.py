@@ -79,12 +79,29 @@ def pty_ssh(port: int, command: str, tries: int = 12) -> str:
     return ""
 
 
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "erx_dhcp_guard.py")
+
+
 def stage_preflight():
     print("== STAGE preflight")
     o = erx("uci get dhcp.lan_guest.ignore")
     if o.strip() != "0":
+        # #283: the ERX is the house's single DHCP authority — the
+        # erx_dhcp_guard validate/check pair is MANDATORY around ANY dhcp
+        # config change here (AGENTS.md ERX dnsmasq Guard, rules 2-3): a
+        # duplicate host section from an earlier session crash-loops
+        # dnsmasq house-wide (the 2026-09-28 outage class).
+        rc, out = run(["python3", GUARD, "validate"])
+        if rc != 0:
+            die(f"erx_dhcp_guard validate FAILED pre-change — fix the dhcp "
+                f"config first (this is the house-DNS single point of "
+                f"failure):\n{out[:300]}")
         erx("uci set dhcp.lan_guest.ignore=0; uci commit dhcp; /etc/init.d/dnsmasq restart")
         time.sleep(3)
+        rc, out = run(["python3", GUARD, "check"])
+        if rc != 0:
+            die(f"erx_dhcp_guard check FAILED post-change — dnsmasq may be "
+                f"down house-wide; investigate immediately:\n{out[:300]}")
         o = erx("uci get dhcp.lan_guest.ignore")
     ok("lan_guest DHCP armed") if o.strip() == "0" else die(f"lan_guest ignore={o!r}")
     o = erx("ip route show 192.168.1.1")

@@ -186,6 +186,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unknown place {args.place}; known: {sorted(places)}")
         return 2
     place = places[args.place]
+    # #278: the sweep runs firstboot + DELIBERATE power cuts — a protected
+    # (reset_allowed=false) place must be refused in main() BEFORE any
+    # experiment, mirroring bench_adopt.stage_reset's refusal (a sweep that
+    # bricks a TFTP-dependent unit is exactly the class the flag exists for).
+    if not getattr(place, "reset_allowed", True):
+        print(
+            f"refusing: place {place.name!r} is reset_allowed=false — the "
+            f"cut sweep is a reset-class operation (re-arm lifeline or run "
+            f"#61 first, cf. bench_adopt.stage_reset)",
+            file=sys.stderr,
+        )
+        return 2
     labgrid_host = load_labgrid_host(args.places)
 
     RESULTS.parent.mkdir(parents=True, exist_ok=True)

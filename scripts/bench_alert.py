@@ -59,7 +59,16 @@ class AlertError(Exception):
 
 
 def load_config(path: Path) -> dict:
-    cfg = json.loads(path.read_text()) if path.exists() else {}
+    # #281: same ##-header strip as bench_watch — the example's comment
+    # block must not break the documented copy-to-config flow.
+    text = (
+        "\n".join(
+            line for line in path.read_text().splitlines()
+            if not line.lstrip().startswith("##")
+        )
+        if path.exists() else ""
+    )
+    cfg = json.loads(text) if text else {}
     for key in ("ntfy_url",):
         if key in cfg and not str(cfg[key]).startswith(("http://", "https://")):
             raise AlertError(f"config {key!r} must be an http(s) URL")

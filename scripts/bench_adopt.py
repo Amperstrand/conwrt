@@ -230,18 +230,21 @@ def stage_preflight(r: Runner) -> None:
 
 
 def stage_backup(r: Runner) -> None:
+    # #276: sha256 per the repo baseline — sha256sum is universally
+    # available on OpenWrt (base-files depends on it since 2018) and the
+    # AGENTS tool rules mandate it over md5sum.
     out = r.dut("backup", "sysupgrade -b /tmp/bench-adopt-backup.tar.gz >/dev/null 2>&1; "
-                          "md5sum /tmp/bench-adopt-backup.tar.gz")
+                          "sha256sum /tmp/bench-adopt-backup.tar.gz")
     digest = parse_field(out, "bench-adopt-backup.tar.gz").split()[0]
-    if len(digest) != 32:
-        raise AdoptError(f"backup: no md5 in output:\n{out[:300]}")
+    if len(digest) != 64:
+        raise AdoptError(f"backup: no sha256 in output:\n{out[:300]}")
     pulled = r.sh("backup-pull", [
         f"dbclient -y -y -i /root/.ssh/id_ed25519 root@{r.place.linklocal}%switch.{r.place.vlan} "
         f"'cat /tmp/bench-adopt-backup.tar.gz' </dev/null > /tmp/bench-adopt-backup.tar.gz 2>/dev/null",
-        "md5sum /tmp/bench-adopt-backup.tar.gz"])
+        "sha256sum /tmp/bench-adopt-backup.tar.gz"])
     if digest not in pulled:
-        raise AdoptError("backup: md5 mismatch DUT vs switch — refusing to continue")
-    print(f"[PASS] backup {r.place.name}: md5 {digest} verified end-to-end")
+        raise AdoptError("backup: sha256 mismatch DUT vs switch — refusing to continue")
+    print(f"[PASS] backup {r.place.name}: sha256 {digest[:16]}… verified end-to-end")
 
 
 def stage_overlay(r: Runner) -> None:
@@ -614,11 +617,17 @@ def stage_adopt(r: Runner) -> None:
     if readback != expected_values:
         raise AdoptError(f"adopt: value readback mismatch — got {readback}, "
                          f"expected {expected_values} (raw: {out[-200:]})")
-    out = r.dut("adopt-commit", "uci commit network; echo COMMITTED; "
-                                "/etc/init.d/network restart >/dev/null 2>&1; echo RESTARTED")
-    if "COMMITTED" not in out:
+    # #275: DEADMAN before commit/restart — the DUT is managed THROUGH
+    # the network being rewritten; a wrong runtime path strands it until
+    # manual console work. The detached self-reboot heals within 5 min;
+    # stage_verify cancels it once the new address answers (cf8260b shape).
+    out = r.dut("adopt-commit",
+               "setsid sh -c 'sleep 300 && reboot' >/dev/null 2>&1 & echo DEADMAN-ARMED; "
+               "uci commit network; echo COMMITTED; "
+               "/etc/init.d/network restart >/dev/null 2>&1; echo RESTARTED")
+    if "COMMITTED" not in out or "DEADMAN-ARMED" not in out:
         raise AdoptError(f"adopt: commit did not confirm:\n{out[:300]}")
-    print(f"[PASS] adopt {p.name}: keys (idempotent) + clean-baseline static config committed")
+    print(f"[PASS] adopt {p.name}: deadman armed, static config committed, network restarted")
 
 
 def stage_verify(r: Runner) -> None:
@@ -633,7 +642,14 @@ def stage_verify(r: Runner) -> None:
     for required in ("SSH-OK-NEW-IP", "static", p.dut_ip, p.release):
         if required not in out:
             raise AdoptError(f"verify: missing {required!r} in evidence:\n{out[:400]}")
-    print(f"[PASS] verify {p.name}: key-auth SSH at {p.dut_ip}, proto=static, release kept")
+    # #275: the new address answers — cancel the deadman BEFORE anything
+    # else (the reboot would undo the adoption we just verified).
+    cancel = r.dut("verify-deadman-cancel",
+                   "pkill -f 'sleep 300 && reboot' 2>/dev/null; echo DEADMAN-CANCELED")
+    if "DEADMAN-CANCELED" not in cancel:
+        print(f"[WARN] verify {p.name}: deadman cancel not confirmed:\n{cancel[:200]} "
+              f"(the unit may self-reboot in <=5 min — check uptime)")
+    print(f"[PASS] verify {p.name}: key-auth SSH at {p.dut_ip}, proto=static, release kept, deadman canceled")
 
 
 STAGES = {"rom-audit": stage_rom_audit, "preflight": stage_preflight, "backup": stage_backup,

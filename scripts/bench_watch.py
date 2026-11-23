@@ -92,7 +92,14 @@ class WatchConfig:
 
 
 def load_config(path: Path) -> WatchConfig:
-    raw = json.loads(path.read_text())
+    # #281: the checked-in .example files carry `##` header comments —
+    # strip them before json.loads so the documented copy-to-config flow
+    # works verbatim (an unparseable example is the copy flow failing).
+    text = "\n".join(
+        line for line in path.read_text().splitlines()
+        if not line.lstrip().startswith("##")
+    )
+    raw = json.loads(text)
     devices = []
     names: set[str] = set()
     for d in raw.get("devices", []):

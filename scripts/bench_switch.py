@@ -212,8 +212,18 @@ def cmd_deploy(host: str, serial_port: str | None, profile: BenchProfile,
             print(f"FAIL: deploy script rc={rc}")
             return 1
     else:
+        # #282: the script contains single-quoted fragments (the deadman
+        # line first) — wrapping it in another `sh -c '…'` pair terminated
+        # the outer quote early and every non-serial deploy ran a
+        # malformed command. Feed the script via SSH STDIN instead: no
+        # quoting layer at all (the AGENTS dark-device `sh -s` pattern).
         script = "\n".join(lines)
-        rc, out = ssh(host, f"sh -c '{script}'", timeout=180)
+        proc = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", host, "sh -s"],
+            input=script, capture_output=True, text=True, timeout=180,
+        )
+        out = proc.stdout + proc.stderr
+        rc = proc.returncode
         print(out[-400:])
         if rc != 0 or "DEPLOY-COMMITTED" not in out:
             print("FAIL: deploy over ssh")

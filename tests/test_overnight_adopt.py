@@ -27,8 +27,13 @@ def fake_switch_ssh(monkeypatch: pytest.MonkeyPatch, switch_has_key: bool):
             return (0, SWITCH_KEY + "\n") if switch_has_key else (1, "")
         if "KEYS-OK" in cmd:
             return (0, "KEYS-OK")
+        if "---READBACK---" in cmd:
+            # #284: the readback gate's canned evidence — the staged
+            # values come back exactly as staged.
+            return (0, "---READBACK---\nstatic\n192.168.104.51/24\n"
+                       "192.168.104.1\n192.168.104.1")
         if "ADOPT-OK" in cmd:
-            return (0, "ADOPT-OK")
+            return (0, "DEADMAN-ARMED\nADOPT-OK")
         return (0, "")
 
     monkeypatch.setattr(overnight, "switch_ssh", switch_ssh)

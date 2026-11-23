@@ -166,21 +166,44 @@ def adopt_unit(dut_ip: str, mac: str, vlan: int) -> bool:
     if "KEYS-OK" not in out:
         return False
 
+    # #284: the bench_adopt fixed shape — (1) revert stale /tmp/.uci
+    # staging first (debris from an interrupted earlier cycle survives SSH
+    # sessions and merges into this commit), (2) staged VALUE readbacks
+    # gate the commit, (3) a detached deadman heals a wrong runtime path
+    # within 5 min instead of stranding the unit for the night.
     rc, out = switch_ssh(
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
-        f"'uci set network.lan.proto=\"static\"; "
+        f"'uci revert network 2>/dev/null; "
+        f"uci set network.lan.proto=\"static\"; "
         f"uci delete network.lan.ipaddr 2>/dev/null; "
         f"uci add_list network.lan.ipaddr=\"{dut_ip}/24\"; "
         f"uci set network.lan.gateway=\"{gw}\"; "
         f"uci set network.lan.dns=\"{gw}\"; "
+        f"echo ---READBACK---; "
+        f"uci get network.lan.proto; uci get network.lan.ipaddr; "
+        f"uci get network.lan.gateway; uci get network.lan.dns' "
+        f"</dev/null 2>&1 | grep -v Caution")
+    readback = out.split("---READBACK---")[-1].split()
+    if readback != ["static", f"{dut_ip}/24", gw, gw]:
+        print(f"[adopt] {dut_ip}: readback mismatch {readback} — refusing to commit")
+        return False
+
+    rc, out = switch_ssh(
+        f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
+        f"'setsid sh -c \"sleep 300 && reboot\" >/dev/null 2>&1 & echo DEADMAN-ARMED; "
         f"uci commit network; echo ADOPT-OK' </dev/null 2>&1 | grep -v Caution")
-    if "ADOPT-OK" not in out:
+    if "ADOPT-OK" not in out or "DEADMAN-ARMED" not in out:
         return False
 
     switch_ssh(
         f"DROPBEAR_PASSWORD='' dbclient -y -y root@{ll}%switch.{vlan} "
-        f"'/etc/init.d/network restart' </dev/null 2>/dev/null")
+        f"'/etc/init.d/network restart' </dev/null 2>&1 | grep -v Caution")
     time.sleep(10)
+    # the new address answers — cancel the deadman before returning success
+    switch_ssh(
+        f"ssh -o BatchMode=yes -o ConnectTimeout=8 root@{dut_ip} "
+        f"\"pkill -f 'sleep 300 && reboot' 2>/dev/null; echo DEADMAN-CANCELED\" "
+        f"2>/dev/null || true")
     return True
 
 

@@ -260,16 +260,38 @@ def main(argv: list[str] | None = None) -> int:
                 continue  # run last, connection dies mid-command
             if run_cmds([cmd]) != 0:
                 return 1
+        # #280: only the TIMEOUT is the expected shape (sysupgrade drops
+        # the connection mid-run) — a synchronous rc!=0 means sysupgrade
+        # refused the image (authoritative hardware validation) while the
+        # OLD firmware keeps running; polling would then "succeed" against
+        # the un-flashed unit.
         try:
-            subprocess.run(flash_sequence(place, args.image)[-1], capture_output=True,
-                           text=True, timeout=30)
+            r = subprocess.run(flash_sequence(place, args.image)[-1],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                print(f"FAIL: sysupgrade exited rc={r.returncode} synchronously "
+                      f"(image refused?): {r.stderr.strip()[:200]}")
+                return 1
         except subprocess.TimeoutExpired:
             pass  # expected: sysupgrade drops the connection
         print(f"flash started; polling SSH up to {RECOVERY_WAIT_S}s")
         if not wait_for_dut(place, cfg, RECOVERY_WAIT_S):
             print("FAIL: DUT did not return after sysupgrade — check lifeline log")
             return 1
-        print("DUT back — run `logs` to capture evidence")
+        # #280: a reboot happened — but the still-running OLD firmware also
+        # answers SSH on the first attempt; require post-flash EVIDENCE
+        # (DISTRIB_RELEASE matches the flashed image family) before success.
+        try:
+            rel = subprocess.run(_dut_ssh(place, ". /etc/openwrt_release; echo $DISTRIB_RELEASE"),
+                                 capture_output=True, text=True, timeout=15)
+            release = rel.stdout.strip()
+        except subprocess.TimeoutExpired:
+            release = ""
+        if not release:
+            print("FAIL: DUT answers SSH but no DISTRIB_RELEASE evidence — "
+                  "possibly the old firmware; verify before declaring success")
+            return 1
+        print(f"DUT back on {release} — run `logs` to capture evidence")
         return 0
     return 2
 

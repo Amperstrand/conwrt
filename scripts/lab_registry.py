@@ -107,7 +107,26 @@ def cmd_emit_exporter(cfg: dict) -> str:
 
 
 def sh(cmd: list[str], timeout=60) -> str:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    """Run a command, return stdout.strip(); RAISE on rc != 0 (#277).
+
+    The old shape discarded rc/stderr — a failed scp/config-swap/restart
+    made every caller continue and exit 0 with nothing installed but a
+    success report. Read-only probes that must tolerate failure use
+    sh_try instead.
+    """
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"command failed (rc={r.returncode}): {' '.join(cmd[:3])}… "
+            f"stderr: {r.stderr.strip()[-200:]}"
+        )
+    return r.stdout.strip()
+
+
+def sh_try(cmd: list[str], timeout=60) -> tuple[int, str, str]:
+    """Failure-tolerant variant for probes: (rc, stdout, stderr) intact."""
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
 def cmd_deploy_exporter(cfg: dict) -> int:
@@ -117,12 +136,23 @@ def cmd_deploy_exporter(cfg: dict) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         f.write(cmd_emit_exporter(cfg))
         tmp = f.name
-    print(sh(["scp", "-q", tmp, f"{host}:{remote_path}.new"]))
-    print(sh(["ssh", host, f"cp {remote_path} {remote_path}.bak && mv {remote_path}.new {remote_path} && "
+    # #277: every step rc-gated (sh raises on failure), and the pgrep
+    # EVIDENCE LINE is verified — an exporter that did not come back up
+    # after the restart is a failed deploy, not a success report.
+    sh(["scp", "-q", tmp, f"{host}:{remote_path}.new"])
+    evidence = sh(["ssh", host, f"cp {remote_path} {remote_path}.bak && mv {remote_path}.new {remote_path} && "
                             "(systemctl --user restart conwrt-exporter 2>/dev/null || "
                             "systemctl restart conwrt-exporter 2>/dev/null || "
-                            "pkill -f labgrid-exporter) && sleep 3 && pgrep -af labgrid-exporter | head -1"]))
+                            "pkill -f labgrid-exporter) && sleep 3 && pgrep -af labgrid-exporter | head -1"])
     os.unlink(tmp)
+    if "labgrid-exporter" not in evidence:
+        print(
+            f"deploy failed: exporter not running after restart "
+            f"(pgrep evidence: {evidence[:200]!r})",
+            file=sys.stderr,
+        )
+        return 1
+    print(evidence)
     return 0
 
 
@@ -131,7 +161,10 @@ def cmd_reconcile(cfg: dict) -> int:
     drift = []
     switch = cfg["devices"]["gs1900-bench"]["mgmt"]
     # 1. bench switch uptime (self-reboot detection)
-    up = sh(["ssh", "-o", "BatchMode=yes", f"root@{switch}", "uptime"])
+    up_rc, up, _ = sh_try(["ssh", "-o", "BatchMode=yes", f"root@{switch}", "uptime"])
+    if up_rc != 0:
+        drift.append(f"gs1900-bench: unreachable over SSH (rc={up_rc})")
+        up = ""
     m = re.search(r"up (\d+) min", up)
     if m and int(m.group(1)) < 30:
         drift.append(f"gs1900-bench: uptime {m.group(1)}min — REBOOTED, failsafes likely DISARMED "
