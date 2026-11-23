@@ -1556,6 +1556,76 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
     })
 }
 
+pub(super) fn plan_ddns(_model: &DeviceModel, ddns: &DdnsProfile) -> Result<Plan, Unsupported> {
+    ddns.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // Byte-parity with open ddns.py `_build_ddns_ops`: the delete
+    // guards AGENTS.md staging debris; the section line renders
+    // unquoted (uci_token) so both renderers agree; comments/blank
+    // lines are filtered by the parity normalizers on both sides.
+    let mut options: Vec<(String, UciValue)> = vec![
+        ("enabled".into(), literal("1".into())),
+        ("domain".into(), literal(ddns.domain.clone())),
+        ("username".into(), literal(ddns.username.clone())),
+        ("password".into(), literal(ddns.password.clone())),
+        ("use_https".into(), literal("1".into())),
+        ("lookup_host".into(), literal(ddns.domain.clone())),
+        (
+            "check_interval".into(),
+            literal(ddns.check_interval.to_string()),
+        ),
+        ("check_unit".into(), literal("seconds".into())),
+        (
+            "force_interval".into(),
+            literal(ddns.force_interval.to_string()),
+        ),
+        ("force_unit".into(), literal("seconds".into())),
+    ];
+    if ddns.provider == "custom" {
+        options.push(("update_url".into(), literal(ddns.update_url.clone())));
+    } else {
+        let svc = DDNS_PROVIDERS
+            .iter()
+            .find(|(n, _)| *n == ddns.provider)
+            .map(|(_, s)| (*s).to_string())
+            .unwrap_or_default();
+        options.push(("service_name".into(), literal(svc)));
+    }
+    let ops = vec![
+        PlanOp::Shell {
+            command: "uci -q delete ddns.myddns >/dev/null 2>&1 || true".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "ddns".into(),
+            section: "myddns".into(),
+            section_type: "service".into(),
+            options,
+        },
+        PlanOp::CommitUci {
+            config: "ddns".into(),
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Restart,
+        },
+    ];
+    Ok(Plan {
+        profile_id: "ddns".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "ddns section committed with the target domain".into(),
+            command: "uci -q get ddns.myddns.domain".into(),
+            expect_contains: ddns.domain.clone(),
+        }],
+        warnings: Vec::new(),
+    })
+}
+
 /// Single-quote a literal for POSIX shells (`'` → `'\''`).
 pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\''"))
