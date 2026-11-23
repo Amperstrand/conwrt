@@ -136,14 +136,14 @@
 
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DohProfile,
-    FipsBluetoothRfcommProfile, GuestWifiProfile, Mesh11sdProfile, MptcpBondingProfile,
-    Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile,
-    PbrProfile, Profile, RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile,
-    TetherProfile, TetherVariant, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
-    plan_profile, render_shell,
+    FipsBluetoothRfcommProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile,
+    MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
+    OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
+    SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile, plan_profile, render_shell,
 };
 use conwrt_core::state::DeviceState;
 use conwrt_types::DeviceModel;
@@ -226,6 +226,27 @@ fn assert_plan_matches_golden(profile: Profile, golden: &str) {
     assert_eq!(
         want, got,
         "rendered command lines must equal the 1.x golden byte-for-byte"
+    );
+}
+
+#[test]
+fn ipv6_wan_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ipv6Wan(Ipv6WanProfile::default()),
+        include_str!("goldens/ipv6-wan.sh"),
+    );
+}
+
+#[test]
+fn ipv6_wan_custom_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ipv6Wan(Ipv6WanProfile {
+            reqprefix: "56".into(),
+            ula_prefix: "fd12:3456:789a::/64".into(),
+            masq6: false,
+            ..Ipv6WanProfile::default()
+        }),
+        include_str!("goldens/ipv6-wan-custom.sh"),
     );
 }
 

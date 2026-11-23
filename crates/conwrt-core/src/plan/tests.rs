@@ -1197,6 +1197,50 @@ fn pbr_shape_gates_and_strict_branch_match_1x() {
 }
 
 #[test]
+fn ipv6_wan_param_bounds_and_shape_match_1x() {
+    assert!(Ipv6WanProfile::default().validate().is_ok());
+    // empty ula_prefix = the derive branch (valid); a set one must be a /64 token
+    assert!(matches!(
+        Ipv6WanProfile {
+            ula_prefix: "fd00::/48".into(),
+            ..Ipv6WanProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    assert!(matches!(
+        Ipv6WanProfile {
+            ula_prefix: "a b".into(),
+            ..Ipv6WanProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    assert!(matches!(
+        Ipv6WanProfile {
+            reqprefix: "x".into(),
+            ..Ipv6WanProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    assert!(matches!(
+        Ipv6WanProfile {
+            lan_ip6assign: "32".into(),
+            ..Ipv6WanProfile::default()
+        }
+        .validate(),
+        Err(Unsupported::InvalidParams(_))
+    ));
+    let plan = plan_for(Profile::Ipv6Wan(Ipv6WanProfile::default()));
+    let script = render_shell(&plan);
+    // derive guard keeps any existing ULA; masq6 lands on the NAMED zone
+    assert!(script.contains("[ -n \"$ula\" ] || {"));
+    assert!(script.contains("uci set firewall.$z.masq6='1'"));
+    assert!(script.contains("uci set network.wan6.proto='dhcpv6'"));
+}
+
+#[test]
 fn openclash_shape_gates_and_branches_match_1x() {
     let plan = plan_for(Profile::OpenClash(OpenClashProfile::default()));
     let script = render_shell(&plan);

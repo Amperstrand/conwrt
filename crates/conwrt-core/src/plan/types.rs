@@ -12,6 +12,8 @@ pub enum Profile {
     Sqm(SqmProfile),
     /// Encrypted DNS resolution for the whole LAN.
     Doh(DohProfile),
+    /// IPv6 WAN with NAT66/ULA stable LAN addressing.
+    Ipv6Wan(Ipv6WanProfile),
     /// USB WAN from a phone (all four 1.x tether presets).
     Tether(TetherProfile),
     /// Route traffic through a WireGuard VPN tunnel.
@@ -108,6 +110,7 @@ impl Profile {
         match self {
             Profile::Sqm(_) => "sqm",
             Profile::Doh(_) => "doh",
+            Profile::Ipv6Wan(_) => "ipv6-wan",
             Profile::Tether(t) => t.variant.id(),
             Profile::WireguardClient(_) => "wireguard-client",
             Profile::WireguardServer(_) => "wireguard-server",
@@ -156,6 +159,7 @@ impl Profile {
         match self {
             Profile::Sqm(_) => &[],
             Profile::Doh(_) => &[],
+            Profile::Ipv6Wan(_) => &[],
             Profile::Tether(_) => &["usb"],
             Profile::WireguardClient(_) => &[],
             Profile::WireguardServer(_) => &[],
