@@ -1,0 +1,280 @@
+# Master file for snd_soc_msm tabla 2.0 sound card
+# Lists all use case verbs
+
+SectionUseCase."Voice Call" {
+Comment "Voice Call use case"
+SectionVerb
+	Name "Voice Call"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:1
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:0
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:0
+	EndSequence
+
+	# ALSA PCMs
+	PlaybackPCM 2
+	CapturePCM 2
+
+EndSection
+}
+
+SectionUseCase."VoLTE" {
+Comment "VoLTE use case"
+SectionVerb
+	Name "VoLTE"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:1
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:0
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:0
+	EndSequence
+
+	# ALSA PCMs
+	PlaybackPCM 4
+	capturePCM 4
+
+EndSection
+}
+
+SectionUseCase."Loopback" {
+Comment "Loopback use case"
+SectionVerb
+	Name "Loopback"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX Audio Mixer MultiMedia1':1:1
+		'MultiMedia1 Mixer SEC_AUX_PCM_UL_TX':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX Audio Mixer MultiMedia1':1:0
+		'MultiMedia1 Mixer SEC_AUX_PCM_UL_TX':1:0
+	EndSequence
+
+	# ALSA PCMs
+	PlaybackPCM 0
+	CapturePCM 0
+
+EndSection
+}
+
+SectionDevice
+	Name "Auxpcm Rx"
+	Comment "Auxpcm Rx device"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	7:1
+
+EndSection
+
+SectionDevice
+	Name "AMR Rx"
+	Comment "Auxpcm Rx device for AMR-MM"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	10:1
+
+EndSection
+
+SectionDevice
+	Name "Auxpcm Tx"
+	Comment "Auxpcm Tx device"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	4:2
+
+EndSection
+
+SectionDevice
+	Name "AMR Tx"
+	Comment "Auxpcm Tx device for AMR-MM"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	8:2
+
+EndSection
+
+SectionModifier
+	Name "Play Voice"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:1
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:0
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:0
+	EndSequence
+
+	# ALSA PCMs
+	CapturePCM 2
+	PlaybackPCM 2
+
+EndSection
+
+SectionModifier
+	Name "Play VoLTE"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:1
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX_Voice Mixer VoiceMMode1':1:0
+		'VoiceMMode1_Tx Mixer SEC_AUX_PCM_TX_MMode1':1:0
+	EndSequence
+
+	# ALSA PCMs
+	PlaybackPCM 4
+	capturePCM 4
+
+EndSection
+
+SectionModifier
+	Name "Play Loopback"
+
+	EnableSequence
+		'SEC_AUX_PCM_RX Audio Mixer MultiMedia1':1:1
+		'MultiMedia1 Mixer SEC_AUX_PCM_UL_TX':1:1
+	EndSequence
+
+	DisableSequence
+		'SEC_AUX_PCM_RX Audio Mixer MultiMedia1':1:0
+		'MultiMedia1 Mixer SEC_AUX_PCM_UL_TX':1:0
+	EndSequence
+
+	# ALSA PCMs
+	PlaybackPCM 0
+	CapturePCM 0
+
+EndSection
+
+SectionDevice
+	Name "TTY Full Rx"
+	Comment "TTY Full Rx device"
+
+	EnableSequence
+		'TTY Mode':0:FULL
+	EndSequence
+
+	DisableSequence
+		'TTY Mode':0:ZERO
+	EndSequence
+
+	ACDBID	17:1
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+SectionDevice
+	Name "TTY Full Tx"
+	Comment "TTY Full Tx device"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	16:2
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+SectionDevice
+	Name "TTY VCO Rx"
+	Comment "TTY VCO Rx device"
+
+	EnableSequence
+		'TTY Mode':0:VCO
+	EndSequence
+
+	DisableSequence
+		'TTY Mode':0:ZERO
+	EndSequence
+
+	ACDBID	17:1
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+SectionDevice
+	Name "TTY VCO Tx"
+	Comment "TTY VCO Tx device"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	36:2
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+SectionDevice
+	Name "TTY HCO Rx"
+	Comment "TTY HCO Rx device"
+
+	EnableSequence
+	EndSequence
+
+	DisableSequence
+	EndSequence
+
+	ACDBID	37:1
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+SectionDevice
+	Name "TTY HCO Tx"
+	Comment "TTY HCO Tx device"
+
+	EnableSequence
+		'TTY Mode':0:HCO
+	EndSequence
+
+	DisableSequence
+		'TTY Mode':0:ZERO
+	EndSequence
+
+	ACDBID	16:2
+	EffectsMixerCTL "SRS TruMedia"
+
+EndSection
+
+# End of master file
+

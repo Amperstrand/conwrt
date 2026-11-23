@@ -1,0 +1,178 @@
+#!/bin/sh
+#******************************************************************
+# Collect moduleap_ap syslog & keylog
+#******************************************************************
+syslog_path=`cfg get syslog_path`
+key_syslog_name=`cfg get key_syslog_name`
+
+LOG_ERR="logger -s -t router_script -p 3 $0:"
+LOG_INFO="logger -s -t router_script -p 6 $0:"
+
+${LOG_INFO} "begin running"
+
+cfg set get_syslog_running=1
+cfg set log_upload_status="uploading"
+# syslog_upload_mode = 0 download to PC; syslog_upload_mode = 1 upload to server
+log_mode=`cfg get syslog_upload_mode`  
+currentdate=`date "+%Y%m%d%H%M%S"`
+imei=`cfg get imei`
+
+if [ "$syslog_path" == "" ];then
+    syslog_path="/logfs"
+fi
+
+if [ "$key_syslog_name" == "" ];then
+    key_syslog_name="key.log"
+fi
+
+sh /usr/zte/zte_conf/scripts/zte_debug.sh get_status
+
+if [ -f "$syslog_path/syslog" ] ; then
+	cmd="$syslog_path/syslog*"
+fi
+
+fuzzy_ip()
+{
+	if [ -f "$1" ] ; then
+		egrep -o "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" $1 | sort -u > /tmp/ip_list.txt
+		while read line
+		do
+			first=`echo $line | cut -d '.' -f 1`
+			fourth=`echo $line | cut -d '.' -f 4`
+			replace="$first.*.*.$fourth"
+			sed -i "s/$line/$replace/g" $1
+		done < /tmp/ip_list.txt	
+		rm -rf /tmp/ip_list.txt	
+	fi	
+}
+
+fuzzy_mac()
+{
+	if [ -f "$1" ] ; then
+		egrep -o "[0-f]{2}\:[0-f]{2}\:[0-f]{2}\:[0-f]{2}\:[0-f]{2}\:[0-f]{2}" $1 | sort -u > /tmp/mac_list.txt
+		while read line
+		do
+			first=`echo $line | cut -d ':' -f 1-2`
+			fourth=`echo $line | cut -d ':' -f 5-6`
+			replace="$first:*:*:*:$fourth"
+			sed -i "s/$line/$replace/g" $1
+		done < /tmp/mac_list.txt	
+		rm -rf /tmp/mac_list.txt
+	fi	
+}
+
+${LOG_INFO} "fuzzy $syslog_path/$key_syslog_name"
+if [ -f "$syslog_path/$key_syslog_name" ] ; then
+	cmd="$cmd $syslog_path/${key_syslog_name}*"
+	fuzzy_ip $syslog_path/$key_syslog_name
+	fuzzy_mac $syslog_path/$key_syslog_name
+	
+	if [ -f "$syslog_path/${key_syslog_name}.0" ] ; then
+		fuzzy_ip $syslog_path/${key_syslog_name}.0
+		fuzzy_mac $syslog_path/${key_syslog_name}.0
+	fi
+fi
+
+${LOG_INFO} "fuzzy $syslog_path/status"
+if [ -d "$syslog_path/status" ] ; then
+	cmd="$cmd $syslog_path/status"
+	fuzzy_ip $syslog_path/status/ifconfig
+	fuzzy_mac $syslog_path/status/ifconfig
+	fuzzy_ip $syslog_path/status/iptables
+	fuzzy_mac $syslog_path/status/iptables	
+	fuzzy_ip $syslog_path/status/nvshow_excluded
+	fuzzy_mac $syslog_path/status/nvshow_excluded	
+	fuzzy_ip $syslog_path/status/system_status
+	fuzzy_mac $syslog_path/status/system_status	
+	sed -i "s/zte_topsw/*/g" $syslog_path/status/system_status
+	sed -i "s/usr\/bin/*/g" $syslog_path/status/system_status
+	sed -i "s/zte/*/g" $syslog_path/status/system_status	
+	fuzzy_ip $syslog_path/status/dmesg
+	fuzzy_mac $syslog_path/status/dmesg	
+	fuzzy_ip $syslog_path/status/IPACM_cfg.xml
+	fuzzy_mac $syslog_path/status/IPACM_cfg.xml		
+fi
+
+if [ -f "/cache/update.log" ] ; then
+	cmd="$cmd /cache/update.log"
+fi
+
+if [ -f "/tmp/arp.leases" ] ; then
+	cmd="$cmd /tmp/arp.leases"
+fi
+
+if [ -f "$syslog_path/neon.txt" ] ; then
+	cmd="$cmd $syslog_path/neon.txt"
+fi
+
+if [ -d "/etc_rw/tr069" ] ; then
+	cmd="$cmd /etc_rw/tr069"
+fi
+
+if [ -d "/tmp/diag_logs" ] ; then
+     cmd="$cmd /tmp/diag_logs"
+fi
+
+ls -la /cache > /tmp/cachelist.txt
+cmd="$cmd /tmp/cachelist.txt"
+
+${LOG_INFO} "beging tar log"
+syslog_file_name=`cfg get syslog_file_name`
+if [ "$syslog_file_name" != "" ] ; then
+	rm -rf /tmp/$syslog_file_name
+fi
+syslog_file_no_encrype=`cfg get syslog_file_no_encrype`
+if [ "$syslog_file_no_encrype" != "1" ] ; then
+    syslog_file_name="${imei}_${currentdate}_syslog_en.tar.gz"
+    cfg set syslog_file_name=$syslog_file_name
+
+    tar -czvf /tmp/tmplog.tar.gz $cmd
+    router_msg encrype_log /tmp/tmplog.tar.gz /tmp/$syslog_file_name
+    rm -rf /tmp/tmplog.tar.gz
+else
+    syslog_file_name="${imei}_${currentdate}_syslog.tar.gz"     
+    cfg set syslog_file_name=$syslog_file_name
+    tar -czvf /tmp/$syslog_file_name $cmd
+fi
+
+if [ -d "$syslog_path/status" ] ; then
+	rm -rf $syslog_path/status
+fi
+
+if [ "$log_mode" == "1" ] ; then
+	model_name=`cfg get model_name`
+	day=`date +"%Y-%m-%d"`
+	tim=`date +"%T"`
+	day_time="$day $tim"
+	
+	accessToken="MC801A1${day_time}MC801A1@TestUse"
+	echo "accessToken=[$accessToken]"
+	accessToken=`echo -n $accessToken | md5sum | awk '{print $1}'`
+	echo "accessToken md5 encode=[$accessToken]"
+	integrate_version=`cfg get integrate_version`
+
+	echo "{\"AppName\":\"$model_name\",\"PackageName\":\"\",\"PackageSource\":\"\",\"Type\":\"keylog\",\"Time\":\"$day $tim\",\"Description\":\"TestuploadMBBlog\",\"InnerName\":\"\",\"PhoneUser\":\"${model_name}User\",\"FirstLogName\":\"$syslog_file_name\",\"SecondLogName\":\"\",\"ReservedOne\":\"0\",\"ReservedTwo\":\"\",\"IMEI\":\"$imei\",\"Model\":\"$model_name\",\"SoftVersion\":\"$integrate_version\",\"AndroidVersion\":\"0\",\"Operators\":\"\",\"TestRadarVersion\":\"0\"}" > /tmp/MBBLogInfo.json
+	zte_log_manage -M 1 -F "uploadFile=@/tmp/$syslog_file_name" -U https://all-in-one.zte.com.cn:8043/TestRadarIII/TestRadarApi/Bug/UploadAttachment?accessToken=$accessToken\&sys=MC801A1\&timeString="$day%20$tim"
+	ret="$?"
+	if [ "$ret" != "0" ] ; then
+		cfg set log_upload_status="error"
+		${LOG_INFO} "curl upload logfile result=[$ret]"
+	fi
+	
+	zte_log_manage -M 1 -D "{\"AppName\":\"$model_name\",\"PackageName\":\"\",\"PackageSource\":\"\",\"Type\":\"keylog\",\"Time\":\"$day $tim\",\"Description\":\"TestuploadMBBlog\",\"InnerName\":\"\",\"PhoneUser\":\"${model_name}User\",\"FirstLogName\":\"$syslog_file_name\",\"SecondLogName\":\"\",\"ReservedOne\":\"0\",\"ReservedTwo\":\"\",\"IMEI\":\"$imei\",\"Model\":\"$model_name\",\"SoftVersion\":\"$integrate_version\",\"AndroidVersion\":\"0\",\"Operators\":\"\",\"TestRadarVersion\":\"0\"}" -U https://all-in-one.zte.com.cn:8043/TestRadarIII/TestRadarApi/Bug/SubmitBug?accessToken=$accessToken\&sys=MC801A1\&timeString="$day%20$tim"
+	ret="$?"
+	if [ "$ret" != "0" ] ; then
+		cfg set log_upload_status="error"
+		${LOG_INFO} "curl upload json result=[$ret]"
+	fi
+	
+	log_upload_status=`cfg get log_upload_status`
+	if [ "$log_upload_status" == "uploading" ] ; then
+		cfg set log_upload_status="done"
+		${LOG_INFO} "log_upload_status=[done]"
+	fi
+	
+	rm -rf /tmp/MBBLogInfo.json
+fi
+cfg set get_syslog_running=0
+${LOG_INFO} "end running"

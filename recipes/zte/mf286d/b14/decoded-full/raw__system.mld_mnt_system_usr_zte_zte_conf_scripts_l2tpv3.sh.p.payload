@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# $Id: l2tpv3.sh
+#
+# usage: l2tp
+#
+LOG_ERR="logger -s -t script_router -p 0 $0:"
+LOG_INFO="logger -s -t script_router -p 6 $0:"
+
+l2tp_local_tunnel_id=`cfg get l2tp_local_tunnel_id` 
+l2tp_remote_tunnel_id=`cfg get l2tp_remote_tunnel_id` 
+
+l2tp_type=`cfg get l2tp_type` 
+
+l2tp_udp_sport=`cfg get l2tp_udp_sport` 
+l2tp_udp_dport=`cfg get l2tp_udp_dport`
+
+l2tp_local_ip=`cfg get l2tp_local_ip`
+l2tp_remote_ip=`cfg get l2tp_remote_ip`
+
+l2tp_local_session_id=`cfg get l2tp_local_session_id`
+l2tp_remote_session_id=`cfg get l2tp_remote_session_id`
+
+l2tp_eth0_ip=`cfg get l2tp_eth0_ip`
+
+l2tpv3_enable=`cfg get l2tpv3_enable`
+
+if [ "$l2tpv3_enable" == "1" ] ;then
+	${LOG_INFO}  "l2tpv3 connect"
+	if [ "$l2tp_type" == "UDP" ] ; then
+		ip l2tp add tunnel tunnel_id $l2tp_local_tunnel_id peer_tunnel_id $l2tp_remote_tunnel_id encap udp  udp_sport $l2tp_udp_sport udp_dport $l2tp_udp_dport local $l2tp_local_ip remote $l2tp_remote_ip
+		ip l2tp add session tunnel_id $l2tp_local_tunnel_id session_id $l2tp_local_session_id peer_session_id $l2tp_remote_session_id
+		ip addr add $l2tp_eth0_ip dev l2tpeth0
+		ip link set dev l2tpeth0 up
+	elif [ "$l2tp_type" == "IP" ] ; then
+		ip l2tp add tunnel tunnel_id $l2tp_local_tunnel_id peer_tunnel_id $l2tp_remote_tunnel_id encap ip local $l2tp_local_ip remote $l2tp_remote_ip
+		ip l2tp add session tunnel_id $l2tp_local_tunnel_id session_id $l2tp_local_session_id peer_session_id $l2tp_remote_session_id
+		ip addr add $l2tp_eth0_ip dev l2tpeth0
+		ip link set dev l2tpeth0 up
+	fi
+elif [ "$l2tpv3_enable" == "0" ] ;then
+	${LOG_INFO}  "l2tpv3 disconnect"
+	ip l2tp del tunnel tunnel_id $l2tp_local_tunnel_id
+	exit
+fi
+
+
+

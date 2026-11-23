@@ -1,0 +1,135 @@
+#!/bin/sh
+
+#!/bin/sh
+
+# save the dumplog to flash
+#insmod /usr/lib/modules/3.10.0+/kernel/drivers/mtd/mtdoops.ko mtddev=misc record_size=131072
+
+checkandbackup_etc_rw()
+{
+    if [ ! -d /etc_rw/ztembb  ] ; then
+	    touch /cache/NeedToBackupEtcrw
+		sync
+		sys_reboot
+    fi
+}
+checkandbackup_etc_rw
+
+start-stop-daemon -S -b -a /sbin/adbd &
+sh /usr/ui/startanimation.sh &
+
+#zte_fota
+
+#################### Factory Restore Function Begin ######################
+factory_restore()
+{
+	echo "start restore configs." >> /tmp/restore.log
+	#restore nvconfig
+	#rm /usr/zte/zte_conf/config/userseting_nvconfig.txt || echo "can not remove userseting_nvconfig.txt" >> /tmp/restore.log
+	#restore dnsmasq
+	rm /usr/zte/zte_conf/config/dnsmasq.conf || echo "can not remove /usr/zte/zte_conf/config/dnsmasq.conf" >> /tmp/restore.log
+	cp /usr/zte_web/web/copy/etc/dnsmasq.conf /usr/zte/zte_conf/config/dnsmasq.conf || echo "can not copy /usr/zte_web/web/copy/etc/dnsmasq.conf" >> /tmp/restore.log
+	#restore xxx
+	rm /etc/factory_restore || echo "fatal error: can not remove flag /etc/factory_restore" >> /tmp/restore.log
+	rm /etc_rw/ztembb/ztemc/factory_restore || echo "fatal error: can not remove flag /etc_rw/ztembb/ztemc/factory_restore" >> /tmp/restore.log
+	echo "restore configs finished." >> /tmp/restore.log
+	#restore pma
+	rm /usr/pma/pmaconfig.ini
+}
+
+factory_restore_probe()
+{
+	if [ -f /etc/factory_restore ] || [ -f /etc_rw/ztembb/ztemc/factory_restore ]; then
+		echo "need restore configs..." >> /tmp/restore.log
+		factory_restore
+	else
+	    echo "no need restore configs." >> /tmp/restore.log
+	fi
+}
+
+userdata_restore_probe()
+{
+	#check if restore ztedata
+	if [ -f /etc/userdata_restore_flag ] || [ -f /etc_rw/ztembb/ztemc/userdata_restore_flag ]; then
+		rm /etc/userdata_restore_flag || echo "fatal error: can not remove /etc/userdata_restore_flag" >> /tmp/restore.log
+		rm /etc_rw/ztembb/ztemc/userdata_restore_flag || echo "fatal error: can not remove /etc_rw/ztembb/ztemc/userdata_restore_flag" >> /tmp/restore.log
+		echo "need restore userdata..." >> /tmp/restore.log
+		######## restore sms and phonebook here ########
+		rm /usr/zte/web/sms_db/sms.db || echo "can not remove /usr/zte/web/sms_db/sms.db" >> /tmp/restore.log
+		rm /usr/zte/web/pbm_db/pbm.db || echo "can not remove /usr/zte/web/pbm_db/pbm.db" >> /tmp/restore.log
+		######## restore userdata here ########
+		echo "restore userdata finished." >> /tmp/restore.log
+	else
+		echo "no need restore userdata." >> /tmp/restore.log
+	fi
+}
+
+special_nv_restore()
+{
+	#check if restore special_nv
+	if [ -f /etc/ignore_special_nv_flag ] || [ -f /etc_rw/ztembb/ztemc/ignore_special_nv_flag ]; then
+		echo "need restore special_nv..." >> /tmp/restore.log
+		######## start restore special_nv here ########
+		sh /usr/zte/zte_conf/scripts/para_backup.sh mc_merge
+		######## end restore special_nv here ########
+		rm /etc/ignore_special_nv_flag || echo "fatal error: can not remove /etc/ignore_special_nv_flag" >> /tmp/restore.log
+		rm /etc_rw/ztembb/ztemc/ignore_special_nv_flag || echo "fatal error: can not remove /etc_rw/ztembb/ztemc/ignore_special_nv_flag" >> /tmp/restore.log
+		echo "restore special_nv finished." >> /tmp/restore.log
+	else
+		echo "no need special_nv userdata." >> /tmp/restore.log
+	fi
+}
+### this must be the first to run ###
+echo "checking for restore..." > /tmp/restore.log
+echo "start time: `date`" >> /tmp/restore.log
+userdata_restore_probe
+factory_restore_probe
+echo "end time  : `date`" >> /tmp/restore.log
+
+################### cfg init ###########################################
+#find /usr/lib/ -name cfg.ko|xargs insmod
+insmod /usr/lib/modules/`uname -r`/kernel/drivers/cfg/cfg.ko
+mknod /dev/flash0 c 200 0
+mknod /dev/flash1 c 200 1
+nvram
+
+echo "restore special_nv start time: `date`" >> /tmp/restore.log
+special_nv_restore
+echo "restore special_nv end time  : `date`" >> /tmp/restore.log
+#Start ZTE syslog
+zte_syslog_start()
+{
+  syslog_mode=`cfg get syslog_mode`
+  syslog_level=`cfg get syslog_level`
+  
+  if [ $syslog_mode = 0 ]; then
+    syslog_path=`cfg get syslog_path`
+
+    syslog_size=`cfg get syslog_size`
+    /usr/zte/zte_conf/scripts/zte_syslog.sh -L -o $syslog_path -l $syslog_level -s $syslog_size
+  else
+    if [ $syslog_mode = 1 ]; then
+      syslog_host_ip=`cfg get syslog_host_ip` 
+      /usr/zte/zte_conf/scripts/zte_syslog.sh -R $syslog_host_ip -l $syslog_level
+    else
+      /usr/zte/zte_conf/scripts/zte_syslog.sh -L
+    fi
+fi
+}
+klogd
+zte_syslog_start
+
+#################### Factory Restore Function End ######################
+
+#start up telnetd for debug use
+#telnetd -l/bin/sh &
+#################### Add zte programs below ####################
+ifconfig lo up
+zte_usb_ctl &
+#zte_topsw_systime &
+#sh /usr/zte/zte_conf/scripts/start_dnsmasq.sh &
+
+################## rcS-zte run before modem online #############
+
+
+
