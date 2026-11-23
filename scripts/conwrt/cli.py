@@ -363,4 +363,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sim_modes.add_parser(subparsers)
 
+    from conwrt import adopt as adopt_mod
+    from conwrt import v6door as v6door_mod
+    adopt_mod.add_parser(subparsers)
+    v6door_mod.add_parser(subparsers)
+
     return parser
