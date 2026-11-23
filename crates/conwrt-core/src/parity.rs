@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 
 use crate::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
+    ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile, FipsPeer,
     FleetIdentityProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile, MptcpBondingProfile,
     Mwan3Profile, NetRolesProfile, NetUplink, NodnsProfile, OpenClashProfile,
     OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile,
@@ -68,6 +68,14 @@ fn get_str(params: &serde_json::Value, key: &str) -> Option<String> {
             None
         }
     })
+}
+
+fn get_u32(params: &serde_json::Value, key: &str, default: u32) -> u32 {
+    params
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(default)
 }
 
 fn get_u16(params: &serde_json::Value, key: &str, default: u16) -> u16 {
@@ -181,6 +189,18 @@ pub fn profile_from_fixture(fixture: &serde_json::Value) -> Result<Profile, Stri
                 listen_port: get_u16(&params, "listen_port", 5053),
             };
             Ok(Profile::Doh(p))
+        }
+        "ddns" => {
+            let p = DdnsProfile {
+                provider: get_str(&params, "provider").unwrap_or_else(|| "cloudflare".into()),
+                domain: get_str(&params, "domain").unwrap_or_default(),
+                username: get_str(&params, "username").unwrap_or_default(),
+                password: get_str(&params, "password").unwrap_or_default(),
+                update_url: get_str(&params, "update_url").unwrap_or_default(),
+                check_interval: get_u32(&params, "check_interval", 300),
+                force_interval: get_u32(&params, "force_interval", 2_592_000),
+            };
+            Ok(Profile::Ddns(p))
         }
         "ipv6-wan" => {
             let p = Ipv6WanProfile {

@@ -1,5 +1,6 @@
 # golden: conwrt 1.x output of scripts/use_cases/openclash.py build_configure — regenerate with the command in tests/use_case_goldens.rs
 # --- OpenClash transparent proxy ---
+if [ -n "$(opkg list-installed luci-app-openclash 2>/dev/null)" ]; then echo 'openclash: luci-app-openclash already installed'; elif [ -n "$(opkg list luci-app-openclash 2>/dev/null)" ]; then opkg update >/dev/null 2>&1; opkg install luci-app-openclash; else echo 'PRECONDITION-FAIL (#59): luci-app-openclash ships from the third-party vernesong feed (github.com/vernesong/OpenClash), not the official OpenWrt package feeds - bake it into the image (packages_via=image) or configure the feed first; refusing before any configuration is touched'; exit 1; fi
 mkdir -p /etc/openclash/config
 uci -q revert openclash 2>/dev/null || true
 uci set openclash.config.enable='1'

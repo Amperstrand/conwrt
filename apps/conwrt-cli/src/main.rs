@@ -21,13 +21,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 use conwrt_core::mock::{MockProber, NamedScenario};
 use conwrt_core::plan::{
     AdguardProfile, ApNostrIdProfile, AutoSqmProfile, CashuVpnClientProfile,
-    ConfigurationWizzardProfile, DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile,
-    Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile,
-    OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile, RescueWatchdogProfile, SqmProfile,
-    SshHardeningProfile, SslProfile, TollgateProfile, TollgateSecurityProfile, TravelmateProfile,
-    VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile, VpnNordvpnIke2Profile,
-    VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile, VpnPiaOpenvpnProfile,
-    VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile, WireguardServerProfile,
+    ConfigurationWizzardProfile, DdnsProfile, DohProfile, FipsBluetoothRfcommProfile,
+    GuestWifiProfile, Ipv6WanProfile, MptcpBondingProfile, Mwan3Profile, NodnsProfile,
+    OpenClashProfile, OpenPerfClientProfile, OpenPerfServerProfile, PbrProfile,
+    RescueWatchdogProfile, SqmProfile, SshHardeningProfile, SslProfile, TollgateProfile,
+    TollgateSecurityProfile, TravelmateProfile, VpnIvpnProfile, VpnMullvadProfile, VpnNodeProfile,
+    VpnNordvpnIke2Profile, VpnNordvpnOpenvpnProfile, VpnNordvpnProfile, VpnOpenvpnProfile,
+    VpnPiaOpenvpnProfile, VpnPiaProfile, VpnSurfsharkProfile, WireguardClientProfile,
+    WireguardServerProfile,
 };
 use conwrt_core::ssh::{HostKeyView, TrustMode, TrustStore};
 use conwrt_core::{DeviceState, Profile, confirm, diagnose, plan_profile};
@@ -566,6 +567,7 @@ enum ProfileChoice {
     Sqm,
     Doh,
     Ipv6Wan,
+    Ddns,
     SshHardening,
     Adguard,
     RescueWatchdog,
@@ -645,6 +647,24 @@ struct ProfileArgs {
     /// ipv6-wan: LAN prefix assignment size
     #[arg(long)]
     v6_lan_assign: Option<String>,
+    /// ddns: FQDN to keep updated
+    #[arg(long)]
+    ddns_domain: Option<String>,
+    /// ddns: account username
+    #[arg(long)]
+    ddns_username: Option<String>,
+    /// ddns: account password / API token
+    #[arg(long)]
+    ddns_password: Option<String>,
+    /// ddns: custom-provider update URL (https only)
+    #[arg(long)]
+    ddns_update_url: Option<String>,
+    /// ddns: IP check interval, seconds
+    #[arg(long)]
+    ddns_check_interval: Option<u32>,
+    /// ddns: forced update interval, seconds
+    #[arg(long)]
+    ddns_force_interval: Option<u32>,
     /// ssh-hardening: idle disconnect timeout in seconds.
     #[arg(long)]
     idle_timeout: Option<u32>,
@@ -2273,6 +2293,21 @@ fn build_profile(args: &ProfileArgs) -> Result<Profile, String> {
             masq6: args.v6_masq6,
             lan_ip6assign: args.v6_lan_assign.clone().unwrap_or_else(|| "64".into()),
         })),
+        ProfileChoice::Ddns => {
+            let domain = args.ddns_domain.clone().unwrap_or_default();
+            if domain.is_empty() {
+                return Err("--ddns-domain is required for ddns".into());
+            }
+            Ok(Profile::Ddns(DdnsProfile {
+                provider: args.provider.clone().unwrap_or_else(|| "cloudflare".into()),
+                domain,
+                username: args.ddns_username.clone().unwrap_or_default(),
+                password: args.ddns_password.clone().unwrap_or_default(),
+                update_url: args.ddns_update_url.clone().unwrap_or_default(),
+                check_interval: args.ddns_check_interval.unwrap_or(300),
+                force_interval: args.ddns_force_interval.unwrap_or(2_592_000),
+            }))
+        }
         ProfileChoice::SshHardening => Ok(Profile::SshHardening(SshHardeningProfile {
             disable_password_auth: !args.password_auth,
             idle_timeout: args.idle_timeout.unwrap_or(300),
@@ -3757,6 +3792,12 @@ mod tests {
             profile,
             ap_nostr_npub: None,
             ap_nostr_nsec: None,
+            ddns_domain: None,
+            ddns_username: None,
+            ddns_password: None,
+            ddns_update_url: None,
+            ddns_check_interval: None,
+            ddns_force_interval: None,
             download_kbps: None,
             upload_kbps: None,
             interface: "wan".into(),

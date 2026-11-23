@@ -1556,16 +1556,82 @@ pub(super) fn plan_doh(model: &DeviceModel, doh: &DohProfile) -> Result<Plan, Un
     })
 }
 
+pub(super) fn plan_ddns(_model: &DeviceModel, ddns: &DdnsProfile) -> Result<Plan, Unsupported> {
+    ddns.validate()?;
+    let literal = |v: String| UciValue::Literal(v);
+    // Byte-parity with open ddns.py `_build_ddns_ops`: the delete
+    // guards AGENTS.md staging debris; the section line renders
+    // unquoted (uci_token) so both renderers agree; comments/blank
+    // lines are filtered by the parity normalizers on both sides.
+    let mut options: Vec<(String, UciValue)> = vec![
+        ("enabled".into(), literal("1".into())),
+        ("domain".into(), literal(ddns.domain.clone())),
+        ("username".into(), literal(ddns.username.clone())),
+        ("password".into(), literal(ddns.password.clone())),
+        ("use_https".into(), literal("1".into())),
+        ("lookup_host".into(), literal(ddns.domain.clone())),
+        (
+            "check_interval".into(),
+            literal(ddns.check_interval.to_string()),
+        ),
+        ("check_unit".into(), literal("seconds".into())),
+        (
+            "force_interval".into(),
+            literal(ddns.force_interval.to_string()),
+        ),
+        ("force_unit".into(), literal("seconds".into())),
+    ];
+    if ddns.provider == "custom" {
+        options.push(("update_url".into(), literal(ddns.update_url.clone())));
+    } else {
+        let svc = DDNS_PROVIDERS
+            .iter()
+            .find(|(n, _)| *n == ddns.provider)
+            .map(|(_, s)| (*s).to_string())
+            .unwrap_or_default();
+        options.push(("service_name".into(), literal(svc)));
+    }
+    let ops = vec![
+        PlanOp::Shell {
+            command: "uci -q delete ddns.myddns >/dev/null 2>&1 || true".into(),
+        },
+        PlanOp::SetUciSection {
+            config: "ddns".into(),
+            section: "myddns".into(),
+            section_type: "service".into(),
+            options,
+        },
+        PlanOp::CommitUci {
+            config: "ddns".into(),
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Enable,
+        },
+        PlanOp::Service {
+            name: "ddns".into(),
+            action: ServiceAction::Restart,
+        },
+    ];
+    Ok(Plan {
+        profile_id: "ddns".into(),
+        model_id: _model.id.clone(),
+        ops,
+        verification: vec![VerificationCheck {
+            description: "ddns section committed with the target domain".into(),
+            command: "uci -q get ddns.myddns.domain".into(),
+            expect_contains: ddns.domain.clone(),
+        }],
+        warnings: Vec::new(),
+    })
+}
+
 pub(super) fn plan_ipv6_wan(
     _model: &DeviceModel,
     v6: &Ipv6WanProfile,
 ) -> Result<Plan, Unsupported> {
     v6.validate()?;
     let literal = |v: String| UciValue::Literal(v);
-    // Byte-parity with ipv6_wan.py `_build_ipv6_wan_ops`: the two Shell
-    // ops (ULA derive, masq6 zone lookup) are byte-identical constants
-    // on both sides; comments/blank lines from the structured ops are
-    // filtered by the parity normalizers.
     let mut ops = vec![PlanOp::SetUciSection {
         config: "network".into(),
         section: "wan6".into(),
@@ -3296,8 +3362,31 @@ pub(super) fn plan_openclash(
         PlanOp::EnsurePackage {
             name: "dnsmasq-full".into(),
         },
-        PlanOp::EnsurePackage {
-            name: "luci-app-openclash".into(),
+        // #59: luci-app-openclash ships from the third-party vernesong
+        // feed, NOT official OpenWrt packages — a bare EnsurePackage
+        // aborted with a generic install failure on stock feeds (the
+        // issue's opaque verify-empty-output). The gate (byte-identical
+        // to openclash.py's op, after dnsmasq-full which the package
+        // depends on): no-op when installed, install when the feed is
+        // configured, refuse WITH THE REASON before any configuration
+        // is touched. Starts with the parity drop prefix
+        // ('if [ -n "$(opkg list-installed ') so normalized command
+        // streams stay aligned (parity.rs command_lines mirrors the
+        // pytest _DROP_LINE_PREFIXES).
+        PlanOp::Shell {
+            command: concat!(
+                "if [ -n \"$(opkg list-installed luci-app-openclash 2>/dev/null)\" ]; then ",
+                "echo 'openclash: luci-app-openclash already installed'; ",
+                "elif [ -n \"$(opkg list luci-app-openclash 2>/dev/null)\" ]; then ",
+                "opkg update >/dev/null 2>&1; opkg install luci-app-openclash; ",
+                "else ",
+                "echo 'PRECONDITION-FAIL (#59): luci-app-openclash ships from the ",
+                "third-party vernesong feed (github.com/vernesong/OpenClash), not the ",
+                "official OpenWrt package feeds - bake it into the image ",
+                "(packages_via=image) or configure the feed first; refusing before any ",
+                "configuration is touched'; exit 1; fi",
+            )
+            .into(),
         },
         PlanOp::EnsurePackage {
             name: "coreutils-nohup".into(),

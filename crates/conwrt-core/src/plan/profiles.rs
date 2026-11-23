@@ -64,6 +64,159 @@ impl SqmProfile {
     }
 }
 
+/// Dynamic DNS via `ddns-scripts` — port of the 1.x `ddns` use case
+/// (`scripts/use_cases/ddns.py`, issue #5). Keeps a hostname pointed
+/// at the router's dynamic WAN address: provider map to ddns-scripts
+/// `service_name` values, token-charset validation on everything that
+/// rides uci values (the mwan3/#448 injection class), HTTPS-only
+/// updates, and the standard check/force interval pair (300 s / 30 d
+/// defaults mirror the LuCI defaults). Custom providers take an
+/// `update_url` instead of a mapped service name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DdnsProfile {
+    /// Provider name from [`DDNS_PROVIDERS`] or `custom` (with
+    /// `update_url`).
+    pub provider: String,
+    /// FQDN to keep updated (also the lookup host).
+    pub domain: String,
+    /// Account username (empty for token providers).
+    pub username: String,
+    /// Account password / API token.
+    pub password: String,
+    /// Custom-provider update URL (https only).
+    pub update_url: String,
+    /// IP check interval, seconds (30 s floor).
+    pub check_interval: u32,
+    /// Forced update interval, seconds (30 s floor).
+    pub force_interval: u32,
+}
+
+/// ddns-scripts `service_name` values for the mapped providers.
+pub const DDNS_PROVIDERS: &[(&str, &str)] = &[
+    ("cloudflare", "cloudflare.com/v4"),
+    ("duckdns", "duckdns.org"),
+    ("noip", "noip.com"),
+    ("dynu", "dynu.com"),
+    ("desec", "desec.io"),
+];
+
+impl Default for DdnsProfile {
+    fn default() -> Self {
+        Self {
+            provider: "cloudflare".into(),
+            domain: String::new(),
+            username: String::new(),
+            password: String::new(),
+            update_url: String::new(),
+            check_interval: 300,
+            force_interval: 2_592_000,
+        }
+    }
+}
+
+impl DdnsProfile {
+    pub(super) fn validate(&self) -> Result<(), Unsupported> {
+        if self.provider != "custom" && !DDNS_PROVIDERS.iter().any(|(n, _)| *n == self.provider) {
+            return Err(Unsupported::InvalidParams(format!(
+                "unknown ddns provider: {}",
+                self.provider
+            )));
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '@' | '/' | '-')
+                })
+        };
+        let secret = |v: &str| {
+            !v.is_empty()
+                && v.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | ':'
+                                | '@'
+                                | '/'
+                                | '!'
+                                | '#'
+                                | '$'
+                                | '%'
+                                | '^'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | '='
+                                | '~'
+                                | '?'
+                                | '<'
+                                | '>'
+                                | '|'
+                                | '\\'
+                                | '-'
+                        )
+                })
+        };
+        if !token(&self.domain) {
+            return Err(Unsupported::InvalidParams(
+                "domain is required and must be a hostname token".into(),
+            ));
+        }
+        if !self.username.is_empty() && !token(&self.username) {
+            return Err(Unsupported::InvalidParams(
+                "username contains unsafe characters".into(),
+            ));
+        }
+        if !secret(&self.password) {
+            return Err(Unsupported::InvalidParams(
+                "password contains unsafe characters".into(),
+            ));
+        }
+        if self.provider == "custom" {
+            let ok = self.update_url.starts_with("https://")
+                && self.update_url.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '_'
+                                | '~'
+                                | ':'
+                                | '/'
+                                | '?'
+                                | '#'
+                                | '@'
+                                | '!'
+                                | '$'
+                                | '&'
+                                | '*'
+                                | '+'
+                                | ','
+                                | ';'
+                                | '='
+                                | '%'
+                                | '-'
+                        )
+                });
+            if !ok {
+                return Err(Unsupported::InvalidParams(
+                    "update_url must be an https URL token".into(),
+                ));
+            }
+        }
+        for (name, v) in [
+            ("check_interval", self.check_interval),
+            ("force_interval", self.force_interval),
+        ] {
+            if v < 30 {
+                return Err(Unsupported::InvalidParams(format!(
+                    "{name} below the 30-second floor: {v}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// IPv6 WAN with NAT66/ULA for stable LAN addressing — port of the 1.x
 /// `ipv6-wan` use case (`scripts/use_cases/ipv6_wan.py`, issue #3).
 /// ISP prefixes churn (DHCPv6-PD reassignment) and take every
@@ -862,10 +1015,11 @@ impl PbrProfile {
 /// NOT official OpenWrt packages (1.x shares this gap — its
 /// `packages_via="auto"` list fails to resolve on stock devices and
 /// the public ASU alike). The intended delivery is a baked image or a
-/// preinstalled device, where the leading `EnsurePackage`
-/// short-circuits on `opkg list-installed`; on a stock device the
-/// apply aborts loudly at the FIRST op — before any configuration is
-/// touched — rather than leaving dangling config for absent software.
+/// preinstalled device, where the gate's `opkg list-installed` arm
+/// no-ops; when the feed IS configured it installs; on a stock device
+/// it refuses WITH THE REASON (#59: the vernesong feed requirement and
+/// the bake-into-image path) — before any configuration is touched —
+/// rather than leaving dangling config for absent software.
 /// An acquisition phase (feed setup / release-IPK download) is M7
 /// image-pipeline work, not a plan op. The 1.x `packages_remove:
 /// [dnsmasq]` (swapped for `dnsmasq-full`) is likewise an image-build

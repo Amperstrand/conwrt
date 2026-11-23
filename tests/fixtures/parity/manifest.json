@@ -297,6 +297,14 @@
         "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer \u2014 the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
       ]
     },
+    "ddns_default": {
+      "use_case": "ddns",
+      "expect": "EQUAL"
+    },
+    "ddns_custom": {
+      "use_case": "ddns",
+      "expect": "EQUAL"
+    },
     "ipv6_wan_default": {
       "use_case": "ipv6-wan",
       "expect": "EQUAL"

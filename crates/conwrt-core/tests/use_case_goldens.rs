@@ -135,8 +135,8 @@
 //! bytes — must match exactly.
 
 use conwrt_core::plan::{
-    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DohProfile,
-    FipsBluetoothRfcommProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile,
+    AdguardProfile, ApNostrIdProfile, AutoSqmProfile, ConfigurationWizzardProfile, DdnsProfile,
+    DohProfile, FipsBluetoothRfcommProfile, GuestWifiProfile, Ipv6WanProfile, Mesh11sdProfile,
     MptcpBondingProfile, Mwan3Profile, NodnsProfile, OpenClashProfile, OpenPerfClientProfile,
     OpenPerfServerProfile, PbrProfile, Profile, RescueWatchdogProfile, SqmProfile,
     SshHardeningProfile, SslProfile, TetherProfile, TetherVariant, TollgateProfile,
@@ -226,6 +226,36 @@ fn assert_plan_matches_golden(profile: Profile, golden: &str) {
     assert_eq!(
         want, got,
         "rendered command lines must equal the 1.x golden byte-for-byte"
+    );
+}
+
+#[test]
+fn ddns_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ddns(DdnsProfile {
+            provider: "cloudflare".into(),
+            domain: "home.example.org".into(),
+            username: String::new(),
+            password: "tok123".into(),
+            ..DdnsProfile::default()
+        }),
+        include_str!("goldens/ddns.sh"),
+    );
+}
+
+#[test]
+fn ddns_custom_matches_1x_golden() {
+    assert_plan_matches_golden(
+        Profile::Ddns(DdnsProfile {
+            provider: "custom".into(),
+            domain: "router.example.net".into(),
+            username: "svc".into(),
+            password: "s3cr3t".into(),
+            update_url: "https://upd.example.com/nic/update?hostname=".into(),
+            check_interval: 600,
+            ..DdnsProfile::default()
+        }),
+        include_str!("goldens/ddns-custom.sh"),
     );
 }
 
