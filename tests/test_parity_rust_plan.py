@@ -232,7 +232,57 @@ def plan_render_bin() -> Path:
                 f"{build.stderr.strip()}"
             )
     assert bin_path.exists(), f"{bin_path} missing after cargo build"
+    # #432 consequence 2: a stale-but-present binary (shared global
+    # target dir, built by an older checkout) produced false 'no Rust
+    # profile' reds. The binary carries its build HEAD; mismatch with
+    # the live HEAD = rebuild once and re-verify.
+    _rebuild_if_stale(cargo, bin_path)
     return bin_path
+
+
+def _current_head(repo: Path) -> str:
+    proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True, timeout=30)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _rebuild_if_stale(cargo: str, bin_path: Path) -> None:
+    import subprocess as sp
+    stamp_proc = sp.run([str(bin_path), "--stamp"], capture_output=True, text=True, timeout=60)
+    stamp = stamp_proc.stdout.strip()
+    if stamp == "unknown":
+        return  # hermetic no-git build: stamped, trusted as-is
+    head = _current_head(REPO)
+    if not head:
+        return  # no git context to compare against
+    if not stamp:
+        # PRE-STAMP binary (built before the flag existed): unverifiable,
+        # and the shared-cache hazard class itself — rebuild.
+        print("parity render bin predates --stamp (unverifiable) — rebuilding")
+    elif stamp != head:
+        print(f"parity render bin is stale (built {stamp[:12]}, HEAD {head[:12]}) — rebuilding")
+    else:
+        return
+    # cargo does not rerun build scripts when only HEAD moved (it caches on
+    # rerun-if-changed inputs = build.rs itself): touch build.rs so the
+    # stamp refreshes, otherwise the rebuild would re-emit the OLD stamp
+    # and the guard would false-fail on its own post-check.
+    build_rs = REPO / "apps" / "conwrt-cli" / "build.rs"
+    try:
+        import time as _t
+        build_rs.touch(exist_ok=True)
+    except OSError:
+        pass
+    build = sp.run([cargo, "build", "-q", "-p", "conwrt-cli", "--bin", "conwrt-plan-render"],
+                   cwd=REPO, capture_output=True, text=True, timeout=600)
+    if build.returncode != 0:
+        pytest.fail(f"stale render bin rebuild failed: {build.stderr.strip()[:400]}")
+    stamp2 = sp.run([str(bin_path), "--stamp"], capture_output=True, text=True, timeout=60).stdout.strip()
+    if stamp2 not in (head, "unknown"):
+        pytest.fail(
+            f"render bin still stale after rebuild: built {stamp2[:12]}, HEAD {head[:12]} "
+            f"(shared target dir thrash?)"
+        )
 
 
 def _load_manifest() -> dict:
@@ -417,3 +467,52 @@ class TestTargetDirResolution:
         assert _resolve_target_dir(str(bad), REPO) == Path("/tmp/env-target")
         monkeypatch.delenv("CARGO_TARGET_DIR")
         assert _resolve_target_dir(str(bad), REPO) == REPO / "target"
+
+
+class TestRenderBinStampGuard:
+    """#432 consequence 2: unverifiable/stale render binaries rebuild."""
+
+    def _shim(self, path, body, chmod=0o755):
+        path.write_text(body)
+        path.chmod(chmod)
+
+    def test_matching_stamp_does_not_rebuild(self, tmp_path, monkeypatch):
+        from test_parity_rust_plan import _rebuild_if_stale, _current_head
+        head = _current_head(REPO)
+        assert head  # requires git context
+        bin_shim = tmp_path / "render-bin"
+        self._shim(bin_shim, f"#!/bin/sh\necho {head}\n")
+        boom = tmp_path / "cargo"
+        self._shim(boom, "#!/bin/sh\necho 'cargo must not run' >&2\nexit 9\n")
+        monkeypatch.setattr("shutil.which", lambda n: str(boom))
+        # must not raise and must not invoke cargo
+        _rebuild_if_stale(str(boom), bin_shim)
+
+    def test_unknown_stamp_skips_rebuild(self, tmp_path, monkeypatch):
+        from test_parity_rust_plan import _rebuild_if_stale
+        bin_shim = tmp_path / "render-bin"
+        self._shim(bin_shim, "#!/bin/sh\necho unknown\n")
+        boom = tmp_path / "cargo"
+        self._shim(boom, "#!/bin/sh\nexit 9\n")
+        _rebuild_if_stale(str(boom), bin_shim)
+
+    def test_stale_stamp_rebuilds_until_current(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from test_parity_rust_plan import _rebuild_if_stale, _current_head
+        head = _current_head(REPO)
+        assert head
+        bin_shim = tmp_path / "render-bin"
+        # first --stamp prints stale; the fake cargo REWRITES the shim
+        # to the current head (simulating the rebuild)
+        self._shim(bin_shim, "#!/bin/sh\necho 0000000000000000000000000000000000000000\n")
+        cargo = tmp_path / "cargo"
+        self._shim(
+            cargo,
+            "#!/bin/sh\n"
+            f"printf '#!/bin/sh\\necho {head}\\n' > {bin_shim}\n"
+            f"chmod +x {bin_shim}\nexit 0\n",
+        )
+        _rebuild_if_stale(str(cargo), bin_shim)
+        # the rebuild actually flipped the shim's stamp
+        now = sp.run([str(bin_shim)], capture_output=True, text=True).stdout.strip()
+        assert now == head

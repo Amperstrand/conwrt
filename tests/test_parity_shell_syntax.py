@@ -20,19 +20,20 @@ from pathlib import Path
 
 import pytest
 
-from test_parity_rust_plan import _fixtures, REPO
+from test_parity_rust_plan import (
+    _fixtures,
+    plan_render_bin,  # noqa: F401,F811 — pytest discovers cross-module fixtures via the import
+)
 
 
 class TestCorpusShellSyntax:
-    def test_every_fixture_renders_shell_clean(self):
-        bin_path = Path(os.environ.get("CARGO_TARGET_DIR", str(REPO / "target"))) / "debug" / "conwrt-plan-render"
-        if not bin_path.exists():
-            build = subprocess.run(
-                [shutil.which("cargo") or "cargo", "build", "-q",
-                 "-p", "conwrt-cli", "--bin", "conwrt-plan-render"],
-                cwd=str(REPO), capture_output=True, text=True,
-            )
-            assert build.returncode == 0, f"render bin build failed: {build.stderr[-300:]}"
+    # the render binary resolves through the SAME stamped, stale-guarded
+    # path as the parity harness (#432 + follow-up): this file's old
+    # inline resolution was a second, un-fixed copy of the hazard.
+    def test_every_fixture_renders_shell_clean(
+        self, plan_render_bin,  # noqa: F811 — param lookup, not a redefinition
+    ):
+        bin_path = Path(plan_render_bin)
         checked = 0
         failures: list[str] = []
         for fixture in _fixtures():
