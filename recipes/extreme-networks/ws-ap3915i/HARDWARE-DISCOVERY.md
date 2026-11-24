@@ -1,5 +1,11 @@
 # Hardware Discovery Log
 
+> **Status note (2026-11-24 audit):** historical hardware-discovery session
+> write-up. `scripts/overlay.py` and `lib/overlay.sh` no longer exist at those
+> paths — the overlay machinery lives in `scripts/profile/` (apply.py/builder.py)
+> and the conwrt-lite-era gaps below predate the current flash pipeline.
+
+
 Findings from the 2026-05-24 hardware testing session on the GS1900-8HP switch rack.
 
 ## Port Mapping (Verified 2026-05-24)
