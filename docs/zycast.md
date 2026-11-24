@@ -159,6 +159,40 @@ since #780, a single atomic stage-2 command that carries the unit's
 whole identity. Direct-to-permanent zycast stays an opt-in experiment
 behind hardware validation, not a default.
 
+## 1e. Zycast-to-profile: where identity can and cannot ride today
+
+Design review (2026-11-24) of "can I zycast a unit TO a profile (IP,
+DHCP off, keys) instead of configuring after the flash?":
+
+**Stage 2 (the permanent image) — fully covered, two ways:**
+
+| Path | What carries identity | When to use |
+|---|---|---|
+| Baked image (imagebuilder) | `conwrt profile` plan → uci-defaults fragments (LAN-IP modes incl. per-model subnet, MAC-suffix hostname, DHCP-off triple, ssh keys, password, TOFB) baked into a custom sysupgrade image via `FILES=` | fleet-flavored images; proven (bench `nr7101-wwand-v2c` release) |
+| Stock image + overlay (#780) | `build_overlay_tarball(disable_dhcp=, authorized_keys=, lan_ip=)` attached with `sysupgrade -n -f` | one-offs on stock downloads; no build step |
+
+**Stage 1 (the zycast'd boot itself) — NOT covered, by construction:**
+the payload is the stock `initramfs-recovery.bin` from downloads; a
+compressed kernel image cannot be amended post-hoc, and the
+imagebuilder does not emit initramfs images at all (verified against
+the 25.12.6 ramips/mt7621 IB — no initramfs in `profiles.json`;
+initramfs is a full-build artifact). So a stock-zycast'd unit WILL come
+up at 192.168.1.1 with DHCP+RA armed for its stage-1 life; that is why
+§1c mandates the isolated staging segment.
+
+**Closing the gap (tracked, opt-in):** a custom initramfs built ONCE by
+the SDK/full-build lane with the same `FILES=`/uci-defaults profile
+bits gives every stage-1 boot the operator's IP + silent DHCP + keys
+(uci-defaults re-run on each ramdisk boot — persistence is irrelevant
+at this stage). The zycast sender side needs no change (same image
+class). The stretch variant — an initramfs that also pulls and
+self-installs the stage-2 sysupgrade image from a declared server —
+would make zycast a true one-touch provisioner, but auto-flashing on a
+recovery vehicle needs hard guards (board-match + sha verify + no
+retry loop) and is deliberately out of the first cut. Both tracked in
+the issue linked from the model JSON `post_flash` note; the default
+flow remains stock stage 1 + one-command stage 2.
+
 ## 2. Implementations
 
 | Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) | Rust (`conwrt-protocols::zycast` core + `conwrt zycast` CLI) |
