@@ -57,6 +57,7 @@
       "reset_instructions": "Power cycle the device. Z-Loader enters Multiboot Listening automatically on EVERY boot for ~7 seconds (1s ESC prompt + 6s countdown). Serial interrupt NOT required \u2014 just start zycast before power cycle and the bootloader picks it up. Serial-verified 2026-06-27.",
       "led_pattern": "no specific LED \u2014 watch console or multicast traffic",
       "firmware_type": "initramfs-recovery",
+      "post_flash": "STAGE-1 IS RAM-ONLY BY DESIGN: zycast writes the initramfs-recovery image to Kernel+Kernel2 only \u2014 no overlay/UBI exists, no config survives reboot, DHCP+RA live at 192.168.1.1 until stage 2. Finish with sysupgrade -n [-f overlay] to the permanent image (first boot creates the overlay; overlay supports disable_dhcp + authorized_keys + lan_ip). See docs/zycast.md \u00a71c and docs/gotchas.md 'First flash runs from RAM'.",
       "images": {
         "initramfs": {
           "filename": "*-ramips-mt7621-zyxel_nr7101-initramfs-recovery.bin",

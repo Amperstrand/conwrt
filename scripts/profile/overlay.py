@@ -6,11 +6,40 @@ the device has a chance to serve a single lease.
 """
 from __future__ import annotations
 
+import ipaddress
 import io
 import os
 import tarfile
 import tempfile
 from typing import Optional
+
+
+def _validate_lan_ip(lan_ip: str) -> None:
+    """Reject anything that is not a plain IPv4 literal.
+
+    The value is interpolated into a uci-defaults shell script; anything
+    that is not a bare IPv4 address is an injection risk and a
+    reachability bug (the AGENTS single-quote/IP lesson).
+    """
+    try:
+        addr = ipaddress.ip_address(lan_ip)
+    except ValueError:
+        raise ValueError(f"lan_ip must be an IPv4 literal, got: {lan_ip!r}") from None
+    if addr.version != 4:
+        raise ValueError(f"lan_ip must be IPv4 (use a separate overlay for ip6addr), got: {lan_ip!r}")
+
+
+def _lan_ip_uci_default_script(lan_ip: str) -> bytes:
+    # Delta-only uci-defaults script: runs at first boot AFTER the image's
+    # default network config exists, sets only ipaddr — no full
+    # etc/config/network replacement (device names vary per model; a whole
+    # -file replacement is the reachability-bug class this avoids).
+    # OpenWrt runs+deletes /etc/uci-defaults/* on first boot; scripts in a
+    # sysupgrade -f restore archive are honored.
+    return (
+        f"uci set network.lan.ipaddr='{lan_ip}'\n"
+        f"uci commit network\n"
+    ).encode()
 
 
 def _dhcp_lan_ignore_config() -> bytes:
@@ -52,12 +81,16 @@ config odhcpd 'odhcpd'
 def build_overlay_tarball(
     disable_dhcp: bool = True,
     authorized_keys: Optional[str] = None,
+    lan_ip: Optional[str] = None,
 ) -> str:
     """Build a sysupgrade -f compatible overlay tarball.
 
     Returns the path to the temporary tarball file.
     Caller is responsible for cleanup.
     """
+    if lan_ip is not None:
+        _validate_lan_ip(lan_ip)
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         if disable_dhcp:
@@ -65,6 +98,13 @@ def build_overlay_tarball(
             info = tarfile.TarInfo(name="etc/config/dhcp")
             info.size = len(data)
             info.mode = 0o644
+            tar.addfile(info, io.BytesIO(data))
+
+        if lan_ip is not None:
+            data = _lan_ip_uci_default_script(lan_ip)
+            info = tarfile.TarInfo(name="etc/uci-defaults/99-conwrt-lan-ip")
+            info.size = len(data)
+            info.mode = 0o755
             tar.addfile(info, io.BytesIO(data))
 
         if authorized_keys:
