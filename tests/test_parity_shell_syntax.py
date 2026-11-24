@@ -39,15 +39,27 @@ class TestCorpusShellSyntax:
         for fixture in _fixtures():
             name = fixture["stem"]
             path = Path(fixture["path"])
-            proc = subprocess.run(
-                [str(bin_path), str(path)],
-                capture_output=True, text=True, timeout=120,
-            )
-            assert proc.returncode == 0, (
-                f"{name}: render failed: {proc.stderr[:300]}"
-            )
+            # Plan-side-only use cases (documented no-Rust-arm GAPs, e.g.
+            # maas-portable-lab #768) have no Profile to render through —
+            # their PYTHON render is the shell this gate exists to check.
+            # Use it directly instead of skipping: the syntax gate must
+            # cover every fixture in the corpus.
+            no_arm = any("no Rust Profile arm" in r
+                         for r in (fixture["entry"] or {}).get("gap_reasons") or [])
+            if no_arm:
+                from test_parity_rust_plan import _python_render
+                script = _python_render(fixture["fixture"])
+            else:
+                proc = subprocess.run(
+                    [str(bin_path), str(path)],
+                    capture_output=True, text=True, timeout=120,
+                )
+                assert proc.returncode == 0, (
+                    f"{name}: render failed: {proc.stderr[:300]}"
+                )
+                script = proc.stdout
             syntax = subprocess.run(
-                ["sh", "-n"], input=proc.stdout,
+                ["sh", "-n"], input=script,
                 capture_output=True, text=True, timeout=60,
             )
             if syntax.returncode != 0:
