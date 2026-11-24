@@ -78,12 +78,14 @@ class TestParseUImageHeader:
         p = tmp_path / "img.bin"
         p.write_bytes(uimage_header(header_crc=0xDEADBEEF))
         h = a.parse_uimage_header(p)
+        assert h is not None
         assert h["header_crc_matches"] is False
 
     def test_data_crc_mismatch(self, tmp_path):
         p = tmp_path / "img.bin"
         p.write_bytes(uimage_header(data_crc=0x11223344))
         h = a.parse_uimage_header(p)
+        assert h is not None
         assert h["data_crc_matches"] is False
 
     def test_truncated_data_leaves_crc_unknown(self, tmp_path):
