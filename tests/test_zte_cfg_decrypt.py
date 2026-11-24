@@ -21,7 +21,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from zte_cfg_decrypt import KEY, decrypt  # noqa: E402
-from Crypto.Cipher import DES3  # noqa: E402
+
+try:
+    from Crypto.Cipher import DES3  # noqa: E402
+except ModuleNotFoundError:  # bench envs without the dev extra
+    pytest.skip("pycryptodome not installed (dev extra; CI installs it)",
+                allow_module_level=True)
 
 PLAIN = b"<?xml version=\"1.0\"?><businesscfg><entry>VoIP</entry></businesscfg>"
 MAGIC = bytes.fromhex("690e3214")

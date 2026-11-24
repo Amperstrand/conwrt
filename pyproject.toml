@@ -16,6 +16,7 @@ dev = [
   "ruff>=0.6",
   "pyyaml>=6.0",
   "pyright>=1.1",
+  "pycryptodome>=3.20",  # zte_cfg_decrypt tests (3DES round-trips); RE tool dep
 ]
 
 [tool.setuptools]
