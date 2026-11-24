@@ -59,7 +59,7 @@ def pty_ssh(port: int, command: str, tries: int = 12) -> str:
                "-o", "ConnectTimeout=8", "root@127.0.0.1", command]
         pid, fd = pty.fork()
         if pid == 0:
-            os.close(2); os.execvp(cmd[0], cmd)  # noqa: keep stderr out of pty
+            os.close(2); os.execvp(cmd[0], cmd)  # keep stderr out of the pty stream
         out = b""; deadline = time.time() + 15
         while time.time() < deadline:
             r, _, _ = select.select([fd], [], [], 1)

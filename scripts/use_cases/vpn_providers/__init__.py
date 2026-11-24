@@ -5,4 +5,4 @@ via the shared ``register()`` function. The parent ``use_cases`` package
 auto-discovers this subpackage through ``pkgutil.iter_modules``; importing
 this ``__init__`` triggers registration of all providers.
 """
-from . import pia, mullvad, nordvpn, ivpn, surfshark, openvpn as openvpn_uc  # noqa: F401
+from . import pia, mullvad, nordvpn, ivpn, surfshark, openvpn as openvpn_uc

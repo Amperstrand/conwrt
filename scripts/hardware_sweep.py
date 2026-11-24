@@ -31,7 +31,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from bench_adopt import Place, load_places, load_labgrid_host  # noqa: E402
+from bench_adopt import Place, load_places, load_labgrid_host
 
 RESULTS = REPO_ROOT / "data" / "bench" / "hardware-sweep.jsonl"
 

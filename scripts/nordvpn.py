@@ -23,15 +23,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from use_cases.vpn_providers.nordvpn import (  # noqa: E402
+from use_cases.vpn_providers.nordvpn import (
     _fetch_credentials,
     _is_ip,
     _resolve_endpoint,
     _server_public_key,
 )
 
-import base64  # noqa: E402
-import urllib.request  # noqa: E402
+import base64
+import urllib.request
 
 COUNTRY_ALIASES = {"germany": "DE", "de": "DE"}
 

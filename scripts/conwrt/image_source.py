@@ -195,7 +195,7 @@ def sha256_file(path: Union[str, os.PathLike]) -> str:
 
 def _http_get_text(url: str, timeout: float = 30.0) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "conwrt/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         data: bytes = resp.read()
     return data.decode("utf-8", errors="replace")
 
@@ -203,7 +203,7 @@ def _http_get_text(url: str, timeout: float = 30.0) -> str:
 def _download_file(url: str, dest: Path, timeout: float = 300.0) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "conwrt/1.0"})
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         with open(tmp, "wb") as f:
             while True:
                 chunk = resp.read(1 << 20)

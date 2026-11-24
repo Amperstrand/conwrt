@@ -65,9 +65,9 @@ from typing import Iterator, Mapping, Protocol, runtime_checkable
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bench_adopt import Place  # noqa: E402
-from bench_flash import lifeline_lines  # noqa: E402
-from config import LabgridConfig, load_config  # noqa: E402
+from bench_adopt import Place
+from bench_flash import lifeline_lines
+from config import LabgridConfig, load_config
 
 def switch_hostname(value: str) -> str:
     """Accept "host" or "root@host"; return the bare host."""
@@ -288,7 +288,7 @@ class LabgridBench:
                  session_factory=None, target_factory=None,
                  switch_host: str | None = None) -> None:
         try:
-            import labgrid  # noqa: F401 — fail fast, typed, before any use
+            import labgrid
         except ImportError as e:
             raise LabgridNotInstalledError(
                 "labgrid backend requested but the labgrid package is not "

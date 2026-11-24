@@ -43,7 +43,7 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP,
         try:
             from platform_utils import configure_interface_ip
             configure_interface_ip(interface, client_ip, "24")
-        except Exception as e:  # noqa: BLE001 — probe must not die on alias setup
+        except Exception as e:
             log(f"client-alias setup failed ({e}); probing anyway")
     try:
         r = subprocess.run(

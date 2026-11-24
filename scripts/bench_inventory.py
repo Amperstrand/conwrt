@@ -87,9 +87,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from bench_adopt import eui64_linklocal  # noqa: E402
-from bench_session import BenchError, get_session  # noqa: E402
-from inventory import append_to_inventory, read_inventory  # noqa: E402
+from bench_adopt import eui64_linklocal
+from bench_session import BenchError, get_session
+from inventory import append_to_inventory, read_inventory
 
 DEFAULT_PLACES = REPO_ROOT / "data" / "bench" / "places.json"
 DEFAULT_INVENTORY = str(REPO_ROOT / "data" / "inventory.jsonl")
@@ -401,7 +401,7 @@ def validated_candidates(dut_ip: str, mac: str) -> tuple[str, str]:
         dut_ip = ""
     try:
         ll = eui64_linklocal(mac)
-    except Exception:  # noqa: BLE001 — malformed registry MAC must not kill the scan
+    except Exception:
         ll = ""
     return dut_ip, ll
 
@@ -513,7 +513,7 @@ def probe_identities(switch_host: str, obs: dict[str, PortObservation]) -> None:
         for mac in sorted(o.macs):
             try:
                 ll = eui64_linklocal(mac)
-            except Exception:  # noqa: BLE001 — bad MAC must not kill the scan
+            except Exception:
                 continue
             cmd = (f"dbclient -y -y -i /root/.ssh/id_ed25519 "
                    f"root@{ll}%switch.{o.vlan} "

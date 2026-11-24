@@ -82,7 +82,7 @@ def cmd_recovery_probe(args: argparse.Namespace) -> int:
         try:
             from platform_utils import configure_interface_ip
             configure_interface_ip(args.interface, client_ip, "24")
-        except Exception as e:  # noqa: BLE001 — probe continues without alias
+        except Exception as e:
             print(f"warning: could not arm {client_ip} on {args.interface}: {e}",
                   file=sys.stderr)
         time.sleep(1)
