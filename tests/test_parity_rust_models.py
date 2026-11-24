@@ -38,7 +38,12 @@ def conwrt_bin() -> Path:
     cargo = shutil.which("cargo")
     if cargo is None:
         pytest.skip("cargo toolchain not available for the Rust parity binary")
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target"))
+    # THIRD copy of the #432 hazard class (2026-11-24 audit): the hardcoded
+    # CARGO_TARGET_DIR-or-./target guess missed the global-config redirect;
+    # resolve through cargo metadata like the parity harnesses.
+    from test_parity_rust_plan import _resolve_target_dir
+
+    target_dir = _resolve_target_dir(cargo, REPO)
     bin_path = target_dir / "debug" / "conwrt"
     # Always build (incremental): an existence check would test a stale
     # binary and false-pass Rust-side drift.
