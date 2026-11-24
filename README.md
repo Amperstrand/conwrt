@@ -45,6 +45,15 @@ Other entry points:
 | `python3 scripts/conwrt_tui.py` | Interactive discovery TUI (preview/dry-run by design) |
 | `conwrt flash --model-id ID --request-image` | Direct flash of a known model |
 
+Dark or just-flashed unit (the detection-and-recovery first moves, in order — see docs/DETECTION-RECOVERY-TOOLING.md):
+
+| Command | What it does |
+|---------|--------------|
+| `conwrt listen` | Classify a boot/PoE-cycle capture into a JSON verdict + next action (kernel-up → v6door, ARP leak → alias-probe, vendor beacon → model hints) |
+| `conwrt discover` | The dark-unit ladder: positive control → v6 link-local → v4 archaeology → banners; credentials printed, never executed |
+| `conwrt v6door` | Dial a unit's derived `fe80::` link-local through an on-link host (survives every v4 failure mode) |
+| `conwrt adopt` | Post-flash adoption as one gate ladder: rogue-DHCP disarm, mgmt IP, SSH key — every value read back |
+
 Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
 
 ## Requirements
