@@ -52,6 +52,14 @@ STOP = threading.Event()
 REMOTE_SH = r"""
 TTY="$1"
 LOG="${2:-/tmp/conwrt-bridge-target.log}"
+# Test seams (defaults preserve on-device behavior exactly; BusyBox-safe
+# parameter expansion — see tests/test_serial_bridge.py, which runs THIS
+# script against a fake inittab/ps to pin every exit route's restore path).
+INITTAB="${CONWRT_BRIDGE_INITTAB:-/etc/inittab}"
+INITTAB_BAK="${CONWRT_BRIDGE_INITTAB_BAK:-/etc/inittab.bak-conwrt}"
+PS_CMD="${CONWRT_BRIDGE_PS:-ps}"
+HUP_TARGET="${CONWRT_BRIDGE_HUP_TARGET:-1}"
+SLEEP_S="${CONWRT_BRIDGE_SLEEP:-1}"
 
 free_tty() {
   # BusyBox inittab console ids are device BASENAMES ("ttyMSM0"), never
@@ -59,25 +67,25 @@ free_tty() {
   # more), not [^#].* (which demands a leading char and never matched: the
   # getty was never actually freed, and its respawn raced the cats for bytes).
   TTYID="${TTY#/dev/}"
-  if grep -q "^[^#]*$TTYID" /etc/inittab 2>/dev/null; then
-    [ -f /etc/inittab.bak-conwrt ] || cp /etc/inittab /etc/inittab.bak-conwrt 2>/dev/null
-    sed -i "s|^\([^#]*$TTYID\)|#\1|" /etc/inittab 2>/dev/null
-    kill -HUP 1 2>/dev/null
-    sleep 1
+  if grep -q "^[^#]*$TTYID" "$INITTAB" 2>/dev/null; then
+    [ -f "$INITTAB_BAK" ] || cp "$INITTAB" "$INITTAB_BAK" 2>/dev/null
+    sed -i "s|^\([^#]*$TTYID\)|#\1|" "$INITTAB" 2>/dev/null
+    kill -HUP "$HUP_TARGET" 2>/dev/null
+    sleep "$SLEEP_S"
   fi
   # kill anything already holding the tty: a console getty (or the /bin/login
   # an askfirst activation leaves behind) OR a stale 'cat $TTY' from a
   # previous bridge run (two readers race for the same bytes).
-  for p in $(ps | grep -E "askfirst|getty|login\.sh|/bin/login |cat $TTY" | grep -v grep | awk '{print $1}'); do
+  for p in $("$PS_CMD" | grep -E "askfirst|getty|login\.sh|/bin/login |cat $TTY" | grep -v grep | awk '{print $1}'); do
     kill "$p" 2>/dev/null
   done
-  sleep 1
+  sleep "$SLEEP_S"
 }
 
 restore_tty() {
-  if [ -f /etc/inittab.bak-conwrt ]; then
-    cp /etc/inittab.bak-conwrt /etc/inittab 2>/dev/null
-    kill -HUP 1 2>/dev/null
+  if [ -f "$INITTAB_BAK" ]; then
+    cp "$INITTAB_BAK" "$INITTAB" 2>/dev/null
+    kill -HUP "$HUP_TARGET" 2>/dev/null
   fi
 }
 
