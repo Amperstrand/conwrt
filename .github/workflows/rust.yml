@@ -30,9 +30,14 @@ on:
       - "scripts/sdk_rust_version.py"
       - "scripts/openwrt-toolchain.json"
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # workspace test + clippy + no_std parity; the 2026-10 CI-hang class needs a cap
     steps:
       - uses: actions/checkout@v4
       # Follows rust-toolchain.toml (pinned 1.99.0 since #149); installing
@@ -125,6 +130,7 @@ jobs:
   # 48 KiB of the ram number is the esp-alloc protocol heap).
   firmware-esp32s3:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # esp build; vm-lifecycle uses 35 for its heaviest
     steps:
       - uses: actions/checkout@v4
       - name: Install esp-rs Xtensa toolchain (espup 1.98.1.0, esp32s3 only)
