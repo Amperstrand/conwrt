@@ -1,5 +1,5 @@
 {
-  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review \u2014 gaps close loudly, never silently.",
+  "contract": "Each fixture in this directory is rendered through BOTH plan implementations: Python 1.x (scripts/use_cases/<use_case>.py -> profile.ops.render_shell) and Rust (crates/conwrt-core plan/profile pipeline, exposed via `cargo run -p conwrt-cli --bin conwrt-plan-render -- <fixture>`). The pytest harness (tests/test_parity_rust_plan.py) normalizes both outputs (drop shebang/set-e/comment/blank lines; shlex-tokenize each line; drop known-equivalent decorations 2>/dev/null, 'uci -q' quiet flag, trailing '|| true') and asserts the command streams are EQUAL. The cargo-side test (crates/conwrt-core/src/parity.rs) additionally asserts byte-equality of the filtered command lines against the Python-generated goldens in golden/ for every fixture marked EQUAL. The expected status below is the recorded parity state: if reality changes in either direction the tests fail until this manifest is updated in review — gaps close loudly, never silently.",
   "fixtures": {
     "wireguard_client_default": {
       "use_case": "wireguard-client",
@@ -197,14 +197,14 @@
       "use_case": "tollgate-cellular",
       "expect": "GAP",
       "gap_reasons": [
-        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals — same logical command, different bytes"
       ]
     },
     "tollgate_cellular_minimal": {
       "use_case": "tollgate-cellular",
       "expect": "GAP",
       "gap_reasons": [
-        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals \u2014 same logical command, different bytes"
+        "1.x render_shell wraps printf-embedded script literals with quote+backslash line-wrapping; Rust emits clean literals — same logical command, different bytes"
       ]
     },
     "vpn_nordvpn_default": {
@@ -278,14 +278,14 @@
       "use_case": "net-roles",
       "expect": "GAP",
       "gap_reasons": [
-        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer \u2014 the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
+        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer — the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
       ]
     },
     "net_roles_adaptive": {
       "use_case": "net-roles",
       "expect": "GAP",
       "gap_reasons": [
-        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer \u2014 the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
+        "1.x embeds the multi-KB conn-adapter/metered-guard daemon scripts in single printf lines whose awk '\\''-idiom quoting breaks shlex tokenization in the parity normalizer — the tollgate-cellular GAP class. The port itself is byte-faithful where comparable: net_roles_auto_switch (whose staged bodies tokenize) renders EQUAL through the same stage_file() path."
       ]
     },
     "ddns_default": {
@@ -316,12 +316,13 @@
       "use_case": "maas-portable-lab",
       "expect": "GAP",
       "gap_reasons": [
-        "no Rust Profile arm: intentionally plan-side-only \u2014 string firstboot builder (configure_via=ssh), Rust support lives in conwrt-maas workflows, not plan profiles (#768 verification)"
+        "no Rust Profile arm: intentionally plan-side-only — string firstboot builder (configure_via=ssh), Rust support lives in conwrt-maas workflows, not plan profiles (#768 verification)"
       ]
     }
   },
   "pending_migration": [
-    "RESOLVED 2026-11-03: vpn-provider arms render OFFLINE (API calls ride the emitted apply-time script text; nordvpn/nordvpn-openvpn use the harness _VPN_PROVIDER_STUBS recipe) \u2014 all 9 provider presets wired EQUAL",
-    "tollgate-cellular GAP (quote+backslash literal wrapping divergence in 1.x render_shell) \u2014 documented, same logical commands"
-  ]
+    "RESOLVED 2026-11-03: vpn-provider arms render OFFLINE (API calls ride the emitted apply-time script text; nordvpn/nordvpn-openvpn use the harness _VPN_PROVIDER_STUBS recipe) — all 9 provider presets wired EQUAL",
+    "tollgate-cellular GAP (quote+backslash literal wrapping divergence in 1.x render_shell) — documented, same logical commands"
+  ],
+  "_comment": "Parity corpus consumers (all three must be checked when adding/changing fixtures): (1) tests/test_parity_rust_plan.py (python-vs-rust render + goldens), (2) tests/test_parity_shell_syntax.py (sh -n on every fixture; no-arm fixtures render python-side), (3) crates/conwrt-core/src/parity.rs gap_fixtures_render_and_are_documented (GAP fixtures must rust-render UNLESS gap_reasons document 'no Rust Profile arm')."
 }
