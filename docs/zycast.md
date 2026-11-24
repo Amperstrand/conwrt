@@ -113,6 +113,52 @@ Rules that follow:
 Related species-level footgun (applies to every initramfs-recovery flow,
 not just zycast): `docs/gotchas.md` §"First flash runs from RAM".
 
+## 1d. WHY initramfs is the zycast payload (and why we don't zycast the permanent image)
+
+Design review (2026-11-24), because "can't we just flash the permanent
+image directly and skip the confusing stage?" is the natural next
+question after §1c:
+
+1. **zycast is a dumb byte pipe; sysupgrade is the safety gate.** The
+   Z-Loader Multiboot client checksums each packet (byte-sum) and writes
+   bytes to the kernel slots. It performs NO image validation against
+   the device, no rootfs handling, no overlay setup. `sysupgrade` is
+   where our last-line-of-defense hardware validation lives (the
+   "Device X not supported by this image" gate — see AGENTS "NEVER Force
+   Sysupgrade"), plus overlay creation and the atomic `-f` overlay
+   (rogue-DHCP triple, key, lan_ip). Keeping the permanent install
+   inside sysupgrade keeps every gate in the loop; zycast'ing a
+   permanent image directly would bypass them all.
+2. **The initramfs payload is flash-state-agnostic — that's the point
+   of a recovery vehicle.** A kernel+ramdisk makes zero assumptions
+   about what else is in flash: no squashfs rootfs to find in the slot,
+   no overlay to expect, no UBI to attach. It boots from an arbitrary
+   prior state (half-written slots, foreign firmware, empty data area) —
+   exactly the states a bootloader-recovery entry is for.
+3. **The write window is the worst possible experiment site.** A
+   RAS-wrapped squashfs-sysupgrade image would *probably* boot on ramips
+   (combined images are self-locating), but it is unproven on this
+   fleet, and the documented wedge class (2026-11-09/10: interrupted or
+   non-accepting multicast writes leave units that neither boot nor
+   accept further multicast) makes payload-class experiments on the
+   zycast path expensive to fail. Do not flip the default to direct-
+   permanent without a deliberate hardware-validation campaign (tracked
+   in the issue linked from the model JSON's `post_flash` note).
+4. **Initramfs is NOT the default everywhere — only the recovery
+   entry.** A unit already running OpenWrt (any era) goes straight to
+   `sysupgrade`; there is no initramfs stage on that path at all. The
+   two-stage flow exists precisely for stock/dark/bootlooping units
+   where nothing else can reach the box. conwrt's generic oem-http/ftp
+   flow likewise chains initramfs → automatic permanent install when
+   both images are present, and treats "initramfs only" as the explicit
+   reduced mode.
+
+**Verdict:** keep initramfs as the zycast default (recovery semantics +
+gate preservation); the two-stage cost is one extra reboot (~3 min) and,
+since #780, a single atomic stage-2 command that carries the unit's
+whole identity. Direct-to-permanent zycast stays an opt-in experiment
+behind hardware validation, not a default.
+
 ## 2. Implementations
 
 | Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) | Rust (`conwrt-protocols::zycast` core + `conwrt zycast` CLI) |
