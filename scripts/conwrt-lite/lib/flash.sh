@@ -130,14 +130,51 @@ conwrt_flash_write_permanent_bootcfg() {
     }
 
     echo "  installing kmod-mtd-rw and writing CFG1..."
-    ssh $_CONWRT_SSH_OPTS "root@${_device_ip}" "
+    # #776 classified readback gate: MATCH / ERASED-NOOP / MISMATCH are
+    # different failures with different recoveries (AGENTS rule 2 — zeros,
+    # erased 0xFF, and a valid image are three different boot outcomes).
+    # Reuse-the-artifact rule: expected sha comes from the HOST-side file
+    # we just uploaded, never from memory.
+    _expected_sha=$(sha256sum "$_cfg1_bin" | cut -d' ' -f1)
+    _rb_out=$(ssh $_CONWRT_SSH_OPTS "root@${_device_ip}" "
         opkg install /tmp/$_kmod_name &&
         insmod mtd-rw i_want_a_brick=1 &&
-        mtd write /tmp/$_cfg1_name CFG1 &&
-        echo WRITE_OK
-    " || {
+        mtd write /tmp/$_cfg1_name CFG1 || exit 9
+        _dev=/dev/\$(grep -m1 CFG1 /proc/mtd | cut -d: -f1)
+        [ -n \"\$_dev\" ] && [ -b \"\$_dev\" ] || { echo MTD-NAME-FAIL; exit 8; }
+        _span=\$(wc -c < /tmp/$_cfg1_name | tr -d ' ')
+        _rb=\$(head -c \"\$_span\" \"\$_dev\" | sha256sum | cut -d' ' -f1)
+        _nonff=\$(head -c \"\$_span\" \"\$_dev\" | tr -d '\377' | wc -c)
+        echo \"RB_SHA=\$_rb RB_NONFF=\$_nonff SPAN=\$_span DEV=\$_dev\"
+    ")
+    _rc=$?
+    if [ "$_rc" -eq 9 ]; then
         echo "kmod-mtd-rw + mtd write failed" >&2; return 1;
-    }
+    fi
+    if [ "$_rc" -eq 8 ] || [ -z "$_rb_out" ]; then
+        echo "mtd readback: could not resolve CFG1 device or read the span" >&2; return 1;
+    fi
+    _rb_sha=$(printf '%s\n' "$_rb_out" | grep -o 'RB_SHA=[0-9a-f]*' | cut -d= -f2)
+    _rb_nonff=$(printf '%s\n' "$_rb_out" | grep -o 'RB_NONFF=[0-9]*' | cut -d= -f2)
+    if [ "$_rb_sha" != "$_expected_sha" ] && [ "$_rb_nonff" = "0" ]; then
+        echo "mtd readback CFG1: write silently NO-OP'D — span still reads as erased 0xFF." >&2
+        echo "Do NOT reboot; the running OS is the recovery window (MF286D device-2 lockout class)." >&2
+        return 1
+    fi
+    if [ "$_rb_sha" != "$_expected_sha" ]; then
+        echo "mtd readback CFG1: MISMATCH — re-reading once before condemning (transport corruption must not condemn)..." >&2
+        _rb2=$(ssh $_CONWRT_SSH_OPTS "root@${_device_ip}" "
+            _dev=/dev/\$(grep -m1 CFG1 /proc/mtd | cut -d: -f1)
+            _span=\$(wc -c < /tmp/$_cfg1_name | tr -d ' ')
+            head -c \"\$_span\" \"\$_dev\" | sha256sum | cut -d' ' -f1
+        ")
+        if [ "$_rb2" != "$_expected_sha" ]; then
+            echo "mtd readback CFG1: MISMATCH confirmed on re-read — write corrupt, do not reboot." >&2
+            return 1
+        fi
+        echo "  re-read matches; first readback was transport corruption" >&2
+    fi
+    echo "  mtd readback CFG1: match (span verified, sha $_expected_sha)"
 
     echo "  permanent boot config written to $_device_ip"
     return 0
