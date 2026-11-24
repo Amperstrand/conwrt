@@ -1,0 +1,117 @@
+{
+  "schema": "conwrt-discover-strategy/1",
+  "_comment": "The dark-device ladder as DATA (#777). States are DEVICE knowledge states; each ladder rung is a transition whose probe verdict picks the edge: on_positive moves to the state the evidence establishes; on_negative is a SELF-EDGE (a negative adds no device knowledge — the run falls through to the next rung). The one exception is the layer-0 control gate, whose negative aborts (methodology-unverified). Kept in lockstep with bench_discover.build_ladder() by tests/test_strategy_states.py — a rung without a transition (or vice versa) is a bug. listen verdicts (bootlisten.py next_action ids) seed discover's initial state via entry_hints.",
+  "states": [
+    {
+      "id": "dark",
+      "kind": "initial",
+      "description": "No frames ever, including the bootloader phase, across a fresh power cycle (DARK-DEVICE-PLAYBOOK: the only genuine serial-gated class)"
+    },
+    {
+      "id": "methodology-unverified",
+      "kind": "terminal",
+      "description": "Layer-0 positive control failed — every negative below would be meaningless (AGENTS rule 11); ABORT"
+    },
+    {
+      "id": "v6-alive",
+      "kind": "reachable",
+      "description": "EUI-64 link-local answers, or all-nodes/NDP evidence — kernel up; v6 doors open (dbclient, zone-scoped)"
+    },
+    {
+      "id": "v4-candidate",
+      "kind": "reachable",
+      "description": "Static v4 found by host-subnet sweep or inventory archaeology"
+    },
+    {
+      "id": "banner-up",
+      "kind": "reachable",
+      "description": "SSH banner observed on any discovered address (v4 or v6)"
+    },
+    {
+      "id": "stack-alive",
+      "kind": "reachable",
+      "description": "LFP probe: SYN to a closed port elicits an RST with iTTL/IPID — IP stack answers with no doors open"
+    },
+    {
+      "id": "shell-candidate",
+      "kind": "terminal",
+      "description": "Credential ladder reached — PRINTED ONLY, never auto-executed (human gate by design)"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "control-gate",
+      "from": "dark",
+      "layer": "0-control",
+      "probe": "ping the control host off the probe iface",
+      "on_positive": "dark",
+      "on_negative": "methodology-unverified",
+      "comment": "a gate, not a device move: positive validates methodology (stay at dark, negatives below become trustworthy)"
+    },
+    {
+      "id": "v6-linklocal",
+      "from": "dark",
+      "layer": "1-v6",
+      "probe": "ping the derived fe80::EUI-64",
+      "on_positive": "v6-alive",
+      "on_negative": "dark"
+    },
+    {
+      "id": "all-nodes",
+      "from": "dark",
+      "layer": "1-v6",
+      "probe": "ping ff02::1 (all-nodes multicast)",
+      "on_positive": "v6-alive",
+      "on_negative": "dark"
+    },
+    {
+      "id": "ndp-cache",
+      "from": "dark",
+      "layer": "1-v6",
+      "probe": "ip neigh show (NDP cache for the derived link-local)",
+      "on_positive": "v6-alive",
+      "on_negative": "dark"
+    },
+    {
+      "id": "v4-sweep",
+      "from": "dark",
+      "layer": "2-v4",
+      "probe": "ARP sweep of host-own subnets + inventory archaeology",
+      "on_positive": "v4-candidate",
+      "on_negative": "dark"
+    },
+    {
+      "id": "banner-scan",
+      "from": "v4-candidate",
+      "layer": "3-service",
+      "probe": "SSH banner on :22 across discovered addresses",
+      "on_positive": "banner-up",
+      "on_negative": "v4-candidate"
+    },
+    {
+      "id": "lfp-probe",
+      "from": "banner-up",
+      "layer": "3-service",
+      "probe": "SYN to a closed port; watch RST iTTL/IPID",
+      "on_positive": "stack-alive",
+      "on_negative": "banner-up"
+    },
+    {
+      "id": "credential-ladder",
+      "from": "banner-up",
+      "layer": "4-creds",
+      "probe": "PRINT ONLY (never auto-executed)",
+      "on_positive": "shell-candidate",
+      "on_negative": "shell-candidate"
+    }
+  ],
+  "entry_hints": {
+    "_comment": "bootlisten next_action ids → the state discover should START from (listen seeds discover instead of re-probing from dark)",
+    "no-frames": "dark",
+    "v6door": "v6-alive",
+    "alias-probe": "v4-candidate",
+    "dhcp-adopt": "v4-candidate",
+    "vendor-fallback": "banner-up",
+    "capture-longer": "dark"
+  }
+}

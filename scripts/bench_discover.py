@@ -332,6 +332,16 @@ def main(argv: list[str] | None = None) -> int:
             "steps": [s.__dict__ for s in steps],
             "credentials": credential_ladder(),
         }
+        # #777 state view: the run as a walk through discover_states.json —
+        # machine-checkable against the playbook (a transition the machine
+        # forbids = a bug, not a surprise). Additive; prose fields unchanged.
+        try:
+            from conwrt.strategy_states import audit_run, load_states
+            state_doc = load_states()
+            payload["state_view"] = audit_run(
+                state_doc, [{"layer": s.layer, "status": s.status} for s in steps])
+        except Exception as exc:  # never block a bench run on the audit view
+            payload["state_view"] = {"legal": None, "error": f"{type(exc).__name__}: {exc}"}
         args.json.write_text(json.dumps(payload, indent=1))
         print(f"\n# wrote {args.json}")
     return 0
