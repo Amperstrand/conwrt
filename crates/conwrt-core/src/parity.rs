@@ -977,6 +977,10 @@ mod tests {
 
     /// GAP fixtures must still render (the gap is in output parity, not in
     /// plannability) and must carry at least one documented reason.
+    /// Exception: fixtures whose gap_reasons document "no Rust Profile arm"
+    /// (#768 class — intentionally plan-side-only use cases such as
+    /// maas-portable-lab) have no Profile to render through; the reason
+    /// itself is the recorded parity status and IS the documentation.
     #[test]
     fn gap_fixtures_render_and_are_documented() {
         let manifest = manifest();
@@ -993,6 +997,14 @@ mod tests {
                 .and_then(|v| v.as_array())
                 .unwrap_or_else(|| panic!("{stem}: GAP entry needs gap_reasons"));
             assert!(!reasons.is_empty(), "{stem}: gap_reasons must not be empty");
+            let no_arm = reasons.iter().any(|r| {
+                r.as_str()
+                    .map(|s| s.contains("no Rust Profile arm"))
+                    .unwrap_or(false)
+            });
+            if no_arm {
+                continue;
+            }
             let fixture_path = fixtures_dir().join(format!("{stem}.json"));
             assert!(
                 render_fixture_file(&fixture_path).is_ok(),
