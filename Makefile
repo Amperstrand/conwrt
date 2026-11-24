@@ -14,9 +14,9 @@ help: ## Show this help
 lint: ## Run ruff, severity-gated shellcheck (when installed), and shell syntax checks
 	@echo "Running ruff..."
 	@ruff check scripts tests
-	@echo "Running shellcheck (severity=error) over scripts/*.sh..."
+	@echo "Running shellcheck (severity=error) over scripts/ + recipes/ + tests/smoke.sh..."
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck --severity=error $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh 2>/dev/null \
+		shellcheck --severity=error $(SCRIPTS_DIR)/*.sh $(SCRIPTS_DIR)/lib/*.sh recipes/*/*.sh recipes/*/*/*.sh tests/smoke.sh 2>/dev/null \
 			|| { echo "FAIL: shellcheck findings at severity=error (see above)"; exit 1; }; \
 		echo "  OK: no severity=error findings"; \
 	else \
