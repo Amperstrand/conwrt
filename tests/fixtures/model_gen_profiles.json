@@ -1,0 +1,27 @@
+{
+  "arch_packages": "mipsel_24kc",
+  "metadata_version": 1,
+  "target": "ramips/mt7621",
+  "version_number": "25.12.6",
+  "profiles": {
+    "zyxel_nr7101": {
+      "device_packages": ["kmod-mt7603", "kmod-usb3", "kmod-usb-net-qmi-wwan", "kmod-usb-serial-option", "uqmi"],
+      "image_prefix": "openwrt-25.12.6-ramips-mt7621-zyxel_nr7101",
+      "images": [
+        {"filesystem": "squashfs", "name": "openwrt-25.12.6-ramips-mt7621-zyxel_nr7101-squashfs-sysupgrade.bin",
+         "sha256": "e243e678614e01221af2e1af452ab36cfebe431aeb756ae8860ff2850551d3ec",
+         "sha256_unsigned": "e243e678614e01221af2e1af452ab36cfebe431aeb756ae8860ff2850551d3ec",
+         "size": 9769501, "type": "sysupgrade"}
+      ],
+      "supported_devices": ["zyxel,nr7101"],
+      "titles": [{"model": "NR7101", "vendor": "Zyxel"}]
+    },
+    "generic_sofubar_1": {
+      "device_packages": [],
+      "image_prefix": "openwrt-25.12.6-ramips-mt7621-generic_sofubar_1",
+      "images": [],
+      "supported_devices": ["generic,sofubar-1"],
+      "titles": []
+    }
+  }
+}
