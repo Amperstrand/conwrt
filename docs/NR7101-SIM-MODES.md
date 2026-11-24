@@ -114,11 +114,9 @@ conwrt sim render remote_android_sap --json
 ### What you need
 
 - A 9eSIM (ECP3 eUICC) in the modem's active SIM slot.
-- **A healthy ISD-R (card-state gate):** the eUICC's profile manager must
-  answer — `lpac chip info` returns an EID, ICCID is NOT the all-1's
-  placeholder. A card damaged by an interrupted UIM session (modem crash
-  mid-session) presents exactly those symptoms and cannot run any mode
-  until recovered via a physical PCSC reader — see
+- **Card state verified (Gate 0):** profile map matches expectation —
+  a modem session that ended abnormally can leave the card silently
+  wiped (proven failure mode), so diff before/after every session; see
   [NR7101-ESIM-PLAYBOOK.md](NR7101-ESIM-PLAYBOOK.md) §"Gate 0".
 - The profile installed and enabled. Use
   [NR7101-ESIM-PLAYBOOK.md](NR7101-ESIM-PLAYBOOK.md): the proven APDU

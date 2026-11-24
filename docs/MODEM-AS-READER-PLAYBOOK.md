@@ -15,7 +15,7 @@ Per-model status:
 
 | Model | Modem | Appendix | Status |
 |---|---|---|---|
-| Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) — **specimen caveat (2026-11): the org's 9eSIM is damaged (interrupted UIM session); see NR7101-ESIM-PLAYBOOK.md Gate 0 — procedures valid for any healthy ECP3 card** |
+| Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) — **specimen note (2026-11): the org's 9eSIM profile store was wiped by modem-driven deletes during a modem death (paid profile lost; card healthy and re-proven end-to-end since — see NR7101-ESIM-PLAYBOOK.md Gate 0)** |
 | GL.iNet GL-E750 | Quectel EM060K-GL | B (stub → #619) | in progress |
 | ZTE MF286D | ZTE cat.12 mPCIe | C (filled) | negative species result (closed 2026-11-07 — no eUICC/SAP; classic reader only) |
 | Zyxel NR7302-class | Quectel RG520F (+soldered eUICC on some SKUs) | D (stub → ZYXEL-ESIM-RESEARCH.md) | research candidate — no unit owned |
@@ -55,18 +55,19 @@ whichever path has two clean rehearsals — A if in doubt.
 
 ## Universal gates — run in this order, never reordered
 
-0. **Card-state gate (read-only):** before any other gate, prove the seated
-   card's ISD-R answers. `lpac chip info` must return an EID (or
-   `validate-esimgate.sh` ESG-001..004 green). A card whose ICCID reads as
-   an all-1's placeholder (no enabled profile) or whose ISD-R channel-opens
-   hang is **damaged** — STOP. Do not retry-loop ISD-R access (limited
-   authentication budget; every failed open may deepen a lockout), do not
-   "refresh" or power-cycle hoping it clears. The modem-as-reader paths in
-   this playbook CANNOT recover this failure class — recovery needs a
-   physical PCSC reader with direct power/reset/protocol control.
-   Motivating incident (2026-11): a modem crashed mid-UIM-session and left
-   the ISD-R in an interrupted state; species-level record in
-   NR7101-ESIM-PLAYBOOK.md §"Gate 0", specimen-level dossier in the
+0. **Card-state gate (read-only):** before any other gate, diff the seated
+   card's state against expectation — `lpac chip info` must return an EID
+   and `lpac profile list` must match the expected profile map (or
+   `validate-esimgate.sh` ESG-001..004 green). Two failure classes this
+   catches, both field-proven: (a) **an abnormal session termination can
+   leave the card wiped** — a modem dying mid-UIM-session drove valid
+   ES10c DeleteProfile ops and the eUICC executed them (2026-11 incident;
+   paid profile lost, activation code consumed) — so the map can be
+   silently empty while everything else looks healthy; (b) a genuinely
+   unresponsive ISD-R (channel opens hang/refused). In BOTH cases: STOP,
+   do not retry-loop, do not "refresh" hoping it clears. (a) means
+   re-provision, not card repair; (b) means the card needs a physical
+   PCSC reader before any verdict. Specimen-level records live in the
    operator's private bench repo.
 1. **Dry gate (no hardware):** `tests/hardware/validate.sh` in ifd-modemifd —
    defaults to a local mock-modem dry run. Encodes every failure class that has
