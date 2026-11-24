@@ -20,6 +20,38 @@ able to provision the latest OpenWrt and get silentlink/nadanada working on a
 below cites the exact commits that were tested and separates them from
 improvements that landed since and are still pending hardware re-validation.
 
+## Gate 0 — card state, BEFORE anything else (2026-11-24)
+
+**The org's 9eSIM specimen is currently DAMAGED — no profile operations
+(free or paid) are possible on it until it is recovered.** During an
+unrelated lane's modem experiment (2026-11-10), the modem crashed while a
+UIM session with the card was open; the eUICC's ISD-R was left in an
+interrupted state. Species-level symptoms, all verified on the specimen:
+
+- Basic UIM layer alive (card detect, ATR, placeholder ICCID readable).
+- ISD-R unreachable: logical-channel opens to the ISD-R AID hang — via
+  every modem path (both modem species tested).
+- ICCID reads as the all-1's placeholder → **no profile is enabled**; the
+  last-known-good card map (silent.link enabled, nadanada expired+disabled,
+  Speedtest test profile disabled) is unreachable and unverifiable.
+
+What this means for you:
+
+1. **Do not run the reproduction runbook below against the damaged card.**
+   Repeated ISD-R open attempts may burn the card's limited authentication
+   budget (worst ranked hypothesis: counter exhaustion → permanently
+   locked card). One attempt to confirm state is a gate; a loop is damage.
+2. **Modem-as-reader cannot recover this failure class.** Recovery requires
+   a physical PCSC reader (direct power/reset/protocol control). The
+   procedure, decision tree per hypothesis, and card-handling doctrine
+   pointer live in the operator's private bench repo (conwrt-bench,
+   `docs/nr7101/9ESIM-PCSC-RECOVERY-RUNBOOK.md`; root cause:
+   `data/bench/mf286d/20261119-b14diff/pipeline/9ESIM-ROOT-CAUSE.md`).
+3. The species-level procedures below remain valid for any HEALTHY ECP3
+   eUICC (a fresh 9eSIM, or this one after recovery). The universal card
+   -state gate is now [MODEM-AS-READER-PLAYBOOK.md](MODEM-AS-READER-PLAYBOOK.md)
+   §"Universal gates" gate 0 — run it first on every card, every time.
+
 ## The chain
 
     silent.link / nadanada purchase (host)
@@ -158,8 +190,10 @@ conformance tests, the sacrificial-SIM suite + `validate.sh` split (Class-A
 zero-risk vs eSIM-provisioning gate), release-gate docs, silentlink-lib
 bench-gap audit.
 
-## Current bench state / known gaps (2026-10-24)
+## Current bench state / known gaps
 
+- **(2026-11-24) The 9eSIM specimen is damaged — see Gate 0 above.** The
+  items below this line are the 2026-10-24 record, kept for history.
 - The NR7101's AT bridge is **down right now** (unit was reconfigured during
   unrelated failover testing; no socat service running). Step 2 restores it.
 - Dual-SIM slot switch command for this RG502Q-EA firmware: identify via

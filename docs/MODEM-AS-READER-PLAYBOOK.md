@@ -15,7 +15,7 @@ Per-model status:
 
 | Model | Modem | Appendix | Status |
 |---|---|---|---|
-| Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) |
+| Zyxel NR7101 | Quectel RG502Q-EA | A (filled) | production-proven (download, enable, rollback, silent.link) — **specimen caveat (2026-11): the org's 9eSIM is damaged (interrupted UIM session); see NR7101-ESIM-PLAYBOOK.md Gate 0 — procedures valid for any healthy ECP3 card** |
 | GL.iNet GL-E750 | Quectel EM060K-GL | B (stub → #619) | in progress |
 | ZTE MF286D | ZTE cat.12 mPCIe | C (filled) | negative species result (closed 2026-11-07 — no eUICC/SAP; classic reader only) |
 | Zyxel NR7302-class | Quectel RG520F (+soldered eUICC on some SKUs) | D (stub → ZYXEL-ESIM-RESEARCH.md) | research candidate — no unit owned |
@@ -55,6 +55,19 @@ whichever path has two clean rehearsals — A if in doubt.
 
 ## Universal gates — run in this order, never reordered
 
+0. **Card-state gate (read-only):** before any other gate, prove the seated
+   card's ISD-R answers. `lpac chip info` must return an EID (or
+   `validate-esimgate.sh` ESG-001..004 green). A card whose ICCID reads as
+   an all-1's placeholder (no enabled profile) or whose ISD-R channel-opens
+   hang is **damaged** — STOP. Do not retry-loop ISD-R access (limited
+   authentication budget; every failed open may deepen a lockout), do not
+   "refresh" or power-cycle hoping it clears. The modem-as-reader paths in
+   this playbook CANNOT recover this failure class — recovery needs a
+   physical PCSC reader with direct power/reset/protocol control.
+   Motivating incident (2026-11): a modem crashed mid-UIM-session and left
+   the ISD-R in an interrupted state; species-level record in
+   NR7101-ESIM-PLAYBOOK.md §"Gate 0", specimen-level dossier in the
+   operator's private bench repo.
 1. **Dry gate (no hardware):** `tests/hardware/validate.sh` in ifd-modemifd —
    defaults to a local mock-modem dry run. Encodes every failure class that has
    actually burned a one-shot activation code.
