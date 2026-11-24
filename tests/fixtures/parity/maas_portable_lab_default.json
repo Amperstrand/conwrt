@@ -1,0 +1,11 @@
+{
+  "use_case": "maas-portable-lab",
+  "params": {
+    "uplink_ssid": "Bench-Lab-5G",
+    "uplink_password": "bench-lab-passphrase",
+    "bench_subnet": "192.0.2.0/24",
+    "bench_gateway": "192.0.2.1",
+    "maas_ip": "192.0.2.10",
+    "ssh_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIParityFixturePlaceholder parity@fixtures"
+  }
+}

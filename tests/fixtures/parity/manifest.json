@@ -311,6 +311,13 @@
     "iot_wan_cutoff": {
       "use_case": "iot",
       "expect": "EQUAL"
+    },
+    "maas_portable_lab_default": {
+      "use_case": "maas-portable-lab",
+      "expect": "GAP",
+      "gap_reasons": [
+        "no Rust Profile arm: intentionally plan-side-only \u2014 string firstboot builder (configure_via=ssh), Rust support lives in conwrt-maas workflows, not plan profiles (#768 verification)"
+      ]
     }
   },
   "pending_migration": [

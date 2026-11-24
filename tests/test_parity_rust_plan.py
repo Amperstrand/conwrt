@@ -311,9 +311,14 @@ def _fixtures() -> list[dict]:
 def _python_render(fixture: dict) -> str:
     uc = use_cases.get(fixture["use_case"])
     assert uc is not None, f"use case {fixture['use_case']} not registered"
-    assert uc.build_configure_ops is not None, (
-        f"use case {fixture['use_case']} has no ops builder"
-    )
+    # String-script builders (firstboot-class use cases like
+    # maas-portable-lab) carry build_configure returning the script
+    # directly — no ops builder exists by design (#768: plan-side-only).
+    if uc.build_configure_ops is None:
+        assert uc.build_configure is not None, (
+            f"use case {fixture['use_case']} has neither ops nor script builder"
+        )
+        return uc.build_configure(fixture["params"])
     # Credless vpn-provider rendering: the provider presets fetch
     # credentials / resolve servers over the network at BUILD time. The
     # canonical offline recipe (same values as the Rust-side
@@ -353,16 +358,27 @@ _VPN_PROVIDER_STUBS = {
 }
 
 
-def _rust_render(bin_path: Path, fixture_path: Path) -> str:
+NO_RUST_ARM_MARKER = "no Rust Profile arm"
+
+
+def _rust_render(bin_path: Path, fixture_path: Path,
+                 *, allow_missing_arm: bool = False) -> str | None:
     proc = subprocess.run(
         [str(bin_path), str(fixture_path)],
         capture_output=True,
         text=True,
         timeout=120,
     )
-    assert proc.returncode == 0, (
-        f"Rust renderer failed for {fixture_path.name}: {proc.stderr}"
-    )
+    if proc.returncode != 0:
+        # A fixture whose manifest entry documents the no-Rust-arm GAP may
+        # legitimately fail here (the renderer has no Profile for the use
+        # case); every OTHER failure stays a hard assert — the gate must
+        # not learn to swallow real render errors.
+        if allow_missing_arm:
+            return None
+        raise AssertionError(
+            f"Rust renderer failed for {fixture_path.name}: {proc.stderr}"
+        )
     return proc.stdout
 
 
@@ -403,8 +419,20 @@ class TestPlanRendererParity:
             except AssertionError as err:
                 return None, str(err)[:120]
 
-        py, py_err = _safe_norm(_python_render(fx["fixture"]))
-        rs, rs_err = _safe_norm(_rust_render(plan_render_bin, fx["path"]))
+        py_script = _python_render(fx["fixture"])
+        py, py_err = _safe_norm(py_script)
+        documented_no_arm = any(NO_RUST_ARM_MARKER in r
+                                for r in (fx["entry"] or {}).get("gap_reasons") or [])
+        rs_script = _rust_render(plan_render_bin, fx["path"],
+                                 allow_missing_arm=documented_no_arm)
+        if rs_script is None:
+            # recorded GAP with the no-arm reason: the Rust renderer
+            # refusing the use case IS the recorded parity status
+            assert fx["expect"] == "GAP", (
+                f"{fx['stem']}: Rust renderer has no arm but manifest says EQUAL"
+            )
+            return
+        rs, rs_err = _safe_norm(rs_script)
         if py_err or rs_err:
             actual = "GAP"
             detail = f"(normalizer cannot tokenize: {py_err or rs_err})"

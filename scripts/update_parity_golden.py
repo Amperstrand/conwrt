@@ -45,8 +45,12 @@ def main() -> int:
             _tpr = None
         if _tpr is not None and fixture["use_case"] in _tpr._VPN_PROVIDER_STUBS:
             script = _tpr._python_render(fixture)
+        elif uc.build_configure_ops is None:
+            # String-script builders (firstboot-class, e.g. maas-portable-lab
+            # #768): build_configure returns the script directly.
+            assert uc.build_configure is not None, fixture["use_case"]
+            script = uc.build_configure(fixture["params"])
         else:
-            assert uc.build_configure_ops is not None, fixture["use_case"]
             script = render_shell(uc.build_configure_ops(fixture["params"]))
         out = golden_dir / f"{fixture_path.stem}.sh"
         out.write_text(script)
