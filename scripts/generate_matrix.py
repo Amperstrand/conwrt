@@ -118,6 +118,16 @@ def _render_test_entries(model: dict) -> str:
 
     parts = []
     for entry_name, info in tested_hw.items():
+        if not isinstance(info, dict):
+            # Species metadata sometimes rides along as plain strings
+            # (zte-mf286d's confirmed_on / modem_fw_note since #662) —
+            # render as an informational row instead of crashing the page.
+            parts.append(
+                f'<div class="test-entry"><span class="badge defined">info</span> '
+                f'<code>{entry_name}</code> <span class="note">'
+                f'{html.escape(str(info))}</span></div>'
+            )
+            continue
         tested = info.get("tested", False)
         if tested:
             cls = "tested"
