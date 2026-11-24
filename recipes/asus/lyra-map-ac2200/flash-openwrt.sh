@@ -827,7 +827,6 @@ else
         done <<< "$MTD_INFO"
       fi
 
-      local backup_count
       backup_count=$(ls -1 "${BACKUP_DIR}"/*.bin 2>/dev/null | wc -l | tr -d ' ')
       step "Backup complete — ${backup_count} partitions saved"
     else
