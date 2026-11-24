@@ -544,3 +544,43 @@ must answer within seconds. Exactly ONE announcer per segment is the invariant
 (here: the ERX only — verified post-fix). Fix on a production AP is
 odhcpd-only (never touches hostapd/netifd wireless): WiFi associations and
 IPv4 are outside the blast radius.
+
+## First flash runs from RAM — nothing persists until the sysupgrade to a permanent image
+
+(Motivating incident: 2026-11-24 remote NR7101 bring-up — a freshly
+zycast'd unit was diagnosed as "OpenWrt running entirely from RAM, no
+overlay mounted, no UBI attached; config disappears on reboot". That is
+not a fault — it is stage 1 of the two-stage flash flow working exactly
+as designed. Full mechanism: `docs/zycast.md` §1c.)
+
+**What happens:** the recovery flash path (zycast on Zyxel, and
+initramfs-recovery images generally) writes a self-contained
+kernel+ramdisk into the kernel slot(s). The boot environment copies it
+to RAM and jumps in: root filesystem = ramdisk → no flash rootfs → no
+overlay → **nothing persists across reboot** (`uci commit`, installed
+keys, DHCP suppression all die), and dropbear host keys regenerate every
+boot.
+
+**How to tell which stage you are on (read-only):**
+
+```sh
+mount | grep -E 'overlay|ubi'   # empty output = RAM-only stage
+cat /tmp/sysinfo/board_name     # confirm model anyway
+```
+
+**What to do:** don't repair "broken persistence" — finish the flow.
+`sysupgrade -n` the PERMANENT image from the running initramfs; its
+first boot creates the overlay and persistence begins. Ship identity
+atomically with that sysupgrade: conwrt's flash path already attaches a
+`-f` overlay tarball with the rogue-DHCP triple, and
+`build_overlay_tarball(lan_ip="192.168.X.Y")` additionally pins the LAN
+address via a first-boot uci-defaults script — so the permanent image
+comes up on your IP with DHCP already quiet (never competing with
+another 192.168.1.1). Until that boot: keep the unit on an isolated
+port/VLAN — a stage-1 unit re-arms its DHCP server on every reboot
+(your runtime suppression does not survive).
+
+**Do NOT confuse with:** the octeon initramfs-sysupgrade breakage
+(§above) — that is a *different* failure (sysupgrade FROM initramfs
+broken on that target); on ramips/mt7621 sysupgrade-from-initramfs is
+the proven path.

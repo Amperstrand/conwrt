@@ -41,6 +41,78 @@ image only at the post-stream cycle); and the C reference tool sends a
 single pass per invocation — wrapper-looping it invites exactly the
 compressed timing that wedges units. Prefer the bounded-loop senders.
 
+## 1c. The FIRST flash runs from RAM — nothing persists (by design)
+
+**The image zycast writes is the initramfs-recovery image, not the
+destination firmware.** This is the single most common "did my flash
+fail?" confusion on freshly-zycast'd units (paid for again on a remote
+bring-up, 2026-11-24: unit diagnosed as "no persistent overlay, no UBI
+attached, config vanishing on reboot — firmware missing or damaged?"
+None of the above — it was sitting at stage 1 of a two-stage flow).
+
+**Why (the mechanism):**
+
+1. zycast writes ONLY the kernel slots (`Kernel` mtd3 + `Kernel2` mtd5 on
+   the NR7101 — the tool flashes both simultaneously). The image it
+   carries is the `initramfs-recovery` build: a self-contained
+   kernel+rootfs *ramdisk* (RAS/zytrx container). Bootloader/Fact/Config
+   partitions are untouched; the data/UBI area is neither written nor
+   attached.
+2. On boot, Z-Loader copies that image into RAM and jumps to it
+   ("Starting application at …"). The kernel's root filesystem IS the
+   ramdisk — there is no flash rootfs to mount, so **no overlay
+   (rootfs_data) exists or is ever mounted, and no UBI attach happens**.
+3. OpenWrt persistence lives in the overlay. No overlay → `/` is tmpfs →
+   every `uci commit`, every installed key, every DHCP suppression dies
+   at reboot. Dropbear host keys are regenerated each boot (expect
+   host-key churn between sessions).
+4. This is deliberate: initramfs-recovery is the *recovery vehicle* — a
+   known-good, hardware-minimal OpenWrt that boots regardless of flash
+   state, giving you SSH/network to install the real firmware. It is a
+   staging stage, not a fault and not the destination.
+
+**The correct two-stage sequence (NR7101-proven):**
+
+```
+stage 1: zycast initramfs-recovery  →  boots at 192.168.1.1, RAM-only
+stage 2: from that environment: sysupgrade -n [-f overlay.tar.gz] <permanent-sysupgrade-image>
+         →  writes kernel+rootfs; FIRST boot of the permanent image
+            creates the overlay → persistence begins
+```
+
+Rules that follow:
+
+- **Treat a post-zycast unit as a live grenade on any shared segment.**
+  The initramfs image is stock OpenWrt: DHCP + RA on br-lan 192.168.1.1.
+  Because nothing persists, your runtime suppression does not survive a
+  reboot — the rogue-DHCP exposure exists until stage 2 completes. Keep
+  the unit on an isolated port/VLAN (or disconnected uplink) for the
+  whole staging window.
+- **Don't diagnose "broken persistence" before stage 2.** Symptoms of a
+  healthy stage-1 unit: `/` is tmpfs, no `/overlay` mount, no UBI
+  attach, `uci commit` works but vanishes, host keys change every boot.
+  Verify stage with `mount | grep -E 'overlay|ubi'` (absence = stage 1)
+  and `cat /tmp/sysinfo/board_name`.
+- **Set the desired identity IN stage 2, atomically.** conwrt's
+  sysupgrade path (`scripts/conwrt/flash_utils.py`) already ships a
+  `sysupgrade -n -f <overlay.tar.gz>` overlay carrying the rogue-DHCP
+  triple (and optionally an authorized key). Since the 2026-11-24
+  follow-up, `scripts/profile/overlay.py: build_overlay_tarball()` also
+  accepts `lan_ip=` — a delta-only uci-defaults script
+  (`etc/uci-defaults/99-conwrt-lan-ip`) that sets
+  `network.lan.ipaddr` on the permanent image's first boot, so the unit
+  comes up on YOUR address, never competing on 192.168.1.1. The value is
+  validated as a bare IPv4 literal (injection/typo guard). For a
+  full-flavored first boot (hostname, keys, packages) use the ASU /
+  imagebuilder bake path instead (`docs/gotchas.md` §"ASU", QUICKSTART
+  build recipe on the bench).
+- **Rebooting a stage-1 unit is free — and undoing.** Anything not yet
+  carried into stage 2 is lost by design; re-run it after the permanent
+  image boots (or put it in the overlay).
+
+Related species-level footgun (applies to every initramfs-recovery flow,
+not just zycast): `docs/gotchas.md` §"First flash runs from RAM".
+
 ## 2. Implementations
 
 | Feature | Go (`cmd/zycast/`) | C (via `scripts/zycast.py`) | Python (`scripts/zycast.py` fallback) | Rust (`conwrt-protocols::zycast` core + `conwrt zycast` CLI) |
