@@ -13,8 +13,15 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    // --stamp: the workspace HEAD this binary was built from; the pytest
+    // parity harness compares it against the live HEAD and rebuilds on
+    // mismatch (#432 consequence 2 — stale shared-cache false reds).
+    if args.len() == 2 && args[1] == "--stamp" {
+        println!("{}", env!("CONWRT_RENDER_STAMP"));
+        return ExitCode::SUCCESS;
+    }
     if args.len() != 2 {
-        eprintln!("usage: conwrt-plan-render <fixture.json>");
+        eprintln!("usage: conwrt-plan-render <fixture.json> | conwrt-plan-render --stamp");
         return ExitCode::FAILURE;
     }
     match conwrt_core::parity::render_fixture_file(std::path::Path::new(&args[1])) {
