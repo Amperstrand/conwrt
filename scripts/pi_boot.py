@@ -76,8 +76,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pi_eeprom import BOOT_MODES, decode_boot_order  # noqa: E402
-from ssh_utils import run_ssh  # noqa: E402
+from pi_eeprom import BOOT_MODES, decode_boot_order
+from ssh_utils import run_ssh
 
 # ---------------------------------------------------------------------------
 # Firmware facts (from raspberrypi/rpi-eeprom firmware-2711 release-notes.md)

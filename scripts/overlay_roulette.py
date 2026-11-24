@@ -128,7 +128,7 @@ def vm_run(vm: "VM", cmd: str) -> str:
     try:
         out = vm.run(cmd, timeout_s=20)
         return " | ".join(out) if isinstance(out, list) else str(out)
-    except Exception as err:  # noqa: BLE001 — classification must not crash
+    except Exception as err:
         return f"<err {type(err).__name__}>"
 
 

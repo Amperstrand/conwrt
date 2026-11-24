@@ -45,7 +45,7 @@ import os
 import lzma
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from checksum_utils import internet_checksum  # noqa: E402
+from checksum_utils import internet_checksum
 
 
 # --- ROMBIN header (48 bytes, big-endian) ---

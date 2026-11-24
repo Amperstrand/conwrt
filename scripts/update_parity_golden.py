@@ -19,9 +19,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from profile.ops import render_shell  # noqa: E402
+from profile.ops import render_shell
 
-import use_cases  # noqa: E402
+import use_cases
 
 
 def main() -> int:

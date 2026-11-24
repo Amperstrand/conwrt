@@ -282,7 +282,7 @@ def restore_wifi(token: str) -> None:
 def has_scapy() -> bool:
     """Check if scapy is importable."""
     try:
-        import scapy  # noqa: F401
+        import scapy
         return True
     except ImportError:
         return False

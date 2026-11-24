@@ -182,7 +182,7 @@ def cmd_configure(args: argparse.Namespace) -> int:
             ):
                 log("  ⚠ password hardening incomplete — configure reported as failed")
                 return 1
-        except Exception as exc:  # noqa: BLE001 — the audit must never break configure
+        except Exception as exc:
             log(f"  ⚠ password audit skipped (device unreachable: {exc})")
 
     if args.verify and not args.dry_run:

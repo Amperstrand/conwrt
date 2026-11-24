@@ -28,7 +28,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from flash.chromium_upload import upload  # noqa: E402
+from flash.chromium_upload import upload
 
 FRESH_STATES = ("REACHABLE", "DELAY", "PROBE")
 

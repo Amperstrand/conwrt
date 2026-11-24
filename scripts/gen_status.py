@@ -25,7 +25,7 @@ END = "<!-- END generated:test-status -->"
 
 def _pins_version() -> str:
     sys.path.insert(0, str(REPO / "tests" / "integration"))
-    import _pins  # noqa: PLC0415
+    import _pins
 
     return _pins.OPENWRT_VERSION
 
@@ -38,7 +38,7 @@ def _matrix_count() -> str:
 
 def _preset_census() -> tuple[int, list[str], int]:
     sys.path.insert(0, str(REPO / "scripts"))
-    from use_cases import registry  # noqa: PLC0415
+    from use_cases import registry
 
     regs = registry()
     untested = [n for n, uc in regs.items() if uc.test_status == "untested"]

@@ -43,7 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ssh_utils import run_ssh  # noqa: E402
+from ssh_utils import run_ssh
 
 MIN_DEVICE_GB = 8
 DD_BLOCK = "4M"

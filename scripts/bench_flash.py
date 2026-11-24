@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bench_adopt import AdoptError, Place, Runner  # noqa: E402
+from bench_adopt import AdoptError, Place, Runner
 
 if TYPE_CHECKING:
     # annotation-only: bench_session imports bench_flash at module level

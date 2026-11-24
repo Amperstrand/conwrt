@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pi_netboot import armed_macs, is_armed, read_remote_config  # noqa: E402
+from pi_netboot import armed_macs, is_armed, read_remote_config
 
 # Upstream is pinned by COMMIT, not by a moving branch. The defaults land in
 # SPI flash; `master` meant two builds of one tool version could package

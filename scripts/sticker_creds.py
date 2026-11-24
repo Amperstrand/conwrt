@@ -34,8 +34,8 @@ from typing import Any
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
-from ssh_utils import run_ssh, ssh_cmd, scp_cmd  # noqa: E402
-from model_loader import load_model  # noqa: E402
+from ssh_utils import run_ssh, ssh_cmd, scp_cmd
+from model_loader import load_model
 
 # ---------------------------------------------------------------------------
 # Constants

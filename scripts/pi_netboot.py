@@ -38,8 +38,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from oui import oui_lookup  # noqa: E402
-from ssh_utils import run_ssh  # noqa: E402
+from oui import oui_lookup
+from ssh_utils import run_ssh
 
 MARKER_START = "# --- Pi netboot rescue (managed by conwrt pi_netboot) ---"
 MARKER_END = "# --- end Pi netboot rescue ---"

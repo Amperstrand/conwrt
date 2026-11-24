@@ -195,7 +195,7 @@ def upload(image_path: str, endpoint: str, field: str = "firmware",
                         page.wait_for_selector("input[type=file]", timeout=10000)
                         log(f"attempt {attempt}: form ready ({target})")
                         break
-                    except Exception as e:  # noqa: BLE001 — retry ladder is the point
+                    except Exception as e:
                         transcript.append(str(e).splitlines()[0])
                         log(f"attempt {attempt} failed: {str(e)[:110]}")
                 else:
@@ -213,7 +213,7 @@ def upload(image_path: str, endpoint: str, field: str = "firmware",
                     page.wait_for_load_state("load", timeout=timeout * 1000)
                     body = page.content()[:200].replace("\n", " ")
                     transcript.append(f"page: {body}")
-                except Exception as e:  # noqa: BLE001 — mid-flash endings land here
+                except Exception as e:
                     transcript.append(f"post-upload wait: {str(e)[:110]}")
                 return classify_outcome("\n".join(transcript))
             finally:

@@ -34,7 +34,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_consistency import (SERIAL_RESOURCE, DoctorError, ExporterParseError,
                                Stanzas, crosscheck, load_places, parse_exporter)
-from config import load_config  # noqa: E402
+from config import load_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLACES_JSON = REPO_ROOT / "data" / "bench" / "places.json"

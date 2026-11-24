@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from checksum_utils import internet_checksum  # noqa: E402
+from checksum_utils import internet_checksum
 
 ROMBIN_HDR_SIZE = 48
 EXPECTED_SLOT_GAP = 0x800000
