@@ -72,8 +72,10 @@ class TestChecksum:
         assert checksum(b"\xff\xff\x00\x01") == 0x1FF
 
     def test_fold(self):
-        # 258 bytes of 0xFF sum to 0x1001E -> one fold -> 0x1E + 1 = 0x1F.
-        assert checksum(b"\xff" * 258) == 0x1F
+        # 258 bytes of 0xFF sum to 0x100FE -> one fold -> 0x00FE + 1 = 0xFF.
+        # (Truncation without the carry would say 0x00FE — the +1 is the
+        # fold being pinned.)
+        assert checksum(b"\xff" * 258) == 0xFF
 
     def test_empty(self):
         assert checksum(b"") == 0
