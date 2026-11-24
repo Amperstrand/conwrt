@@ -1,5 +1,10 @@
 # conwrt + vps-on-demand: Combined SHC Deployment
 
+> **Status note (2026-11-23 audit):** historical analysis document —
+> references scripts that no longer exist in the tree (removed in
+> later refactors). Kept for the reasoning, not the file inventory.
+
+
 ## Architecture
 
 ```
