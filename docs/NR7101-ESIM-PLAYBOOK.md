@@ -20,6 +20,32 @@ able to provision the latest OpenWrt and get silentlink/nadanada working on a
 below cites the exact commits that were tested and separates them from
 improvements that landed since and are still pending hardware re-validation.
 
+## Gate 0 — card state, BEFORE anything else (2026-11-24)
+
+**Species lesson (paid for with a lost profile):** when a modem dies
+mid-UIM-session, it can drive VALID destructive profile operations on the
+way down — during a 2026-11 incident the dying modem executed three ES10c
+DeleteProfile ops through the still-open session, and the seated eUICC
+carried them out. The paid profile was lost conclusively (single-use
+activation code consumed; SGP.22 has no un-delete). The card itself
+survived HEALTHY (ISD-R, crypto, and cert chain all fine afterward).
+
+What this means for you:
+
+1. **Diff the card state before and after every session** — profile map
+   vs expectation (`lpac profile list` / `wwandctl sims`). A silent
+   profile-store wipe is a real failure mode and diffing is the only
+   detector.
+2. **Never seat an eUICC in a modem that is not just-proven-stable**, and
+   never mid-experiment. An abnormal session termination is not
+   necessarily passive — the card may execute whatever the dying modem
+   sends.
+3. **A wiped card is not a dead card.** "No profiles / placeholder ICCID"
+   after an incident is consistent with a fully healthy ISD-R; recovery is
+   re-provisioning (activation code), not card repair.
+4. Species-level card-state gate: [MODEM-AS-READER-PLAYBOOK.md](MODEM-AS-READER-PLAYBOOK.md)
+   §"Universal gates" gate 0 — run it first on every card, every time.
+
 ## The chain
 
     silent.link / nadanada purchase (host)
@@ -158,8 +184,12 @@ conformance tests, the sacrificial-SIM suite + `validate.sh` split (Class-A
 zero-risk vs eSIM-provisioning gate), release-gate docs, silentlink-lib
 bench-gap audit.
 
-## Current bench state / known gaps (2026-10-24)
+## Current bench state / known gaps
 
+- **(2026-11-24) Card-state discipline is Gate 0 above** — the specimen
+  card's profile store was wiped by modem-driven deletes during a modem
+  death (paid profile lost; card healthy and since re-proven end-to-end).
+  The items below this line are the 2026-10-24 record, kept for history.
 - The NR7101's AT bridge is **down right now** (unit was reconfigured during
   unrelated failover testing; no socat service running). Step 2 restores it.
 - Dual-SIM slot switch command for this RG502Q-EA firmware: identify via
