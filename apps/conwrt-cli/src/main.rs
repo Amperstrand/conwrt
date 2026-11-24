@@ -304,6 +304,25 @@ enum Command {
         #[command(subcommand)]
         command: CacheCommand,
     },
+    /// Prepare an AP391x CFG1 block for the two-stage no-serial flash.
+    /// DRY-RUN by default. Field-validated on ap3915i-3893 (2026-11-18..23).
+    FlashAp391x {
+        /// Path to the stock CFG1 block backup (64 KiB, from the device).
+        #[arg(long)]
+        cfg1_backup: PathBuf,
+        /// TFTP server IP (serverip env var).
+        #[arg(long)]
+        tftp_server: String,
+        /// Temporary IP for the AP during TFTP boot (ipaddr env var).
+        #[arg(long)]
+        ap_ip: String,
+        /// Stage 1 (flash from stock) or final (OpenWrt permanent).
+        #[arg(long, default_value = "final")]
+        stage: String,
+        /// Write the prepared block to this file.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Derive deterministic per-device fleet identity (replaces
     /// `scripts/fleet_secrets.py`): hostname, SSID, and root/wifi
     /// passwords for BOTH derivation versions — v1 (frozen, byte-
@@ -1555,6 +1574,13 @@ fn main() -> ExitCode {
         Command::Agent { command } => cmd_agent(command),
         Command::Maas { command } => cmd_maas(command),
         Command::Cache { command } => cmd_cache(command),
+        Command::FlashAp391x {
+            cfg1_backup,
+            tftp_server,
+            ap_ip,
+            stage,
+            output,
+        } => flash_ap391x(&cfg1_backup, &tftp_server, &ap_ip, &stage, output),
         Command::FleetDerive {
             mac,
             salt,
@@ -3813,6 +3839,157 @@ fn board_matches(model: &conwrt_types::DeviceModel, board: &str) -> bool {
             .board_names
             .as_deref()
             .is_some_and(|names| names.iter().any(|name| name == board))
+}
+
+// ---------------------------------------------------------------------------
+// flash-ap391x: the two-stage no-serial CFG1 preparation (P1 Rust driver)
+// ---------------------------------------------------------------------------
+
+/// Prepare an AP391x CFG1 block for the `extreme-rdwr-tftp-initramfs`
+/// flash method. Parses the stock backup, applies the species recipe
+/// (stage-1: `run boot_net` only; final: `run boot_openwrt; run boot_net`
+/// with the 0x83600000 load address — the Sept-2026 constraint was this
+/// address, not kernel version), and writes the new block.
+fn flash_ap391x(
+    cfg1_backup: &Path,
+    tftp_server: &str,
+    ap_ip: &str,
+    stage: &str,
+    output: Option<PathBuf>,
+) -> ExitCode {
+    const CRC_OFFSET: usize = 5; // AP391x: 4-byte CRC + 1-byte active flag
+
+    // 1. Read and parse the stock block
+    let data = match std::fs::read(cfg1_backup) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("conwrt: cannot read {cfg1_backup:?}: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if data.len() != 65536 {
+        eprintln!(
+            "conwrt: CFG1 block must be exactly 65536 bytes (got {})",
+            data.len()
+        );
+        return ExitCode::from(2);
+    }
+    let mut env = match conwrt_core::uboot_env::UbootEnvBlock::from_bytes(&data, CRC_OFFSET) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("conwrt: cannot parse CFG1 block: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if !env.validate_crc() {
+        eprintln!(
+            "conwrt: WARNING: stock CFG1 CRC does not validate — the backup may be corrupt. Proceeding anyway (the new block gets a fresh CRC)."
+        );
+    }
+
+    let before: std::collections::BTreeMap<String, String> = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    // 2. Apply the species recipe
+    env.set("WATCHDOG_COUNT", "0");
+    env.set("WATCHDOG_LIMIT", "0");
+    env.set("MOSTRECENTKERNEL", "0");
+    env.set("serverip", tftp_server);
+    env.set("ipaddr", ap_ip);
+
+    match stage {
+        "stage1" => {
+            // Stage 1: force TFTP boot (flash the initramfs from stock)
+            env.set("bootcmd", "run boot_net");
+            // boot_openwrt stays for the final transition
+            env.set(
+                "boot_openwrt",
+                "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000",
+            );
+        }
+        "final" => {
+            // Final: flash first, TFTP fallback tail (semicolon, never ||)
+            env.set("bootcmd", "run boot_openwrt; run boot_net");
+            env.set(
+                "boot_openwrt",
+                "sf probe; sf read 0x83600000 0x280000 0xc00000; bootm 0x83600000",
+            );
+        }
+        _ => {
+            eprintln!("conwrt: --stage must be 'stage1' or 'final' (got {stage:?})");
+            return ExitCode::from(2);
+        }
+    }
+
+    // Strip ubi.mtd=0 from bootargs (causes kernel UBI attach failure)
+    if let Some(ba) = env.get("bootargs") {
+        let scrubbed: String = ba
+            .replace("ubi.mtd=0", " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        env.set("bootargs", &scrubbed);
+    }
+
+    // 3. Serialize and verify
+    let new_block = env.to_bytes();
+    let reparsed = match conwrt_core::uboot_env::UbootEnvBlock::from_bytes(&new_block, CRC_OFFSET) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("conwrt: internal error — reparse failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if !reparsed.validate_crc() {
+        eprintln!("conwrt: internal error — new block CRC does not validate");
+        return ExitCode::from(2);
+    }
+
+    // 4. Print the diff
+    let after: std::collections::BTreeMap<String, String> = reparsed
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let changed: Vec<&String> = before
+        .keys()
+        .chain(after.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|k| before.get(*k) != after.get(*k))
+        .collect();
+    println!(
+        "conwrt: CFG1 prepared ({stage} stage, {} keys changed)",
+        changed.len()
+    );
+    for k in &changed {
+        println!(
+            "  {k}:\n    old: {}\n    new: {}",
+            before.get(*k).map_or("<unset>", |v| v.as_str()),
+            after.get(*k).map_or("<unset>", |v| v.as_str()),
+        );
+    }
+
+    // 5. Write output
+    match output {
+        Some(path) => {
+            if let Err(e) = std::fs::write(&path, &new_block) {
+                eprintln!("conwrt: cannot write {path:?}: {e}");
+                return ExitCode::from(2);
+            }
+            println!("conwrt: wrote {} bytes to {path:?}", new_block.len());
+            println!("conwrt: next steps on the device:");
+            println!("  scp -O {path:?} root@<device>:/tmp/cfg1.bin");
+            println!("  flashcp /tmp/cfg1.bin /dev/mtd1   # CFG1 only; CFG2 stays pristine");
+        }
+        None => {
+            println!("conwrt: dry-run (no --output given). The prepared block is valid.");
+            println!("conwrt: next steps:");
+            println!("  conwrt flash-ap391x --output /tmp/cfg1-prepared.bin ... (to write)");
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
