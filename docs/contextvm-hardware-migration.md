@@ -1,5 +1,10 @@
 # Physical Hardware Testing via Context-VM
 
+> **Status note (2026-11-23 audit):** historical analysis document —
+> references scripts that no longer exist in the tree (removed in
+> later refactors). Kept for the reasoning, not the file inventory.
+
+
 ## Problem
 
 All conwrt testing today runs against QEMU x86_64 VMs. This can't test:

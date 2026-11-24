@@ -1,5 +1,10 @@
 # conwrt Architecture Analysis
 
+> **Status note (2026-11-23 audit):** historical analysis document —
+> references scripts that no longer exist in the tree (removed in
+> later refactors). Kept for the reasoning, not the file inventory.
+
+
 Assessment of the current codebase structure and arguments for/against
 refactoring toward greater modularity. Written after building the field-lab
 feature, which exposed both strengths and friction points in the existing
