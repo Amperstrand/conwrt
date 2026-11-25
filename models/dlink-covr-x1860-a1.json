@@ -45,7 +45,8 @@
       ],
       "envelope": [
         "image-type-factory"
-      ]
+      ],
+      "one_request_recovery": true
     },
     "sysupgrade": {
       "description": "SSH sysupgrade from existing OpenWrt",

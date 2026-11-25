@@ -263,6 +263,7 @@ def _resolve_initial_state(mode: str, profile: object, boot_state: str,
             profile.recovery_ip,
             interface=interface,
             client_ip=getattr(profile, "client_ip", ""),
+            one_request=getattr(profile, "one_request_recovery", False),
         )
         if found:
             log(f"Recovery HTTP already live at {profile.recovery_ip} ({detail}) — skipping power cycle")
@@ -412,6 +413,7 @@ def _handle_detecting(ctx: RecoveryContext, event_queue: queue.Queue) -> None:
                 recovery_ip,
                 interface=ctx.interface,
                 client_ip=getattr(ctx.profile, "client_ip", ""),
+                one_request=getattr(ctx.profile, "one_request_recovery", False),
             )
             if found:
                 log(f"Recovery HTTP already live at {recovery_ip} ({detail}) — skipping power cycle")

@@ -96,9 +96,15 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
         .get("recovery_soft_mac", "")
     )
 
+    # One-request recovery server class (#241): the recovery HTTP stack
+    # serves exactly ONE request — detection must be ARP-only and the
+    # firmware POST must be that request.
+    one_request_recovery = bool(fm.get("one_request_recovery", False))
+
     return SimpleNamespace(
         name=model["id"],
         vendor=model["vendor"],
+        one_request_recovery=one_request_recovery,
         recovery_soft_mac=recovery_soft_mac,
         description=model["description"],
         flash_method=method_name,

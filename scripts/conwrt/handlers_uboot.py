@@ -97,6 +97,7 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
             profile.recovery_ip,
             interface=getattr(ctx, "interface", None),
             client_ip=getattr(profile, "client_ip", ""),
+            one_request=getattr(profile, "one_request_recovery", False),
         )
         if found:
             log(f"Recovery mode detected: {detail}")

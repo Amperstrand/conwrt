@@ -245,6 +245,11 @@ pub struct FlashMethod {
     /// Silence timeout before declaring the flash stalled, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silence_timeout: Option<u32>,
+    /// One-request recovery server class (#241): the recovery HTTP stack
+    /// serves exactly ONE request — detection goes ARP-only and the
+    /// firmware POST must be that request. Schema parity: boolean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_request_recovery: Option<bool>,
 
     /// Method-specific parameters (`flash_methods.*.params` and friends),
     /// preserved in document order — the #118 audit's scattered-readers
@@ -398,6 +403,7 @@ mod trigger_tests {
             upload_endpoint: Some("/upload".into()),
             flash_time_seconds: None,
             silence_timeout: None,
+            one_request_recovery: None,
             extras,
         }
     }
@@ -406,6 +412,25 @@ mod trigger_tests {
     fn gl_style_trigger_flagged() {
         assert!(method_with("trigger_flash_endpoint", "/result").requires_trigger());
         assert!(method_with("trigger_endpoint", "/result").requires_trigger());
+    }
+
+    #[test]
+    fn one_request_recovery_flag_parses_and_roundtrips() {
+        // #241: the one-request class flag must survive the typed
+        // projection (schema parity: boolean on flash_methods.*).
+        let json = r#"{"id":"x","vendor":"v","description":"d",
+            "openwrt":{"target":"t/t","device":"d","profile":"p","version":"1"},
+            "flash_methods":{"recovery-http":{
+                "description":"x","one_request_recovery":true}}}"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let model: DeviceModel = serde_json::from_value(value.clone()).unwrap();
+        let fm = &model.flash_methods.as_ref().unwrap()["recovery-http"];
+        assert_eq!(fm.one_request_recovery, Some(true));
+        assert_eq!(
+            serde_json::to_value(&model).unwrap().get("flash_methods"),
+            value.get("flash_methods"),
+            "the flag must roundtrip without loss"
+        );
     }
 
     #[test]
