@@ -206,6 +206,10 @@
             },
             "uniqueItems": true,
             "description": "Safety preconditions that must hold BEFORE the risky step (AGENTS.md discipline, machine-checkable). A transition without its envelope refuses to run."
+          },
+          "one_request_recovery": {
+            "type": "boolean",
+            "description": "The recovery HTTP stack serves exactly ONE request (D-Link COVR x1860 class): detection goes ARP-only and the firmware POST must be that request — any GET burns the arming window (#241, runbook §2 rule 1)."
           }
         }
       }

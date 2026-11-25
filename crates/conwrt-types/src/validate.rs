@@ -226,6 +226,7 @@ mod tests {
                     upload_endpoint: None,
                     flash_time_seconds: None,
                     silence_timeout: None,
+                    one_request_recovery: None,
                     extras: Default::default(),
                 },
             )])),
@@ -395,6 +396,7 @@ mod tests {
                 upload_endpoint: None,
                 flash_time_seconds: None,
                 silence_timeout: None,
+                one_request_recovery: None,
                 extras: Default::default(),
             },
         );

@@ -27,9 +27,46 @@ def parse_uboot_response(response: str) -> tuple[int | None, str | None]:
         return None, None
     return int(match.group(1)), match.group(2).lower()
 
+# Neighbor states that count as armed (the flash-recovery.sh doctrine:
+# MAC present + live-ish state; INCOMPLETE/FAILED/absent do not count).
+_NEIGH_RE = re.compile(
+    r"lladdr\s+([0-9a-fA-F:]{17})\s+(REACHABLE|STALE|DELAY|PROBE)")
+
+
+def detect_uboot_arp(recovery_ip: str,
+                     interface: str | None = None) -> tuple[bool, str]:
+    """ARP-only arming check — the flash-recovery.sh doctrine, factored.
+
+    The one-request recovery class (D-Link COVR x1860) serves exactly ONE
+    HTTP request; any GET burns the arming window and costs a power cycle
+    (runbook §2 rule 1, #241). The recovery stack answers ARP, never ICMP:
+    solicit with one ping, then read the neighbor entry — a MAC in a
+    live-ish state means the server is up and would serve its one request.
+    ZERO HTTP requests are issued from here, ever.
+    """
+    try:
+        # Solicit ARP (the ping itself gets no ICMP reply — that is fine).
+        subprocess.run(
+            ["ping", "-c", "1", "-W", "1", recovery_ip],
+            capture_output=True, timeout=3, check=False,
+        )
+        cmd = ["ip", "neigh", "show", recovery_ip]
+        if interface:
+            cmd += ["dev", interface]
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=5, check=False)
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"arp probe failed: {e}"[:80]
+    match = _NEIGH_RE.search(r.stdout)
+    if match:
+        return True, f"ARP {match.group(2)} {match.group(1)}"
+    return False, r.stdout.strip()[:60] or "no neighbor entry"
+
+
 def detect_uboot_http(recovery_ip: str = DEFAULT_IP,
                       interface: str | None = None,
-                      client_ip: str | None = None) -> tuple[bool, str]:
+                      client_ip: str | None = None,
+                      one_request: bool = False) -> tuple[bool, str]:
     """Probe the recovery HTTP server.
 
     On routed seats (fixture SVI, VLAN subinterface, ...) the probe source
@@ -38,7 +75,20 @@ def detect_uboot_http(recovery_ip: str = DEFAULT_IP,
     curl routes via the default route and the recovery page is invisible,
     which made the "already live → skip power cycle" fast path unreachable
     and forced the manual power-cycle dance (bench-verified 2026-09-27).
+
+    When *one_request* is set (model flag, #241) the probe NEVER issues an
+    HTTP request — arming is detected from the ARP neighbor table only
+    (detect_uboot_arp), so the firmware POST stays the first and only
+    request the recovery server ever sees.
     """
+    if one_request:
+        if interface and client_ip:
+            try:
+                from platform_utils import configure_interface_ip
+                configure_interface_ip(interface, client_ip, "24")
+            except Exception as e:
+                log(f"client-alias setup failed ({e}); probing anyway")
+        return detect_uboot_arp(recovery_ip, interface=interface)
     if interface and client_ip:
         try:
             from platform_utils import configure_interface_ip

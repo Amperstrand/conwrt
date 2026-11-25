@@ -126,6 +126,13 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
       recovery server uses the model-wide soft MAC `3e:85:be:87:55:42`
       (locally administered). NEVER GET the page (rule 1).
       (`bench_switch_recovery_rig_2026_10_14`)
+- [ ] **One-request-safe handoff (#241)**: `conwrt flash` is now
+      one-request-safe for this species — the model's flash method
+      carries `one_request_recovery: true`, so boot-state detection
+      arms via the ARP neighbor table (same doctrine as the script
+      probe) and the firmware POST is the first and only HTTP request.
+      The generic helper may run end-to-end; the Playwright path
+      remains the bench-proven upload (#91).
 - [ ] **Soft-MAC pinning (#242)**: `flash-recovery.sh` now enforces the pin
       when the model declares `signatures.recovery.recovery_soft_mac` — a
       neighbor with a DIFFERENT MAC is not "armed" (another device may
