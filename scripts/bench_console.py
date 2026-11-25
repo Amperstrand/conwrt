@@ -35,7 +35,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import pexpect
+# pexpect is imported LAZILY (TYPE_CHECKING for the annotation, local
+# imports in the functions that need the runtime class/constants):
+# importing this module — for the host-normalization/jump-chain/marker
+# logic, or in CI without the operator-host dependency — must not
+# require it.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pexpect
 
 SWITCH_HOST = os.environ.get("CONWRT_BENCH_SWITCH", "")
 REF_UNIT_HOST = os.environ.get("CONWRT_REF_UNIT", "")
@@ -76,6 +84,8 @@ class BenchConsole:
 
     def connect(self, timeout: int = 15) -> None:
         """Open the SSH+serial tunnel."""
+        import pexpect  # lazy: only a real connection needs it
+
         if self.child:
             self.close()
         cmd = self._ssh_cmd()
@@ -127,6 +137,8 @@ class BenchConsole:
                     password: str = STOCK_PASS,
                     timeout: int = 60) -> bool:
         """Login to the stock Extreme firmware on the serial console."""
+        import pexpect  # lazy runtime import (see module note)
+
         assert self.child, "not connected"
         # Send newline to wake up the console / get a fresh prompt
         self.child.sendline("")
@@ -157,6 +169,8 @@ class BenchConsole:
                     autoboot_pattern: str = "stop autoboot",
                     timeout: int = 60) -> bool:
         """Interrupt U-Boot autoboot and get to the prompt."""
+
+        import pexpect  # lazy runtime import (see module note)
         assert self.child, "not connected"
         idx = self.child.expect(
             [autoboot_pattern, r"Boot.*->", pexpect.TIMEOUT],
@@ -173,6 +187,8 @@ class BenchConsole:
 
 
 def main() -> int:
+    import pexpect  # lazy runtime import (see module note)
+
     """Quick smoke: connect, send newline, show what comes back."""
     console = BenchConsole()
     print(f"connecting to {console.ref_host} via {console.switch_host}...")
