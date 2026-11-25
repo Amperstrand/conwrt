@@ -88,9 +88,18 @@ def build_profile_from_model(model_id: str, serial_method: str = "",
         client_ip = fm["client_ip"]
         recovery_ip = fm["recovery_ip"]
 
+    # Model-wide soft MAC of the recovery stack, when the species presents a
+    # constant one (#242). Absent for the GL.iNet class (no known constant
+    # recovery MAC) -> any-MAC arming verdict stays.
+    recovery_soft_mac = (
+        model.get("signatures", {}).get("recovery", {})
+        .get("recovery_soft_mac", "")
+    )
+
     return SimpleNamespace(
         name=model["id"],
         vendor=model["vendor"],
+        recovery_soft_mac=recovery_soft_mac,
         description=model["description"],
         flash_method=method_name,
         recovery_ip=recovery_ip,

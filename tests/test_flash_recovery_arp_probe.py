@@ -379,3 +379,45 @@ class TestNobodyWrapBoundaries:
                   "--clear-groups"]
         assert all(p.isdigit() or p.startswith(("-", "setpriv", "--"))
                    for p in prefix[1:])
+
+
+# --- #242: soft-MAC pinning of the ARP arming verdict -----------------------
+
+OTHER_MAC = "aa:bb:cc:dd:ee:01"
+
+
+@pytest.mark.parametrize("mac_case", [SOFT_MAC, SOFT_MAC.upper()],
+                         ids=["lower", "upper"])
+def test_soft_mac_match_armed(rig, mac_case):
+    """Model pins the soft MAC -> matching neighbor (either case) is armed."""
+    rig.set_py_reply(f"{RECOVERY_IP} 192.168.0.10 {SOFT_MAC}")
+    rig.set_neigh_reply(f"{RECOVERY_IP} dev lo lladdr {mac_case} REACHABLE")
+    out = rig.run({"DRY_RUN": "1"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert f"Recovery server armed (ARP REACHABLE {mac_case})" in out.stdout
+    assert "does not match" not in out.stderr
+
+
+def test_soft_mac_mismatch_not_armed(rig):
+    """Model pins the soft MAC -> a DIFFERENT device on the recovery IP is
+    NOT armed (the false-positive that burns a flash cycle, #242)."""
+    rig.set_py_reply(f"{RECOVERY_IP} 192.168.0.10 {SOFT_MAC}")
+    rig.set_neigh_reply(f"{RECOVERY_IP} dev lo lladdr {OTHER_MAC} REACHABLE")
+    out = rig.run({"DRY_RUN": "1", "ASSUME_YES": "0"},
+                  stdin="")
+    # not armed -> warn + prompt -> empty stdin aborts
+    assert out.returncode != 0
+    assert "Recovery server armed" not in out.stdout
+    assert "Recovery server armed" not in out.stderr
+    assert "different device" in out.stderr
+    assert rig.lines("curl") == []  # never GETs either way
+
+
+def test_soft_mac_absent_keeps_any_mac_verdict(rig):
+    """No pinned soft MAC (GL.iNet class) -> any-MAC verdict, unchanged."""
+    rig.set_py_reply(f"{RECOVERY_IP} 192.168.0.10")  # two fields only
+    rig.set_neigh_reply(f"{RECOVERY_IP} dev lo lladdr {OTHER_MAC} REACHABLE")
+    out = rig.run({"DRY_RUN": "1"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert f"Recovery server armed (ARP REACHABLE {OTHER_MAC})" in out.stdout
+    assert "different device" not in out.stderr
