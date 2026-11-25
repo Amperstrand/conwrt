@@ -26,7 +26,7 @@ use crate::ordered_map::OrderedMap;
 /// Baud is the field hardware lessons keep proving wrong in prose
 /// (AGENTS: NR7101 shipped 115200 in JSON, real hardware speaks 57600) —
 /// so it carries a range check both languages enforce identically.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SerialConsole {
     /// Baud rate (1200–921600: everything real hardware speaks).
     pub baud: u32,
@@ -44,6 +44,62 @@ pub struct SerialConsole {
     /// Free-form operator note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Vendor/extra keys the schema admits (`additionalProperties: true`)
+    /// — preserved in document order like every other section, so
+    /// reserialization never corrupts the document (#338 gap 1).
+    #[serde(flatten)]
+    pub extras: OrderedMap<serde_json::Value>,
+}
+
+/// Deserialize an optional field, REJECTING an explicit JSON `null` the
+/// way the schema does (type object/array vs null). serde's default
+/// `Option` handling conflates null with absent; the schema does not —
+/// the two validators disagreed (#338 gap 3).
+fn reject_explicit_null<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    struct NullAware<T>(core::marker::PhantomData<T>);
+
+    impl<'de, T> serde::de::Visitor<'de> for NullAware<T>
+    where
+        T: serde::Deserialize<'de>,
+    {
+        type Value = Option<T>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("a value or an absent key (explicit null is rejected)")
+        }
+
+        fn visit_none<E>(self) -> Result<Option<T>, E>
+        where
+            E: serde::de::Error,
+        {
+            // JSON null maps here for serde_json's deserialize_option.
+            Err(E::custom(
+                "explicit null is not an absent key — remove the key instead (schema parity, #338)",
+            ))
+        }
+
+        fn visit_unit<E>(self) -> Result<Option<T>, E>
+        where
+            E: serde::de::Error,
+        {
+            Err(E::custom(
+                "explicit null is not an absent key — remove the key instead (schema parity, #338)",
+            ))
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Option<T>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            T::deserialize(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(NullAware(core::marker::PhantomData))
 }
 
 /// A device model definition (`models/{id}.json`).
@@ -66,11 +122,22 @@ pub struct DeviceModel {
     /// Known OUI prefixes for this model (species-level; never unit MACs).
     #[serde(default)]
     pub mac_oui: Vec<String>,
-    /// Typed serial console section (optional; #118).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Typed serial console section (optional; #118). An explicit `null`
+    /// is REJECTED, matching the schema (type: object) — absent is fine,
+    /// null is not (#338 gap 3).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_explicit_null"
+    )]
     pub serial_console: Option<SerialConsole>,
     /// Operator-facing hard warnings (array of strings; dual-typed #118).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// An explicit `null` is REJECTED, matching the schema (type: array).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_explicit_null"
+    )]
     pub warnings: Option<Vec<String>>,
     /// Every field not yet typed, in document order — parsing is lossless
     /// and reserialization drops nothing (corpus roundtrip test).
@@ -232,6 +299,47 @@ mod tests {
         );
         assert!(m.capabilities.is_none());
         assert!(m.mac_oui.is_empty());
+    }
+
+    #[test]
+    fn serial_console_vendor_extras_roundtrip() {
+        // #338 gap 1: the schema admits additionalProperties in
+        // serial_console; the typed projection must not drop them.
+        let json = r#"{"id":"x","vendor":"v","description":"d",
+            "openwrt":{"target":"t/t","device":"d","profile":"p","version":"1"},
+            "flash_methods":{"m":{"description":"x"}},
+            "serial_console":{"baud":57600,"console_device":"ttyS0",
+                              "voltage":"3.3","connector":"RJ45"}}"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let model: DeviceModel = serde_json::from_value(value.clone()).unwrap();
+        let roundtripped = serde_json::to_value(&model).unwrap();
+        assert_eq!(
+            roundtripped.get("serial_console"),
+            value.get("serial_console"),
+            "serial_console vendor keys must survive the typed projection"
+        );
+    }
+
+    #[test]
+    fn explicit_null_serial_console_rejected() {
+        // #338 gap 3: schema rejects "serial_console": null (type object);
+        // the Rust parse must reject it too, not read it as absent.
+        let bad = r#"{"id":"x","vendor":"v","description":"d",
+            "openwrt":{"target":"t/t","device":"d","profile":"p","version":"1"},
+            "flash_methods":{"m":{"description":"x"}},
+            "serial_console":null}"#;
+        let err = serde_json::from_str::<DeviceModel>(bad).unwrap_err();
+        assert!(err.to_string().contains("explicit null"));
+    }
+
+    #[test]
+    fn explicit_null_warnings_rejected() {
+        let bad = r#"{"id":"x","vendor":"v","description":"d",
+            "openwrt":{"target":"t/t","device":"d","profile":"p","version":"1"},
+            "flash_methods":{"m":{"description":"x"}},
+            "warnings":null}"#;
+        let err = serde_json::from_str::<DeviceModel>(bad).unwrap_err();
+        assert!(err.to_string().contains("explicit null"));
     }
 
     #[test]
