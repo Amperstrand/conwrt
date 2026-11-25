@@ -75,19 +75,28 @@ BusyBox `httpd` bound to the **LAN-port IPv6 link-local address** only
 (framework precedent: the dark-device discipline's zone-scoped fe80
 transport, AGENTS.md Dark-Device rule 6; physical-link locality is the
 perimeter). The endpoint accepts exactly one POST: the operator's public
-key plus the 6-digit code. It:
+key plus the 6-digit **binding** code. It:
 
-- rejects requests whose code does not match the derived value (rate-limited
-  by design: one comparison per request, endpoint dies after 3 failures);
+- rejects requests whose code does not match the value derived from
+  **the device host key concatenated with the submitted operator key**
+  (rate-limited by design: one comparison per request, endpoint dies
+  after 3 failures) — since #344 the LED device-half code alone no
+  longer authorizes enrollment: a forwarded request with a swapped
+  operator key derives a different expected code and fails, defeating
+  the plaintext-POST key-swap attack without changing the channel;
 - on match: appends the key to `/etc/dropbear/authorized_keys`, `chmod 600`,
   **verifies the write** (`grep -qF` of the key — the #229/#235 lesson:
   harden and mark done only after a provable write), then arms the standard
   key-only config, writes the TOFB marker, and tears the endpoint down.
 
 Operator side: `scripts/tofb.py` scans/keys the device over link-local
-(`ssh-keyscan` or the enrollment GET), computes the same 6-digit code from
-the presented host key, the operator compares against the LED, and only
-then enrolls.
+(`ssh-keyscan` or the enrollment GET), computes the device-half code from
+the presented host key — the operator compares that against the LED
+(visual TOFU of the device) — then derives the **binding** code with
+`tofb bindcode <device-host-line> <operator-key>` (SHA-256 of the two
+key blobs concatenated) and enrolls with it. The typed code is thereby a
+commitment to the operator's own key, not just an observation of the
+device's.
 
 ### MITM-resistance argument
 
