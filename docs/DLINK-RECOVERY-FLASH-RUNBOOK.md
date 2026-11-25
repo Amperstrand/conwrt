@@ -126,6 +126,13 @@ orange blink = OpenWrt starting; white constant = OpenWrt up.
       recovery server uses the model-wide soft MAC `3e:85:be:87:55:42`
       (locally administered). NEVER GET the page (rule 1).
       (`bench_switch_recovery_rig_2026_10_14`)
+- [ ] **Soft-MAC pinning (#242)**: `flash-recovery.sh` now enforces the pin
+      when the model declares `signatures.recovery.recovery_soft_mac` — a
+      neighbor with a DIFFERENT MAC is not "armed" (another device may
+      squat 192.168.0.1 on an unswept seat). The field stays UNPOPULATED
+      until #240's bench observation confirms the soft MAC is stable
+      across units and power cycles; the GL.iNet class (no constant
+      recovery MAC) keeps the any-MAC verdict by design.
 - [ ] **Specimen-identity gate BEFORE the upload** (#360): the recovery
       server's soft MAC is model-wide, so ARP arming proves the SPECIES,
       never the UNIT — and on a bench with several X1860s the wrong unit

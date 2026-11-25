@@ -72,7 +72,8 @@ sys.path.insert(0, "scripts")
 try:
     from flash.device_profile import build_profile_from_model as b
     p = b(sys.argv[1])
-    print(getattr(p, "recovery_ip", "") or "", getattr(p, "client_ip", "") or "")
+    print(getattr(p, "recovery_ip", "") or "", getattr(p, "client_ip", "") or "",
+          getattr(p, "recovery_soft_mac", "") or "")
 except Exception as e:  # noqa: BLE001 — empty result is handled by the caller
     # Loud on stderr so a model/schema drift cannot silently skip the probe.
     print(f"model_recovery: lookup failed for {sys.argv[1]}: {e}", file=sys.stderr)
@@ -98,8 +99,9 @@ except Exception:
 
 RECOVERY_IP=""
 CLIENT_IP=""
+SOFT_MAC=""
 if [[ -n "$MODEL" ]]; then
-  read -r RECOVERY_IP CLIENT_IP < <(model_recovery "$MODEL")
+  read -r RECOVERY_IP CLIENT_IP SOFT_MAC < <(model_recovery "$MODEL")
 fi
 if [[ -n "$MODEL" && -z "$RECOVERY_IP" ]]; then
   # Serial/TFTP-only models legitimately have none — but so does a broken
@@ -184,10 +186,19 @@ if [[ -n "$RECOVERY_IP" && -n "$CLIENT_IP" ]]; then
       ping -c 1 -W 1 "$RECOVERY_IP" >/dev/null 2>&1 || true
       NEIGH="$(ip neigh show "$RECOVERY_IP" dev "$IFACE" 2>/dev/null || true)"
       # MAC present + live-ish state (not INCOMPLETE/FAILED/absent) = armed.
+      # When the model pins a species-wide recovery soft MAC (#242), the
+      # neighbor MAC must MATCH it: a different live device squatting the
+      # recovery IP on an unswept seat would otherwise false-positive
+      # "armed" and burn a flash cycle on the one-request server class.
       if [[ "$NEIGH" =~ lladdr[[:space:]]+([0-9a-fA-F:]{17})[[:space:]]+(REACHABLE|STALE|DELAY|PROBE) ]]; then
-        ARMED=1
-        ARM_EVIDENCE="ARP ${BASH_REMATCH[2]} ${BASH_REMATCH[1]}"
-        break
+        if [[ -n "$SOFT_MAC" && "${BASH_REMATCH[1],,}" != "${SOFT_MAC,,}" ]]; then
+          warn "Neighbor MAC ${BASH_REMATCH[1]} != model soft MAC ${SOFT_MAC} —"
+          warn "a different device may hold $RECOVERY_IP; not treating as armed."
+        else
+          ARMED=1
+          ARM_EVIDENCE="ARP ${BASH_REMATCH[2]} ${BASH_REMATCH[1]}"
+          break
+        fi
       fi
       sleep 1
     done

@@ -215,7 +215,7 @@
     },
     "signatures": {
       "type": "object",
-      "description": "Evidence-shaped boot/traffic signatures: categories map to prose, scalars, or nested evidence objects. Deliberately loose (corpus-honest, 2026-10-15 audit: bare ints, nested dicts, bools all occur) \u2014 preserved-extra in the Rust projection, never dropped (#118).",
+      "description": "Evidence-shaped boot/traffic signatures: categories map to prose, scalars, or nested evidence objects. Deliberately loose (corpus-honest, 2026-10-15 audit: bare ints, nested dicts, bools all occur) — preserved-extra in the Rust projection, never dropped (#118). Known contract key: signatures.recovery.recovery_soft_mac — full lowercase colon-MAC; when present, flash-recovery's ARP arming verdict REQUIRES the neighbor MAC to match it (#242; populate from bench observation only, gated by #240).",
       "additionalProperties": true
     },
     "hardware": {
