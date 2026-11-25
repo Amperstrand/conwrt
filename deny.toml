@@ -1,0 +1,77 @@
+# cargo-deny configuration — advisory lane bring-up (ops session
+# amperstrand-ops#49, tollgate-s3-rs #14 precedent).
+#
+# Policy: unmaintained crates are handled via explicit dated ignore
+# entries below (NOT `unmaintained = "none"`): we want each
+# unmaintained dependency visible with a reason and revisit condition.
+
+[advisories]
+ignore = [
+    # (2026-11-17) lane bring-up (ops#49, tollgate-s3-rs #14 precedent):
+    # chrono unmaintained (RUSTSEC-2026-0543): upstream archived; no
+    # maintained 0.4.x drop-in. Revisit if time ships a fork adopted
+    # by the ecosystem.
+    "RUSTSEC-2026-0543",
+    # (2026-11-17) lane bring-up: rsa 0.10.0-rc.18 Marvin Attack
+    # (RUSTSEC-2023-0071, timing sidechannel in PKCS#1 v1.5 decryption).
+    # Fix is released rsa >= 0.10.0 which does not exist on crates.io —
+    # only the rc line does — and russh 0.65.1 (conwrt-local-std) pins
+    # that rc line. No in-range `--precise` target. Revisit when russh
+    # ships with released rsa 0.10.x (or ssh-key does).
+    "RUSTSEC-2023-0071",
+    # (2026-11-17) lane bring-up: atomic-polyfill unmaintained
+    # (RUSTSEC-2023-0089): via heapless 0.7.17 <- postcard 1.1.x
+    # (conwrt-agent-proto agent protocol). No safe upgrade inside
+    # postcard 1.x. Revisit when postcard moves to heapless 0.8+
+    # (drops atomic-polyfill).
+    "RUSTSEC-2023-0089",
+    # (2026-11-17) lane bring-up: async-std discontinued
+    # (RUSTSEC-2025-0052): pulled in by httpmock 0.7 (dev-dependency
+    # of conwrt-cli / conwrt-image tests only). Fix is httpmock 0.8+
+    # (dropped async-std) — a Cargo.toml dev-dep change, out of scope
+    # for this mechanical lockfile lane. Revisit on httpmock bump.
+    "RUSTSEC-2025-0052",
+    # (2026-11-17) lane bring-up: pin-utils unmaintained
+    # (RUSTSEC-2026-0441): via async-std (same httpmock 0.7 dev-dep
+    # chain as RUSTSEC-2025-0052); no maintained drop-in at this dep
+    # depth. Revisit on the httpmock bump.
+    "RUSTSEC-2026-0441",
+]
+
+[licenses]
+# License gate: allow list = the permissive union the resolved tree carries
+# (verified against CI run 45660104661, 2026-11-25). OR-alternatives that
+# appear in expressions but are never the satisfying branch (LGPL-2.1,
+# GPL-3.0-only, BSD-1-Clause) are deliberately NOT allowed wholesale, so a
+# future dependency whose only license is copyleft still hard-fails.
+# Standalone copyleft / non-OSI licenses live in scoped exceptions below.
+confidence-threshold = 0.8
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "ISC",
+  "0BSD",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "Zlib",
+  "Unicode-3.0",
+  "Unlicense",
+  "CC0-1.0",
+  "MIT-0",
+  "BSL-1.0",
+]
+
+[[licenses.exceptions]]
+# serialport 4.10.1 (standalone MPL-2.0): the serial device console path.
+# Weak copyleft on a tool dependency; scoped so any other MPL crate still
+# hard-fails.
+allow = ["MPL-2.0"]
+crate = "serialport"
+
+[[licenses.exceptions]]
+# webpki-roots (standalone CDLA-Permissive-2.0): bundles Mozilla's CCADB
+# CA root store — the license covers the DATA, not code; permissive terms,
+# standard exception in rustls trees.
+allow = ["CDLA-Permissive-2.0"]
+crate = "webpki-roots"
