@@ -81,7 +81,13 @@ def download_qip_cert(lan_ip: str, dest_dir: str) -> tuple[str, str, str]:
         content = f.read()
 
     cert_match = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", content, re.DOTALL)
-    key_match = re.search(r"-----BEGIN .*PRIVATE KEY-----.*?-----END .*PRIVATE KEY-----", content, re.DOTALL)
+    # #809: the prefix was '.*' with DOTALL, greedily matching from the
+    # CERTIFICATE header (dashes span blocks) — the key file began with a
+    # cert block. The [A-Z0-9 ]* class cannot contain dashes, so the match
+    # can only anchor at a genuine PRIVATE KEY header.
+    key_match = re.search(
+        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+        content, re.DOTALL)
 
     if cert_match:
         with open(cert_path, "w") as f:
