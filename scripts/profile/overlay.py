@@ -31,13 +31,19 @@ def _validate_lan_ip(lan_ip: str) -> None:
 
 def _lan_ip_uci_default_script(lan_ip: str) -> bytes:
     # Delta-only uci-defaults script: runs at first boot AFTER the image's
-    # default network config exists, sets only ipaddr — no full
+    # default network config exists, sets only ipaddr+netmask — no full
     # etc/config/network replacement (device names vary per model; a whole
     # -file replacement is the reachability-bug class this avoids).
     # OpenWrt runs+deletes /etc/uci-defaults/* on first boot; scripts in a
     # sysupgrade -f restore archive are honored.
+    # netmask is MANDATORY: on 25.12.x the stock LAN address ships as a
+    # CIDR-list value, so a plain `uci set ipaddr=X` clobbers it to a bare
+    # option and netifd parses /32 — the unit then answers ARP and fe80 but
+    # no v4 (no on-link route for replies). Hardware-proven 2026-11-25
+    # (#781 validation, campaign #835 E02); mirrors builder.py's pair.
     return (
         f"uci set network.lan.ipaddr='{lan_ip}'\n"
+        "uci set network.lan.netmask='255.255.255.0'\n"
         f"uci commit network\n"
     ).encode()
 
