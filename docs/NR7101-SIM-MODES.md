@@ -1,5 +1,9 @@
 # NR7101 SIM modes — local eSIM, physical ICE, Android phone SAP
 
+> **New here, starting from a boxed unit?** Start with
+> [nr7101/NR7101-ZERO-TO-DATA.md](nr7101/NR7101-ZERO-TO-DATA.md) — the
+> one-page on-ramp that chains flash → cellular stack → this guide.
+
 Status: hardware-proven on the Zyxel NR7101 / Quectel RG502Q-EA (2026-11-05).
 This is the **deployment guide** for the three supported SIM sources. The
 deep eSIM provisioning mechanics live in
