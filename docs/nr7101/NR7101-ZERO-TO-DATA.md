@@ -18,6 +18,7 @@
 | NR7101 (any state: stock / OpenWrt / bootlooping) | IP68 shell, 4 screws |
 | 802.3at PoE injector or PoE switch port | the box has ONE port, PoE-powered |
 | A host with ssh + this repo | Linux/macOS both work |
+| **Somewhere safe to plug the unit in** | the flash is stock at 192.168.1.1 with DHCP armed — pick a topology first: `docs/PROVISIONING.md` §2 (direct cable / spare OpenWrt flash host / bench switch) |
 | Your SIM source (A/B/C) | see the path table below |
 | (only if flashing from stock) USB-serial 3.3 V adapter | rescue lifeline; zycast itself needs no serial |
 
