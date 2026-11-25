@@ -229,3 +229,79 @@ ip addr show br-lan                # the LAN address you baked/overlaid
 - `docs/nr7101/NR7101-ZERO-TO-DATA.md` — NR7101 end-to-end on-ramp
 - `recipes/zyxel/nr7101/` — self-documenting flash recipe
 - Issue #781 — hardware validation of the overlay `lan_ip` first-boot path
+
+## 5. What you should see — timing, LEDs, and "is it working?" (measured)
+
+Measured 2026-11-25 on the bench (NR7101, 25.12.6 initramfs, Rust sender,
+15 loops; conwrt issue #841 E1). These are the expectations to set BEFORE
+you flash — the top user complaint is not knowing what "working" looks like.
+
+| Phase | What happens | How long |
+|---|---|---|
+| Sender stream | 15 bounded loops, ~76 s per loop (7420 chunks, 97 pkt/s @ 10 ms pacing) | ~19 min total |
+| Bootloader write | **completely silent** — no frames from the unit, PoE draw flat | during the stream |
+| Hands-off soak | sender done → wait | +10 min (mandatory — do NOT power-cycle inside this window) |
+| Final power cycle | off ~8 s, on | ~13 s |
+| Kernel boot | first frames are IPv6 DAD/MLD — the "kernel alive" wire signature | ~32 s after power-on |
+| Stage-1 reachable | answers ping/SSH at 192.168.1.1 | +0.5 s after first frames |
+| Network fully stable | brief re-configure burst, one ping may drop | ~67 s after power-on |
+
+Total from first power-cycle to stage-1 SSH: **~30 min** with the
+conservative discipline. If a complete stream was delivered and 10+ minutes
+have passed with no boot after the final cycle — stop sending; more airtime
+does not help.
+
+**LED meanings (NR7101, bench-observed)**: color-cycling roughly every 1 s
+= crash loop or flash loop (STOP senders, one clean reboot);
+~2 Hz red = early boot (bootloader/kernel init); signal-strength bars
+cycling = modem scanning (kernel is ALIVE — this is good); steady amber =
+booted and idle. A rebooting unit that never shows bars/amber is not
+booting.
+
+**Non-visual "is it working" channels** (the sender itself has NO feedback
+— fire-and-forget multicast; there is no completion signal from the
+receiver, ever):
+
+- ICMP: does 192.168.1.1 (or your elected/baked address) answer? The
+  simplest "done" signal — poll it.
+- The wire: a booting OpenWrt kernel's FIRST frames are IPv6 DAD/MLD
+  (before any IPv4). `tcpdump -i <iface> -ne` on the flash host and watch
+  for them. Zero frames during the stream is NORMAL (the receiver emits
+  nothing while writing).
+- PoE draw (managed switches): flat during the write, visible wobble
+  (±0.5-0.9 W) during kernel boot, 0 W if unpowered. Draw cannot show
+  write progress.
+- Link carrier flaps = reboots. Many flaps = crash loop (see LEDs).
+- The bootloader does NOT announce its listen window (no IGMP join) —
+  silence proves nothing about acceptance; only the post-cycle boot does.
+
+## 6. Flashing onto a shared LAN safely: LAN role election
+
+For the no-VLAN case where the unit must sit on your real LAN (dumb PoE
+switch topology): instead of pinning a static `lan_ip`, let the unit elect
+its role on first boot — it probes for an upstream DHCP server for ~60 s:
+
+```sh
+PYTHONPATH=scripts python3 -c "
+from profile.overlay import build_overlay_tarball
+print(build_overlay_tarball(disable_dhcp=True, lan_election=True))"
+# → overlay with etc/uci-defaults/96-conwrt-lan-election
+```
+
+- **Lease seen** → the unit becomes a DHCP *client* on your LAN (the
+  established dumb-AP role: our DHCP server and RAs stay off) — no DHCP
+  war, find it in your router's lease table. Its own log:
+  `/tmp/conwrt-election.log`.
+- **No lease** → classic stock behavior (192.168.1.1 + DHCP server) —
+  exactly today's default, 60 s later.
+
+The election runs exactly once (first boot, uci-defaults exit-0 contract),
+is client-biased, and never re-evaluates at runtime — the failure mode
+called out on the OpenWrt forum (a device electing itself DHCP server
+while the real one is merely slow to boot) is scoped to provisioning time,
+with you watching. Preconditions for zycasting on a shared LAN: no OTHER
+ZyXEL devices in bootloader-listen state on that segment (multicast
+reflashes every listening ZyXEL), and key-only auth baked if the LAN is
+internet-connected.
+
+Hardware validation of the election on the bench: campaign issue #841 (E5).

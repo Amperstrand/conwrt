@@ -82,6 +82,8 @@ def build_overlay_tarball(
     disable_dhcp: bool = True,
     authorized_keys: Optional[str] = None,
     lan_ip: Optional[str] = None,
+    lan_election: bool = False,
+    election_iface: str = "eth0",
 ) -> str:
     """Build a sysupgrade -f compatible overlay tarball.
 
@@ -90,6 +92,11 @@ def build_overlay_tarball(
     """
     if lan_ip is not None:
         _validate_lan_ip(lan_ip)
+    if lan_election and lan_ip is not None:
+        raise ValueError(
+            "lan_election and lan_ip are mutually exclusive: the election "
+            "derives the role at first boot, a static lan_ip fixes it ahead "
+            "of time — pick one per unit")
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -98,6 +105,14 @@ def build_overlay_tarball(
             info = tarfile.TarInfo(name="etc/config/dhcp")
             info.size = len(data)
             info.mode = 0o644
+            tar.addfile(info, io.BytesIO(data))
+
+        if lan_election:
+            from profile.lan_election import election_script
+            data = election_script(iface=election_iface)
+            info = tarfile.TarInfo(name="etc/uci-defaults/96-conwrt-lan-election")
+            info.size = len(data)
+            info.mode = 0o755
             tar.addfile(info, io.BytesIO(data))
 
         if lan_ip is not None:
