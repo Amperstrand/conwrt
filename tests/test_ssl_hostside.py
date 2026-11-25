@@ -85,14 +85,22 @@ class TestDownloadQip:
         cert, key, host = sslmod.download_qip_cert("10.1.2.3", str(tmp_path))
         assert host == "*.x.qip.sh"          # 10. -> zone x
         assert open(cert).read().strip() == CERT_PEM.strip()
-        # KNOWN BUG (filed as an issue, pinned here as current behavior):
-        # the key regex '-----BEGIN .*PRIVATE KEY-----' with DOTALL greedily
-        # starts at the CERTIFICATE header, so the key file BEGINS with the
-        # cert block. Characterization pin — the fix lands in its own lane.
-        key_content = open(key).read()
-        assert key_content.startswith("-----BEGIN CERTIFICATE-----")
-        assert "PRIVATE KEY" in key_content
+        # #809 fixed: the key file is ONLY the private key block (the old
+        # regex greedily started at the CERTIFICATE header)
+        assert open(key).read().strip() == KEY_PEM.strip()
+        assert "CERTIFICATE" not in open(key).read()
         assert not (tmp_path / "x.qip.sh.pem").exists()  # combined removed
+
+    def test_rsa_key_block_matches_too(self, tmp_path, monkeypatch):
+        # key-type words (RSA/EC/OPENSSH) are part of the header the
+        # dash-free prefix class must still admit
+        rsa_key = "-----BEGIN RSA PRIVATE KEY-----\nCCCC\n-----END RSA PRIVATE KEY-----\n"
+        monkeypatch.setattr(
+            sslmod, "urlretrieve",
+            lambda url, dest: open(dest, "w").write(CERT_PEM + rsa_key))
+        cert, key, host = sslmod.download_qip_cert("10.9.9.9", str(tmp_path))
+        assert open(key).read().strip() == rsa_key.strip()
+        assert "CERTIFICATE" not in open(key).read()
 
     def test_missing_blocks_leave_files_unwritten(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
