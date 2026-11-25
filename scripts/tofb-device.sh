@@ -52,6 +52,30 @@ CODE=$(printf '%s' "$CODE" | awk '{
 }')
 echo "tofb: code derived" >&2
 
+# #344: the code the endpoint ACCEPTS binds the operator key —
+# SHA-256(host key blob || submitted pubkey blob), same digest shape as
+# the LED code. Derived per-request below (depends on the submitted
+# key); the host blob is captured once here.
+HOSTBLOB=$(awk '{print $2}' "$PUBKEY_TXT" | base64 -d 2>/dev/null)
+[ -n "$HOSTBLOB" ] || die "host key blob extraction failed"
+limb_reduce() {
+    # Same #345 awk limb-reduction as the LED code path (exact under 2^53).
+    awk '{
+        n = 0
+        for (i = 1; i <= length($1); i++)
+            n = (n * 16 + index("0123456789abcdef", tolower(substr($1, i, 1))) - 1) % 1000000
+        printf "%06d", n
+    }'
+}
+binding_code() {
+    # $1 = submitted operator pubkey line. MUST match tofb.py
+    # enrollment_code(): sha256(host_blob || operator_blob)[:8] mod 1e6.
+    OPBLOB=$(printf '%s
+' "$1" | awk '{print $2}' | base64 -d 2>/dev/null)
+    [ -n "$OPBLOB" ] || return 1
+    printf '%s%s' "$HOSTBLOB" "$OPBLOB" | sha256sum | cut -c1-16 | limb_reduce
+}
+
 show_led_code() {
     # ADR-0013 §2: six groups, color cycles red/orange/white, digit = blink
     # count (0 = one long blink). LED paths/timers NEEDS-BENCH.
@@ -88,7 +112,14 @@ handle_enroll() {
     REQ=$(cat)
     GOT=$(printf '%s' "$REQ" | grep -o '"code"[: ]*"[0-9]*"' | grep -o '[0-9]\{6\}')
     PUB=$(printf '%s' "$REQ" | grep -o '"pubkey"[: ]*"[^"]*"' | cut -d'"' -f4)
-    if [ "$GOT" != "$CODE" ]; then
+    case "$PUB" in
+        ssh-*) ;;
+        *) echo "Status: 400 Bad Request"; echo ""; echo "bad key"; return ;;
+    esac
+    # #344: compare against the BINDING code (host || THIS pubkey), not the
+    # device-half LED code — a forwarded/swapped pubkey must mismatch.
+    BIND=$(binding_code "$PUB")
+    if [ -z "$BIND" ] || [ "$GOT" != "$BIND" ]; then
         FAILURES=$((FAILURES + 1))
         echo "Status: 403 Forbidden"
         echo ""
@@ -96,10 +127,6 @@ handle_enroll() {
         [ "$FAILURES" -ge "$FAILURES_LIMIT" ] && exit 1
         return
     fi
-    case "$PUB" in
-        ssh-*) ;;
-        *) echo "Status: 400 Bad Request"; echo ""; echo "bad key"; return ;;
-    esac
     mkdir -p /etc/dropbear
     echo "$PUB" >> "$AUTH_KEYS" || return 1
     chmod 600 "$AUTH_KEYS"

@@ -6,10 +6,19 @@ follow-up) generates an ed25519 host key on first boot, derives a 6-digit
 attestation code from it, shows the code on the status LED, and serves a
 link-local enrollment endpoint. This module is the operator side:
 
-- derive the same 6-digit code from a host key the client sees over the
+- derive the device-half LED code from the host key the client sees over the
   network (ssh-keyscan output), so the operator can compare it against the
   LED;
-- POST an operator public key to the device endpoint once the codes match.
+- POST an operator public key + a BINDING code to the device endpoint.
+
+Binding codes (#344): the code the device ACCEPTS is derived from
+SHA-256(device host key blob || operator pubkey blob) — not the device
+half alone. The operator computes it from the SSH-observed device host
+key plus THEIR OWN key, so a segment MITM that forwards the request
+with a swapped pubkey invalidates the typed code: the device derives a
+different expected code and rejects (403). The LED still shows the
+device-half code (visual TOFU of the device identity, unchanged);
+`tofb bindcode` derives the binding code for enrollment.
 
 All cryptography is platform primitives (hashlib/ssl stdlib); the code is a
 truncated SHA-256 of the decoded public key blob, exactly as the device
@@ -59,6 +68,22 @@ def tofb_code(pubkey_line: str) -> str:
     digest = hashlib.sha256(key_blob(pubkey_line)).digest()
     value = int.from_bytes(digest[:8], "big") % (10**CODE_DIGITS)
     return str(value).zfill(CODE_DIGITS)
+
+
+def enrollment_code(device_pubkey_line: str, operator_pubkey_line: str) -> str:
+    """Derive the BINDING enrollment code for a (device, operator) pair.
+
+    SHA-256(device key blob || operator key blob), first 8 bytes
+    big-endian, mod 1e6 — the same digest shape as tofb_code, but over
+    the CONCATENATION, so the submitted operator key is committed to by
+    the code the operator types (#344: an unauthenticated POST must not
+    be able to enroll a key the operator never chose).
+    """
+    digest = hashlib.sha256(
+        key_blob(device_pubkey_line) + key_blob(operator_pubkey_line)
+    ).digest()
+    value = int.from_bytes(digest[:8], "big")
+    return f"{value % 10 ** CODE_DIGITS:0{CODE_DIGITS}d}"
 
 
 def led_sequence(code: str) -> list[tuple[str, int]]:
@@ -114,6 +139,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_code = sub.add_parser("code", help="derive the LED code for a public key")
     p_code.add_argument("pubkey_line", help="public key line, or - for stdin")
 
+    p_bind = sub.add_parser(
+        "bindcode",
+        help="derive the BINDING code (device host key + operator key) for enroll")
+    p_bind.add_argument("device_pubkey_line", help="device host public key line (from ssh-keyscan/ssh), or - for stdin")
+    p_bind.add_argument("operator_pubkey_line", help="operator public key line")
+
     p_seq = sub.add_parser("led", help="show the LED blink plan for a code")
     p_seq.add_argument("code", help="6-digit code")
 
@@ -129,6 +160,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "code":
         line = sys.stdin.readline() if args.pubkey_line == "-" else args.pubkey_line
         print(tofb_code(line))
+        return 0
+    if args.cmd == "bindcode":
+        dev_line = (sys.stdin.readline() if args.device_pubkey_line == "-"
+                    else args.device_pubkey_line)
+        print(enrollment_code(dev_line, args.operator_pubkey_line))
         return 0
     if args.cmd == "led":
         for color, blinks in led_sequence(args.code):

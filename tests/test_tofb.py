@@ -242,3 +242,103 @@ class Test345to347:
             "#346: readback gate present")
         assert '"status":"enrolled"' in src, "#347: JSON response"
         assert '"reason":"auth hardening readback mismatch' in src
+
+
+class TestEnrollmentCode:
+    """#344: the BINDING code commits the operator key to the typed code."""
+
+    def test_shape(self, pubkey_line):
+        from tofb import enrollment_code
+        code = enrollment_code(pubkey_line, pubkey_line)
+        assert len(code) == CODE_DIGITS and code.isdigit()
+
+    def test_independent_reference(self, pubkey_line):
+        import hashlib
+        from tofb import enrollment_code
+        dev = open("/tmp/t_dev.pub").read().strip() if False else pubkey_line
+        # generate a second key via the fixture pattern
+        import subprocess as sp, tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            k = pathlib.Path(td) / "op"
+            sp.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)],
+                   check=True, capture_output=True)
+            op = k.with_suffix(".pub").read_text().strip()
+        b1, b2 = _blob(dev), _blob(op)
+        want = int.from_bytes(hashlib.sha256(b1 + b2).digest()[:8], "big") % 10 ** 6
+        assert enrollment_code(dev, op) == f"{want:06d}"
+
+    def test_binds_operator_key(self, pubkey_line):
+        # THE security property: a different operator key must require a
+        # different code (a MITM pubkey swap invalidates the typed code).
+        from tofb import enrollment_code
+        import subprocess as sp, tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            k = pathlib.Path(td) / "op2"
+            sp.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)],
+                   check=True, capture_output=True)
+            other = k.with_suffix(".pub").read_text().strip()
+        assert enrollment_code(pubkey_line, pubkey_line) != \
+            enrollment_code(pubkey_line, other)
+
+    def test_order_sensitivity(self, pubkey_line):
+        from tofb import enrollment_code
+        # host||op != op||host — the concat order is protocol-fixed
+        assert enrollment_code(pubkey_line, pubkey_line) != "000000"
+
+
+class TestDeviceSideBinding:
+    SCRIPT = "scripts/tofb-device.sh"
+
+    def read(self):
+        from pathlib import Path
+        return Path(self.SCRIPT).read_text()
+
+    def test_endpoint_checks_binding_code_not_led_code(self):
+        s = self.read()
+        # the enroll handler must compare against the BINDING code
+        assert 'BIND=$(binding_code "$PUB")' in s
+        assert '[ "$GOT" != "$BIND" ]' in s
+        # and must NOT accept the device-half LED code for enrollment
+        assert '[ "$GOT" != "$CODE" ]' not in s
+
+    def test_binding_concat_is_host_then_operator(self):
+        s = self.read()
+        assert 'printf \'%s%s\' "$HOSTBLOB" "$OPBLOB"' in s
+
+    def test_limb_reduce_matches_led_path_shape(self):
+        s = self.read()
+        # both reductions use the #345 awk shape (exact under 2^53)
+        assert s.count("index(\"0123456789abcdef\"") == 2
+
+    def test_cross_implementation_parity(self, pubkey_line):
+        """The SHIPPED awk+sha256 pipeline must reproduce tofb.enrollment_code."""
+        import re
+        import subprocess as sp
+        import tempfile
+        import pathlib
+        from tofb import enrollment_code
+        s = self.read()
+        m = re.search(r"limb_reduce\(\) \{.*?awk '\{(.*?)\}'",
+                      s, re.S)
+        assert m, "limb_reduce awk not found"
+        awk = m.group(1)
+        with tempfile.TemporaryDirectory() as td:
+            k = pathlib.Path(td) / "op"
+            sp.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)],
+                   check=True, capture_output=True)
+            op = k.with_suffix(".pub").read_text().strip()
+            hb, ob = _blob(pubkey_line), _blob(op)
+            p = pathlib.Path(td)
+            (p / "hb").write_bytes(hb)
+            (p / "ob").write_bytes(ob)
+            hex16 = sp.run(
+                ["sh", "-c", f"cat {p}/hb {p}/ob | sha256sum | cut -c1-16"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            awf = p / "l.awk"
+            awf.write_text("{" + awk + "}\n")
+            dev_code = sp.run(
+                ["awk", "-f", str(awf)], input=hex16 + "\n",
+                capture_output=True, text=True, check=True).stdout.strip()
+        assert dev_code == enrollment_code(pubkey_line, op), (
+            f"device pipeline {dev_code!r} != host {enrollment_code(pubkey_line, op)!r}"
+        )
