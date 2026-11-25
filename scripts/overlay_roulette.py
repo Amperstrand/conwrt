@@ -29,7 +29,9 @@ import select
 import subprocess
 import time
 from pathlib import Path
-from labgrid.protocol import PowerProtocol
+# labgrid is an operator-host dependency (the CI test environment does not
+# install it); PowerProtocol was imported but never referenced — the import
+# is removed so the module (and its testable driver logic) imports anywhere.
 
 QEMU = "/usr/bin/qemu-system-x86_64"
 BASE_IMAGE = "/home/ubuntu/labgrid/images/openwrt-24.10.2-x86-64-generic-squashfs-combined.img"
