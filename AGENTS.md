@@ -1023,3 +1023,51 @@ by button**. True last-resort doors: serial console (Cisco-pinout RJ45 jack,
 the bootloader-resident failsafe webpage (`run failsafe_boot` /
 `bootm 0x9fd70000` → unauthenticated upload page at 192.168.1.1). Details:
 conwrt-bench docs/WIKI-RESEARCH-WS-AP3915I.md.
+
+## Campaign Lessons (2026-11 multi-window engagement, ~52 PRs)
+
+Rules distilled from the 2026-11-23/25 unattended campaigns (full
+retrospective: docs/LESSONS-2026-11-CAMPAIGNS.md). Each was paid for
+at least once.
+
+1. **Fix the class, not the instance.** When a root cause is found,
+   grep for its siblings in the same minute — the #432 hardcoded
+   `./target` resolution existed in THREE test harnesses and fired
+   twice more after the first fix. A fixed instance with living
+   siblings is a scheduled recurrence.
+2. **Verify against fresh state before acting on any plan.** Stale
+   local checkouts produce phantom regressions (the `.target-rustvm`
+   "re-commit" scare was a stale `master`); stale briefings charter
+   already-finished work (an entire campaign-4 lane was done by a
+   sibling); host and supervisor clocks disagreed twice. Fetch,
+   measure, `date -u` — then execute.
+3. **Characterize before you fix; pin while you find.** Writing an
+   honest test for "untested" code surfaced a live on-device bug
+   (the #809 qip key-split). Pin the buggy behavior with a loud
+   comment, file the issue, fix in its own lane, flip the pin —
+   the regression is then mechanically caught forever.
+4. **Fakes must model protocol semantics, not shapes.** A flat-read
+   fake HTTP response hung a download loop forever (no EOF); a
+   first-draft orchestration test let a REAL request out to a bench
+   address because the code-under-test posted via a direct urlopen,
+   not the stubbed transport. Unit tests never touch the wire; stub
+   every layer the code actually uses.
+5. **Piped terminal output lies; captured files don't.** `cmd | tail`
+   masked exit codes and produced phantom "12 failed" runs that
+   vanished when output went to a file. Before pushing on a red or
+   green you care about: redirect to a file and read the file.
+6. **Mass fixes on shared hot files are coordination attacks.** 301
+   pedantic-lint findings sat in the three most-edited files of the
+   repo; fixing them overnight would have churned every sibling
+   lane's conflict surface. Policy-scale changes get filed with a
+   recommendation (#791), not executed unilaterally.
+7. **Bank every unit before starting the next.** Commit + push +
+   handoff-entry per unit is what let two agents run four overnight
+   windows over the same repo with near-zero collision damage. The
+   ledger (data/active-sessions.jsonl) is claimed BEFORE the first
+   edit and released AFTER the worktree is clean.
+8. **Registries: generate, then curate.** Hand-authored
+   device/model/target registries drift against upstream (the
+   D-Link dashes class); generate stubs from the vendor's own
+   metadata and curate only the bench-observed delta (model-gen,
+   #766; the probe-rs target-gen precedent).
