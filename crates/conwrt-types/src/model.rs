@@ -55,12 +55,18 @@ pub struct SerialConsole {
 /// way the schema does (type object/array vs null). serde's default
 /// `Option` handling conflates null with absent; the schema does not —
 /// the two validators disagreed (#338 gap 3).
-fn reject_explicit_null<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+fn reject_explicit_null<'de, T, D>(
+    deserializer: D,
+    field: &'static str,
+) -> Result<Option<T>, D::Error>
 where
     T: serde::Deserialize<'de>,
     D: serde::Deserializer<'de>,
 {
-    struct NullAware<T>(core::marker::PhantomData<T>);
+    struct NullAware<T> {
+        field: &'static str,
+        _marker: core::marker::PhantomData<T>,
+    }
 
     impl<'de, T> serde::de::Visitor<'de> for NullAware<T>
     where
@@ -76,19 +82,24 @@ where
         where
             E: serde::de::Error,
         {
-            // JSON null maps here for serde_json's deserialize_option.
-            Err(E::custom(
-                "explicit null is not an absent key — remove the key instead (schema parity, #338)",
-            ))
+            // JSON null maps here for serde_json's deserialize_option. The
+            // message NAMES the field so schema-negative attribution
+            // (manifest `expect` = leaf field name) matches like every
+            // other rejection reason.
+            let field = self.field;
+            Err(E::custom(format_args!(
+                "{field}: explicit null is not an absent key — remove the key instead (schema parity, #338)",
+            )))
         }
 
         fn visit_unit<E>(self) -> Result<Option<T>, E>
         where
             E: serde::de::Error,
         {
-            Err(E::custom(
-                "explicit null is not an absent key — remove the key instead (schema parity, #338)",
-            ))
+            let field = self.field;
+            Err(E::custom(format_args!(
+                "{field}: explicit null is not an absent key — remove the key instead (schema parity, #338)",
+            )))
         }
 
         fn visit_some<D>(self, deserializer: D) -> Result<Option<T>, D::Error>
@@ -99,7 +110,26 @@ where
         }
     }
 
-    deserializer.deserialize_option(NullAware(core::marker::PhantomData))
+    deserializer.deserialize_option(NullAware {
+        field,
+        _marker: core::marker::PhantomData,
+    })
+}
+
+/// Field-specific shims so `deserialize_with` (a bare fn path) can name
+/// the field in the rejection message.
+fn reject_null_serial_console<'de, D>(deserializer: D) -> Result<Option<SerialConsole>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    reject_explicit_null(deserializer, "serial_console")
+}
+
+fn reject_null_warnings<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    reject_explicit_null(deserializer, "warnings")
 }
 
 /// A device model definition (`models/{id}.json`).
@@ -128,7 +158,7 @@ pub struct DeviceModel {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "reject_explicit_null"
+        deserialize_with = "reject_null_serial_console"
     )]
     pub serial_console: Option<SerialConsole>,
     /// Operator-facing hard warnings (array of strings; dual-typed #118).
@@ -136,7 +166,7 @@ pub struct DeviceModel {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "reject_explicit_null"
+        deserialize_with = "reject_null_warnings"
     )]
     pub warnings: Option<Vec<String>>,
     /// Every field not yet typed, in document order — parsing is lossless
