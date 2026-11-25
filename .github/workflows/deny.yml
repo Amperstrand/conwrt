@@ -23,6 +23,11 @@ env:
 jobs:
   deny:
     runs-on: [self-hosted, legion-vm]
+    # 2026-11-25: the self-hosted runner has no default cap — a starved
+    # cargo install/cargo deny leg ran 24h0m1s before failing (PR #702's
+    # deny check). Same class #802 capped for ci.yml/rust.yml. 20 min is
+    # ~3x the healthy install+check time.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # Follows rust-toolchain.toml (pinned 1.99.0 since #149), same as
