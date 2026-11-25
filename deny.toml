@@ -37,3 +37,41 @@ ignore = [
     # depth. Revisit on the httpmock bump.
     "RUSTSEC-2026-0441",
 ]
+
+[licenses]
+# License gate: allow list = the permissive union the resolved tree carries
+# (verified against CI run 45660104661, 2026-11-25). OR-alternatives that
+# appear in expressions but are never the satisfying branch (LGPL-2.1,
+# GPL-3.0-only, BSD-1-Clause) are deliberately NOT allowed wholesale, so a
+# future dependency whose only license is copyleft still hard-fails.
+# Standalone copyleft / non-OSI licenses live in scoped exceptions below.
+confidence-threshold = 0.8
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "ISC",
+  "0BSD",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "Zlib",
+  "Unicode-3.0",
+  "Unlicense",
+  "CC0-1.0",
+  "MIT-0",
+  "BSL-1.0",
+]
+
+[[licenses.exceptions]]
+# serialport 4.10.1 (standalone MPL-2.0): the serial device console path.
+# Weak copyleft on a tool dependency; scoped so any other MPL crate still
+# hard-fails.
+allow = ["MPL-2.0"]
+crate = "serialport"
+
+[[licenses.exceptions]]
+# webpki-roots (standalone CDLA-Permissive-2.0): bundles Mozilla's CCADB
+# CA root store — the license covers the DATA, not code; permissive terms,
+# standard exception in rustls trees.
+allow = ["CDLA-Permissive-2.0"]
+crate = "webpki-roots"
