@@ -259,28 +259,6 @@
       ],
       "additionalProperties": true
     },
-    "serial_configuration": {
-      "type": "object",
-      "description": "Serial-based configuration procedure evidence (loose; preserved-extra in Rust).",
-      "properties": {
-        "verified": {
-          "type": "boolean"
-        },
-        "date": {
-          "type": "string"
-        },
-        "method": {
-          "type": "string"
-        },
-        "operations": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": true
-    },
     "partition_layout": {
       "type": "object",
       "description": "Flash partition layout evidence (loose; preserved-extra in Rust).",
@@ -291,7 +269,9 @@
       "description": "Operator-facing hard warnings (dual-typed with the Rust projection, #118).",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "pattern": "\\S",
+        "description": "At least one non-whitespace character — aligns the schema with the Rust validator's trim-empty rejection (#338 gap 4)."
       },
       "minItems": 1
     },
@@ -334,6 +314,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "serial_configuration": {
+      "type": "object",
+      "description": "Serial-based configuration procedure evidence — DELIBERATELY loose on BOTH sides (the Rust projection keeps it as unconstrained extras, so typing it here split the validators; #338 gap 5, the signatures-block precedent). Tighten together when it earns a typed home (#118).",
+      "additionalProperties": true
     }
   }
 }

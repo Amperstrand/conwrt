@@ -17,6 +17,18 @@
     },
     "warnings-not-array": {
       "expect": "a plain string"
+    },
+    "warnings-empty-array": {
+      "expect": "warnings"
+    },
+    "warnings-explicit-null": {
+      "expect": "warnings"
+    },
+    "warnings-whitespace-entry": {
+      "expect": "warnings"
+    },
+    "serial-console-explicit-null": {
+      "expect": "serial_console"
     }
   }
 }

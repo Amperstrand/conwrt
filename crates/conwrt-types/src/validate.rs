@@ -145,6 +145,13 @@ pub fn validate_model(model: &DeviceModel, filename_stem: Option<&str>) -> Vec<S
     // warnings: dual-typed (#118) — typed as array of strings by the parse
     // itself; nothing further to check beyond non-empty entries.
     if let Some(warnings) = &model.warnings {
+        // #338 gap 2: schema minItems:1 rejects "warnings": []; the loop
+        // below iterates zero times and would silently pass it.
+        if warnings.is_empty() {
+            problems.push(
+                "warnings: at least one entry required (schema minItems: 1 — an empty array means the key should be absent)".to_string(),
+            );
+        }
         for w in warnings {
             if w.trim().is_empty() {
                 problems.push("warnings: entries must not be empty".to_string());
@@ -230,6 +237,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_warnings_vec_rejected_like_the_schema() {
+        // #338 gap 2: schema minItems:1 rejects []; the Rust loop alone
+        // would pass it (zero iterations).
+        let mut m = base_model();
+        m.warnings = Some(vec![]);
+        let problems = validate_model(&m, Some("vendor-model-1"));
+        assert!(
+            problems.iter().any(|p| p.contains("warnings")),
+            "empty warnings vec must be rejected: {problems:?}"
+        );
+        m.warnings = Some(vec!["real warning".into()]);
+        assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
+    }
+
+    #[test]
     fn default_ip_empty_is_rejected_like_the_schema() {
         // schemas/model.schema.json enforces minLength 1 on
         // openwrt.default_ip; the Rust validator must agree (#473).
@@ -254,6 +276,7 @@ mod tests {
             bootloader: None,
             verified_from: None,
             note: None,
+            extras: Default::default(),
         });
         assert!(validate_model(&m, Some("vendor-model-1")).is_empty());
 
