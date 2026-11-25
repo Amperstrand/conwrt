@@ -87,7 +87,7 @@ Rules that follow:
   Because nothing persists, your runtime suppression does not survive a
   reboot — the rogue-DHCP exposure exists until stage 2 completes. Keep
   the unit on an isolated port/VLAN (or disconnected uplink) for the
-  whole staging window.
+  whole staging window (topology options: `docs/PROVISIONING.md` §2).
 - **Don't diagnose "broken persistence" before stage 2.** Symptoms of a
   healthy stage-1 unit: `/` is tmpfs, no `/overlay` mount, no UBI
   attach, `uci commit` works but vanishes, host keys change every boot.
@@ -353,7 +353,7 @@ On devices with dual-image layout (NR7101), zycast writes to both firmware slots
 - **Verify Z-Loader mode**: The bootloader only listens for multicast when Z-Loader is active. Use serial console to confirm Z-Loader is running (look for "Multiboot Listening..." or "Press any key" message).
 - **Serial trigger**: If the device boots normally without entering Z-Loader, connect serial and press Escape during boot delay to enter Z-Loader manually.
 - Monitor BOTH the old IP and 192.168.1.1. The IP changes after flashing to OpenWrt default.
-- Check if 192.168.1.0/24 conflicts with your local network. If it does, SSH through the switch instead.
+- Check if 192.168.1.0/24 conflicts with your local network. If it does, don't put the device on that segment at all — see `docs/PROVISIONING.md` §2 for the three safe connection topologies (direct ethernet, a spare OpenWrt device as flash host, or a managed bench switch).
 - Increase `--loops` (try 5 or more).
 - Verify the VLAN interface is up and has an IP address.
 - Check PoE status: `ubus call poe info` on the switch. The port should show "Delivering power".

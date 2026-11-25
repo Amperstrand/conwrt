@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from config import load_config  # noqa: E402
 from model_loader import resolve_model_any  # noqa: E402
 from profile.builder import build_plan  # noqa: E402
+from profile.overlay import _validate_lan_ip  # noqa: E402
 
 
 def bake(model_id: str, out_dir: Path, *, ssh_key_path: str | None = None,
@@ -42,6 +43,13 @@ def bake(model_id: str, out_dir: Path, *, ssh_key_path: str | None = None,
             "model id, underscored id, or openwrt.profile")
 
     cfg = load_config()
+    if lan_ip:
+        # The builder only emits the static-LAN block when cfg.lan_ip is set
+        # BEFORE build_plan runs — mutating cfg after the call was a no-op
+        # (found 2026-11-25: --lan-ip was silently dropped from the fragment).
+        _validate_lan_ip(lan_ip)
+        cfg.lan_ip = lan_ip
+        cfg.lan_ip_mode = "static"
     plan = build_plan(
         cfg,
         mode="asu_build",
@@ -53,8 +61,6 @@ def bake(model_id: str, out_dir: Path, *, ssh_key_path: str | None = None,
         hostname=hostname,
         lan_ip_mode="static" if lan_ip else "",
     )
-    if lan_ip:
-        cfg.lan_ip_mode = "static"
 
     fragment = plan.asu_defaults_script()
     if not fragment:

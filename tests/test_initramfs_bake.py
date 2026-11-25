@@ -97,3 +97,37 @@ class TestBake:
         rc = bake_mod.main(["--model-id", "nope", "--out", str(tmp_path / "o6")])
         assert rc == 1
         assert "unknown model" in capsys.readouterr().err
+
+    def test_cli_lan_ip_lands_in_fragment(self, tmp_path, stub_config, monkeypatch):
+        # Regression (2026-11-25): --lan-ip was silently dropped — bake()
+        # mutated cfg AFTER build_plan, so the static-LAN block never
+        # rendered. Pin that the CLI override reaches the fragment even
+        # when the config carries no static IP of its own.
+        from config import ConwrtConfig
+        key = stub_config[1]
+        cfg = ConwrtConfig(
+            lan_ip_mode="", lan_ip="",
+            ssh_public_key_path=str(key), ssh_all_keys=[str(key)],
+            ssh_public_key_text=key.read_text(),
+            hostname_pattern="static", hostname="nr-stage1")
+        monkeypatch.setattr(bake_mod, "load_config", lambda: cfg)
+
+        out = tmp_path / "o-lanip"
+        files_root = bake_mod.bake("zyxel-nr7101", out, lan_ip="192.168.7.1")
+        text = (files_root / "etc" / "uci-defaults" / "99-conwrt-identity").read_text()
+        assert "network.lan.ipaddr" in text
+        assert "192.168.7.1" in text
+
+    def test_cli_lan_ip_validated(self, tmp_path, stub_config, monkeypatch):
+        # same injection/typo guard as the overlay path (PR #780)
+        from config import ConwrtConfig
+        key = stub_config[1]
+        cfg = ConwrtConfig(
+            lan_ip_mode="", lan_ip="",
+            ssh_public_key_path=str(key), ssh_all_keys=[str(key)],
+            ssh_public_key_text=key.read_text(),
+            hostname_pattern="static", hostname="nr-stage1")
+        monkeypatch.setattr(bake_mod, "load_config", lambda: cfg)
+
+        with pytest.raises(ValueError, match="IPv4 literal"):
+            bake_mod.bake("zyxel-nr7101", tmp_path / "o-bad", lan_ip="192.168.1")
