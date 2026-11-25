@@ -770,16 +770,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "conwrt-blankdl"
+version = "0.1.0"
+dependencies = [
+ "conwrt-protocols",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "socket2 0.6.5",
+]
+
+[[package]]
 name = "conwrt-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "conwrt-agent-proto",
+ "conwrt-blankdl",
  "conwrt-core",
  "conwrt-image",
  "conwrt-local-std",
  "conwrt-maas",
  "conwrt-probe-core",
+ "conwrt-protocols",
  "conwrt-serial",
  "conwrt-types",
  "conwrt-zycast",
