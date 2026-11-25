@@ -394,4 +394,14 @@ def _build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--json", default="", help="write ladder+results as JSON")
     discover_parser.set_defaults(func=discover_mod.cmd_discover)
 
+    from conwrt import initramfs_bake as bake_mod
+    bake_parser = subparsers.add_parser(
+        "initramfs-bake", help="emit the profile-baked overlay for a zycast stage-1 boot (#784)")
+    bake_parser.add_argument("--model-id", required=True, help="registry model id")
+    bake_parser.add_argument("--out", default="initramfs-overlay")
+    bake_parser.add_argument("--ssh-key", default=None)
+    bake_parser.add_argument("--hostname", default="")
+    bake_parser.add_argument("--lan-ip", default="")
+    bake_parser.set_defaults(func=bake_mod.cmd_initramfs_bake)
+
     return parser
