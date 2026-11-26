@@ -351,6 +351,7 @@ def build_plan(
     hostname: str = "",
     wifi_disable: bool = False,
     lan_ip_mode: str = "",
+    lan_ip: str = "",
     hostname_pattern: str = "",
     model_id: str = "",
 ) -> ProfilePlan:
@@ -360,6 +361,12 @@ def build_plan(
     steps: list[ProfileStep] = []
 
     effective_lan_ip_mode = lan_ip_mode or cfg.lan_ip_mode
+    # #828 parity: a per-request flag beats both the config mode and the
+    # config static IP — it pins THIS image's LAN address. mac-hash is
+    # deliberately never overridable to a static bake (device-side only).
+    effective_lan_ip = lan_ip or cfg.lan_ip
+    if lan_ip and effective_lan_ip_mode != "keep":
+        effective_lan_ip_mode = "static"
     effective_hostname_pattern = hostname_pattern or cfg.hostname_pattern or "model_mac"
 
     model_data: dict = {}
@@ -694,24 +701,24 @@ def build_plan(
                 ShellCommand("uci commit network"),
             ],
         ))
-    elif cfg.lan_ip:
+    elif effective_lan_ip:
         _lan_fb = (
-            f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+            f"uci set network.lan.ipaddr={sh_quote(effective_lan_ip)}"
             " && uci set network.lan.netmask='255.255.255.0'"
             " && uci commit network"
         )
         steps.append(ProfileStep(
             kind=StepKind.LAN_IP,
-            label=f"LAN IP → {cfg.lan_ip}",
+            label=f"LAN IP → {effective_lan_ip}",
             firstboot_script=_lan_fb,
             configure_script=(
-                f"uci set network.lan.ipaddr={sh_quote(cfg.lan_ip)}"
+                f"uci set network.lan.ipaddr={sh_quote(effective_lan_ip)}"
                 " && uci set network.lan.netmask='255.255.255.0'"
             ),
             include_in_asu=True,
             ops=[
                 UciSet(config="network", section="lan", values={
-                    "ipaddr": cfg.lan_ip, "netmask": "255.255.255.0",
+                    "ipaddr": effective_lan_ip, "netmask": "255.255.255.0",
                 }),
             ],
         ))

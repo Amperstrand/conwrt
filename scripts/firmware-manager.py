@@ -220,6 +220,18 @@ def cmd_request(args: argparse.Namespace) -> int:
     password: Optional[str] = args.password
     wan_ssh: bool = args.wan_ssh or cfg.wan_ssh
     tofb: bool = args.tofb or cfg.tofb
+    lan_ip_flag: Optional[str] = getattr(args, "lan_ip", None)
+    if lan_ip_flag:
+        # fail fast, before any ASU submission — same guard as the
+        # sysupgrade overlay path (#828 parity)
+        import ipaddress as _ipa
+        try:
+            if _ipa.ip_address(lan_ip_flag).version != 4:
+                raise ValueError("not IPv4")
+        except ValueError as exc:
+            logger.error("--lan-ip must be an IPv4 literal, got %r (%s)",
+                         lan_ip_flag, exc)
+            return 1
 
     if not ssh_key_path:
         if cfg.ssh_public_key_path:
@@ -277,6 +289,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         tofb=tofb,
         extra_pub_keys=extra_pub_keys,
         disable_dhcp=cfg.disable_lan_dhcp,
+        lan_ip=lan_ip_flag or "",
     )
     defaults_script = plan.asu_defaults_script()
     ssh_key_cleaned = plan.ssh_key_cleaned
@@ -781,6 +794,13 @@ def main() -> int:
     p_request.add_argument(
         "--ssh-key", default=None,
         help="Path to SSH public key (default: [ssh].key from config.toml, then ~/.ssh/id_ed25519.pub)",
+    )
+    p_request.add_argument(
+        "--lan-ip", default=None,
+        help="Pin this image's LAN IPv4 address (baked as a first-boot "
+             "uci-default; beats config.toml's static IP and overrides "
+             "mac-hash for THIS request — the mac-hash default itself is "
+             "never a flag away from device-side derivation)",
     )
     p_request.add_argument(
         "--password", default=None,
