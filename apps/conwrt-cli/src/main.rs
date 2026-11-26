@@ -450,6 +450,10 @@ enum Command {
         /// every ZyXEL bootloader in its listen window on the segment.
         #[arg(long)]
         confirm_specimen: bool,
+        /// Run every payload gate (magic/model/pacing/mutex) and exit
+        /// 0 without sending — the pre-flight dogfood mode (#847).
+        #[arg(long)]
+        validate: bool,
         /// Expected RAS model-ID field (hex, e.g. 7101 for NR7101).
         /// Refuses before multicast what the bootloader's flash-commit
         /// gate would refuse after receiving ("Wrong Model ID!!").
@@ -1659,6 +1663,7 @@ fn main() -> ExitCode {
             port,
             confirm_specimen,
             allow_raw,
+            validate,
             expect_model,
         } => zycast::run(zycast::ZycastArgs {
             image,
@@ -1670,6 +1675,7 @@ fn main() -> ExitCode {
             port,
             confirm_specimen,
             allow_raw,
+            validate,
             expect_model,
         }),
         Command::DarkWatch {

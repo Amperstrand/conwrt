@@ -40,6 +40,12 @@ pub struct ZycastArgs {
     /// must carry the ZyXEL RAS magic — a tar/sysupgrade container or any
     /// stray file is refused rather than flashed into bootloaders.
     pub allow_raw: bool,
+    /// Run EVERY gate (specimen attestation, magic, model-ID, pacing,
+    /// flash-mutex) and exit 0 — sending NOTHING. The dogfood/
+    /// pre-flight mode: prove the payload and flags are right before a
+    /// unit spends its listen window (#847 follow-up; felix-ready
+    /// handoff gate).
+    pub validate: bool,
 }
 
 /// CLI entry point.
@@ -70,12 +76,12 @@ fn enforce_flash_mutex() -> Result<(), String> {
 }
 
 fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
-    if !a.confirm_specimen {
+    if !a.confirm_specimen && !a.validate {
         return Err(
             "refusing to send: multicast flashes EVERY ZyXEL bootloader in its listen \
              window on this segment. Verify the target specimen (MAC/serial gate, AGENTS \
              \"Verify the SPECIMEN\") and isolate sibling units, then re-run with \
-             --confirm-specimen."
+             --confirm-specimen (or --validate to run the payload gates only)."
                 .into(),
         );
     }
@@ -145,6 +151,19 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
             }
         }
     }
+    if a.validate {
+        println!(
+            "validate: all gates passed (magic, model{} , pacing, flash-mutex) — \
+             nothing sent; {} bytes ready as {ty}",
+            if a.expect_model.is_some() {
+                ", attested"
+            } else {
+                " (not requested)"
+            },
+            image.len()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     let chunks = chunk_count(image.len());
     let est = Duration::from_millis(chunks as u64 * a.delay_ms * a.loops as u64);
     println!("=== conwrt zycast (Rust) ===");
@@ -183,6 +202,7 @@ fn args(image: &str, allow_raw: bool) -> ZycastArgs {
         port: 5631,
         confirm_specimen: true,
         allow_raw,
+        validate: false,
         expect_model: None,
     }
 }
@@ -381,5 +401,43 @@ mod hardening_tests {
         a.delay_ms = 1;
         let msg = inner(a).unwrap_err();
         assert!(msg.contains("pacing clamp"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod validate_mode_tests {
+    use super::{args, inner};
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn real_header() -> PathBuf {
+        // the #847 fixture: header bytes carved from the sha-verified
+        // stock 25.12.6 image (b4b6c10a…) — the shape every real run hits
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/conwrt-protocols/tests/fixtures/nr7101-ras-header.bin")
+    }
+
+    #[test]
+    fn validate_passes_real_image_without_sending_or_specimen() {
+        // THE dogfood contract (#847 acceptance): a real NR7101 image
+        // passes every gate WITHOUT --allow-raw and WITHOUT the
+        // send-time specimen attestation — nothing is sent.
+        let mut a = args(real_header().to_str().unwrap(), false);
+        a.validate = true;
+        a.confirm_specimen = false;
+        a.expect_model = Some("7101".into());
+        let code = inner(a).expect("gates must pass on the real image");
+        assert_eq!(code, std::process::ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn validate_still_refuses_garbage() {
+        let mut tmp = tempfile::tempfile().unwrap();
+        tmp.write_all(b"\x1f\x8b garbage gzip").unwrap();
+        let mut a = args("/dev/null", false);
+        a.validate = true;
+        // reading /dev/null yields empty -> magic gate refuses
+        let err = inner(a).expect_err("empty image must be refused");
+        assert!(err.contains("RAS magic"));
     }
 }
