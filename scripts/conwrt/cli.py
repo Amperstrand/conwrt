@@ -423,4 +423,20 @@ def _build_parser() -> argparse.ArgumentParser:
     felix_parser.add_argument("--json", action="store_true")
     felix_parser.set_defaults(func=felix_mod.cmd_felix_preflight)
 
+    from conwrt import cmd_overlay as overlay_mod
+    overlay_parser = subparsers.add_parser(
+        "overlay",
+        help="build the post-flash identity overlay tarball for sysupgrade -f (#828)")
+    overlay_parser.add_argument("--out", default=None, metavar="PATH",
+                                help="write the tarball to PATH (default: mkstemp, printed)")
+    overlay_parser.add_argument("--lan-ip", default=None, metavar="IP",
+                                help="pin the first-boot LAN IPv4 (flag > config)")
+    overlay_parser.add_argument("--authorized-keys", default=None, metavar="KEY_OR_PATH",
+                                help="public key text or path to a .pub file")
+    overlay_parser.add_argument("--keep-dhcp", action="store_true",
+                                help="do NOT suppress LAN DHCP/RA (isolated-bay tests only)")
+    overlay_parser.add_argument("--print-command", action="store_true",
+                                help="also print the scp+sysupgrade lines to paste")
+    overlay_parser.set_defaults(func=overlay_mod.cmd_overlay)
+
     return parser
