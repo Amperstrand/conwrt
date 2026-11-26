@@ -31,12 +31,15 @@ links; it does not duplicate — when the two disagree, the ifd-modemifd doc win
         → lpac (SGP.22) ──────────────────────────────► 9eSIM (ECP3 eUICC)
             path A: host pcscd → ifd-modemifd → ssh://  seated in the modem's
                     dropbear exec relay → AT+CSIM        SIM slot
+                    (24.10-era; BROKEN on 25.12.x — #856)
             path B: lpac ON the router, LPAC_APDU=at_csim,
                     own modem tty directly
 
 ## Two paths, when to use which
 
 **Path A — host-side reader** (`ifd-modemifd` README + NR7101-ESIM-PLAYBOOK).
+> 24.10.x only: the ssh:// relay requires stty/timeout, absent on
+> 25.12.x default images (#856). For 25.12.x use path B.
 Zero router-side software (dropbear + busybox relay only). Formally reasoned
 no-resend transport semantics (typed `AtOutcome`, retry only for provably
 undelivered lines) — the conservative choice for a **one-shot paid activation**.

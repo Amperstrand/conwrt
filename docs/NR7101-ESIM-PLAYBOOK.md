@@ -57,9 +57,23 @@ What this means for you:
     9eSIM (ECP3 eUICC) ◄──── AT+CSIM ◄──── modem AT tty (/dev/ttyUSBx)
     seated in the NR7101 modem              OpenWrt (built by conwrt)
 
-## Transport decision — SSH now, on-device Rust later
+## Transport decision — on-device lpac (at_csim) now; ssh:// was 24.10-era and is REMOVED
 
-**Chosen (2026-10-24): `ssh://` exec transport** (ifd-modemifd v3.5, PR #22,
+**CURRENT (2026-11-20+): on-device `lpac` with `LPAC_APDU=at_csim`** —
+lpac runs ON the router, driving the modem's own AT tty directly. No
+host-side relay, no stty, no socat, no network in the card path. The
+HTTP leg (SM-DP+ download) uses the esim-http-relay (lpac
+`LPAC_HTTP=stdio` piped through an interneted host) when the router has
+no data of its own. Full matrix: conwrt-bench `docs/nr7101/REMOTE-ESIM-TOOLBOX.md`.
+
+> **The `ssh://` transport below is 24.10-era and BROKEN on 25.12.x**
+> (#856): the busybox relay requires `stty` (absent on 25.12.x default
+> images — the tty stays canonical+echo, producing AT ERROR storms),
+> `timeout` (absent — no watchdog), and the docs' `opkg` snippets
+> predate the apk era. The section is kept for the historical record
+> and for 24.10.x units that still carry the applet.
+
+**Historical: `ssh://` exec transport** (ifd-modemifd v3.5, PR #22,
 `a02d669`). The driver opens a BatchMode, host-key-pinned dropbear session
 and execs a busybox relay (`stty -F <tty> raw -echo; exec 3<><tty>;
 cat <&3 & exec cat >&3`) that owns the modem AT tty directly.
