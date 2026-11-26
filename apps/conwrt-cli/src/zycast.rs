@@ -93,11 +93,19 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
     if matches!(ty, ImageType::Ras | ImageType::Backup) && !a.allow_raw {
         // Magic per the RE'd flash-commit gate (conwrt-bench
         // docs/research/2026-11-10-zloader-re-findings.md §2 [P]):
-        // firmware images carry "HDR0", bootloader images "HDR4". (The
-        // legacy 83 80 00 00 constant was from a different ZyXEL family;
-        // NR7101 images would have tripped it — masked so far only
-        // because real runs used --allow-raw.)
-        const RAS_MAGICS: [[u8; 4]; 3] = [*b"HDR0", *b"HDR4", [0x83, 0x80, 0x00, 0x00]];
+        // firmware 0x30524448 / bootloader 0x34524448 — which the REAL
+        // NR7101 images store LE-loaded as file bytes "0RDH"/"4RDH"
+        // (verified against the stock 25.12.6 image, sha b4b6c10a…,
+        // #836/#847). The ASCII "HDR0"/"HDR4" spellings are kept for
+        // synthetic/legacy payloads, as is the 83 80 00 00 constant from
+        // a different ZyXEL family.
+        const RAS_MAGICS: [[u8; 4]; 5] = [
+            *b"HDR0",
+            *b"HDR4",
+            *b"0RDH", // 0x30524448 LE-stored — real firmware images
+            *b"4RDH", // 0x34524448 LE-stored — real bootloader images
+            [0x83, 0x80, 0x00, 0x00],
+        ];
         if image.len() < 4 || !RAS_MAGICS.iter().any(|m| image.starts_with(m)) {
             return Err(
                 "refusing to send: payload does not carry a ZyXEL RAS magic \
@@ -131,7 +139,7 @@ fn inner(a: ZycastArgs) -> Result<ExitCode, String> {
             None => {
                 return Err(
                     "refusing to send: --expect-model given but the image carries no \
-                     RAS header to check (no HDR0/HDR4 magic) — cannot attest the model"
+                     RAS header to check (no HDR0/HDR4/0RDH/4RDH magic) — cannot attest the model"
                         .into(),
                 );
             }
@@ -185,11 +193,12 @@ mod magic_gate_tests {
 
     #[test]
     fn hdr0_image_passes_the_magic_gate() {
-        // NR7101 reality: ZyXEL RAS files start "HDR0" (RE §2 [P]);
-        // the old 83 80 00 00 constant would have refused them.
+        // NR7101 reality: ZyXEL RAS files start the LE-stored magic
+        // "0RDH" (RE §2 [P], #836); ASCII "HDR0" is kept for synthetic
+        // payloads. Both spellings pass.
         let p = std::env::temp_dir().join("zycast-gate-test-ras.bin");
         let mut img = vec![0u8; 0x120];
-        img[0..4].copy_from_slice(b"HDR0");
+        img[0..4].copy_from_slice(b"0RDH");
         std::fs::write(&p, &img).unwrap();
         // Interface "nonexistent-zycast-test" so a PASSING gate then fails
         // at socket-bind — proving we got past the magic check.
@@ -203,8 +212,9 @@ mod magic_gate_tests {
     fn model_id_mismatch_is_refused_before_send() {
         let p = std::env::temp_dir().join("zycast-model-test.bin");
         let mut img = vec![0u8; 0x120];
-        img[0..4].copy_from_slice(b"HDR0");
-        img[0x11c..0x120].copy_from_slice(&0x0000_7101u32.to_be_bytes());
+        img[0..4].copy_from_slice(b"0RDH");
+        // #836: nibble-packed model field (real-image byte order)
+        img[0x11c..0x120].copy_from_slice(&[0x07, 0x01, 0x00, 0x01]);
         std::fs::write(&p, &img).unwrap();
         let mut a = args(p.to_str().unwrap(), false);
         a.expect_model = Some("6101".into());
@@ -219,8 +229,8 @@ mod magic_gate_tests {
     fn model_id_match_proceeds_past_the_preflight() {
         let p = std::env::temp_dir().join("zycast-model-ok.bin");
         let mut img = vec![0u8; 0x120];
-        img[0..4].copy_from_slice(b"HDR0");
-        img[0x11c..0x120].copy_from_slice(&0x0000_7101u32.to_be_bytes());
+        img[0..4].copy_from_slice(b"0RDH");
+        img[0x11c..0x120].copy_from_slice(&[0x07, 0x01, 0x00, 0x01]);
         std::fs::write(&p, &img).unwrap();
         let mut a = args(p.to_str().unwrap(), false);
         a.expect_model = Some("7101".into());
@@ -277,6 +287,42 @@ mod magic_gate_tests {
         // It must not have progressed to file reading (the path doesn't
         // exist; a read attempt would produce a different error).
         assert!(!msg.contains("read image"), "refusal must precede file IO");
+    }
+
+    #[test]
+    fn real_stock_header_passes_gates_without_allow_raw() {
+        // First 0x200 bytes of the stock NR7101 25.12.6 initramfs-recovery
+        // image (sha b4b6c10a…, #836): LE-stored magic + nibble-packed
+        // model. The gate used to refuse this exact file class — every
+        // real run needed --allow-raw.
+        const HDR: &[u8; 0x200] =
+            include_bytes!("../../../crates/conwrt-protocols/tests/fixtures/nr7101-ras-header.bin");
+        let p = std::env::temp_dir().join("zycast-real-header-test.bin");
+        std::fs::write(&p, HDR).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.interface = "nonexistent-zycast-test".into();
+        let msg = inner(a).unwrap_err();
+        assert!(!msg.contains("RAS magic"), "real magic must pass: {msg}");
+        assert!(
+            !msg.contains("--allow-raw"),
+            "gate must not demand raw: {msg}"
+        );
+    }
+
+    #[test]
+    fn real_stock_header_model_attests() {
+        const HDR: &[u8; 0x200] =
+            include_bytes!("../../../crates/conwrt-protocols/tests/fixtures/nr7101-ras-header.bin");
+        let p = std::env::temp_dir().join("zycast-real-model-test.bin");
+        std::fs::write(&p, HDR).unwrap();
+        let mut a = args(p.to_str().unwrap(), false);
+        a.expect_model = Some("7101".into());
+        a.interface = "nonexistent-zycast-test".into();
+        let msg = inner(a).unwrap_err();
+        assert!(
+            !msg.contains("model"),
+            "stock image must attest 7101: {msg}"
+        );
     }
 
     #[test]
