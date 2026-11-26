@@ -40,7 +40,7 @@ def main() -> int:
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch", "listen",
         "sim", "esim", "adopt", "v6door", "discover", "initramfs-bake", "felix-preflight",
-        "overlay",
+        "overlay", "esim-bundle",
         "-h", "--help", "--version", "-V",
     ):
         sys.argv.insert(1, "flash")
@@ -115,6 +115,7 @@ def main() -> int:
         "adopt": ("conwrt.adopt", "cmd_adopt"),
         "v6door": ("conwrt.v6door", "cmd_v6door"),
         "overlay": ("conwrt.cmd_overlay", "cmd_overlay"),
+        "esim-bundle": ("conwrt.cmd_esim_bundle", "cmd_esim_bundle"),
         }
 
     entry = _COMMAND_MAP.get(command)
