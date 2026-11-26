@@ -423,6 +423,18 @@ def _build_parser() -> argparse.ArgumentParser:
     felix_parser.add_argument("--json", action="store_true")
     felix_parser.set_defaults(func=felix_mod.cmd_felix_preflight)
 
+    from conwrt import cmd_esim_bundle as esim_bundle_mod
+    esim_bundle_parser = subparsers.add_parser(
+        "esim-bundle",
+        help="verify + side-load the eSIM toolchain onto a no-internet router (#856)")
+    esim_bundle_parser.add_argument("--artifact", required=True,
+                                    help="path to the lpac-openwrt bundle tarball")
+    esim_bundle_parser.add_argument("--verify-only", action="store_true",
+                                    help="verify the artifact, print the manifest, exit")
+    esim_bundle_parser.add_argument("--push", default=None, metavar="IP",
+                                    help="side-load onto the router at IP (scp -O + tar)")
+    esim_bundle_parser.set_defaults(func=esim_bundle_mod.cmd_esim_bundle)
+
     from conwrt import cmd_overlay as overlay_mod
     overlay_parser = subparsers.add_parser(
         "overlay",
