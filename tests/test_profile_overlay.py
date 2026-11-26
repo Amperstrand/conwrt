@@ -78,6 +78,9 @@ class TestBuildOverlayTarball(unittest.TestCase):
                 self.assertEqual(member.mode, 0o755)
                 content = tar.extractfile(member).read().decode()
                 self.assertIn("uci set network.lan.ipaddr='192.168.63.10'", content)
+                # netmask must ride along: without it 25.12.x parses a bare
+                # ipaddr as /32 (ARP+fe80 answer, v4 unreachable — #781/#835 E02)
+                self.assertIn("uci set network.lan.netmask='255.255.255.0'", content)
                 self.assertIn("uci commit network", content)
         finally:
             os.unlink(path)
