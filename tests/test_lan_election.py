@@ -1,9 +1,12 @@
-"""Offline tests for the LAN-role-election fragment (profile.lan_election).
+"""Offline tests for the LAN-role-election fragment (profile.lan_election, v2).
 
-The shell script is executed for real in a stub environment: PATH-injected
-fake `udhcpc` (both exit branches) and a fake `uci` that records its calls.
-This is the FakeDoor pattern — the decision logic is provable without any
-hardware. Hardware validation: conwrt campaign #841 E5.
+v2 shape: a uci-defaults INSTALLER drops an ifup HOTPLUG hook; the hook
+(the real election) runs when netifd first brings 'lan' up. Tests execute
+the REAL rendered hook in a stub environment (PATH-injected fake udhcpc
+with both exit branches, fake uci recording heredoc stdin, fake ubus
+reporting br-lan) under a simulated hotplug context. FakeDoor pattern —
+the decision logic is provable without hardware. Hardware validation:
+conwrt campaign #841 E5B.
 """
 import os
 import stat
@@ -13,9 +16,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-ELECTION_LOG = Path("/tmp/conwrt-election.log")
-
 
 def _write_stub(dirpath: Path, name: str, body: str) -> None:
     p = dirpath / name
@@ -23,100 +23,137 @@ def _write_stub(dirpath: Path, name: str, body: str) -> None:
     p.chmod(p.stat().st_mode | stat.S_IEXEC)
 
 
-class TestElectionScript(unittest.TestCase):
+class ElectionHarness(unittest.TestCase):
+    """Shared stub environment: bin dir + marker/uci recording."""
+
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="election-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="election2-test-"))
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
+        self.etc = self.tmp / "etc"
+        self.etc.mkdir()
         self.uci_calls = self.tmp / "uci-calls.log"
-        if ELECTION_LOG.exists():
-            ELECTION_LOG.unlink()
+        self.network_cmds = self.tmp / "network-cmds.log"
+        self.log = self.tmp / "election.log"
 
     def tearDown(self):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
-        if ELECTION_LOG.exists():
-            ELECTION_LOG.unlink()
 
-    def _arm_stubs(self, udhcpc_exit: int) -> None:
+    def _arm(self, udhcpc_exit: int, bridge: str = "br-lan") -> None:
         _write_stub(self.bin, "udhcpc", f"#!/bin/sh\nexit {udhcpc_exit}\n")
-        # record args AND heredoc stdin so the test asserts the exact uci
-        # mutations the election performed (value readbacks, not shapes)
         _write_stub(
             self.bin, "uci",
             f"#!/bin/sh\necho \"$@\" >> {self.uci_calls}\n"
             f"cat >> {self.uci_calls}\nexit 0\n")
-        _write_stub(self.bin, "ip", "#!/bin/sh\nexit 0\n")
-        _write_stub(self.bin, "date", "#!/bin/sh\necho 2026-11-26T00:00:00Z\n")
+        _write_stub(self.bin, "ubus",
+            f"#!/bin/sh\necho '{{\"l3_device\": \"{bridge}\"}}'\nexit 0\n")
+        _write_stub(self.bin, "date", "#!/bin/sh\necho 2026-11-26T01:00:00Z\n")
+        # /etc/init.d/network stub (the hook's reload/restart target);
+        # NEVER stub "sh" itself — subprocess.run(["sh", …]) would resolve
+        # the stub via PATH and silently not run the script under test.
+        initd = self.etc / "init.d"
+        initd.mkdir(exist_ok=True)
+        (initd / "network").write_text("#!/bin/sh\nexit 0\n")
+        (initd / "network").chmod(
+            (initd / "network").stat().st_mode | stat.S_IEXEC)
 
-    def _run_script(self, script: bytes) -> "subprocess.CompletedProcess":
-        script_path = self.tmp / "96-conwrt-lan-election"
-        script_path.write_bytes(script)
-        script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+    def _run_hook(self, script: bytes, *, interface: str = "lan",
+                  action: str = "ifup", marker: bool = False) -> "subprocess.CompletedProcess":
+        if marker:
+            (self.etc / "conwrt-election.done").write_text("")
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}:{env['PATH']}"
-        return subprocess.run(["sh", str(script_path)], env=env,
-                              capture_output=True, timeout=30)
+        env["INTERFACE"] = interface
+        env["ACTION"] = action
+        # the hook writes /tmp/conwrt-election.log and reads /etc/...:
+        # remap via a chroot-lite: run with cwd sandbox and the /etc and
+        # /tmp paths overridden through a wrapper shell
+        script_path = self.tmp / "96-conwrt-election"
+        script_path.write_bytes(script)
+        script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+        wrapper = self.tmp / "wrapper.sh"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            f"export PATH={self.bin}:$PATH\n"
+            f'export INTERFACE={interface} ACTION={action}\n'
+            f"mount --bind {self.tmp} /mnt 2>/dev/null || true\n"
+            f"sh {script_path}\n")
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
+        # simplest hermetic approach: sed the absolute paths to the sandbox
+        patched = script.decode().replace("/etc/", f"{self.etc}/")
+        patched = patched.replace("/tmp/conwrt-election.log", str(self.log))
+        patched_path = self.tmp / "hook-patched"
+        patched_path.write_text(patched)
+        patched_path.chmod(patched_path.stat().st_mode | stat.S_IEXEC)
+        return subprocess.run(
+            ["sh", str(patched_path)], env=env,
+            capture_output=True, timeout=30)
 
-    def test_render_contains_probe_and_uci_batch(self):
-        from profile.lan_election import election_script
-        text = election_script(iface="eth0").decode()
-        self.assertIn("IFACE='eth0'", text)
-        self.assertIn("-n -q -T 5 -t 12", text)
-        self.assertIn("set network.lan.proto='dhcp'", text)
-        self.assertIn("set dhcp.lan.ignore='1'", text)
-        self.assertIn("exit 0", text)
+    def _uci_saw(self) -> str:
+        return self.uci_calls.read_text() if self.uci_calls.exists() else ""
 
-    def test_render_rejects_hostile_iface_names(self):
-        from profile.lan_election import election_script
-        for bad in ("eth0; reboot", "eth0'", "eth 0", "$(reboot)", ""):
-            with self.assertRaises(ValueError):
-                election_script(iface=bad)
 
-    def test_lease_branch_switches_to_lan_citizen(self):
-        from profile.lan_election import election_script
-        self._arm_stubs(udhcpc_exit=0)
-        res = self._run_script(election_script(iface="eth0"))
+class TestElectionV2(ElectionHarness):
+    def test_installer_embeds_hotplug_hook(self):
+        from profile.lan_election import election_installer, election_hook
+        installer = election_installer().decode()
+        self.assertIn("/etc/hotplug.d/iface/96-conwrt-election", installer)
+        self.assertIn("udhcpc -i \"$BRIDGE\"", installer)
+        self.assertIn("conwrt-election.done", installer)
+        # the installer must carry the hook verbatim
+        hook = election_hook().decode()
+        self.assertIn(hook[:200], installer)
+
+    def test_hook_lease_branch_switches_to_lan_citizen(self):
+        from profile.lan_election import election_hook
+        self._arm(udhcpc_exit=0)
+        res = self._run_hook(election_hook())
         self.assertEqual(res.returncode, 0, res.stderr)
-        calls = self.uci_calls.read_text()
-        self.assertIn("set network.lan.proto='dhcp'", calls)
-        self.assertIn("set dhcp.lan.ignore='1'", calls)
-        log = ELECTION_LOG.read_text()
-        self.assertIn("LAN-citizen mode", log)
+        self.assertIn("set network.lan.proto='dhcp'", self._uci_saw())
+        self.assertIn("set dhcp.lan.ignore='1'", self._uci_saw())
+        self.assertTrue((self.etc / "conwrt-election.done").exists())
+        self.assertIn("LAN-citizen mode", self.log.read_text())
 
-    def test_no_lease_branch_keeps_gateway_default(self):
-        from profile.lan_election import election_script
-        self._arm_stubs(udhcpc_exit=1)
-        res = self._run_script(election_script(iface="eth0"))
+    def test_hook_no_lease_branch_keeps_gateway(self):
+        from profile.lan_election import election_hook
+        self._arm(udhcpc_exit=1)
+        res = self._run_hook(election_hook())
         self.assertEqual(res.returncode, 0, res.stderr)
-        if self.uci_calls.exists():
-            self.assertEqual(
-                self.uci_calls.read_text().strip(), "",
-                "no-lease branch must not touch any config")
-        log = ELECTION_LOG.read_text()
-        self.assertIn("gateway mode", log)
+        self.assertEqual("", self._uci_saw().strip())
+        self.assertTrue((self.etc / "conwrt-election.done").exists())
+        self.assertIn("gateway mode", self.log.read_text())
 
-    def test_script_is_idempotent_safe_and_deletes_itself_contract(self):
-        # uci-defaults contract: exit 0 => deleted after first successful
-        # run; the script must always exit 0 even on probe weirdness.
-        from profile.lan_election import election_script
-        self._arm_stubs(udhcpc_exit=0)
-        res = self._run_script(election_script(iface="eth0"))
-        self.assertEqual(res.returncode, 0)
+    def test_hook_marker_gates_repeats(self):
+        from profile.lan_election import election_hook
+        self._arm(udhcpc_exit=0)
+        res = self._run_hook(election_hook(), marker=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        # no probe ran: the log was never written
+        self.assertFalse(self.log.exists())
+        self.assertEqual("", self._uci_saw().strip())
+
+    def test_hook_ignores_other_interfaces_and_actions(self):
+        from profile.lan_election import election_hook
+        self._arm(udhcpc_exit=0)
+        for iface, action in (("wan", "ifup"), ("lan", "ifdown")):
+            res = self._run_hook(election_hook(), interface=iface, action=action)
+            self.assertEqual(res.returncode, 0)
+            self.assertEqual("", self._uci_saw().strip(),
+                             f"must not act on {action}/{iface}")
 
 
 class TestOverlayWiring(unittest.TestCase):
-    def test_overlay_contains_election_fragment(self):
+    def test_overlay_contains_election_installer(self):
         from profile.overlay import build_overlay_tarball
-        path = build_overlay_tarball(disable_dhcp=True, lan_election=True,
-                                     election_iface="eth0")
+        path = build_overlay_tarball(disable_dhcp=True, lan_election=True)
         try:
             with tarfile.open(path, "r:gz") as tar:
                 member = tar.getmember("etc/uci-defaults/96-conwrt-lan-election")
                 self.assertEqual(member.mode, 0o755)
                 content = tar.extractfile(member).read().decode()
-                self.assertIn("IFACE='eth0'", content)
-                self.assertIn("udhcpc", content)
+                self.assertIn("/etc/hotplug.d/iface/96-conwrt-election", content)
+                self.assertIn("udhcpc -i \"$BRIDGE\"", content)
         finally:
             os.unlink(path)
 

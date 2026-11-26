@@ -242,9 +242,10 @@ you flash — the top user complaint is not knowing what "working" looks like.
 | Bootloader write | **completely silent** — no frames from the unit, PoE draw flat | during the stream |
 | Hands-off soak | sender done → wait | +10 min (mandatory — do NOT power-cycle inside this window) |
 | Final power cycle | off ~8 s, on | ~13 s |
-| Kernel boot | first frames are IPv6 DAD/MLD — the "kernel alive" wire signature | ~32 s after power-on |
+| Kernel boot | first frames are IPv6 DAD/MLD — the "kernel alive" wire signature | 32-56 s after power-on (unit-dependent: 78:c5:…91:9c ~32 s; 78:c5:…a6:e4 ~55 s, n=3 within ±1 s — per-unit times are VERY consistent, quote the unit class) |
 | Stage-1 reachable | answers ping/SSH at 192.168.1.1 | +0.5 s after first frames |
 | Network fully stable | brief re-configure burst, one ping may drop | ~67 s after power-on |
+| sysupgrade to stage-2 (from stage-1) | full write + first boot, can be turbulent (carrier flaps, minutes of wire-silence) before stabilizing | ~6 min |
 
 Total from first power-cycle to stage-1 SSH: **~30 min** with the
 conservative discipline. If a complete stream was delivered and 10+ minutes
@@ -304,4 +305,17 @@ ZyXEL devices in bootloader-listen state on that segment (multicast
 reflashes every listening ZyXEL), and key-only auth baked if the LAN is
 internet-connected.
 
-Hardware validation of the election on the bench: campaign issue #841 (E5).
+Hardware validation of the election on the bench: campaign issue #841 (E5)
+— both branches validated (gateway mode on a serverless segment; full
+DHCP DISCOVER→ACK citizen election on a segment with a scoped server).
+
+**If you run the DHCP probe receiver yourself** (the flash-host side of
+the election test — these cost us hours, all measured): a DHCP server on
+a dedicated host interface needs (1) a firewall hole for INBOUND udp/67
+*broadcasts* (on ufw hosts, broadcast-destined packets jump straight to
+the DROP policy — `ufw allow in on <iface> proto udp to any port 67`),
+(2) `rp_filter=0` on that interface (strict RPF silently eats
+0.0.0.0-sourced discovers), and (3) a server lifetime longer than your
+whole flash window. A wire capture (`tcpdump -i <iface> udp port 67`)
+taps BEFORE the firewall — "packets visible in tcpdump but the server
+never logs them" is your firewall, not your server.
