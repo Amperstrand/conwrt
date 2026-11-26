@@ -53,6 +53,7 @@ Dark or just-flashed unit (the detection-and-recovery first moves, in order — 
 | `conwrt discover` | The dark-unit ladder: positive control → v6 link-local → v4 archaeology → banners; credentials printed, never executed |
 | `conwrt v6door` | Dial a unit's derived `fe80::` link-local through an on-link host (survives every v4 failure mode) |
 | `conwrt adopt` | Post-flash adoption as one gate ladder: rogue-DHCP disarm, mgmt IP, SSH key — every value read back |
+| `conwrt initramfs-bake --model-id ID` | Emit the profile-baked overlay (uci-defaults identity + SDK build recipe) for a zycast stage-1 boot — DHCP-off forced, empty fragment refused (#784) |
 
 Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
 
