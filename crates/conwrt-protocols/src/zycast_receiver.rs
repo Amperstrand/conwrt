@@ -257,28 +257,37 @@ impl ZLoaderReceiver {
 
 /// RAS model-ID field of a firmware image, if it carries an RAS header.
 ///
-/// The receiver's flash-commit gate [P]: for images starting `HDR0`
-/// (firmware) the 4 bytes at `+0x11c`, printed with `%x`, must equal the
-/// flash model string — `7101` (u32 `0x00007101`) for NR7101 — else
+/// The receiver's flash-commit gate [P]: for firmware images (RAS magic)
+/// the 4 bytes at `+0x11c`, printed with `%x`, must equal the flash
+/// model string — `7101` (u32 `0x00007101`) for NR7101 — else
 /// "Wrong Model ID!! Skip upgrade." This is the wrong-unit refusal class;
 /// the sender should refuse *before* multicast what the bootloader
 /// refuses after receiving.
+///
+/// Byte order, corrected for real images (#836/#847): real NR7101 RAS
+/// containers store the magic LE-loaded (`30 52 44 48` = "0RDH", the
+/// RE's `0x30524448`), NOT the big-endian ASCII "HDR0" — the original
+/// check never matched a real image. The model field is
+/// **nibble-packed**: each of the 4 bytes carries one hex digit of the
+/// model — the stock 25.12.6 image (sha `b4b6c10a…`, header fixture in
+/// tests/fixtures/) has `07 01 00 01` at `+0x11c`, and
+/// `(0x07<<12)|(0x01<<8)|(0x00<<4)|0x01 == 0x7101`, which `sprintf %x`
+/// renders as the flash model string "7101". This is the unique decode
+/// under which the documented gate accepts the image real units flash
+/// — simple BE/LE u32 loads of these bytes yield `7010001`/`1000107`
+/// and cannot match.
 #[must_use]
 pub fn ras_model_id(image: &[u8]) -> Option<u32> {
     if image.len() < 0x120 {
         return None;
     }
-    let is_hdr0 = &image[0..4] == b"HDR0";
-    let is_hdr4 = &image[0..4] == b"HDR4"; // bootloader variant [P]
-    if !is_hdr0 && !is_hdr4 {
+    let is_fw = &image[0..4] == b"HDR0" || &image[0..4] == b"0RDH";
+    let is_bl = &image[0..4] == b"HDR4" || &image[0..4] == b"4RDH"; // bootloader variant [P]
+    if !is_fw && !is_bl {
         return None;
     }
-    Some(u32::from_be_bytes([
-        image[0x11c],
-        image[0x11d],
-        image[0x11e],
-        image[0x11f],
-    ]))
+    let [b0, b1, b2, b3] = [image[0x11c], image[0x11d], image[0x11e], image[0x11f]];
+    Some((u32::from(b0) << 12) | (u32::from(b1) << 8) | (u32::from(b2) << 4) | u32::from(b3))
 }
 
 #[cfg(test)]
@@ -495,13 +504,37 @@ mod tests {
 
     #[test]
     fn ras_model_id_reads_the_gate_field() {
+        // #836: the field is NIBBLE-PACKED, not a BE u32 — synthetic
+        // headers with 0x7101.to_be_bytes() were self-consistent but
+        // never matched a real image.
         let mut img = vec![0u8; 0x120];
         img[0..4].copy_from_slice(b"HDR0");
-        img[0x11c..0x120].copy_from_slice(&0x0000_7101u32.to_be_bytes());
+        img[0x11c..0x120].copy_from_slice(&[0x07, 0x01, 0x00, 0x01]);
         assert_eq!(ras_model_id(&img), Some(0x7101));
-        img[0x11c..0x120].copy_from_slice(&0x0000_6101u32.to_be_bytes());
+        img[0x11c..0x120].copy_from_slice(&[0x06, 0x01, 0x00, 0x01]);
         assert_eq!(ras_model_id(&img), Some(0x6101)); // would be refused
         img[0..4].copy_from_slice(b"\x83\x80\x00\x00"); // raw kernel, no RAS hdr
         assert_eq!(ras_model_id(&img), None); // gate skipped, still written [P]
+    }
+
+    #[test]
+    fn ras_model_id_decodes_the_real_stock_header() {
+        // First 0x200 bytes of the stock
+        // openwrt-25.12.6-ramips-mt7621-zyxel_nr7101-initramfs-recovery.bin
+        // (sha256 b4b6c10a5faca821… — #836): LE-stored magic + the real
+        // model field.
+        const HDR: &[u8; 0x200] = include_bytes!("../tests/fixtures/nr7101-ras-header.bin");
+        assert_eq!(&HDR[0..4], b"0RDH", "real magic is LE-stored");
+        assert_eq!(ras_model_id(HDR), Some(0x7101));
+    }
+
+    #[test]
+    fn le_stored_magics_are_accepted() {
+        let mut img = vec![0u8; 0x120];
+        img[0..4].copy_from_slice(b"0RDH");
+        img[0x11c..0x120].copy_from_slice(&[0x07, 0x01, 0x00, 0x01]);
+        assert_eq!(ras_model_id(&img), Some(0x7101));
+        img[0..4].copy_from_slice(b"4RDH"); // bootloader variant, LE-stored
+        assert_eq!(ras_model_id(&img), Some(0x7101));
     }
 }
