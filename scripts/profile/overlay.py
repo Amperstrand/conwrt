@@ -83,7 +83,6 @@ def build_overlay_tarball(
     authorized_keys: Optional[str] = None,
     lan_ip: Optional[str] = None,
     lan_election: bool = False,
-    election_iface: str = "eth0",
 ) -> str:
     """Build a sysupgrade -f compatible overlay tarball.
 
@@ -108,8 +107,8 @@ def build_overlay_tarball(
             tar.addfile(info, io.BytesIO(data))
 
         if lan_election:
-            from profile.lan_election import election_script
-            data = election_script(iface=election_iface)
+            from profile.lan_election import election_installer
+            data = election_installer()
             info = tarfile.TarInfo(name="etc/uci-defaults/96-conwrt-lan-election")
             info.size = len(data)
             info.mode = 0o755
