@@ -47,8 +47,17 @@ def _scp_upload(device_ip: str, firmware_path: str, ssh_key: Optional[str] = Non
 
 
 def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[str] = None,
-                          keep_config: bool = False) -> bool:
-    """Upload firmware via SCP and run sysupgrade; resets config (-n) unless keep_config."""
+                          keep_config: bool = False,
+                          lan_ip: Optional[str] = None,
+                          authorized_keys: Optional[str] = None) -> bool:
+    """Upload firmware via SCP and run sysupgrade; resets config (-n) unless keep_config.
+
+    Identity overlay (#828): on OpenWrt targets the -n flash attaches the
+    post-flash overlay carrying the rogue-DHCP suppression PLUS whatever
+    identity ``resolve_overlay_identity`` derives (explicit lan_ip /
+    authorized_keys arguments here, else config.toml). Precedence lives
+    in profile.overlay.resolve_overlay_identity — the one decision place.
+    """
     ok, remote_path = _scp_upload(device_ip, firmware_path, ssh_key)
     if not ok:
         return False
@@ -59,8 +68,11 @@ def _flash_via_sysupgrade(device_ip: str, firmware_path: str, ssh_key: Optional[
         log(f"Firmware uploaded. Running sysupgrade (keeping settings) {remote_path}...")
         cmd = f"sysupgrade {remote_path}"
     elif on_openwrt:
-        from profile.overlay import build_overlay_tarball
-        overlay_path = build_overlay_tarball(disable_dhcp=True)
+        from profile.overlay import build_overlay_tarball, resolve_overlay_identity
+        ident_ip, ident_keys = resolve_overlay_identity(lan_ip, authorized_keys)
+        overlay_path = build_overlay_tarball(disable_dhcp=True,
+                                             lan_ip=ident_ip,
+                                             authorized_keys=ident_keys)
         try:
             overlay_name = os.path.basename(overlay_path)
             overlay_remote = f"/tmp/{overlay_name}"

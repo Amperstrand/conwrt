@@ -484,8 +484,13 @@ def install_sysupgrade(ctx, openwrt_ip: str) -> bool:
     from platform_utils import detect_platform
     if detect_platform() == "openwrt":
         try:
-            from profile.overlay import build_overlay_tarball
-            overlay_path = build_overlay_tarball(disable_dhcp=True)
+            # Identity overlay (#828): config-driven; precedence lives in
+            # profile.overlay.resolve_overlay_identity — the one decision place.
+            from profile.overlay import build_overlay_tarball, resolve_overlay_identity
+            ident_ip, ident_keys = resolve_overlay_identity()
+            overlay_path = build_overlay_tarball(disable_dhcp=True,
+                                                 lan_ip=ident_ip,
+                                                 authorized_keys=ident_keys)
             overlay_name = os.path.basename(overlay_path)
             overlay_remote = f"/tmp/{overlay_name}"
             overlay_scp = subprocess.run(
