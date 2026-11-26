@@ -196,7 +196,12 @@ def upload(image_path: str, endpoint: str, field: str = "firmware",
                         log(f"attempt {attempt}: form ready ({target})")
                         break
                     except Exception as e:
-                        transcript.append(str(e).splitlines()[0])
+                        # an exception whose str() is empty would crash
+                        # splitlines()[0] (found by the fake-playwright
+                        # driver tests: bare TimeoutError()) — degrade to
+                        # the exception class name instead.
+                        transcript.append(str(e).splitlines()[0] if str(e)
+                                          else type(e).__name__)
                         log(f"attempt {attempt} failed: {str(e)[:110]}")
                 else:
                     transcript.append("recovery page never loaded")
