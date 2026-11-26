@@ -144,11 +144,13 @@ def build_overlay_tarball(
     authorized_keys: Optional[str] = None,
     lan_ip: Optional[str] = None,
     lan_election: bool = False,
+    out_path: Optional[str] = None,
 ) -> str:
     """Build a sysupgrade -f compatible overlay tarball.
 
-    Returns the path to the temporary tarball file.
-    Caller is responsible for cleanup.
+    Returns the tarball path: ``out_path`` when given (created/overwritten),
+    else a temporary file the caller owns. ``out_path`` serves the CLI
+    surface (#828 item 3); the flash paths keep the mkstemp default.
     """
     if lan_ip is not None:
         _validate_lan_ip(lan_ip)
@@ -189,6 +191,11 @@ def build_overlay_tarball(
             info.mode = 0o600
             tar.addfile(info, io.BytesIO(key_data))
 
+    if out_path:
+        out = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(out, "wb") as f:
+            f.write(buf.getvalue())
+        return out_path
     fd, path = tempfile.mkstemp(suffix=".tar.gz", prefix="conwrt-overlay-")
     with os.fdopen(fd, "wb") as f:
         f.write(buf.getvalue())
