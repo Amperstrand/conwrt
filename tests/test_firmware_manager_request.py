@@ -212,3 +212,43 @@ class TestImageClassification:
         # find the metadata written under the temp images dir
         meta = next((tmp_path / "images").rglob("build.metadata.json"))
         assert json.loads(meta.read_text())["images"][0]["type"] == expected
+
+
+class TestLanIpFlag:
+    """#828 parity leg: --lan-ip pins the request's LAN IP (flag > config)."""
+
+    def _cfg_stub(self, monkeypatch, lan_ip_mode="mac-hash", lan_ip=""):
+        from config import ConwrtConfig
+        cfg = ConwrtConfig(lan_ip_mode=lan_ip_mode, lan_ip=lan_ip,
+                           ssh_public_key_path=None)
+        monkeypatch.setattr(fm, "_load_config", lambda: cfg)
+        return cfg
+
+    def test_flag_bakes_static_ip_over_mac_hash(self, monkeypatch, tmp_path, capsys):
+        # real build_plan (network stubbed only): the flag must reach the
+        # ASU defaults script as a static pin
+        self._cfg_stub(monkeypatch)
+        posts, _, _ = _stub_network(monkeypatch, tmp_path)
+        fm.cmd_request(_args(lan_ip="192.168.9.1"))
+        payload = posts[0][1]
+        assert "192.168.9.1" in json.dumps(payload), \
+            "flag IP must be baked into the ASU request defaults script"
+
+    def test_no_flag_mac_hash_default_preserved(self, monkeypatch, tmp_path):
+        self._cfg_stub(monkeypatch)
+        posts, _, _ = _stub_network(monkeypatch, tmp_path)
+        fm.cmd_request(_args())
+        payload = json.dumps(posts[0][1])
+        assert "10.$_o2.$_o3.1" in payload, "mac-hash derivation stays default"
+        assert "192.168.9.1" not in payload
+
+    def test_invalid_ip_fails_before_submission(self, monkeypatch, tmp_path, capsys):
+        self._cfg_stub(monkeypatch)
+        posts, gets, downloads = _stub_network(monkeypatch, tmp_path)
+        rc = fm.cmd_request(_args(lan_ip="not-an-ip"))
+        assert rc == 1
+        assert not posts, "invalid IP must never reach ASU"
+
+    def test_ipv6_rejected(self, monkeypatch, tmp_path):
+        self._cfg_stub(monkeypatch)
+        assert fm.cmd_request(_args(lan_ip="fd00::1")) == 1
