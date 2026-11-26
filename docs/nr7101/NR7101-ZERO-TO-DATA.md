@@ -88,6 +88,18 @@ path (wired SSH or serial) alive while committing.
 
 ## Stage 4 — eSIM profiles (path A only)
 
+### No internet on the device? The toolchain problem
+
+The eSIM toolchain (lpac, the AT helper, curl with TLS) is NOT in a
+stock OpenWrt image, and the device may have no internet until the eSIM
+is provisioned. Three options, pick by situation:
+
+| Option | When | How |
+|---|---|---|
+| **Bake it** (fleet) | you control the image | ASU/imagebuilder `PACKAGES=` + `FILES=` carries the toolchain; the conwrt ASU request path supports this |
+| **Side-load bundle** (recommended default) | stock image, no internet | host builds a tarball with the per-arch lpac + deps + install script; `scp -O` + one `ash install.sh`. The lpac-openwrt repo produces the artifacts; the driver is `conwrt esim-bundle` (in development, #856) |
+| **WiFi-STA bridge** (works, hacky) | any interneted AP reachable | the QUICKSTART Phase-1 shape; unpinned checks ride WiFi — only wwan-pinned checks are truth |
+
 Do these **in order**; each has a gate:
 
 1. **Card-state gate (Gate 0)** — `docs/MODEM-AS-READER-PLAYBOOK.md`
