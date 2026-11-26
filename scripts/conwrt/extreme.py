@@ -714,8 +714,14 @@ def _handle_extreme_sysupgrade_flashing(ctx: RecoveryContext, event_queue: queue
     overlay_path = None
 
     if on_openwrt:
-        from profile.overlay import build_overlay_tarball
-        overlay_path = build_overlay_tarball(disable_dhcp=True)
+        # Identity overlay (#828): config-driven here (the ctx carries no
+        # per-run identity fields); precedence lives in
+        # profile.overlay.resolve_overlay_identity — the one decision place.
+        from profile.overlay import build_overlay_tarball, resolve_overlay_identity
+        ident_ip, ident_keys = resolve_overlay_identity()
+        overlay_path = build_overlay_tarball(disable_dhcp=True,
+                                             lan_ip=ident_ip,
+                                             authorized_keys=ident_keys)
         try:
             overlay_name = os.path.basename(overlay_path)
             overlay_remote = f"/tmp/{overlay_name}"

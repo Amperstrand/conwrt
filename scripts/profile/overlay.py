@@ -78,6 +78,61 @@ config odhcpd 'odhcpd'
 """
 
 
+def resolve_overlay_identity(
+    lan_ip: Optional[str] = None,
+    authorized_keys: Optional[str] = None,
+    cfg: Optional["object"] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """THE single decision place for overlay identity (#828).
+
+    Precedence (explicit flag > config):
+    - lan_ip: an explicit argument wins; else the config's static LAN IP
+      — but ONLY when ``lan_ip_mode == "static"`` (the mac-hash default
+      is deliberately NOT baked into a first-boot overlay: a MAC-derived
+      address belongs to the device-side derivators, not a static pin).
+    - authorized_keys: an explicit argument (key text or file path) wins;
+      else the config's public key text; else the file at
+      ``ssh_public_key_path``.
+
+    Returns (lan_ip, authorized_keys_text) — either may be None (that
+    overlay feature then rides the defaults). An invalid explicit IP
+    raises (same guard as build_overlay_tarball).
+    """
+    if cfg is None:
+        from config import load_config  # noqa: PLC0415 — lazy: config IO only when needed
+        try:
+            cfg = load_config()
+        except Exception:  # no config / unparsable: flags only (host-side best effort)
+            cfg = None
+
+    resolved_ip = lan_ip
+    if resolved_ip is None and cfg is not None:
+        if getattr(cfg, "lan_ip_mode", "") == "static" and getattr(cfg, "lan_ip", ""):
+            resolved_ip = cfg.lan_ip
+
+    resolved_keys = authorized_keys
+    if resolved_keys is None and cfg is not None:
+        text = getattr(cfg, "ssh_public_key_text", "")
+        if not text:
+            path = getattr(cfg, "ssh_public_key_path", "")
+            if path:
+                try:
+                    with open(os.path.expanduser(path)) as fh:
+                        text = fh.read().strip()
+                except OSError:
+                    text = ""
+        resolved_keys = text or None
+    elif resolved_keys and not resolved_keys.startswith("ssh-") and os.path.isfile(
+            os.path.expanduser(resolved_keys)):
+        # a path was passed as the explicit argument: read the key text
+        with open(os.path.expanduser(resolved_keys)) as fh:
+            resolved_keys = fh.read().strip()
+
+    if resolved_ip is not None:
+        _validate_lan_ip(resolved_ip)
+    return resolved_ip, resolved_keys
+
+
 def build_overlay_tarball(
     disable_dhcp: bool = True,
     authorized_keys: Optional[str] = None,
