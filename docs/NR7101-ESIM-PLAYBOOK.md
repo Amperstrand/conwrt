@@ -93,6 +93,16 @@ reconnect (fine at pcscd cadence); the pinned `/dev/ttyUSBx` can go stale
 when the modem shuffles ports (re-pin or probe after modem resets — the
 port-shuffle finding is in ifd-modemifd's README).
 
+> **25.12.x regression (2026-11-26): this relay cannot run as written on an
+> OpenWrt 25.12.4 image.** The image ships **no `stty`** (also no `timeout`,
+> `socat` or `microcom`; the package manager is `apk`), so the relay's
+> `stty -F <tty> raw -echo` fails and the tty stays in canonical mode with
+> echo on — which produces echo-driven `ERROR` storms with more than one AT
+> command per open fd. Tracked in issue #856. Until that is fixed, provision
+> with an on-device LPA instead (see `docs/LPAC-OPENWRT-UPDATES.md`: a
+> libc-only `lpac` AT-only build, staged in `/tmp`), or run the relay against
+> a busybox that has the `stty` applet.
+
 **The destination: run it all on the router.** The end state is pcscd +
 ifd-modemifd on the NR7101 itself, opening `/dev/ttyUSBx` directly — no
 network in the card path; clients reach it via a WG/SSH-forwarded pcscd
