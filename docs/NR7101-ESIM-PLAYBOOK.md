@@ -93,6 +93,19 @@ reconnect (fine at pcscd cadence); the pinned `/dev/ttyUSBx` can go stale
 when the modem shuffles ports (re-pin or probe after modem resets — the
 port-shuffle finding is in ifd-modemifd's README).
 
+> **25.12.x note (2026-11-26): the APDU and HTTP legs can be split.** `lpac`'s
+> APDU driver and HTTP driver are independent, so a router with **no WAN** can
+> still provision: keep `LPAC_APDU=at` on the router against the local tty
+> (fast), and set `LPAC_HTTP=stdio` so only the HTTPS bodies are relayed to a
+> host that has internet. `driver/http/stdio.c` is always compiled in and
+> speaks a small JSON protocol, so the AT-only static build already contains
+> it — no curl, no NAT, no fleet uplink, and the router's wrong clock stops
+> mattering because TLS terminates on the host. Do **not** tunnel the APDU
+> instead: a profile transfer is hundreds of APDUs at the modem's 8 s dwell and
+> will not finish over an ssh pty. Detail and the relay driver:
+> `docs/NR7101-HANDOVER-2026-11-26.md`; the hang that makes transport choice
+> urgent is issue #862.
+
 **The destination: run it all on the router.** The end state is pcscd +
 ifd-modemifd on the NR7101 itself, opening `/dev/ttyUSBx` directly — no
 network in the card path; clients reach it via a WG/SSH-forwarded pcscd
