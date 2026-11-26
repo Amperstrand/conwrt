@@ -172,3 +172,22 @@ class TestBackupFlow:
         ]))
         rc = cb.cmd_backup(_args(output_dir=str(tmp_path)))
         assert rc == 1  # critical partition not present -> refuse
+
+    def test_scp_failure_fails_partition(self, model, ssh, tmp_path, monkeypatch, capsys):
+        """The 5-line gap: scp returncode != 0 marks the partition FAILED
+        (scp error text logged, remote cleanup still skipped for it)."""
+        real = cb._scp_with_password
+
+        def flaky(ip, user, password, remote, local, timeout=120):
+            if "mtd1" in remote:
+                return _cp(1, "", "scp: Connection closed")
+            return real(ip, user, password, remote, local, timeout)
+
+        monkeypatch.setattr(cb, "_scp_with_password", flaky)
+        rc = cb.cmd_backup(_args(output_dir=str(tmp_path)))
+        assert rc == 1  # Factory is critical and failed
+        out = capsys.readouterr().out
+        assert "FAILED (scp)" in out
+        # the failed partition never reached the remote-cleanup stage
+        cleanups = [c for c in ssh.ssh_calls if c.startswith("rm -f")]
+        assert all("mtd1" not in c for c in cleanups)
