@@ -106,7 +106,7 @@ Do these **in order**; each has a gate:
    gate 0: profile map matches expectation before AND after every
    session. A card that came back from another modem gets diffed, not
    trusted.
-2. **Free rehearsal** — download/enable/delete the osmocom Speedtest
+2. **Free rehearsal** — download/enable the osmocom Speedtest (NOTE: these are PRODUCTION profiles with zero data entitlement — free SIM, paid data; NOT SGP.22 test-profile-infrastructure profiles; per-EID re-download limits apply)
    profile (`LPA:1$rsp.truphone.com$QRF-SPEEDTEST`, single-quoted).
    Free, repeatable, proves the whole chain. Do it twice.
 3. **Paid profile** — silent.link or nadanada ($0.99 tier exists;
