@@ -18,9 +18,9 @@ bench devices (switch + DUTs)
   │         ├─ alerts.jsonl (always, durable)
   │         ├─ ntfy phone push   (config-gated, staged)
   │         └─ osascript + say   (config-gated, local)
-  ├─ remote syslog UDP:514 → rsyslog on ai-legion     ← STAGED (config ready,
-  │    per-device/day files                              deploy coordinated with
-  │                                                      the fleet session)
+  ├─ remote syslog UDP:514 → rsyslog on ai-legion     ← LIVE (deployed +
+  │    per-device/day files                              E2E-proven 2026-11-27:
+  │                                                      scripts/bench_rsyslog_deploy.sh)
   └─ pytest runs via bench_run.py / make labgrid-test  ← per-run evidence:
        runs/<ts>-<name>/{manifest.json, pytest.log, report.xml, console_*}
 ```
