@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""felix-preflight — the stage-gated checklist driver for the NR7101
+"""esim-preflight — the stage-gated checklist driver for the NR7101
 flash → configure → eSIM chain (#835: 'idiotproof for felixfelix-bot
 -class users ... with preflight checklists').
 
@@ -241,12 +241,37 @@ def stage_esim(args: argparse.Namespace) -> StageReport:
                 "wwandctl/modem session")
     rep.gates.append(g)
 
-    g = Gate("transport reachable (lpac → pcscd → ifd-modemifd → AT)",
-             expectation="the SSH-exec transport is the proven path "
-                         "(playbook 'Transport decision')")
-    rc, out = _run(["sh", "-c", "command -v lpac && pgrep -x pcscd"])
-    g.ok = rc == 0 and "pcscd" in out
-    g.detail = out[:100] if out else "lpac/pcscd not found on this host"
+    g = Gate("transport reachable (lpac on-router → at_csim + HTTP relay)",
+             expectation="the split transport is the proven path: lpac on "
+                         "the router drives the modem AT tty (at_csim); "
+                         "the SM-DP+ HTTPS leg is either on-router (curl) "
+                         "or relayed to a host (LPAC_HTTP=stdio + "
+                         "esim-http-relay). The old host-side pcscd/"
+                         "ifd-modemifd path is 24.10-era and REMOVED (#856).")
+    # Check: can we SSH to the unit, and is lpac present there?
+    ssh_target = getattr(args, "unit", None) or "root@192.168.5.1"
+    rc_ssh, out_ssh = _run(["sh", "-c",
+        f"ssh -o ConnectTimeout=5 -o BatchMode=yes {ssh_target} "
+        f"'command -v lpac' 2>/dev/null"])
+    if rc_ssh == 0 and "lpac" in (out_ssh or ""):
+        # lpac on the router: check the HTTP path
+        # (either relay script on host or curl on router)
+        rc_relay, _ = _run(["sh", "-c", "test -f relay.py || command -v lpac"])
+        g.ok = True
+        g.detail = f"lpac on-router at {ssh_target}; HTTP leg: "
+        rc_http, out_http = _run(["sh", "-c",
+            f"ssh -o ConnectTimeout=5 -o BatchMode=yes {ssh_target} "
+            f"'command -v curl' 2>/dev/null"])
+        if rc_http == 0 and "curl" in (out_http or ""):
+            g.detail += "curl on-router (full on-router path)"
+        else:
+            g.detail += ("relay needed (no curl on router; use "
+                         "LPAC_HTTP=stdio + esim-http-relay)")
+    else:
+        g.ok = False
+        g.detail = (f"cannot reach lpac on {ssh_target} — "
+                    f"SSH unreachable or lpac not installed "
+                    f"(side-load via 'conwrt esim-bundle')")
     rep.gates.append(g)
 
     g = Gate("activation code present (SMDP+matching ID)",
@@ -263,7 +288,7 @@ STAGES = {"flash": stage_flash, "configure": stage_configure,
           "esim": stage_esim}
 
 
-def cmd_felix_preflight(args: argparse.Namespace) -> int:
+def cmd_esim_preflight(args: argparse.Namespace) -> int:
     rep = STAGES[args.stage](args)
     if args.json:
         print(json.dumps({
@@ -274,7 +299,7 @@ def cmd_felix_preflight(args: argparse.Namespace) -> int:
             "gates": [{"name": g.name, "ok": g.ok, "detail": g.detail}
                       for g in rep.gates]}, indent=2))
     else:
-        print(f"== felix-preflight: {rep.stage} ==")
+        print(f"== esim-preflight: {rep.stage} ==")
         for g in rep.gates:
             mark = {"PASS": "✔", "FAIL": "✘", "INFO": "·"}[
                 "PASS" if g.ok else ("FAIL" if g.ok is False else "INFO")]
@@ -292,7 +317,7 @@ def cmd_felix_preflight(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="conwrt felix-preflight",
+        prog="conwrt esim-preflight",
         description="the stage-gated checklist driver for the NR7101 "
                     "flash → configure → eSIM chain (#835)")
     p.add_argument("--stage", required=True,
@@ -313,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return cmd_felix_preflight(build_parser().parse_args(argv))
+    return cmd_esim_preflight(build_parser().parse_args(argv))
 
 
 if __name__ == "__main__":

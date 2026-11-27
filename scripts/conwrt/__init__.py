@@ -39,7 +39,7 @@ def main() -> int:
         "flash", "list", "list-use-cases", "setup-mgmt-wifi", "backup",
         "auto", "setup-nor-recovery", "configure", "profile", "fingerprint", "reset",
         "probe", "flow", "lan-migrate", "bench-doctor", "recovery-probe", "boot-watch", "listen",
-        "sim", "esim", "adopt", "v6door", "discover", "initramfs-bake", "felix-preflight",
+        "sim", "esim", "adopt", "v6door", "discover", "initramfs-bake", "esim-preflight",
         "overlay", "esim-bundle",
         "-h", "--help", "--version", "-V",
     ):
@@ -111,7 +111,7 @@ def main() -> int:
         "listen": ("conwrt.bootlisten", "cmd_listen"),
         "discover": ("conwrt.discover", "cmd_discover"),
         "initramfs-bake": ("conwrt.initramfs_bake", "cmd_initramfs_bake"),
-        "felix-preflight": ("conwrt.felix_preflight", "cmd_felix_preflight"),
+        "esim-preflight": ("conwrt.esim_preflight", "cmd_esim_preflight"),
         "adopt": ("conwrt.adopt", "cmd_adopt"),
         "v6door": ("conwrt.v6door", "cmd_v6door"),
         "overlay": ("conwrt.cmd_overlay", "cmd_overlay"),

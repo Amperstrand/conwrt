@@ -1,4 +1,4 @@
-"""felix-preflight tests (#835): the stage-gated checklist driver.
+"""esim-preflight tests (#835): the stage-gated checklist driver.
 
 All host interactions stubbed at the module seam (_run). The gates'
 verdict logic, the EUI-64 door derivation, the INFO-gate semantics
@@ -19,7 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from conwrt import felix_preflight as fp  # noqa: E402
+from conwrt import esim_preflight as fp  # noqa: E402
 
 
 @pytest.fixture()
@@ -205,7 +205,7 @@ class TestCliContract:
             poe_verified=False, unit=None, preset="ddns",
             card_diff_path=None, modem_stable=False,
             activation_code=None, json=True)
-        rc = fp.cmd_felix_preflight(args)
+        rc = fp.cmd_esim_preflight(args)
         out = json.loads(capsys.readouterr().out)
         assert out["stage"] == "configure"
         assert isinstance(out["gates"], list) and out["gates"]
@@ -218,7 +218,7 @@ class TestCliContract:
             poe_verified=False, unit=None, preset=None,
             card_diff_path=None, modem_stable=False,
             activation_code=None, json=False)
-        rc = fp.cmd_felix_preflight(args)
+        rc = fp.cmd_esim_preflight(args)
         out = capsys.readouterr().out
         assert "GATE 0" in out and "expect:" in out and "BLOCKED" in out
         assert rc == 1
@@ -234,7 +234,7 @@ class TestCliContract:
             activation_code=None, json=False)
         stub_run.canned["ping -c2"] = (0, "alive")
         stub_run.canned["ssh"] = (0, "zyxel,nr7101\n78:c5:7d:13:91:9c")
-        rc = fp.cmd_felix_preflight(args)
+        rc = fp.cmd_esim_preflight(args)
         out = capsys.readouterr().out
         assert "PENDING" in out and "BLOCKED" not in out
         assert rc == 2
