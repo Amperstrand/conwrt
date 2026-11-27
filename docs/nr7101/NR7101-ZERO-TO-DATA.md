@@ -105,7 +105,7 @@ is provisioned. Three options, pick by situation:
 | Option | When | How |
 |---|---|---|
 | **Bake it** (fleet) | you control the image | ASU/imagebuilder `PACKAGES=` + `FILES=` carries the toolchain; the conwrt ASU request path supports this |
-| **Side-load bundle** (recommended default) | stock image, no internet | host builds a tarball with the per-arch lpac + deps + install script; `scp -O` + one `ash install.sh`. The lpac-openwrt repo produces the artifacts; the driver is `conwrt esim-bundle` (in development, #856) |
+| **Side-load bundle** (recommended default) | stock image, no internet | host builds a tarball with the per-arch lpac + deps + install script; `scp -O` + one `ash install.sh`. Artifacts come from the lpac-openwrt repo; the driver is `conwrt esim-bundle` — **shipped** (`scripts/conwrt/cmd_esim_bundle.py`, tests in `tests/test_esim_bundle.py`): verify sha256 + runtime fingerprints, then generate or perform the side-load |
 | **WiFi-STA bridge** (works, hacky) | any interneted AP reachable | the QUICKSTART Phase-1 shape; unpinned checks ride WiFi — only wwan-pinned checks are truth |
 
 Do these **in order**; each has a gate:
