@@ -25,6 +25,18 @@ bench devices (switch + DUTs)
        runs/<ts>-<name>/{manifest.json, pytest.log, report.xml, console_*}
 ```
 
+Runtime netconsole arming (stock initramfs, 2026-11-27 proven): fetch
+`kmod-netconsole` from `releases/<v>/targets/<target>/kmods/<kver>-1-<hash>/`
+(the hash is listed in that kmods dir; `uname -r` + the release give the
+rest), `apk add --allow-untrusted --force-non-repository /tmp/kmod-*.apk`
+(the package is lost on reboot — fine for a live session; durable arming
+is the baked `--netconsole` path in firmware-manager), then
+`modprobe netconsole netconsole=514@/br-lan,514@<host-ip>/` and verify with
+`echo "<6>TEST" > /dev/kmsg`. Kernel printks then land in the SAME
+per-device files as the syslog stream — pre-userspace coverage (early
+boot, panics, wedges) that logd cannot give. UFW must allow UDP 514 from
+the unit's subnet.
+
 Division of coverage (do not blur): **remote syslog = userspace after network
 init; serial/console (`--lg-log`, serial bridges) = bootloader + early boot;
 SNAP polling = liveness oracle (log gaps are NEVER reboot evidence — UDP
