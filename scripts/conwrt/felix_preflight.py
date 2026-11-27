@@ -64,7 +64,15 @@ class StageReport:
 
     @property
     def passed(self) -> bool:
+        """Full attestation: every gate explicitly ok."""
         return all(g.ok for g in self.gates)
+
+    @property
+    def blocked(self) -> bool:
+        """A hard red gate exists (ok is False). INFO gates (ok=None,
+        not-yet-attested) do NOT block — a stage whose only misses are
+        INFO gates is PENDING, not BLOCKED."""
+        return any(g.ok is False for g in self.gates)
 
 
 def _run(cmd: list[str], timeout: int = 20) -> tuple[int, str]:
@@ -260,6 +268,9 @@ def cmd_felix_preflight(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({
             "stage": rep.stage, "passed": rep.passed,
+            "blocked": rep.blocked,
+            "verdict": ("READY" if rep.passed else
+                        "BLOCKED" if rep.blocked else "PENDING"),
             "gates": [{"name": g.name, "ok": g.ok, "detail": g.detail}
                       for g in rep.gates]}, indent=2))
     else:
@@ -271,9 +282,12 @@ def cmd_felix_preflight(args: argparse.Namespace) -> int:
             print(f"        {g.detail}")
             if g.expectation:
                 print(f"        expect: {g.expectation}")
-        verdict = "READY" if rep.passed else "BLOCKED"
+        verdict = ("READY" if rep.passed else
+                   "BLOCKED" if rep.blocked else "PENDING")
         print(f"== {verdict} ==")
-    return 0 if rep.passed else 1
+    # Exit codes: 0 READY, 1 BLOCKED (a red gate), 2 PENDING (only INFO
+    # gates outstanding — not a failure, but not attested complete).
+    return 0 if rep.passed else (1 if rep.blocked else 2)
 
 
 def build_parser() -> argparse.ArgumentParser:

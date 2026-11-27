@@ -173,6 +173,26 @@ class TestEsimStage:
         rep = fp.stage_esim(self._args())
         assert rep.passed is False
 
+    def test_info_only_gates_are_pending_not_blocked(self, stub_run):
+        # The wrong-verdict class (found in the live dress rehearsal):
+        # a stage whose only misses are INFO gates (ok=None) must NOT
+        # report BLOCKED — it is PENDING, waiting on attestation.
+        rep = fp.StageReport(stage="configure", gates=[
+            fp.Gate(name="green", ok=True),
+            fp.Gate(name="info", ok=None),
+        ])
+        assert rep.passed is False
+        assert rep.blocked is False  # no red gate — PENDING, not BLOCKED
+
+    def test_blocked_requires_a_red_gate(self, stub_run):
+        rep = fp.StageReport(stage="configure", gates=[
+            fp.Gate(name="green", ok=True),
+            fp.Gate(name="info", ok=None),
+            fp.Gate(name="red", ok=False),
+        ])
+        assert rep.blocked is True
+        assert rep.passed is False
+
 
 class TestCliContract:
     def test_json_output_shape(self, stub_run, monkeypatch, capsys):
@@ -202,3 +222,19 @@ class TestCliContract:
         out = capsys.readouterr().out
         assert "GATE 0" in out and "expect:" in out and "BLOCKED" in out
         assert rc == 1
+
+    def test_pending_exit_code_and_verdict(self, stub_run, capsys):
+        # all-green gates + one INFO -> PENDING (verdict text + rc 2),
+        # never BLOCKED
+        args = types.SimpleNamespace(
+            stage="configure", image=None, expect_model="7101",
+            specimen_mac="78:c5:7d:13:91:9c", staging_iface="enp2s0.999",
+            poe_verified=False, unit=None, preset=None,
+            card_diff_path=None, modem_stable=False,
+            activation_code=None, json=False)
+        stub_run.canned["ping -c2"] = (0, "alive")
+        stub_run.canned["ssh"] = (0, "zyxel,nr7101\n78:c5:7d:13:91:9c")
+        rc = fp.cmd_felix_preflight(args)
+        out = capsys.readouterr().out
+        assert "PENDING" in out and "BLOCKED" not in out
+        assert rc == 2
