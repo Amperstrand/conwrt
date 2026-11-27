@@ -134,17 +134,28 @@ def verify_artifact(path: str | Path) -> dict:
     }
 
 
+_SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=10"]
+
+
 def _scp_and_install(image_ip: str, artifact: str,
                      timeout: int = 120) -> tuple[int, str]:
-    """scp -O the artifact and extract it on the router."""
+    """scp -O the artifact and extract it on the router.
+
+    Bench-standard SSH options: the router's host key is regenerated
+    on every initramfs boot, so strict host-key verification always
+    fails on a freshly flashed unit (observed live: the first push
+    of the r1+ bundle died to 'Host key verification failed')."""
     remote_name = os.path.basename(artifact)
     scp = subprocess.run(
-        ["scp", "-O", artifact, f"root@{image_ip}:/tmp/{remote_name}"],
+        ["scp", "-O", *_SSH_OPTS, artifact,
+         f"root@{image_ip}:/tmp/{remote_name}"],
         capture_output=True, text=True, timeout=timeout, check=False)
     if scp.returncode != 0:
         return scp.returncode, f"scp failed: {scp.stderr.strip()[:200]}"
     install = subprocess.run(
-        ["ssh", f"root@{image_ip}",
+        ["ssh", *_SSH_OPTS, f"root@{image_ip}",
          f"tar -xzf /tmp/{remote_name} -C / && rm /tmp/{remote_name} && "
          f"lpac version && echo BUNDLE-INSTALLED"],
         capture_output=True, text=True, timeout=timeout, check=False)
@@ -182,7 +193,8 @@ def cmd_esim_bundle(args: argparse.Namespace) -> int:
     # Default: print the paste-able commands
     art = str(Path(args.artifact).resolve())
     print(f"\n# side-load (paste these):")
-    print(f"scp -O {art} root@<router-ip>:/tmp/")
+    print(f"scp -O -o StrictHostKeyChecking=no "
+          f"-o UserKnownHostsFile=/dev/null {art} root@<router-ip>:/tmp/")
     print(f"ssh root@<router-ip> 'tar -xzf /tmp/{os.path.basename(art)} -C / "
           f"&& rm /tmp/{os.path.basename(art)} && lpac version'")
     print(f"\n# then the known-good env + Gate 0:")
