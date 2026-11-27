@@ -88,9 +88,16 @@ whichever path has two clean rehearsals — A if in doubt.
 5. **eSIM gate (read-only):** `validate-esimgate.sh` (ISD-R readiness, EID,
    chipInfo) before any write-class operation.
 6. **Free rehearsal:** the osmocom known-test-profiles Speedtest profile
-   (`LPA:1$rsp.truphone.com$QRF-SPEEDTEST`) — free-failure, additive,
-   deletable. SINGLE-QUOTE the LPA string (`$` expands under double quotes).
-   Download → list → enable → delete is the full rehearsal cycle.
+   (e.g. the BetterRoaming activation string from betterroaming.com/
+   esim-installation) — free production profiles (connect to real tower,
+   data blocked until plan purchase; NOT SGP.22 test infrastructure).
+   SINGLE-QUOTE the LPA string (`$` expands under double quotes).
+   Download → list → enable → verify-attach → delete is the full
+   rehearsal cycle. **Matching-ID caution**: the short `QRF-SPEEDTEST`
+   is a retired legacy format (server-side dead); use the live-format
+   IDs from the providers' own QR pages. Per-EID download policies
+   apply — first download to a new card works; re-downloads to the
+   same EID may be refused.
 7. **Paid provisioning (owner-gated):** silentlink-lib `checkout.sh` →
    `parse_order.sh` → lpac download. Real money, one-shot discipline, explicit
    owner sign-off first. Sequence the post-enable refresh per the ladder below.

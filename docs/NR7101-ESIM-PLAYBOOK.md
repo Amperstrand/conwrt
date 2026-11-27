@@ -7,9 +7,19 @@
 > eSIM download/enable deep dive.
 
 **The pitch:** provision a current OpenWrt image on the Zyxel NR7101, then buy
-and provision eSIM profiles (silent.link, nadanada) onto a physical **9eSIM
+and provision eSIM profiles (nadanada $0.99, silent.link) onto a physical **9eSIM
 (ECP3 eUICC)** seated in the NR7101's SIM slot — **using only the NR7101's own
-modem as the smartcard reader**. No external reader, no SIM removal. The
+modem as the smartcard reader**. No external reader, no SIM removal.
+
+**Free profiles are production profiles, not test profiles**: the "free"
+options (BetterRoaming, Speedtest Travel) are real commercial profiles with
+zero data entitlement — they connect to a real tower, get a real IP, resolve
+DNS, then block data transit until you buy a plan through the provider's
+account/payment page. They prove the chain (card → transport → auth →
+download → install → enable → attach) but don't give you internet. The
+cheapest real data test is **nadanada $0.99**. See
+[nr7101/NR7101-ZERO-TO-DATA.md](nr7101/NR7101-ZERO-TO-DATA.md) §Stage 4
+for the full profile-source table. The
 profile download + enable path is **proven end-to-end on hardware**
 (nadanada, 2026-10-23); the silent.link payment→activation flow is automated
 and its audit is linked below.
