@@ -24,6 +24,7 @@ it never writes to a device.
 | `local_esim_silentlink` | 9eSIM (ECP3 eUICC) in the modem slot | Telia NO 242/02 (roaming) | `internet` / `ipv4` | silent.link / nadanada profile |
 | `local_physical_ice` | physical ice+ card in the modem slot | ice+ NO 242/14 (home) | `ice.net` / `ipv4` | a plain physical SIM, no eSIM tooling |
 | `remote_android_sap` | phone SIM, lent over Bluetooth SAP | carrier of the phone SIM (bench: Telia NO 242/02) | `telia` / `ipv4v6` (override as needed) | keep the SIM in the phone; remote access only via SAP |
+| **Mode D: router-to-router** | donor NR7101's SIM, lent to borrower NR7101's modem via wwand-rsim | any seated SIM (donor's) | per the donor's SIM | the donor's SIM serves the borrower's modem; donor radio parked. See [nr7101/NR7101-RSIM-LENDING.md](nr7101/NR7101-RSIM-LENDING.md) |
 
 All three run through the same wwand stack and the same modem. The local
 modes put the card in the modem's own slot. The remote mode keeps the card

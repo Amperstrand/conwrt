@@ -29,6 +29,7 @@
 | **A: 9eSIM** | SIM-MODES Mode A + Stage 4 below | buy a profile (free test first!) | ~1.5 h |
 | **B: physical SIM** | SIM-MODES Mode B | none | ~1 h |
 | **C: Android phone (BT SAP)** | SIM-MODES Mode C | phone prep (pairing, SAP grant) | ~1.5 h + phone quirks |
+| **D: another NR7101's SIM** | RSIM-LENDING (Mode D) | donor NR7101 + wwand-rsim | ~30 min (both units on bench) |
 
 ## Stage 1 — OpenWrt on the box (skip if already current)
 
