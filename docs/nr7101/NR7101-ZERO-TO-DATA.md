@@ -106,12 +106,46 @@ Do these **in order**; each has a gate:
    gate 0: profile map matches expectation before AND after every
    session. A card that came back from another modem gets diffed, not
    trusted.
-2. **Free rehearsal** — download/enable the osmocom Speedtest (NOTE: these are PRODUCTION profiles with zero data entitlement — free SIM, paid data; NOT SGP.22 test-profile-infrastructure profiles; per-EID re-download limits apply)
-   profile (`LPA:1$rsp.truphone.com$QRF-SPEEDTEST`, single-quoted).
-   Free, repeatable, proves the whole chain. Do it twice.
-3. **Paid profile** — silent.link or nadanada ($0.99 tier exists;
-  validity starts at first use). One-shot discipline: a failed paid
-   download is STOP-capture-diagnose, never retry.
+2. **Free rehearsal** — download/enable a free production profile (see
+   the profile-source table below). Proves the whole chain (card →
+   transport → TLS → authentication → download → install → enable →
+   attach to a real production network). **Free profile ≠ free data**:
+   the profile connects to a real tower, gets a real IP, and resolves
+   DNS — but data transit is blocked until you buy a plan from the
+   provider (it's a dormant commercial subscription; useful for chain
+   verification and as a base you can later activate through the
+   provider's account/payment page). Single-quoted LPA string.
+3. **Paid profile** — the cheapest real test is **nadanada $0.99**
+   (self-serve, no account, crypto/card, validity starts at first use).
+   silent.link works too but costs more. One-shot discipline: a failed
+   paid download is STOP-capture-diagnose, never retry.
+
+### Free profile sources (what they actually are)
+
+**Important: "free test profiles" are NOT test profiles in the SGP.22 sense.**
+They are **free production profiles** — signed by the GSMA production
+certificate chain, connecting to real production networks, with a real
+IMSI and real authentication. What makes them "free" is that the profile
+itself costs nothing — but the **data costs money** (a dormant commercial
+subscription until you buy a plan). The SGP.22 test-profile infrastructure
+(test CI, test SM-DP+, `testProfileSupport` flag) is a separate system
+we are not using here.
+
+What a free profile actually gives you:
+- ✅ Registration on a real production tower (e.g. Telia 242/02)
+- ✅ Bearer with a real IP (CGNAT)
+- ✅ DNS resolution through the provider's resolver
+- ❌ **Data transit blocked** — no plan purchased, no bytes forwarded
+- ✅ **Useful as a base** — some providers (BetterRoaming) let you
+  activate the same profile later through their account/payment page,
+  turning the dormant subscription into a working one
+
+| Source | Profile | What you get | Matching ID notes |
+|---|---|---|---|
+| osmocom known-test-profiles | BetterRoaming | Free production profile (1GLOBAL/Truphone chain). **Connects to real tower, DNS resolves, data blocked** — dormant subscription; buy a plan through betterroaming.com to activate data later | `QRF-BETTERROAMING-PMRDGIR2EARDEIT5` — **per-EID download policy**: first download to a new card works; re-downloads to the same EID may be refused |
+| osmocom known-test-profiles | Speedtest Travel | Same class as BetterRoaming (Ookla/Truphone promo). The short `QRF-SPEEDTEST` on the osmocom page is a **retired legacy format**; the live one from speedtest.net/esimqr is the longer format | `QRF-SPEEDTEST-PMRDGIR2EARDCIT5` (live) — same per-EID policy; the short form is dead server-side |
+| **nadana.me** ($0.99) | nadanada | **The cheapest real data test** — pay $0.99, get a profile with actual data. Self-serve, no account, no KYC | Fresh matching ID per purchase (no refusal risk); validity starts at first use, activate within 6 weeks |
+| **silent.link** | DATA.PLUS / PAYG | Pay-per-MB, no expiry. More expensive but no time pressure | Fresh matching ID per order |
 
 Deep mechanics: `NR7101-ESIM-PLAYBOOK.md` + `MODEM-AS-READER-PLAYBOOK.md`.
 
