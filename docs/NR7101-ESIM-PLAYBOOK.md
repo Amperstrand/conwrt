@@ -85,8 +85,15 @@ no data of its own. Full matrix: conwrt-bench `docs/nr7101/REMOTE-ESIM-TOOLBOX.m
 
 **Historical: `ssh://` exec transport** (ifd-modemifd v3.5, PR #22,
 `a02d669`). The driver opens a BatchMode, host-key-pinned dropbear session
-and execs a busybox relay (`stty -F <tty> raw -echo; exec 3<><tty>;
+and execs a busybox relay (`stty -F <tty> raw -echo; exec 3<><tty;
 cat <&3 & exec cat >&3`) that owns the modem AT tty directly.
+> **ifd-modemifd is NOT deprecated** — it's a separate project
+> (Amperstrand/ifd-modemifd) that remains useful for PC/SC tooling
+> (pySim, OpenSC), non-eSIM smartcards, other modem species, and
+> 24.10.x targets. It's just no longer the recommended transport for
+> THIS workflow (NR7101 + 9eSIM + 25.12.x) — see
+> [MODEM-AS-READER-PLAYBOOK.md](MODEM-AS-READER-PLAYBOOK.md) §"ifd-modemifd's
+> ongoing role" for the full boundary.
 
 Why this beats the alternatives:
 

@@ -40,6 +40,8 @@ links; it does not duplicate — when the two disagree, the ifd-modemifd doc win
 **Path A — host-side reader** (`ifd-modemifd` README + NR7101-ESIM-PLAYBOOK).
 > 24.10.x only: the ssh:// relay requires stty/timeout, absent on
 > 25.12.x default images (#856). For 25.12.x use path B.
+> **See "ifd-modemifd's ongoing role" below** — the project is not
+> deprecated, just not the recommended path for this workflow.
 Zero router-side software (dropbear + busybox relay only). Formally reasoned
 no-resend transport semantics (typed `AtOutcome`, retry only for provably
 undelivered lines) — the conservative choice for a **one-shot paid activation**.
@@ -48,6 +50,34 @@ Enables PC/SC tooling (pySim, OpenSC) against the seated card.
 **Path B — on-device lpac** (`KNOWN-GOOD-ONDEVICE-PROVISIONING.md`). lpac
 cross-compiled for the router's arch, `LPAC_APDU=at_csim`, the modem's own AT
 tty. No network in the card path at all; fastest proven download (~24 s).
+
+### ifd-modemifd's ongoing role (not deprecated — repurposed)
+
+**What it was used for**: the original NR7101 eSIM provisioning chain (2026-10 era) —
+a host-side PC/SC IFD driver that turned the NR7101's modem into a smartcard
+reader over SSH, allowing lpac, pySim, and other PC/SC tools to talk to the
+seated eUICC from the host. Hardware-proven end-to-end (v4.0, full SGP.22
+download + enable through the modem reader).
+
+**What replaced it for THIS workflow**: on-device lpac with `LPAC_APDU=at_csim`
+(path B above) — simpler, faster, no host-side tooling, no network in the card
+path, and critically: works on 25.12.x where the ifd-modemifd relay's stty/
+timeout/socat prerequisites are absent from default images.
+
+**Where ifd-modemifd is still useful** (the reason it stays a separate, active
+project at Amperstrand/ifd-modemifd):
+
+| Use case | Why ifd-modemifd |
+|---|---|
+| pySim / OpenSC / other PC/SC tools | These tools require a PC/SC reader; ifd-modemifd turns any modem with an AT port into one |
+| Non-eSIM smartcards | The driver is card-agnostic — it provides the APDU transport, not the eSIM logic |
+| Other modem species (non-Quectel, non-OpenWrt) | The AT-based reader works on any modem with AT+CSIM support, not just the RG502Q |
+| 24.10.x targets | The ssh:// transport still works on 24.10.x images that carry the busybox applets |
+| Formal no-resend semantics | The typed AtOutcome / duplicate-APDU elimination is valuable for one-shot operations where a duplicate APDU is catastrophic |
+
+**The boundary**: for NR7101 + 9eSIM + OpenWrt 25.12.x provisioning specifically,
+use path B (on-device lpac). For everything else — other modems, other cards,
+PC/SC tooling, pySim forensics — ifd-modemifd remains the tool.
 Costs: a per-arch artifact + a router-side deploy footprint (see the
 non-invasive bundle in `lpac-openwrt`). Hardware-proven for the full download
 (T-A) and free rehearsals; the paid one-shot has also been executed and
