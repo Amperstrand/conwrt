@@ -88,6 +88,14 @@ path (wired SSH or serial) alive while committing.
 
 ## Stage 4 — eSIM profiles (path A only)
 
+> **Gate on this first: has Stage 2 actually run?** On a unit where the
+> cellular stack is absent (no `wwandctl`, no `network.wwan0`, no `wwan0`
+> data interface, `network.wan` pointing at a nonexistent device), a profile
+> can be downloaded and installed but **cannot be enabled-and-attached** — so
+> the "attach to a real production network" half of the rehearsal below is
+> unobservable. Do Stage 2 before spending any code. Measured example with
+> the exact checks: `nr7101/STAGE2-MISSING-BLOCKS-PROFILE-VERIFY.md`.
+
 ### No internet on the device? The toolchain problem
 
 The eSIM toolchain (lpac, the AT helper, curl with TLS) is NOT in a
@@ -143,11 +151,33 @@ What a free profile actually gives you:
 | Source | Profile | What you get | Matching ID notes |
 |---|---|---|---|
 | osmocom known-test-profiles | BetterRoaming | Free production profile (1GLOBAL/Truphone chain). **Connects to real tower, DNS resolves, data blocked** — dormant subscription; buy a plan through betterroaming.com to activate data later | `QRF-BETTERROAMING-PMRDGIR2EARDEIT5` — **per-EID download policy**: first download to a new card works; re-downloads to the same EID may be refused |
-| osmocom known-test-profiles | Speedtest Travel | Same class as BetterRoaming (Ookla/Truphone promo). The short `QRF-SPEEDTEST` on the osmocom page is a **retired legacy format**; the live one from speedtest.net/esimqr is the longer format | `QRF-SPEEDTEST-PMRDGIR2EARDCIT5` (live) — same per-EID policy; the short form is dead server-side |
+| osmocom known-test-profiles | Speedtest Travel | Same class as BetterRoaming (Ookla/Truphone promo). The published code is the **short** form — see the measured note below before believing any "live long format" | `QRF-SPEEDTEST` (measured 2026-11-27 by decoding the QR at the source page; the long form circulating in forum posts is not what the provider publishes) |
 | **nadana.me** ($0.99) | nadanada | **The cheapest real data test** — pay $0.99, get a profile with actual data. Self-serve, no account, no KYC | Fresh matching ID per purchase (no refusal risk); validity starts at first use, activate within 6 weeks |
 | **silent.link** | DATA.PLUS / PAYG | Pay-per-MB, no expiry. More expensive but no time pressure | Fresh matching ID per order |
 
 Deep mechanics: `NR7101-ESIM-PLAYBOOK.md` + `MODEM-AS-READER-PLAYBOOK.md`.
+
+### Verify an activation code at the source, not in a forum post
+
+Forum reposts of "the live long-format Speedtest ID"
+(`QRF-SPEEDTEST-PMRDGIR2EARDCIT5`) are not what the provider publishes. Measured
+2026-11-27 by fetching and decoding the QR image at
+<https://www.speedtest.net/esimqr>: it encodes `LPA:1$rsp.truphone.com$QRF-SPEEDTEST`
+— the short form — and the osmocom manual lists the same short form as the
+Speedtest entry. Decode the QR at the provider's own page before spending a
+single-use download attempt:
+
+```sh
+curl -sL https://www.speedtest.net/esimqr | grep -o 'src="[^"]*qrcode[^"]*"'
+curl -sL -o qr.png https://www.speedtest.net/s/images/speedtest/esim/esim-qrcode.png
+python3 -m venv /tmp/qrv && /tmp/qrv/bin/pip install -q zxing-cpp pillow
+/tmp/qrv/bin/python -c "import zxingcpp;print(zxingcpp.read_barcodes('/tmp/qr.png')[0].text)"
+```
+
+Either way both forms are refused for the reason in
+`FREE-PROFILE-AVAILABILITY.md`: the refusal is a per-EID policy at
+`authenticateClient`, not a stale-ID error — so the exact string is not what
+would unblock a download.
 
 ## Stage 5 — verify you are done
 
