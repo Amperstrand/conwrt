@@ -54,6 +54,7 @@ Dark or just-flashed unit (the detection-and-recovery first moves, in order — 
 | `conwrt v6door` | Dial a unit's derived `fe80::` link-local through an on-link host (survives every v4 failure mode) |
 | `conwrt adopt` | Post-flash adoption as one gate ladder: rogue-DHCP disarm, mgmt IP, SSH key — every value read back |
 | `conwrt initramfs-bake --model-id ID` | Emit the profile-baked overlay (uci-defaults identity + SDK build recipe) for a zycast stage-1 boot — DHCP-off forced, empty fragment refused (#784) |
+| EAD raw-L2 shell (see docs/EAD-EMERGENCY-ACCESS.md) | Deploy-on-demand root shell over broadcast Ethernet for bench troubleshooting — six upstream fixes required, fork branch `ead-bench-fixes`; **not recommended for production units** |
 
 Device in a weird state (wrong IP, no recovery mode)? Put it in recovery first — for most models hold reset while powering on. `conwrt watch` will find it once the U-Boot recovery server answers.
 
