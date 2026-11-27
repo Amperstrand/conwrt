@@ -404,24 +404,24 @@ def _build_parser() -> argparse.ArgumentParser:
     bake_parser.add_argument("--lan-ip", default="")
     bake_parser.set_defaults(func=bake_mod.cmd_initramfs_bake)
 
-    from conwrt import felix_preflight as felix_mod
-    felix_parser = subparsers.add_parser(
-        "felix-preflight",
+    from conwrt import esim_preflight as esim_pf_mod
+    esim_pf_parser = subparsers.add_parser(
+        "esim-preflight",
         help="the stage-gated checklist driver: flash -> configure -> eSIM (#835)")
-    felix_parser.add_argument("--stage", required=True,
+    esim_pf_parser.add_argument("--stage", required=True,
                               choices=["flash", "configure", "esim"])
-    felix_parser.add_argument("--image", default=None)
-    felix_parser.add_argument("--expect-model", default="7101")
-    felix_parser.add_argument("--specimen-mac", default=None)
-    felix_parser.add_argument("--staging-iface", default="enp2s0.999")
-    felix_parser.add_argument("--poe-verified", action="store_true")
-    felix_parser.add_argument("--unit", default=None)
-    felix_parser.add_argument("--preset", default=None)
-    felix_parser.add_argument("--card-diff-path", default=None)
-    felix_parser.add_argument("--modem-stable", action="store_true")
-    felix_parser.add_argument("--activation-code", default=None)
-    felix_parser.add_argument("--json", action="store_true")
-    felix_parser.set_defaults(func=felix_mod.cmd_felix_preflight)
+    esim_pf_parser.add_argument("--image", default=None)
+    esim_pf_parser.add_argument("--expect-model", default="7101")
+    esim_pf_parser.add_argument("--specimen-mac", default=None)
+    esim_pf_parser.add_argument("--staging-iface", default="enp2s0.999")
+    esim_pf_parser.add_argument("--poe-verified", action="store_true")
+    esim_pf_parser.add_argument("--unit", default=None)
+    esim_pf_parser.add_argument("--preset", default=None)
+    esim_pf_parser.add_argument("--card-diff-path", default=None)
+    esim_pf_parser.add_argument("--modem-stable", action="store_true")
+    esim_pf_parser.add_argument("--activation-code", default=None)
+    esim_pf_parser.add_argument("--json", action="store_true")
+    esim_pf_parser.set_defaults(func=esim_pf_mod.cmd_esim_preflight)
 
     from conwrt import cmd_esim_bundle as esim_bundle_mod
     esim_bundle_parser = subparsers.add_parser(
