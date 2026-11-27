@@ -1071,3 +1071,26 @@ at least once.
    D-Link dashes class); generate stubs from the vendor's own
    metadata and curate only the bench-observed delta (model-gen,
    #766; the probe-rs target-gen precedent).
+
+## Every Friction Gets Filed (the conwrt bug/UX rule)
+
+**Any time work in conwrt (or its tooling, docs, or dependencies) is not
+quite as you would expect or gives you trouble, file an issue or open a
+PR — never just work around it and move on.** The bug you route around
+today is the one the next agent spends hours rediscovering; the fix you
+don't file is the UX debt that never gets paid. This applies to:
+
+- Surprising behavior in our tools, scripts, presets, or docs
+- Upstream dependency bugs that bite us (file the upstream candidate +
+  our fork fix; see the lpac #857/#862/#865/#866 series and the
+  upstream-PR pattern — verified, evidence-first, owner-gated)
+- Missing preflight/detection that would have caught a failure you hit
+  (the esim-dryrun gates exist because each one was paid for)
+- "This works for me but I don't remember exactly how" — file the pin
+  (see docs/nr7101/PINNED-STACK.md and keep it current)
+
+A run that hit friction and filed none of it is a run that left the repo
+no better. A wrong theory filed as an issue with its evidence is still
+worth more than a silent correct workaround — the issue is searchable,
+the workaround is not (see #841's retraction chain: filed, disproven,
+corrected, all in public).
