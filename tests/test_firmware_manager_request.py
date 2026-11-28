@@ -189,9 +189,14 @@ class TestCmdRequest:
             poll_replies=[{"status": "done", "bin_dir": "bd",
                            "images": [{"name": "fw.bin", "sha256": IMG_SHA,
                                        "size": len(IMG_BYTES)}]}])
-        fm.cmd_request(_args(netconsole="192.168.77.9:6666"))
+        fm.cmd_request(_args(netconsole="192.168.77.9"))
         body = json.dumps(posts[0][1])
-        assert "netconsole" in body and "192.168.77.9:6666" in body
+        # the baked block is the PROVEN logd streaming path (the modules.d
+        # netconsole form never configured a target — core_param is
+        # cmdline-only; found by live-testing 2026-11-28)
+        assert "log_ip" in body and "192.168.77.9" in body
+        assert "system.@system[0].log_port='514'" in body
+        assert "modules.d/netconsole" not in body
 
 
 class TestImageClassification:

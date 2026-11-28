@@ -297,17 +297,20 @@ def cmd_request(args: argparse.Namespace) -> int:
 
     netconsole_target = getattr(args, "netconsole", None)
     if netconsole_target:
-        # Kernel netconsole: printk over UDP from the first netdev up. The '+'
-        # prefix keeps boot going if one interface never appears; target MAC is
-        # omitted so the kernel ARP-resolves the receiver.
+        # Remote kernel+userspace log streaming via logd (uci log_ip): the
+        # PROVEN path — logd captures the kernel ring from preinit and the
+        # logread forwarder ships it to the receiver. The modules.d
+        # netconsole approach this replaces NEVER worked live: netconsole's
+        # config is a core_param (kernel command line only), so a modprobe
+        # arg cannot configure a target — the module loads and prints
+        # "network logging started" while forwarding nothing (found by
+        # live-testing a baked image 2026-11-28).
         defaults_script = (defaults_script or "") + f"""
-# --- netconsole (baked by conwrt --netconsole {netconsole_target}) ---
-cat > /etc/modules.d/netconsole <<'NCMOD'
-netconsole +6666@/br-lan,{netconsole_target} +6666@/eth0,{netconsole_target}
-NCMOD
-chmod 644 /etc/modules.d/netconsole
+uci set system.@system[0].log_ip='{netconsole_target}'
+uci set system.@system[0].log_port='514'
+uci commit system
 """
-        logger.info("netconsole baked: targets %s:6666 on br-lan and eth0", netconsole_target)
+        logger.info("remote log streaming baked: logd -> %s:514 (kernel+userspace)", netconsole_target)
 
     if getattr(args, "dry_run", False):
         print_plan(plan)
@@ -315,8 +318,7 @@ chmod 644 /etc/modules.d/netconsole
         extras = list(cfg.extra_packages)
         if packages_str:
             extras += [p.strip() for p in packages_str.split(",") if p.strip()]
-        if netconsole_target:
-            extras.append("kmod-netconsole")
+
         packages_to_send = list(dict.fromkeys(plan.all_packages() + extras))
         remove = plan.all_packages_remove()
         for r in remove:
@@ -812,9 +814,10 @@ def main() -> int:
     )
     p_request.add_argument(
         "--netconsole", default=None, metavar="RECEIVER_IP",
-        help="Bake kernel netconsole into the image (kmod-netconsole + modules.d "
-             "entry targeting RECEIVER_IP:6666 on both br-lan and eth0 — the "
-             "serial-free boot debugger; the receiver needs a UDP/6666 listener)",
+        help="Bake remote log streaming into the image (logd kernel+userspace "
+             "via uci log_ip -> RECEIVER_IP:514 — the serial-free boot "
+             "debugger from preinit onward; the receiver needs a UDP/514 "
+             "listener, e.g. scripts/bench_rsyslog_deploy.sh)",
     )
     p_request.add_argument(
         "--tofb", action="store_true",
