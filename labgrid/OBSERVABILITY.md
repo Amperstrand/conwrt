@@ -25,25 +25,28 @@ bench devices (switch + DUTs)
        runs/<ts>-<name>/{manifest.json, pytest.log, report.xml, console_*}
 ```
 
-Kernel-log streaming — the honest mechanism map (2026-11-28 correction):
-the logd path IS the kernel path: logd captures the kernel ring from
-preinit and the `logread -f` forwarder ships it to the receiver, so
-`echo "<7>TEST" > /dev/kmsg` lines arrive as "OpenWrt kernel: [...]"
-entries. Runtime arming on any unit: `uci set system.@system[0].log_ip=
-<host-ip-on-DUT-subnet>; uci set system.@system[0].log_port='514'; uci
-commit system; /etc/init.d/log restart`. Durable arming: bake the same
-uci pair via `firmware-manager request --netconsole <ip>`.
+CORRECTION (2026-11-28, live evidence): the netconsole claims above were
+FALSE POSITIVES — the /dev/kmsg verification lines arrived via the
+logd→logread syslog forwarder (logd consumes /dev/kmsg, so kernel lines
+ride the syslog stream), not via netconsole. On this species (mt7621 +
+DSA: br-lan over the `lan` DSA port), netconsole is genuinely MUTE: the
+module loads, targets parse, "network logging started" prints, and ZERO
+packets ever hit the wire (proven with wire captures across br-lan/lan/
+eth0 sources, ARP resolved, firewall open — the DSA netpoll xmit class).
+The baked `--netconsole` modules.d line additionally uses the `+`
+dynamic-config form, which requires configfs (not mounted) — doubly
+inert. Two real gotchas found while proving this: the UFW receiver rules
+must cover the MAC-HASH source subnets (10/8 — the profile's first-boot
+LAN is 10.<mac-hash>.x.1, not 192.168.1.x), and UDP 514 sends silently
+fail until the target's ARP entry is warm.
 
-netconsole (the module) is NOT a runtime option on these kernels: its
-config is a core_param — parsed ONLY from the kernel command line — so
-`modprobe netconsole netconsole=...` loads the module and it prints
-"network logging started" while forwarding NOTHING (no target can be
-attached; there is no configfs dynamic config either). An earlier note
-claimed runtime modprobe arming was "proven live" — that proof was
-mis-attributed: the markers flowed through logd's kernel stream, not
-netconsole. True pre-preinit coverage (kernel init, early panics) needs
-`netconsole=` in the bootloader's bootargs — a bootloader-env change,
-not an image feature. Receiver: scripts/bench_rsyslog_deploy.sh.
+The WORKING kernel-line path on this bench: the logd→logread forwarder
+(`uci set system.@system[0].log_ip=<host>; uci set ...log_port='514';
+uci commit system; /etc/init.d/log restart`) — logd reads /dev/kmsg, so
+userspace AND kernel lines stream to the same per-device files (proven
+on both the initramfs and the flash-rooted ASU image). Coverage starts
+at the network stage (~10-15 s in); the pre-network window (bootloader
+→ first printks) is serial-only on this species.
 
 Division of coverage (do not blur): **remote syslog = userspace after network
 init; serial/console (`--lg-log`, serial bridges) = bootloader + early boot;
